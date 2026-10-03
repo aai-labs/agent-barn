@@ -46,28 +46,70 @@ LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1
 
 ## Organization LLM budgets
 
-Each Organization has its own LLM spend ceiling, set by a Platform Administrator
-through `PUT /platform/organizations/{id}/llm-budget`. There is no deployment-wide
-budget and no environment variable: an amount belongs to one Organization, and an
-Organization cannot raise its own. The behaviour contract is in
+Every Organization has a Spend Ceiling, set by a Platform Administrator through
+`PUT /platform/organizations/{id}/llm-budget`; beneath it the Organization's Owners and
+Admins set a lower limit of their own, a default for their Agents, and a limit per
+Agent. The behaviour contract is in
 [Costs](../features/costs.md#organization-llm-budgets).
 
-Budgets are off until set. With LiteLLM configured, teams are still provisioned and
-new keys assigned even when no amount is set anywhere. No Agent restart is required,
-and a change takes effect as soon as it is saved — there is nothing to redeploy.
+Two deployment settings are **required** — the API, its worker, every CronJob and the
+migration job all refuse to start without them:
 
-`budget_usd` is a non-negative finite number, where `0` is a limit of nothing and
-omitting it removes the cap. `budget_duration` is a positive integer followed by
-`s`, `m`, `h` or `d`, defaulting to `30d` — a 30-day interval, not a calendar month.
-Clearing the amount also clears the renewal schedule. Changing only the amount
-preserves spend and the renewal date; changing the duration moves the next renewal
-without resetting spend.
+| Setting | Meaning |
+| --- | --- |
+| `ORGANIZATION_DEFAULT_LLM_BUDGET_USD` | The ceiling a new Organization starts with. The migration that introduced it also gave it to every existing Organization that had none. |
+| `AGENT_DEFAULT_LLM_BUDGET_USD` | The limit an Agent is held to until its Organization sets a default or the Agent its own. Must not exceed the Organization default. |
 
-Saving a budget writes the Organization row first and then pushes it to LiteLLM. A
+Deploys read them from repository variables, following the usual prefixes:
+production uses the names above, staging `STAGING_ORGANIZATION_DEFAULT_LLM_BUDGET_USD` /
+`STAGING_AGENT_DEFAULT_LLM_BUDGET_USD` (falling back to the production ones when unset),
+and the public deployment `PUBLIC_ORGANIZATION_DEFAULT_LLM_BUDGET_USD` /
+`PUBLIC_AGENT_DEFAULT_LLM_BUDGET_USD`. They reach the chart's
+`organizationLlmBudgets.defaultOrganizationUsd` / `defaultAgentUsd` through
+`helmfile.yaml.gotmpl` and render into the shared API Secret; the chart refuses to
+render without them, so a deploy with either variable unset fails before anything
+changes.
+Local runs read them from `.env`, and the API test suite sets its own in
+`api/tests/conftest.py`.
+
+No Agent restart is required: a change takes effect as soon as it is saved.
+`budget_usd` is a non-negative finite number and is required on the ceiling — it can
+be changed but not cleared, so "no practical limit" is a very large amount.
+`budget_duration` is one of `1d`, `7d` or `30d`, defaulting to `30d`; LiteLLM renews
+these on calendar boundaries (next midnight, next Monday, the 1st of the month), which
+is what keeps the Organization and its Agents renewing together. Changing only an
+amount preserves spend and the renewal date; changing the window moves the next
+renewal without resetting spend.
+
+**Rollout (AF-337): no manual step is needed.** LiteLLM keeps one running spend total
+per key and per team and only zeroes it when a window renews, so a key or team that
+was never capped carries everything it has ever spent into its first window. Three
+things keep that from refusing anyone at rollout:
+
+- The migration gives every existing Organization without a ceiling $10,000 a month
+  rather than `ORGANIZATION_DEFAULT_LLM_BUDGET_USD`: high enough that its team's
+  lifetime spend refuses nobody, while the team gets a window and renews on the 1st.
+- It sets every existing Organization's default Agent limit to its ceiling (that
+  $10,000, or the ceiling it already had from AF-303), so existing Agents are not held
+  to `AGENT_DEFAULT_LLM_BUDGET_USD`; the team stays the only limit that binds.
+- The first time a limit is written to a key that has never had a window (every key
+  created before AF-337), the API zeroes that key's spend first
+  (`POST /key/{key}/reset_spend`), so its cap measures from then. This happens on the
+  reconciler's first pass after the deploy. Spend logs, and so cost records, are
+  untouched.
+
+From the first renewal on, team spend is per window, and a platform administrator can
+set a real limit without any reset. One edge case remains: LiteLLM cannot zero a
+single team, so an Organization without a ceiling whose team has already spent more
+than $10,000 in total, or one given a real limit before its first renewal, is measured
+against lifetime spend until the 1st. LiteLLM's only team-wide option is
+`POST /global/spend/reset`, which zeroes every key and team at once.
+
+Saving a limit writes the row first and then pushes it to LiteLLM. A
 proxy failure returns `502` with the amount already stored, because losing an
 administrator's setting because the proxy blinked is worse than a delayed push. The
-`<release>-llm-budget-reconciler` CronJob pushes stored budgets onto their teams every
-15 minutes to repair exactly that kind of drift, logging
+`<release>-llm-budget-reconciler` CronJob pushes stored limits onto every team and
+Agent key every 15 minutes to repair exactly that kind of drift, logging
 `Organization LiteLLM budgets reconciled`. Like the other reconcilers it runs under
 `concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
 API itself never contacts the proxy at startup. A budget saved while the proxy was
@@ -78,15 +120,17 @@ Run either pass by hand with `make reconcile-llm-budgets` or `make run-llm-budge
 Organization's Owners and Admins are notified — comma separated, each between 1 and
 100, defaulting to `80,100`. A malformed list refuses to boot rather than quietly
 alerting nobody. The value is read by the API and by the
-`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over Organizations
-that have a limit set. Alerting is informational: the limit is enforced in the
-request path, so the interval only bounds how late someone is told.
+`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over every
+Organization and every Agent key. The same thresholds apply to an Agent's own limit,
+whose alerts go to its creator and Owners. Alerting is informational: the limit is
+enforced in the request path, so the interval only bounds how late someone is told.
 
-Agents created before an Organization had a limit carry no team on their key, so a
-limit does not bind them until they are enrolled. A Platform Administrator does that
-from the Organization's page — the spend limit controls stay hidden until every Agent
-is covered, and the button reports anything it could not enroll by name. Historical
-pre-enrollment spend stays in reports but is not added to the new team counter.
+Agents created before an Organization had a team carry none on their key, so the
+Organization's limit does not bind them until they are enrolled. A Platform
+Administrator does that from the Organization's page, where uncovered Agents are
+named beside the limit controls and the button reports anything it could not enroll.
+Historical pre-enrollment spend stays in reports but is not added to the new team
+counter.
 
 ## Transactional email
 
@@ -301,6 +345,7 @@ Documentation-only changes do not change a service image and do not require a se
 ## Operational safety
 
 - Treat signing-key and encryption-key rotation as migrations: existing tokens or encrypted values depend on the current keys.
+- Treat a stricter provider content schema like a data migration too: every Agent start re-validates stored Agent Secrets and Shared Credentials, so rows saved under the old rule stop their Agents' starts (with a 400 naming the integration) until re-saved. Before deploying such a change, run `python -m api.scripts.check_secret_contents` in each environment's API pod. It is read-only, lists failing rows by id and provider without printing values, and exits non-zero when any fail.
 - Verify migration and secret-hook behavior when changing API chart startup.
 - Keep runtime/platform differences explicit when changing Hermes, OpenClaw, Slack, Teams, Telegram, or Discord deployment configuration.
 - The content-free Communications operation journal is retained for

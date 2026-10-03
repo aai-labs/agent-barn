@@ -37,6 +37,7 @@ from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
+    AGENT_LLM_BUDGET_CHANGED,
     AGENT_SECRET_ADDED,
     AGENT_SECRET_REMOVED,
     AGENT_UPDATED,
@@ -124,6 +125,131 @@ class AgentRepository:
                 )
             ).all()
             return [(row[0], row[1], row[2]) for row in rows]
+
+    def list_llm_budget_targets(self, organization_id: UUID | None = None, *, with_key: bool = True) -> list[Agent]:
+        """Live Agents for spend-limit work: by default only those holding a key a
+        limit can be written onto, or every live Agent for an overview.
+
+        One Organization's, or every Organization's for the scheduled passes. Same
+        exclusions and reasoning as list_llm_credentials. Unscoped by Agent
+        visibility: callers are system passes or hold Organization-wide `cost.read`.
+        """
+        with Session(self.delegate.engine) as session:
+            query = select(Agent).where(col(Agent.deleted_at).is_(None))
+            if with_key:
+                query = query.where(col(Agent.litellm_key_encrypted) != "")
+            if organization_id is not None:
+                query = query.where(col(Agent.organization_id) == organization_id)
+            return list(session.exec(query.order_by(col(Agent.created_at).asc())).all())
+
+    def count_by_llm_budget_source(self, organization_id: UUID) -> tuple[int, int]:
+        """(inheriting, own) Agent counts for the default Agent spend limit.
+
+        Unscoped by Agent visibility for the same reason as count_by_model_source:
+        the numbers state how far a default change reaches, naming no Agent.
+        """
+        with Session(self.delegate.engine) as session:
+            inheriting, own = session.exec(
+                select(
+                    func.count().filter(col(Agent.llm_budget_usd).is_(None)),
+                    func.count().filter(col(Agent.llm_budget_usd).is_not(None)),
+                )
+                .select_from(Agent)
+                .where(col(Agent.organization_id) == organization_id)
+                .where(col(Agent.deleted_at).is_(None))
+            ).one()
+            return int(inheriting or 0), int(own or 0)
+
+    def set_llm_budget_with_event(
+        self,
+        agent_id: UUID,
+        amount_usd: float | None,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> tuple[Agent, list[UUID]] | None:
+        """An Agent's own spend limit and its change Event, atomically. None when the
+        Agent is gone."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agent = session.exec(
+                select(Agent).where(col(Agent.id) == agent_id, col(Agent.deleted_at).is_(None)).with_for_update()
+            ).first()
+            if agent is None:
+                return None
+            delivery_ids = self._stage_llm_budget_change(session, agent, amount_usd, actor, actor_display, None)
+            session.commit()
+            return agent, delivery_ids
+
+    def lower_llm_budgets_above(
+        self,
+        organization_id: UUID,
+        limit_usd: float,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+        reason: str,
+    ) -> tuple[list[Agent], list[UUID]]:
+        """Pull every live Agent limit above `limit_usd` down to it, one Event each.
+
+        One transaction: an Organization limit either brings all its Agents within it
+        or none, and each lowered Agent carries the reason in its audit record.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agents = list(
+                session.exec(
+                    select(Agent)
+                    .where(
+                        col(Agent.organization_id) == organization_id,
+                        col(Agent.deleted_at).is_(None),
+                        col(Agent.llm_budget_usd) > limit_usd,
+                    )
+                    .with_for_update()
+                ).all()
+            )
+            delivery_ids: list[UUID] = []
+            for agent in agents:
+                delivery_ids += self._stage_llm_budget_change(session, agent, limit_usd, actor, actor_display, reason)
+            session.commit()
+            return agents, delivery_ids
+
+    def _stage_llm_budget_change(
+        self,
+        session: Session,
+        agent: Agent,
+        amount_usd: float | None,
+        actor: ActorIdentity,
+        actor_display: str,
+        reason: str | None,
+    ) -> list[UUID]:
+        previous = agent.llm_budget_usd
+        agent.llm_budget_usd = amount_usd
+        agent.updated_at = datetime.now(UTC)
+        session.add(agent)
+        session.flush()
+        event = EVENT_REGISTRY.build_event(
+            event_name=AGENT_LLM_BUDGET_CHANGED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=agent.organization_id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT,
+                id=agent.id,
+                organization_id=agent.organization_id,
+            ),
+            correlation_id=uuid4(),
+            payload={
+                "organization_id": agent.organization_id,
+                "agent_id": agent.id,
+                "limit_usd": amount_usd,
+                "previous_limit_usd": previous,
+                "reason": reason,
+                "actor_display": actor_display,
+                "subject_display": agent.name,
+            },
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
 
     def get_by_id(self, agent_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:

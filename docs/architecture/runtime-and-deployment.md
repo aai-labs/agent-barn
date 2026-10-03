@@ -141,7 +141,7 @@ starts, after the config and plugin directories are prepared so doctor validates
 the config Agent Barn just wrote; healthy workspaces never run the broad doctor
 repair during startup. A failed migration is logged and does not stop startup.
 
-Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be a recognized silence marker (`[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`); ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement.
+Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be a recognized silence marker (`[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`); ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement. The appended Scheduled runs policy carries this silence rule and native origin/home-target guidance, including the startup HTTP-session boundary and repair of old jobs. The prompt no longer routes sends through `agentbarn-message`; native scheduler delivery belongs to the runtime. This prompt change does not enable separate initiated sends or relax the runtime tool and recipient-policy boundaries.
 
 ## Telemetry and costs
 

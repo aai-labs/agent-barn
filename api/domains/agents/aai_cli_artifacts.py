@@ -339,40 +339,18 @@ def build_local_tools_policy_md(mounted_skill_names: Iterable[str]) -> str:
 
     Kept separate from the integrations block because that one tells the agent to always
     pass ``--profile``, which is exactly wrong here — these take no profile and no
-    credentials.
-
-    A tool that produces files is only half useful if the agent cannot hand one back, and
-    naming the file in prose does not attach it. Both runtimes attach on a ``MEDIA:<path>``
-    token in the reply — Hermes matches it anywhere, OpenClaw also has a line-start-only
-    path, so the guidance insists on its own line to satisfy both.
+    credentials. Where to write a file and how to hand it back is
+    ``build_file_delivery_policy_md``'s job: it depends on the agent's Connections, not on
+    which tool made the file, and an Agent without a native chat Connection cannot share one.
     """
     lines = [CREDENTIAL_FREE_TOOLS[name] for name in mounted_skill_names if name in CREDENTIAL_FREE_TOOLS]
     if not lines:
         return ""
-    block = (
+    return (
         "\n## Local file tools (aai-cli)\n\n"
         "These work on files on this machine. They need **no credentials and no "
         "`--profile`** — do not ask the user to authenticate for them.\n\n" + "\n".join(lines) + "\n"
     )
-    block += (
-        "\nWrite files you intend to share into `/workspace` — it persists across restarts "
-        "and is readable by the messaging layer.\n"
-    )
-    block += (
-        "\n**Always send back a file you produced.** When you create or update a file the "
-        "user asked for, attach it in that same reply — do not wait to be asked, and do "
-        "not just tell them where you saved it. A path they cannot open is not an answer.\n"
-        "\nAttach it by putting `MEDIA:<absolute path>` **on its own line** at the end of the "
-        "reply:\n\n"
-        "```\n"
-        "Here's the Q1 report.\n"
-        "MEDIA:/workspace/q1-report.xlsx\n"
-        "```\n\n"
-        "Naming the file in prose does **not** attach it — delivery only happens when that "
-        "token is present. Keep it on its own line and keep the path absolute: one runtime "
-        "only scans line starts, so a token buried mid-sentence is silently ignored.\n"
-    )
-    return block
 
 
 # Display label per provider for the agents_md integrations block.

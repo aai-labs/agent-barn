@@ -14,6 +14,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-03 — Merge staging compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Preserved: staging spend-limit configuration and terminal-error tracking alongside bridge-free Web Chat/Email runtime delivery; the retired initiated-send execution binding remains removed.
+- Reconciled: staging Scheduled runs and native file-attachment prompt policies remain, with native origin/home-target guidance retained. Runtime tool and transport boundaries stay code-owned.
+- Migration: merge the gateway-retirement/driver-default and self-service spend-limit revision branches into one Alembic head without rewriting either history.
+
 ### 2026-10-03 — Review verification: complete Docker-backed checks — PR pending
 
 - Verified: `make test-api` passes all 3,155 tests; `make test-ui` passes all 434 browser tests. API lint/format/types, UI lint/types, one migration head, and Helm lint/render pass.
@@ -154,6 +160,9 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Delivered: native Connections reject gateway reconnect and historical Delivery retry without changing their health or durable history. Gateway Connections without a supervised provider session reject reconnect; gateway Delivery retry remains available. Recovery retains the existing Agent update authorization and tenant concealment behavior.
 - Changed: Connection responses add effective transport and supported recovery actions. Dashboard diagnostics use those actions to gate controls, show native Agent restart guidance, and retain readable history. Older API responses remain accepted with recovery controls hidden. The [runtime recovery contract](../../architecture/runtime-and-deployment.md#connection-failure-recovery) owns these behaviors.
 - Follow-up: fix chat-platform ownership by Platform and remove the deployment switch and gateway fallback in subsequent reviewed slices; obsolete runtime plugin removal has not landed yet.
+### 2026-10-02 — Drop the gateway messaging policy from AGENTS.md — PR pending
+
+- Changed: The "Message Delivery" section appended to every Agent's AGENTS.md (from [PR #188](https://github.com/aai-labs/agent-barn/pull/188)) is removed. It told Agents to send through the deprecated `agentbarn-message` client and never to call the message tool from a cron run. Since OpenClaw Slack and Discord run in OpenClaw's own gateway, native Agents read it as binding and refused sends their gateway supports: a Pipedrive Sales Analyst Agent refused to post its scheduled daily update as a header message with the update in its thread. A "Scheduled runs" section keeps the runtime-neutral rule that an empty scheduled run returns a silence marker.
 
 ### 2026-09-30 — Use Agent identity in the Slack manifest — PR pending
 

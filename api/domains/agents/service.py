@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
@@ -26,6 +27,8 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
+    HERMES_WORKSPACE_DIR,
+    OPENCLAW_WORKSPACE_DIR,
     build_config_map,
     build_deployment,
     build_hermes_config_map,
@@ -49,6 +52,7 @@ from api.domains.agents.builders import (
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
+from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -111,8 +115,9 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
-    build_messaging_policy_md,
+    build_file_delivery_policy_md,
     build_role_scope_policy_md,
+    build_scheduled_runs_policy_md,
 )
 from api.domains.agents.selection import (
     SelectionValidator,
@@ -236,6 +241,11 @@ def _enrich_atlassian_content(content: Any) -> Any:
     return content
 
 
+def _validation_problems(exc: ValidationError) -> str:
+    """Field paths and messages of a validation failure, without the rejected values."""
+    return "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors(include_input=False))
+
+
 def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
     """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
     An empty allowlist blocks everything. Matching is case-insensitive.
@@ -266,6 +276,7 @@ class AgentService:
     organization_lookup: OrganizationLookupService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
+    agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
     plugins: PlatformPluginRegistry
@@ -731,11 +742,21 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
-            shared_content = decrypt_content(
-                shared_cred.provider,
-                shared_cred.content,
-                self.config.agent_token_encryption_key,
-            )
+            try:
+                shared_content = decrypt_content(
+                    shared_cred.provider,
+                    shared_cred.content,
+                    self.config.agent_token_encryption_key,
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Shared credential {shared_cred.name!r} has stored "
+                        f"{PROVIDER_DISPLAY_NAMES[shared_cred.provider]} settings that are no longer valid "
+                        f"({_validation_problems(exc)}). Edit the shared credential and save it again."
+                    ),
+                ) from exc
             live_validation_contents.append((shared_cred.provider, shared_content))
             prepared_secrets.append(
                 AgentSecret(
@@ -792,9 +813,17 @@ class AgentService:
         allocated_litellm_key: str | None = None
         try:
             if self.config.litellm_base_url and self.config.litellm_secret_name:
+                # A new Agent follows the default, so its key is capped from the first
+                # call — and a team created here carries the Organization's limit.
+                key_budget = self.agent_budgets.key_budget_for_new_agent(agent.organization_id)
                 try:
                     allocated_litellm_key = self.litellm.generate_key(
-                        str(agent.id), agent.name, str(agent.organization_id)
+                        str(agent.id),
+                        agent.name,
+                        str(agent.organization_id),
+                        max_budget=key_budget.agent_limit_usd,
+                        budget_duration=key_budget.window,
+                        team_budget=key_budget.organization_limit_usd,
                     )
                 except LiteLLMError as exc:
                     raise HTTPException(
@@ -1982,7 +2011,20 @@ class AgentService:
             else:
                 ciphertext = s.content
             assert ciphertext is not None
-            decrypted[provider] = decrypt_content(provider, ciphertext, key)
+            try:
+                decrypted[provider] = decrypt_content(provider, ciphertext, key)
+            except ValidationError as exc:
+                # Stored content is re-validated on every start, so a schema that tightened
+                # after the secret was saved (e.g. the Pipedrive domain rule) stops here with
+                # a fixable message rather than an unhandled error. Re-saving the
+                # integration replaces the stored content.
+                raise AgentProvisioningPrecondition(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"The stored {PROVIDER_DISPLAY_NAMES[provider]} integration settings are no longer valid "
+                        f"({_validation_problems(exc)}). Edit the integration and save it again."
+                    ),
+                ) from exc
         self._backfill_google_client_credentials(decrypted)
         # Only google_workspace is materialized. The retired per-service Google providers
         # and their rows were deleted by migration; affected agents must reconnect through
@@ -2133,14 +2175,19 @@ class AgentService:
         # in the auto-loaded prompt no matter that its skill is mounted.
         # gog gets its own block: the aai-cli one insists on --profile and on aai-cli
         # being the only route to its integrations, neither of which is true of gog.
+        workspace_dir = HERMES_WORKSPACE_DIR if agent.agent_type == AgentType.HERMES else OPENCLAW_WORKSPACE_DIR
         agents_md = (
             rendered.agents_md
             + build_integrations_policy_md(decrypted)
             + build_gog_policy_md(gws_content if isinstance(gws_content, GoogleWorkspaceContent) else None)
             + build_local_tools_policy_md(s.name for s in mounted_skills)
+            + build_file_delivery_policy_md(
+                # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
+                workspace_dir if any(c is not None for c in (native_slack, native_discord, native_telegram)) else None
+            )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
-            + build_messaging_policy_md()
+            + build_scheduled_runs_policy_md()
         )
 
         if agent.agent_type == AgentType.HERMES:

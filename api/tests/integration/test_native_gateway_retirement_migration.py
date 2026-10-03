@@ -60,15 +60,25 @@ def retirement_database(monkeypatch):
 def seed(engine, *, bulk=False):
     now = datetime.now(UTC)
     table = Table("communication_connection", MetaData(), autoload_with=engine)
+    organization_table = Table("organization", MetaData(), autoload_with=engine)
+    agent_table = Table("agent", MetaData(), autoload_with=engine)
     with Session(engine) as session:
         organizations = [Organization(name="Retirement A"), Organization(name="Retirement B")]
-        session.add_all(organizations)
-        session.flush()
+        # Seed the historical schema without projecting later spend-limit columns.
+        for organization in organizations:
+            session.connection().execute(
+                organization_table.insert().values(
+                    **{key: value for key, value in organization.model_dump().items() if key in organization_table.c}
+                )
+            )
         rows = []
         for organization in organizations:
             agent = Agent(name="Historical Agent", organization_id=organization.id, deleted_at=now)
-            session.add(agent)
-            session.flush()
+            session.connection().execute(
+                agent_table.insert().values(
+                    **{key: value for key, value in agent.model_dump().items() if key in agent_table.c}
+                )
+            )
             for platform in ("slack", "discord", "telegram", "teams", "web", "email"):
                 connection = CommunicationConnection(
                     organization_id=organization.id,

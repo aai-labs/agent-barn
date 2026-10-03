@@ -33,14 +33,24 @@ def driver_key_database(monkeypatch):
     engine = create_engine(target_url)
     try:
         command.upgrade(config, PREVIOUS_REVISION)
+        organization_table = Table("organization", MetaData(), autoload_with=engine)
+        agent_table = Table("agent", MetaData(), autoload_with=engine)
         with Session(engine) as session:
             organization = Organization(name="Driver default migration")
-            session.add(organization)
-            session.flush()
+            # Current mappings contain spend-limit columns absent at this revision.
+            session.connection().execute(
+                organization_table.insert().values(
+                    **{key: value for key, value in organization.model_dump().items() if key in organization_table.c}
+                )
+            )
             agent = Agent(
                 name="Historical Migration Agent", organization_id=organization.id, deleted_at=datetime.now(UTC)
             )
-            session.add(agent)
+            session.connection().execute(
+                agent_table.insert().values(
+                    **{key: value for key, value in agent.model_dump().items() if key in agent_table.c}
+                )
+            )
             session.commit()
             database = SimpleNamespace(config=config, engine=engine, agent_id=agent.id, organization_id=organization.id)
         yield database

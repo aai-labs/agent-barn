@@ -1,4 +1,9 @@
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
+from api.domains.agents.runtime_policy import (
+    build_chat_commands_policy_md,
+    build_file_delivery_policy_md,
+    build_role_scope_policy_md,
+    build_scheduled_runs_policy_md,
+)
 
 # --- build_chat_commands_policy_md --------------------------------------------
 
@@ -80,3 +85,63 @@ def test_role_scope_policy_md_is_runtime_neutral():
 def test_role_scope_policy_md_does_not_mention_profiles():
     # Same "no integrations configured" contract the chat-commands block guards.
     assert "--profile" not in build_role_scope_policy_md()
+
+
+# --- build_file_delivery_policy_md --------------------------------------------
+
+
+def test_file_delivery_policy_md_is_empty_without_a_native_chat_connection():
+    """Gateway-owned Connections send text only; promising an attachment there would
+    have the agent report a file the user never receives."""
+    assert build_file_delivery_policy_md(None) == ""
+
+
+def test_file_delivery_policy_md_tells_agents_how_to_attach_a_file():
+    """Producing a file is only half the job: the runtimes attach on an explicit MEDIA:
+    token, so naming the file in prose silently sends text and no attachment."""
+    md = build_file_delivery_policy_md("/workspace")
+    assert "MEDIA:<absolute path>" in md
+    assert "/workspace" in md
+    # The failure mode is silent, so the instruction has to be explicit about it.
+    assert "does **not** attach" in md
+
+
+def test_attaching_a_produced_file_is_the_default_not_a_request():
+    """Explaining the mechanism was not enough — agents described where they saved the file
+    and waited to be asked for it. Attaching has to read as standing behaviour."""
+    md = build_file_delivery_policy_md("/workspace")
+    assert "Always send back a file you produced" in md
+    assert "do not wait to be asked" in md
+
+
+def test_attach_token_is_documented_on_its_own_line_for_both_runtimes():
+    """Both runtimes parse MEDIA:, but OpenClaw also has a line-start-only extractor, so a
+    token buried mid-sentence would be dropped there while working on Hermes."""
+    md = build_file_delivery_policy_md("/workspace")
+    assert "on its own line" in md
+    # The worked example must itself put the token at the start of a line.
+    assert "\nMEDIA:/workspace/q1-report.xlsx\n" in md
+
+
+def test_file_delivery_policy_md_is_runtime_neutral():
+    md = build_file_delivery_policy_md("/workspace")
+    assert "Hermes" not in md
+    assert "OpenClaw" not in md
+
+
+# --- build_scheduled_runs_policy_md --------------------------------------------
+
+
+def test_scheduled_runs_policy_md_keeps_the_silence_markers():
+    md = build_scheduled_runs_policy_md()
+    for marker in ("[SILENT]", "SILENT", "NO_REPLY", "NO REPLY", "HEARTBEAT_OK"):
+        assert marker in md
+
+
+def test_scheduled_runs_policy_md_does_not_route_sends_through_the_deprecated_client():
+    """Chat platforms run in the runtimes' own gateways; telling agents to use
+    `agentbarn-message` and to avoid the message tool in cron made them refuse
+    sends their gateway supports, such as a scheduled header plus thread reply."""
+    md = build_scheduled_runs_policy_md()
+    assert "agentbarn-message" not in md
+    assert "message tool" not in md
