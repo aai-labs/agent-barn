@@ -184,6 +184,14 @@ hooks directly. Shared setup lives in
   chain, pins the Teams runtime listener's environment/port/path contract, and runs
   the telemetry plugin against the real SessionStore. The workflow invokes this
   entrypoint when either the Hermes builder or base image changes.
+- `../../api/tests/fixtures/test-messaging-retirement.sh` exercises fresh, upgraded,
+  and restored persistent state using generated configuration in both pinned images.
+  Hermes image tests also drive native origin/home scheduled delivery and silence.
+  `../../openclaw-base/test-native-runtime.sh` checks native one-shot scheduling,
+  observer hooks, retirement, and the generated native tool policy (`message` denied,
+  `cron` allowed). Hermes checks that its send engine is absent from the agent tool
+  registry. Scheduler fixtures simulate model/provider execution;
+  they prove native routing and execution boundaries without sending live messages.
 - The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
   generated runtime configuration in the real image and proves materialized
   Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The

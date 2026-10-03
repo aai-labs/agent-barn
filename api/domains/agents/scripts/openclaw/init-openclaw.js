@@ -95,6 +95,20 @@ if (config.meta) delete config.meta.lastTouchedAt;
 
 const merged = deepMerge(config, overlay);
 
+// Deep merging must not resurrect the retired managed messaging plugin on a PVC.
+const plugins = merged.plugins;
+if (plugins) {
+  for (const key of ['entries', 'installs']) {
+    if (plugins[key]) delete plugins[key]['agentbarn-messaging'];
+  }
+  for (const key of ['allow', 'deny']) {
+    if (Array.isArray(plugins[key])) plugins[key] = plugins[key].filter(id => id !== 'agentbarn-messaging');
+  }
+  if (Array.isArray(plugins.load?.paths)) {
+    plugins.load.paths = plugins.load.paths.filter(p => path.basename(p.replace(/\/$/, '')) !== 'agentbarn-messaging');
+  }
+}
+
 for (const parts of REPLACE_PATHS) {
   const overlayVal = getPath(overlay, parts);
   if (overlayVal !== undefined) setPath(merged, parts, overlayVal);

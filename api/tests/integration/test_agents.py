@@ -154,23 +154,6 @@ _GIVEN_WITH_HERMES_IMAGE = [
     there_is_a_template(),
 ]
 
-_GIVEN_WITH_NATIVE_PLATFORMS = [
-    set_env_variable(
-        {
-            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
-            "LITELLM_BASE_URL": "http://litellm:4000",
-            "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
-            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-            "API_EXTERNAL_URL": "https://api.test.com",
-            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
-            "COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord,telegram,teams",
-        }
-    ),
-    *_GIVEN_WITH_HERMES_IMAGE[1:],
-]
-
-
 # Same as _GIVEN but with no server-owned Google OAuth client. Set here rather than in a
 # later step because Config is built (and cached) when the injector is prepared, and a
 # developer's root .env may define real Google credentials.
@@ -2491,7 +2474,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
             assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["display"]["platforms"], equal_to({}))
-            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push", "agentbarn-messaging"]))
+            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push"]))
             assert_that(cfg, is_not(has_key("slack")))
 
         with then("the ConfigMap has the headless runtime adapter"):
@@ -2529,7 +2512,6 @@ def _native_discord_connection(context) -> None:
                 "home_channel_id": "channel-home",
             },
             credentials_encrypted=encrypt_token(json.dumps({"bot_token": "discord-token"}), TEST_ENCRYPTION_KEY),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2539,7 +2521,7 @@ def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
 
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(agent_type=AgentType.HERMES),
             _native_discord_connection,
         ]
@@ -2564,7 +2546,6 @@ def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
             assert_that(secret["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
             assert_that(secret["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
             assert_that(secret["DISCORD_HOME_CHANNEL"], equal_to("channel-home"))
-            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
             assert_that("AGENTBARN_DISCORD_POLICY" in secret, equal_to(False))
 
 
@@ -2583,7 +2564,6 @@ def _native_telegram_connection(context) -> None:
                 "home_channel_id": "-1009",
             },
             credentials_encrypted=encrypt_token(json.dumps({"bot_token": "123:telegram-token"}), TEST_ENCRYPTION_KEY),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2593,7 +2573,7 @@ def test_start_hermes_agent_runs_telegram_in_the_native_gateway() -> None:
 
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(agent_type=AgentType.HERMES),
             _native_telegram_connection,
         ]
@@ -2617,7 +2597,6 @@ def test_start_hermes_agent_runs_telegram_in_the_native_gateway() -> None:
             assert_that(secret["TELEGRAM_ALLOWED_CHATS"], equal_to("-1001"))
             assert_that(secret["TELEGRAM_ALLOWED_USERS"], equal_to("111"))
             assert_that(secret["TELEGRAM_HOME_CHANNEL"], equal_to("-1009"))
-            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
 
 
 def _runtime_teams_connection(context) -> None:
@@ -2633,7 +2612,6 @@ def _runtime_teams_connection(context) -> None:
                 json.dumps({"app_id": "teams-app", "app_password": "teams-secret", "tenant_id": "teams-tenant"}),
                 TEST_ENCRYPTION_KEY,
             ),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2643,7 +2621,7 @@ def test_start_hermes_agent_runs_teams_in_the_runtime_transport() -> None:
 
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(agent_type=AgentType.HERMES),
             _runtime_teams_connection,
         ]
@@ -2682,7 +2660,6 @@ def _native_slack_connection(context) -> None:
             credentials_encrypted=encrypt_token(
                 json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}), TEST_ENCRYPTION_KEY
             ),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2690,7 +2667,7 @@ def _native_slack_connection(context) -> None:
 def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> None:
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(),
             _native_slack_connection,
             _native_discord_connection,
@@ -2726,7 +2703,6 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
             assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to("123:telegram-token"))
             assert_that(secret["MSTEAMS_APP_PASSWORD"], equal_to("teams-secret"))
             assert_that(secret["AGENTBARN_NATIVE_CHANNELS"], equal_to("slack,discord,telegram,msteams"))
-            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
             service = k8s.create_service.call_args.args[1]
             assert_that([port.name for port in service.spec.ports], has_item("webhook"))
 
@@ -2736,7 +2712,7 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
     [(AgentType.OPENCLAW, "/home/node/.openclaw/workspace"), (AgentType.HERMES, "/workspace")],
 )
 def test_start_agent_with_native_chat_connection_tells_it_how_to_send_files(agent_type, workspace) -> None:
-    with given([*_GIVEN_WITH_NATIVE_PLATFORMS, there_is_an_agent(agent_type=agent_type), _native_slack_connection]) as (
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=agent_type), _native_slack_connection]) as (
         context
     ):
         client: TestClient = context.client

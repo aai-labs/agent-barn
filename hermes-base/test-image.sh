@@ -40,9 +40,11 @@ docker run --rm --network none \
     "$image" \
     /driver.py
 
+# Native scheduler delivery remains active without the retired completion capture patch.
 docker run --rm --network none \
-    -v "$repo_root/api/domains/agents/scripts/messaging:/messaging:ro" \
-    -v "$repo_root/api/tests/fixtures/hermes_message_completion_driver.py:/message-driver.py:ro" \
-    --entrypoint python3 "$image" /message-driver.py
+    -v "$repo_root/api/tests/fixtures/hermes_native_delivery_driver.py:/native-driver.py:ro" \
+    --entrypoint python3 "$image" /native-driver.py
+
+sh "$repo_root/api/tests/fixtures/test-messaging-retirement.sh" "$image" hermes
 
 echo 'All Hermes image tests passed'

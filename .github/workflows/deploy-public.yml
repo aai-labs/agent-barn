@@ -333,7 +333,6 @@ jobs:
           # The public deployment's own defaults, like its other PUBLIC_ settings.
           ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_ORGANIZATION_DEFAULT_LLM_BUDGET_USD }}
           AGENT_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_AGENT_DEFAULT_LLM_BUDGET_USD }}
-          COMMUNICATIONS_NATIVE_PLATFORMS: ${{ vars.COMMUNICATIONS_NATIVE_PLATFORMS }}
         run: helmfile -f helmfile.yaml.gotmpl sync --wait
 
   # Runs after `deploy` on purpose: the Worker posts inbound mail into this

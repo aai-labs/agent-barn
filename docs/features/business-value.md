@@ -238,10 +238,10 @@ What the delivery statuses mean:
 
 ### Coverage
 
-- Only Connections on the Communications Gateway create Communication Deliveries. Platforms listed in `COMMUNICATIONS_NATIVE_PLATFORMS` run natively. That is Slack, Discord, Telegram, and Teams in deployed environments; the setting is empty by default and in local k3d.
+- Only gateway-owned Connections create new Communication Deliveries. Ownership follows the [fixed Platform contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary) in every environment; deployment allowlists no longer change coverage.
 - Native traffic is mirrored into `agent_chat_message` through Ingest but has no delivery rows. Web Chat and Email always create them.
 - The handled rate and the response time therefore cover only part of the Requests. Each is returned with its coverage count, so the dashboard can say "based on 120 of 480 requests".
-- Native avoidance is transport routing, not a check when a delivery is accepted. A delivery created before its Platform switched to native stays PENDING and is left out of the denominator.
+- Gateway ingress and runtime callbacks reject native transport. Historical deliveries created before the cutoff remain readable and cannot be claimed or revived by expired-lease recovery. Stranded PENDING rows and the CANCELLED rows produced by the [native delivery retirement migration](../architecture/runtime-and-deployment.md#connection-failure-recovery) remain outside the handled-rate denominator.
 
 ### Response
 

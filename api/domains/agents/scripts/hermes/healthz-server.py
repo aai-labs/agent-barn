@@ -125,7 +125,7 @@ def _healthz_result(ok, ever, reason) -> tuple[int, dict]:
 
 
 def _liveness_result() -> tuple[int, dict]:
-    """The sidecar process is live; provider sessions run in Communications."""
+    """Report sidecar liveness independently of native provider-session health."""
     return 200, {"live": True}
 
 

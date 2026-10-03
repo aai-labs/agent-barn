@@ -91,7 +91,6 @@ def _there_is_an_inbound_message(context, *, occurred_at: datetime) -> AgentChat
             platform_key="slack",
             display_name="Test Slack",
             credentials_encrypted="test-credentials",
-            driver_key_encrypted="test-driver-key",
         )
         delegate.save(context.communication_connection)
     message = AgentChatMessage(

@@ -53,10 +53,6 @@ POLICY_DISPOSITIONS = Counter(
 )
 
 
-def record_reconnect() -> None:
-    RECONNECTS.inc()
-
-
 def record_policy_disposition(disposition: CommunicationPolicyDisposition) -> None:
     POLICY_DISPOSITIONS.labels(disposition=_value(disposition)).inc()
 
