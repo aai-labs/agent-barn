@@ -552,11 +552,6 @@ class CommunicationDiagnosticsRead(PydanticBaseModel):
     window_end: datetime
 
 
-class CommunicationReconnectRead(PydanticBaseModel):
-    connection: CommunicationConnectionRead
-    requested_at: datetime
-
-
 class CommunicationRetryRead(PydanticBaseModel):
     delivery_id: UUID
     status: CommunicationDeliveryStatus
@@ -707,7 +702,7 @@ class CommunicationConnectionRead(PydanticBaseModel):
     display_name: str
     enabled: bool
     transport: Literal["gateway", "native"] = "gateway"
-    recovery_actions: list[Literal["reconnect", "retry_delivery"]] = Field(default_factory=list)
+    recovery_actions: list[Literal["retry_delivery"]] = Field(default_factory=list)
     schema_version: int
     settings: dict[str, Any]
     external_identity: str | None

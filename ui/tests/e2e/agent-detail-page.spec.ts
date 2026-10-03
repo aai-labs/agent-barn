@@ -816,7 +816,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     expect(widths.alert).toBeCloseTo(widths.content, 0);
   });
 
-  test("shows delivery activity, lets an operator copy an error, and confirms a reconnect request", async ({ context }) => {
+  test("shows native delivery history and lets an operator copy an error", async ({ context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     // Delivery transitions are the primary activity surface. Connection
     // failures are explained inline from the diagnostics read model.
@@ -884,11 +884,8 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
     await connectionDetailPage.failedOnlyCheckbox().uncheck();
 
-    const reconnect = connectionDetailPage.waitForReconnectRequest();
-    await connectionDetailPage.reconnectButton().click();
-    await expect(connectionDetailPage.reconnectDialog()).toBeVisible();
-    await connectionDetailPage.confirmReconnectButton().click();
-    await reconnect;
+    await expect(connectionDetailPage.reconnectButton()).toHaveCount(0);
+    await expect(connectionDetailPage.nativeRecoveryGuidance()).toBeVisible();
   });
 
   for (const recovery of [

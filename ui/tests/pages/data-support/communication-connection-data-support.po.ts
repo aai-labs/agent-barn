@@ -8,7 +8,6 @@ import {
   mockCommunicationDeliveryJournalPage,
   mockCommunicationDeliveryLifecyclePage,
   mockCommunicationDeliveryLifecyclePage2,
-  mockCommunicationReconnectResponse,
   mockCommunicationPlatforms,
   mockCreatedCommunicationConnection,
   mockUpdatedCommunicationConnection,
@@ -148,18 +147,6 @@ export class CommunicationConnectionDataSupport {
         roles: [{ id: "role-one", label: "@Maintainer", detail: null }],
       }[kind] ?? [];
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(entries) });
-    });
-
-    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connections/*/reconnect`, async (route) => {
-      if (route.request().method() !== "POST") {
-        await route.fallback();
-        return;
-      }
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify(mockCommunicationReconnectResponse),
-      });
     });
   }
 }

@@ -14,6 +14,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-03 — Review follow-up: remove unreachable reconnect UI — PR pending
+
+- Removed: unreachable reconnect mutation, confirmation, response DTO/schema, and recovery-action literal. The compatibility route retains authorization and tenant scoping but documents its terminal `409` instead of a successful `202`. Historical reconnect counts and journal identities remain readable.
+- Corrected: Discord browser fixtures use native ownership and no gateway recovery; the historical diagnostics test verifies Agent restart guidance instead of simulating successful reconnect. Four focused browser checks, UI lint/type checks, and API static checks pass.
+
 ### 2026-10-03 — Review follow-up: remove redundant delivery exclusions — PR pending
 
 - Removed: native allowlist parameters and redundant exclusions from gateway Delivery claims, plus the unused general enabled-Connection scan. Claims retain the fixed Web Chat/Email inclusion filter.
