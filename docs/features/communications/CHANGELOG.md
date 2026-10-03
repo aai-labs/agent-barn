@@ -14,6 +14,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-03 — Re-review follow-up: preserve independent retirement warnings — PR pending
+
+- Corrected: failed advisory-report writes retain the job-store audit result and report a separate `report_write=failed` warning. Permission regressions cover both absent and unreadable stores and skip under root, which bypasses directory permissions.
+
 ### 2026-10-03 — Review follow-up: remove unreachable reconnect UI — PR pending
 
 - Removed: unreachable reconnect mutation, confirmation, response DTO/schema, and recovery-action literal. The compatibility route retains authorization and tenant scoping but documents its terminal `409` instead of a successful `202`. Historical reconnect counts and journal identities remain readable.
@@ -32,7 +36,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ### 2026-10-03 — Review follow-up: tolerate an unwritable retirement report — PR pending
 
-- Corrected: failure to save the advisory retirement report logs `job_audit=unwritable` instead of blocking Agent startup. Managed plugin removal still fails loudly; job stores and history remain untouched.
+- Corrected: failure to save the advisory retirement report logs `report_write=failed` without masking unreadable native stores instead of blocking Agent startup. Managed plugin removal still fails loudly; job stores and history remain untouched.
 - Verified: a real read-only state-directory regression fails with the old script and passes with the fix.
 
 ### 2026-10-03 — Review follow-up: fence old replicas during cleanup rollout — PR pending

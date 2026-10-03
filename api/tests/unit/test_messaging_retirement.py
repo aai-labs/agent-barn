@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import sqlite3
 import subprocess
 import tarfile
@@ -102,18 +103,27 @@ def test_unreadable_job_store_is_reported_without_content_or_changes(tmp_path):
     assert store.read_text() == "private corrupt job store"
 
 
-def test_unwritable_audit_report_does_not_block_startup(tmp_path, capsys):
+@pytest.mark.skipif(os.geteuid() == 0, reason="Root bypasses directory write permissions")
+@pytest.mark.parametrize("corrupt_store", [False, True])
+def test_unwritable_audit_report_does_not_block_startup(tmp_path, capsys, corrupt_store):
     state = tmp_path / "state"
     plugin = state / "plugins/agentbarn-messaging"
     plugin.mkdir(parents=True)
+    if corrupt_store:
+        store = state / "cron/jobs.json"
+        store.parent.mkdir()
+        store.write_text("private corrupt job store")
     state.chmod(0o555)
     try:
         report = _retirement().retire("hermes", state)
     finally:
         state.chmod(0o755)
     assert not plugin.exists()
-    assert report["job_audit"] == "unwritable"
-    assert "job_audit=unwritable" in capsys.readouterr().out
+    assert report["job_audit"] == ("unreadable" if corrupt_store else "absent")
+    assert report["report_write"] == "failed"
+    output = capsys.readouterr().out
+    assert "report_write=failed" in output
+    assert "private" not in output
 
 
 def test_openclaw_merged_config_cannot_resurrect_retired_plugin(tmp_path):

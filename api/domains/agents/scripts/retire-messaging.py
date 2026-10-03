@@ -64,10 +64,11 @@ def retire(runtime: str, state: Path) -> dict:
         (state / "retired-messaging-audit.json").write_text(json.dumps(report) + "\n")
     except OSError:
         # The report is advisory; plugin removal above must still succeed.
-        report["job_audit"] = "unwritable"
+        report["report_write"] = "failed"
     print(
         f"[messaging-retirement] spool_present={report['spool_present']} "
-        f"job_audit={report['job_audit']} jobs_requiring_repair={len(report['jobs_requiring_repair'])}",
+        f"job_audit={report['job_audit']} report_write={report.get('report_write', 'written')} "
+        f"jobs_requiring_repair={len(report['jobs_requiring_repair'])}",
         flush=True,
     )
     return report
