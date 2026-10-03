@@ -190,13 +190,22 @@ class CommunicationConnectionRepository:
                 safe_details
             )
             safe_message = CommunicationOperationalRepository.safe_error_summary(error_message, details=safe_details)
+            serialized_details = safe_details.model_dump(mode="json", exclude_none=True) if safe_details else None
+            if (
+                expected_revision is not None
+                and connection.observed_status == status
+                and connection.last_error_code == safe_code
+                and connection.last_error_message == safe_message
+                and connection.last_error_details == serialized_details
+            ):
+                # Email configuration health is stable until configuration changes.
+                # Keep native observer heartbeat timestamps refreshing independently.
+                return
             connection.observed_status = status
             connection.last_health_at = datetime.now(UTC)
             connection.last_error_code = safe_code
             connection.last_error_message = safe_message
-            connection.last_error_details = (
-                safe_details.model_dump(mode="json", exclude_none=True) if safe_details is not None else None
-            )
+            connection.last_error_details = serialized_details
             session.add(connection)
             if previous_status != status and self.operations is not None:
                 stage_by_status = {
@@ -223,9 +232,7 @@ class CommunicationConnectionRepository:
                         organization_id=connection.organization_id,
                         actor=ActorIdentity(
                             type=ActorIdentityType.SYSTEM,
-                            id="communications-maintenance"
-                            if expected_revision is not None
-                            else "communications-supervisor",
+                            id="communications-maintenance" if expected_revision is not None else "runtime-observer",
                         ),
                         subject=SubjectIdentity(
                             type=SubjectIdentityType.AGENT,
@@ -245,7 +252,7 @@ class CommunicationConnectionRepository:
                             else None,
                             "actor_display": "Communications Maintenance"
                             if expected_revision is not None
-                            else "Communications Supervisor",
+                            else "Runtime Observer",
                             "subject_display": connection.display_name,
                         },
                     )

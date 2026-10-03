@@ -14,6 +14,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-03 — Review follow-up: avoid unchanged Email health writes — PR pending
+
+- Corrected: revision-guarded Email configuration checks skip updates when status and safe error fields are unchanged, preserving `last_health_at` and avoiding row churn. Native observer health continues refreshing heartbeat timestamps.
+- Synchronized: runtime observer audit identity replaces the retired supervisor name; the RBAC brief lists the bounded background Email scan.
+- Verification: PostgreSQL regression coverage checks repeat maintenance cycles preserve the row version and timestamp; execution is blocked locally because Docker is unavailable.
+
 ### 2026-10-03 — Review follow-up: tolerate an unwritable retirement report — PR pending
 
 - Corrected: failure to save the advisory retirement report logs `job_audit=unwritable` instead of blocking Agent startup. Managed plugin removal still fails loudly; job stores and history remain untouched.

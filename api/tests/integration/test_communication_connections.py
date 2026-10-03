@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import zipfile
@@ -29,7 +30,7 @@ from hamcrest import (
     not_none,
     starts_with,
 )
-from sqlalchemy import MetaData, Table
+from sqlalchemy import MetaData, Table, literal_column
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
@@ -37,6 +38,7 @@ from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.email_address_repository import AgentEmailAddressRepository
 from api.domains.communications.error_details import normalize_communication_error
+from api.domains.communications.maintenance import CommunicationsMaintenance
 from api.domains.communications.models import (
     AgentEmailAddress,
     CommunicationConnection,
@@ -1745,6 +1747,44 @@ def test_concurrent_email_configuration_health_emits_one_connection_transition()
             assert connection is not None
             assert_that(connection.model_dump(), not_(has_key("ingress_lease_owner")))
             assert_that(connection.model_dump(), not_(has_key("ingress_lease_expires_at")))
+
+
+def test_repeat_email_maintenance_cycle_does_not_rewrite_unchanged_health() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        worker = context.injector.get(CommunicationsMaintenance)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        asyncio.run(worker._reconcile())
+        with Session(delegate.engine) as session:
+            connection = session.exec(
+                select(CommunicationConnection).where(col(CommunicationConnection.id) == connection_id)
+            ).one()
+            assert_that(connection, not_none())
+            assert_that(connection.observed_status, equal_to(ConnectionObservedStatus.CONNECTED))
+            previous_health_at = connection.last_health_at
+            previous_version = session.exec(
+                select(literal_column("xmin::text"))
+                .select_from(CommunicationConnection)
+                .where(col(CommunicationConnection.id) == connection_id)
+            ).one()
+
+        with when("Email maintenance validates the same configuration again"):
+            asyncio.run(worker._reconcile())
+
+        with then("the durable row and its health timestamp remain unchanged"):
+            with Session(delegate.engine) as session:
+                connection = session.exec(
+                    select(CommunicationConnection).where(col(CommunicationConnection.id) == connection_id)
+                ).one()
+                assert_that(connection, not_none())
+                assert_that(connection.last_health_at, equal_to(previous_health_at))
+                version = session.exec(
+                    select(literal_column("xmin::text"))
+                    .select_from(CommunicationConnection)
+                    .where(col(CommunicationConnection.id) == connection_id)
+                ).one()
+                assert_that(version, equal_to(previous_version))
 
 
 def test_email_maintenance_pages_only_enabled_nonretired_email_connections() -> None:

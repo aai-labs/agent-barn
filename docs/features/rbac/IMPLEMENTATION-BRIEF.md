@@ -75,7 +75,7 @@ Visibility belongs in repository queries rather than post-fetch filtering. Membe
 
 Subordinate repositories must join or use an accessible-Agent query so alternate endpoints cannot reveal conversations, tool calls, costs, logs, Skills, configuration, or credential metadata.
 
-Background work is the one exception, and it is narrow. It covers scheduled work and operator-run one-shot commands. A CronJob or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, and the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified` run unscoped. The exception holds only while all three of these do:
+Background work is the one exception, and it is narrow. It covers scheduled work and operator-run one-shot commands. A CronJob or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, the Communications maintenance scan's `CommunicationConnectionRepository.list_enabled_email_page`, and the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified` run unscoped. The exception holds only while all three of these do:
 
 - the method is never reachable from a router
 - the request paths over the same table keep their `AgentAuthorization` checks unchanged
