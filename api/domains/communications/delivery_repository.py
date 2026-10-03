@@ -172,13 +172,11 @@ class CommunicationDeliveryRepository:
         lease_seconds: int = 120,
         max_attempts: int = 5,
         reclaim_expired: bool = True,
-        excluded_platform_keys: frozenset[str] = frozenset(),
     ) -> RuntimeDeliveryRead | None:
         if reclaim_expired:
             self.reclaim_expired_inbound(
                 agent_id=agent_id,
                 max_attempts=max_attempts,
-                excluded_platform_keys=excluded_platform_keys,
             )
         now = datetime.now(UTC)
         active_ordering = aliased(CommunicationDelivery)
@@ -204,7 +202,6 @@ class CommunicationDeliveryRepository:
                 col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
             ).where(
                 col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
-                col(CommunicationConnection.platform_key).not_in(excluded_platform_keys),
             )
             query = (
                 query.order_by(
@@ -324,7 +321,6 @@ class CommunicationDeliveryRepository:
         *,
         agent_id: UUID,
         max_attempts: int = 5,
-        excluded_platform_keys: frozenset[str] = frozenset(),
     ) -> list[RuntimeDeliveryRead]:
         """Reclaim stale runtime leases and return newly terminal deliveries."""
         now = datetime.now(UTC)
@@ -342,7 +338,6 @@ class CommunicationDeliveryRepository:
                 col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
             ).where(
                 col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
-                col(CommunicationConnection.platform_key).not_in(excluded_platform_keys),
             )
             expired = session.exec(query.with_for_update(skip_locked=True)).all()
             for stale in expired:
@@ -504,7 +499,6 @@ class CommunicationDeliveryRepository:
         self,
         *,
         lease_seconds: int = 120,
-        native_platform_keys: frozenset[str] = frozenset(),
     ) -> CommunicationDelivery | None:
         now = datetime.now(UTC)
         earlier_outbound = aliased(CommunicationDelivery)
@@ -516,7 +510,6 @@ class CommunicationDeliveryRepository:
             )
             gateway_connection_ids = select(CommunicationConnection.id).where(
                 col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
-                col(CommunicationConnection.platform_key).not_in(native_platform_keys),
             )
             reclaim = reclaim.where(col(CommunicationDelivery.connection_id).in_(gateway_connection_ids))
             session.exec(
@@ -555,7 +548,6 @@ class CommunicationDeliveryRepository:
             )
             query = query.where(
                 col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
-                col(CommunicationConnection.platform_key).not_in(native_platform_keys),
             )
             delivery = session.exec(
                 query.order_by(

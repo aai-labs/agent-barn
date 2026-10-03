@@ -34,7 +34,7 @@ from api.domains.communications.plugins.base import (
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
-from api.domains.communications.transport import NATIVE_PLATFORM_KEYS, require_gateway_transport
+from api.domains.communications.transport import require_gateway_transport
 from api.infrastructure.communication_signals import (
     CommunicationSignal,
     CommunicationSignalBus,
@@ -111,15 +111,12 @@ class CommunicationsGatewayService:
     def claim_runtime_delivery(self, agent: Agent) -> RuntimeDeliveryRead | None:
         if agent.status != AgentStatus.RUNNING:
             raise RuntimeError("Agent is not running")
-        native_platform_keys = NATIVE_PLATFORM_KEYS
         self.delivery_repository.reclaim_expired_inbound(
             agent_id=agent.id,
-            excluded_platform_keys=native_platform_keys,
         )
         delivery = self.delivery_repository.claim_next_inbound(
             agent_id=agent.id,
             reclaim_expired=False,
-            excluded_platform_keys=native_platform_keys,
         )
         if delivery is not None:
             delivery = self._for_runtime(delivery)

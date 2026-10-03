@@ -14,6 +14,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-03 — Review follow-up: remove redundant delivery exclusions — PR pending
+
+- Removed: native allowlist parameters and redundant exclusions from gateway Delivery claims, plus the unused general enabled-Connection scan. Claims retain the fixed Web Chat/Email inclusion filter.
+- Coverage: existing inbound/outbound claim integration tests continue proving native rows cannot be claimed; only the unused scan test is removed.
+
 ### 2026-10-03 — Review follow-up: avoid unchanged Email health writes — PR pending
 
 - Corrected: revision-guarded Email configuration checks skip updates when status and safe error fields are unchanged, preserving `last_health_at` and avoiding row churn. Native observer health continues refreshing heartbeat timestamps.

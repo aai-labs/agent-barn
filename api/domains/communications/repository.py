@@ -23,7 +23,6 @@ from api.domains.communications.models import (
     ConnectionObservedStatus,
 )
 from api.domains.communications.operations import CommunicationOperationalRepository
-from api.domains.communications.transport import GATEWAY_PLATFORM_KEYS
 from api.domains.events.catalog import COMMUNICATION_CONNECTION_HEALTH_CHANGED
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.rbac.policy import AuthorizationScope
@@ -121,22 +120,6 @@ class CommunicationConnectionRepository:
                     col(CommunicationConnection.retired_at).is_(None),
                 )
             ).one_or_none()
-
-    def list_enabled(self, native_platform_keys: frozenset[str] = frozenset()) -> list[CommunicationConnection]:
-        """Enabled Connections, less those the Agent runtime's native gateway runs itself."""
-        with Session(self.delegate.engine) as session:
-            return list(
-                session.exec(
-                    select(CommunicationConnection)
-                    .where(
-                        col(CommunicationConnection.enabled).is_(True),
-                        col(CommunicationConnection.retired_at).is_(None),
-                        col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
-                        col(CommunicationConnection.platform_key).not_in(native_platform_keys),
-                    )
-                    .order_by(col(CommunicationConnection.id))
-                ).all()
-            )
 
     def list_enabled_email_page(
         self, *, after_id: UUID | None = None, limit: int = 100

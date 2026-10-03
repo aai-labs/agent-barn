@@ -193,7 +193,6 @@ def test_runtime_claim_skips_native_platform_deliveries() -> None:
 
         claimed = repository.claim_next_inbound(
             agent_id=context.agent.id,
-            excluded_platform_keys=frozenset(),
         )
 
         assert_that(claimed.delivery_id if claimed else None, equal_to(gateway.delivery_id))
@@ -225,7 +224,6 @@ def test_outbound_claim_skips_native_platform_deliveries() -> None:
         repository.claim_next_inbound(agent_id=context.agent.id)
         repository.claim_next_inbound(
             agent_id=context.agent.id,
-            excluded_platform_keys=frozenset(),
         )
         context.connection = native_connection
         there_is_an_outbound_delivery(status=CommunicationDeliveryStatus.PENDING)(context)
@@ -236,7 +234,7 @@ def test_outbound_claim_skips_native_platform_deliveries() -> None:
             reply=RuntimeReplyCreate(idempotency_key="gateway-reply", text="gateway reply"),
         )
 
-        claimed = repository.claim_next_outbound(native_platform_keys=frozenset())
+        claimed = repository.claim_next_outbound()
 
         assert_that(claimed.id if claimed else None, equal_to(gateway_reply_id))
         assert_that(_delivery(context, native_reply_id).status, equal_to(CommunicationDeliveryStatus.PENDING))

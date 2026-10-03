@@ -340,7 +340,7 @@ def test_gateway_claim_and_terminal_failure_preserve_status_wakeup() -> None:
     assert published_signal.delivery_id == delivery.delivery_id
 
 
-def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway() -> None:
+def test_empty_runtime_claim_still_reclaims_expired_gateway_work() -> None:
     connection = cast(CommunicationConnection, _connection())
     service, deliveries = _service(connection, _delivery_plugin())
     deliveries.reclaim_expired_inbound.return_value = []
@@ -352,15 +352,12 @@ def test_native_platform_deliveries_are_not_reclaimed_or_claimed_by_the_gateway(
 
     assert service.claim_runtime_delivery(agent) is None
 
-    excluded = frozenset({"slack", "discord", "telegram", "teams"})
     deliveries.reclaim_expired_inbound.assert_called_once_with(
         agent_id=agent.id,
-        excluded_platform_keys=excluded,
     )
     deliveries.claim_next_inbound.assert_called_once_with(
         agent_id=agent.id,
         reclaim_expired=False,
-        excluded_platform_keys=excluded,
     )
 
 

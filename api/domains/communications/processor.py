@@ -13,7 +13,7 @@ from api.domains.communications.models import (
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
-from api.domains.communications.transport import NATIVE_PLATFORM_KEYS, require_gateway_transport
+from api.domains.communications.transport import require_gateway_transport
 from api.infrastructure.crypto import decrypt_token
 
 logger = logging.getLogger(__name__)
@@ -30,9 +30,7 @@ class OutboundCommunicationProcessor:
     plugins: PlatformPluginRegistry
 
     def process_one(self) -> bool:
-        delivery = self.deliveries.claim_next_outbound(
-            native_platform_keys=NATIVE_PLATFORM_KEYS,
-        )
+        delivery = self.deliveries.claim_next_outbound()
         if delivery is None:
             return False
         outbound: OutboundCommunicationEnvelope | None = None

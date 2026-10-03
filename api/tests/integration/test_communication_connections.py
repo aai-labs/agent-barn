@@ -1644,51 +1644,6 @@ def test_app_package_is_named_after_the_agent_not_the_connection() -> None:
             assert_that(response.headers["content-disposition"], contains_string(f"{slug}-teams-app.zip"))
 
 
-def _connection_for_current_agent(key: str, platform_key: str):
-    def step(context):
-        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
-        connection = CommunicationConnection(
-            organization_id=context.agent.organization_id,
-            agent_id=context.agent.id,
-            platform_key=platform_key,
-            display_name=key,
-            credentials_encrypted="unused",
-        )
-        delegate.save(connection)
-        setattr(context, key, connection)
-
-    return step
-
-
-def test_supervised_connections_exclude_native_platforms_on_every_runtime():
-    with given(
-        [
-            *_GIVEN,
-            there_is_an_agent(name="OpenClaw Agent"),
-            _connection_for_current_agent("openclaw_slack", "slack"),
-            _connection_for_current_agent("openclaw_discord", "discord"),
-            there_is_an_agent(name="Hermes Agent", agent_type=AgentType.HERMES),
-            _connection_for_current_agent("hermes_slack", "slack"),
-            _connection_for_current_agent("hermes_discord", "discord"),
-        ]
-    ) as context:
-        repository: CommunicationConnectionRepository = context.injector.get(CommunicationConnectionRepository)
-        connections = {
-            context.openclaw_slack.id,
-            context.openclaw_discord.id,
-            context.hermes_slack.id,
-            context.hermes_discord.id,
-        }
-
-        with when("the repository lists gateway Connections with Slack and Discord running natively"):
-            native = {connection.id for connection in repository.list_enabled(frozenset({"slack", "discord"}))}
-            gateway = {connection.id for connection in repository.list_enabled()}
-
-        with then("both runtimes' native Connections are left to the runtime"):
-            assert_that(connections.isdisjoint(native), equal_to(True))
-            assert_that(connections.isdisjoint(gateway), equal_to(True))
-
-
 @pytest.mark.parametrize("mutation", ["revision", "disabled", "retired", "native"])
 def test_stale_email_configuration_health_cannot_mutate_changed_connection(mutation: str) -> None:
     with given(_GIVEN_WITH_AGENT_EMAIL) as context:

@@ -61,9 +61,7 @@ def test_provider_success_completes_with_stable_idempotency_and_current_agent_id
     sent = plugin.send.call_args.args[2]
     assert sent.provider_metadata == {"subject": "Subject", "agent_name": "Tommy"}
     assert plugin.send.call_args.kwargs == {"idempotency_key": "reply-1"}
-    assert deliveries.claim_next_outbound.call_args.kwargs == {
-        "native_platform_keys": frozenset({"slack", "discord", "telegram", "teams"})
-    }
+    deliveries.claim_next_outbound.assert_called_once_with()
 
 
 def test_provider_failure_is_normalized_for_durable_retry():
