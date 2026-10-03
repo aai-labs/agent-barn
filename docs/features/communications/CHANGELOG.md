@@ -14,6 +14,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-03 — Review verification: complete Docker-backed checks — PR pending
+
+- Verified: `make test-api` passes all 3,155 tests; `make test-ui` passes all 434 browser tests. API lint/format/types, UI lint/types, one migration head, and Helm lint/render pass.
+- Runtime evidence: Hermes smoke/PVC/native-access/observer/scheduler/retirement contracts pass against `native-gateway-hermes:slice2`; OpenClaw smoke/native-scheduler/observer/retirement/startup contracts pass against `openclaw-base:0.7.2`. Hermes pinned-image Skill discovery also passes. Both retirement fixtures cover fresh/upgraded/restored state using current generated configuration and mounted scripts.
+- Regression evidence: the new PostgreSQL Email-health test fails against the pre-fix `record_health` method and passes unchanged against the fix. The retirement permission test also has recorded red/green evidence.
+- Limit: the separate Kubernetes client mutation test is excluded from `make test-api` and remains unrun under the read-only infrastructure restriction. Deployment cutoff verification remains separate from these local tests.
+
 ### 2026-10-03 — Re-review follow-up: preserve independent retirement warnings — PR pending
 
 - Corrected: failed advisory-report writes retain the job-store audit result and report a separate `report_write=failed` warning. Permission regressions cover both absent and unreadable stores and skip under root, which bypasses directory permissions.
@@ -32,7 +39,7 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 - Corrected: revision-guarded Email configuration checks skip updates when status and safe error fields are unchanged, preserving `last_health_at` and avoiding row churn. Native observer health continues refreshing heartbeat timestamps.
 - Synchronized: runtime observer audit identity replaces the retired supervisor name; the RBAC brief lists the bounded background Email scan.
-- Verification: PostgreSQL regression coverage checks repeat maintenance cycles preserve the row version and timestamp; execution is blocked locally because Docker is unavailable.
+- Verified: PostgreSQL regression coverage checks repeat maintenance cycles preserve the row version and timestamp. With Docker available, the regression fails at the timestamp assertion using the pre-fix method and passes using the current method.
 
 ### 2026-10-03 — Review follow-up: tolerate an unwritable retirement report — PR pending
 
