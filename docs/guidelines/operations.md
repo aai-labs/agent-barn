@@ -83,9 +83,18 @@ Hindsight auth/LLM environment. Set `MEMORY_LITELLM_KEY_HASHES` in `.env` to the
 SHA-256 of its dedicated LiteLLM key. The standard upstream entrypoint does not
 install our bridge and cannot attribute memory spend per Organization.
 
-Organization limit enforcement, purge, and backup/restore are later work, tracked in the
-[delivery log](../features/agent-memory/CHANGELOG.md). Current platform budgets
-do not imply Organization-level memory enforcement.
+The enabled gateway chart requires attribution key hashes. Keep the existing
+cost-sync CronJob (every 15 minutes) and LLM-budget-alerts snapshot job (every
+5 minutes) running. Capped Organizations need a successful cost sync and a current
+runtime snapshot before retain/reflect become available. Local operators must run
+the equivalent jobs (`cd api && uv run python -c "from api.domains.costs.sync import main; main()"`
+and `make run-llm-budget-alerts`) on those schedules. See
+[Costs](../features/costs.md#organization-llm-budgets) for freshness
+requirements, 429/503 behavior, and the observed-spend limitation. The gateway
+uses persisted accounting and needs no LiteLLM master key or Kubernetes credentials.
+
+Purge and backup/restore remain later work in the
+[delivery log](../features/agent-memory/CHANGELOG.md).
 
 Run `make check-memory` with Helm installed to validate both enabled and disabled
 renders without connecting to a cluster. The API CI workflow runs the same check.

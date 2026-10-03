@@ -19,7 +19,11 @@ ORG_NAME = "Acme Inc"
 
 
 class FakeCostRepository:
+    def record_sync_completion(self, completed_at):
+        self.completed_at = completed_at
+
     def __init__(self, *, watermark=None, candidates=None, organization_names=None, drop_healed=False):
+        self.completed_at = None
         self.watermark = watermark
         # Mirror the real predicate: a healed row stops being a candidate.
         self.drop_healed = drop_healed
@@ -232,6 +236,7 @@ def test_a_failed_page_stops_the_run_instead_of_skipping_it():
 
     assert result.pages_read == 1
     assert result.truncated is True
+    assert repository.completed_at is None
 
 
 def test_an_empty_page_ends_the_run():
@@ -242,6 +247,7 @@ def test_an_empty_page_ends_the_run():
 
     assert result.pages_read == 0
     assert result.truncated is False
+    assert repository.completed_at is not None
 
 
 # --- Projection --------------------------------------------------------------
@@ -403,6 +409,7 @@ def test_the_deadline_stops_paging_and_marks_the_run_truncated(monkeypatch):
     result = _synchronizer(repository, spend_logs=spend_logs).run_once()
 
     assert result.truncated is True
+    assert repository.completed_at is None
     # Two pages read, then the deadline hit — not zero, which would pass vacuously.
     assert result.pages_read == 2
 

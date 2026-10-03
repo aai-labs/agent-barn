@@ -835,3 +835,16 @@ def test_memory_cost_origin_upgrade_defaults_existing_rows_and_can_roll_back(fre
             .all()
         )
     assert_that("is_memory" in columns, equal_to(False))
+
+
+def test_cost_sync_heartbeat_upgrade_and_rollback_preserve_cost_history(fresh_database):
+    config = _alembic_config()
+    command.downgrade(config, "e4c9b72a6f10")
+    command.upgrade(config, "f2a8d41b9c63")
+    with fresh_database.engine.begin() as connection:
+        connection.execute(text("INSERT INTO cost_sync_state VALUES ('litellm', now())"))
+        assert_that(connection.execute(text("SELECT count(*) FROM cost_sync_state")).scalar_one(), equal_to(1))
+    command.downgrade(config, "e4c9b72a6f10")
+    with fresh_database.engine.connect() as connection:
+        assert_that(connection.execute(text("SELECT to_regclass('cost_sync_state')")).scalar_one(), none())
+        assert_that(connection.execute(text("SELECT to_regclass('cost_record')")).scalar_one(), equal_to("cost_record"))

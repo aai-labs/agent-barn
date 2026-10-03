@@ -71,6 +71,7 @@ class Attribution:
 
 
 class CostSyncRepository(Protocol):
+    def record_sync_completion(self, completed_at: datetime) -> None: ...
     def upsert_many(self, records: list[CostRecord]) -> int: ...
     def latest_occurred_at(self) -> datetime | None: ...
     def find_heal_candidates(self, limit: int) -> list[CostRecord]: ...
@@ -128,6 +129,8 @@ class CostSynchronizer:
     def run_once(self) -> CostSyncResult:
         started = time.monotonic()
         result = self._sync(started)
+        if not result.truncated:
+            self.repository.record_sync_completion(datetime.now(UTC))
         result = self._heal(result, started)
         self._log_summary(result)
         return result

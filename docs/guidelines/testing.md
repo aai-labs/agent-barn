@@ -165,6 +165,11 @@ The API suite also runs the Hindsight cost bridge contract inside the pinned
 HTTP model listener verifies concurrent bank identity and background consolidation;
 no real model key is used. Memory cost integration tests cover exact persistence,
 replay/healing, Organization totals, renewal-window isolation, and migration rollback.
+Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
+memory charges, and successful-sync heartbeats. Cover exhausted/zero/uncapped
+limits, precise combined totals, missing/stale data, renewal, immediate limit
+changes, and recall availability when changing this policy. Failed and truncated
+spend-log runs must leave the heartbeat unchanged.
 
 The Hermes and OpenClaw telemetry plugins run inside agent containers but are
 delivered from repository source through runtime configuration, rather than as

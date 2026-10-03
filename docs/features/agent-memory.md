@@ -65,7 +65,7 @@ Recall traces, raw chunks, and source-fact expansion are disabled. Reflect exclu
 
 The gateway sends only its own Hindsight bearer credential upstream and does not follow redirects or environment proxies. Upstream errors become generic errors without backend content or headers. Request logs contain Agent, Organization, canonical bank/endpoint, effective access tags, and status; memory content, client paths, and credentials are excluded.
 
-Organization suspension is not a current lifecycle state, so there is no suspension gate. Organization model costs are attributed through LiteLLM; spend-limit enforcement is the next part of the cost slice. See [Costs](costs.md#agent-memory-attribution) for the authoritative attribution contract. Deployment and credential rotation belong to [`operations.md`](../guidelines/operations.md#agent-memory-deployment).
+Organization suspension is not a current lifecycle state, so there is no suspension gate. Organization model costs are attributed through LiteLLM. Retain and reflect return 429 when combined observed runtime and memory spend reaches the Organization limit, or 503 when capped-Organization accounting data is unavailable or stale. Recall remains available. See [Costs](costs.md#organization-llm-budgets) for the authoritative spend-limit contract and its accounting delay. Deployment and credential rotation belong to [`operations.md`](../guidelines/operations.md#agent-memory-deployment).
 
 ## Runtime integration
 
@@ -111,6 +111,7 @@ and do not measure Hindsight extraction quality.
 | Gateway credentials or Agent lifecycle | Alembic migration, Agent start/persistence flow, gateway authentication tests |
 | Plugin request shapes or Hindsight version | Sanitized captures, gateway DTOs and replay tests, runtime image contracts, backend chart |
 | Gateway/backend deployment | [`operations.md`](../guidelines/operations.md#agent-memory-deployment), chart checks, runtime/deployment architecture |
+| Memory spend policy or accounting freshness | [`costs.md`](costs.md#organization-llm-budgets), cost sync heartbeat, gateway spend tests, deployment job schedules |
 
 ## Code map
 

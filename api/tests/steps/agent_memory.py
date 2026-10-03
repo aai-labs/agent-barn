@@ -1,7 +1,9 @@
+import hashlib
 from uuid import uuid7
 
 from api.domains.agents.models import AgentStatus
 from api.domains.users.organization_users.models import OrganizationRole
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.modules import (
     create_test_client,
     prepare_api_server,
@@ -76,5 +78,16 @@ def an_agent_created_by_the_current_member(name: str = "Member Agent"):
             created_by_user_id=context.user.id,
             creator_membership_id=context.organization_user.id,
         )(context)
+
+    return step
+
+
+def memory_is_enabled():
+    def step(context):
+        context.memory_key = "per-agent-memory-test-key"
+        agent = context.agent
+        agent.memory_enabled = True
+        agent.memory_key_hash = hashlib.sha256(context.memory_key.encode()).hexdigest()
+        context.injector.get(PostgresRepositoryDelegate).save(agent)
 
     return step

@@ -97,10 +97,33 @@ requires checking this contract. Key rotation and local setup belong in
 
 ## Organization LLM budgets
 
-The optional [Agent Memory](agent-memory.md) backend currently uses a separate,
-budgeted platform LiteLLM key. Its calls are attributed per Organization through
-the existing cost sync; the gateway spend-limit gate is the next part of this slice. The
-Agent key/team enforcement below applies to runtime model calls.
+The optional [Agent Memory](agent-memory.md) backend uses a separate, budgeted
+platform LiteLLM key. Its calls are attributed per Organization through cost sync.
+Before forwarding retain or reflect, the gateway reads the current Organization
+limit and adds its runtime team spend snapshot to exact persisted memory spend
+in the current budget window (`renewal - duration` through now). Only rows with
+that Organization and `is_memory=true` count as memory spend. The shared key must
+remain outside Organization teams to avoid counting memory twice.
+
+A zero limit blocks retain and reflect immediately. For other capped Organizations,
+the runtime snapshot must be at most 10 minutes old, the cost-sync heartbeat at
+most 20 minutes old, and the renewal must be in the future. Missing key hashes,
+missing/invalid accounting values or durations, future accounting timestamps, and stale data
+return 503. Combined observed spend at or above the limit returns 429. An uncapped
+Organization bypasses this gate. Recall, readiness, and operation polling remain
+available under the usual memory authorization rules. Raising or removing the
+limit is observed on the next request; no Agent restart is needed.
+
+Migration `f2a8d41b9c63` adds `cost_sync_state`. Cost sync records its heartbeat only
+after completing spend-log paging, including an empty successful run; a failed or
+truncated paging run does not refresh it. OpenRouter healing remains a separate
+phase. This gate uses observed spend without reservations: late billing, healing,
+concurrent requests, and already queued background consolidation can overshoot the
+limit. It does not cancel accepted jobs. Runtime LiteLLM team caps continue to
+enforce runtime calls independently; budget banners and threshold alerts still
+report runtime team spend, while Organization cost totals include memory spend.
+
+The Agent key/team enforcement below applies to runtime model calls.
 
 `../../api/domains/organizations/service.py` owns budget storage and reconciliation;
 `../../api/infrastructure/litellm/client.py` owns the remote team/key API calls.
@@ -182,6 +205,7 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 | Table and response contracts  | `../../api/domains/costs/models.py`         |
 | Persistence and aggregation   | `../../api/domains/costs/repository.py`     |
 | Sync and healing job          | `../../api/domains/costs/sync.py`           |
+| Memory spend gate             | `../../api/domains/agent_memory/spend_policy.py`, `../../api/tests/integration/test_memory_spend_gate.py` |
 | Tunables                      | `../../api/domains/costs/constants.py`      |
 | Org reads                     | `../../api/domains/costs/service.py`        |
 | Platform reads                | `../../api/domains/costs/platform_service.py` |

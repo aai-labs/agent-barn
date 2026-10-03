@@ -9,18 +9,33 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 - Delivered: the per-Agent memory opt-in and Memory Grants with audit Domain Events;
   authenticated gateway with current grant checks; hashed per-start Agent credentials; optional
   Hindsight and gateway Helm deployments; automatic Hermes/OpenClaw recall and retain alongside
-  native memory for opted-in starts; Organization attribution of memory model costs.
+  native memory for opted-in starts; Organization attribution of memory model costs;
+  retain/reflect gating against combined observed Organization spend.
 - In transition: runtime configuration and pinned-image contracts are implemented, but the
-  optional deployment remains off by default. Organization cost limits, deletion purge, and
+  optional deployment remains off by default. Deletion purge and
   backup/restore are pending.
 - Next, in order:
-  1. Spend limits: gate retain/reflect against the Organization limit, accounting for runtime
-     team spend and the memory charges already persisted by cost sync.
-  2. UI: an Agent memory toggle and an Organization memory-access settings page.
-  3. Lifecycle: purge an Agent's memories and grants on deletion; Hindsight backups.
+  1. UI: an Agent memory toggle and an Organization memory-access settings page.
+  2. Lifecycle: purge an Agent's memories and grants on deletion; Hindsight backups.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-03 — slice 4b — observed Organization spend limits
+
+- Delivered: retain and reflect stop at the combined runtime snapshot and persisted
+  memory spend limit (429), or pause for missing/stale accounting (503). Recall remains
+  available. Zero, uncapped, changed limits, and renewed windows apply on the next request.
+- Changed: migration `f2a8d41b9c63` adds a successful spend-log sync heartbeat, including
+  empty successful runs; failed/truncated paging cannot refresh it. The enabled gateway
+  chart requires attribution hashes. The gateway reads persisted policy/accounting without
+  additional upstream credentials. No public DTO or release-version change.
+- Verified: 273 selected gateway, memory spend, cost, and Organization-budget tests,
+  plus both cost migration upgrade/rollback checks pass. Lint, formatting, types,
+  migration-head, enabled/disabled chart checks, and the pinned launcher's CLI pass.
+- Follow-up: UI, then lifecycle. This cutoff uses observed spend; late billing, healing,
+  concurrent requests, and already queued consolidation can exceed the limit. Runtime
+  budget banners and alerts still report runtime spend.
 
 ### 2026-10-03 — slice 4a — billed memory cost attribution
 

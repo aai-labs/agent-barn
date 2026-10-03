@@ -36,7 +36,19 @@ def main() -> None:
     }
     disabled = render("agentbarn-api", values)
     assert not any(document["metadata"]["name"] == "agentbarn-api-memory" for document in disabled)
-    enabled = render("agentbarn-api", {**values, "memory": {"enabled": True}})
+    memory_values = {**values, "memory": {"enabled": True, "litellmKeyHashes": "f" * 64}}
+    try:
+        render("agentbarn-api", {**values, "memory": {"enabled": True}})
+    except subprocess.CalledProcessError as error:
+        assert "memory.litellmKeyHashes is required" in error.stderr
+    else:
+        raise AssertionError("Memory deployment must require the cost attribution key hashes")
+    enabled = render("agentbarn-api", memory_values)
+    shared_secret = next(
+        document for document in enabled if "MEMORY_LITELLM_KEY_HASHES" in document.get("stringData", {})
+    )
+    assert shared_secret["stringData"]["MEMORY_LITELLM_KEY_HASHES"] == "f" * 64
+    assert "HINDSIGHT_LITELLM_API_KEY" not in shared_secret["stringData"]
     for document in enabled:
         if document["kind"] == "Deployment":
             pod = document["spec"]["template"]["spec"]
@@ -69,6 +81,15 @@ def main() -> None:
     assert pod["automountServiceAccountToken"] is False
     container = pod["containers"][0]
     assert container["image"] == "ghcr.io/vectorize-io/hindsight:0.10.2"
+    assert container["command"] == [
+        "/app/api/.venv/bin/python",
+        "/opt/agentbarn/start_hindsight.py",
+        "--workers",
+        "1",
+    ]
+    assert "checksum/attribution" in deployment["spec"]["template"]["metadata"]["annotations"]
+    bridge = next(document for document in backend if document["kind"] == "ConfigMap")
+    assert "start_hindsight.py" in bridge["data"]
     environment = {entry["name"]: entry["value"] for entry in container["env"]}
     assert environment["HINDSIGHT_ENABLE_CP"] == "false"
     assert environment["HINDSIGHT_API_TENANT_EXTENSION"].endswith(":ApiKeyTenantExtension")

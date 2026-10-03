@@ -1,4 +1,5 @@
 {{- if .Values.memory.enabled }}
+{{- $_ := required "memory.litellmKeyHashes is required for memory cost attribution" .Values.memory.litellmKeyHashes }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

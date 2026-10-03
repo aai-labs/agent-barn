@@ -13,7 +13,7 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.helpers.memory_backend import memory_gateway_is_ready
 from api.tests.steps.agent import there_is_an_agent
-from api.tests.steps.agent_memory import agent_memory_api_setup, two_agents
+from api.tests.steps.agent_memory import agent_memory_api_setup, memory_is_enabled, two_agents
 
 _BASE = "/memory/v1/v1/default/banks/forged-bank"
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "agent_memory"
@@ -22,17 +22,6 @@ _CAPTURES = [
     for runtime in ("hermes", "openclaw")
     for row in json.loads((_FIXTURES / f"{runtime}.json").read_text())
 ]
-
-
-def memory_is_enabled():
-    def step(context):
-        context.memory_key = "per-agent-memory-test-key"
-        agent = context.agent
-        agent.memory_enabled = True
-        agent.memory_key_hash = hashlib.sha256(context.memory_key.encode()).hexdigest()
-        context.injector.get(PostgresRepositoryDelegate).save(agent)
-
-    return step
 
 
 def _headers(context):

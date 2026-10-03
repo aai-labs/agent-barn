@@ -17,6 +17,7 @@ from api.domains.costs.models import (
     CostRecord,
     CostRecordSource,
     CostSortDirection,
+    CostSyncState,
     MonthlyWindow,
 )
 from api.domains.organizations.models import Organization
@@ -89,6 +90,21 @@ _REFRESHABLE_COLUMNS = (
 @dataclass
 class CostRepository:
     delegate: PostgresRepositoryDelegate
+
+    def record_sync_completion(self, completed_at: datetime) -> None:
+        table = SQLModel.metadata.tables["cost_sync_state"]
+        statement = pg_insert(table).values(source="litellm", completed_at=completed_at)
+        statement = statement.on_conflict_do_update(
+            index_elements=[table.c.source], set_={"completed_at": statement.excluded.completed_at}
+        )
+        with Session(self.delegate.engine) as session:
+            session.exec(statement)  # type: ignore[call-overload]
+            session.commit()
+
+    def last_sync_completed_at(self) -> datetime | None:
+        with Session(self.delegate.engine) as session:
+            state = session.get(CostSyncState, "litellm")
+            return state.completed_at if state else None
 
     def upsert_many(self, records: list[CostRecord]) -> int:
         """Insert or refresh cost rows, keyed on request_id. Returns rows written.

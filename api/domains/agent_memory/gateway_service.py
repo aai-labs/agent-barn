@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from api.domains.agent_memory.gateway_models import MemoryAccess, MemoryRecall, MemoryReflect, MemoryRetain
 from api.domains.agent_memory.repository import AgentMemoryRepository
+from api.domains.agent_memory.spend_policy import MemorySpendPolicy
 from api.infrastructure.hindsight.client import HindsightClient, HindsightResponse
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ _OPERATION_PATH = re.compile(r"^v1/default/banks/[^/]+/operations/[^/]+$")
 class MemoryGatewayService:
     repository: AgentMemoryRepository
     client: HindsightClient
+    spend_policy: MemorySpendPolicy
 
     def authenticate(self, authorization: str | None) -> MemoryAccess:
         if not authorization:
@@ -55,6 +57,8 @@ class MemoryGatewayService:
                 raise HTTPException(404, "Memory operation not found.")
             elif method == "POST" and match:
                 rewritten = self._rewrite(access, endpoint, payload)
+                if endpoint in {"memories", "reflect"}:
+                    self.spend_policy.require_available(access.organization_id)
                 result = self.client.request(
                     "POST", f"/v1/default/banks/org-{access.organization_id}/{endpoint}", rewritten
                 )

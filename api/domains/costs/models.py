@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field
-from sqlmodel import Column
+from sqlmodel import Column, SQLModel
 from sqlmodel import Field as SqlField
 
 from api.domains.platform_admin.models import StatsGranularity, StatsPeriod
@@ -32,6 +32,15 @@ class CostRecordSource(str, enum.Enum):
 
 
 COST_RECORD_STATUS_SUCCESS = "success"
+
+
+class CostSyncState(SQLModel, table=True):
+    """Successful spend-log sync heartbeat, even when no model calls occurred."""
+
+    __tablename__: str = "cost_sync_state"
+    source: str = SqlField(primary_key=True, max_length=32)
+    completed_at: datetime = SqlField(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+
 
 # Rows the healing pass tries to recover: the proxy recorded no money for a
 # request that plainly consumed tokens. Kept in sync with the partial index on
