@@ -21,6 +21,17 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — terminal writer discovery
+
+- Fixed: runtime instructions invoke the Organization Memory writer by its
+  absolute installed path. Hermes terminal shells reset PATH, so the short name
+  was unavailable even though startup installed it. Existing Agents need updated
+  configuration and a restart for the corrected instructions.
+- Verified: the real Hermes terminal reproduces command-not-found on the original
+  instructions; all four runtime memory contracts pass after the fix. API static
+  checks pass. Alex was refreshed, and its terminal accepted the requested
+  Organization name save through the authenticated gateway.
+
 ### 2026-10-04 — combined Organization Memory permission
 
 - Changed: Organization Memory offers Read only or Read and write, with one grant

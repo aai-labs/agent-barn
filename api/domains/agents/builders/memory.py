@@ -8,11 +8,11 @@ MEMORY_TOOL_INSTRUCTIONS = """
 ## Organization Memory
 
 Automatic memory saves are private to this Agent. To explicitly save a durable
-fact for the organization, run `agentbarn-memory remember-organization` using
+fact for the organization, run `/tmp/agentbarn-bin/agentbarn-memory remember-organization` using
 your terminal tool, with the fact on standard input (a quoted heredoc avoids
 shell expansion). Only use this when the user requests an organization-wide
-save. Never include credentials or secrets. The gateway requires a separate
-Organization Memory write grant; having read access does not permit writing.
+save. Never include credentials or secrets. The gateway requires
+Organization Memory Read and write permission; having read access does not permit writing.
 If refused, explain the missing permission and do not claim the fact was shared.
 Acceptance means extraction is queued, not that the memory is already recallable.
 Other Agents need Organization Memory read access to recall it. This command

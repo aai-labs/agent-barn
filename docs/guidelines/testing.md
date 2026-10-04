@@ -169,7 +169,9 @@ Deletion cleanup tests cover atomic tombstone/grant changes, rollback/replay, ba
 recovery, expired leases and stale completions, unsafe targets, and late retained
 documents. The pinned-image purge test verifies private/shared removal without
 changing another Agent or bank. Test queue migrations against already deleted Agents.
-Explicit Organization Memory write tests cover read-only and combined read/write grants, immediate revocation, cross-Agent write rejection, runtime credential use, content-only payloads, and refusal handling. The shared writer targets Python 3.12 in Ruff, matching the oldest runtime. Both pinned-runtime startup contracts execute the mounted writer command. Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
+Explicit Organization Memory write tests cover read-only and combined read/write grants, immediate revocation, cross-Agent write rejection, runtime credential use, content-only payloads, and refusal handling. The shared writer targets Python 3.12 in Ruff, matching the oldest runtime. Both pinned-runtime startup contracts execute the mounted writer command; Hermes
+executes the command from its generated instructions through the real terminal
+tool, covering shell PATH changes. Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
 memory charges, and successful-sync heartbeats. Cover exhausted/zero/uncapped
 limits, precise combined totals, missing/stale data, renewal, immediate limit
 changes, and recall availability when changing this policy. Failed and truncated

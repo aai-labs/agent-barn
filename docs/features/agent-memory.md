@@ -63,11 +63,11 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 
 ### Explicit Organization Memory saves
 
-Both runtimes expose `agentbarn-memory remember-organization` through their
+Both runtimes expose `/tmp/agentbarn-bin/agentbarn-memory remember-organization` through their
 terminal tool. Provide the fact on standard input, for example:
 
 ```sh
-agentbarn-memory remember-organization <<'MEMORY'
+/tmp/agentbarn-bin/agentbarn-memory remember-organization <<'MEMORY'
 The organization uses EUR for customer invoices.
 MEMORY
 ```
@@ -81,7 +81,9 @@ means extraction was accepted asynchronously, not that recall is already ready.
 Failures are reported without backend content or credentials; the tool bypasses
 environment proxies and refuses redirects. Automatic saves stay private.
 The tool and instructions are mounted from API-owned runtime configuration;
-existing Agents must restart to receive them. Memory must be enabled.
+existing Agents must restart to receive them. Memory must be enabled. Instructions
+use the absolute installed path because terminal login shells can reset PATH;
+the Hermes runtime contract executes those instructions through its real terminal tool.
 
 Migration `c95f20b8413a` consolidates existing Organization grants into one
 permission per Agent. Existing read grants stay read-only. Existing write grants,
