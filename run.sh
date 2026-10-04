@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-command local dev stack: validates .env, brings up the k3d cluster +
 # LiteLLM, loads agent base images (skipping any already in the cluster),
-# runs migrations, then starts db/redis/api/worker/communications/memory/ui in Docker with hot
+# runs migrations, then starts db/redis/api/worker/cost-sync/communications/memory/ui in Docker with hot
 # reload.
 #
 # Usage:
@@ -100,12 +100,12 @@ step "Running database migrations"
 ${COMPOSE} build api
 ${COMPOSE} run --rm --no-deps --workdir /app/api api python -m alembic upgrade head
 
-step "Building and starting api, worker, communications, memory, ui"
+step "Building and starting api, worker, cost-sync, communications, memory, ui"
 if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
   step "Starting local Hindsight database and backend"
   ${COMPOSE} up -d hindsight-db hindsight
 fi
-${COMPOSE} up -d --build api worker communications memory ui
+${COMPOSE} up -d --build api worker cost-sync communications memory ui
 
 # Prints a boxed row padded to the border width, measuring visible width only
 # (ANSI color/bold codes stripped before computing the pad) so values of any

@@ -199,6 +199,31 @@ services:
     volumes:
       - ./api:/app/api
 
+  # Helm schedules cost ingestion in production. Local k3d needs its own runner.
+  cost-sync:
+    profiles: [k3d]
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-c", "from api.domains.costs.sync import main; main()", "--watch"]
+    depends_on:
+      db:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+      LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
+      K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH:-${K8S_KUBECONFIG_PATH-}}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./api:/app/api
+      - ./.k3d:/app/.k3d:ro
+
   communications:
     build:
       context: .

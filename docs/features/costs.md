@@ -181,6 +181,7 @@ that must keep their own errors.
 
 ## Operational
 
+- Local `./run.sh` starts the Compose `cost-sync` service: it syncs immediately and every 15 minutes using the same entrypoint with `--watch`. Runs never overlap; a failed run retries on the next interval. The UI reads imported records, so calls recorded only in LiteLLM stay invisible until this job runs.
 - The CronJob runs every 15 minutes under `concurrencyPolicy: Forbid`. `COST_SYNC_MAX_RUNTIME_SECONDS` must stay below the schedule interval: an overrunning pass does not overlap, it silently costs the next tick.
 - Unlike the event reconciler, this job talks to the Kubernetes API — it reads the LiteLLM master key from the `litellm` Secret. It needs the service account, `K8S_NAMESPACE`, `K8S_KUBECONFIG_PATH` and the mounted kubeconfig, or it fails on first run with `Secret 'litellm' not found`.
 - `/spend/logs/v2` needs the LiteLLM **master** key; the virtual key in `litellmApiKeySecretName` cannot authenticate it.

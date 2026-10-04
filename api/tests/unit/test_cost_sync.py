@@ -519,3 +519,45 @@ def test_memory_rows_count_as_organization_attributed_without_counting_as_agent_
     assert result.attributed == 1
     assert result.unattributed == 0
     assert repository.upserted[0][0].agent_id is None
+
+
+def test_local_watch_syncs_immediately_and_retries_a_failed_run(monkeypatch):
+    from unittest.mock import Mock
+
+    import pytest
+
+    from api.domains.costs import sync
+
+    synchronizer = Mock()
+    synchronizer.run_once.side_effect = [RuntimeError("transient outage"), None]
+    monkeypatch.setattr(sync, "build_synchronizer", lambda: synchronizer)
+    monkeypatch.setattr("sys.argv", ["cost-sync", "--watch"])
+    waits = []
+
+    def wait(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(sync.time, "sleep", wait)
+    with pytest.raises(KeyboardInterrupt):
+        sync.main()
+    assert synchronizer.run_once.call_count == 2
+    assert len(waits) == 2
+    assert all(0 < seconds <= 900 for seconds in waits)
+
+
+def test_one_shot_cost_sync_still_reports_failure(monkeypatch):
+    from unittest.mock import Mock
+
+    import pytest
+
+    from api.domains.costs import sync
+
+    synchronizer = Mock()
+    synchronizer.run_once.side_effect = RuntimeError("outage")
+    monkeypatch.setattr(sync, "build_synchronizer", lambda: synchronizer)
+    monkeypatch.setattr("sys.argv", ["cost-sync"])
+    with pytest.raises(RuntimeError, match="outage"):
+        sync.main()
+    assert synchronizer.run_once.call_count == 1

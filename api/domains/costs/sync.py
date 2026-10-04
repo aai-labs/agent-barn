@@ -481,9 +481,22 @@ def build_synchronizer() -> CostSynchronizer:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync LiteLLM spend into cost_record and heal missing costs.")
-    parser.parse_args()
+    parser.add_argument(
+        "--watch", action="store_true", help="Sync immediately and every 15 minutes for local development."
+    )
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    build_synchronizer().run_once()
+    while True:
+        started = time.monotonic()
+        try:
+            build_synchronizer().run_once()
+        except Exception:
+            if not args.watch:
+                raise
+            logger.exception("Local cost sync failed; retrying on the next interval.")
+        if not args.watch:
+            return
+        time.sleep(max(0, 900 - (time.monotonic() - started)))
 
 
 if __name__ == "__main__":

@@ -138,9 +138,12 @@ install our bridge and cannot attribute memory spend per Organization.
 The enabled gateway chart requires attribution key hashes. Keep the existing
 cost-sync CronJob (every 15 minutes) and LLM-budget-alerts snapshot job (every
 5 minutes) running. Capped Organizations need a successful cost sync and a current
-runtime snapshot before retain/reflect become available. Local operators must run
-the equivalent jobs (`cd api && uv run python -c "from api.domains.costs.sync import main; main()"`
-and `make run-llm-budget-alerts`) on those schedules. See
+runtime snapshot before retain/reflect become available. The local `./run.sh`
+stack runs cost sync immediately and every 15 minutes through Compose's
+`cost-sync` service. Restart that service after changing its Python code or
+environment. Local operators must still schedule `make run-llm-budget-alerts`
+every five minutes for the runtime snapshot. Host-run setups also need cost sync
+on its schedule (`cd api && uv run python -c "from api.domains.costs.sync import main; main()"`). See
 [Costs](../features/costs.md#organization-llm-budgets) for freshness
 requirements, 429/503 behavior, and the observed-spend limitation. The gateway
 uses persisted accounting and needs no LiteLLM master key or Kubernetes credentials.
