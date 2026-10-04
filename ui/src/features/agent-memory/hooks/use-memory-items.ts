@@ -9,7 +9,7 @@ import { PaginatedMemoryItemsSchema, type PaginatedMemoryItems } from "../schema
 import { MEMORY_ITEMS_PAGE_SIZE, agentMemoryKey, organizationMemoryKey } from "../utils";
 
 /**
- * Agent history or shared Organization Memory. The caller must pass the matching
+ * permission-scoped Agent memory or shared Organization Memory. The caller must pass the matching
  * human viewing permission so unauthorized people never issue the request.
  */
 export function useMemoryItems(
@@ -41,6 +41,7 @@ export function useMemoryItems(
       queryKey.slice(0, -1).every((part, index) => previousQuery?.queryKey[index] === part)
         ? previousData
         : undefined,
+    refetchInterval: agentId ? 5000 : false,
     retry: false,
   });
 

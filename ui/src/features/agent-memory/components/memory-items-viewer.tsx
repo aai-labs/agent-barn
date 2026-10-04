@@ -77,7 +77,7 @@ export function MemoryItemsViewer({ agent, enabled }: { agent?: Agent; enabled: 
       <p className="mb-4 mt-0 max-w-3xl text-[0.84rem] leading-relaxed" style={{ color: "var(--ink-3)" }}>
         {organization
           ? "Shared memories saved for this Organization by its Agents. Private Agent memories are excluded. Revoking an Agent's access keeps previously saved memories. This list is read-only."
-          : `What ${agent.name} saved, including Organization Memory it wrote. This is saved history, not a list of its current access. Revoking the Agent's Organization Memory access keeps these records; your permission to view them is separate. This list is read-only.`}
+          : `${agent.name}'s private memories, followed by Organization Memory when it has Read only or Read and write access. Revoking that permission hides all Organization Memory here, including its own shared contributions. Shared records remain on the Organization Memory page. This list is read-only.`}
         {!organization && !agent.memoryEnabled && " Saved history stays available while memory is off."}
       </p>
 

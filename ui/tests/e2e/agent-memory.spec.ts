@@ -363,6 +363,18 @@ test.describe("Agent memory viewer", () => {
     return { data, mock, memory };
   }
 
+  test("hides Organization Memory after revocation and restores it after a new read grant", async ({ page }) => {
+    const items = [...mockMemoryItems];
+    const { memory } = await open(page, { items });
+    await expect(memory.viewer()).toContainText("Shared · Organization Memory");
+    const shared = items.find((item) => item.shared)!;
+    items.splice(items.indexOf(shared), 1);
+    await expect(memory.viewer()).not.toContainText(String(shared.text), { timeout: 10000 });
+    await expect(memory.viewer()).toContainText(String(items[0].text));
+    items.push(shared);
+    await expect(memory.viewer()).toContainText(String(shared.text), { timeout: 10000 });
+  });
+
   test("lists saved memories read-only with their scope and date", async ({ page }) => {
     const { memory, mock } = await open(page);
 
@@ -372,8 +384,8 @@ test.describe("Agent memory viewer", () => {
     await expect(viewer).toContainText("Observation");
     await expect(viewer).toContainText("Private");
     await expect(viewer).toContainText("Shared · Organization Memory");
-    await expect(viewer).toContainText("saved history, not a list of its current access");
-    await expect(viewer).toContainText("your permission to view them is separate");
+    await expect(viewer).toContainText("Revoking that permission hides all Organization Memory here");
+    await expect(viewer).toContainText("Shared records remain on the Organization Memory page");
     await expect(viewer).toContainText("Mentioned");
     await expect(viewer).toContainText("No date recorded");
     await expect(viewer).toContainText("3 memories");

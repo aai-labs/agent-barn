@@ -30,6 +30,9 @@ export function useCreateMemoryGrant() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: memoryGrantsKey.forOrganization(orgApiBase) });
+      void queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey.includes("memory-items") && query.queryKey.includes(orgApiBase),
+      });
     },
   });
 }
@@ -45,6 +48,9 @@ export function useRevokeMemoryGrant() {
     // A grant that is already gone (404) leaves the list stale as well as a success does.
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: memoryGrantsKey.forOrganization(orgApiBase) });
+      void queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey.includes("memory-items") && query.queryKey.includes(orgApiBase),
+      });
     },
   });
 }
