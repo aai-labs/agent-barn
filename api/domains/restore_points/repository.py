@@ -69,6 +69,15 @@ class RestorePointRepository:
             items=[AgentRestorePointRead.model_validate(row) for row in rows],
         )
 
+    def get_by_id(self, restore_point_id: UUID) -> AgentRestorePoint | None:
+        """The row itself, with no authorization scope.
+
+        Callers that already hold the Agent — the orchestrator waiting on a row
+        it just requested — need the row, not a scoped read.
+        """
+        with Session(self.delegate.engine) as session:
+            return session.get(AgentRestorePoint, restore_point_id)
+
     def get_in_scope(
         self,
         restore_point_id: UUID,

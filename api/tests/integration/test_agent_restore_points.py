@@ -1675,3 +1675,27 @@ def test_capture_proceeds_once_the_pod_has_gone():
         with then("the capture is accepted rather than refused"):
             assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
             assert_that(k8s.create_job.called, equal_to(True))
+
+
+def test_get_by_id_returns_the_row():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _seed(context, label="before update")
+
+        with when("I read the row straight from the repository"):
+            repository = context.injector.get(RestorePointRepository)
+            row = repository.get_by_id(seeded.id)
+
+        with then("the row is found without a scope"):
+            assert_that(row, not_none())
+            assert_that(str(row.id), equal_to(str(seeded.id)))
+            assert_that(row.label, equal_to("before update"))
+
+
+def test_get_by_id_returns_none_for_an_unknown_row():
+    with given(_GIVEN) as context:
+        with when("I read a restore point that does not exist"):
+            repository = context.injector.get(RestorePointRepository)
+            row = repository.get_by_id(uuid.uuid4())
+
+        with then("there is nothing there"):
+            assert_that(row, none())
