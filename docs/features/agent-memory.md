@@ -253,7 +253,6 @@ Revocation cannot erase existing conversation context or copies separately saved
 as private memories. The Agent tab refreshes every five seconds and after grant
 changes made in this UI; authorization is always rechecked by the gateway.
 
-
 ## Platform memory-processing model
 
 Platform Admins choose the Hindsight model at **Platform Settings → Agent Memory**

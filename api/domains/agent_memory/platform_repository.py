@@ -38,6 +38,8 @@ class PlatformMemoryRepository:
             session.connection().execute(sa.text("SELECT pg_advisory_xact_lock(732914105)"))
             row = session.get(PlatformMemorySettings, 1)
             previous = row.model if row else default_model
+            # Keep the bounded LiteLLM requests under this lock so concurrent admin
+            # saves cannot lose allowlist additions or persist an unusable choice.
             prepare(previous)
             if row and previous == model:
                 return PlatformMemorySettingsRead(model=row.model, updated_at=row.updated_at), []

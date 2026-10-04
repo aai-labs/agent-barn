@@ -178,6 +178,31 @@ Postgres schema migration.
 Run `make check-memory` with Helm installed to validate both enabled and disabled
 renders without connecting to a cluster. The API CI workflow runs the same check.
 
+### Operating Platform Agent Memory model settings
+
+Apply migration `d83f291bc7a0` before deploying the settings API. Deploy both
+bridge files (`start_hindsight.py` and `memory_model.py`) and set
+`AGENTBARN_MEMORY_SETTINGS_URL` to the gateway's `/memory/runtime/v1/model`
+endpoint. Compose and Helm supply the internal URL. Existing backends need one
+restart to install the bridge; subsequent settings changes need none. The
+endpoint uses the existing Hindsight backend auth key, which product API and
+Agent pods do not receive.
+
+Set `MEMORY_LITELLM_ACTIVE_KEY_HASH` when retaining multiple attribution hashes.
+Helmfile derives it from the currently configured dedicated key; Compose
+operators supply it in `.env`. With a single hash the API infers the active one.
+Settings saves expand only that key's model allowlist and preserve prior models,
+budgets, and spend. On key rotation provision the persisted model, startup
+fallback, and models needed by in-progress operations on the new key. Keep
+retired hashes for delayed cost attribution.
+
+Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
+customize the initial model. Both deployments use that one setting for the API
+default and Hindsight startup model. When using charts directly, set API
+`memory.defaultModel` and Hindsight `llm.model` to the same value. Gateway outages retain the last known selection,
+or the startup model before the first successful fetch. A schema downgrade drops
+the persisted choice.
+
 ## Organization LLM budgets
 
 Each Organization has its own LLM spend ceiling, set by a Platform Administrator
@@ -517,28 +542,3 @@ calls it from a router, and no CronJob runs it.
 - Classifier code changes that alter how a command is split into invocations can shift
   ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
   instead of updating them.
-
-
-### Operating Platform Agent Memory model settings
-
-Apply migration `d83f291bc7a0` before deploying the settings API. Deploy both
-bridge files (`start_hindsight.py` and `memory_model.py`) and set
-`AGENTBARN_MEMORY_SETTINGS_URL` to the gateway's `/memory/runtime/v1/model`
-endpoint. Compose and Helm supply the internal URL. Existing backends need one
-restart to install the bridge; subsequent settings changes need none. The
-endpoint uses the existing Hindsight backend auth key, which product API and
-Agent pods do not receive.
-
-Set `MEMORY_LITELLM_ACTIVE_KEY_HASH` when retaining multiple attribution hashes.
-Helmfile derives it from the currently configured dedicated key; Compose
-operators supply it in `.env`. With a single hash the API infers the active one.
-Settings saves expand only that key's model allowlist and preserve prior models,
-budgets, and spend. On key rotation provision the persisted model, startup
-fallback, and models needed by in-progress operations on the new key. Keep
-retired hashes for delayed cost attribution.
-
-`MEMORY_DEFAULT_MODEL` supplies the API default before any choice is stored. Keep
-it aligned with Hindsight's startup `llm.model` / `HINDSIGHT_API_LLM_MODEL` when
-customizing initial deployment. Gateway outages retain the last known selection,
-or the startup model before the first successful fetch. A schema downgrade drops
-the persisted choice.

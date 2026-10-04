@@ -38,6 +38,7 @@ def main() -> None:
     assert database["volumes"] == ["hindsight_postgres_data:/var/lib/postgresql"]
     assert local["environment"]["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://memory:8003/memory/runtime/v1/model"
     assert any("memory_model.py" in mount for mount in local["volumes"])
+    assert local["environment"]["HINDSIGHT_API_LLM_MODEL"] == services["api"]["environment"]["MEMORY_DEFAULT_MODEL"]
     assert local["environment"]["HINDSIGHT_ENABLE_CP"] == "false"
     assert local["environment"]["HINDSIGHT_API_TENANT_EXTENSION"].endswith(":ApiKeyTenantExtension")
     for name in ("api", "worker", "communications", "memory"):
@@ -59,7 +60,12 @@ def main() -> None:
     assert not any(document["metadata"]["name"] == "agentbarn-api-memory" for document in disabled)
     memory_values = {
         **values,
-        "memory": {"enabled": True, "litellmKeyHashes": "f" * 64, "litellmActiveKeyHash": "f" * 64},
+        "memory": {
+            "enabled": True,
+            "litellmKeyHashes": "f" * 64,
+            "litellmActiveKeyHash": "f" * 64,
+            "defaultModel": "openrouter/custom/default",
+        },
     }
     try:
         render("agentbarn-api", {**values, "memory": {"enabled": True}})
@@ -85,6 +91,7 @@ def main() -> None:
         document for document in enabled if "MEMORY_LITELLM_KEY_HASHES" in document.get("stringData", {})
     )
     assert shared_secret["stringData"]["MEMORY_LITELLM_KEY_HASHES"] == "f" * 64
+    assert shared_secret["stringData"]["MEMORY_DEFAULT_MODEL"] == "openrouter/custom/default"
     assert shared_secret["stringData"]["MEMORY_LITELLM_ACTIVE_KEY_HASH"] == "f" * 64
     assert "HINDSIGHT_LITELLM_API_KEY" not in shared_secret["stringData"]
     for document in enabled:
@@ -111,7 +118,7 @@ def main() -> None:
         {
             "databaseUrl": "postgresql://test:test@postgres-hindsight/test",
             "apiKey": "test-backend-key",
-            "llm": {"apiKey": "test-platform-key"},
+            "llm": {"apiKey": "test-platform-key", "model": "openrouter/custom/default"},
         },
     )
     deployment = next(document for document in backend if document["kind"] == "Deployment")
@@ -131,6 +138,7 @@ def main() -> None:
     assert "memory_model.py" in bridge["data"]
     environment = {entry["name"]: entry["value"] for entry in container["env"]}
     assert environment["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://agentbarn-api-memory:8003/memory/runtime/v1/model"
+    assert environment["HINDSIGHT_API_LLM_MODEL"] == shared_secret["stringData"]["MEMORY_DEFAULT_MODEL"]
     assert environment["HINDSIGHT_ENABLE_CP"] == "false"
     assert environment["HINDSIGHT_API_TENANT_EXTENSION"].endswith(":ApiKeyTenantExtension")
     assert "HINDSIGHT_API_TENANT_MCP_AUTH_DISABLED" not in environment

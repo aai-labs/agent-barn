@@ -29,7 +29,7 @@ class ModelSelection:
         async with self.lock:
             if time.monotonic() >= self.expires:
                 try:
-                    async with httpx.AsyncClient(timeout=3, trust_env=False, follow_redirects=False) as client:
+                    async with httpx.AsyncClient(timeout=1, trust_env=False, follow_redirects=False) as client:
                         response = await client.get(self.url, headers={"Authorization": f"Bearer {self.key}"})
                         response.raise_for_status()
                         model = response.json()["model"]

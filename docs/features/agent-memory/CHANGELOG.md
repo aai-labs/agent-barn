@@ -21,6 +21,19 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — Opus quality review follow-ups
+
+- Fixed: Compose and Helmfile share `MEMORY_DEFAULT_MODEL` between the API and
+  Hindsight startup configuration. Direct charts expose `memory.defaultModel`.
+  The gateway fetch timeout is one second; allowlist serialization is documented.
+- Added: active-key rejection, missing model-capability, and custom-default tests.
+  Both previously surviving review mutations now fail their intended assertions.
+- Cleaned up: model settings use domain-named hook fields, valid definition-list
+  markup, formatted JSX, and browser mocks in data-support. Operations and
+  verification guidance now live under their applicable sections.
+- Verified: 24 API/client/pinned-runtime tests, all five browser scenarios,
+  API/UI static checks, memory chart checks, and Compose validation pass.
+
 ### 2026-10-04 — Platform Settings design alignment
 
 - Changed: Platform Settings reuses the Organization settings header, sidebar,

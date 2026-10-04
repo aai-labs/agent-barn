@@ -211,6 +211,7 @@ communications:
       cpu: 500m
 
 memory:
+  defaultModel: "openrouter/openai/gpt-4.1-mini"
   litellmKeyHashes: ""
   litellmActiveKeyHash: ""
   enabled: false

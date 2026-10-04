@@ -31,6 +31,18 @@ CATALOG = [
         "output_modalities": ["text"],
         "supported_parameters": ["tools", "structured_outputs"],
     },
+    {
+        "id": "text/no-tools",
+        "name": "No tools",
+        "output_modalities": ["text"],
+        "supported_parameters": ["response_format"],
+    },
+    {
+        "id": "text/no-structure",
+        "name": "No structured responses",
+        "output_modalities": ["text"],
+        "supported_parameters": ["tools"],
+    },
     {"id": "image/only", "name": "Image model", "output_modalities": ["image"], "supported_parameters": []},
 ]
 
@@ -102,7 +114,14 @@ def test_platform_admin_without_membership_can_select_and_persist_global_memory_
 
 
 @pytest.mark.parametrize(
-    "model", ["openrouter/image/only", "openrouter/unknown/model", "litellm/openrouter/openai/alternate"]
+    "model",
+    [
+        "openrouter/text/no-tools",
+        "openrouter/text/no-structure",
+        "openrouter/image/only",
+        "openrouter/unknown/model",
+        "litellm/openrouter/openai/alternate",
+    ],
 )
 def test_unsupported_model_cannot_change_the_platform_choice(model, monkeypatch):
     with given(agent_memory_api_setup(setup, admin)) as context:
@@ -133,3 +152,32 @@ def test_runtime_model_endpoint_only_accepts_the_hindsight_service_credential(to
                 "/memory/runtime/v1/model", headers={"Authorization": f"Bearer {token}"} if token else {}
             )
             assert_that(response.status_code, equal_to(200 if token == "backend-service-test-key" else 401))
+
+
+@pytest.mark.parametrize("hashes,active", [("", ""), ("a" * 64 + "," + "b" * 64, ""), ("a" * 64, "b" * 64)])
+def test_unknown_or_ambiguous_active_key_cannot_change_settings(hashes, active, monkeypatch):
+    with given(agent_memory_api_setup(setup, admin)) as context:
+        monkeypatch.setattr(context.injector.get(OpenRouterClient), "list_models", Mock(return_value=CATALOG))
+        config = context.injector.get(Config)
+        config.memory_litellm_key_hashes = hashes
+        config.memory_litellm_active_key_hash = active
+        key_update = context.injector.get(LiteLLMClient).allow_memory_models
+        response = context.client.put(BASE, headers=auth(context), json={"model": "openrouter/openai/alternate"})
+        assert_that(response.status_code, equal_to(503))
+        assert_that(
+            context.client.get(BASE, headers=auth(context)).json(), has_entries(model="openrouter/openai/gpt-4.1-mini")
+        )
+        key_update.assert_not_called()
+
+
+def test_configured_default_is_returned_before_a_choice_is_saved():
+    with given(agent_memory_api_setup(setup, admin)) as context:
+        context.injector.get(Config).memory_default_model = "openrouter/custom/default"
+        assert_that(
+            context.client.get(BASE, headers=auth(context)).json(), has_entries(model="openrouter/custom/default")
+        )
+        with TestClient(create_memory_app(context.injector)) as client:
+            response = client.get(
+                "/memory/runtime/v1/model", headers={"Authorization": "Bearer backend-service-test-key"}
+            )
+            assert_that(response.json(), has_entries(model="openrouter/custom/default"))

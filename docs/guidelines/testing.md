@@ -269,14 +269,13 @@ Avoid assertions inside page objects. Avoid feature-specific network interceptio
 | Helm/Kubernetes behavior     | Chart/render checks and Kubernetes integration when available |
 | Contributor-facing documentation only | Link/path/format validation; application tests are optional |
 
-## Failure handling
-
-Fix failures introduced by the change. If an unrelated pre-existing failure blocks verification, report the exact command and failure without reshaping unrelated code to make the suite green.
-
-
 Platform Agent Memory model changes require settings API authorization and
 failure-atomicity tests, browser selection/save/retry and Organization Owner
 denial tests, and the pinned Hindsight provider contract. That contract records
 actual outgoing models for new and in-progress operations, tool calls, and
 concurrent bank attribution. Run `make check-memory` for bridge/chart wiring and
 `make check-migrations` for the singleton settings migration.
+
+## Failure handling
+
+Fix failures introduced by the change. If an unrelated pre-existing failure blocks verification, report the exact command and failure without reshaping unrelated code to make the suite green.
