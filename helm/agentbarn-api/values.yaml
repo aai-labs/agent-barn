@@ -212,6 +212,7 @@ communications:
 
 memory:
   litellmKeyHashes: ""
+  litellmActiveKeyHash: ""
   enabled: false
   authChecksum: ""
   replicaCount: 1

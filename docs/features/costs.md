@@ -230,3 +230,10 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 ## Change impact
 
 Changing the sync or heal predicates changes what is recorded as money, so cover them in unit tests before touching the job. Changing attribution affects agent key lifecycle, deleted-agent behavior, and the unattributed bucket. Changing the schedule requires rechecking `COST_SYNC_MAX_RUNTIME_SECONDS`. Status changes require checking both persisted AgentStatus and the cost-facing mapped labels. A new Agent-surface route must go through `_authorized_agent` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`.
+
+
+Platform Admins select the shared Hindsight processing model in
+[Platform Settings](agent-memory.md#platform-memory-processing-model). Changing
+it preserves the dedicated key's budgets and existing cost records; subsequent
+calls carry the chosen model with the same Organization bank attribution.
+Agent chat models remain independently configured.

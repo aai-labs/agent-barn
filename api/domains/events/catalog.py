@@ -38,6 +38,7 @@ ORGANIZATION_VALUE_SETTINGS_CHANGED = "organization.value_settings.changed"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
+PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
@@ -51,6 +52,14 @@ ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
+
+
+class PlatformMemoryModelChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    previous: str
+    current: str
+    actor_display: str
+    subject_display: str
 
 
 class OrganizationRoleChangedPayload(BaseModel):
@@ -575,6 +584,15 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_MEMORY_MODEL_CHANGED,
+            schema_version=1,
+            payload_model=PlatformMemoryModelChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
     for event_name in (
         PLATFORM_USER_PRIVILEGE_GRANTED,
         PLATFORM_USER_PRIVILEGE_REVOKED,

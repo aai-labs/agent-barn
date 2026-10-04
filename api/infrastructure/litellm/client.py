@@ -298,6 +298,32 @@ class LiteLLMClient:
         except Exception as exc:
             raise LiteLLMError(f"Failed to fetch key info: {exc}") from exc
 
+    def allow_memory_models(self, key_hash: str, models: list[str]) -> None:
+        """Expand only the memory key's model allowlist; preserve budgets and spend.
+
+        Keeping previous models permits in-flight calls and startup fallback.
+        Empty existing restrictions already permit every configured proxy model.
+        """
+        try:
+            info = self.get_key_info(key_hash)
+            if info.get("team_id"):
+                raise LiteLLMError("Memory processing requires a dedicated platform key")
+            allowed = info.get("models", [])
+            if not isinstance(allowed, list) or not all(isinstance(item, str) for item in allowed):
+                raise LiteLLMError("Unexpected memory key model restrictions")
+            allowed = [str(item) for item in allowed]
+            if not allowed or set(models).issubset(allowed):
+                return
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/update",
+                headers=self._headers(self._master_key()),
+                json={"key": key_hash, "models": sorted(set(allowed + models))},
+                timeout=10,
+            )
+            response.raise_for_status()
+        except Exception:
+            raise LiteLLMError("Could not enable the memory model") from None
+
     def get_key_spend(self, key: str) -> float:
         """Return the total spend (USD) accumulated by this virtual key."""
         return float(self.get_key_info(key).get("spend", 0.0))

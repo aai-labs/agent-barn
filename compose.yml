@@ -51,10 +51,12 @@ services:
       HINDSIGHT_API_LLM_PROVIDER: openai
       HINDSIGHT_API_LLM_BASE_URL: http://litellm:4000/v1
       HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_LITELLM_API_KEY:-}
+      AGENTBARN_MEMORY_SETTINGS_URL: http://memory:8003/memory/runtime/v1/model
       HINDSIGHT_API_LLM_MODEL: openrouter/openai/gpt-4.1-mini
       HINDSIGHT_API_WORKER_ID: local-hindsight
     volumes:
       - ./helm/hindsight/files/start_hindsight.py:/opt/agentbarn/start_hindsight.py:ro
+      - ./helm/hindsight/files/memory_model.py:/opt/agentbarn/memory_model.py:ro
     networks: [default, hindsight-storage]
 
   db:

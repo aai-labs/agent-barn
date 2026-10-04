@@ -6,3 +6,5 @@ metadata:
 data:
   start_hindsight.py: |
 {{ .Files.Get "files/start_hindsight.py" | indent 4 }}
+  memory_model.py: |
+{{ .Files.Get "files/memory_model.py" | indent 4 }}

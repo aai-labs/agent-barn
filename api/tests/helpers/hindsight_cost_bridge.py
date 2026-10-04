@@ -18,10 +18,23 @@ def hindsight_cost_boundary_is_ready():
         if exists.returncode:
             subprocess.run(["docker", "pull", IMAGE], check=True, capture_output=True)
         context.model_requests = []
+        context.selected_model = "openrouter/contract/first"
 
         class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"model": context.selected_model}).encode())
+
             def do_POST(self):
                 payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if self.path == "/settings":
+                    context.selected_model = payload["model"]
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"{}")
+                    return
                 context.model_requests.append(payload)
                 response = {
                     "id": "contract-model-response",
@@ -55,7 +68,7 @@ def hindsight_cost_boundary_is_ready():
     return step
 
 
-def run_hindsight_cost_driver(context):
+def run_hindsight_cost_driver(context, *, dynamic_model=False):
     context.completed = subprocess.run(
         [
             "docker",
@@ -71,6 +84,11 @@ def run_hindsight_cost_driver(context):
             f"{ROOT / 'api/tests/fixtures/agent_memory'}:/contract:ro",
             "-e",
             f"CONTRACT_URL={context.model_url}",
+            *(
+                ["-e", f"CONTRACT_SETTINGS_URL={context.model_url.removesuffix('/v1')}/settings"]
+                if dynamic_model
+                else []
+            ),
             IMAGE,
             "/contract/hindsight_cost_driver.py",
         ],

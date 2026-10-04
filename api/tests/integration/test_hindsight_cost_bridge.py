@@ -23,3 +23,16 @@ def test_bank_identity_survives_concurrent_foreground_and_background_model_calls
                     startup=None,
                 ),
             )
+
+
+def test_platform_model_changes_reach_new_hindsight_calls_without_changing_in_flight_operations():
+    with given([hindsight_cost_boundary_is_ready()]) as context:
+        run_hindsight_cost_driver(context, dynamic_model=True)
+        assert_that(context.completed.returncode, equal_to(0), context.completed.stdout + context.completed.stderr)
+        calls = {request["messages"][0]["content"]: request for request in context.model_requests}
+        for operation in ["retain", "reflect", "consolidation", "startup", "held-before", "held-after"]:
+            assert_that(calls[operation]["model"], equal_to("openrouter/contract/first"))
+        for operation in ["updated-model", "updated-tools"]:
+            assert_that(calls[operation]["model"], equal_to("openrouter/contract/second"))
+        assert_that(calls["updated-model"]["user"], equal_to("org-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+        assert_that(calls["updated-tools"]["user"], equal_to("org-11111111-2222-3333-4444-555555555555"))

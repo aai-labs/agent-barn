@@ -36,6 +36,8 @@ def main() -> None:
     assert database["networks"] == ["hindsight-storage"]
     assert compose["networks"]["hindsight-storage"]["internal"] is True
     assert database["volumes"] == ["hindsight_postgres_data:/var/lib/postgresql"]
+    assert local["environment"]["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://memory:8003/memory/runtime/v1/model"
+    assert any("memory_model.py" in mount for mount in local["volumes"])
     assert local["environment"]["HINDSIGHT_ENABLE_CP"] == "false"
     assert local["environment"]["HINDSIGHT_API_TENANT_EXTENSION"].endswith(":ApiKeyTenantExtension")
     for name in ("api", "worker", "communications", "memory"):
@@ -55,7 +57,10 @@ def main() -> None:
     }
     disabled = render("agentbarn-api", values)
     assert not any(document["metadata"]["name"] == "agentbarn-api-memory" for document in disabled)
-    memory_values = {**values, "memory": {"enabled": True, "litellmKeyHashes": "f" * 64}}
+    memory_values = {
+        **values,
+        "memory": {"enabled": True, "litellmKeyHashes": "f" * 64, "litellmActiveKeyHash": "f" * 64},
+    }
     try:
         render("agentbarn-api", {**values, "memory": {"enabled": True}})
     except subprocess.CalledProcessError as error:
@@ -80,6 +85,7 @@ def main() -> None:
         document for document in enabled if "MEMORY_LITELLM_KEY_HASHES" in document.get("stringData", {})
     )
     assert shared_secret["stringData"]["MEMORY_LITELLM_KEY_HASHES"] == "f" * 64
+    assert shared_secret["stringData"]["MEMORY_LITELLM_ACTIVE_KEY_HASH"] == "f" * 64
     assert "HINDSIGHT_LITELLM_API_KEY" not in shared_secret["stringData"]
     for document in enabled:
         if document["kind"] == "Deployment":
@@ -122,7 +128,9 @@ def main() -> None:
     assert "checksum/attribution" in deployment["spec"]["template"]["metadata"]["annotations"]
     bridge = next(document for document in backend if document["kind"] == "ConfigMap")
     assert "start_hindsight.py" in bridge["data"]
+    assert "memory_model.py" in bridge["data"]
     environment = {entry["name"]: entry["value"] for entry in container["env"]}
+    assert environment["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://agentbarn-api-memory:8003/memory/runtime/v1/model"
     assert environment["HINDSIGHT_ENABLE_CP"] == "false"
     assert environment["HINDSIGHT_API_TENANT_EXTENSION"].endswith(":ApiKeyTenantExtension")
     assert "HINDSIGHT_API_TENANT_MCP_AUTH_DISABLED" not in environment

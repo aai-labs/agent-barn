@@ -252,3 +252,41 @@ Agent/team document namespace, and never becomes an Agent-accessible route.
 Revocation cannot erase existing conversation context or copies separately saved
 as private memories. The Agent tab refreshes every five seconds and after grant
 changes made in this UI; authorization is always rechecked by the gateway.
+
+
+## Platform memory-processing model
+
+Platform Admins choose the Hindsight model at **Platform Settings → Agent Memory**
+(`/dashboard/platform/settings`). It applies to all Organizations and Agents,
+separately from Agent chat models and Organization model allowlists. The catalog
+permits text models supporting structured responses and tools. Changes affect
+future extraction, consolidation, and reflection; existing memories are retained
+without re-extraction.
+
+`GET/PUT /api/v1/platform/settings/agent-memory` and its `GET /models` catalog
+require a persisted Platform Admin user session, independent of Organization
+membership. Organization Owners/Admins and Agent credentials have no authority.
+The singleton `platform_memory_settings` row stores the model, update time, and
+acting User. Without a row, `MEMORY_DEFAULT_MODEL` supplies the deployment default
+(`openrouter/openai/gpt-4.1-mini`).
+
+Before committing a choice, the service enables it on the dedicated platform
+LiteLLM key, preserving budgets, spend, and previously allowed models. The active
+hash must belong to `MEMORY_LITELLM_KEY_HASHES`; with multiple hashes,
+`MEMORY_LITELLM_ACTIVE_KEY_HASH` identifies it. Catalog or key update failures
+leave the persisted setting unchanged. The choice and the Platform-scoped
+`platform.memory_model.changed` audit event commit atomically; repeated saves
+of an already persisted choice emit no additional event.
+
+The pinned Hindsight bridge reads `GET /memory/runtime/v1/model` on the separate
+gateway with the backend service credential, never an Agent token or viewer
+capability. A five-second cache applies choices to new operations without Agent
+restarts; in-progress operations keep their model snapshot (up to 1,024 tracked
+operations). Separate provider instances preserve model-specific initialization
+and concurrent Organization cost attribution. During settings outages the bridge
+keeps its last known selection, or its startup model before its first successful
+fetch.
+
+Migration `d83f291bc7a0` adds the singleton table. Upgrade the database before
+starting the updated API and bridge; downgrade drops the choice and restores
+deployment-default selection. See [operations](../guidelines/operations.md#agent-memory-deployment).

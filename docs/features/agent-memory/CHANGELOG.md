@@ -6,7 +6,7 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Current state
 
-- Delivered: the Agent memory setting, Organization memory-access page, and read-only
+- Delivered: Platform Admin memory model selection and live Hindsight switching; the Agent memory setting, Organization memory-access page, and read-only
   Agent Memory tab and Owner/Admin Organization Memory viewer; the per-Agent memory opt-in and Memory Grants with audit Domain Events;
   authenticated gateway with current grant checks; hashed per-start Agent credentials; optional
   Hindsight and gateway Helm deployments; automatic Hermes/OpenClaw recall and retain alongside
@@ -20,6 +20,19 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-04 — Platform memory model settings
+
+- Delivered: Platform Admin settings API, supported model catalog, singleton
+  persistence, and Platform audit events. Organization roles cannot manage it.
+- Changed: the pinned Hindsight bridge fetches service-authenticated settings,
+  preserves model snapshots for in-progress operations, and switches new work
+  within five seconds. Dedicated-key allowlists expand without budget/spend
+  changes; bank attribution remains intact. Migration `d83f291bc7a0` is required.
+- Verified: 36 settings/catalog/key tests and both pinned provider contracts pass;
+  API static, chart isolation, and migration checks pass. Local migration and
+  bridge deployment are applied, with GPT-4.1-mini preserved. The live supported
+  catalog and settings save succeeded; the backend fetched the persisted choice.
 
 ### 2026-10-04 — permission-scoped Agent tab and shared authorship
 

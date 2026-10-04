@@ -45,6 +45,8 @@ spec:
               value: openai
             - name: HINDSIGHT_API_LLM_BASE_URL
               value: {{ .Values.llm.baseUrl | required "llm.baseUrl is required" | quote }}
+            - name: AGENTBARN_MEMORY_SETTINGS_URL
+              value: {{ .Values.llm.settingsUrl | quote }}
             - name: HINDSIGHT_API_LLM_MODEL
               value: {{ .Values.llm.model | required "llm.model is required" | quote }}
             - name: HINDSIGHT_API_WORKER_ID

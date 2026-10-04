@@ -6,6 +6,10 @@ import sys
 from types import SimpleNamespace
 
 sys.path.insert(0, "/opt/agentbarn")
+if os.environ.get("CONTRACT_SETTINGS_URL"):
+    os.environ["AGENTBARN_MEMORY_SETTINGS_URL"] = os.environ["CONTRACT_SETTINGS_URL"]
+    os.environ["HINDSIGHT_API_TENANT_API_KEY"] = "backend-model-test-key"
+
 from start_hindsight import install  # ty: ignore[unresolved-import]
 
 install()
@@ -40,6 +44,23 @@ async def main():
         asyncio.create_task(call(BANKS[0], "consolidation")),
     )
     await provider.call(messages=[{"role": "user", "content": "startup"}], max_retries=0)
+    if os.environ.get("CONTRACT_SETTINGS_URL"):
+        import httpx
+
+        held = provider.with_config(config, bank_id=BANKS[0], operation="held")
+        await held.call(messages=[{"role": "user", "content": "held-before"}], max_retries=0)
+        async with httpx.AsyncClient() as client:
+            await client.post(os.environ["CONTRACT_SETTINGS_URL"], json={"model": "openrouter/contract/second"})
+        await asyncio.sleep(5.1)
+        await call(BANKS[1], "updated-model")
+        await held.call(messages=[{"role": "user", "content": "held-after"}], max_retries=0)
+        await provider.with_config(config, bank_id=BANKS[0], operation="tools").call_with_tools(
+            messages=[{"role": "user", "content": "updated-tools"}],
+            tools=[
+                {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}}}
+            ],
+            max_retries=0,
+        )
     await provider.cleanup()
     print("HINDSIGHT_COST_CONTRACT=ok")
 

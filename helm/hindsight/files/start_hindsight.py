@@ -34,6 +34,9 @@ def install():
 
     apply_defaults._agentbarn_attribution = True
     OpenAICompatibleLLM._apply_provider_extra_body_defaults = apply_defaults
+    from memory_model import install_model_selection
+
+    install_model_selection()
 
 
 if __name__ == "__main__":

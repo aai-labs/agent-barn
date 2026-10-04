@@ -159,3 +159,10 @@ AF-150 workflows must retain clean transaction seams for later event adoption wi
 Test Platform Administrator, Organization Owner/Admin, creator, explicit Agent Owner/Editor/Viewer, Agent General Access Viewer/Editor/Owner, explicit-plus-General Permission union, unassigned Member, pending/removed Membership, wrong Organization, soft-deleted Agent, and migrated legacy data across list/count/detail/mutation and subordinate-resource paths.
 
 Verify fresh and pre-AF-150 migration paths, Organization Role policy coverage, Agent Access Role seed idempotency, constraints, 404/403 behavior, direct mutation authorization, persistence-level pagination, and UI control differences. Run the required targets from [`../../guidelines/testing.md`](../../guidelines/testing.md) and keep [`CHANGELOG.md`](CHANGELOG.md) synchronized with every delivered slice.
+
+
+Platform Agent Memory settings (`/platform/settings/agent-memory`, including the
+catalog) require Platform Admin user-session authority without Organization
+membership. They confer no Organization or Agent authority. The memory gateway's
+read-only runtime model endpoint requires the Hindsight backend service key and
+refuses Agent credentials.

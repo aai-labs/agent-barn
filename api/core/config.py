@@ -74,6 +74,9 @@ class Config(BaseSettings):
     # Non-secret SHA-256 hashes of current and retired Hindsight LiteLLM keys.
     memory_litellm_key_hashes: str = ""
 
+    memory_default_model: str = "openrouter/openai/gpt-4.1-mini"
+    memory_litellm_active_key_hash: str = ""
+
     hindsight_base_url: str = ""
     hindsight_api_key: str = ""
     hindsight_request_timeout_seconds: int = Field(default=120, ge=1, le=600)

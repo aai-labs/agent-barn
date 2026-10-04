@@ -74,7 +74,7 @@ HINDSIGHT_LITELLM_API_KEY=<dedicated budgeted LiteLLM virtual key>
 MEMORY_LITELLM_KEY_HASHES=<SHA-256 of that virtual key>
 ```
 
-Use a virtual key restricted to `openrouter/openai/gpt-4.1-mini`, with no
+Initially use a virtual key restricted to `openrouter/openai/gpt-4.1-mini`, with no
 Organization team assignment. Keep its hash alongside any retired hashes in
 `MEMORY_LITELLM_KEY_HASHES` for cost attribution. `./run.sh` starts the backend
 when that profile is enabled. To start it on an already running stack:
@@ -119,8 +119,9 @@ Rotating the Helmfile API-key value rolls Hindsight and the gateway through
 their Secret/auth checksums. With a manually managed Secret, also restart the
 gateway Deployment after rotation because environment variables are read at boot.
 
-Hindsight calls the existing LiteLLM endpoint with a dedicated platform key and
-`openrouter/openai/gpt-4.1-mini`. Do not share this key with Agents or attach it to
+Hindsight calls the existing LiteLLM endpoint with a dedicated platform key.
+`openrouter/openai/gpt-4.1-mini` is the initial default; Platform Admins can
+choose subsequent models in Platform Settings → Agent Memory. Do not share this key with Agents or attach it to
 an Organization team. The chart runs a pinned startup bridge that sends each
 operation's canonical bank as the model request's `user` field; the existing cost
 CronJob attributes LiteLLM's billed calls to that Organization without reading
@@ -516,3 +517,28 @@ calls it from a router, and no CronJob runs it.
 - Classifier code changes that alter how a command is split into invocations can shift
   ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
   instead of updating them.
+
+
+### Operating Platform Agent Memory model settings
+
+Apply migration `d83f291bc7a0` before deploying the settings API. Deploy both
+bridge files (`start_hindsight.py` and `memory_model.py`) and set
+`AGENTBARN_MEMORY_SETTINGS_URL` to the gateway's `/memory/runtime/v1/model`
+endpoint. Compose and Helm supply the internal URL. Existing backends need one
+restart to install the bridge; subsequent settings changes need none. The
+endpoint uses the existing Hindsight backend auth key, which product API and
+Agent pods do not receive.
+
+Set `MEMORY_LITELLM_ACTIVE_KEY_HASH` when retaining multiple attribution hashes.
+Helmfile derives it from the currently configured dedicated key; Compose
+operators supply it in `.env`. With a single hash the API infers the active one.
+Settings saves expand only that key's model allowlist and preserve prior models,
+budgets, and spend. On key rotation provision the persisted model, startup
+fallback, and models needed by in-progress operations on the new key. Keep
+retired hashes for delayed cost attribution.
+
+`MEMORY_DEFAULT_MODEL` supplies the API default before any choice is stored. Keep
+it aligned with Hindsight's startup `llm.model` / `HINDSIGHT_API_LLM_MODEL` when
+customizing initial deployment. Gateway outages retain the last known selection,
+or the startup model before the first successful fetch. A schema downgrade drops
+the persisted choice.
