@@ -1,13 +1,16 @@
+import uuid
+
 import pytest
 from fastapi import HTTPException, status
-from hamcrest import assert_that, equal_to, has_length, none
+from hamcrest import assert_that, contains_string, equal_to, has_length, none
 from unittest.mock import patch
 
 from api.core.config import Config
-from api.domains.agents.models import AgentStatus, RestorePointOrigin, RestorePointStatus
+from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.restore_points.models import AgentRestorePointCreate
+from api.domains.restore_points.repository import RestorePointRepository
 from api.infrastructure.kubernetes import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -244,3 +247,60 @@ def test_a_managed_update_rolls_back_when_the_start_itself_fails():
             body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
             assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
             assert_that(starts["count"], equal_to(2))
+
+
+# --- The HTTP route -----------------------------------------------------------
+
+
+def test_managed_update_is_accepted_and_runs_through_the_background_task():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        context.injector.get(KubernetesClient).get_pod_readiness.return_value = ("ready", None)
+
+        with when("I ask for a managed update"):
+            response = context.client.post(_managed_url(context), headers=_auth(context))
+
+        with then("it is accepted, and the scheduled task has carried the update through"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
+
+
+def test_managed_update_on_a_stopped_agent_returns_409():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        with when("I ask for a managed update on a stopped Agent"):
+            response = context.client.post(_managed_url(context), headers=_auth(context))
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("running"))
+
+
+def test_managed_update_while_a_restore_point_is_in_flight_returns_409():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        repository = context.injector.get(RestorePointRepository)
+        row = AgentRestorePoint(
+            agent_id=context.agent.id,
+            label="someone is restoring",
+            status=RestorePointStatus.RESTORING,
+            origin=RestorePointOrigin.MANUAL,
+            agent_type=context.agent.agent_type,
+            pvc_name=f"restore-point-{uuid.uuid4()}",
+            config_manifest={},
+        )
+        repository.save(row)
+
+        with when("I ask for a managed update while that runs"):
+            response = context.client.post(_managed_url(context), headers=_auth(context))
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_managed_update_without_auth_returns_401():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        with when("I ask for a managed update without auth"):
+            response = context.client.post(_managed_url(context))
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
