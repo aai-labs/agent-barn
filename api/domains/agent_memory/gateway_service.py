@@ -134,7 +134,7 @@ class MemoryGatewayService:
             if endpoint == "memories/recall":
                 result = MemoryRecall.model_validate(payload).model_dump(exclude_none=True)
                 result["trace"] = False
-                result["include"].update({"chunks": None, "source_facts": None})
+                result["include"].update({"entities": None, "chunks": None, "source_facts": None})
             else:
                 result = MemoryReflect.model_validate(payload).model_dump(exclude_none=True)
                 result.update(

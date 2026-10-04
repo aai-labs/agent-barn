@@ -22,7 +22,7 @@ def runtime_model(
     if (
         scheme.lower() != "bearer"
         or not config.hindsight_api_key
-        or not hmac.compare_digest(token, config.hindsight_api_key)
+        or not hmac.compare_digest(token.encode(), config.hindsight_api_key.encode())
     ):
         raise HTTPException(401, "Invalid memory service credential.")
     return {"model": repository.read(config.memory_default_model).model}

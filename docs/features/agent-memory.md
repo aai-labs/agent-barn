@@ -145,7 +145,7 @@ exponential delays from 30 seconds to one hour, serviced on the job's schedule.
 Expired leases are reclaimable; stale workers cannot overwrite newer claims. Runs
 are bounded to 20 tasks, 100 documents per task, and four minutes, with ten-second
 backend timeouts. Shrinking document pages are always fetched at offset zero.
-Successful tombstones remain scheduled hourly: Hindsight work accepted before deletion
+Successful tombstones are swept hourly for two days after deletion, then daily: Hindsight work accepted before deletion
 may finish later and recreate a document. `last_cleaned_at` records the last empty
 scan, not a guarantee that earlier background work ended. Stored errors are generic
 codes; logs contain only Agent, Organization, and result. No cleanup endpoint is
@@ -170,7 +170,7 @@ The token determines the Organization and Agent. Client bank names, query parame
 
 Private retain forces only `agent:<agent_id>`. Shared retain forces `author:<agent_id>` and `scope:team` only when the Agent requests sharing and holds an Organization Memory write grant; otherwise a shared retain is rejected with 403. Both force `observation_scopes: per_tag`; shared consolidation therefore cannot create private Agent-tag observations. Document IDs are namespaced by Agent and private/Organization scope, with the client ID hashed. Separate scope namespaces prevent appending a shared turn from republishing earlier private turns. Operation IDs are namespaced by Agent too. Missing document IDs produce new namespaced IDs.
 
-Recall traces, raw chunks, and source-fact expansion are disabled. Reflect excludes mental models, global directive application, and fact/tool-call traces. These response surfaces remain disabled until their tag isolation is verified. Requests use a bounded subset of the pinned Hindsight 0.10.2 contract: at most 2MiB per body, 20 retain items, and 100,000 content characters per item. Malformed supported requests return 422; oversized bodies return 413.
+Recall traces, bank-wide entity-name expansion, raw chunks, and source-fact expansion are disabled. Reflect excludes mental models, global directive application, and fact/tool-call traces. These response surfaces remain disabled until their tag isolation is verified. Requests use a bounded subset of the pinned Hindsight 0.10.2 contract: at most 2MiB per body, 20 retain items, and 100,000 content characters per item. Malformed supported requests return 422; oversized bodies return 413.
 
 The gateway sends only its own Hindsight bearer credential upstream and does not follow redirects or environment proxies. Upstream errors become generic errors without backend content or headers. Request logs contain Agent, Organization, canonical bank/endpoint, effective access tags, and status; memory content, client paths, and credentials are excluded.
 
@@ -291,3 +291,16 @@ fetch.
 Migration `d83f291bc7a0` adds the singleton table. Upgrade the database before
 starting the updated API and bridge; downgrade drops the choice and restores
 deployment-default selection. See [operations](../guidelines/operations.md#agent-memory-deployment).
+
+
+Memory writer instructions are included once in `TOOLS.md`, only for memory-enabled
+Agents. The executable remains installed for both runtimes; disabled Agents retain
+their native prompts without shared-memory instructions.
+
+Deletion sweeps process at most 20 tombstones per five-minute run (240 per hour),
+subject to a four-minute runtime bound. Larger backlogs delay repeat sweeps; hourly
+and daily schedules are minimum retry intervals, not completion guarantees.
+Tombstones remain durable because Hindsight has no enforced maximum job lifetime.
+The gateway in Compose and Helm receives explicitly selected settings and credentials,
+including DB access and its signing/backend key, rather than the shared API Secret.
+Kubernetes network reachability still relies on cluster policy and backend auth.

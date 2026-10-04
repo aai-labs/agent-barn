@@ -35,10 +35,45 @@ spec:
           ports:
             - name: memory
               containerPort: 8003
-          envFrom:
-            - secretRef:
-                name: {{ .Values.secretName }}
           env:
+            # This process has no platform-user management surface.
+            - name: PLATFORM_ADMIN_CREDENTIALS
+              value: ""
+            - name: DB_CONNECTION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: DB_CONNECTION_URL
+            - name: SECRET_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: SECRET_SIGNING_KEY
+            - name: ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: ENVIRONMENT
+            - name: MEMORY_DEFAULT_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: MEMORY_DEFAULT_MODEL
+            - name: MEMORY_LITELLM_KEY_HASHES
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: MEMORY_LITELLM_KEY_HASHES
+            - name: ORGANIZATION_DEFAULT_LLM_BUDGET_USD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: ORGANIZATION_DEFAULT_LLM_BUDGET_USD
+            - name: AGENT_DEFAULT_LLM_BUDGET_USD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: AGENT_DEFAULT_LLM_BUDGET_USD
             - name: HINDSIGHT_BASE_URL
               value: {{ .Values.memory.hindsightBaseUrl | required "memory.hindsightBaseUrl is required" | quote }}
             - name: HINDSIGHT_API_KEY

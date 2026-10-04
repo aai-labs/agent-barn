@@ -317,3 +317,20 @@ def test_an_absent_bank_is_a_successful_empty_sweep():
             assert_that(result, equal_to(1))
             assert_that(_rows(context, AgentMemoryPurge)[0].last_error, none())
             assert_that(any(method == "DELETE" for method, _, _ in backend.calls), equal_to(False))
+
+
+def test_old_clean_tombstones_back_off_to_daily_sweeps():
+    with given(_setup()) as context:
+        _delete(context)
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            row = session.exec(select(AgentMemoryPurge)).one()
+            row.created_at = datetime.now(UTC) - timedelta(days=3)
+            session.add(row)
+            session.commit()
+        repository = context.injector.get(MemoryPurgeRepository)
+        claimed = repository.claim()
+        assert claimed is not None
+        repository.finish(claimed, None)
+        row = _rows(context, AgentMemoryPurge)[0]
+        assert row.last_cleaned_at is not None
+        assert timedelta(hours=23) < row.next_attempt_at - row.last_cleaned_at <= timedelta(days=1)

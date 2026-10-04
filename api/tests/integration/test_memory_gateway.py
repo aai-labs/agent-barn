@@ -147,15 +147,16 @@ def test_grants_and_revocations_apply_on_the_next_request():
             assert_that(tags[2], contains_exactly(f"agent:{context.triage.id}", "scope:team"))
 
 
-@pytest.mark.parametrize("team_granted", [False, True])
-def test_retain_forces_tags_and_separates_private_and_team_documents(team_granted):
+@pytest.mark.parametrize("grant_access", [None, "read", "read_write"])
+def test_retain_forces_tags_and_separates_private_and_team_documents(grant_access):
     with given(
         agent_memory_api_setup(
             there_is_an_agent(status=AgentStatus.RUNNING), memory_is_enabled(), memory_gateway_is_ready()
         )
     ) as context:
-        if team_granted:
-            _grant(context, access="read_write")
+        team_granted = grant_access == "read_write"
+        if grant_access:
+            _grant(context, access=grant_access)
         body = {
             "items": [
                 {"content": "private fact", "document_id": "same-session", "tags": ["agent:other"]},
@@ -458,3 +459,14 @@ def test_organization_write_tool_endpoint_rejects_identity_and_tag_overrides():
         )
         assert_that(response.status_code, equal_to(422))
         assert_that(context.backend_requests, empty())
+
+
+def test_recall_suppresses_bank_wide_entity_names_even_when_requested():
+    with given(
+        agent_memory_api_setup(
+            there_is_an_agent(status=AgentStatus.RUNNING), memory_is_enabled(), memory_gateway_is_ready()
+        )
+    ) as context:
+        response = _request(context, body={"query": "Who do we know?", "include": {"entities": {"max_tokens": 2000}}})
+        assert_that(response.status_code, equal_to(200))
+        assert_that(context.backend_requests[0]["payload"]["include"]["entities"], equal_to(None))

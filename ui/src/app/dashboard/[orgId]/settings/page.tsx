@@ -1,6 +1,6 @@
 "use client";
 
-import { Brain, FileCode2, KeyRound, Sparkles, UserRound } from "lucide-react";
+import { Brain, FileCode2, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
@@ -17,9 +17,11 @@ import {
 } from "@/features/organizations/components/organization-settings-utils";
 import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
+import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limits-panel";
 
 const ICONS = {
   agents: UserRound,
+  "spend-limits": Wallet,
   templates: FileCode2,
   skills: Sparkles,
   "memory-access": Brain,
@@ -88,6 +90,7 @@ export default function SettingsPage() {
           description={section.description}
         >
           {section.key === "agents" && <AgentDefaultsPanel canEdit={canManage} />}
+          {section.key === "spend-limits" && <SpendLimitsPanel />}
           {section.key === "templates" && (
             <TemplatesPanel scope={{ kind: "organization" }} canManage={canManage} />
           )}

@@ -21,10 +21,30 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
-### 2026-10-04 — Opus review approval
+### 2026-10-04 — full-branch review integration and corrections
 
-- Reviewed: Claude Opus 5.5 approved the follow-up changes and confirmed all eight
-  original findings resolved, with no regressions found.
+- Integrated: current staging spend limits, RBAC, Organization Settings, and
+  migration history. Memory uses the effective Organization limit; per-Agent
+  key limits remain scoped to runtime calls. Local budget snapshots run every
+  five minutes alongside cost sync.
+- Fixed: read-only shared-retain regression coverage, opt-in-only writer prompts,
+  transactional toggle idempotence/deletion handling, non-ASCII credential
+  refusal, and bank-wide entity-name suppression.
+- Hardened: the gateway uses an explicit credential/settings allowlist; older
+  purge tombstones back off to daily sweeps without losing late-job cleanup.
+- Kept: applied migration history and a merge revision instead of resetting local
+  databases. Backups/restores remain deferred; full Opus review completion is
+  pending after Claude rate limits interrupted the initial pass. Its saved
+  findings have been addressed and await independent re-review.
+
+- Verified: 276 follow-up API tests, 15 pinned-backend/client contracts,
+  57 browser scenarios, API/UI static checks, production UI build, migration
+  and memory chart checks. The read-permission write mutation is rejected.
+
+### 2026-10-04 — Platform Settings review follow-ups
+
+- Resolved: the eight findings from the Platform Settings slice review. This
+  entry records only that slice, not a full-branch approval.
 - Finished: optional model/active-key entries in environment templates, shared
   browser data-support registration, and operations documentation wrapping.
 - Verified: all five Platform Settings browser scenarios and UI static checks pass.

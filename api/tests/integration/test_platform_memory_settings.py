@@ -144,12 +144,13 @@ def test_failed_model_key_update_does_not_persist_a_new_setting(monkeypatch):
         )
 
 
-@pytest.mark.parametrize("token", [None, "agent-test-key", "backend-service-test-key"])
+@pytest.mark.parametrize("token", [None, "agent-test-key", "é", "backend-service-test-key"])
 def test_runtime_model_endpoint_only_accepts_the_hindsight_service_credential(token):
     with given(agent_memory_api_setup(setup)) as context:
         with TestClient(create_memory_app(context.injector)) as client:
             response = client.get(
-                "/memory/runtime/v1/model", headers={"Authorization": f"Bearer {token}"} if token else {}
+                "/memory/runtime/v1/model",
+                headers={"Authorization": f"Bearer {token}".encode()} if token else {},
             )
             assert_that(response.status_code, equal_to(200 if token == "backend-service-test-key" else 401))
 

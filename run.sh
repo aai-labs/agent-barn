@@ -57,6 +57,7 @@ required_vars=(
   SECRET_SIGNING_KEY PLATFORM_ADMIN_CREDENTIALS ENVIRONMENT WEB_APP_URL API_PORT
   AGENT_TOKEN_ENCRYPTION_KEY
   OPENROUTER_API_KEY LITELLM_MASTER_KEY OPENCLAW_IMAGE HERMES_IMAGE
+  ORGANIZATION_DEFAULT_LLM_BUDGET_USD AGENT_DEFAULT_LLM_BUDGET_USD
 )
 if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
   required_vars+=(HINDSIGHT_DB_PASSWORD HINDSIGHT_API_KEY HINDSIGHT_LITELLM_API_KEY)
@@ -100,12 +101,12 @@ step "Running database migrations"
 ${COMPOSE} build api
 ${COMPOSE} run --rm --no-deps --workdir /app/api api python -m alembic upgrade head
 
-step "Building and starting api, worker, cost-sync, communications, memory, ui"
+step "Building and starting api, worker, cost-sync, budget-snapshots, communications, memory, ui"
 if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
   step "Starting local Hindsight database and backend"
   ${COMPOSE} up -d hindsight-db hindsight
 fi
-${COMPOSE} up -d --build api worker cost-sync communications memory ui
+${COMPOSE} up -d --build api worker cost-sync budget-snapshots communications memory ui
 
 # Prints a boxed row padded to the border width, measuring visible width only
 # (ANSI color/bold codes stripped before computing the pad) so values of any

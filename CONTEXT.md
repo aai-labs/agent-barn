@@ -21,8 +21,12 @@ The deployment-configured maximum number of non-deleted Organizations attributed
 _Avoid_: Membership limit, ownership limit, Platform Administrator quota
 
 **Model Spend Limit**:
-The amount an Organization may spend on model calls in one renewal period, set and changed only by a Platform Administrator. An Organization can neither see nor change its own. Absent means no limit; zero is a real limit of nothing. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
+The amount an Organization or one of its Agents may spend on model calls in one renewal period. An Organization's limit in force is its own limit when it has set one, otherwise its Spend Ceiling; an Agent's is its own limit when it has one, otherwise the Organization's default Agent limit, and never more than the Organization's. Zero is a real limit of nothing. The Organization and all its Agents share one renewal period and renew together. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
 _Avoid_: budget, allowance, quota, cap
+
+**Spend Ceiling**:
+The most an Organization may spend on model calls in one renewal period, set by a Platform Administrator. Every Organization has one, starting at the deployment default. The Organization may set a lower Model Spend Limit of its own, never a higher one, and lowering the ceiling beneath that limit pulls it down.
+_Avoid_: allowance, plan limit, platform budget
 
 **Spend Limit Coverage**:
 Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.
@@ -105,11 +109,11 @@ A captured, restorable copy of one Agent's persistent volume contents, together 
 _Avoid_: snapshot, backup, volume image, checkpoint
 
 **Agent Memory**:
-Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, credentials, automatic Runtime use, and read-only viewing of an Agent's own saved memories are implemented; physical purging is pending. See [Agent Memory](docs/features/agent-memory.md).
+Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, credentials, automatic Runtime use, and read-only viewing of an Agent's own and currently permitted Organization memories, an Owner/Admin Organization viewer, and asynchronous deletion purging are implemented. See [Agent Memory](docs/features/agent-memory.md).
 _Avoid_: MEMORY.md, Runtime memory, knowledge base
 
 **Organization Memory**:
-Agent Memory marked for sharing across one Organization. Separate Organization Memory read and write grants govern recalling other Agents' shared memories and explicitly saving shared facts.
+Agent Memory marked for sharing across one Organization. One Organization Memory grant gives an Agent either Read only access for recall or Read and write access for recall and explicit shared saves.
 _Avoid_: team memory, shared bank
 
 **Memory Grant**:

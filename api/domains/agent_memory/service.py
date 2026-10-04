@@ -55,15 +55,14 @@ class AgentMemoryService:
             PermissionKey.AGENT_MEMORY_MANAGE,
             detail="You don't have permission to manage memory for this Agent.",
         )
-        if agent.memory_enabled != enabled:
-            delivery_ids = self.repository.set_enabled_with_event(
-                agent.id,
-                agent.organization_id,
-                enabled,
-                actor=resolve_actor_identity(context, agent.organization_id),
-                actor_display=_actor_display(context),
-            )
-            self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+        delivery_ids = self.repository.set_enabled_with_event(
+            agent.id,
+            agent.organization_id,
+            enabled,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            actor_display=_actor_display(context),
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         return AgentMemoryRead(agent_id=agent.id, enabled=enabled)
 
     def list_memories(

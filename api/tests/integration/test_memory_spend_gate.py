@@ -113,13 +113,13 @@ def test_zero_limit_is_enforced_without_needing_any_snapshot():
             assert_that(context.backend_requests, equal_to([]))
 
 
-def test_uncapped_organizations_do_not_depend_on_spend_snapshots():
-    with given(_setup(memory_budget_is_present(limit=None, synced=False, llm_spend_usd=None))) as context:
-        with when("an uncapped Agent retains a memory"):
-            response = _post(context, "memories")
-        with then("the retain reaches Hindsight"):
-            assert_that(response.status_code, equal_to(200))
-            assert_that(context.backend_requests, has_length(1))
+def test_organization_own_limit_is_enforced_below_the_platform_ceiling():
+    with given(
+        _setup(memory_budget_is_present(limit=500, runtime_spend=49, memory_spend="1", llm_own_budget_usd=50))
+    ) as context:
+        response = _post(context, "memories")
+        assert_that(response.status_code, equal_to(429))
+        assert_that(context.backend_requests, equal_to([]))
 
 
 @pytest.mark.parametrize("synced", [False, True])
@@ -132,7 +132,7 @@ def test_recall_remains_available_at_the_limit_and_without_fresh_cost_data(synce
             assert_that(context.backend_requests, has_length(1))
 
 
-def test_raising_and_removing_a_limit_take_effect_on_the_next_request():
+def test_raising_a_limit_takes_effect_but_stale_cost_data_still_blocks():
     with given(_setup(memory_budget_is_present(runtime_spend=4, memory_spend="6"))) as context:
         assert_that(_post(context, "memories").status_code, equal_to(429))
         with when("the persisted Organization limit is raised"):
@@ -140,12 +140,10 @@ def test_raising_and_removing_a_limit_take_effect_on_the_next_request():
             context.injector.get(PostgresRepositoryDelegate).save(context.organization)
         with then("the next request can retain"):
             assert_that(_post(context, "memories").status_code, equal_to(200))
-        with when("the limit is removed and no cost sync is available"):
-            context.organization.llm_budget_usd = None
-            context.injector.get(PostgresRepositoryDelegate).save(context.organization)
+        with when("cost sync becomes stale"):
             context.injector.get(CostRepository).record_sync_completion(datetime.now(UTC) - timedelta(days=1))
-        with then("the next request can retain without a spend snapshot"):
-            assert_that(_post(context, "memories").status_code, equal_to(200))
+        with then("a higher limit still needs current accounting"):
+            assert_that(_post(context, "memories").status_code, equal_to(503))
 
 
 def test_a_renewed_window_does_not_count_the_previous_windows_memory_charges():

@@ -106,6 +106,14 @@ LITELLM_SECRET_NAME=litellm
 # Percentages of an Organization's LLM limit at which its Owners and Admins are
 # notified. Comma separated, 1-100. Empty uses the default.
 ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS=80,100
+# Required. Model spend limit (USD) a new Organization starts with; a Platform
+# Administrator changes it per Organization afterwards. Existing Organizations without
+# a limit are given it by the AF-337 migration. For "no practical limit", use a very
+# large amount.
+ORGANIZATION_DEFAULT_LLM_BUDGET_USD=
+# Required. Model spend limit (USD) an Agent is held to until its Organization sets a
+# default or the Agent its own. Must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD.
+AGENT_DEFAULT_LLM_BUDGET_USD=
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —

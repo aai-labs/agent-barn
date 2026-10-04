@@ -41,7 +41,9 @@ def main() -> None:
     assert local["environment"]["HINDSIGHT_API_LLM_MODEL"] == services["api"]["environment"]["MEMORY_DEFAULT_MODEL"]
     assert local["environment"]["HINDSIGHT_ENABLE_CP"] == "false"
     assert local["environment"]["HINDSIGHT_API_TENANT_EXTENSION"].endswith(":ApiKeyTenantExtension")
-    for name in ("api", "worker", "communications", "memory"):
+    assert "env_file" not in services["memory"]
+    assert "AGENT_TOKEN_ENCRYPTION_KEY" not in services["memory"]["environment"]
+    for name in ("api", "worker", "communications"):
         assert services[name]["environment"]["HINDSIGHT_LITELLM_API_KEY"] == ""
         assert services[name]["environment"]["HINDSIGHT_DB_PASSWORD"] == ""
         if name != "memory":
@@ -52,6 +54,7 @@ def main() -> None:
         "platformAdminCredentials": "admin@example.com:Test1234",
         "agentTokenEncryptionKey": "test",
         "environment": "test",
+        "organizationLlmBudgets": {"defaultOrganizationUsd": 1000, "defaultAgentUsd": 100},
         "webAppUrl": "http://localhost",
         "kubeconfigB64": "dGVzdA==",
         "registry": {"server": "test.invalid", "username": "test", "password": "test"},
@@ -104,6 +107,19 @@ def main() -> None:
                 if entry["name"] == "HINDSIGHT_API_KEY"
             ]
             if document["metadata"]["name"] == "agentbarn-api-memory":
+                assert "envFrom" not in pod["containers"][0]
+                assert {entry["name"] for entry in pod["containers"][0]["env"]} == {
+                    "DB_CONNECTION_URL",
+                    "SECRET_SIGNING_KEY",
+                    "ENVIRONMENT",
+                    "MEMORY_DEFAULT_MODEL",
+                    "MEMORY_LITELLM_KEY_HASHES",
+                    "ORGANIZATION_DEFAULT_LLM_BUDGET_USD",
+                    "AGENT_DEFAULT_LLM_BUDGET_USD",
+                    "PLATFORM_ADMIN_CREDENTIALS",
+                    "HINDSIGHT_BASE_URL",
+                    "HINDSIGHT_API_KEY",
+                }
                 assert pod["automountServiceAccountToken"] is False
                 assert len(key_env) == 1
                 assert key_env[0]["valueFrom"]["secretKeyRef"] == {

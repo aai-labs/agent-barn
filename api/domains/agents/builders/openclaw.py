@@ -339,6 +339,7 @@ def build_config_map(
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
     skills_json: str | None = None,
+    memory_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data = {
         "SOUL.md": soul_md,
@@ -346,8 +347,8 @@ def build_config_map(
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
         "agentbarn-memory": MEMORY_COMMAND,
-        "TOOLS.md": tools_md + MEMORY_TOOL_INSTRUCTIONS,
-        "AGENTS.md": agents_md + MEMORY_TOOL_INSTRUCTIONS,
+        "TOOLS.md": tools_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
+        "AGENTS.md": agents_md,
         "BOOT.md": boot_md,
         "BOOTSTRAP.md": bootstrap_md,
         "HEARTBEAT.md": heartbeat_md,

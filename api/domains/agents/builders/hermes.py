@@ -361,6 +361,7 @@ def build_hermes_config_map(
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
     skills_json: str | None = None,
+    memory_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
@@ -368,8 +369,8 @@ def build_hermes_config_map(
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
         "agentbarn-memory": MEMORY_COMMAND,
-        "TOOLS.md": tools_md + MEMORY_TOOL_INSTRUCTIONS,
-        "AGENTS.md": agents_md + MEMORY_TOOL_INSTRUCTIONS,
+        "TOOLS.md": tools_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
+        "AGENTS.md": agents_md,
         "BOOT.md": boot_md,
         "HEARTBEAT.md": heartbeat_md,
         "hermes-config.yaml": yaml.dump(hermes_config, default_flow_style=False, sort_keys=False),

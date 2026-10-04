@@ -56,7 +56,10 @@ class MemoryPurgeRepository:
             row.last_error = error
             if not error:
                 row.last_cleaned_at = now
-            delay = min(3600, 30 * 2 ** min(row.attempts - 1, 7)) if error else 3600
+            # Sweep recent deletions hourly for late jobs, then daily indefinitely.
+            # Retaining tombstones avoids assuming a maximum Hindsight queue lifetime.
+            clean_delay = 3600 if now - row.created_at.replace(tzinfo=UTC) < timedelta(days=2) else 86400
+            delay = min(3600, 30 * 2 ** min(row.attempts - 1, 7)) if error else clean_delay
             row.next_attempt_at = now + timedelta(seconds=delay)
             row.lease_id = None
             row.lease_until = None

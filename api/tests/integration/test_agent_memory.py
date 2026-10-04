@@ -564,3 +564,47 @@ def test_organization_memory_has_one_permission_per_agent(existing, new):
 def test_write_only_is_not_a_supported_permission():
     with given(agent_memory_api_setup(two_agents())) as context:
         assert_that(_create_grant(context, context.triage.id, access="write").status_code, equal_to(422))
+
+
+def test_concurrent_identical_toggles_publish_one_event(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from api.domains.agents.authorization import AgentAuthorization
+
+    with given(agent_memory_api_setup(there_is_an_agent())) as context:
+        authorization = context.injector.get(AgentAuthorization)
+        original = authorization.require_action
+        barrier = Barrier(2)
+
+        def authorize_both_before_writing(*args, **kwargs):
+            agent = original(*args, **kwargs)
+            barrier.wait(timeout=10)
+            return agent
+
+        monkeypatch.setattr(authorization, "require_action", authorize_both_before_writing)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(executor.map(lambda _: _set_memory(context, context.agent.id, True), range(2)))
+        assert all(response.status_code == 200 for response in responses)
+        assert _event_names(context).count(AGENT_MEMORY_ENABLED) == 1
+
+
+def test_deletion_between_authorization_and_toggle_returns_not_found(monkeypatch):
+    from datetime import UTC, datetime
+
+    from api.domains.agents.authorization import AgentAuthorization
+
+    with given(agent_memory_api_setup(there_is_an_agent())) as context:
+        authorization = context.injector.get(AgentAuthorization)
+        original = authorization.require_action
+
+        def authorize_then_delete(*args, **kwargs):
+            agent = original(*args, **kwargs)
+            agent.deleted_at = datetime.now(UTC)
+            context.injector.get(PostgresRepositoryDelegate).save(agent)
+            return agent
+
+        monkeypatch.setattr(authorization, "require_action", authorize_then_delete)
+        response = _set_memory(context, context.agent.id, True)
+        assert response.status_code == 404
+        assert AGENT_MEMORY_ENABLED not in _event_names(context)

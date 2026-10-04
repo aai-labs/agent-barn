@@ -19,6 +19,7 @@ from api.tests.steps.agent import (
     there_is_an_agent,
     use_org_for_auth,
 )
+from api.tests.steps.cost import cost_records_are_clean, memory_budget_is_present
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -42,6 +43,8 @@ def agent_memory_api_setup(*steps):
         database_is_clean(),
         there_is_an_organization_with_user_and_access_token(),
         use_org_for_auth(),
+        cost_records_are_clean(),
+        memory_budget_is_present(limit=10000, runtime_spend=0),
         *steps,
     ]
 

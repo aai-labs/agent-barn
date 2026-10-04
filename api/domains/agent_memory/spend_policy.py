@@ -37,9 +37,7 @@ class MemorySpendPolicy:
         organization = self.organizations.get(organization_id)
         if organization is None:
             raise HTTPException(401, "Invalid Agent Memory credential.")
-        limit = organization.llm_budget_usd
-        if limit is None:
-            return
+        limit = organization.effective_llm_budget_usd
         if limit == 0:
             raise HTTPException(429, "Organization model spend limit reached.")
         now = datetime.now(UTC)

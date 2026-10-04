@@ -86,4 +86,29 @@ export class AgentConfigurationPage {
       name: /also re-apply the recorded configuration/i,
     });
   }
+
+  spendLimitSection(): Locator {
+    return this.page.getByRole("region", { name: "Model spend limit" });
+  }
+
+  editSpendLimitButton(): Locator {
+    return this.spendLimitSection().getByRole("button", { name: "Edit" });
+  }
+
+  /** Empty means "follow the default"; this is the explicit way back to it. */
+  useDefaultSpendLimitButton(): Locator {
+    return this.spendLimitSection().getByRole("button", { name: "Use the default" });
+  }
+
+  agentSpendLimitInput(): Locator {
+    return this.page.getByLabel("Agent limit (US dollars)", { exact: true });
+  }
+
+  saveSpendLimitButton(): Locator {
+    return this.spendLimitSection().getByRole("button", { name: "Save limit" });
+  }
+
+  confirmSpendLimitButton(): Locator {
+    return this.page.getByRole("dialog").getByRole("button", { name: "Save limit" });
+  }
 }

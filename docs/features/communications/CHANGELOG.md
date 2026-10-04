@@ -19,12 +19,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
   bound in Compose and both Make entrypoints, so active runtime control streams
   cannot block code reloads indefinitely. Pending messages remain durable and
   runtimes reconnect after reload. No protocol or production deployment change.
-- Recovered: Alex's queued Web Chat turn completed after restarting the stuck
-  local gateway, with both inbound and reply deliveries successful.
 - Verified: the real Uvicorn reload regression fails without the timeout and
   passes for both Compose and native launch commands with an open control stream.
   API lint, formatting, types, and Make command parsing pass. The running local
   gateway has been recreated with the new timeout.
+### 2026-10-02 — Drop the gateway messaging policy from AGENTS.md — PR pending
+
+- Changed: The "Message Delivery" section appended to every Agent's AGENTS.md (from [PR #188](https://github.com/aai-labs/agent-barn/pull/188)) is removed. It told Agents to send through the deprecated `agentbarn-message` client and never to call the message tool from a cron run. Since OpenClaw Slack and Discord run in OpenClaw's own gateway, native Agents read it as binding and refused sends their gateway supports: a Pipedrive Sales Analyst Agent refused to post its scheduled daily update as a header message with the update in its thread. A "Scheduled runs" section keeps the runtime-neutral rule that an empty scheduled run returns a silence marker.
 
 ### 2026-09-30 — Use Agent identity in the Slack manifest — PR pending
 

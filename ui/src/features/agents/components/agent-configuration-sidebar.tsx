@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   UserRound,
+  Wallet,
   Webhook,
 } from "lucide-react";
 
@@ -27,6 +28,7 @@ const ICONS = {
   keys: KeyRound,
   override: SlidersHorizontal,
   restore: History,
+  spend: Wallet,
   danger: ShieldAlert,
 } as const;
 
