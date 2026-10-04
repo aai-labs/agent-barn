@@ -3,6 +3,7 @@ import fnmatch
 import json
 import logging
 import secrets
+import time
 from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -2430,6 +2431,32 @@ class AgentService:
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return result.agent
+
+    def _wait_for_ready(self, agent_id: UUID, timeout_seconds: int, poll_seconds: int = 5) -> bool:
+        """Poll the Deployment's newest pod until it is ready, crashes, or time runs out.
+
+        'crashed' returns immediately: a crash-looping image will never become
+        ready, so burning the whole timeout before rolling back is waste.
+        """
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            pod_status, _reason = self.k8s.get_pod_readiness(f"agent-{agent_id}", self.config.k8s_namespace)
+            if pod_status == "ready":
+                return True
+            if pod_status == "crashed":
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll_seconds)
+
+    def _teardown_workload(self, agent_id: UUID) -> None:
+        """Delete the Deployment so the RWO PVC is free for a restore Job.
+
+        A failed start leaves a (likely crash-looping) Deployment behind, and
+        `restore_restore_point` refuses while any pod holds the volume.
+        ConfigMap and Secret are left in place — `start_agent` rebuilds both.
+        """
+        self.k8s.delete_deployment(f"agent-{agent_id}", self.config.k8s_namespace)
 
     def rebuild_running_agents_for_maintenance(
         self, *, apply: bool
