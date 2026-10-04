@@ -46,6 +46,11 @@ access logging disabled so client paths cannot enter logs. `make dev-api` starts
 it alongside the other HTTP processes; `make dev-memory` runs it separately.
 For local use set `HINDSIGHT_BASE_URL` to the backend root and `HINDSIGHT_API_KEY`
 to its shared API key. Compose starts the gateway but does not start Hindsight.
+`./run.sh` includes the `memory` service. Its published `MEMORY_PORT` defaults
+to 8003; set a distinct port if the product API or another local service uses it.
+An Agent needs no messaging connection to view saved memories. A missing bank
+returns an empty list, while an absent gateway or unconfigured/unavailable
+Hindsight backend produces an unavailable error, including for a new Agent.
 The product API lists an Agent's saved memories through the gateway's separate
 viewer under `/memory/view/v1`, addressed by `MEMORY_VIEW_BASE_URL`. `make dev-api`
 points it at `localhost`, Compose at the `memory` service, and the chart at the

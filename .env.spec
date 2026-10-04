@@ -149,7 +149,8 @@ INGEST_PORT=
 # through host.docker.internal; defaults to 8002.
 COMMUNICATIONS_PORT=
 
-# Memory gateway (plugins are enabled in a later slice). The backend is configured
+# Memory gateway. Choose a port distinct from API_PORT and other local services.
+# The backend is configured
 # separately; its shared key must never be injected into Agent runtime Secrets.
 MEMORY_PORT=8003
 # Optional. How the Docker-run product API reaches the gateway's read-only memory

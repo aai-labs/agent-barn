@@ -21,6 +21,17 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — local startup review
+
+- Fixed: `./run.sh` now starts the Compose memory gateway alongside the other
+  services and reports its port. The contributor docs explain the separate
+  Hindsight backend prerequisite and local port overrides.
+- Verified: shell syntax and memory chart/Compose checks pass. The local gateway
+  starts and responds to its health probe; the viewer still returns 503 because
+  this environment has no Hindsight backend URL/auth configured. Messaging
+  connections are not required for memory viewing.
+- Follow-up: configure a local or existing Hindsight backend for this environment.
+
 ### 2026-10-04 — slice 6 — deletion cleanup and retries
 
 - Delivered: deletion atomically clears memory credentials, removes inbound/outbound
