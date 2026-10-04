@@ -50,6 +50,10 @@ def stage_agent_memory_cleanup(session: Session, agent_id: UUID, organization_id
     session.exec(statement)  # type: ignore[call-overload]
 
 
+class AgentMemoryGrantTargetGoneError(ValueError):
+    """An Agent disappeared after the service authorized a grant."""
+
+
 class AgentMemoryGrantConflictError(Exception):
     pass
 
@@ -205,6 +209,23 @@ class AgentMemoryRepository:
         actor_display: str,
     ) -> AgentMemoryGrantChangeResult:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
+            # Hold shared row locks through insertion so a concurrent soft delete
+            # either removes this grant afterward or makes this transaction refuse it.
+            ids = {grant.agent_id}
+            if grant.source_agent_id:
+                ids.add(grant.source_agent_id)
+            targets = session.exec(
+                select(Agent.id)
+                .where(
+                    col(Agent.id).in_(ids),
+                    col(Agent.organization_id) == grant.organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .order_by(col(Agent.id))
+                .with_for_update(read=True)
+            ).all()
+            if len(targets) != len(ids):
+                raise AgentMemoryGrantTargetGoneError("Memory grant Agent not found.")
             session.add(grant)
             try:
                 session.flush()

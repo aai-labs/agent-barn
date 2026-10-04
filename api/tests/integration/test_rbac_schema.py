@@ -848,3 +848,40 @@ def test_cost_sync_heartbeat_upgrade_and_rollback_preserve_cost_history(fresh_da
     with fresh_database.engine.connect() as connection:
         assert_that(connection.execute(text("SELECT to_regclass('cost_sync_state')")).scalar_one(), none())
         assert_that(connection.execute(text("SELECT to_regclass('cost_record')")).scalar_one(), equal_to("cost_record"))
+
+
+def test_memory_purge_migration_backfills_deleted_agents_and_removes_only_their_grants(legacy_database):
+    db = legacy_database
+    command.upgrade(db.config, "f2a8d41b9c63")
+    with db.engine.begin() as connection:
+        connection.execute(
+            text("UPDATE agent SET memory_key_hash = :hash WHERE id = :id"),
+            {"hash": "a" * 64, "id": db.deleted_agent_a},
+        )
+        for reader, source in [(db.deleted_agent_a, None), (db.agent_a, db.deleted_agent_a), (db.agent_a, None)]:
+            connection.execute(
+                text("""INSERT INTO agent_memory_grant
+                (id, created_at, updated_at, organization_id, agent_id, source_agent_id)
+                VALUES (:id, now(), now(), :org, :reader, :source)"""),
+                {"id": uuid7(), "org": db.org_a, "reader": reader, "source": source},
+            )
+    command.upgrade(db.config, "a63e8c941d20")
+    with db.engine.connect() as connection:
+        assert_that(
+            connection.execute(text("SELECT agent_id, organization_id FROM agent_memory_purge")).all(),
+            equal_to([(db.deleted_agent_a, db.org_a)]),
+        )
+        assert_that(
+            connection.execute(text("SELECT agent_id, source_agent_id FROM agent_memory_grant")).all(),
+            equal_to([(db.agent_a, None)]),
+        )
+        assert_that(
+            connection.execute(
+                text("SELECT memory_key_hash FROM agent WHERE id = :id"), {"id": db.deleted_agent_a}
+            ).scalar_one(),
+            none(),
+        )
+    command.downgrade(db.config, "f2a8d41b9c63")
+    with db.engine.connect() as connection:
+        assert_that(connection.execute(text("SELECT to_regclass('agent_memory_purge')")).scalar_one(), none())
+        assert_that(connection.execute(text("SELECT count(*) FROM agent")).scalar_one(), equal_to(3))

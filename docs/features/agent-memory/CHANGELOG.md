@@ -29,9 +29,15 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 - Changed: migration `a63e8c941d20` adds tombstones and backfills deleted Agents.
   The enabled chart adds a five-minute cleanup job with only database/backend auth;
   local operators use `make purge-agent-memory`. No public delete tool or version bump.
-- Verified: nine cleanup integration tests and a real pinned Hindsight purge contract
-  pass, preserving another Agent and bank. Static, migration-head, and chart checks pass;
-  broader lifecycle/migration checks follow.
+- Reviewed: grant creation locks and rechecks both Agents to prevent insertion after
+  concurrent deletion. Additional checks cover partial deletion recovery, absent banks,
+  minimal operator credentials, and migration backfill/rollback. The wildcard contract
+  now accounts for generated context being searchable alongside memory text.
+- Verified: 13 cleanup integration tests and a real pinned Hindsight purge contract
+  pass, preserving another Agent and bank. The broad regression run passed 406 tests;
+  its wildcard assertion was corrected and passed on rerun. The focused memory/grant
+  suite passed 50 tests; the final cleanup, pinned listing/purge, and schema run passed
+  all 44 tests. Static, migration-head, and enabled/disabled chart checks pass.
 - Follow-up: backups/restores are explicitly deferred. Physical purge is asynchronous;
   previously accepted retains are caught by subsequent sweeps.
 

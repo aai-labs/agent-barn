@@ -31,6 +31,7 @@ def test_purge_removes_private_and_shared_documents_without_touching_another_age
                 f"Billing {scope} secret",
                 [tag, *(["scope:team"] if scope == "team" else [])],
                 document_id=f"{tag}:{scope}:seed",
+                observation_scopes="per_tag",
             )
         retain_in_bank(
             context,
@@ -134,14 +135,17 @@ def test_search_and_pagination_stay_inside_the_agents_filter():
 
 def test_search_wildcards_match_literally_against_the_real_endpoint():
     with given(_setup(two_agents(), _two_agents_share_a_bank())) as context:
+        # A percent-only fact distinguishes an escaped underscore from a wildcard.
+        # A lone underscore may legitimately match generated observation context.
+        retain_in_bank(context, _bank(context), "Billing 50% discount", [f"agent:{context.billing.id}"])
         with when("a search consists of SQL wildcard characters"):
             percent = _list(context, context.billing.id, search="%").json()
-            underscore = _list(context, context.billing.id, search="_").json()
+            paired = _list(context, context.billing.id, search="%_").json()
             literal = _list(context, context.billing.id, search="100%_sure").json()
 
         with then("only memories containing those characters are found"):
-            assert_that(percent["total"], equal_to(literal["total"]))
-            assert_that(underscore["total"], equal_to(literal["total"]))
+            assert_that(percent["total"], greater_than(paired["total"]))
+            assert_that(paired["total"], equal_to(literal["total"]))
             assert_that(any("100%_sure" in item["text"] for item in literal["items"]), equal_to(True))
             assert_that(any("coffee" in item["text"] for item in literal["items"]), equal_to(False))
 

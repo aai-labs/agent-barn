@@ -106,7 +106,7 @@ Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenCl
 
 ### Stop and delete
 
-Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. Individual Communication Connection retirement remains an independent Communications workflow.
+Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. It also revokes memory credentials and grants and schedules [Agent Memory cleanup](agent-memory.md#deletion-cleanup). Individual Communication Connection retirement remains an independent Communications workflow.
 
 ### Capture and restore
 

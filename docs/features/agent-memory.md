@@ -69,6 +69,8 @@ as the soft deletion and `agent.deleted` event. Grant cleanup is a consequence o
 that deletion event; it emits no separate user-initiated grant-revocation events.
 Migration `a63e8c941d20` queues previously deleted Agents and removes stale grants.
 Tombstones have no foreign keys, so they survive subsequent Organization deletion.
+Grant insertion rechecks and holds shared locks on its same-Organization, undeleted
+targets through commit, so a grant racing deletion cannot be inserted afterward.
 
 The operator-only worker derives the bank and Agent tag from the tombstone. It lists
 documents with `any_strict` and deletes only IDs in that Agent's

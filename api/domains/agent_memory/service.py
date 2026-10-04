@@ -12,7 +12,11 @@ from api.domains.agent_memory.models import (
     AgentMemoryItemRead,
     AgentMemoryRead,
 )
-from api.domains.agent_memory.repository import AgentMemoryGrantConflictError, AgentMemoryRepository
+from api.domains.agent_memory.repository import (
+    AgentMemoryGrantConflictError,
+    AgentMemoryGrantTargetGoneError,
+    AgentMemoryRepository,
+)
 from api.domains.agent_memory.view_client import MemoryViewClient
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent
@@ -133,6 +137,8 @@ class AgentMemoryService:
             )
         except AgentMemoryGrantConflictError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except AgentMemoryGrantTargetGoneError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return AgentMemoryGrantRead(
             id=result.grant.id,

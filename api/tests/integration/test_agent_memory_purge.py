@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -12,7 +15,7 @@ from api.core.config import get_config
 from api.domains.agent_memory.models import AgentMemoryGrant, AgentMemoryPurge
 from api.domains.agent_memory.purge import MemoryPurger
 from api.domains.agent_memory.purge_repository import MemoryPurgeRepository
-from api.domains.agent_memory.repository import stage_agent_memory_cleanup
+from api.domains.agent_memory.repository import AgentMemoryRepository, stage_agent_memory_cleanup
 from api.domains.agents.models import Agent
 from api.infrastructure.hindsight.client import HindsightClient, HindsightResponse
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -67,6 +70,8 @@ class Backend(HindsightClient):
 def test_delete_atomically_removes_both_grant_directions_and_queues_purge():
     with given(_setup()) as context:
         delegate = context.injector.get(PostgresRepositoryDelegate)
+        context.billing.memory_key_hash = "b" * 64
+        delegate.save(context.billing)
         for reader, source in [
             (context.billing, None),
             (context.triage, context.billing),
@@ -226,3 +231,86 @@ def test_deadline_keeps_cleanup_pending():
         with pytest.raises(HTTPException):
             MemoryPurger(context.injector.get(MemoryPurgeRepository), backend).purge(row, time.monotonic() - 1)
         assert_that(backend.calls, empty())
+
+
+def test_operator_launcher_needs_only_database_and_backend_configuration():
+    with given(_setup()) as context:
+        _delete(context)
+        with when("the operator launcher runs with no backend available"):
+            result = subprocess.run(
+                [sys.executable, "-c", "from api.domains.agent_memory.purge import main; main()"],
+                env={
+                    **os.environ,
+                    "DB_CONNECTION_URL": context.injector.get(PostgresRepositoryDelegate).engine.url.render_as_string(
+                        hide_password=False
+                    ),
+                    "SECRET_SIGNING_KEY": "",
+                    "PLATFORM_ADMIN_CREDENTIALS": "",
+                    "HINDSIGHT_BASE_URL": "",
+                    "HINDSIGHT_API_KEY": "",
+                },
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+        with then("it boots and records a generic retry instead of requiring user credentials"):
+            assert_that(result.returncode, equal_to(0))
+            assert_that(_rows(context, AgentMemoryPurge)[0].last_error, equal_to("backend_503"))
+
+
+def test_a_grant_cannot_be_inserted_after_its_prevalidated_source_is_deleted(monkeypatch):
+    with given(_setup()) as context:
+        repository = context.injector.get(AgentMemoryRepository)
+        original = repository.create_grant_with_event
+
+        def delete_before_insert(*args, **kwargs):
+            assert_that(_delete(context).status_code, equal_to(204))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(repository, "create_grant_with_event", delete_before_insert)
+        with when("the source disappears after authorization but before inserting its grant"):
+            result = context.client.post(
+                "/api/v1/organizations/{organization_id}/memory-grants",
+                json={"agent_id": str(context.triage.id), "source_agent_id": str(context.billing.id)},
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+        with then("the stale grant is rejected and not stored"):
+            assert_that(result.status_code, equal_to(404))
+            assert_that(_rows(context, AgentMemoryGrant), empty())
+
+
+def test_retry_after_partial_document_deletion_removes_only_the_remaining_document():
+    class PartialBackend(Backend):
+        failed_once = False
+
+        def request(self, method, path, payload, *, params=None):
+            if method == "DELETE" and len(self.documents) == 1 and not self.failed_once:
+                self.failed_once = True
+                raise HTTPException(502, "unavailable")
+            return super().request(method, path, payload, params=params)
+
+    with given(_setup()) as context:
+        _delete(context)
+        backend = PartialBackend(context.billing.id)
+        purger = MemoryPurger(context.injector.get(MemoryPurgeRepository), backend)
+        with when("one deletion succeeds and the next fails before retrying"):
+            assert_that(purger.run_once(), equal_to(0))
+            assert_that(backend.documents, has_length(1))
+            _due(context)
+            assert_that(purger.run_once(), equal_to(1))
+        with then("the retry starts at offset zero and deletes only what remains"):
+            assert_that(backend.documents, empty())
+            assert_that([method for method, _, _ in backend.calls].count("DELETE"), equal_to(2))
+
+
+def test_an_absent_bank_is_a_successful_empty_sweep():
+    with given(_setup()) as context:
+        _delete(context)
+        backend = Backend(context.billing.id)
+        backend.failure = 404
+        with when("the deleted Agent never created a bank"):
+            result = MemoryPurger(context.injector.get(MemoryPurgeRepository), backend).run_once()
+        with then("cleanup succeeds without issuing a deletion"):
+            assert_that(result, equal_to(1))
+            assert_that(_rows(context, AgentMemoryPurge)[0].last_error, none())
+            assert_that(any(method == "DELETE" for method, _, _ in backend.calls), equal_to(False))
