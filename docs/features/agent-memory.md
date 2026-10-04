@@ -14,7 +14,7 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 
 - An Agent's memories are private to it by default. Each Organization's memories live in one Hindsight bank, `org-<organization_id>`; inside it, every memory an Agent writes is tagged `agent:<agent_id>`.
 - Turning memory off stops the Agent recalling and retaining. Its stored memories are kept, and Agents granted access to them can still recall them, until the Agent is deleted.
-- Deletion immediately removes the Agent's gateway access and its tag from other Agents' recall filters. Physical purging and grant cleanup are pending the lifecycle slice.
+- Deletion immediately removes the Agent's gateway access and its Memory Grants in both directions. Hindsight purging is asynchronous through a durable deletion tombstone; see [Deletion cleanup](#deletion-cleanup).
 - Memories live outside the Agent's volume; an Agent Restore Point does not capture or roll them back.
 - Memories are shared across all users of one Agent on purpose: a fact one person tells an Agent can be recalled in another person's session with that Agent.
 
@@ -60,6 +60,39 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 - Organization Settings → **Memory access** is visible only to the Organization's Owners and Admins, matching `memory.access.manage`; a platform administrator who is only a Member does not see it. It lists grants, creates one from a reader Agent to Organization Memory or to another Agent's private memories (never itself), and revokes one after confirmation. A duplicate is stopped before submission and shown if the server still returns 409.
 - Agent page → **Memory** appears only with `activity.read` and queries only then. It is read-only; see [View an Agent's saved memories](#view-an-agents-saved-memories). Memory text is rendered as plain text.
 - Grants and memory items are Organization-scoped query families; the `memory-grants` family is evicted on an Organization switch and keys carry the Organization API base.
+
+### Deletion cleanup
+
+Agent deletion clears its memory credential, removes grants where it is either reader
+or source, and inserts one `agent_memory_purge` tombstone in the same transaction
+as the soft deletion and `agent.deleted` event. Grant cleanup is a consequence of
+that deletion event; it emits no separate user-initiated grant-revocation events.
+Migration `a63e8c941d20` queues previously deleted Agents and removes stale grants.
+Tombstones have no foreign keys, so they survive subsequent Organization deletion.
+
+The operator-only worker derives the bank and Agent tag from the tombstone. It lists
+documents with `any_strict` and deletes only IDs in that Agent's
+`agent:<id>:private:` or `agent:<id>:team:` namespace carrying its exact tag.
+It never deletes a bank or another Agent's documents. Hindsight 0.10.2 document
+deletion removes its facts and invalidates dependent observations, requeuing surviving
+sources. Unexpected document shapes/names/tags fail closed. Absent banks and already
+deleted documents are safe to repeat. Live or tenant-mismatched Agents are refused.
+
+Cleanup does not block deletion. Until it runs, shared facts tagged `scope:team` can
+remain in Hindsight; private source grants are removed immediately. This removes
+the deleted Agent's own documents, not copies other Agents may have retained.
+
+Workers claim one row with a ten-minute lease and `SKIP LOCKED`. Failures use
+exponential delays from 30 seconds to one hour, serviced on the job's schedule.
+Expired leases are reclaimable; stale workers cannot overwrite newer claims. Runs
+are bounded to 20 tasks, 100 documents per task, and four minutes, with ten-second
+backend timeouts. Shrinking document pages are always fetched at offset zero.
+Successful tombstones remain scheduled hourly: Hindsight work accepted before deletion
+may finish later and recreate a document. `last_cleaned_at` records the last empty
+scan, not a guarantee that earlier background work ended. Stored errors are generic
+codes; logs contain only Agent, Organization, and result. No cleanup endpoint is
+exposed to users, Agent tokens, or viewer capabilities. Scheduling/manual execution
+belong in [operations](../guidelines/operations.md#agent-memory-deployment).
 
 ### Use the memory gateway
 

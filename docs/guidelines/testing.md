@@ -165,6 +165,10 @@ The API suite also runs the Hindsight cost bridge contract inside the pinned
 HTTP model listener verifies concurrent bank identity and background consolidation;
 no real model key is used. Memory cost integration tests cover exact persistence,
 replay/healing, Organization totals, renewal-window isolation, and migration rollback.
+Deletion cleanup tests cover atomic tombstone/grant changes, rollback/replay, backend
+recovery, expired leases and stale completions, unsafe targets, and late retained
+documents. The pinned-image purge test verifies private/shared removal without
+changing another Agent or bank. Test queue migrations against already deleted Agents.
 Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
 memory charges, and successful-sync heartbeats. Cover exhausted/zero/uncapped
 limits, precise combined totals, missing/stale data, renewal, immediate limit

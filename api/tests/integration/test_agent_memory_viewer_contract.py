@@ -4,13 +4,58 @@ These prove what the stand-in tests assume: the tag filter applies before `total
 counted, search and pagination run inside that filter, and an absent bank is a 404.
 """
 
-from hamcrest import assert_that, contains_inanyorder, empty, equal_to, greater_than, has_entries, has_item, is_not
+from uuid import uuid4
 
+from hamcrest import assert_that, contains_inanyorder, empty, equal_to, greater_than, has_entries, has_item, is_not
+from sqlmodel import Session, select
+
+from api.domains.agent_memory.models import AgentMemoryPurge
+from api.domains.agent_memory.purge import MemoryPurger
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.helpers.hindsight_view_backend import hindsight_listing, pinned_hindsight_is_running, retain_in_bank
 from api.tests.helpers.memory_backend import memory_viewer_is_served
 from api.tests.steps.agent import there_is_an_agent
-from api.tests.steps.agent_memory import agent_memory_api_setup, two_agents
+from api.tests.steps.agent_memory import agent_memory_api_setup, purge_tasks_are_clean, two_agents
+
+
+def test_purge_removes_private_and_shared_documents_without_touching_another_agent_or_bank():
+    with given(_setup(two_agents(), purge_tasks_are_clean())) as context:
+        bank = _bank(context)
+        foreign_bank = f"org-{uuid4()}"
+        tag = f"agent:{context.billing.id}"
+        for scope in ["private", "team"]:
+            retain_in_bank(
+                context,
+                bank,
+                f"Billing {scope} secret",
+                [tag, *(["scope:team"] if scope == "team" else [])],
+                document_id=f"{tag}:{scope}:seed",
+            )
+        retain_in_bank(
+            context,
+            bank,
+            "Triage stays",
+            [f"agent:{context.triage.id}"],
+            document_id=f"agent:{context.triage.id}:private:seed",
+        )
+        retain_in_bank(context, foreign_bank, "Other bank stays", [tag], document_id=f"{tag}:private:seed")
+        assert_that(hindsight_listing(context, bank, tag)["total"], greater_than(0))
+        with when("Billing is deleted and the cleanup job runs"):
+            deleted = context.client.delete(
+                f"/api/v1/organizations/{{organization_id}}/agents/{context.billing.id}",
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+            assert_that(deleted.status_code, equal_to(204))
+            assert_that(context.injector.get(MemoryPurger).run_once(), equal_to(1))
+        with then("only Billing's memories in its Organization are gone"):
+            assert_that(hindsight_listing(context, bank, tag), has_entries(total=0, items=empty()))
+            assert_that(hindsight_listing(context, bank, f"agent:{context.triage.id}")["total"], greater_than(0))
+            assert_that(hindsight_listing(context, foreign_bank, tag)["total"], greater_than(0))
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                task = session.exec(select(AgentMemoryPurge)).one()
+                assert_that(task.last_cleaned_at, is_not(equal_to(None)))
+
 
 _ITEMS = "/api/v1/organizations/{organization_id}/agents/{agent_id}/memory/items"
 

@@ -5,7 +5,7 @@ RUNTIME ?= hermes
 	setup run stop stop-clean test-api-runtime \
 	restart-ui \
 	dev-api dev-ingest dev-communications dev-memory dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
-	db-up db-down db-logs db-restart redis-up redis-down redis-logs
+	db-up db-down db-logs db-restart redis-up redis-down redis-logs purge-agent-memory
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
 # images (skipping any already in the cluster), migrates, starts the app
@@ -117,6 +117,9 @@ reconcile-restore-points:
 # Both run as CronJobs in a deployment; these are the same passes by hand. Named to
 # match `reconcile`, not `check-*`: they mutate the proxy and send notifications,
 # unlike every other check-* target, which is static verification.
+purge-agent-memory:
+	cd api && uv run python -c "from api.domains.agent_memory.purge import main; main()"
+
 reconcile-llm-budgets:
 	cd api && uv run python -c "from api.domains.organizations.llm_budget_reconciliation import main; main()"
 

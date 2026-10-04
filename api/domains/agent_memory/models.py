@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict
+from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
@@ -103,3 +104,20 @@ class AgentMemoryItemRead(PydanticBaseModel):
     text: str
     mentioned_at: datetime | None
     shared: bool
+
+
+class AgentMemoryPurge(BaseModel, table=True):
+    """Durable deletion tombstone; no FK so cleanup survives Organization deletion."""
+
+    __tablename__: str = "agent_memory_purge"
+    __table_args__ = (sa.Index("ix_agent_memory_purge_due", "next_attempt_at"),)
+    agent_id: UUID = SqlField(nullable=False, unique=True)
+    organization_id: UUID = SqlField(nullable=False)
+    next_attempt_at: datetime = SqlField(
+        default_factory=lambda: datetime.now(UTC), sa_column=Column(sa.DateTime(timezone=True), nullable=False)
+    )
+    lease_until: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True)))
+    lease_id: UUID | None = SqlField(default=None)
+    attempts: int = SqlField(default=0, nullable=False)
+    last_cleaned_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True)))
+    last_error: str | None = SqlField(default=None, max_length=32)

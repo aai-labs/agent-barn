@@ -1,6 +1,8 @@
 import hashlib
 from uuid import uuid7
 
+from sqlalchemy import text
+
 from api.domains.agents.models import AgentStatus
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -50,6 +52,14 @@ def two_agents():
         context.billing = context.agent
         there_is_an_agent(name="Triage", status=AgentStatus.RUNNING)(context)
         context.triage = context.agent
+
+    return step
+
+
+def purge_tasks_are_clean():
+    def step(context):
+        with context.injector.get(PostgresRepositoryDelegate).engine.begin() as connection:
+            connection.execute(text("TRUNCATE agent_memory_purge"))
 
     return step
 

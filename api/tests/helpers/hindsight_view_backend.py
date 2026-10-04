@@ -78,11 +78,14 @@ def pinned_hindsight_is_running():
     return step
 
 
-def retain_in_bank(context, bank: str, content: str, tags: list[str]) -> None:
+def retain_in_bank(context, bank: str, content: str, tags: list[str], *, document_id: str | None = None) -> None:
     """Retain through Hindsight's own API, as the gateway would after forcing tags."""
     response = httpx.post(
         f"{context.hindsight_url}/v1/default/banks/{bank}/memories",
-        json={"items": [{"content": content, "tags": tags}]},
+        json={
+            "items": [{"content": content, "tags": tags, **({"document_id": document_id} if document_id else {})}],
+            "observation_scopes": "per_tag",
+        },
         timeout=60,
     )
     response.raise_for_status()

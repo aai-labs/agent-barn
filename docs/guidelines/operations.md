@@ -100,8 +100,21 @@ and `make run-llm-budget-alerts`) on those schedules. See
 requirements, 429/503 behavior, and the observed-spend limitation. The gateway
 uses persisted accounting and needs no LiteLLM master key or Kubernetes credentials.
 
-Purge and backup/restore remain later work in the
-[delivery log](../features/agent-memory/CHANGELOG.md).
+When memory is enabled, the chart deploys `agentbarn-api-memory-purge` every five
+minutes with `Forbid` concurrency and a 280-second pod deadline. It holds only the
+product database URL and Hindsight auth key, mounts no kubeconfig, and disables
+service-account token mounting. Keep it running while tombstones remain; disabling
+the optional release pauses physical cleanup.
+
+For local operation, schedule `make purge-agent-memory` with `DB_CONNECTION_URL`,
+`HINDSIGHT_BASE_URL`, and `HINDSIGHT_API_KEY`. Repeating runs after a failure or
+restart is safe. Inspect `agent_memory_purge.last_error`, `attempts`,
+`next_attempt_at`, and `last_cleaned_at` for progress without reading memory content.
+The [deletion contract](../features/agent-memory.md#deletion-cleanup) owns retry
+leases, runtime limits, and hourly sweeps for previously accepted Hindsight work.
+Downgrading `a63e8c941d20` drops pending cleanup; it cannot restore removed grants.
+Complete cleanup before retiring this table/job. Backups and restore work are
+deferred in the [delivery log](../features/agent-memory/CHANGELOG.md).
 
 Run `make check-memory` with Helm installed to validate both enabled and disabled
 renders without connecting to a cluster. The API CI workflow runs the same check.

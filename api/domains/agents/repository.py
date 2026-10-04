@@ -11,6 +11,7 @@ from sqlalchemy import exists, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
+from api.domains.agent_memory.repository import stage_agent_memory_cleanup
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
@@ -982,8 +983,10 @@ class AgentRepository:
                 return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
             now = datetime.now(UTC)
             persisted.deleted_at = now
+            persisted.memory_key_hash = None
             session.add(persisted)
             session.flush()
+            stage_agent_memory_cleanup(session, persisted.id, persisted.organization_id, now)
             # Agent deletion is a soft delete, so the database FK cascade does
             # not retire the Agent-owned Communication Connections. Release
             # their provider credentials in this same transaction so retired

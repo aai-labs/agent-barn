@@ -13,13 +13,27 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
   native memory for opted-in starts; Organization attribution of memory model costs;
   retain/reflect gating against combined observed Organization spend.
 - In transition: runtime configuration and pinned-image contracts are implemented, but the
-  optional deployment remains off by default. Deletion purge and
-  backup/restore are pending.
+  optional deployment remains off by default. Deletion cleanup and durable retries
+  are delivered; backups and restores are deferred by the maintainer.
 - Next, in order:
-  1. Lifecycle: purge an Agent's memories and grants on deletion; Hindsight backups.
+  1. Backups and tested restore when requested; deferred for now.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-04 — slice 6 — deletion cleanup and retries
+
+- Delivered: deletion atomically clears memory credentials, removes inbound/outbound
+  grants, and queues a durable purge. The bounded job removes private/shared documents,
+  retries failures with reclaimable leases, and retains hourly sweeps for late work.
+- Changed: migration `a63e8c941d20` adds tombstones and backfills deleted Agents.
+  The enabled chart adds a five-minute cleanup job with only database/backend auth;
+  local operators use `make purge-agent-memory`. No public delete tool or version bump.
+- Verified: nine cleanup integration tests and a real pinned Hindsight purge contract
+  pass, preserving another Agent and bank. Static, migration-head, and chart checks pass;
+  broader lifecycle/migration checks follow.
+- Follow-up: backups/restores are explicitly deferred. Physical purge is asynchronous;
+  previously accepted retains are caught by subsequent sweeps.
 
 ### 2026-10-04 — slice 5 review — viewer navigation
 

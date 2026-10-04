@@ -3,10 +3,12 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+import sqlalchemy as sa
 from injector import inject, singleton
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
-from sqlmodel import Session, col, select
+from sqlmodel import Session, SQLModel, col, select
 
 from api.domains.agent_memory.gateway_models import MemoryAccess
 from api.domains.agent_memory.models import AgentMemoryGrant
@@ -22,6 +24,30 @@ from api.domains.events.catalog import (
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.models import Organization
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+
+def stage_agent_memory_cleanup(session: Session, agent_id: UUID, organization_id: UUID, now: datetime) -> None:
+    """Stage grant removal and a tombstone in the caller's Agent deletion transaction."""
+    session.exec(
+        sa.delete(AgentMemoryGrant).where(
+            col(AgentMemoryGrant.organization_id) == organization_id,
+            sa.or_(col(AgentMemoryGrant.agent_id) == agent_id, col(AgentMemoryGrant.source_agent_id) == agent_id),
+        )
+    )
+    statement = (
+        pg_insert(SQLModel.metadata.tables["agent_memory_purge"])
+        .values(
+            id=uuid4(),
+            agent_id=agent_id,
+            organization_id=organization_id,
+            created_at=now,
+            updated_at=now,
+            next_attempt_at=now,
+            attempts=0,
+        )
+        .on_conflict_do_nothing(index_elements=["agent_id"])
+    )
+    session.exec(statement)  # type: ignore[call-overload]
 
 
 class AgentMemoryGrantConflictError(Exception):

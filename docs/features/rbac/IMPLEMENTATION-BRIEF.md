@@ -87,6 +87,12 @@ Background work is the one exception, and it is narrow. It covers scheduled work
 
 A background method that acquires a user-facing caller stops qualifying and needs the accessible-Agent join like any other.
 
+The operator-only Agent Memory purge worker uses this background exception to consume
+durable deletion tombstones. It derives the bank and document namespace from persisted
+Agent/Organization IDs, refuses live or mismatched targets, and exposes no router.
+Only the authorized Agent deletion transaction stages new tombstones. See
+[Deletion cleanup](../agent-memory.md#deletion-cleanup).
+
 HTTP semantics remain deliberate:
 
 - Return `404` when an Agent or subordinate resource is absent, cross-Organization, or inaccessible and therefore concealed.

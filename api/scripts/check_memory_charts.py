@@ -44,6 +44,19 @@ def main() -> None:
     else:
         raise AssertionError("Memory deployment must require the cost attribution key hashes")
     enabled = render("agentbarn-api", memory_values)
+    job = next(document for document in enabled if document["metadata"]["name"] == "agentbarn-api-memory-purge")
+    assert job["spec"]["concurrencyPolicy"] == "Forbid"
+    job_pod = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    assert job_pod["automountServiceAccountToken"] is False
+    assert "volumes" not in job_pod
+    job_container = job_pod["containers"][0]
+    assert "envFrom" not in job_container
+    assert {item["name"] for item in job_container["env"]} == {
+        "DB_CONNECTION_URL",
+        "HINDSIGHT_BASE_URL",
+        "HINDSIGHT_API_KEY",
+    }
+    assert not any(document["metadata"]["name"] == "agentbarn-api-memory-purge" for document in disabled)
     shared_secret = next(
         document for document in enabled if "MEMORY_LITELLM_KEY_HASHES" in document.get("stringData", {})
     )
