@@ -54,6 +54,11 @@ HINDSIGHT_API_KEY=
 HINDSIGHT_LITELLM_API_KEY=
 # Retired backend LiteLLM key SHA-256 hashes, comma separated (current hash is derived).
 MEMORY_LITELLM_KEY_HASHES=
+# Optional initial model; shared by the API default and Hindsight startup.
+# MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini
+# Active key SHA-256 hash when several attribution hashes are retained.
+# Compose infers it for one hash; enabled Helmfile derives it from the current key.
+# MEMORY_LITELLM_ACTIVE_KEY_HASH=
 
 # ── LiteLLM + OpenRouter ─────────────────────────────────────────────────────
 # Any strong secret prefixed with sk-; LiteLLM uses it to mint agent-scoped

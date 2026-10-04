@@ -1,7 +1,5 @@
 import { expect, Page, test } from "@playwright/test";
 
-import { PlatformMemoryDataSupport } from "../pages/data-support/platform-memory-data-support.po";
-
 import UserContext from "../fixtures/user-context.json";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { PlatformMemorySettingsPage } from "../pages/platform-memory-settings-page.po";
@@ -22,7 +20,7 @@ test("Platform Admin can search and save the shared memory model", async ({
 }) => {
   await signIn(page);
   const settings = new PlatformMemorySettingsPage(page);
-  const mock = await new PlatformMemoryDataSupport(page).intercept();
+  const mock = await new DataSupport(page).platformMemory.intercept();
   await settings.goto();
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await expect(settings.summary()).toContainText("GPT-4.1 mini");
@@ -50,7 +48,7 @@ test("Organization Owner cannot open Platform Settings or fetch the memory setti
 }) => {
   await signIn(page, false);
   const settings = new PlatformMemorySettingsPage(page);
-  const mock = await new PlatformMemoryDataSupport(page).intercept();
+  const mock = await new DataSupport(page).platformMemory.intercept();
   await settings.goto();
   await expect(page.getByText("Platform admin access required")).toBeVisible();
   await expect(settings.model()).not.toBeVisible();
@@ -63,7 +61,7 @@ test("failed save preserves the choice and supports retry", async ({
 }) => {
   await signIn(page);
   const settings = new PlatformMemorySettingsPage(page);
-  const mock = await new PlatformMemoryDataSupport(page).intercept({
+  const mock = await new DataSupport(page).platformMemory.intercept({
     saveStatus: 503,
   });
   await settings.goto();
@@ -83,7 +81,7 @@ test("unavailable catalog prevents saving and shows retry", async ({
 }) => {
   await signIn(page);
   const settings = new PlatformMemorySettingsPage(page);
-  await new PlatformMemoryDataSupport(page).intercept({ modelsStatus: 503 });
+  await new DataSupport(page).platformMemory.intercept({ modelsStatus: 503 });
   await settings.goto();
   await expect(
     page.getByRole("button", { name: "Retry models" }),
@@ -98,7 +96,7 @@ test("cancel returns to the saved model without updating settings", async ({
 }) => {
   await signIn(page);
   const settings = new PlatformMemorySettingsPage(page);
-  const mock = await new PlatformMemoryDataSupport(page).intercept();
+  const mock = await new DataSupport(page).platformMemory.intercept();
   await settings.goto();
   await settings.choose("Alternate model");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();

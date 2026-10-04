@@ -21,6 +21,14 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — Opus review approval
+
+- Reviewed: Claude Opus 5.5 approved the follow-up changes and confirmed all eight
+  original findings resolved, with no regressions found.
+- Finished: optional model/active-key entries in environment templates, shared
+  browser data-support registration, and operations documentation wrapping.
+- Verified: all five Platform Settings browser scenarios and UI static checks pass.
+
 ### 2026-10-04 — Opus quality review follow-ups
 
 - Fixed: Compose and Helmfile share `MEMORY_DEFAULT_MODEL` between the API and

@@ -199,7 +199,8 @@ retired hashes for delayed cost attribution.
 Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
 customize the initial model. Both deployments use that one setting for the API
 default and Hindsight startup model. When using charts directly, set API
-`memory.defaultModel` and Hindsight `llm.model` to the same value. Gateway outages retain the last known selection,
+`memory.defaultModel` and Hindsight `llm.model` to the same value. Gateway outages
+retain the last known selection,
 or the startup model before the first successful fetch. A schema downgrade drops
 the persisted choice.
 

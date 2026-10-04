@@ -9,6 +9,7 @@ import { CostDataSupport } from "./cost-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
 import { OrganizationDataSupport } from "./organization-data-support.po";
 import { OrgTemplateDataSupport } from "./org-template-data-support.po";
+import { PlatformMemoryDataSupport } from "./platform-memory-data-support.po";
 import { PlatformStatsDataSupport } from "./platform-stats-data-support.po";
 import { PlatformTemplateDataSupport } from "./platform-template-data-support.po";
 import { SkillDataSupport } from "./skill-data-support.po";
@@ -27,6 +28,7 @@ export class DataSupport {
   public eventDeliveries: EventDeliveryDataSupport;
   public orgTemplates: OrgTemplateDataSupport;
   public platformTemplates: PlatformTemplateDataSupport;
+  public platformMemory: PlatformMemoryDataSupport;
   public platformStats: PlatformStatsDataSupport;
 
   constructor(page: Page) {
@@ -42,6 +44,7 @@ export class DataSupport {
     this.eventDeliveries = new EventDeliveryDataSupport(page);
     this.orgTemplates = new OrgTemplateDataSupport(page);
     this.platformTemplates = new PlatformTemplateDataSupport(page);
+    this.platformMemory = new PlatformMemoryDataSupport(page);
     this.platformStats = new PlatformStatsDataSupport(page);
   }
 }
