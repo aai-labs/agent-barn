@@ -103,14 +103,16 @@ class AgentMemoryRepository:
                     col(source.deleted_at).is_(None),
                 )
             ).all()
-            organization_memory = any(grant.source_agent_id is None for grant in grants)
+            organization_memory_write = any(
+                grant.source_agent_id is None and grant.access == "write" for grant in grants
+            )
             tags = [f"agent:{agent.id}"]
             tags.extend(
                 sorted(f"agent:{grant.source_agent_id}" for grant in grants if grant.source_agent_id is not None)
             )
-            if organization_memory:
+            if any(grant.source_agent_id is None and grant.access == "read" for grant in grants):
                 tags.append("scope:team")
-            return MemoryAccess(agent.id, agent.organization_id, tuple(tags), organization_memory)
+            return MemoryAccess(agent.id, agent.organization_id, tuple(tags), organization_memory_write)
 
     def resolve_view_target(self, organization_id: UUID, agent_id: UUID) -> bool:
         """Whether the Agent is undeleted in an existing Organization.
@@ -295,6 +297,7 @@ class AgentMemoryRepository:
                 "grant_id": grant.id,
                 "agent_id": grant.agent_id,
                 "source_agent_id": grant.source_agent_id,
+                "access": grant.access,
                 "source_display": source_display,
                 "actor_display": actor_display,
                 "subject_display": agent_name,

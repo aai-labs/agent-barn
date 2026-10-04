@@ -34,9 +34,9 @@ def _request(context, endpoint="memories/recall", body=None):
     )
 
 
-def _grant(context, source_id=None):
+def _grant(context, source_id=None, access="read"):
     grant = AgentMemoryGrant(
-        organization_id=context.organization.id, agent_id=context.agent.id, source_agent_id=source_id
+        organization_id=context.organization.id, agent_id=context.agent.id, source_agent_id=source_id, access=access
     )
     context.injector.get(PostgresRepositoryDelegate).save(grant)
     return grant
@@ -49,6 +49,9 @@ def test_recorded_plugin_requests_are_accepted_and_scoped(runtime, capture):
             there_is_an_agent(status=AgentStatus.RUNNING), memory_is_enabled(), memory_gateway_is_ready()
         )
     ) as context:
+        shared = any("scope:team" in (item.get("tags") or []) for item in (capture.get("body") or {}).get("items", []))
+        if shared:
+            _grant(context, access="write")
         with when("a runtime sends its captured request"):
             response = context.memory_client.request(
                 capture["method"], "/memory/v1" + capture["path"], json=capture.get("body"), headers=_headers(context)
@@ -67,7 +70,10 @@ def test_recorded_plugin_requests_are_accepted_and_scoped(runtime, capture):
                     assert_that(upstream["path"].split("/")[4], equal_to(f"org-{context.organization.id}"))
                     payload = upstream["payload"]
                     if capture["path"].endswith("/memories"):
-                        assert_that(payload["items"][0]["tags"], contains_exactly(f"agent:{context.agent.id}"))
+                        assert_that(
+                            payload["items"][0]["tags"],
+                            equal_to([f"agent:{context.agent.id}"] + (["scope:team"] if shared else [])),
+                        )
                         assert_that(payload["items"][0]["observation_scopes"], equal_to("per_tag"))
                     else:
                         assert_that(payload["tags"], contains_exactly(f"agent:{context.agent.id}"))
@@ -141,7 +147,7 @@ def test_retain_forces_tags_and_separates_private_and_team_documents(team_grante
         )
     ) as context:
         if team_granted:
-            _grant(context)
+            _grant(context, access="write")
         body = {
             "items": [
                 {"content": "private fact", "document_id": "same-session", "tags": ["agent:other"]},
@@ -159,6 +165,10 @@ def test_retain_forces_tags_and_separates_private_and_team_documents(team_grante
         }
         with when("the Agent attempts to forge retain visibility"):
             response = _request(context, "memories", body)
+        if not team_granted:
+            assert_that(response.status_code, equal_to(403))
+            assert_that(context.backend_requests, empty())
+            return
         with then("only the granted scope can be written"):
             assert_that(response.status_code, equal_to(200))
             payload = context.backend_requests[0]["payload"]
@@ -383,3 +393,47 @@ def test_agents_without_memory_receive_no_memory_credentials():
             assert_that("MEMORY_API_KEY" in secret.string_data, equal_to(False))
             deployment = context.injector.get(KubernetesClient).create_deployment.call_args.args[1]
             assert_that(deployment.spec.template.spec.automount_service_account_token, equal_to(False))
+
+
+@pytest.mark.parametrize("read,write", [(False, False), (True, False), (False, True), (True, True)])
+def test_organization_read_and_write_are_independent_and_revocation_is_immediate(read, write):
+    with given(
+        agent_memory_api_setup(
+            there_is_an_agent(status=AgentStatus.RUNNING), memory_is_enabled(), memory_gateway_is_ready()
+        )
+    ) as context:
+        if read:
+            _grant(context)
+        writer = _grant(context, access="write") if write else None
+        recall = _request(context)
+        assert_that(recall.status_code, equal_to(200))
+        assert_that("scope:team" in context.backend_requests[-1]["payload"]["tags"], equal_to(read))
+        response = context.memory_client.post(
+            "/memory/v1/organization-memory", json={"content": "Shared convention"}, headers=_headers(context)
+        )
+        assert_that(response.status_code, equal_to(202 if write else 403))
+        if write:
+            payload = context.backend_requests[-1]["payload"]
+            assert_that(payload["items"][0]["tags"], contains_exactly(f"agent:{context.agent.id}", "scope:team"))
+            assert_that(payload["async"], equal_to(True))
+            context.injector.get(PostgresRepositoryDelegate).delete(writer)
+            response = context.memory_client.post(
+                "/memory/v1/organization-memory", json={"content": "Refused fact"}, headers=_headers(context)
+            )
+            assert_that(response.status_code, equal_to(403))
+
+
+def test_organization_write_tool_endpoint_rejects_identity_and_tag_overrides():
+    with given(
+        agent_memory_api_setup(
+            there_is_an_agent(status=AgentStatus.RUNNING), memory_is_enabled(), memory_gateway_is_ready()
+        )
+    ) as context:
+        _grant(context, access="write")
+        response = context.memory_client.post(
+            "/memory/v1/organization-memory",
+            json={"content": "fact", "agent_id": "other", "tags": ["agent:other"]},
+            headers=_headers(context),
+        )
+        assert_that(response.status_code, equal_to(422))
+        assert_that(context.backend_requests, empty())

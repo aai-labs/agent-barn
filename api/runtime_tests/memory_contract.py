@@ -42,6 +42,11 @@ def memory_should_start(runtime: str, image: str, root: Path):
             start_memory_runtime(context)
         with then("native memory and the Hindsight provider should both load"):
             runtime_should_have_started(context)
+            assert_that(context.result["organization_tool_exit"], equal_to(0), str(context.result))
+            shared = [request for request in context.requests if request["path"] == "/memory/v1/organization-memory"]
+            assert_that(len(shared), equal_to(1))
+            assert_that(shared[0]["payload"], equal_to({"content": "Organization release convention."}))
+            assert_that(shared[0]["authorization"], equal_to(f"Bearer {RUNTIME_KEY}"))
             provider = "hindsight" if runtime == "hermes" else "hindsight-openclaw"
             assert_that(context.result["providers"], has_item(provider))
             if runtime == "openclaw":

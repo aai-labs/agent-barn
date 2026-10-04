@@ -1,5 +1,24 @@
 """Configuration for the pinned runtime memory providers."""
 
+from pathlib import Path
+
+MEMORY_WRITE_TOOL = (Path(__file__).parent.parent / "scripts" / "agentbarn_memory.py").read_text()
+MEMORY_TOOL_INSTRUCTIONS = """
+
+## Organization Memory
+
+Automatic memory saves are private to this Agent. To explicitly save a durable
+fact for the organization, run `agentbarn-memory remember-organization` using
+your terminal tool, with the fact on standard input (a quoted heredoc avoids
+shell expansion). Only use this when the user requests an organization-wide
+save. Never include credentials or secrets. The gateway requires a separate
+Organization Memory write grant; having read access does not permit writing.
+If refused, explain the missing permission and do not claim the fact was shared.
+Acceptance means extraction is queued, not that the memory is already recallable.
+Other Agents need Organization Memory read access to recall it. This command
+cannot write as another Agent or modify another Agent's private memories.
+"""
+
 MEMORY_PLUGIN_PATH = "/opt/openclaw-preinstalled/npm/node_modules/@vectorize-io/hindsight-openclaw"
 MEMORY_RETAIN_CONTEXT = (
     "Keep durable facts, user preferences, decisions, and working conventions from this conversation. "

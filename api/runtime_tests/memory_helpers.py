@@ -154,6 +154,8 @@ def memory_http_boundary_is_ready(*, health_denials: int = 0):
                     return 200, {"status": "ok"}
                 if self.path == "/memory/v1/version":
                     return 200, {"version": "0.10.2"}
+                if self.path == "/memory/v1/organization-memory":
+                    return 202, {"status": "accepted"}
                 if self.path.endswith("/memories/recall"):
                     return 200, {"results": [{"id": str(AGENT_ID), "text": RECALLED_FACT, "type": "world"}]}
                 if self.path.endswith("/memories") and self.command == "POST":
@@ -253,7 +255,7 @@ def configure_memory(context, *, enabled: bool):
             '#!/bin/sh\ncase "$1" in\n'
             '  --version) echo "OpenClaw 2026.8.2" ;;\n'
             "  plugins|doctor) exit 0 ;;\n"
-            "  *) exec node /contract-commands/openclaw_runtime_driver.mjs ;;\nesac\n"
+            "  gateway) exec node /contract-commands/openclaw_runtime_driver.mjs ;;\n  *) exit 0 ;;\nesac\n"
         )
     for name, content in config_map.data.items():
         target = context.config_dir / name
@@ -290,6 +292,11 @@ def start_memory_runtime(context):
         "-e",
         f"CONTRACT_MODEL_URL={context.base_url}/llm/v1",
     ]
+    if context.runtime == "hermes":
+        workspace = context.state_dir / "workspace"
+        workspace.mkdir(exist_ok=True)
+        workspace.chmod(0o777)
+        command += ["-v", f"{workspace}:/workspace"]
     if context.memory_enabled:
         command += ["-e", f"MEMORY_URL={context.base_url}/memory/v1", "-e", f"MEMORY_API_KEY={RUNTIME_KEY}"]
     command += [context.image, "/app/config/start.sh"]

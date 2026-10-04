@@ -11,7 +11,8 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
   authenticated gateway with current grant checks; hashed per-start Agent credentials; optional
   Hindsight and gateway Helm deployments; automatic Hermes/OpenClaw recall and retain alongside
   native memory for opted-in starts; Organization attribution of memory model costs;
-  retain/reflect gating against combined observed Organization spend.
+  retain/reflect gating against combined observed Organization spend; separate Organization
+  Memory read/write grants and an explicit shared writer command for both runtimes.
 - In transition: runtime configuration and pinned-image contracts are implemented, but the
   optional deployment remains off by default. Deletion cleanup and durable retries
   are delivered; backups and restores are deferred by the maintainer.
@@ -20,6 +21,23 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-04 — explicit Organization Memory write access and tool
+
+- Delivered: independent read/write grants, defaulting new grants to read-only.
+  Cross-Agent grants cannot allow writes. The gateway requires write access for
+  shared retains and the new content-only `organization-memory` endpoint.
+  Both runtimes install `agentbarn-memory remember-organization` with instructions;
+  automatic saves remain private, and accepted writes are asynchronous.
+- Changed: migration `b84e19a7302f` preserves old combined grants as separate
+  read/write rows; new audit payloads include access. Shared runtime code targets
+  Python 3.12. Existing Agents need a restart for the tool; grants apply immediately.
+- Verified: 119 API/gateway/schema tests, 59 tool/builder tests, and all four real
+  runtime memory contracts pass. Static, migration-head, and chart checks pass.
+  The runtime checks caught and fixed Python-version compatibility, and the probe
+  fixture now invokes its driver only for gateway startup rather than health checks.
+- UI: access mode schemas/actions and explicit permission controls are implemented
+  and verified in the next UI commit. Backups/restores remain deferred.
 
 ### 2026-10-04 — memory Save and Restart
 

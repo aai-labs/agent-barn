@@ -1,5 +1,6 @@
 // Use the pinned core's real loader, manifest validation, service, and hook runner.
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import { o as loadPlugins } from "/usr/local/lib/node_modules/openclaw/dist/loader-DhyKX__3.js";
 import { i as initialize, t as runner } from "/usr/local/lib/node_modules/openclaw/dist/hook-runner-global-ac8FBwry.js";
 
@@ -39,10 +40,13 @@ try {
 } finally {
   for (const entry of services) await entry.service.stop();
 }
+const organizationTool = process.env.MEMORY_API_KEY ? spawnSync("agentbarn-memory", ["remember-organization"], {input: "Organization release convention.", encoding: "utf8", timeout: 15000}) : null;
 console.log("MEMORY_RUNTIME_CONTRACT=" + JSON.stringify({
   providers: registry.plugins.filter((entry) => entry.status === "loaded").map((entry) => entry.id),
   plugin_errors: registry.plugins.filter((entry) => entry.status === "error").map((entry) => entry.error),
   recalled,
+  organization_tool_exit: organizationTool?.status ?? null,
+  organization_tool_error: organizationTool?.stderr ?? "",
   native_prompt: fs.readFileSync(state + "/workspace/USER.md", "utf8") + fs.readFileSync(state + "/workspace/MEMORY.md", "utf8"),
   saved_settings_exist: Object.hasOwn(config.plugins.entries["hindsight-openclaw"], "config"),
   saved_credential: savedConfig.includes(process.env.MEMORY_API_KEY ?? "absent-credential"),

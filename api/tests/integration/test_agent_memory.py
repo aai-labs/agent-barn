@@ -66,10 +66,14 @@ def _set_memory(context, agent_id: UUID, enabled: bool):
     )
 
 
-def _create_grant(context, agent_id: UUID, source_agent_id: UUID | None = None):
+def _create_grant(context, agent_id: UUID, source_agent_id: UUID | None = None, access: str = "read"):
     return context.client.post(
         _GRANTS,
-        json={"agent_id": str(agent_id), "source_agent_id": str(source_agent_id) if source_agent_id else None},
+        json={
+            "agent_id": str(agent_id),
+            "source_agent_id": str(source_agent_id) if source_agent_id else None,
+            "access": access,
+        },
         headers=_auth(context),
     )
 
@@ -519,3 +523,30 @@ def test_migrated_schema_enforces_memory_grant_relationships(invalid_relationshi
 
         with then("the migrated database refuses the invalid relationship"):
             assert_that(_grants(context), empty())
+
+
+@pytest.mark.parametrize("role", [OrganizationRole.OWNER, OrganizationRole.ADMIN])
+def test_admin_can_grant_and_revoke_organization_write_independently(role):
+    with given(
+        agent_memory_api_setup(two_agents(), *([signed_in_as(role)] if role != OrganizationRole.OWNER else []))
+    ) as context:
+        reader = _create_grant(context, context.triage.id)
+        writer = _create_grant(context, context.triage.id, access="write")
+        assert_that(reader.status_code, equal_to(201))
+        assert_that(writer.status_code, equal_to(201))
+        assert_that(writer.json()["access"], equal_to("write"))
+        result = context.client.delete(_GRANTS + "/" + writer.json()["id"], headers=_auth(context))
+        assert_that(result.status_code, equal_to(204))
+        remaining = context.client.get(_GRANTS, headers=_auth(context)).json()
+        assert_that([row["access"] for row in remaining], contains_exactly("read"))
+
+
+def test_member_cannot_grant_organization_write():
+    with given(agent_memory_api_setup(two_agents(), signed_in_as(OrganizationRole.MEMBER))) as context:
+        assert_that(_create_grant(context, context.triage.id, access="write").status_code, equal_to(403))
+
+
+def test_write_access_to_another_agents_private_memory_is_rejected():
+    with given(agent_memory_api_setup(two_agents())) as context:
+        response = _create_grant(context, context.triage.id, context.billing.id, access="write")
+        assert_that(response.status_code, equal_to(400))

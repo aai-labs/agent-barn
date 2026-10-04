@@ -8,7 +8,13 @@ from fastapi import HTTPException
 from injector import inject, singleton
 from pydantic import ValidationError
 
-from api.domains.agent_memory.gateway_models import MemoryAccess, MemoryRecall, MemoryReflect, MemoryRetain
+from api.domains.agent_memory.gateway_models import (
+    MemoryAccess,
+    MemoryRecall,
+    MemoryReflect,
+    MemoryRetain,
+    OrganizationMemoryWrite,
+)
 from api.domains.agent_memory.repository import AgentMemoryRepository
 from api.domains.agent_memory.spend_policy import MemorySpendPolicy
 from api.infrastructure.hindsight.client import HindsightClient, HindsightResponse
@@ -39,13 +45,33 @@ class MemoryGatewayService:
 
     @staticmethod
     def accepts_payload(method: str, path: str) -> bool:
-        return method == "POST" and _BANK_PATH.fullmatch(path) is not None
+        return method == "POST" and (path == "organization-memory" or _BANK_PATH.fullmatch(path) is not None)
 
     def forward(self, access: MemoryAccess, method: str, path: str, payload: object) -> HindsightResponse:
         match = _BANK_PATH.fullmatch(path)
         endpoint = match.group(1) if match else "blocked"
         code = 403
         try:
+            if method == "POST" and path == "organization-memory":
+                endpoint = "organization-memory"
+                if not access.organization_memory_write:
+                    raise HTTPException(403, "Organization Memory write access is required.")
+                try:
+                    request = OrganizationMemoryWrite.model_validate(payload)
+                except ValidationError:
+                    raise HTTPException(422, "Invalid Organization Memory write.") from None
+                rewritten = self._rewrite(
+                    access,
+                    "memories",
+                    {
+                        "items": [{"content": request.content, "tags": ["scope:team"]}],
+                        "async": True,
+                    },
+                )
+                self.spend_policy.require_available(access.organization_id)
+                self.client.request("POST", f"/v1/default/banks/org-{access.organization_id}/memories", rewritten)
+                code = 202
+                return HindsightResponse(202, b'{"status":"accepted"}')
             if method == "GET" and path == "health":
                 endpoint = "health"
                 return HindsightResponse(200, b'{"status":"ok"}')
@@ -89,7 +115,9 @@ class MemoryGatewayService:
                 request = MemoryRetain.model_validate(payload)
                 items = []
                 for item in request.items:
-                    team = access.organization_memory and "scope:team" in (item.tags or [])
+                    team = "scope:team" in (item.tags or [])
+                    if team and not access.organization_memory_write:
+                        raise HTTPException(403, "Organization Memory write access is required.")
                     data = item.model_dump(exclude={"tags", "document_id"}, exclude_none=True)
                     data["tags"] = [f"agent:{access.agent_id}"] + (["scope:team"] if team else [])
                     data["observation_scopes"] = "per_tag"

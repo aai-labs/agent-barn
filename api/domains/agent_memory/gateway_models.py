@@ -17,7 +17,7 @@ class MemoryAccess:
     agent_id: UUID
     organization_id: UUID
     readable_tags: tuple[str, ...]
-    organization_memory: bool
+    organization_memory_write: bool
 
 
 class EntityOptions(BaseModel):
@@ -61,6 +61,11 @@ class MemoryRetain(BaseModel):
     items: list[MemoryRetainItem] = Field(min_length=1, max_length=20)
     async_: bool = Field(default=False, alias="async")
     operation_id: UUID | None = None
+
+
+class OrganizationMemoryWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: str = Field(min_length=1, max_length=100000)
 
 
 class MemoryViewQuery(BaseModel):

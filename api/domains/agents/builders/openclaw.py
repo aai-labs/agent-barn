@@ -7,7 +7,7 @@ from kubernetes import client
 from api.domains.communications.models import ConversationLocation
 
 from .common import _labels, _resource_name, _setting_ids
-from .memory import MEMORY_PLUGIN_PATH, openclaw_memory_settings
+from .memory import MEMORY_PLUGIN_PATH, MEMORY_TOOL_INSTRUCTIONS, MEMORY_WRITE_TOOL, openclaw_memory_settings
 
 # Explicit so agents stop inheriting the namespace LimitRange default of
 # 512Mi request / 2Gi limit. requests.memory is the binding quota axis
@@ -336,8 +336,9 @@ def build_config_map(
         "SOUL.md": soul_md,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
-        "TOOLS.md": tools_md,
-        "AGENTS.md": agents_md,
+        "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "TOOLS.md": tools_md + MEMORY_TOOL_INSTRUCTIONS,
+        "AGENTS.md": agents_md + MEMORY_TOOL_INSTRUCTIONS,
         "BOOT.md": boot_md,
         "BOOTSTRAP.md": bootstrap_md,
         "HEARTBEAT.md": heartbeat_md,

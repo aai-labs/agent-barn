@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,12 +35,27 @@ finally:
     if agent._memory_manager:
         agent._memory_manager.shutdown_all()
 
+organization_tool = (
+    subprocess.run(
+        ["agentbarn-memory", "remember-organization"],
+        input="Organization release convention.",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    if os.environ.get("MEMORY_API_KEY")
+    else None
+)
+
 settings = Path("/opt/data/hindsight/config.json")
 print(
     "MEMORY_RUNTIME_CONTRACT="
     + json.dumps(
         {
             "providers": providers,
+            "organization_tool_exit": organization_tool.returncode if organization_tool else None,
+            "organization_tool_error": organization_tool.stderr if organization_tool else "",
             "native_prompt": native_prompt,
             "response": result.get("final_response", ""),
             "saved_settings_exist": settings.exists(),

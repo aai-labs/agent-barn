@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -242,6 +242,8 @@ class AgentMemoryGrantPayload(BaseModel):
     agent_id: UUID
     source_agent_id: UUID | None
     source_display: str
+    # Absent in historical combined Organization Memory grants.
+    access: Literal["read", "write"] | None = None
     actor_display: str
     subject_display: str
 

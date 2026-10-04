@@ -885,3 +885,24 @@ def test_memory_purge_migration_backfills_deleted_agents_and_removes_only_their_
     with db.engine.connect() as connection:
         assert_that(connection.execute(text("SELECT to_regclass('agent_memory_purge')")).scalar_one(), none())
         assert_that(connection.execute(text("SELECT count(*) FROM agent")).scalar_one(), equal_to(3))
+
+
+def test_split_memory_access_preserves_old_combined_grants_and_rollback(legacy_database):
+    db = legacy_database
+    command.upgrade(db.config, "a63e8c941d20")
+    with db.engine.begin() as connection:
+        connection.execute(
+            text("""INSERT INTO agent_memory_grant
+            (id, created_at, updated_at, organization_id, agent_id, source_agent_id)
+            VALUES (:id, now(), now(), :org, :agent, NULL)"""),
+            {"id": uuid7(), "org": db.org_a, "agent": db.agent_a},
+        )
+    command.upgrade(db.config, "b84e19a7302f")
+    with db.engine.connect() as connection:
+        assert_that(
+            connection.execute(text("SELECT access FROM agent_memory_grant ORDER BY access")).scalars().all(),
+            equal_to(["read", "write"]),
+        )
+    command.downgrade(db.config, "a63e8c941d20")
+    with db.engine.connect() as connection:
+        assert_that(connection.execute(text("SELECT count(*) FROM agent_memory_grant")).scalar_one(), equal_to(1))

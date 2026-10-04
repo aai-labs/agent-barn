@@ -22,10 +22,10 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 
 - `agent.memory_enabled` defaults to false. Changing it requires the Agent Permission `agent.memory.manage`, which the locked Agent Owner role holds. In practice that means the Agent Creator (who receives Agent Owner on creation), Organization Owners and Admins (implicit Agent Owner), and anyone later given Agent Owner access. Agent Editors and Viewers cannot.
 - Memory Grants require the Organization Permission `memory.access.manage`, which only Organization Owners and Admins hold. Agent Owner authority over either Agent is not enough.
-- A Memory Grant is directional: it lets its reading Agent (`agent_id`) recall memories, and gives nothing back to the source.
-  - With `source_agent_id` NULL it grants **Organization Memory**: the Agent may recall memories tagged `scope:team` and may write them. An Agent without this grant can neither read nor write Organization Memory.
+- A Memory Grant is directional: it gives its receiving Agent (`agent_id`) the selected access, and gives nothing back to a source Agent.
+  - With `source_agent_id` NULL it grants **Organization Memory** with explicit `access`: `read` permits recalling `scope:team`; `write` permits explicit shared saves. These grants are independent: grant both separately when needed. Write-only does not grant recall of other Agents' shared facts; an Agent can always recall what it itself wrote.
   - With `source_agent_id` set it lets the Agent recall that one source Agent's private memories.
-- Both Agents in a grant belong to the same Organization (composite foreign keys), an Agent cannot be granted its own memories (`ck_agent_memory_grant_not_self`), and each reader holds at most one grant per source and one Organization Memory grant (partial unique indexes).
+- Both Agents in a grant belong to the same Organization (composite foreign keys), an Agent cannot be granted its own memories (`ck_agent_memory_grant_not_self`), and each reader holds at most one grant per source and one Organization Memory grant per access mode (partial unique indexes).
 - Grants control recall and, for Organization Memory, permission to write. Creating or revoking one never moves or rewrites stored memories.
 - Every start with memory enabled mints a fresh bearer credential. Only its SHA-256 hash is stored on the Agent; plaintext is injected as `MEMORY_API_KEY` in the runtime Secret alongside `MEMORY_URL`. It is never exposed by Agent reads. A start with memory disabled stores no hash or memory environment variables.
 - The gateway authenticates against current persisted state: the Agent must exist in an existing Organization, be undeleted, running, and memory-enabled. Stopping, disabling, or deleting it denies its credential on the next request; starting again invalidates the previous credential. Enabling memory on an Agent started without it requires a restart to receive credentials.
@@ -41,7 +41,7 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 ### Manage Memory Grants
 
 - `GET /organizations/{organization_id}/memory-grants` lists grants whose Agents are not deleted.
-- `POST /organizations/{organization_id}/memory-grants` with `{"agent_id", "source_agent_id"}` creates one; omit or null `source_agent_id` for Organization Memory. A missing, deleted or other-Organization Agent is 404, a self-grant is 400, a duplicate is 409.
+- `POST /organizations/{organization_id}/memory-grants` with `{"agent_id", "source_agent_id", "access"}` creates one; `access` defaults to `read`. `write` is allowed only for Organization Memory; writing to another Agent's memories returns 400. Omit or null `source_agent_id` for Organization Memory. A missing, deleted or other-Organization Agent is 404, a self-grant is 400, a duplicate is 409.
 - `DELETE /organizations/{organization_id}/memory-grants/{grant_id}` revokes one (204).
 
 ### View an Agent's saved memories
@@ -57,9 +57,38 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 ### Use the memory UI
 
 - Agent configuration → **Memory** shows `memory_enabled` and, for people with `agent.memory.manage`, lets them change it. A running Agent with `agent.lifecycle.manage` uses **Save and Restart**: the UI stops it, saves the setting, and starts it again. If saving fails after stopping, the shared lifecycle flow still attempts to start it. Save or lifecycle failures remain visible inline. A stopped Agent uses **Save** and stays stopped. People without lifecycle permission can save without restarting; the UI explains that someone with lifecycle access must restart a running Agent to activate memory. The memory API itself does not restart the Agent; turning it off rejects memory requests immediately and keeps stored memories.
-- Organization Settings → **Memory access** is visible only to the Organization's Owners and Admins, matching `memory.access.manage`; a platform administrator who is only a Member does not see it. It lists grants, creates one from a reader Agent to Organization Memory or to another Agent's private memories (never itself), and revokes one after confirmation. A duplicate is stopped before submission and shown if the server still returns 409.
+- Organization Settings → **Memory access** is visible only to the Organization's Owners and Admins, matching `memory.access.manage`; a platform administrator who is only a Member does not see it. It lists grants, creates one for an Agent to Organization Memory with an explicit **Read only** or **Write only** selection, or to another Agent's private memories marked **Read only** (never itself), and revokes one after confirmation. A duplicate is stopped before submission and shown if the server still returns 409.
 - Agent page → **Memory** appears only with `activity.read` and queries only then. It is read-only; see [View an Agent's saved memories](#view-an-agents-saved-memories). Memory text is rendered as plain text.
 - Grants and memory items are Organization-scoped query families; the `memory-grants` family is evicted on an Organization switch and keys carry the Organization API base.
+
+### Explicit Organization Memory saves
+
+Both runtimes expose `agentbarn-memory remember-organization` through their
+terminal tool. Provide the fact on standard input, for example:
+
+```sh
+agentbarn-memory remember-organization <<'MEMORY'
+The organization uses EUR for customer invoices.
+MEMORY
+```
+
+The tool sends only content to `POST /memory/v1/organization-memory`, using its
+existing per-start credential. It has no bank, Agent identity, or tag parameters.
+The gateway checks the current write grant and spend policy, forces the writer's
+identity, `scope:team`, `per_tag` observations, and a fresh team document namespace.
+Missing write access returns 403; revocation applies on the next request. A 202
+means extraction was accepted asynchronously, not that recall is already ready.
+Failures are reported without backend content or credentials; the tool bypasses
+environment proxies and refuses redirects. Automatic saves stay private.
+The tool and instructions are mounted from API-owned runtime configuration;
+existing Agents must restart to receive them. Memory must be enabled.
+
+Migration `b84e19a7302f` preserves existing combined Organization grants as
+separate read and write rows. Existing source grants stay read-only. New grants
+default to read. New grant audit events include the access mode; historical
+payloads without it keep their original combined meaning. Downgrade removes
+write rows: write-only access is lost, while surviving read grants regain the
+old combined semantics. Review grants before rolling back.
 
 ### Deletion cleanup
 
@@ -102,6 +131,7 @@ The separate `api.memory_main:app` process serves port 8003 under `/memory/v1`. 
 
 | Method and path relative to the base | Behavior |
 | --- | --- |
+| `POST /organization-memory` | Explicit shared save; write grant required; content only; 202 accepted |
 | `POST /v1/default/banks/{bank_id}/memories` | Retain with forced write tags and document scope |
 | `POST /v1/default/banks/{bank_id}/memories/recall` | Recall with current readable tags and `any_strict` |
 | `POST /v1/default/banks/{bank_id}/reflect` | Reflect with the same tag restrictions |
@@ -109,9 +139,9 @@ The separate `api.memory_main:app` process serves port 8003 under `/memory/v1`. 
 | `GET /v1/default/banks/{bank_id}/operations/{operation_id}` | 404; operation details are not exposed |
 | Everything else | 403 |
 
-The token determines the Organization and Agent. Client bank names, query parameters, headers other than the bearer credential, tag filters, and unknown payload fields cannot override them. Recall and reflect receive the Agent's own tag, granted source tags, and `scope:team` only with an Organization Memory grant. Untagged memories are excluded by `any_strict`.
+The token determines the Organization and Agent. Client bank names, query parameters, headers other than the bearer credential, tag filters, and unknown payload fields cannot override them. Recall and reflect receive the Agent's own tag, granted source tags, and `scope:team` only with an Organization Memory read grant. Untagged memories are excluded by `any_strict`.
 
-Retain always forces `agent:<agent_id>` and `observation_scopes: per_tag`. It adds `scope:team` only when the Agent requests that tag and holds an Organization Memory grant. Document IDs are namespaced by Agent and private/Organization scope, with the client ID hashed. Separate scope namespaces prevent appending a shared turn from republishing earlier private turns. Operation IDs are namespaced by Agent too. Missing document IDs produce new namespaced IDs.
+Retain always forces `agent:<agent_id>` and `observation_scopes: per_tag`. It adds `scope:team` only when the Agent requests that tag and holds an Organization Memory write grant; otherwise a shared retain is rejected with 403. Document IDs are namespaced by Agent and private/Organization scope, with the client ID hashed. Separate scope namespaces prevent appending a shared turn from republishing earlier private turns. Operation IDs are namespaced by Agent too. Missing document IDs produce new namespaced IDs.
 
 Recall traces, raw chunks, and source-fact expansion are disabled. Reflect excludes mental models, global directive application, and fact/tool-call traces. These response surfaces remain disabled until their tag isolation is verified. Requests use a bounded subset of the pinned Hindsight 0.10.2 contract: at most 2MiB per body, 20 retain items, and 100,000 content characters per item. Malformed supported requests return 422; oversized bodies return 413.
 

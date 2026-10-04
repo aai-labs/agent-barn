@@ -103,6 +103,7 @@ class AgentMemoryService:
                 agent_name=row.agent_name,
                 source_agent_id=row.grant.source_agent_id,
                 source_agent_name=row.source_agent_name,
+                access=row.grant.access,
                 created_at=row.grant.created_at,
             )
             for row in self.repository.list_grants(organization_id)
@@ -115,6 +116,8 @@ class AgentMemoryService:
         context: CurrentUserContext,
     ) -> AgentMemoryGrantRead:
         scope = self._require_manage(organization_id, context)
+        if payload.source_agent_id is not None and payload.access == "write":
+            raise HTTPException(400, "Another Agent's memory can only be granted read access.")
         if payload.source_agent_id == payload.agent_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -128,6 +131,7 @@ class AgentMemoryService:
                     organization_id=organization_id,
                     agent_id=agent.id,
                     source_agent_id=source.id if source else None,
+                    access=payload.access,
                     created_by_user_id=context.user.id,
                 ),
                 agent_name=agent.name,
@@ -146,6 +150,7 @@ class AgentMemoryService:
             agent_name=agent.name,
             source_agent_id=source.id if source else None,
             source_agent_name=source.name if source else None,
+            access=result.grant.access,
             created_at=result.grant.created_at,
         )
 
