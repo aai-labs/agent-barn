@@ -38,6 +38,9 @@ finally:
 
 organization_tool = None
 if os.environ.get("MEMORY_API_KEY"):
+    discovery = json.loads(terminal_tool(command="command -v agentbarn-memory", timeout=5))
+    if discovery.get("exit_code") != 0:
+        raise RuntimeError("Hermes terminal cannot find the installed agentbarn-memory command")
     instructions = Path("/workspace/AGENTS.md").read_text()
     match = re.search(r"run `([^`]+remember-organization)`", instructions)
     if match is None:

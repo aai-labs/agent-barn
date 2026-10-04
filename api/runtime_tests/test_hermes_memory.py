@@ -19,3 +19,7 @@ def test_hermes_should_recall_and_retain_alongside_native_memory(hermes_image: s
 
 def test_hermes_should_preserve_native_memory_when_disabled(hermes_image: str, tmp_path: Path):
     memory_should_stop("hermes", hermes_image, tmp_path)
+
+
+def test_hermes_reports_permission_denied_from_its_real_terminal(hermes_image: str, tmp_path: Path):
+    memory_should_start("hermes", hermes_image, tmp_path, organization_write_status=403)

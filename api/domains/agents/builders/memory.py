@@ -2,18 +2,43 @@
 
 from pathlib import Path
 
+from kubernetes import client
+
+MEMORY_COMMAND = '#!/bin/sh\nexec python3 /app/config/agentbarn_memory.py "$@"\n'
+MEMORY_COMMAND_PATH = "/usr/local/bin/agentbarn-memory"
+
+
+def memory_command_mount() -> client.V1VolumeMount:
+    return client.V1VolumeMount(
+        name="memory-command", mount_path=MEMORY_COMMAND_PATH, sub_path="agentbarn-memory", read_only=True
+    )
+
+
+def memory_command_volume(config_name: str) -> client.V1Volume:
+    return client.V1Volume(
+        name="memory-command",
+        config_map=client.V1ConfigMapVolumeSource(
+            name=config_name, items=[client.V1KeyToPath(key="agentbarn-memory", path="agentbarn-memory", mode=0o555)]
+        ),
+    )
+
+
 MEMORY_WRITE_TOOL = (Path(__file__).parent.parent / "scripts" / "agentbarn_memory.py").read_text()
 MEMORY_TOOL_INSTRUCTIONS = """
 
 ## Organization Memory
 
 Automatic memory saves are private to this Agent. To explicitly save a durable
-fact for the organization, run `/tmp/agentbarn-bin/agentbarn-memory remember-organization` using
+fact for the organization, run `/usr/local/bin/agentbarn-memory remember-organization` using
 your terminal tool, with the fact on standard input (a quoted heredoc avoids
 shell expansion). Only use this when the user requests an organization-wide
 save. Never include credentials or secrets. The gateway requires
 Organization Memory Read and write permission; having read access does not permit writing.
-If refused, explain the missing permission and do not claim the fact was shared.
+Always attempt this command for each requested shared save, even if a previous
+attempt failed. Do not infer command availability or permissions from earlier
+conversation messages. If the gateway refuses the save, explain that this Agent
+lacks Organization Memory Read and write permission and an Owner or Admin must
+grant it. Do not claim the fact was shared, or call a permission refusal a missing tool.
 Acceptance means extraction is queued, not that the memory is already recallable.
 Other Agents need Organization Memory read access to recall it. This command
 cannot write as another Agent or modify another Agent's private memories.

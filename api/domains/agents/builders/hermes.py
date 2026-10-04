@@ -7,7 +7,14 @@ from kubernetes import client
 from api.domains.communications.models import ConversationLocation
 
 from .common import _labels, _resource_name, _setting_ids
-from .memory import MEMORY_TOOL_INSTRUCTIONS, MEMORY_WRITE_TOOL, hermes_memory_settings
+from .memory import (
+    MEMORY_COMMAND,
+    MEMORY_TOOL_INSTRUCTIONS,
+    MEMORY_WRITE_TOOL,
+    hermes_memory_settings,
+    memory_command_mount,
+    memory_command_volume,
+)
 
 # Matches OpenClaw, so limits.memory (100Gi quota) never binds before
 # requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
@@ -360,6 +367,7 @@ def build_hermes_config_map(
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn-memory": MEMORY_COMMAND,
         "TOOLS.md": tools_md + MEMORY_TOOL_INSTRUCTIONS,
         "AGENTS.md": agents_md + MEMORY_TOOL_INSTRUCTIONS,
         "BOOT.md": boot_md,
@@ -520,6 +528,7 @@ def build_hermes_deployment(
                             ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
+                                memory_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -543,6 +552,7 @@ def build_hermes_deployment(
                         )
                     ],
                     volumes=[
+                        memory_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

@@ -76,7 +76,7 @@ def runtime_is_present(runtime: str, image: str, root: Path):
     return step
 
 
-def memory_http_boundary_is_ready(*, health_denials: int = 0):
+def memory_http_boundary_is_ready(*, health_denials: int = 0, organization_write_status: int = 202):
     def step(context):
         context.requests = []
         context.health_denials = health_denials
@@ -155,7 +155,9 @@ def memory_http_boundary_is_ready(*, health_denials: int = 0):
                 if self.path == "/memory/v1/version":
                     return 200, {"version": "0.10.2"}
                 if self.path == "/memory/v1/organization-memory":
-                    return 202, {"status": "accepted"}
+                    return organization_write_status, {"status": "accepted"} if organization_write_status == 202 else {
+                        "detail": "Forbidden"
+                    }
                 if self.path.endswith("/memories/recall"):
                     return 200, {"results": [{"id": str(AGENT_ID), "text": RECALLED_FACT, "type": "world"}]}
                 if self.path.endswith("/memories") and self.command == "POST":
@@ -259,8 +261,10 @@ def configure_memory(context, *, enabled: bool):
         )
     for name, content in config_map.data.items():
         target = context.config_dir / name
+        if target.exists():
+            target.chmod(0o644)
         target.write_text(content)
-        target.chmod(0o644)
+        target.chmod(0o555 if name == "agentbarn-memory" else 0o644)
     shutil.copy(FIXTURES / driver, context.commands_dir / driver)
     wrapper = context.commands_dir / context.runtime
     wrapper.write_text(command)
@@ -279,6 +283,8 @@ def start_memory_runtime(context):
         "sh",
         "-v",
         f"{context.config_dir}:/app/config:ro",
+        "-v",
+        f"{context.config_dir / 'agentbarn-memory'}:/usr/local/bin/agentbarn-memory:ro",
         "-v",
         f"{context.state_dir}:{mount}",
         "-v",

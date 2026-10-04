@@ -29,11 +29,11 @@ def runtime_should_have_started(context):
     assert_that(context.result["saved_credential"], is_(False))
 
 
-def memory_should_start(runtime: str, image: str, root: Path):
+def memory_should_start(runtime: str, image: str, root: Path, *, organization_write_status: int = 202):
     with given(
         [
             runtime_is_present(runtime, image, root),
-            memory_http_boundary_is_ready(health_denials=3),
+            memory_http_boundary_is_ready(health_denials=3, organization_write_status=organization_write_status),
             stale_memory_settings_are_present(),
             runtime_memory_is_configured(enabled=True),
         ]
@@ -42,7 +42,16 @@ def memory_should_start(runtime: str, image: str, root: Path):
             start_memory_runtime(context)
         with then("native memory and the Hindsight provider should both load"):
             runtime_should_have_started(context)
-            assert_that(context.result["organization_tool_exit"], equal_to(0), str(context.result))
+            assert_that(
+                context.result["organization_tool_exit"],
+                equal_to(0 if organization_write_status == 202 else 1),
+                str(context.result),
+            )
+            if organization_write_status == 403:
+                assert_that(
+                    context.result["organization_tool_error"],
+                    contains_string("Organization Memory write access is required"),
+                )
             shared = [request for request in context.requests if request["path"] == "/memory/v1/organization-memory"]
             assert_that(len(shared), equal_to(1))
             assert_that(shared[0]["payload"], equal_to({"content": "Organization release convention."}))
