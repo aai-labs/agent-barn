@@ -39,6 +39,16 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+## Local Communications reload
+
+Compose and `make dev-api` / `make dev-communications` run the Communications
+gateway with a five-second graceful shutdown timeout. Its persistent runtime
+control streams otherwise keep Uvicorn waiting indefinitely during a code reload,
+leaving accepted Web Chat messages queued. After the timeout, open streams are
+cancelled and runtimes reconnect; PostgreSQL retains pending deliveries. If an
+already running local gateway is stuck, recreate it with
+`docker compose up -d --no-deps communications` to load these launch flags.
+
 ## Agent Memory deployment
 
 The gateway runs from the API image as `api.memory_main:app` on port 8003, with
