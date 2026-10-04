@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { SettingsSection } from "@/components/settings/settings-section";
 import type { Agent } from "@/features/agents/schemas";
+import { useAgentApplyAndRestart } from "@/features/agents/hooks/use-agent-apply-and-restart";
 
 import { useSetAgentMemory } from "../hooks/use-set-agent-memory";
 
@@ -24,11 +25,6 @@ function StateBadge({ enabled }: { enabled: boolean }) {
   );
 }
 
-/**
- * The per-Agent long-term memory opt-in. Turning it on or off is a single setting change,
- * not an Agent restart; the copy states what that means rather than tracking restart state,
- * which the API does not report.
- */
 export function AgentMemorySettings({
   agent,
   canEdit,
@@ -41,16 +37,31 @@ export function AgentMemorySettings({
   onEdit: () => void;
 }) {
   const setMemory = useSetAgentMemory(agent.id);
+  const { applyAndRestart, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
+  const restartOnSave = agent.status === "RUNNING" && agent.allowedActions.includes("agent.lifecycle.manage");
+  const [applyError, setApplyError] = useState<unknown>(null);
   const [draft, setDraft] = useState(agent.memoryEnabled);
   const isDirty = draft !== agent.memoryEnabled;
+  const error = applyError || setMemory.error;
 
   async function applyChanges() {
-    await setMemory.mutateAsync(draft);
+    setApplyError(null);
+    try {
+      if (restartOnSave) {
+        await applyAndRestart(() => setMemory.mutateAsync(draft).then(() => undefined));
+      } else {
+        await setMemory.mutateAsync(draft);
+      }
+    } catch (error) {
+      setApplyError(error);
+      throw error;
+    }
   }
 
   function cancelChanges() {
     setDraft(agent.memoryEnabled);
     setMemory.reset();
+    setApplyError(null);
     onEdit();
   }
 
@@ -62,17 +73,23 @@ export function AgentMemorySettings({
       editing={editing}
       onEdit={() => {
         setDraft(agent.memoryEnabled);
+        setApplyError(null);
         onEdit();
       }}
       onApply={applyChanges}
       onCancel={cancelChanges}
       onApplied={onEdit}
-      applyDisabled={!isDirty || setMemory.isPending}
-      applyLabel="Save"
-      applyPendingLabel="Saving…"
+      applyDisabled={!isDirty || setMemory.isPending || isRestartPending}
+      applyLabel={restartOnSave ? "Save and Restart" : "Save"}
+      applyPendingLabel={restartOnSave ? "Saving and Restarting…" : "Saving…"}
       errorsShownInline
       confirm={
-        draft
+        restartOnSave
+          ? {
+              title: "Save memory settings and restart the Agent?",
+              description: `${agent.name} will stop, save its memory setting, and start again with memory ${draft ? "on" : "off"}. Memories already saved are kept. People with access to this Agent share what it remembers.`,
+            }
+          : draft
           ? {
               title: "Turn on long-term memory?",
               description: `${agent.name} will start remembering durable facts from its conversations. If it is already running, restart it so memory takes effect. People with access to ${agent.name} share what it remembers.`,
@@ -102,9 +119,9 @@ export function AgentMemorySettings({
           </Label>
         ) : null}
 
-        {setMemory.error && (
+        {Boolean(error) && (
           <span role="alert" className="text-xs" style={{ color: "var(--err)" }}>
-            {setMemory.error instanceof Error ? setMemory.error.message : "Saving memory settings failed."}
+            {error instanceof Error ? error.message : "Saving memory settings failed."}
           </span>
         )}
 
@@ -113,8 +130,11 @@ export function AgentMemorySettings({
             Memory adds to the memory this Agent&apos;s runtime already has; it never replaces it.
           </li>
           <li>
-            Turning it on applies the next time the Agent starts. If the Agent is already running, restart it.
+            Turning it on applies the next time the Agent starts. Save and Restart applies changes to a running Agent.
           </li>
+          {agent.status === "RUNNING" && !agent.allowedActions.includes("agent.lifecycle.manage") && (
+            <li>You can save this setting; someone with lifecycle access must restart the Agent to activate it.</li>
+          )}
           <li>Turning it off takes effect immediately. Memories already saved are kept.</li>
           <li>
             Memories are shared by everyone who uses this Agent: something one person tells it can be recalled

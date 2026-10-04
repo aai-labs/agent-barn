@@ -88,17 +88,22 @@ export class AgentMemoryDataSupport {
     enabled = false,
     putStatus = 200,
     putDetail = "Unable to change memory",
+    startStatus = 200,
+    stopStatus = 200,
   }: {
     agent?: Record<string, unknown>;
     enabled?: boolean;
     putStatus?: number;
     putDetail?: string;
+    startStatus?: number;
+    stopStatus?: number;
   } = {}) {
     const requests: RecordedRequest[] = [];
     let current = enabled;
+    let status = agent.status;
     await this.page.route(`**/api/v1/organizations/*/agents/${agent.id}`, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
-      return json(route, 200, { ...agent, memory_enabled: current });
+      return json(route, 200, { ...agent, status, memory_enabled: current });
     });
     await this.page.route(`**/api/v1/organizations/*/agents/${agent.id}/memory`, async (route) => {
       if (route.request().method() !== "PUT") return route.fallback();
@@ -107,6 +112,16 @@ export class AgentMemoryDataSupport {
       current = (entry.body as { enabled: boolean }).enabled;
       return json(route, 200, { agent_id: agent.id, enabled: current });
     });
+    for (const action of ["stop", "start"]) {
+      await this.page.route(`**/api/v1/organizations/*/agents/${agent.id}/${action}`, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        record(route, requests);
+        const responseStatus = action === "stop" ? stopStatus : startStatus;
+        if (responseStatus >= 400) return json(route, responseStatus, { detail: `Unable to ${action} Agent` });
+        status = action === "stop" ? "STOPPED" : "RUNNING";
+        return json(route, 200, { ...agent, status, memory_enabled: current });
+      });
+    }
     return { requests };
   }
 

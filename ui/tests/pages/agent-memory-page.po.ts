@@ -33,9 +33,9 @@ export class AgentMemoryPage {
     await this.settingsSection().getByRole("checkbox").click();
   }
 
-  async saveSetting() {
-    await this.settingsSection().getByRole("button", { name: "Save" }).click();
-    await this.page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  async saveSetting(label = "Save") {
+    await this.settingsSection().getByRole("button", { name: label, exact: true }).click();
+    await this.page.getByRole("dialog").getByRole("button", { name: label, exact: true }).click();
   }
 
   // --- Memory access (grants) ---

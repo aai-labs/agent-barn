@@ -56,13 +56,14 @@ async function signIn(page: Page, userContext?: unknown) {
 test.describe("Agent Memory setting", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  async function open(page: Page, allowedActions: string[], enabled = false) {
+  async function open(page: Page, allowedActions: string[], enabled = false, status = "STOPPED", startStatus = 200) {
     const data = await signIn(page);
     await data.agents.interceptGetAgentConfigurationRequest();
     await data.agents.interceptGetAgentHealthRequest();
     const setting = await data.agentMemory.interceptAgentMemorySetting({
-      agent: { ...mockAgent, allowed_actions: allowedActions },
+      agent: { ...mockAgent, status, allowed_actions: allowedActions },
       enabled,
+      startStatus,
     });
     await new AgentMemoryPage(page).gotoMemorySettings();
     return { data, setting, memory: new AgentMemoryPage(page) };
@@ -73,7 +74,7 @@ test.describe("Agent Memory setting", () => {
 
     await expect(memory.settingsSection()).toContainText("Off");
     await expect(memory.settingsSection()).toContainText("never replaces it");
-    await expect(memory.settingsSection()).toContainText("restart it");
+    await expect(memory.settingsSection()).toContainText("Save and Restart");
 
     await memory.editSetting();
     await memory.toggleSetting();
@@ -95,6 +96,38 @@ test.describe("Agent Memory setting", () => {
 
     await expect(memory.settingsSection()).toContainText("Off");
     expect(setting.requests.map((request) => request.body)).toEqual([{ enabled: false }]);
+  });
+
+  test("saves and restarts a running Agent in order", async ({ page }) => {
+    const { memory, setting } = await open(page, OWNER_ACTIONS, false, "RUNNING");
+    await memory.editSetting();
+    await memory.toggleSetting();
+    await memory.saveSetting("Save and Restart");
+    await expect(memory.settingsSection()).toContainText("On");
+    expect(setting.requests.map((request) => request.url.pathname.split("/").pop())).toEqual(["stop", "memory", "start"]);
+    expect(setting.requests[1].body).toEqual({ enabled: true });
+  });
+
+  test("shows a restart failure after saving without reporting success", async ({ page }) => {
+    const { memory, setting } = await open(page, OWNER_ACTIONS, false, "RUNNING", 503);
+    await memory.editSetting();
+    await memory.toggleSetting();
+    await memory.saveSetting("Save and Restart");
+    await expect(memory.settingsSection().getByRole("alert")).toContainText("Unable to start Agent");
+    await expect(memory.settingsSection().getByRole("checkbox")).toBeVisible();
+    await expect(memory.settingsSection()).toContainText("On");
+    expect(setting.requests.map((request) => request.url.pathname.split("/").pop())).toEqual(["stop", "memory", "start"]);
+  });
+
+  test("saves without lifecycle requests when restart permission is absent", async ({ page }) => {
+    const actions = OWNER_ACTIONS.filter((action) => action !== "agent.lifecycle.manage");
+    const { memory, setting } = await open(page, actions, false, "RUNNING");
+    await memory.editSetting();
+    await memory.toggleSetting();
+    await expect(memory.settingsSection()).toContainText("someone with lifecycle access must restart");
+    await memory.saveSetting();
+    await expect(memory.settingsSection()).toContainText("On");
+    expect(setting.requests.map((request) => request.url.pathname.split("/").pop())).toEqual(["memory"]);
   });
 
   test("is read-only without the memory-management permission", async ({ page }) => {
@@ -119,7 +152,7 @@ test.describe("Agent Memory setting", () => {
 
     await memory.editSetting();
     await memory.toggleSetting();
-    await memory.saveSetting();
+    await memory.saveSetting("Save and Restart");
 
     await expect(memory.settingsSection().getByRole("alert")).toContainText("don't have permission");
     await expect(memory.settingsSection()).toContainText("Off");

@@ -21,6 +21,17 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — memory Save and Restart
+
+- Delivered: running Agents use **Save and Restart** when the user has lifecycle
+  permission, reusing the shared stop/save/start flow. Stopped Agents stay stopped;
+  users with memory permission alone can save with a manual restart explanation.
+  Save and lifecycle failures remain inline without closing the editor as successful.
+- Verified: UI lint/types and all 23 memory Playwright tests pass, including ordered
+  lifecycle requests, restart failure, and saving without lifecycle permission.
+  The browser run required the existing Playwright container and a fresh test build
+  cache after host-library and cached-path failures.
+
 ### 2026-10-04 — local Hindsight backend
 
 - Delivered: an opt-in `local-hindsight` Compose profile with authenticated
