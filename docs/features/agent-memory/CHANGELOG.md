@@ -22,6 +22,16 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — explicit memory access UI
+
+- Delivered: cross-Agent access is labeled read-only with an explicit statement
+  that it cannot write or change the source Agent's memories. Organization Memory
+  offers separate Read only and Write only grants, named grant actions, and
+  separate list/revoke controls; creating a new grant defaults to read-only.
+- Verified: UI lint/types and all 24 memory Playwright tests pass. The new flow
+  proves explicit write selection and revocation without removing read access.
+  The local database has been upgraded to the new grant schema.
+
 ### 2026-10-04 — explicit Organization Memory write access and tool
 
 - Delivered: independent read/write grants, defaulting new grants to read-only.

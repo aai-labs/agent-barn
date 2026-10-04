@@ -162,6 +162,32 @@ test.describe("Agent Memory setting", () => {
 test.describe("Memory access settings", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
+  test("grants Organization write explicitly and revokes it without removing read", async ({ page }) => {
+    const data = await signIn(page);
+    await data.agentMemory.interceptAgentOptions();
+    const grants = await data.agentMemory.interceptMemoryGrants();
+    const memory = new AgentMemoryPage(page);
+    await memory.gotoMemoryAccess();
+    await memory.chooseReader("Billing");
+    await memory.chooseSource("Organization Memory");
+    await expect(page.getByRole("combobox", { name: "Organization Memory permission" })).toContainText("Read only");
+    await memory.grantButton().click();
+    await expect(memory.grantsSection()).toContainText("Billing can read Organization Memory (read only)");
+    await memory.chooseReader("Billing");
+    await memory.chooseSource("Organization Memory");
+    await memory.chooseOrganizationPermission("Write only — save shared memories");
+    await expect(memory.grantButton()).toHaveText("Grant write access");
+    await memory.grantButton().click();
+    await expect(memory.grantsSection()).toContainText("Billing can write Organization Memory (write only)");
+    expect(grants.requests.filter((request) => request.method === "POST").map((request) => request.body)).toEqual([
+      { agent_id: MOCK_READER_AGENT_ID, source_agent_id: null, access: "read" },
+      { agent_id: MOCK_READER_AGENT_ID, source_agent_id: null, access: "write" },
+    ]);
+    await memory.revoke("Billing can write Organization Memory (write only)");
+    await expect(memory.grantsSection()).not.toContainText("write only");
+    await expect(memory.grantsSection()).toContainText("Billing can read Organization Memory (read only)");
+  });
+
   test("lists, creates, rejects duplicates of, and revokes grants", async ({ page }) => {
     const data = await signIn(page);
     await data.agentMemory.interceptAgentOptions();
@@ -174,10 +200,11 @@ test.describe("Memory access settings", () => {
     await memory.chooseReader("Billing");
     await memory.chooseSource("Organization Memory");
     await memory.grantButton().click();
-    await expect(memory.grantsSection()).toContainText("Billing can read and write Organization Memory");
+    await expect(memory.grantsSection()).toContainText("Billing can read Organization Memory (read only)");
     expect(grants.requests.find((request) => request.method === "POST")?.body).toEqual({
       agent_id: MOCK_READER_AGENT_ID,
       source_agent_id: null,
+      access: "read",
     });
 
     // The same pair again is stopped before it is sent, and the server's 409 is shown if raced.

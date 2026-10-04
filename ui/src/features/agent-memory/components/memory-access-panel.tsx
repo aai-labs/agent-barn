@@ -25,8 +25,8 @@ const ORGANIZATION_MEMORY_VALUE = "__organization__";
 
 function sentence(grant: MemoryGrant) {
   return grant.sourceAgentId === null
-    ? `${grant.agentName} can read and write ${ORGANIZATION_MEMORY_LABEL}`
-    : `${grant.agentName} can read ${grantSourceLabel(grant)}'s private memories`;
+    ? `${grant.agentName} can ${grant.access} ${ORGANIZATION_MEMORY_LABEL} (${grant.access} only)`
+    : `${grant.agentName} can read ${grantSourceLabel(grant)}'s private memories (read only)`;
 }
 
 /**
@@ -41,24 +41,27 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
   const revokeGrant = useRevokeMemoryGrant();
   const [readerId, setReaderId] = useState("");
   const [sourceId, setSourceId] = useState("");
+  const [organizationAccess, setOrganizationAccess] = useState<"read" | "write">("read");
   const [revokeTarget, setRevokeTarget] = useState<MemoryGrant | null>(null);
 
   if (!canManage) return null;
 
   const { grants } = grantsQuery;
   const sourceKey = sourceId === ORGANIZATION_MEMORY_VALUE ? null : sourceId;
+  const access = sourceKey === null ? organizationAccess : "read";
   const alreadyGranted =
     readerId !== "" &&
     sourceId !== "" &&
-    grants.some((grant) => grant.agentId === readerId && grant.sourceAgentId === sourceKey);
+    grants.some((grant) => grant.agentId === readerId && grant.sourceAgentId === sourceKey && grant.access === access);
   const canSubmit = readerId !== "" && sourceId !== "" && !alreadyGranted && !createGrant.isPending;
   const sourceAgents = options.agents.filter((agent) => agent.id !== readerId);
 
   async function submit() {
     try {
-      await createGrant.mutateAsync({ agentId: readerId, sourceAgentId: sourceKey ?? undefined });
+      await createGrant.mutateAsync({ agentId: readerId, sourceAgentId: sourceKey ?? undefined, access });
       setReaderId("");
       setSourceId("");
+      setOrganizationAccess("read");
     } catch {
       // Shown inline from createGrant.error.
     }
@@ -81,9 +84,10 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
         className="mb-5 rounded-xl px-3.5 py-3 text-[13px] leading-[1.5]"
         style={{ background: "var(--bg-soft)", color: "var(--ink-3)" }}
       >
-        Agents keep their memories private by default. A grant lets one Agent recall another Agent&apos;s private
-        memories, or use {ORGANIZATION_MEMORY_LABEL}: memories shared by every Agent with that access, which they
-        can both read and write. Grants work in one direction and never move or change stored memories.
+        Another Agent&apos;s private memory can only be shared for reading; the receiving Agent cannot write
+        or change that Agent&apos;s memories. Organization Memory has separate read and write grants.
+        Read allows recall; write allows explicit organization-wide saves using the memory tool.
+        Grant both separately when needed. Automatic saves stay private. Grants never move stored memories.
       </div>
 
       <section className="mb-6" aria-label="Grant memory access">
@@ -92,7 +96,7 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
         </h3>
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex min-w-48 flex-1 flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
-            Reader Agent
+            Agent receiving access
             <Select
               value={readerId}
               onValueChange={(value) => {
@@ -102,7 +106,7 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
               }}
               disabled={options.isLoading || options.agents.length === 0}
             >
-              <SelectTrigger aria-label="Reader Agent">
+              <SelectTrigger aria-label="Agent receiving access">
                 <SelectValue placeholder="Choose an Agent" />
               </SelectTrigger>
               <SelectContent>
@@ -118,11 +122,12 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
           </label>
 
           <label className="flex min-w-48 flex-1 flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
-            Can access
+            Memory source
             <Select
               value={sourceId}
               onValueChange={(value) => {
                 setSourceId(value);
+                setOrganizationAccess("read");
                 createGrant.reset();
               }}
               disabled={options.isLoading || options.agents.length === 0}
@@ -149,8 +154,25 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
             </Select>
           </label>
 
+          {sourceKey === null && (
+            <label className="flex min-w-48 flex-col gap-1.5 text-[0.84rem] font-medium">
+              Organization Memory permission
+              <Select value={organizationAccess} onValueChange={(value) => setOrganizationAccess(value as "read" | "write")}>
+                <SelectTrigger aria-label="Organization Memory permission"><SelectValue /></SelectTrigger>
+                <SelectContent><SelectGroup>
+                  <SelectItem value="read">Read only — recall shared memories</SelectItem>
+                  <SelectItem value="write">Write only — save shared memories</SelectItem>
+                </SelectGroup></SelectContent>
+              </Select>
+            </label>
+          )}
+
+          {sourceId !== "" && sourceKey !== null && (
+            <p className="text-[0.84rem]">Read only. This Agent cannot write to the selected Agent&apos;s memory.</p>
+          )}
+
           <button type="button" className="af-btn af-btn-primary" disabled={!canSubmit} onClick={() => void submit()}>
-            {createGrant.isPending ? "Granting…" : "Grant access"}
+            {createGrant.isPending ? "Granting…" : `Grant ${access} access`}
           </button>
         </div>
 
@@ -251,9 +273,7 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
         title="Revoke memory access?"
         description={
           revokeTarget
-            ? `${revokeTarget.agentName} will stop recalling ${grantSourceLabel(revokeTarget)}${
-                revokeTarget.sourceAgentId === null ? " and can no longer write to it" : ""
-              } the next time it asks. Stored memories are not changed.`
+            ? `${revokeTarget.agentName} will lose ${revokeTarget.access} access to ${grantSourceLabel(revokeTarget)} the next time it asks. Other grants and stored memories are not changed.`
             : ""
         }
         confirmLabel="Revoke access"

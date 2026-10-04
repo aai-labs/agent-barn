@@ -12,6 +12,7 @@ export const MemoryGrantSchema = z.object({
   /** Null for an Organization Memory grant. */
   sourceAgentId: z.string().uuid().nullable(),
   sourceAgentName: z.string().nullable(),
+  access: z.enum(["read", "write"]),
   createdAt: z.string(),
 });
 

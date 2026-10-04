@@ -12,6 +12,7 @@ export type CreateMemoryGrantInput = {
   agentId: string;
   /** Omit for an Organization Memory grant. */
   sourceAgentId?: string;
+  access: "read" | "write";
 };
 
 export function useCreateMemoryGrant() {
@@ -19,10 +20,10 @@ export function useCreateMemoryGrant() {
   const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
-    mutationFn: async ({ agentId, sourceAgentId }: CreateMemoryGrantInput) => {
+    mutationFn: async ({ agentId, sourceAgentId, access }: CreateMemoryGrantInput) => {
       const response = await api.post<MemoryGrant>(
         `${orgApiBase}/memory-grants`,
-        { agentId, sourceAgentId: sourceAgentId ?? null },
+        { agentId, sourceAgentId: sourceAgentId ?? null, access },
         { schema: MemoryGrantSchema },
       );
       return response.data;

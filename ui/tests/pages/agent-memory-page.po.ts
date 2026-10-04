@@ -49,12 +49,17 @@ export class AgentMemoryPage {
   }
 
   async chooseReader(name: string) {
-    await this.page.getByRole("combobox", { name: "Reader Agent" }).click();
+    await this.page.getByRole("combobox", { name: "Agent receiving access" }).click();
     await this.page.getByRole("option", { name, exact: true }).click();
   }
 
   async chooseSource(name: string) {
     await this.page.getByRole("combobox", { name: "Memory to access" }).click();
+    await this.page.getByRole("option", { name, exact: true }).click();
+  }
+
+  async chooseOrganizationPermission(name: string) {
+    await this.page.getByRole("combobox", { name: "Organization Memory permission" }).click();
     await this.page.getByRole("option", { name, exact: true }).click();
   }
 
@@ -67,7 +72,7 @@ export class AgentMemoryPage {
   }
 
   grantButton(): Locator {
-    return this.page.getByRole("button", { name: "Grant access" });
+    return this.page.getByRole("button", { name: /Grant (read|write) access/ });
   }
 
   async revoke(grantText: string) {

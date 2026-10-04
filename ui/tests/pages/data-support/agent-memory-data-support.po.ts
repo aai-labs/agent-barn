@@ -18,6 +18,7 @@ export const mockMemoryGrant = {
   agent_name: "Billing",
   source_agent_id: MOCK_SOURCE_AGENT_ID,
   source_agent_name: "Triage",
+  access: "read",
   created_at: "2026-10-01T09:00:00Z",
 };
 
@@ -170,14 +171,15 @@ export class AgentMemoryDataSupport {
           );
         }
         if (method === "POST") {
-          const { agent_id: agentId, source_agent_id: sourceId } = entry.body as {
+          const { agent_id: agentId, source_agent_id: sourceId, access } = entry.body as {
             agent_id: string;
             source_agent_id: string | null;
+            access: "read" | "write";
           };
           if (agentId === sourceId) {
             return json(route, 400, { detail: "An Agent already reads its own memories." });
           }
-          if ([...mock.grants, ...mock.unlisted].some((g) => g.agent_id === agentId && g.source_agent_id === sourceId)) {
+          if ([...mock.grants, ...mock.unlisted].some((g) => g.agent_id === agentId && g.source_agent_id === sourceId && g.access === access)) {
             return json(route, 409, { detail: "This Agent already has that memory grant." });
           }
           const created = {
@@ -185,6 +187,7 @@ export class AgentMemoryDataSupport {
             agent_id: agentId,
             agent_name: names.get(agentId) ?? "Agent",
             source_agent_id: sourceId,
+            access,
             source_agent_name: sourceId ? (names.get(sourceId) ?? "Agent") : null,
             created_at: "2026-10-02T10:00:00Z",
           };
