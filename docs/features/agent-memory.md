@@ -257,7 +257,9 @@ changes made in this UI; authorization is always rechecked by the gateway.
 ## Platform memory-processing model
 
 Platform Admins choose the Hindsight model at **Platform Settings → Agent Memory**
-(`/dashboard/platform/settings`). It applies to all Organizations and Agents,
+(`/dashboard/platform/settings`). The page uses the shared settings sidebar and
+card layout, with a read-only model summary and an Edit → Save/Cancel flow.
+It applies to all Organizations and Agents,
 separately from Agent chat models and Organization model allowlists. The catalog
 permits text models supporting structured responses and tools. Changes affect
 future extraction, consolidation, and reflection; existing memories are retained

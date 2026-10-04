@@ -18,8 +18,10 @@ test("Platform Admin can search and save the shared memory model", async ({ page
   const settings = new PlatformMemorySettingsPage(page);
   const mock = await settings.intercept();
   await settings.goto();
-  await expect(page.getByRole("heading", { name: "Platform Settings" })).toBeVisible();
-  await expect(settings.model()).toContainText("GPT-4.1 mini");
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(settings.summary()).toContainText("GPT-4.1 mini");
+  await page.screenshot({ path: test.info().outputPath("platform-settings.png"), fullPage: true });
+  await settings.edit();
   await expect(settings.save()).toBeDisabled();
   await expect(page.getByText("Each Agent keeps its own chat model.", { exact: false })).toBeVisible();
   await settings.choose("Alternate model");
@@ -27,7 +29,7 @@ test("Platform Admin can search and save the shared memory model", async ({ page
   await expect(page.getByRole("status")).toContainText("Memory processing model saved");
   expect(mock.writes).toEqual([{ model: "openrouter/anthropic/alternate" }]);
   await page.reload();
-  await expect(settings.model()).toContainText("Alternate model");
+  await expect(settings.summary()).toContainText("Alternate model");
 });
 
 test("Organization Owner cannot open Platform Settings or fetch the memory setting", async ({ page }) => {
@@ -61,6 +63,19 @@ test("unavailable catalog prevents saving and shows retry", async ({ page }) => 
   await settings.intercept({ modelsStatus: 503 });
   await settings.goto();
   await expect(page.getByRole("button", { name: "Retry models" })).toBeVisible();
+  await settings.edit();
   await expect(settings.model()).toBeDisabled();
   await expect(settings.save()).toBeDisabled();
+});
+
+test("cancel returns to the saved model without updating settings", async ({ page }) => {
+  await signIn(page);
+  const settings = new PlatformMemorySettingsPage(page);
+  const mock = await settings.intercept();
+  await settings.goto();
+  await settings.choose("Alternate model");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(settings.summary()).toContainText("GPT-4.1 mini");
+  await expect(settings.model()).not.toBeVisible();
+  expect(mock.writes).toEqual([]);
 });

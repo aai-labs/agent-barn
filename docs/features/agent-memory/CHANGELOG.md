@@ -21,6 +21,15 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — Platform Settings design alignment
+
+- Changed: Platform Settings reuses the Organization settings header, sidebar,
+  full-width summary card, and Edit footer. Agent Memory shows its saved model,
+  platformwide scope, processing purpose, and Organization cost attribution.
+  Editing exposes the searchable chooser; Cancel discards the draft.
+- Verified: five browser scenarios cover edit/save/reload, cancellation, denied
+  access, save retry, and catalog failure. UI lint/type checks pass.
+
 ### 2026-10-04 — Platform Settings UI
 
 - Delivered: Platform Settings → Agent Memory with a searchable supported-model
