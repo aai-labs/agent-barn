@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import httpx
@@ -19,16 +20,25 @@ class HindsightResponse:
 class HindsightClient:
     config: Config
 
-    def request(self, method: str, path: str, payload: dict | None) -> HindsightResponse:
+    def request(
+        self,
+        method: str,
+        path: str,
+        payload: dict | None,
+        *,
+        params: Sequence[tuple[str, str]] | None = None,
+    ) -> HindsightResponse:
+        """`params` are built by the gateway; client query strings are never forwarded."""
         if not self.config.hindsight_base_url or not self.config.hindsight_api_key:
             raise HTTPException(503, "Agent Memory backend is not configured.")
         try:
-            # No environment proxy, redirect, runtime headers, or query parameters.
+            # No environment proxy, redirect, runtime headers, or client query parameters.
             with httpx.Client(timeout=self.config.hindsight_request_timeout_seconds, trust_env=False) as client:
                 response = client.request(
                     method,
                     self.config.hindsight_base_url.rstrip("/") + path,
                     headers={"Authorization": f"Bearer {self.config.hindsight_api_key}"},
+                    params=list(params) if params else None,
                     json=payload if method == "POST" else None,
                 )
         except httpx.HTTPError:

@@ -69,6 +69,7 @@ services:
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
       MEMORY_BASE_URL: ${MEMORY_BASE_URL:-http://host.docker.internal:${MEMORY_PORT:-8003}/memory/v1}
+      MEMORY_VIEW_BASE_URL: ${MEMORY_VIEW_BASE_URL:-http://memory:8003/memory/view/v1}
       # The API container cannot resolve k3d cluster DNS, so runtime-owned Teams
       # relays through `make forward-teams` on the host instead.
       TEAMS_RUNTIME_WEBHOOK_URL: ${TEAMS_RUNTIME_WEBHOOK_URL:-http://host.docker.internal:3978/api/messages}

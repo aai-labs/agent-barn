@@ -46,6 +46,8 @@ INGEST_BASE_URL ?= http://host.docker.internal:$(INGEST_PORT)/ingest/v1
 COMMUNICATIONS_PORT ?= 8002
 MEMORY_PORT ?= 8003
 MEMORY_BASE_URL ?= http://host.docker.internal:$(MEMORY_PORT)/memory/v1
+# The host-run API reaches the viewer directly, not through the pod-facing host hop.
+MEMORY_VIEW_BASE_URL ?= http://localhost:$(MEMORY_PORT)/memory/view/v1
 COMMUNICATIONS_BASE_URL ?= http://host.docker.internal:$(COMMUNICATIONS_PORT)/communications/v1
 # Overridable so a second worktree can run its own stack without port clashes.
 API_DEV_PORT ?= 8000
@@ -64,7 +66,7 @@ dev-api:
 	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
 	uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) & \
 	uv run python -m uvicorn api.memory_main:app --app-dir .. --host 0.0.0.0 --port $(MEMORY_PORT) --reload --no-access-log & \
-	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) MEMORY_BASE_URL=$(MEMORY_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) MEMORY_BASE_URL=$(MEMORY_BASE_URL) MEMORY_VIEW_BASE_URL=$(MEMORY_VIEW_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
 # Ingest on its own — `make dev-api` already starts it; use this to run or
 # restart the telemetry sink independently.

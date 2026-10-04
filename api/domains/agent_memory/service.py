@@ -9,9 +9,11 @@ from api.domains.agent_memory.models import (
     AgentMemoryGrant,
     AgentMemoryGrantCreate,
     AgentMemoryGrantRead,
+    AgentMemoryItemRead,
     AgentMemoryRead,
 )
 from api.domains.agent_memory.repository import AgentMemoryGrantConflictError, AgentMemoryRepository
+from api.domains.agent_memory.view_client import MemoryViewClient
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
@@ -19,6 +21,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 ORGANIZATION_MEMORY_DISPLAY = "Organization Memory"
 
@@ -39,6 +42,7 @@ class AgentMemoryService:
     authorization: AgentAuthorization
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
+    view_client: MemoryViewClient
 
     def set_memory(self, agent_id: UUID, enabled: bool, context: CurrentUserContext) -> AgentMemoryRead:
         agent = self.authorization.require_action(
@@ -57,6 +61,34 @@ class AgentMemoryService:
             )
             self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         return AgentMemoryRead(agent_id=agent.id, enabled=enabled)
+
+    def list_memories(
+        self, agent_id: UUID, search: str | None, pagination: Pagination, context: CurrentUserContext
+    ) -> PaginatedItems[AgentMemoryItemRead]:
+        """Saved memories written by the Agent, gated like its other conversation content.
+
+        `activity.read` authorizes the content; `agent.memory.manage` and
+        `memory.access.manage` govern settings and grants, not reading what was saved.
+        """
+        agent = self.authorization.require_action(
+            context,
+            agent_id,
+            PermissionKey.ACTIVITY_READ,
+            detail="You don't have permission to view this Agent's memories.",
+        )
+        page = self.view_client.list_memories(
+            agent.organization_id,
+            agent.id,
+            search=search,
+            limit=pagination.size,
+            offset=(pagination.page - 1) * pagination.size,
+        )
+        return PaginatedItems(
+            page=pagination.page,
+            page_size=pagination.size,
+            total=page.total,
+            items=[AgentMemoryItemRead(**item.model_dump()) for item in page.items],
+        )
 
     def list_grants(self, organization_id: UUID, context: CurrentUserContext) -> list[AgentMemoryGrantRead]:
         self._require_manage(organization_id, context)

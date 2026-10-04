@@ -82,6 +82,25 @@ class AgentMemoryRepository:
                 tags.append("scope:team")
             return MemoryAccess(agent.id, agent.organization_id, tuple(tags), organization_memory)
 
+    def resolve_view_target(self, organization_id: UUID, agent_id: UUID) -> bool:
+        """Whether the Agent is undeleted in an existing Organization.
+
+        Stored memories stay viewable while memory is off and the Agent is stopped.
+        """
+        with Session(self.delegate.engine) as session:
+            return (
+                session.exec(
+                    select(Agent.id)
+                    .join(Organization, col(Organization.id) == col(Agent.organization_id))
+                    .where(
+                        col(Agent.id) == agent_id,
+                        col(Agent.organization_id) == organization_id,
+                        col(Agent.deleted_at).is_(None),
+                    )
+                ).first()
+                is not None
+            )
+
     def set_enabled_with_event(
         self,
         agent_id: UUID,

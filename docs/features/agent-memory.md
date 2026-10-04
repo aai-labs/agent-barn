@@ -44,6 +44,16 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 - `POST /organizations/{organization_id}/memory-grants` with `{"agent_id", "source_agent_id"}` creates one; omit or null `source_agent_id` for Organization Memory. A missing, deleted or other-Organization Agent is 404, a self-grant is 400, a duplicate is 409.
 - `DELETE /organizations/{organization_id}/memory-grants/{grant_id}` revokes one (204).
 
+### View an Agent's saved memories
+
+`GET /organizations/{organization_id}/agents/{agent_id}/memory/items?search=&page=&page_size=` returns a read-only page of the memories that Agent itself wrote: `id`, `type` (`world`, `experience`, or `observation`), `text`, `mentioned_at`, and `shared` (true when it carries `scope:team`). Entities, context, chunks, document and source IDs, metadata, and history are never returned. `page_size` is at most 50 and `page` at most 2,000; `search` is at most 200 characters.
+
+- Content authorization reuses the Agent Permission `activity.read` through the normal Agent visibility checks: hidden, other-Organization, and deleted Agents are 404, and a visible Agent without `activity.read` is 403. `agent.memory.manage` and `memory.access.manage` govern settings and grants, not reading saved content.
+- Only the selected Agent's own tag is listed. Memories it can recall from Memory Grants or Organization Memory written by other Agents are not shown. Stored memories are viewable while the Agent is stopped or memory is disabled, until it is deleted.
+- `mentioned_at` is the time Hindsight recorded for the memory, not necessarily when it was persisted; Hindsight 0.10.2 does not expose a creation time on this endpoint. Results are ordered most recently mentioned first. Memories without a mention time have none.
+- The product API holds no Hindsight credential. After authorizing the person it sends the gateway's separate viewer (`/memory/view/v1/memories`, never the Agent allowlist) a 30-second JWT naming one Organization and Agent, with an audience and operation distinct from user access tokens and Agent credentials. The gateway rechecks that the Agent is undeleted in an existing Organization, derives the `org-<organization_id>` bank, forces `tags=agent:<agent_id>&tags_match=any_strict`, and accepts only `search`, `limit`, and `offset`. Agent credentials are still refused on every list path.
+- Hindsight 0.10.2 applies the tag filter before counting, so `total` covers only the Agent's rows. The gateway fails closed with a generic 502 if any returned row lacks that tag, has an unknown type, or the page is larger than requested or than its total. A bank that does not exist yet is an empty page. Search is a case-insensitive substring match on memory text and context with SQL wildcards escaped; it can match context that is not shown. Upstream errors are generic 502 or 503.
+
 ### Use the memory gateway
 
 The separate `api.memory_main:app` process serves port 8003 under `/memory/v1`. The plugin API URL is that base; plugin requests append `/v1/default/banks/{bank_id}/...`. Every request under this base requires the per-start Agent bearer credential. The unprefixed `/health` is a process probe only.
@@ -106,6 +116,7 @@ and do not measure Hindsight extraction quality.
 | Change | Also update |
 | --- | --- |
 | Who may toggle memory or manage grants | [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md), `api/domains/rbac/catalog.py`, a catalogue migration |
+| Viewer fields, search, or listing contract | This document, `api/domains/agent_memory/view_service.py`, the pinned-image contract test, the UI memory tab |
 | Grant semantics or tags | This document, `CONTEXT.md`, gateway policy and contract tests |
 | Memory Grant schema | Alembic migration, `api/domains/agent_memory/models.py` |
 | Gateway credentials or Agent lifecycle | Alembic migration, Agent start/persistence flow, gateway authentication tests |
@@ -115,7 +126,7 @@ and do not measure Hindsight extraction quality.
 
 ## Code map
 
-- `api/domains/agent_memory/`: opt-in, Memory Grants, their Domain Events, gateway authentication and payload policy.
+- `api/domains/agent_memory/`: opt-in, Memory Grants, their Domain Events, gateway authentication and payload policy; `view_*.py` hold the read-only viewer (capability, product-API client, gateway route and service).
 - `api/infrastructure/hindsight/`: authenticated upstream HTTP client.
 - `api/memory_app.py`, `api/memory_main.py`: gateway composition and process entry point.
 - `api/domains/agents/service.py`: start-time memory credentials; Agent lifecycle persistence copies their hash.
@@ -123,4 +134,5 @@ and do not measure Hindsight extraction quality.
 - `api/domains/rbac/catalog.py`: `agent.memory.manage`, `memory.access.manage`.
 - `api/tests/integration/test_agent_memory.py`: permission, tenancy and audit contract.
 - `api/tests/integration/test_memory_gateway.py`, `api/tests/fixtures/agent_memory/`: HTTP policy, credential lifecycle, and sanitized plugin request captures.
+- `api/tests/integration/test_agent_memory_viewer.py`, `test_agent_memory_viewer_contract.py`: viewer permission, tenancy, capability, and failure behavior; the contract file runs the pinned Hindsight 0.10.2 image to prove tag-filtered items and totals, search, and pagination.
 - `api/tests/integration/test_rbac_schema.py`: catalogue seeding, existing-Agent defaults, and migration rollback coverage.

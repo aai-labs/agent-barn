@@ -46,6 +46,13 @@ access logging disabled so client paths cannot enter logs. `make dev-api` starts
 it alongside the other HTTP processes; `make dev-memory` runs it separately.
 For local use set `HINDSIGHT_BASE_URL` to the backend root and `HINDSIGHT_API_KEY`
 to its shared API key. Compose starts the gateway but does not start Hindsight.
+The product API lists an Agent's saved memories through the gateway's separate
+viewer under `/memory/view/v1`, addressed by `MEMORY_VIEW_BASE_URL`. `make dev-api`
+points it at `localhost`, Compose at the `memory` service, and the chart at the
+`<release>-memory` Service; override it only when the gateway lives elsewhere.
+The viewer authenticates a short-lived capability signed with the platform signing
+key, which the gateway already receives from the shared API Secret; no additional
+Hindsight or Kubernetes credential reaches the product API.
 Opted-in starts configure Hermes and OpenClaw for automatic recall and retain
 alongside native memory. Rebuild the runtime base images to install the pinned
 Hindsight clients/plugin before using this integration, then restart opted-in

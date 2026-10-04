@@ -5,10 +5,11 @@ selection, and strategy overrides are never forwarded from a runtime.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 @dataclass(frozen=True)
@@ -60,3 +61,28 @@ class MemoryRetain(BaseModel):
     items: list[MemoryRetainItem] = Field(min_length=1, max_length=20)
     async_: bool = Field(default=False, alias="async")
     operation_id: UUID | None = None
+
+
+class MemoryViewQuery(BaseModel):
+    """The only client-controlled inputs of the read-only viewer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    search: str | None = Field(default=None, max_length=200)
+    limit: int = Field(default=25, ge=1, le=50)
+    offset: int = Field(default=0, ge=0, le=100000)
+
+
+class MemoryViewItem(BaseModel):
+    """Allowlisted fields of one saved memory; entities, chunks, history, and metadata are excluded."""
+
+    id: str
+    type: Literal["world", "experience", "observation"]
+    text: str
+    mentioned_at: datetime | None
+    shared: bool
+
+
+class MemoryViewPage(BaseModel):
+    items: list[MemoryViewItem]
+    total: int = Field(ge=0)

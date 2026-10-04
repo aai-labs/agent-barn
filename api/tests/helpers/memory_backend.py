@@ -1,7 +1,10 @@
 import json
+import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import uvicorn
 from starlette.testclient import TestClient
 
 from api.core.config import get_config
@@ -62,5 +65,40 @@ def memory_gateway_is_ready():
             config.hindsight_base_url, config.hindsight_api_key = previous_url, previous_key
 
         return LambdaWith(open_gateway, close_gateway)
+
+    return step
+
+
+def memory_viewer_is_served():
+    """Serves the gateway over HTTP so the product API's viewer client crosses a real boundary.
+
+    Use after `memory_gateway_is_ready`, which supplies the recording Hindsight stand-in.
+    """
+
+    def step(context):
+        config = get_config()
+        previous_url = config.memory_view_base_url
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        server = uvicorn.Server(
+            uvicorn.Config(create_memory_app(context.injector), host="127.0.0.1", port=port, log_level="warning")
+        )
+        thread = threading.Thread(target=server.run, daemon=True)
+
+        def open_viewer():
+            thread.start()
+            deadline = time.monotonic() + 10
+            while not server.started and time.monotonic() < deadline:
+                time.sleep(0.02)
+            config.memory_view_base_url = f"http://127.0.0.1:{port}/memory/view/v1"
+            context.viewer_port = port
+
+        def close_viewer():
+            server.should_exit = True
+            thread.join()
+            config.memory_view_base_url = previous_url
+
+        return LambdaWith(open_viewer, close_viewer)
 
     return step

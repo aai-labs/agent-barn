@@ -1,18 +1,20 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
 
 from api.domains.agent_memory.models import (
     AgentMemoryGrantCreate,
     AgentMemoryGrantRead,
+    AgentMemoryItemRead,
     AgentMemoryRead,
     AgentMemoryUpdate,
 )
 from api.domains.agent_memory.service import AgentMemoryService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 agent_memory_router = APIRouter(
     prefix="/organizations/{organization_id}/agents/{agent_id}/memory",
@@ -32,6 +34,18 @@ def set_agent_memory(
     service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
 ):
     return service.set_memory(agent_id, payload.enabled, context)
+
+
+@agent_memory_router.get("/items", response_model=PaginatedItems[AgentMemoryItemRead])
+def list_agent_memories(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+    search: Annotated[str | None, Query(max_length=200)] = None,
+    page: Annotated[int, Query(ge=1, le=2000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=50)] = 25,
+):
+    return service.list_memories(agent_id, search.strip() if search else None, Pagination(page, page_size), context)
 
 
 @memory_grants_router.get("", response_model=list[AgentMemoryGrantRead])

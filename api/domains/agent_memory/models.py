@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -92,3 +93,13 @@ class AgentMemoryGrantRead(PydanticBaseModel):
     # None for an Organization Memory grant.
     source_agent_name: str | None
     created_at: datetime
+
+
+class AgentMemoryItemRead(PydanticBaseModel):
+    """One memory the Agent itself wrote; `shared` marks Organization Memory it wrote."""
+
+    id: str
+    type: Literal["world", "experience", "observation"]
+    text: str
+    mentioned_at: datetime | None
+    shared: bool

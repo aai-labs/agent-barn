@@ -38,6 +38,7 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
+from api.tests.helpers.memory_backend import memory_gateway_is_ready, memory_viewer_is_served
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
@@ -375,7 +376,8 @@ def test_visible_agent_viewer_can_read_but_not_author_or_select_configuration():
 
 
 def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, memory_gateway_is_ready(), memory_viewer_is_served(), there_is_an_agent()]) as context:
+        context.backend_response = {"items": [], "total": 0}
         assigned_agent = context.agent
         there_is_an_agent(name="Hidden Aggregate")(context)
         hidden_agent = context.agent
@@ -390,6 +392,7 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
             f"{_BASE}/{assigned_agent.id}/activity",
             f"{_BASE}/{assigned_agent.id}/activity/wakes",
             f"{_BASE}/{assigned_agent.id}/activity/calls",
+            f"{_BASE}/{assigned_agent.id}/memory/items",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/calls",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/monthly",
@@ -403,6 +406,7 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
             f"{_BASE}/{hidden_agent.id}/activity",
             f"{_BASE}/{hidden_agent.id}/activity/wakes",
             f"{_BASE}/{hidden_agent.id}/activity/calls",
+            f"{_BASE}/{hidden_agent.id}/memory/items",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/calls",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/monthly",

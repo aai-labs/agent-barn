@@ -171,6 +171,12 @@ limits, precise combined totals, missing/stale data, renewal, immediate limit
 changes, and recall availability when changing this policy. Failed and truncated
 spend-log runs must leave the heartbeat unchanged.
 
+The Agent Memory viewer's list contract (tag-filtered items and total, search, and
+pagination) is proven against the same pinned image running with its embedded database
+and mock extraction model, in
+`../../api/tests/integration/test_agent_memory_viewer_contract.py`; its stand-in tests
+cover authorization and failure handling. Pull or build the image first when absent.
+
 The Hermes and OpenClaw telemetry plugins run inside agent containers but are
 delivered from repository source through runtime configuration, rather than as
 importable API modules. Tests load them from their source paths and call their

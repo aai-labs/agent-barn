@@ -69,6 +69,8 @@ class Config(BaseSettings):
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
     memory_base_url: str = "http://agentbarn-api-memory:8003/memory/v1"
+    # Where the product API reaches the gateway's read-only viewer; Agents never use it.
+    memory_view_base_url: str = "http://agentbarn-api-memory:8003/memory/view/v1"
     # Non-secret SHA-256 hashes of current and retired Hindsight LiteLLM keys.
     memory_litellm_key_hashes: str = ""
 
