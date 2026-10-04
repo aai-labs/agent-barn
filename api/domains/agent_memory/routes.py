@@ -25,6 +25,22 @@ memory_grants_router = APIRouter(
     tags=["agent-memory"],
 )
 
+organization_memory_router = APIRouter(prefix="/organizations/{organization_id}/memory", tags=["agent-memory"])
+
+
+@organization_memory_router.get("/items", response_model=PaginatedItems[AgentMemoryItemRead])
+def list_organization_memories(
+    organization_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentMemoryService, Injected(AgentMemoryService)],
+    search: Annotated[str | None, Query(max_length=200)] = None,
+    page: Annotated[int, Query(ge=1, le=2000)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=50)] = 25,
+):
+    return service.list_organization_memories(
+        organization_id, search.strip() if search else None, Pagination(page, page_size), context
+    )
+
 
 @agent_memory_router.put("", response_model=AgentMemoryRead)
 def set_agent_memory(

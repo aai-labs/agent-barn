@@ -48,26 +48,41 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 
 `GET /organizations/{organization_id}/agents/{agent_id}/memory/items?search=&page=&page_size=` returns a read-only page of the memories that Agent itself wrote: `id`, `type` (`world`, `experience`, or `observation`), `text`, `mentioned_at`, and `shared` (true when it carries `scope:team`). Entities, context, chunks, document and source IDs, metadata, and history are never returned. `page_size` is at most 50 and `page` at most 2,000; `search` is at most 200 characters.
 
-- Content authorization reuses the Agent Permission `activity.read` through the normal Agent visibility checks: hidden, other-Organization, and deleted Agents are 404, and a visible Agent without `activity.read` is 403. `agent.memory.manage` and `memory.access.manage` govern settings and grants, not reading saved content.
+- Content authorization reuses the Agent Permission `activity.read` through the normal Agent visibility checks: hidden, other-Organization, and deleted Agents are 404, and a visible Agent without `activity.read` is 403. `agent.memory.manage` governs the memory setting; `memory.access.manage` governs grants and the Organization viewer, not reading an Agent's saved content.
 - Only the selected Agent's own tag is listed. Memories it can recall from Memory Grants or Organization Memory written by other Agents are not shown. Stored memories are viewable while the Agent is stopped or memory is disabled, until it is deleted.
 - `mentioned_at` is the time Hindsight recorded for the memory, not necessarily when it was persisted; Hindsight 0.10.2 does not expose a creation time on this endpoint. Results are ordered most recently mentioned first. Memories without a mention time have none.
 - The product API holds no Hindsight credential. After authorizing the person it sends the gateway's separate viewer (`/memory/view/v1/memories`, never the Agent allowlist) a 30-second JWT naming one Organization and Agent, with an audience and operation distinct from user access tokens and Agent credentials. The gateway rechecks that the Agent is undeleted in an existing Organization, derives the `org-<organization_id>` bank, forces `tags=agent:<agent_id>&tags_match=any_strict`, and accepts only `search`, `limit`, and `offset`. Agent credentials are still refused on every list path.
 - Hindsight 0.10.2 applies the tag filter before counting, so `total` covers only the Agent's rows. The gateway fails closed with a generic 502 if any returned row lacks that tag, has an unknown type, or the page is larger than requested or than its total. A bank that does not exist yet is an empty page. Search is a case-insensitive substring match on memory text and context with SQL wildcards escaped; it can match context that is not shown. Upstream errors are generic 502 or 503.
 
+### View Organization Memory
+
+`GET /organizations/{organization_id}/memory/items?search=&page=&page_size=`
+returns the same read-only item/page contract, across Agents but containing only
+`scope:team` memories in that Organization's bank. It requires the Organization
+Permission `memory.access.manage` (Owner/Admin); Agent-level roles and platform
+administrator status alone do not allow it. The capability uses the distinct
+`list-organization` operation and has no Agent target. The gateway rechecks that
+the Organization exists and derives a strict `scope:team` filter. Any private row
+returned by the backend fails the entire page closed. Search, pagination, and
+filtered totals use the same pinned Hindsight contract as the Agent viewer.
+Revoking an Agent's grant does not delete shared records or change human viewing
+permissions. This surface has no create, edit, or delete controls.
+
 ### Use the memory UI
 
 - Agent configuration → **Memory** shows `memory_enabled` and, for people with `agent.memory.manage`, lets them change it. A running Agent with `agent.lifecycle.manage` uses **Save and Restart**: the UI stops it, saves the setting, and starts it again. If saving fails after stopping, the shared lifecycle flow still attempts to start it. Save or lifecycle failures remain visible inline. A stopped Agent uses **Save** and stays stopped. People without lifecycle permission can save without restarting; the UI explains that someone with lifecycle access must restart a running Agent to activate memory. The memory API itself does not restart the Agent; turning it off rejects memory requests immediately and keeps stored memories.
 - Organization Settings → **Memory access** is visible only to the Organization's Owners and Admins, matching `memory.access.manage`; a platform administrator who is only a Member does not see it. It lists grants, creates one for an Agent to Organization Memory with an explicit **Read only** or **Read and write** selection, or to another Agent's private memories marked **Read only** (never itself), and revokes one after confirmation. To change a permission, revoke the current grant and create the desired one. A duplicate is stopped before submission and shown if the server still returns 409. The grant form uses full-width Agent, memory source, and short permission selectors; contextual help and the grant action sit below the fields. Fields stack on narrow screens.
+- Organization Settings → **Organization Memory** is a dedicated read-only viewer, visible only to Organization Owners/Admins. It lists shared memories from all Agents with search, pagination, and retry; private memories are excluded.
 - Agent page → **Memory** appears only with `activity.read` and queries only then. It is read-only; see [View an Agent's saved memories](#view-an-agents-saved-memories). Memory text is rendered as plain text.
-- Grants and memory items are Organization-scoped query families; the `memory-grants` family is evicted on an Organization switch and keys carry the Organization API base.
+- Grants and memory items are Organization-scoped query families; the `memory-grants` and `organization-memory-items` families are evicted on an Organization switch and keys carry the Organization API base.
 
 ### Explicit Organization Memory saves
 
-Both runtimes expose `/tmp/agentbarn-bin/agentbarn-memory remember-organization` through their
+Both runtimes expose `/usr/local/bin/agentbarn-memory remember-organization` through their
 terminal tool. Provide the fact on standard input, for example:
 
 ```sh
-/tmp/agentbarn-bin/agentbarn-memory remember-organization <<'MEMORY'
+/usr/local/bin/agentbarn-memory remember-organization <<'MEMORY'
 The organization uses EUR for customer invoices.
 MEMORY
 ```
@@ -82,8 +97,14 @@ Failures are reported without backend content or credentials; the tool bypasses
 environment proxies and refuses redirects. Automatic saves stay private.
 The tool and instructions are mounted from API-owned runtime configuration;
 existing Agents must restart to receive them. Memory must be enabled. Instructions
-use the absolute installed path because terminal login shells can reset PATH;
-the Hermes runtime contract executes those instructions through its real terminal tool.
+use the absolute installed path; a read-only executable ConfigMap entry is also
+mounted at `/usr/local/bin/agentbarn-memory` so the short command name survives
+terminal login-shell PATH resets. Both runtime Deployment builders mount this
+command with mode 0555. Agents must attempt each explicit save and report the
+actual refusal rather than reuse earlier claims of tool unavailability. The Hermes
+runtime contract proves short-name discovery and permission refusals through its
+real terminal tool. Existing Agents need refreshed configuration and a restart
+to receive the new mount; revoking grants itself never requires a restart.
 
 Migration `c95f20b8413a` consolidates existing Organization grants into one
 permission per Agent. Existing read grants stay read-only. Existing write grants,

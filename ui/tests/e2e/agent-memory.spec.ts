@@ -372,6 +372,8 @@ test.describe("Agent memory viewer", () => {
     await expect(viewer).toContainText("Observation");
     await expect(viewer).toContainText("Private");
     await expect(viewer).toContainText("Shared · Organization Memory");
+    await expect(viewer).toContainText("saved history, not a list of its current access");
+    await expect(viewer).toContainText("your permission to view them is separate");
     await expect(viewer).toContainText("Mentioned");
     await expect(viewer).toContainText("No date recorded");
     await expect(viewer).toContainText("3 memories");
@@ -484,5 +486,68 @@ test.describe("Agent memory viewer", () => {
     await memory.tab().click();
     await expect(memory.viewer()).toContainText("Customers prefer invoices");
     expect(mock.requests).toHaveLength(1);
+  });
+});
+
+
+test.describe("Organization Memory viewer", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("lists only shared memories, explains revocation, and supports search", async ({ page }) => {
+    const data = await signIn(page);
+    const mock = await data.agentMemory.interceptMemoryItems({ organization: true });
+    const memory = new AgentMemoryPage(page);
+    await memory.gotoOrganizationMemory();
+    await expect(page.getByRole("heading", { name: "Organization Memory", exact: true })).toBeVisible();
+    await expect(memory.viewer()).toContainText("Quarterly reports are due");
+    await expect(memory.viewer()).not.toContainText("Customers prefer invoices");
+    await expect(memory.viewer()).toContainText("Revoking an Agent's access keeps previously saved memories.");
+    await expect(memory.viewer().getByRole("button", { name: /edit|delete|remove|forget/i })).toHaveCount(0);
+    await memory.search("no match");
+    await expect(memory.viewer()).toContainText("No saved memories match");
+    expect(mock.requests.at(-1)?.url.searchParams.get("search")).toBe("no match");
+  });
+
+  for (const userContext of [memberContext(), platformAdminMemberContext()]) {
+    test(`hides Organization Memory from ${userContext.is_platform_admin ? "platform admin Members" : "Members"}`, async ({ page }) => {
+      const data = await signIn(page, userContext);
+      await data.organizations.interceptGetOrganization();
+      await data.organizations.interceptAgentSettings();
+      await data.agents.interceptGetModelsRequest();
+      const mock = await data.agentMemory.interceptMemoryItems({ organization: true });
+      const memory = new AgentMemoryPage(page);
+      await memory.gotoOrganizationMemory();
+      await expect(page.getByRole("button", { name: "Organization Memory", exact: true })).toHaveCount(0);
+      expect(mock.requests).toHaveLength(0);
+    });
+  }
+
+  test("paginates and recovers from unavailable storage", async ({ page }) => {
+    const data = await signIn(page);
+    const items = Array.from({ length: 23 }, (_, index) => ({ ...mockMemoryItems[1], id: `shared-${index}`, text: `Shared convention ${index}` }));
+    const mock = await data.agentMemory.interceptMemoryItems({ organization: true, items });
+    const memory = new AgentMemoryPage(page);
+    await memory.gotoOrganizationMemory();
+    await expect(memory.viewer()).toContainText("Shared convention 0");
+    await memory.nextPage();
+    await expect(memory.viewer()).toContainText("Shared convention 22");
+    mock.failWith(503);
+    await memory.search("shared");
+    await expect(memory.viewer()).toContainText("We couldn't load Organization Memory");
+    mock.failWith(null);
+    await memory.viewer().getByRole("button", { name: "Retry" }).click();
+    await expect(memory.viewer()).toContainText("Shared convention 0");
+  });
+
+  test("keeps another Organization's shared memories out of the viewer", async ({ page }) => {
+    const data = await signIn(page, twoOrganizationContext());
+    await data.agentMemory.interceptMemoryItems({ organization: true, organizationId: ORG_A_ID });
+    await data.agentMemory.interceptMemoryItems({ organization: true, organizationId: ORG_B_ID, items: [] });
+    const memory = new AgentMemoryPage(page);
+    await memory.gotoOrganizationMemory(ORG_A_ID);
+    await expect(memory.viewer()).toContainText("Quarterly reports are due");
+    await memory.gotoOrganizationMemory(ORG_B_ID);
+    await expect(memory.viewer()).toContainText("Nothing saved yet");
+    await expect(memory.viewer()).not.toContainText("Quarterly reports are due");
   });
 });

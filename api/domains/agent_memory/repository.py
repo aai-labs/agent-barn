@@ -114,12 +114,14 @@ class AgentMemoryRepository:
                 tags.append("scope:team")
             return MemoryAccess(agent.id, agent.organization_id, tuple(tags), organization_memory_write)
 
-    def resolve_view_target(self, organization_id: UUID, agent_id: UUID) -> bool:
-        """Whether the Agent is undeleted in an existing Organization.
+    def resolve_view_target(self, organization_id: UUID, agent_id: UUID | None) -> bool:
+        """Whether the Organization exists and any targeted Agent is undeleted within it.
 
         Stored memories stay viewable while memory is off and the Agent is stopped.
         """
         with Session(self.delegate.engine) as session:
+            if agent_id is None:
+                return session.get(Organization, organization_id) is not None
             return (
                 session.exec(
                     select(Agent.id)

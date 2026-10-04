@@ -94,6 +94,20 @@ class AgentMemoryService:
             items=[AgentMemoryItemRead(**item.model_dump()) for item in page.items],
         )
 
+    def list_organization_memories(
+        self, organization_id: UUID, search: str | None, pagination: Pagination, context: CurrentUserContext
+    ) -> PaginatedItems[AgentMemoryItemRead]:
+        self._require_manage(organization_id, context)
+        page = self.view_client.list_memories(
+            organization_id, None, search=search, limit=pagination.size, offset=(pagination.page - 1) * pagination.size
+        )
+        return PaginatedItems(
+            page=pagination.page,
+            page_size=pagination.size,
+            total=page.total,
+            items=[AgentMemoryItemRead(**item.model_dump()) for item in page.items],
+        )
+
     def list_grants(self, organization_id: UUID, context: CurrentUserContext) -> list[AgentMemoryGrantRead]:
         self._require_manage(organization_id, context)
         return [

@@ -157,3 +157,28 @@ def test_an_organization_that_never_retained_has_an_empty_page():
 
         with then("the page is empty rather than an error"):
             assert_that(response.json(), has_entries(total=0, items=empty()))
+
+
+def test_organization_viewer_scopes_items_total_search_and_paging_to_shared_memories():
+    with given(_setup(two_agents(), _two_agents_share_a_bank())) as context:
+        bank = _bank(context)
+        retain_in_bank(context, bank, "Triage shared convention", [f"agent:{context.triage.id}", "scope:team"])
+        retain_in_bank(context, f"org-{uuid4()}", "Foreign organization shared secret", ["scope:team"])
+        url = "/api/v1/organizations/{organization_id}/memory/items"
+        auth = {"Authorization": f"Bearer {context.access_token}"}
+        page = context.client.get(url, params={"page_size": 50}, headers=auth)
+        assert_that(page.status_code, equal_to(200))
+        body = page.json()
+        expected = hindsight_listing(context, bank, "scope:team")
+        assert_that(body["total"], equal_to(expected["total"]))
+        assert_that([row["shared"] for row in body["items"]], equal_to([True] * len(body["items"])))
+        text = " ".join(row["text"] for row in body["items"])
+        for private in ("prefers tea", "prefers coffee", "Foreign organization shared secret"):
+            assert_that(private in text, equal_to(False))
+        first = context.client.get(url, params={"page_size": 1}, headers=auth).json()
+        second = context.client.get(url, params={"page_size": 1, "page": 2}, headers=auth).json()
+        assert_that(first["total"], equal_to(body["total"]))
+        assert_that(first["items"][0]["id"], is_not(equal_to(second["items"][0]["id"])))
+        found = context.client.get(url, params={"search": "100%_sure", "page_size": 50}, headers=auth).json()
+        assert_that(found["total"], greater_than(0))
+        assert_that(all("100%_sure" in row["text"] for row in found["items"]), equal_to(True))

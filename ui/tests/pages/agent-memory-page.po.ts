@@ -19,6 +19,10 @@ export class AgentMemoryPage {
     await this.page.goto(`/dashboard/${orgId}/settings?tab=${tab}`);
   }
 
+  async gotoOrganizationMemory(orgId = TEST_ORG_ID) {
+    await this.page.goto(`/dashboard/${orgId}/settings?tab=organization-memory`);
+  }
+
   // --- Agent memory setting ---
 
   settingsSection(): Locator {

@@ -26,7 +26,7 @@ export const MemoryItemSchema = z.object({
   text: z.string(),
   /** When Hindsight recorded the memory as mentioned; not necessarily when it was stored. */
   mentionedAt: z.string().nullable(),
-  /** True for Organization Memory the Agent wrote. */
+  /** True for shared Organization Memory. */
   shared: z.boolean(),
 });
 

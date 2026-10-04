@@ -106,7 +106,7 @@ class AgentMemoryGrantRead(PydanticBaseModel):
 
 
 class AgentMemoryItemRead(PydanticBaseModel):
-    """One memory the Agent itself wrote; `shared` marks Organization Memory it wrote."""
+    """Allowlisted saved memory; `shared` marks Organization Memory."""
 
     id: str
     type: Literal["world", "experience", "observation"]

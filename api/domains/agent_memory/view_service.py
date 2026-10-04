@@ -21,7 +21,7 @@ _TYPES = {"world", "experience", "observation"}
 @singleton
 @dataclass
 class MemoryViewerService:
-    """Read-only listing of the memories one Agent wrote, for authorized people.
+    """Read-only Agent history or shared Organization Memory for authorized people.
 
     Authorization happened in the product API; the capability only proves that and names
     the target. Stored memories stay viewable while the Agent is stopped or memory is off.
@@ -41,11 +41,11 @@ class MemoryViewerService:
         if target is None:
             raise HTTPException(401, "Invalid Agent Memory viewing capability.")
         if not self.repository.resolve_view_target(target.organization_id, target.agent_id):
-            raise HTTPException(404, "Agent not found.")
+            raise HTTPException(404, "Organization not found." if target.agent_id is None else "Agent not found.")
         return target
 
     def list_memories(self, target: MemoryViewTarget, query: MemoryViewQuery) -> MemoryViewPage:
-        own_tag = f"agent:{target.agent_id}"
+        own_tag = "scope:team" if target.agent_id is None else f"agent:{target.agent_id}"
         params = [
             ("tags", own_tag),
             ("tags_match", "any_strict"),
@@ -81,9 +81,8 @@ class MemoryViewerService:
 def _page(content: bytes, own_tag: str, limit: int) -> MemoryViewPage:
     """Map upstream rows to allowlisted fields, failing closed on anything outside the contract.
 
-    Hindsight counts `total` after applying the tag filter, so it describes only this Agent's
-    rows. A row without the Agent's tag means that filter was not honored, so the count could
-    include other Agents' memories and neither it nor the rows may be relayed.
+    Hindsight counts `total` after applying the derived tag filter. A row without
+    that tag means the filter was not honored; neither rows nor counts may be relayed.
     """
     try:
         body = json.loads(content)

@@ -211,15 +211,17 @@ export class AgentMemoryDataSupport {
     agentId = MOCK_AGENT_ID,
     organizationId = TEST_ORG_ID,
     items = mockMemoryItems,
+    organization = false,
   }: {
     agentId?: string;
     organizationId?: string;
     items?: Record<string, unknown>[];
+    organization?: boolean;
   } = {}): Promise<MemoryItemsMock> {
     const requests: RecordedRequest[] = [];
     let failure: number | null = null;
     await this.page.route(
-      `**/api/v1/organizations/${organizationId}/agents/${agentId}/memory/items*`,
+      `**/api/v1/organizations/${organizationId}${organization ? "" : `/agents/${agentId}`}/memory/items*`,
       async (route) => {
         if (route.request().method() !== "GET") return route.fallback();
         const { url } = record(route, requests);
@@ -227,7 +229,7 @@ export class AgentMemoryDataSupport {
         const search = (url.searchParams.get("search") ?? "").toLowerCase();
         const page = Number(url.searchParams.get("page") ?? "1");
         const pageSize = Number(url.searchParams.get("page_size") ?? "25");
-        const matching = items.filter((item) => String(item.text).toLowerCase().includes(search));
+        const matching = items.filter((item) => (!organization || item.shared) && String(item.text).toLowerCase().includes(search));
         return json(route, 200, {
           page,
           page_size: pageSize,

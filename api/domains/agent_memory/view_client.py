@@ -15,16 +15,16 @@ from api.domains.agent_memory.view_capability import issue_view_capability
 @singleton
 @dataclass
 class MemoryViewClient:
-    """Asks the memory gateway's read-only viewer for one Agent's saved memories.
+    """Asks the memory gateway's read-only viewer for Agent history or shared Organization memories.
 
     The product API holds no Hindsight credential: it sends a short-lived capability for
-    one authorized target, and the gateway derives the bank and tag filter itself.
+    one authorized Agent or Organization target, and the gateway derives the bank and tag filter itself.
     """
 
     config: Config
 
     def list_memories(
-        self, organization_id: UUID, agent_id: UUID, *, search: str | None, limit: int, offset: int
+        self, organization_id: UUID, agent_id: UUID | None, *, search: str | None, limit: int, offset: int
     ) -> MemoryViewPage:
         params: dict[str, str | int] = {"limit": limit, "offset": offset}
         if search:
@@ -42,7 +42,7 @@ class MemoryViewClient:
         except httpx.HTTPError:
             raise HTTPException(503, "Agent Memory is unavailable.") from None
         if response.status_code == 404:
-            raise HTTPException(404, f"Agent {agent_id} not found")
+            raise HTTPException(404, "Organization not found" if agent_id is None else f"Agent {agent_id} not found")
         if response.status_code != 200:
             raise HTTPException(503 if response.status_code == 503 else 502, "Agent Memory is unavailable.")
         try:

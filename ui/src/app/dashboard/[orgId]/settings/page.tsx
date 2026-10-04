@@ -5,6 +5,7 @@ import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
+import { MemoryItemsViewer } from "@/features/agent-memory/components/memory-items-viewer";
 import { MemoryAccessPanel } from "@/features/agent-memory/components/memory-access-panel";
 import { AgentDefaultsPanel } from "@/features/agent-settings/components/agent-defaults-panel";
 import { TemplatesPanel } from "@/features/templates/components/templates-panel";
@@ -22,6 +23,7 @@ const ICONS = {
   templates: FileCode2,
   skills: Sparkles,
   "memory-access": Brain,
+  "organization-memory": Brain,
   "shared-credentials": KeyRound,
 } as const;
 
@@ -90,6 +92,7 @@ export default function SettingsPage() {
             <TemplatesPanel scope={{ kind: "organization" }} canManage={canManage} />
           )}
           {section.key === "skills" && <SkillsPanel scope={{ kind: "organization" }} canManage={canManage} />}
+          {section.key === "organization-memory" && <MemoryItemsViewer key={selectedOrganization?.id} enabled={isMembershipAdmin} />}
           {section.key === "memory-access" && <MemoryAccessPanel canManage={isMembershipAdmin} />}
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
         </SettingsPageLayout>

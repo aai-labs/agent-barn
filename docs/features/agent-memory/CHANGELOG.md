@@ -7,7 +7,7 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 ## Current state
 
 - Delivered: the Agent memory setting, Organization memory-access page, and read-only
-  Agent Memory tab; the per-Agent memory opt-in and Memory Grants with audit Domain Events;
+  Agent Memory tab and Owner/Admin Organization Memory viewer; the per-Agent memory opt-in and Memory Grants with audit Domain Events;
   authenticated gateway with current grant checks; hashed per-start Agent credentials; optional
   Hindsight and gateway Helm deployments; automatic Hermes/OpenClaw recall and retain alongside
   native memory for opted-in starts; Organization attribution of memory model costs;
@@ -20,6 +20,28 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-04 — Organization viewer and reliable permission refusals
+
+- Delivered: an Owner/Admin Organization Memory page in Organization Settings,
+  with read-only shared records, search, pagination, and retry. The gateway derives
+  only `scope:team` in the authorized Organization; a distinct signed operation
+  cannot expand an Agent-history capability into Organization access.
+- Fixed: both runtime Deployments mount the writer as an executable in
+  `/usr/local/bin`, making the short name available even after shell PATH resets.
+  Agent instructions require each save to be attempted and the actual refusal
+  explained, rather than repeating historical tool-unavailable claims.
+- Clarified: the Agent viewer is saved history, including shared contributions.
+  Revocation keeps those records and human viewing authority separate from
+  the Agent's live write/recall grants. Previously learned own facts are not erased.
+- Verified: short-name discovery reproduced failing before the mount; five real
+  runtime contracts pass after it, including a 403 through Hermes' terminal.
+  161 viewer/gateway/grant API tests, the pinned Hindsight Organization listing
+  contract, 59 tool/builder tests, and all 31 memory browser tests pass.
+  API/UI static checks and memory chart checks pass. Alex was refreshed with
+  its grant still revoked: a real Web Chat save attempt reports the gateway
+  permission refusal; the live Owner viewer returns shared records only.
+  No schema or version bump.
 
 ### 2026-10-04 — sharing form polish
 

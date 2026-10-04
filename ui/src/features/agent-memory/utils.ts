@@ -6,6 +6,13 @@ import type { MemoryGrant, MemoryItemType } from "./schemas";
 export const MEMORY_ITEMS_PAGE_SIZE = 20;
 export const MEMORY_AGENT_OPTIONS_PAGE_SIZE = 200;
 
+const _organizationMemoryKeyBase = createQueryKeyStructure("organization-memory-items");
+export const organizationMemoryKey = {
+  ..._organizationMemoryKeyBase,
+  items: (orgApiBase: string, params: { search: string; page: number }) =>
+    [..._organizationMemoryKeyBase.all, orgApiBase, params] as const,
+};
+
 const _memoryGrantsKeyBase = createQueryKeyStructure("memory-grants");
 
 // Keyed by the organization API base so one organization's grants are never served

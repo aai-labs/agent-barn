@@ -531,3 +531,94 @@ def test_viewing_logs_do_not_contain_memory_search_or_capability(caplog):
             assert_that("Private diagnosis" in caplog.text, equal_to(False))
             assert_that(capability in caplog.text, equal_to(False))
             assert_that("memories/list" in caplog.text, equal_to(True))
+
+
+def _list_organization(context, **params):
+    return context.client.get(
+        "/api/v1/organizations/{organization_id}/memory/items", params=params, headers=_auth(context)
+    )
+
+
+@pytest.mark.parametrize("role", [OrganizationRole.OWNER, OrganizationRole.ADMIN])
+def test_organization_viewer_lists_shared_memories_from_multiple_agents(role):
+    steps = [] if role == OrganizationRole.OWNER else [signed_in_as(role)]
+    with given(_setup(two_agents(), *steps)) as context:
+        _backend_page(
+            context,
+            [
+                _row(context.billing.id, "Billing shared fact", tags=["scope:team"]),
+                _row(context.triage.id, "Triage shared fact", tags=["scope:team"]),
+            ],
+        )
+        response = _list_organization(context, search="reports", page=2, page_size=10)
+        assert_that(response.status_code, equal_to(200))
+        assert_that([item["shared"] for item in response.json()["items"]], contains_exactly(True, True))
+        upstream = _upstream(context)
+        assert_that(upstream["path"], equal_to(f"/v1/default/banks/org-{context.organization.id}/memories/list"))
+        assert_that(
+            upstream["query"],
+            contains_exactly(
+                ("tags", "scope:team"),
+                ("tags_match", "any_strict"),
+                ("limit", "10"),
+                ("offset", "10"),
+                ("q", "reports"),
+            ),
+        )
+
+
+def test_members_cannot_view_organization_memory_even_with_agent_access():
+    with given(
+        _setup(
+            there_is_an_agent(),
+            signed_in_as(OrganizationRole.MEMBER),
+            there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID),
+        )
+    ) as context:
+        response = _list_organization(context)
+        assert_that(response.status_code, equal_to(403))
+        assert_that(context.backend_requests, empty())
+
+
+def test_organization_memory_viewer_requires_authentication():
+    with given(_setup(there_is_an_agent())) as context:
+        response = context.client.get("/api/v1/organizations/{organization_id}/memory/items")
+        assert_that(response.status_code, equal_to(401))
+        assert_that(context.backend_requests, empty())
+
+
+def test_organization_memory_cannot_be_viewed_from_another_organization():
+    with given(_setup(there_is_an_agent())) as context:
+        response = context.client.get(f"/api/v1/organizations/{uuid7()}/memory/items", headers=_auth(context))
+        assert_that(response.status_code, equal_to(403))
+        assert_that(context.backend_requests, empty())
+
+
+def test_organization_viewer_fails_closed_if_backend_returns_a_private_memory():
+    with given(_setup(there_is_an_agent())) as context:
+        _backend_page(context, [_row(context.agent.id, "Private secret")])
+        response = _list_organization(context)
+        assert_that(response.status_code, equal_to(502))
+        assert_that("Private secret" in response.text, equal_to(False))
+
+
+def test_saved_shared_history_is_visible_without_an_agents_organization_grant():
+    with given(_setup(there_is_an_agent())) as context:
+        _backend_page(context, [_row(context.agent.id, "Previously shared fact", tags=["scope:team"])])
+        response = _list(context)
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["items"][0], has_entries(text="Previously shared fact", shared=True))
+
+
+@pytest.mark.parametrize("params", [{"page": 0}, {"page_size": 51}, {"search": "a" * 201}])
+def test_organization_memory_query_validation(params):
+    with given(_setup(there_is_an_agent())) as context:
+        assert_that(_list_organization(context, **params).status_code, equal_to(422))
+        assert_that(context.backend_requests, empty())
+
+
+def test_organization_capability_cannot_include_an_agent_target():
+    with given(_setup(there_is_an_agent())) as context:
+        response = _viewer(context, _token(context, op="list-organization"))
+        assert_that(response.status_code, equal_to(401))
+        assert_that(context.backend_requests, empty())

@@ -6,18 +6,20 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { api } from "@/shared/api";
 
 import { PaginatedMemoryItemsSchema, type PaginatedMemoryItems } from "../schemas";
-import { MEMORY_ITEMS_PAGE_SIZE, agentMemoryKey } from "../utils";
+import { MEMORY_ITEMS_PAGE_SIZE, agentMemoryKey, organizationMemoryKey } from "../utils";
 
 /**
- * The memories one Agent wrote. `enabled` must carry the viewer's `activity.read`
- * permission, so a person without it never issues the request.
+ * Agent history or shared Organization Memory. The caller must pass the matching
+ * human viewing permission so unauthorized people never issue the request.
  */
-export function useAgentMemoryItems(
-  agentId: string,
+export function useMemoryItems(
+  agentId: string | undefined,
   { search, page, enabled }: { search: string; page: number; enabled: boolean },
 ) {
   const orgApiBase = useOrganizationApiBase();
-  const queryKey = agentMemoryKey.items(orgApiBase, agentId, { search, page });
+  const queryKey = agentId
+    ? agentMemoryKey.items(orgApiBase, agentId, { search, page })
+    : organizationMemoryKey.items(orgApiBase, { search, page });
 
   const query = useQuery({
     queryKey,
@@ -27,12 +29,12 @@ export function useAgentMemoryItems(
       params.set("page_size", String(MEMORY_ITEMS_PAGE_SIZE));
       if (search) params.set("search", search);
       const response = await api.get<PaginatedMemoryItems>(
-        `${orgApiBase}/agents/${agentId}/memory/items?${params.toString()}`,
+        `${orgApiBase}${agentId ? `/agents/${agentId}` : ""}/memory/items?${params.toString()}`,
         { schema: PaginatedMemoryItemsSchema },
       );
       return response.data;
     },
-    enabled: enabled && !!agentId,
+    enabled,
     // Keep pages only within the same Agent and Organization. An observer may
     // survive navigation; its previous data must not follow it to another target.
     placeholderData: (previousData, previousQuery) =>

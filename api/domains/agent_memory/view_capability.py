@@ -1,6 +1,7 @@
 """Short-lived capability the product API presents to the gateway's memory viewer.
 
-It names exactly one Organization and Agent and one read-only operation. The audience
+It names one Organization and either an Agent history view or a shared Organization
+view, with distinct read-only operations. The audience
 differs from user access tokens (which also use the platform signing key) and from Agent
 memory credentials, so neither can stand in for it. The bank, tags, and other upstream
 parameters are never part of it; the gateway derives them.
@@ -25,17 +26,17 @@ _MAX_LIFETIME_SECONDS = 60
 @dataclass(frozen=True)
 class MemoryViewTarget:
     organization_id: UUID
-    agent_id: UUID
+    agent_id: UUID | None
 
 
-def issue_view_capability(config: Config, organization_id: UUID, agent_id: UUID) -> str:
+def issue_view_capability(config: Config, organization_id: UUID, agent_id: UUID | None) -> str:
     now = int(time.time())
     return jwt.encode(
         {
             "aud": AUDIENCE,
-            "op": OPERATION,
+            "op": OPERATION if agent_id is not None else "list-organization",
             "organization_id": str(organization_id),
-            "agent_id": str(agent_id),
+            **({"agent_id": str(agent_id)} if agent_id is not None else {}),
             "iat": now,
             "exp": now + TTL_SECONDS,
         },
@@ -54,7 +55,11 @@ def verify_view_capability(config: Config, token: str) -> MemoryViewTarget | Non
             audience=AUDIENCE,
             options={"require": ["aud", "exp", "iat"]},
         )
-        if payload.get("op") != OPERATION or payload["exp"] - payload["iat"] > _MAX_LIFETIME_SECONDS:
+        if payload["exp"] - payload["iat"] > _MAX_LIFETIME_SECONDS:
+            return None
+        if payload.get("op") == "list-organization" and "agent_id" not in payload:
+            return MemoryViewTarget(UUID(payload["organization_id"]), None)
+        if payload.get("op") != OPERATION:
             return None
         return MemoryViewTarget(UUID(payload["organization_id"]), UUID(payload["agent_id"]))
     except InvalidTokenError, KeyError, ValueError, TypeError:

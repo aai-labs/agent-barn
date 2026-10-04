@@ -171,13 +171,15 @@ documents. The pinned-image purge test verifies private/shared removal without
 changing another Agent or bank. Test queue migrations against already deleted Agents.
 Explicit Organization Memory write tests cover read-only and combined read/write grants, immediate revocation, cross-Agent write rejection, runtime credential use, content-only payloads, and refusal handling. The shared writer targets Python 3.12 in Ruff, matching the oldest runtime. Both pinned-runtime startup contracts execute the mounted writer command; Hermes
 executes the command from its generated instructions through the real terminal
-tool, covering shell PATH changes. Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
+tool, covering short-name discovery after shell PATH changes and explicit 403
+refusals. Runtime fixtures mount the same executable ConfigMap command into the
+standard binary directory. Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
 memory charges, and successful-sync heartbeats. Cover exhausted/zero/uncapped
 limits, precise combined totals, missing/stale data, renewal, immediate limit
 changes, and recall availability when changing this policy. Failed and truncated
 spend-log runs must leave the heartbeat unchanged.
 
-The Agent Memory viewer's list contract (tag-filtered items and total, search, and
+The Agent and Organization Memory viewers' list contract (tag-filtered items and total, search, and
 pagination) is proven against the same pinned image running with its embedded database
 and mock extraction model, in
 `../../api/tests/integration/test_agent_memory_viewer_contract.py`; its stand-in tests

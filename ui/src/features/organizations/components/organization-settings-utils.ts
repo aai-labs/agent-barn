@@ -2,6 +2,7 @@ export type OrganizationSettingsSectionKey =
   | "agents"
   | "templates"
   | "skills"
+  | "organization-memory"
   | "memory-access"
   | "shared-credentials";
 
@@ -38,6 +39,13 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
     label: "Skills",
     description: "Vetted tools your Agents are allowed to call.",
     adminOnly: false,
+  },
+  {
+    key: "organization-memory",
+    label: "Organization Memory",
+    description: "Shared knowledge saved by your Agents for this Organization.",
+    adminOnly: true,
+    membershipAdminOnly: true,
   },
   {
     key: "memory-access",
