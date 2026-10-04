@@ -236,10 +236,7 @@ class RestorePointService:
             if time.monotonic() >= deadline:
                 raise HTTPException(
                     status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                    detail=(
-                        f"Restore point {restore_point_id} did not finish "
-                        f"within {timeout_seconds} seconds"
-                    ),
+                    detail=(f"Restore point {restore_point_id} did not finish within {timeout_seconds} seconds"),
                 )
             time.sleep(poll_seconds)
 

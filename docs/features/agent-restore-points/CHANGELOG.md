@@ -23,6 +23,38 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-10-05 — AF-201 — Managed updates wire restore points into the update flow
+
+- Delivered: `POST /organizations/{org}/agents/{id}/managed-update`, returning `202` after
+  scheduling the orchestration as a background task. It stops the Agent, captures a Restore
+  Point labelled "Automatic backup before managed update" with the `PRE_UPGRADE` origin (the
+  enum value reserved in the original migration and unused until now), starts the Agent on the
+  current platform images, polls `get_pod_readiness` for `agent_update_ready_timeout_seconds`
+  (new setting, default 120 — the readiness probe's own 30+15×6 budget), and on failure rolls
+  back by itself: deletes the leftover Deployment to free the RWO volume, restores the
+  pre-update point with the recorded configuration replayed, and starts again.
+- Decision: the orchestration reuses the public `create_restore_point` /
+  `restore_restore_point` / `start_agent` seams rather than restating them — the only new
+  primitives are `wait_until_terminal` (polls `reconcile_agent` so an unwatched capture
+  resolves), the readiness poll, and the teardown. `create_restore_point` gained a
+  keyword-only `origin`, so the HTTP route keeps emitting `MANUAL`.
+- Decision: `RestorePointRepository.get_by_id` reads without an authorization scope, for the
+  orchestrator that already holds the Agent.
+- Decision: no new Domain Events. `agent.stopped` / `agent.started` and the
+  `agent.restore_point.*` events already narrate the whole flow; a dedicated
+  `agent.managed_update.*` event waits for a consumer.
+- Limitation: the background task is process-local. With `replicaCount: 1` this is sound; a
+  restart mid-update leaves the Agent STOPPED with a non-terminal `PRE_UPGRADE` row, which the
+  scheduled reconciliation resolves and the user can carry by hand. A durable queue is the
+  price of multi-replica, not paid here.
+- Limitation: a rollback that itself fails leaves the Agent in `ERROR` with `last_error`
+  naming the restore point that holds the safe state — automatic recovery is one deep, not
+  two. `last_error_code` stays unset on that row, since the text is hand-written rather than a
+  normalized provisioning category.
+- Note: the update banner's button now calls the managed path; the explicit Restart control
+  remains a plain stop-and-start with no backup, which is the deliberate safe-vs-destructive
+  distinction between the two surfaces.
+
 ### 2026-09-23 — AF-292 — Restore no longer races the Agent it is replacing
 
 - Fixed: capture and restore could run while the Agent's pod was still terminating. Stopping
