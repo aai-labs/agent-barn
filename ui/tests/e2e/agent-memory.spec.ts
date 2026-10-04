@@ -29,6 +29,11 @@ function memberContext() {
   };
 }
 
+/** Platform administrators see admin settings, but only an Owner or Admin holds memory.access.manage. */
+function platformAdminMemberContext() {
+  return { ...memberContext(), is_platform_admin: true };
+}
+
 function twoOrganizationContext() {
   const [first] = UserContext.organization_users;
   const globex = {
@@ -204,6 +209,21 @@ test.describe("Memory access settings", () => {
 
     await expect(page.getByRole("button", { name: "Memory access" })).toHaveCount(0);
     await expect(page.getByText("can read Triage")).toHaveCount(0);
+    expect(grants.requests).toHaveLength(0);
+  });
+
+  test("is hidden from a platform administrator who is only a Member of the Organization", async ({ page }) => {
+    const data = await signIn(page, platformAdminMemberContext());
+    await data.organizations.interceptGetOrganization();
+    await data.organizations.interceptAgentSettings();
+    await data.agents.interceptGetModelsRequest();
+    await data.agentMemory.interceptAgentOptions();
+    const grants = await data.agentMemory.interceptMemoryGrants({ grants: [mockMemoryGrant] });
+    const memory = new AgentMemoryPage(page);
+    await memory.gotoMemoryAccess();
+
+    await expect(page.getByRole("button", { name: "Shared Credentials" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Memory access" })).toHaveCount(0);
     expect(grants.requests).toHaveLength(0);
   });
 

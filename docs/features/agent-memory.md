@@ -8,7 +8,7 @@ Read before changing whether an Agent may use long-term memory, who may turn it 
 
 Agent Memory gives an Agent long-term memory backed by a self-hosted Hindsight instance. It is opt-in per Agent and adds to each Runtime's own memory (Hermes `MEMORY.md`/`USER.md`, OpenClaw `memory-core`); it never replaces it.
 
-Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md). The opt-in, Memory Grants, gateway, per-start credentials, and runtime plugins are implemented. Opted-in Agents automatically recall and retain through Hindsight when the optional backend and gateway are deployed.
+Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md). The opt-in, Memory Grants, gateway, per-start credentials, runtime plugins, and the memory UI are implemented. Opted-in Agents automatically recall and retain through Hindsight when the optional backend and gateway are deployed.
 
 ## Memory data contract
 
@@ -53,6 +53,13 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 - `mentioned_at` is the time Hindsight recorded for the memory, not necessarily when it was persisted; Hindsight 0.10.2 does not expose a creation time on this endpoint. Results are ordered most recently mentioned first. Memories without a mention time have none.
 - The product API holds no Hindsight credential. After authorizing the person it sends the gateway's separate viewer (`/memory/view/v1/memories`, never the Agent allowlist) a 30-second JWT naming one Organization and Agent, with an audience and operation distinct from user access tokens and Agent credentials. The gateway rechecks that the Agent is undeleted in an existing Organization, derives the `org-<organization_id>` bank, forces `tags=agent:<agent_id>&tags_match=any_strict`, and accepts only `search`, `limit`, and `offset`. Agent credentials are still refused on every list path.
 - Hindsight 0.10.2 applies the tag filter before counting, so `total` covers only the Agent's rows. The gateway fails closed with a generic 502 if any returned row lacks that tag, has an unknown type, or the page is larger than requested or than its total. A bank that does not exist yet is an empty page. Search is a case-insensitive substring match on memory text and context with SQL wildcards escaped; it can match context that is not shown. Upstream errors are generic 502 or 503.
+
+### Use the memory UI
+
+- Agent configuration → **Memory** shows `memory_enabled` and, for people with `agent.memory.manage`, lets them change it. Turning it on takes effect when the Agent next starts, so a running Agent must be restarted; the UI does not report whether that has happened. Turning it off takes effect immediately and keeps stored memories.
+- Organization Settings → **Memory access** is visible only to the Organization's Owners and Admins, matching `memory.access.manage`; a platform administrator who is only a Member does not see it. It lists grants, creates one from a reader Agent to Organization Memory or to another Agent's private memories (never itself), and revokes one after confirmation. A duplicate is stopped before submission and shown if the server still returns 409.
+- Agent page → **Memory** appears only with `activity.read` and queries only then. It is read-only; see [View an Agent's saved memories](#view-an-agents-saved-memories). Memory text is rendered as plain text.
+- Grants and memory items are Organization-scoped query families; the `memory-grants` family is evicted on an Organization switch and keys carry the Organization API base.
 
 ### Use the memory gateway
 
@@ -131,6 +138,7 @@ and do not measure Hindsight extraction quality.
 - `api/memory_app.py`, `api/memory_main.py`: gateway composition and process entry point.
 - `api/domains/agents/service.py`: start-time memory credentials; Agent lifecycle persistence copies their hash.
 - `helm/hindsight/`, `helm/agentbarn-api/templates/memory-deployment.yaml`: backend and gateway deployments; Helmfile owns optional release ordering.
+- `ui/src/features/agent-memory/`: the setting, access panel, and Memory tab; composed from the Agent configuration page, the Agent detail page, and Organization Settings.
 - `api/domains/rbac/catalog.py`: `agent.memory.manage`, `memory.access.manage`.
 - `api/tests/integration/test_agent_memory.py`: permission, tenancy and audit contract.
 - `api/tests/integration/test_memory_gateway.py`, `api/tests/fixtures/agent_memory/`: HTTP policy, credential lifecycle, and sanitized plugin request captures.

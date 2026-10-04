@@ -6,7 +6,8 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Current state
 
-- Delivered: the per-Agent memory opt-in and Memory Grants with audit Domain Events;
+- Delivered: the Agent memory setting, Organization memory-access page, and read-only
+  Agent Memory tab; the per-Agent memory opt-in and Memory Grants with audit Domain Events;
   authenticated gateway with current grant checks; hashed per-start Agent credentials; optional
   Hindsight and gateway Helm deployments; automatic Hermes/OpenClaw recall and retain alongside
   native memory for opted-in starts; Organization attribution of memory model costs;
@@ -15,11 +16,37 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
   optional deployment remains off by default. Deletion purge and
   backup/restore are pending.
 - Next, in order:
-  1. UI: an Agent memory toggle and an Organization memory-access settings page.
-  2. Lifecycle: purge an Agent's memories and grants on deletion; Hindsight backups.
+  1. Lifecycle: purge an Agent's memories and grants on deletion; Hindsight backups.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-04 — slice 5 — memory viewing UI
+
+- Delivered: Agent configuration → Memory toggles `memory_enabled` (needs
+  `agent.memory.manage`); Organization Settings → Memory access lists, creates, and
+  revokes Memory Grants (Owners and Admins); the Agent page's Memory tab lists what that
+  Agent itself wrote with type, private/shared label, mention date, search, and pagination
+  (needs `activity.read`). Viewing is read-only; there is no edit or delete.
+- Changed: `GET /organizations/{organization_id}/agents/{agent_id}/memory/items` calls a
+  separate read-only viewer on the memory gateway (`/memory/view/v1/memories`) with a
+  30-second capability signed for one Organization and Agent. Only the gateway holds the
+  Hindsight key; the viewer forces the bank and `agent:<id>` tag, accepts only search and
+  paging, and fails closed (502) on any row outside that filter. `MEMORY_VIEW_BASE_URL`
+  addresses it (Compose, Makefile, chart Secret, `.env.spec`). The UI's Agent permission enum
+  now includes `agent.memory.manage`, which the API already returned. No migration, schema, or
+  release-version change.
+- Verified: the pinned Hindsight 0.10.2 `memories/list` source and a real container run show
+  the tag filter applies before `total`, search is an ILIKE on text and context, and pagination
+  is scoped to the filtered set; `test_agent_memory_viewer_contract.py` asserts this against
+  the image. Viewer API tests cover permissions, hidden/deleted/other-Organization Agents,
+  forged parameters, capability audience/expiry/forgery, stopped and disabled Agents, and
+  upstream failures. Playwright covers the toggle, grants, viewer, read-only behavior,
+  permission query guards, Organization cache isolation, and error states.
+- Limitation: Hindsight 0.10.2 exposes no creation time on its list endpoint, so memories show
+  `mentioned_at` rather than when they were stored; search also matches context that is not
+  shown. The grant form lists at most 200 Agents.
+- Follow-up: lifecycle purge and backups.
 
 ### 2026-10-03 — slice 4b — observed Organization spend limits
 

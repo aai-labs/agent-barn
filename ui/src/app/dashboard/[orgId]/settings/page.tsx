@@ -26,7 +26,8 @@ const ICONS = {
 } as const;
 
 export default function SettingsPage() {
-  const { canManage, selectedOrganization } = useActiveOrgRole();
+  const { role, canManage, selectedOrganization } = useActiveOrgRole();
+  const isMembershipAdmin = role === "OWNER" || role === "ADMIN";
   const [activeSection, setActiveSection] = useQueryState(
     "tab",
     parseAsStringEnum<OrganizationSettingsSectionKey>(ORGANIZATION_SETTINGS_SECTION_KEYS)
@@ -34,7 +35,7 @@ export default function SettingsPage() {
       .withOptions({ scroll: false, history: "replace" }),
   );
 
-  const visibleSections = visibleOrganizationSettingsSections(canManage);
+  const visibleSections = visibleOrganizationSettingsSections(canManage, isMembershipAdmin);
   // A Member who deep-links to an admin-only section lands on the first one they can
   // see rather than an empty page.
   const section =
@@ -89,7 +90,7 @@ export default function SettingsPage() {
             <TemplatesPanel scope={{ kind: "organization" }} canManage={canManage} />
           )}
           {section.key === "skills" && <SkillsPanel scope={{ kind: "organization" }} canManage={canManage} />}
-          {section.key === "memory-access" && <MemoryAccessPanel canManage={canManage} />}
+          {section.key === "memory-access" && <MemoryAccessPanel canManage={isMembershipAdmin} />}
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
         </SettingsPageLayout>
       </main>

@@ -105,7 +105,7 @@ A captured, restorable copy of one Agent's persistent volume contents, together 
 _Avoid_: snapshot, backup, volume image, checkpoint
 
 **Agent Memory**:
-Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, and credentials are implemented; automatic Runtime use and physical purging are pending. See [Agent Memory](docs/features/agent-memory.md).
+Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, credentials, automatic Runtime use, and read-only viewing of an Agent's own saved memories are implemented; physical purging is pending. See [Agent Memory](docs/features/agent-memory.md).
 _Avoid_: MEMORY.md, Runtime memory, knowledge base
 
 **Organization Memory**:
