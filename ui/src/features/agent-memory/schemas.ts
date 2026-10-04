@@ -42,3 +42,12 @@ export type MemoryGrant = z.infer<typeof MemoryGrantSchema>;
 export type MemoryItem = z.infer<typeof MemoryItemSchema>;
 export type MemoryItemType = z.infer<typeof MemoryItemTypeSchema>;
 export type PaginatedMemoryItems = z.infer<typeof PaginatedMemoryItemsSchema>;
+
+
+export const PlatformMemorySettingsSchema = z.object({
+  model: z.string(),
+  updatedAt: z.string().nullable().optional(),
+});
+export const PlatformMemoryModelsSchema = z.array(z.object({ value: z.string(), label: z.string() }));
+export type PlatformMemorySettings = z.infer<typeof PlatformMemorySettingsSchema>;
+export type PlatformMemoryModels = z.infer<typeof PlatformMemoryModelsSchema>;

@@ -3,9 +3,10 @@ import { Suspense } from "react";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 import { PlatformStatsPanel } from "@/features/platform-stats/components/platform-stats-panel";
-import { FileText, Receipt, Sparkles } from "lucide-react";
+import { FileText, Receipt, Settings, Sparkles } from "lucide-react";
 
 const platformLinks = [
+  { href: "/dashboard/platform/settings", title: "Platform Settings", description: "Choose the memory-processing model shared across Organizations.", Icon: Settings },
   {
     href: "/dashboard/platform/users",
     title: "Users",

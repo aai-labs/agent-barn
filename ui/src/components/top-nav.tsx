@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
-import { FileText, Menu, Receipt, Sparkles } from "lucide-react";
+import { FileText, Menu, Receipt, Settings, Sparkles } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
 import {
   Sheet,
@@ -48,6 +48,7 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: "/dashboard/platform/costs", label: "Costs" },
         { href: "/dashboard/platform/templates", label: "Templates" },
         { href: "/dashboard/platform/skills", label: "Skills" },
+        { href: "/dashboard/platform/settings", label: "Settings" },
       ]
     : [
         { href: orgBase, label: "Home" },
@@ -274,6 +275,10 @@ export function TopNav({ onHire }: TopNavProps) {
                     onClick={() => setMenuOpen(false)}
                   >
                     <Receipt size={14} /> Costs
+                  </Link>
+                  <Link href="/dashboard/platform/settings" className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }} onClick={() => setMenuOpen(false)}>
+                    <Settings size={14} /> Settings
                   </Link>
                   <Link
                     href="/dashboard/platform/templates"

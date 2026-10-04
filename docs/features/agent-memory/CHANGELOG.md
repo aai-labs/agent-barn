@@ -21,6 +21,17 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — Platform Settings UI
+
+- Delivered: Platform Settings → Agent Memory with a searchable supported-model
+  chooser, explicit platformwide scope, save/cancel, and inline failure/retry.
+  Platform navigation and the administrator menu expose it; Organization Owners
+  cannot render the controls or fetch the settings/catalog.
+- Verified: all four browser scenarios and UI lint/type checks pass, including
+  persistence after reload, permission denial, failed save retry, and unavailable
+  catalog. The shared preview requires login; authenticated rendering is covered
+  by the browser suite.
+
 ### 2026-10-04 — Platform memory model settings
 
 - Delivered: Platform Admin settings API, supported model catalog, singleton
