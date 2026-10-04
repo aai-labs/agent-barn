@@ -114,6 +114,20 @@ class AgentMemoryRepository:
                 tags.append("scope:team")
             return MemoryAccess(agent.id, agent.organization_id, tuple(tags), organization_memory_write)
 
+    def has_organization_memory_read(self, organization_id: UUID, agent_id: UUID) -> bool:
+        """Current read/read-write grant, independent of runtime state and memory opt-in."""
+        with Session(self.delegate.engine) as session:
+            return (
+                session.exec(
+                    select(AgentMemoryGrant.id).where(
+                        col(AgentMemoryGrant.organization_id) == organization_id,
+                        col(AgentMemoryGrant.agent_id) == agent_id,
+                        col(AgentMemoryGrant.source_agent_id).is_(None),
+                    )
+                ).first()
+                is not None
+            )
+
     def resolve_view_target(self, organization_id: UUID, agent_id: UUID | None) -> bool:
         """Whether the Organization exists and any targeted Agent is undeleted within it.
 

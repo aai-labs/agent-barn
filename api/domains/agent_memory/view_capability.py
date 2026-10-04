@@ -1,6 +1,6 @@
 """Short-lived capability the product API presents to the gateway's memory viewer.
 
-It names one Organization and either an Agent history view or a shared Organization
+It names one Organization and either an permission-scoped Agent view or a shared Organization
 view, with distinct read-only operations. The audience
 differs from user access tokens (which also use the platform signing key) and from Agent
 memory credentials, so neither can stand in for it. The bank, tags, and other upstream

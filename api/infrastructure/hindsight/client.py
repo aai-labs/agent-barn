@@ -39,7 +39,7 @@ class HindsightClient:
                     self.config.hindsight_base_url.rstrip("/") + path,
                     headers={"Authorization": f"Bearer {self.config.hindsight_api_key}"},
                     params=list(params) if params else None,
-                    json=payload if method == "POST" else None,
+                    json=payload if method in {"POST", "PATCH"} else None,
                 )
         except httpx.HTTPError:
             raise HTTPException(502, "Agent Memory backend is unavailable.") from None

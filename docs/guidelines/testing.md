@@ -179,6 +179,11 @@ limits, precise combined totals, missing/stale data, renewal, immediate limit
 changes, and recall availability when changing this policy. Failed and truncated
 spend-log runs must leave the heartbeat unchanged.
 
+The pinned viewer tests also cover exact private scopes, grant/revoke visibility
+for the author's own and other Agents' shared records, real recall with compound
+scopes, multi-page shared-document retagging, and invalidation of legacy private
+observations after retagging and re-consolidation.
+
 The Agent and Organization Memory viewers' list contract (tag-filtered items and total, search, and
 pagination) is proven against the same pinned image running with its embedded database
 and mock extraction model, in

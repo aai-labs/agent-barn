@@ -69,7 +69,13 @@ class MemoryPurger:
                     "GET",
                     bank + "/documents",
                     None,
-                    params=[("tags", tag), ("tags_match", "any_strict"), ("limit", "1"), ("offset", "0")],
+                    params=[
+                        ("tags", tag),
+                        ("tags", f"author:{row.agent_id}"),
+                        ("tags_match", "any_strict"),
+                        ("limit", "1"),
+                        ("offset", "0"),
+                    ],
                 )
             except HTTPException as exc:
                 if exc.status_code == 404:
@@ -87,7 +93,7 @@ class MemoryPurger:
             document_id = doc["id"]
             if not isinstance(document_id, str) or not document_id.startswith((tag + ":private:", tag + ":team:")):
                 raise ValueError("document outside Agent namespace")
-            if not isinstance(doc["tags"], list) or tag not in doc["tags"]:
+            if not isinstance(doc["tags"], list) or not {tag, f"author:{row.agent_id}"}.intersection(doc["tags"]):
                 raise ValueError("document outside Agent tags")
             try:
                 result = self.client.request("DELETE", bank + "/documents/" + quote(document_id, safe=""), None)

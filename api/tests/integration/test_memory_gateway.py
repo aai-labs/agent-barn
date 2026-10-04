@@ -24,6 +24,10 @@ _CAPTURES = [
 ]
 
 
+def _scope_tags(payload):
+    return [scope["tags"][0] for scope in payload["tag_groups"][0]["or"]]
+
+
 def _headers(context):
     return {"Authorization": f"Bearer {context.memory_key}"}
 
@@ -72,12 +76,16 @@ def test_recorded_plugin_requests_are_accepted_and_scoped(runtime, capture):
                     if capture["path"].endswith("/memories"):
                         assert_that(
                             payload["items"][0]["tags"],
-                            equal_to([f"agent:{context.agent.id}"] + (["scope:team"] if shared else [])),
+                            equal_to(
+                                [f"author:{context.agent.id}", "scope:team"]
+                                if shared
+                                else [f"agent:{context.agent.id}"]
+                            ),
                         )
                         assert_that(payload["items"][0]["observation_scopes"], equal_to("per_tag"))
                     else:
-                        assert_that(payload["tags"], contains_exactly(f"agent:{context.agent.id}"))
-                        assert_that(payload["tags_match"], equal_to("any_strict"))
+                        assert_that(_scope_tags(payload), contains_exactly(f"agent:{context.agent.id}"))
+                        assert_that(payload["tag_groups"][0]["or"][0]["match"], equal_to("exact"))
 
 
 @pytest.mark.parametrize("authorization", [None, "Bearer bad", "Basic per-agent-memory-test-key"])
@@ -131,7 +139,7 @@ def test_grants_and_revocations_apply_on_the_next_request():
             context.injector.get(PostgresRepositoryDelegate).delete(source_grant)
             _request(context)
         with then("each request reflects the current grants"):
-            tags = [r["payload"]["tags"] for r in context.backend_requests]
+            tags = [_scope_tags(r["payload"]) for r in context.backend_requests]
             assert_that(tags[0], contains_exactly(f"agent:{context.triage.id}"))
             assert_that(
                 tags[1], contains_exactly(f"agent:{context.triage.id}", f"agent:{context.billing.id}", "scope:team")
@@ -175,7 +183,10 @@ def test_retain_forces_tags_and_separates_private_and_team_documents(team_grante
             private, shared = payload["items"]
             assert_that(private["tags"], contains_exactly(f"agent:{context.agent.id}"))
             assert_that(
-                shared["tags"], equal_to([f"agent:{context.agent.id}"] + (["scope:team"] if team_granted else []))
+                shared["tags"],
+                equal_to(
+                    [f"author:{context.agent.id}", "scope:team"] if team_granted else [f"agent:{context.agent.id}"]
+                ),
             )
             assert_that(shared["observation_scopes"], equal_to("per_tag"))
             assert_that("entities" in shared or "strategy" in shared or "document_tags" in payload, equal_to(False))
@@ -203,9 +214,14 @@ def test_recall_cannot_override_tags_or_enable_unverified_response_surfaces():
         with then("the gateway enforces the safe recall surface"):
             assert_that(response.status_code, equal_to(200))
             payload = context.backend_requests[0]["payload"]
-            assert_that(payload, has_entries(tags=[f"agent:{context.agent.id}"], tags_match="any_strict", trace=False))
+            assert_that(
+                payload,
+                has_entries(
+                    tag_groups=[{"or": [{"tags": [f"agent:{context.agent.id}"], "match": "exact"}]}], trace=False
+                ),
+            )
             assert_that(payload["include"], has_entries(chunks=none(), source_facts=none()))
-            assert_that("tag_groups" in payload, equal_to(False))
+            assert_that("tags" in payload, equal_to(False))
 
 
 def test_reflect_cannot_enable_global_directives_or_tool_traces():
@@ -230,7 +246,7 @@ def test_reflect_cannot_enable_global_directives_or_tool_traces():
             assert_that(
                 context.backend_requests[0]["payload"],
                 has_entries(
-                    tags_match="any_strict",
+                    tag_groups=[{"or": [{"tags": [f"agent:{context.agent.id}"], "match": "exact"}]}],
                     apply_all_directives=False,
                     exclude_mental_models=True,
                     include={"facts": None, "tool_calls": None},
@@ -339,7 +355,9 @@ def test_deleted_sources_are_removed_from_recall_tags():
             response = _request(context)
         with then("the source's tag is absent"):
             assert_that(response.status_code, equal_to(200))
-            assert_that(context.backend_requests[0]["payload"]["tags"], contains_exactly(f"agent:{context.triage.id}"))
+            assert_that(
+                _scope_tags(context.backend_requests[0]["payload"]), contains_exactly(f"agent:{context.triage.id}")
+            )
 
 
 @pytest.mark.parametrize(
@@ -407,14 +425,14 @@ def test_organization_write_includes_read_and_revocation_is_immediate(read, writ
         writer = _grant(context, access="read_write") if write else None
         recall = _request(context)
         assert_that(recall.status_code, equal_to(200))
-        assert_that("scope:team" in context.backend_requests[-1]["payload"]["tags"], equal_to(read or write))
+        assert_that("scope:team" in _scope_tags(context.backend_requests[-1]["payload"]), equal_to(read or write))
         response = context.memory_client.post(
             "/memory/v1/organization-memory", json={"content": "Shared convention"}, headers=_headers(context)
         )
         assert_that(response.status_code, equal_to(202 if write else 403))
         if write:
             payload = context.backend_requests[-1]["payload"]
-            assert_that(payload["items"][0]["tags"], contains_exactly(f"agent:{context.agent.id}", "scope:team"))
+            assert_that(payload["items"][0]["tags"], contains_exactly(f"author:{context.agent.id}", "scope:team"))
             assert_that(payload["async"], equal_to(True))
             context.injector.get(PostgresRepositoryDelegate).delete(writer)
             response = context.memory_client.post(
@@ -423,7 +441,7 @@ def test_organization_write_includes_read_and_revocation_is_immediate(read, writ
             assert_that(response.status_code, equal_to(403))
             recall = _request(context)
             assert_that(recall.status_code, equal_to(200))
-            assert_that("scope:team" in context.backend_requests[-1]["payload"]["tags"], equal_to(False))
+            assert_that("scope:team" in _scope_tags(context.backend_requests[-1]["payload"]), equal_to(False))
 
 
 def test_organization_write_tool_endpoint_rejects_identity_and_tag_overrides():

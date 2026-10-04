@@ -9,14 +9,14 @@ from uuid import uuid4
 from hamcrest import assert_that, contains_inanyorder, empty, equal_to, greater_than, has_entries, has_item, is_not
 from sqlmodel import Session, select
 
-from api.domains.agent_memory.models import AgentMemoryPurge
+from api.domains.agent_memory.models import AgentMemoryGrant, AgentMemoryPurge
 from api.domains.agent_memory.purge import MemoryPurger
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.helpers.hindsight_view_backend import hindsight_listing, pinned_hindsight_is_running, retain_in_bank
 from api.tests.helpers.memory_backend import memory_viewer_is_served
 from api.tests.steps.agent import there_is_an_agent
-from api.tests.steps.agent_memory import agent_memory_api_setup, purge_tasks_are_clean, two_agents
+from api.tests.steps.agent_memory import agent_memory_api_setup, memory_is_enabled, purge_tasks_are_clean, two_agents
 
 
 def test_purge_removes_private_and_shared_documents_without_touching_another_agent_or_bank():
@@ -29,7 +29,7 @@ def test_purge_removes_private_and_shared_documents_without_touching_another_age
                 context,
                 bank,
                 f"Billing {scope} secret",
-                [tag, *(["scope:team"] if scope == "team" else [])],
+                [f"author:{context.billing.id}", "scope:team"] if scope == "team" else [tag],
                 document_id=f"{tag}:{scope}:seed",
                 observation_scopes="per_tag",
             )
@@ -76,6 +76,9 @@ def _bank(context) -> str:
 def _two_agents_share_a_bank():
     def step(context):
         bank = _bank(context)
+        context.injector.get(PostgresRepositoryDelegate).save(
+            AgentMemoryGrant(organization_id=context.organization.id, agent_id=context.billing.id)
+        )
         retain_in_bank(context, bank, "Billing prefers tea", [f"agent:{context.billing.id}"])
         retain_in_bank(context, bank, "Billing 100%_sure", [f"agent:{context.billing.id}", "scope:team"])
         retain_in_bank(context, bank, "Triage prefers coffee", [f"agent:{context.triage.id}"])
@@ -87,15 +90,20 @@ def _setup(*steps):
     return agent_memory_api_setup(pinned_hindsight_is_running(), memory_viewer_is_served(), *steps)
 
 
-def test_items_and_total_cover_only_the_selected_agents_tag_in_a_shared_bank():
+def test_items_and_total_cover_private_and_currently_granted_organization_scopes():
     with given(_setup(two_agents(), _two_agents_share_a_bank())) as context:
         with when("each Agent's memories are viewed through both HTTP boundaries"):
             billing = _list(context, context.billing.id, page_size=50).json()
             triage = _list(context, context.triage.id, page_size=50).json()
-            billing_upstream = hindsight_listing(context, _bank(context), f"agent:{context.billing.id}")
-            triage_upstream = hindsight_listing(context, _bank(context), f"agent:{context.triage.id}")
+            billing_private = hindsight_listing(context, _bank(context), f"agent:{context.billing.id}", match="exact")
+            billing_team = hindsight_listing(context, _bank(context), "scope:team")
+            billing_upstream = {
+                "items": billing_private["items"] + billing_team["items"],
+                "total": billing_private["total"] + billing_team["total"],
+            }
+            triage_upstream = hindsight_listing(context, _bank(context), f"agent:{context.triage.id}", match="exact")
 
-        with then("totals count only that Agent's rows and the rows are exactly Hindsight's tag-filtered rows"):
+        with then("totals and rows cover exactly the permitted private and Organization scopes"):
             assert_that(billing["total"], equal_to(billing_upstream["total"]))
             assert_that(triage["total"], equal_to(triage_upstream["total"]))
             assert_that(billing["total"], greater_than(0))
@@ -182,3 +190,123 @@ def test_organization_viewer_scopes_items_total_search_and_paging_to_shared_memo
         found = context.client.get(url, params={"search": "100%_sure", "page_size": 50}, headers=auth).json()
         assert_that(found["total"], greater_than(0))
         assert_that(all("100%_sure" in row["text"] for row in found["items"]), equal_to(True))
+
+
+def test_organization_grants_control_shared_memories_in_the_agent_tab_including_its_own_contributions():
+    from api.domains.agent_memory.retag_shared import retag_shared_documents
+    from api.infrastructure.hindsight.client import HindsightClient
+
+    with given(_setup(two_agents(), memory_is_enabled())) as context:
+        bank = _bank(context)
+        reader = context.triage
+        tag = f"agent:{reader.id}"
+        retain_in_bank(context, bank, "Private triage preference", [tag], document_id=f"{tag}:private:seed")
+        retain_in_bank(
+            context,
+            bank,
+            "Organization shared convention",
+            [tag, "scope:team"],
+            document_id=f"{tag}:team:seed",
+            observation_scopes="per_tag",
+        )
+        retain_in_bank(
+            context,
+            bank,
+            "Another Agent shared convention",
+            [f"agent:{context.billing.id}", "scope:team"],
+            document_id=f"agent:{context.billing.id}:team:seed",
+            observation_scopes="per_tag",
+        )
+        private = _list(context, reader.id, page_size=50)
+        assert_that(private.status_code, equal_to(200))
+        assert_that(all(not item["shared"] for item in private.json()["items"]), equal_to(True))
+        assert_that(any("Organization shared" in item["text"] for item in private.json()["items"]), equal_to(False))
+
+        # Repairs old source tags via Hindsight's supported document update; this
+        # invalidates the observations that used to fan out to the author's private tag.
+        assert_that(
+            retag_shared_documents(context.injector.get(HindsightClient), context.organization.id, batch_size=1),
+            equal_to(2),
+        )
+        assert_that(retag_shared_documents(context.injector.get(HindsightClient), context.organization.id), equal_to(0))
+        grant = AgentMemoryGrant(organization_id=context.organization.id, agent_id=reader.id)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        delegate.save(grant)
+        full = _list(context, reader.id, page_size=50).json()
+        assert_that(
+            any(item["shared"] and "Organization shared" in item["text"] for item in full["items"]), equal_to(True)
+        )
+        assert_that(any(item["shared"] and "Another Agent" in item["text"] for item in full["items"]), equal_to(True))
+        first = _list(context, reader.id, page_size=2).json()
+        second = _list(context, reader.id, page_size=2, page=2).json()
+        assert_that(first["total"], equal_to(full["total"]))
+        assert_that(second["total"], equal_to(full["total"]))
+        assert_that(
+            [item["id"] for item in first["items"] + second["items"]],
+            equal_to([item["id"] for item in full["items"][:4]]),
+        )
+        # The real recall boundary accepts the gateway's compound scopes too.
+        from api.domains.agent_memory.gateway_service import MemoryGatewayService
+
+        gateway = context.injector.get(MemoryGatewayService)
+        access = gateway.authenticate(f"Bearer {context.memory_key}")
+        recall = gateway.forward(
+            access,
+            "POST",
+            "v1/default/banks/forged/memories/recall",
+            {"query": "Organization shared convention", "types": ["world", "experience"], "budget": "high"},
+        )
+        import json
+
+        recalled = json.loads(recall.content)["results"]
+        assert_that(any("scope:team" in row["tags"] for row in recalled), equal_to(True))
+        delegate.delete(grant)
+        access = gateway.authenticate(f"Bearer {context.memory_key}")
+        recall = gateway.forward(
+            access,
+            "POST",
+            "v1/default/banks/forged/memories/recall",
+            {"query": "Organization shared convention", "types": ["world", "experience"], "budget": "high"},
+        )
+        assert_that(
+            all("scope:team" not in row["tags"] for row in json.loads(recall.content)["results"]), equal_to(True)
+        )
+        revoked = _list(context, reader.id, page_size=50).json()
+        assert_that(all(not item["shared"] for item in revoked["items"]), equal_to(True))
+        assert_that(revoked["total"], equal_to(len(revoked["items"])))
+        assert_that(any("Private triage preference" in item["text"] for item in revoked["items"]), equal_to(True))
+        assert_that(
+            any("Organization shared" in item["text"] or "Another Agent" in item["text"] for item in revoked["items"]),
+            equal_to(False),
+        )
+        shared = context.client.get(
+            "/api/v1/organizations/{organization_id}/memory/items",
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        ).json()
+        assert_that(any("Organization shared" in item["text"] for item in shared["items"]), equal_to(True))
+
+
+def test_shared_retagging_removes_legacy_private_observations_and_keeps_organization_facts():
+    from api.domains.agent_memory.retag_shared import retag_shared_documents
+    from api.infrastructure.hindsight.client import HindsightClient
+    from api.tests.helpers.hindsight_view_backend import consolidate_bank
+
+    with given(_setup(two_agents())) as context:
+        bank = _bank(context)
+        tag = f"agent:{context.triage.id}"
+        retain_in_bank(
+            context,
+            bank,
+            "Legacy organization-only project convention",
+            [tag, "scope:team"],
+            document_id=f"{tag}:team:seed",
+            observation_scopes="per_tag",
+        )
+        consolidate_bank(context, bank)
+        legacy = hindsight_listing(context, bank, tag, match="exact")
+        assert_that(any(row["fact_type"] == "observation" for row in legacy["items"]), equal_to(True))
+        assert_that(retag_shared_documents(context.injector.get(HindsightClient), context.organization.id), equal_to(1))
+        assert_that(hindsight_listing(context, bank, tag), has_entries(total=0, items=empty()))
+        assert_that(hindsight_listing(context, bank, "scope:team")["total"], greater_than(0))
+        consolidate_bank(context, bank)
+        assert_that(hindsight_listing(context, bank, tag), has_entries(total=0, items=empty()))

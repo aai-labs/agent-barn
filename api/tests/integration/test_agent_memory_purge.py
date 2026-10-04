@@ -51,7 +51,10 @@ class Backend(HindsightClient):
     def __init__(self, agent_id):
         super().__init__(get_config())
         self.documents = [
-            {"id": f"agent:{agent_id}:{scope}:doc-{index}", "tags": [f"agent:{agent_id}"]}
+            {
+                "id": f"agent:{agent_id}:{scope}:doc-{index}",
+                "tags": [f"author:{agent_id}", "scope:team"] if scope == "team" else [f"agent:{agent_id}"],
+            }
             for index, scope in enumerate(["private", "team"])
         ]
         self.calls = []
@@ -160,7 +163,7 @@ def test_purge_retries_failures_and_resweeps_late_work_without_skipping_document
                         dict(params),
                         equal_to(
                             {
-                                "tags": f"agent:{context.billing.id}",
+                                "tags": f"author:{context.billing.id}",
                                 "tags_match": "any_strict",
                                 "limit": "1",
                                 "offset": "0",

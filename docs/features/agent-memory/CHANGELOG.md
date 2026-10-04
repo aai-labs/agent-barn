@@ -21,6 +21,23 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — permission-scoped Agent tab and shared authorship
+
+- Changed: the Agent tab lists private records, then all Organization Memory
+  only with a current read/read-write grant. Revocation hides shared records
+  including the Agent's own contributions; the Owner/Admin page keeps them.
+- Fixed: shared writes carry `author:<id>` rather than the private access tag.
+  Recall/reflect use exact private scopes and a separately granted shared scope.
+  An operator repair retags legacy documents and invalidates their derived
+  observations through Hindsight's document API. Purging covers both tag formats.
+- Verified: the old viewer reproduces the revoked-access leak against Hindsight;
+  the corrected grant/revoke, pagination, recall, multi-page retagging, observation
+  invalidation, and purge contracts pass. 161 viewer/gateway/grant scenarios and
+  13 purge scenarios pass; all 32 memory browser tests pass, including refresh
+  after revocation and regrant. API/UI static checks pass. The local shared
+  document was repaired; Alex's current Read only grant was preserved.
+  No platform schema or version bump.
+
 ### 2026-10-04 — Organization viewer and reliable permission refusals
 
 - Delivered: an Owner/Admin Organization Memory page in Organization Settings,

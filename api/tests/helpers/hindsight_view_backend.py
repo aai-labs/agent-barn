@@ -91,19 +91,42 @@ def retain_in_bank(
     response = httpx.post(
         f"{context.hindsight_url}/v1/default/banks/{bank}/memories",
         json={
-            "items": [{"content": content, "tags": tags, **({"document_id": document_id} if document_id else {})}],
-            **({"observation_scopes": observation_scopes} if observation_scopes else {}),
+            "items": [
+                {
+                    "content": content,
+                    "tags": tags,
+                    **({"document_id": document_id} if document_id else {}),
+                    **({"observation_scopes": observation_scopes} if observation_scopes else {}),
+                }
+            ],
         },
         timeout=60,
     )
     response.raise_for_status()
 
 
-def hindsight_listing(context, bank: str, tag: str) -> dict:
+def hindsight_listing(context, bank: str, tag: str, *, match: str = "any_strict") -> dict:
     response = httpx.get(
         f"{context.hindsight_url}/v1/default/banks/{bank}/memories/list",
-        params=[("tags", tag), ("tags_match", "any_strict"), ("limit", "100")],
+        params=[("tags", tag), ("tags_match", match), ("limit", "100")],
         timeout=30,
     )
     response.raise_for_status()
     return response.json()
+
+
+def consolidate_bank(context, bank: str) -> None:
+    response = httpx.post(f"{context.hindsight_url}/v1/default/banks/{bank}/consolidate", json={}, timeout=30)
+    response.raise_for_status()
+    operation = response.json()["operation_id"]
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        result = httpx.get(f"{context.hindsight_url}/v1/default/banks/{bank}/operations/{operation}", timeout=10)
+        result.raise_for_status()
+        status = result.json()["status"]
+        if status == "completed":
+            return
+        if status in {"failed", "cancelled"}:
+            raise AssertionError(f"Consolidation {status}")
+        time.sleep(0.2)
+    raise AssertionError("Consolidation did not complete")

@@ -21,7 +21,7 @@ _TYPES = {"world", "experience", "observation"}
 @singleton
 @dataclass
 class MemoryViewerService:
-    """Read-only Agent history or shared Organization Memory for authorized people.
+    """Read-only permission-scoped Agent memory or Organization Memory for authorized people.
 
     Authorization happened in the product API; the capability only proves that and names
     the target. Stored memories stay viewable while the Agent is stopped or memory is off.
@@ -45,15 +45,37 @@ class MemoryViewerService:
         return target
 
     def list_memories(self, target: MemoryViewTarget, query: MemoryViewQuery) -> MemoryViewPage:
-        own_tag = "scope:team" if target.agent_id is None else f"agent:{target.agent_id}"
+        if target.agent_id is None:
+            return self._list_scope(target, query, "scope:team", exact=False)
+        # Private first, then Organization Memory. Disjoint scopes make counts and
+        # pagination exact without downloading the bank or post-filtering a page.
+        private = self._list_scope(target, query, f"agent:{target.agent_id}", exact=True)
+        if not self.repository.has_organization_memory_read(target.organization_id, target.agent_id):
+            return private
+        shared = self._list_scope(
+            target,
+            MemoryViewQuery(
+                search=query.search,
+                limit=query.limit - len(private.items) or 1,
+                offset=max(0, query.offset - private.total),
+            ),
+            "scope:team",
+            exact=False,
+            count_only=len(private.items) == query.limit,
+        )
+        return MemoryViewPage(items=private.items + shared.items, total=private.total + shared.total)
+
+    def _list_scope(
+        self, target: MemoryViewTarget, query: MemoryViewQuery, tag: str, *, exact: bool, count_only: bool = False
+    ) -> MemoryViewPage:
+        limit = 0 if count_only else query.limit
         params = [
-            ("tags", own_tag),
-            ("tags_match", "any_strict"),
-            ("limit", str(query.limit)),
+            ("tags", tag),
+            ("tags_match", "exact" if exact else "any_strict"),
+            ("limit", str(limit)),
             ("offset", str(query.offset)),
         ]
         if query.search:
-            # Hindsight searches with ILIKE; escape its wildcards so the text matches literally.
             escaped = query.search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             params.append(("q", escaped))
         code = 200
@@ -61,7 +83,7 @@ class MemoryViewerService:
             result = self.client.request(
                 "GET", f"/v1/default/banks/org-{target.organization_id}/memories/list", None, params=params
             )
-            return _page(result.content, own_tag, query.limit)
+            return _page(result.content, tag, limit, exact=exact)
         except HTTPException as exc:
             code = exc.status_code
             # Hindsight creates the Organization's bank on its first retain; before then nothing is saved.
@@ -78,7 +100,7 @@ class MemoryViewerService:
             )
 
 
-def _page(content: bytes, own_tag: str, limit: int) -> MemoryViewPage:
+def _page(content: bytes, own_tag: str, limit: int, *, exact: bool = False) -> MemoryViewPage:
     """Map upstream rows to allowlisted fields, failing closed on anything outside the contract.
 
     Hindsight counts `total` after applying the derived tag filter. A row without
@@ -89,7 +111,7 @@ def _page(content: bytes, own_tag: str, limit: int) -> MemoryViewPage:
         items = []
         for row in body["items"]:
             tags = row["tags"]
-            if own_tag not in tags or row["fact_type"] not in _TYPES:
+            if own_tag not in tags or (exact and set(tags) != {own_tag}) or row["fact_type"] not in _TYPES:
                 raise ValueError("row outside the requested view")
             items.append(
                 MemoryViewItem(

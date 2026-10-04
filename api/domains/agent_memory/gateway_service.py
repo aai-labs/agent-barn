@@ -119,7 +119,7 @@ class MemoryGatewayService:
                     if team and not access.organization_memory_write:
                         raise HTTPException(403, "Organization Memory write access is required.")
                     data = item.model_dump(exclude={"tags", "document_id"}, exclude_none=True)
-                    data["tags"] = [f"agent:{access.agent_id}"] + (["scope:team"] if team else [])
+                    data["tags"] = [f"author:{access.agent_id}", "scope:team"] if team else [f"agent:{access.agent_id}"]
                     data["observation_scopes"] = "per_tag"
                     # Scope segregation prevents an append from publishing earlier private turns.
                     document = (
@@ -144,7 +144,13 @@ class MemoryGatewayService:
                         "include": {"facts": None, "tool_calls": None},
                     }
                 )
-            result.update({"tags": list(access.readable_tags), "tags_match": "any_strict"})
+            # Authorship is never a private-access grant. Exact scopes also exclude
+            # legacy shared facts that still carry an Agent tag until retagging.
+            scopes = [
+                {"tags": [tag], "match": "any_strict" if tag == "scope:team" else "exact"}
+                for tag in access.readable_tags
+            ]
+            result["tag_groups"] = [{"or": scopes}]
             return result
         except ValidationError:
             raise HTTPException(422, "Invalid Agent Memory request.") from None

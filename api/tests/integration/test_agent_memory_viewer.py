@@ -85,7 +85,7 @@ def test_the_agents_own_saved_memories_are_listed_with_only_allowlisted_fields()
             context,
             [
                 _row(context.agent.id, "Prefers metric units"),
-                _row(context.agent.id, "Quarterly report is due", fact_type="observation", tags=["scope:team"]),
+                _row(context.agent.id, "Quarterly report is due", fact_type="observation"),
             ],
             total=2,
         )
@@ -103,7 +103,7 @@ def test_the_agents_own_saved_memories_are_listed_with_only_allowlisted_fields()
             assert_that(
                 [(item["text"], item["type"], item["shared"]) for item in body["items"]],
                 contains_exactly(
-                    ("Prefers metric units", "world", False), ("Quarterly report is due", "observation", True)
+                    ("Prefers metric units", "world", False), ("Quarterly report is due", "observation", False)
                 ),
             )
             assert_that(body["items"][0]["mentioned_at"], equal_to("2026-10-01T12:30:00Z"))
@@ -128,7 +128,7 @@ def test_listing_is_forced_to_the_agents_own_tag_in_its_organizations_bank():
                 upstream["query"],
                 contains_exactly(
                     ("tags", f"agent:{context.billing.id}"),
-                    ("tags_match", "any_strict"),
+                    ("tags_match", "exact"),
                     ("limit", "25"),
                     ("offset", "0"),
                 ),
@@ -602,12 +602,12 @@ def test_organization_viewer_fails_closed_if_backend_returns_a_private_memory():
         assert_that("Private secret" in response.text, equal_to(False))
 
 
-def test_saved_shared_history_is_visible_without_an_agents_organization_grant():
+def test_shared_authorship_cannot_bypass_a_revoked_organization_grant():
     with given(_setup(there_is_an_agent())) as context:
         _backend_page(context, [_row(context.agent.id, "Previously shared fact", tags=["scope:team"])])
         response = _list(context)
-        assert_that(response.status_code, equal_to(200))
-        assert_that(response.json()["items"][0], has_entries(text="Previously shared fact", shared=True))
+        assert_that(response.status_code, equal_to(502))
+        assert_that("Previously shared fact" in response.text, equal_to(False))
 
 
 @pytest.mark.parametrize("params", [{"page": 0}, {"page_size": 51}, {"search": "a" * 201}])

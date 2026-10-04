@@ -15,7 +15,7 @@ from api.domains.agent_memory.view_capability import issue_view_capability
 @singleton
 @dataclass
 class MemoryViewClient:
-    """Asks the memory gateway's read-only viewer for Agent history or shared Organization memories.
+    """Asks the memory gateway's read-only viewer for permission-scoped Agent memory or shared Organization memories.
 
     The product API holds no Hindsight credential: it sends a short-lived capability for
     one authorized Agent or Organization target, and the gateway derives the bank and tag filter itself.

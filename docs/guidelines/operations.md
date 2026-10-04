@@ -161,6 +161,16 @@ Downgrading `a63e8c941d20` drops pending cleanup; it cannot restore removed gran
 Complete cleanup before retiring this table/job. Backups and restore work are
 deferred in the [delivery log](../features/agent-memory/CHANGELOG.md).
 
+When upgrading from shared writes tagged with `agent:<id>`, repair each affected
+Organization using `uv run --project api python -m api.domains.agent_memory.retag_shared
+<organization_id>` from the repository root with `HINDSIGHT_BASE_URL` and
+`HINDSIGHT_API_KEY`. Stop shared writes and let outstanding extraction and consolidation work
+finish before this one-time repair. Repeat the command after any earlier
+extraction work finishes. It reports document
+counts only. The [memory upgrade contract](../features/agent-memory.md#upgrade-legacy-shared-ownership-tags)
+owns tag replacement and observation invalidation. This does not require a
+Postgres schema migration.
+
 Run `make check-memory` with Helm installed to validate both enabled and disabled
 renders without connecting to a cluster. The API CI workflow runs the same check.
 

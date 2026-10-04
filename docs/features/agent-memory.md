@@ -12,7 +12,7 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 
 ## Memory data contract
 
-- An Agent's memories are private to it by default. Each Organization's memories live in one Hindsight bank, `org-<organization_id>`; inside it, every memory an Agent writes is tagged `agent:<agent_id>`.
+- An Agent's memories are private to it by default. Each Organization's memories live in one Hindsight bank, `org-<organization_id>`; inside it, private memories carry `agent:<agent_id>` alone; shared writes carry `author:<agent_id>` and `scope:team`. Authorship never grants read access.
 - Turning memory off stops the Agent recalling and retaining. Its stored memories are kept, and Agents granted access to them can still recall them, until the Agent is deleted.
 - Deletion immediately removes the Agent's gateway access and its Memory Grants in both directions. Hindsight purging is asynchronous through a durable deletion tombstone; see [Deletion cleanup](#deletion-cleanup).
 - Memories live outside the Agent's volume; an Agent Restore Point does not capture or roll them back.
@@ -23,7 +23,7 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 - `agent.memory_enabled` defaults to false. Changing it requires the Agent Permission `agent.memory.manage`, which the locked Agent Owner role holds. In practice that means the Agent Creator (who receives Agent Owner on creation), Organization Owners and Admins (implicit Agent Owner), and anyone later given Agent Owner access. Agent Editors and Viewers cannot.
 - Memory Grants require the Organization Permission `memory.access.manage`, which only Organization Owners and Admins hold. Agent Owner authority over either Agent is not enough.
 - A Memory Grant is directional: it gives its receiving Agent (`agent_id`) the selected access, and gives nothing back to a source Agent.
-  - With `source_agent_id` NULL it grants **Organization Memory** with explicit `access`: `read` permits recalling `scope:team`; `read_write` permits both recall and explicit shared saves. An Agent can always recall what it itself wrote.
+  - With `source_agent_id` NULL it grants **Organization Memory** with explicit `access`: `read` permits recalling `scope:team`; `read_write` permits both recall and explicit shared saves. An Agent needs that grant even to recall its own shared contributions.
   - With `source_agent_id` set it lets the Agent recall that one source Agent's private memories.
 - Both Agents in a grant belong to the same Organization (composite foreign keys), an Agent cannot be granted its own memories (`ck_agent_memory_grant_not_self`), and each reader holds at most one grant per source and one Organization Memory grant (partial unique indexes).
 - Grants control recall and, for Organization Memory, permission to write. Creating or revoking one never moves or rewrites stored memories.
@@ -46,13 +46,13 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 
 ### View an Agent's saved memories
 
-`GET /organizations/{organization_id}/agents/{agent_id}/memory/items?search=&page=&page_size=` returns a read-only page of the memories that Agent itself wrote: `id`, `type` (`world`, `experience`, or `observation`), `text`, `mentioned_at`, and `shared` (true when it carries `scope:team`). Entities, context, chunks, document and source IDs, metadata, and history are never returned. `page_size` is at most 50 and `page` at most 2,000; `search` is at most 200 characters.
+`GET /organizations/{organization_id}/agents/{agent_id}/memory/items?search=&page=&page_size=` returns a read-only page of that Agent's private memories plus Organization Memory when its current grant permits reading: `id`, `type` (`world`, `experience`, or `observation`), `text`, `mentioned_at`, and `shared` (true when it carries `scope:team`). Entities, context, chunks, document and source IDs, metadata, and history are never returned. `page_size` is at most 50 and `page` at most 2,000; `search` is at most 200 characters.
 
 - Content authorization reuses the Agent Permission `activity.read` through the normal Agent visibility checks: hidden, other-Organization, and deleted Agents are 404, and a visible Agent without `activity.read` is 403. `agent.memory.manage` governs the memory setting; `memory.access.manage` governs grants and the Organization viewer, not reading an Agent's saved content.
-- Only the selected Agent's own tag is listed. Memories it can recall from Memory Grants or Organization Memory written by other Agents are not shown. Stored memories are viewable while the Agent is stopped or memory is disabled, until it is deleted.
-- `mentioned_at` is the time Hindsight recorded for the memory, not necessarily when it was persisted; Hindsight 0.10.2 does not expose a creation time on this endpoint. Results are ordered most recently mentioned first. Memories without a mention time have none.
-- The product API holds no Hindsight credential. After authorizing the person it sends the gateway's separate viewer (`/memory/view/v1/memories`, never the Agent allowlist) a 30-second JWT naming one Organization and Agent, with an audience and operation distinct from user access tokens and Agent credentials. The gateway rechecks that the Agent is undeleted in an existing Organization, derives the `org-<organization_id>` bank, forces `tags=agent:<agent_id>&tags_match=any_strict`, and accepts only `search`, `limit`, and `offset`. Agent credentials are still refused on every list path.
-- Hindsight 0.10.2 applies the tag filter before counting, so `total` covers only the Agent's rows. The gateway fails closed with a generic 502 if any returned row lacks that tag, has an unknown type, or the page is larger than requested or than its total. A bank that does not exist yet is an empty page. Search is a case-insensitive substring match on memory text and context with SQL wildcards escaped; it can match context that is not shown. Upstream errors are generic 502 or 503.
+- Private memories use the selected Agent's exact singleton tag scope. All Organization Memory, including contributions from other Agents, is included only while the selected Agent holds a current `read` or `read_write` Organization grant. Revocation hides every shared record here, including its own contributions; records remain in the Owner/Admin Organization viewer. Source-Agent grants do not expand this tab. Private memories remain viewable while the Agent is stopped or memory is disabled, until it is deleted.
+- `mentioned_at` is the time Hindsight recorded for the memory, not necessarily when it was persisted; Hindsight 0.10.2 does not expose a creation time on this endpoint. Private memories come first, followed by Organization Memory; each scope is ordered most recently mentioned first. Memories without a mention time have none.
+- The product API holds no Hindsight credential. After authorizing the person it sends the gateway's separate viewer (`/memory/view/v1/memories`, never the Agent allowlist) a 30-second JWT naming one Organization and Agent, with an audience and operation distinct from user access tokens and Agent credentials. The gateway rechecks that the Agent is undeleted in an existing Organization, derives the `org-<organization_id>` bank, forces `tags=agent:<agent_id>&tags_match=exact` for private records and adds a separate strict `scope:team` listing only with a current Organization grant, and accepts only `search`, `limit`, and `offset`. Agent credentials are still refused on every list path.
+- Hindsight 0.10.2 applies the tag filter before counting, so `total` is the sum of the disjoint private and currently permitted shared scopes. The gateway fails closed with a generic 502 if any returned row lacks that tag, has an unknown type, or the page is larger than requested or than its total. A bank that does not exist yet is an empty page. Search is a case-insensitive substring match on memory text and context with SQL wildcards escaped; it can match context that is not shown. Upstream errors are generic 502 or 503.
 
 ### View Organization Memory
 
@@ -128,9 +128,9 @@ Tombstones have no foreign keys, so they survive subsequent Organization deletio
 Grant insertion rechecks and holds shared locks on its same-Organization, undeleted
 targets through commit, so a grant racing deletion cannot be inserted afterward.
 
-The operator-only worker derives the bank and Agent tag from the tombstone. It lists
+The operator-only worker derives the bank and Agent/authorship tags from the tombstone. It lists
 documents with `any_strict` and deletes only IDs in that Agent's
-`agent:<id>:private:` or `agent:<id>:team:` namespace carrying its exact tag.
+`agent:<id>:private:` or `agent:<id>:team:` namespace carrying its Agent or authorship tag.
 It never deletes a bank or another Agent's documents. Hindsight 0.10.2 document
 deletion removes its facts and invalidates dependent observations, requeuing surviving
 sources. Unexpected document shapes/names/tags fail closed. Absent banks and already
@@ -166,9 +166,9 @@ The separate `api.memory_main:app` process serves port 8003 under `/memory/v1`. 
 | `GET /v1/default/banks/{bank_id}/operations/{operation_id}` | 404; operation details are not exposed |
 | Everything else | 403 |
 
-The token determines the Organization and Agent. Client bank names, query parameters, headers other than the bearer credential, tag filters, and unknown payload fields cannot override them. Recall and reflect receive the Agent's own tag, granted source tags, and `scope:team` only with an Organization Memory read grant. Untagged memories are excluded by `any_strict`.
+The token determines the Organization and Agent. Client bank names, query parameters, headers other than the bearer credential, tag filters, and unknown payload fields cannot override them. Recall and reflect receive a gateway-built OR of exact singleton private tag scopes (the Agent and granted source Agents), plus a strict `scope:team` scope only with an Organization Memory read/read-write grant. Client tag groups are discarded; untagged and authorship-only observations are excluded. Exact private scopes also exclude legacy shared facts with Agent tags.
 
-Retain always forces `agent:<agent_id>` and `observation_scopes: per_tag`. It adds `scope:team` only when the Agent requests that tag and holds an Organization Memory write grant; otherwise a shared retain is rejected with 403. Document IDs are namespaced by Agent and private/Organization scope, with the client ID hashed. Separate scope namespaces prevent appending a shared turn from republishing earlier private turns. Operation IDs are namespaced by Agent too. Missing document IDs produce new namespaced IDs.
+Private retain forces only `agent:<agent_id>`. Shared retain forces `author:<agent_id>` and `scope:team` only when the Agent requests sharing and holds an Organization Memory write grant; otherwise a shared retain is rejected with 403. Both force `observation_scopes: per_tag`; shared consolidation therefore cannot create private Agent-tag observations. Document IDs are namespaced by Agent and private/Organization scope, with the client ID hashed. Separate scope namespaces prevent appending a shared turn from republishing earlier private turns. Operation IDs are namespaced by Agent too. Missing document IDs produce new namespaced IDs.
 
 Recall traces, raw chunks, and source-fact expansion are disabled. Reflect excludes mental models, global directive application, and fact/tool-call traces. These response surfaces remain disabled until their tag isolation is verified. Requests use a bounded subset of the pinned Hindsight 0.10.2 contract: at most 2MiB per body, 20 retain items, and 100,000 content characters per item. Malformed supported requests return 422; oversized bodies return 413.
 
@@ -236,3 +236,19 @@ and do not measure Hindsight extraction quality.
 - `api/tests/integration/test_memory_gateway.py`, `api/tests/fixtures/agent_memory/`: HTTP policy, credential lifecycle, and sanitized plugin request captures.
 - `api/tests/integration/test_agent_memory_viewer.py`, `test_agent_memory_viewer_contract.py`: viewer permission, tenancy, capability, and failure behavior; the contract file runs the pinned Hindsight 0.10.2 image to prove tag-filtered items and totals, search, and pagination.
 - `api/tests/integration/test_rbac_schema.py`: catalogue seeding, existing-Agent defaults, and migration rollback coverage.
+
+### Upgrade legacy shared ownership tags
+
+Before considering legacy shared recall repaired, run the operator-only
+`python -m api.domains.agent_memory.retag_shared <organization_id>` with Hindsight
+configuration. It replaces each gateway-owned shared document's `agent:<id>` tag
+with `author:<id>` through the supported document PATCH endpoint. Hindsight
+invalidates observations derived from those sources and queues re-consolidation.
+This repairs private observations created by the old shared `per_tag` fan-out;
+a source-fact filter alone cannot repair those observations. The command is
+idempotent, leaves private documents and memory text unchanged, validates the
+Agent/team document namespace, and never becomes an Agent-accessible route.
+
+Revocation cannot erase existing conversation context or copies separately saved
+as private memories. The Agent tab refreshes every five seconds and after grant
+changes made in this UI; authorization is always rechecked by the gateway.

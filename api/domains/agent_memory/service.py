@@ -69,7 +69,7 @@ class AgentMemoryService:
     def list_memories(
         self, agent_id: UUID, search: str | None, pagination: Pagination, context: CurrentUserContext
     ) -> PaginatedItems[AgentMemoryItemRead]:
-        """Saved memories written by the Agent, gated like its other conversation content.
+        """Private Agent memories and currently granted Organization Memory.
 
         `activity.read` authorizes the content; `agent.memory.manage` and
         `memory.access.manage` govern settings and grants, not reading what was saved.
