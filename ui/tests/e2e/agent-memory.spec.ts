@@ -171,7 +171,7 @@ test.describe("Memory access settings", () => {
     await memory.chooseReader("Billing");
     await memory.chooseSource("Organization Memory");
     await expect(page.getByRole("combobox", { name: "Organization Memory permission" })).toContainText("Read only");
-    await memory.chooseOrganizationPermission("Read and write — recall and save shared memories");
+    await memory.chooseOrganizationPermission("Read and write");
     await expect(memory.grantButton()).toHaveText("Grant read and write access");
     await memory.grantButton().click();
     await expect(memory.grantsSection()).toContainText("Billing can read and write Organization Memory (read and write)");
@@ -185,6 +185,31 @@ test.describe("Memory access settings", () => {
     await expect(memory.grantsSection()).not.toContainText("Billing can read");
     await expect(memory.grantButton()).toBeEnabled();
   });
+
+  for (const width of [1440, 390]) {
+    test(`keeps sharing controls inside the card at ${width}px`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      const data = await signIn(page);
+      await data.agentMemory.interceptAgentOptions();
+      await data.agentMemory.interceptMemoryGrants();
+      const memory = new AgentMemoryPage(page);
+      await memory.gotoMemoryAccess();
+      await memory.chooseReader("Billing");
+      await memory.chooseSource("Organization Memory");
+      await memory.chooseOrganizationPermission("Read and write");
+      await expect(memory.grantForm()).toContainText("Automatic saves stay private.");
+      const card = await memory.grantForm().boundingBox();
+      expect(card).not.toBeNull();
+      expect(card!.x + card!.width).toBeLessThanOrEqual(width);
+      for (const control of await memory.grantForm().getByRole("combobox").all()) {
+        const bounds = await control.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(card!.x);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(card!.x + card!.width);
+      }
+      await memory.grantForm().screenshot({ path: testInfo.outputPath(`sharing-${width}.png`) });
+    });
+  }
 
   test("lists, creates, rejects duplicates of, and revokes grants", async ({ page }) => {
     const data = await signIn(page);

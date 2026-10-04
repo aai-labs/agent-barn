@@ -80,22 +80,18 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
 
   return (
     <>
-      <div
-        className="mb-5 rounded-xl px-3.5 py-3 text-[13px] leading-[1.5]"
-        style={{ background: "var(--bg-soft)", color: "var(--ink-3)" }}
-      >
-        Another Agent&apos;s private memory can only be shared for reading; the receiving Agent cannot write
-        or change that Agent&apos;s memories. Organization Memory can be shared as Read only or Read and write.
-        Read only allows recall. Read and write also allows explicit organization-wide saves using the memory tool. Automatic saves stay private. Grants never move stored memories.
-      </div>
+      <p className="mb-5 text-sm leading-relaxed" style={{ color: "var(--ink-3)" }}>
+        Access to another Agent&apos;s memory is read-only. Organization Memory can be shared for reading or for reading and writing.
+      </p>
 
-      <section className="mb-6" aria-label="Grant memory access">
-        <h3 className="mb-3 mt-0 text-[0.95rem] font-semibold" style={{ color: "var(--ink)" }}>
+      <section className="mb-6 rounded-2xl p-5" style={{ border: "1px solid var(--line)", background: "var(--bg-card)" }} aria-label="Grant memory access">
+        <h3 className="mb-1 mt-0 text-[0.95rem] font-semibold" style={{ color: "var(--ink)" }}>
           Grant access
         </h3>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="flex min-w-48 flex-1 flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
-            Agent receiving access
+        <p className="mb-5 text-sm" style={{ color: "var(--ink-3)" }}>Choose an Agent and the memories it can access.</p>
+        <div className="grid gap-4 md:grid-cols-3">
+          <label className="flex min-w-0 flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+            Agent
             <Select
               value={readerId}
               onValueChange={(value) => {
@@ -105,7 +101,7 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
               }}
               disabled={options.isLoading || options.agents.length === 0}
             >
-              <SelectTrigger aria-label="Agent receiving access">
+              <SelectTrigger className="h-10 w-full" aria-label="Agent receiving access">
                 <SelectValue placeholder="Choose an Agent" />
               </SelectTrigger>
               <SelectContent>
@@ -120,7 +116,7 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
             </Select>
           </label>
 
-          <label className="flex min-w-48 flex-1 flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+          <label className="flex min-w-0 flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
             Memory source
             <Select
               value={sourceId}
@@ -131,7 +127,7 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
               }}
               disabled={options.isLoading || options.agents.length === 0}
             >
-              <SelectTrigger aria-label="Memory to access">
+              <SelectTrigger className="h-10 w-full" aria-label="Memory to access">
                 <SelectValue placeholder="Choose memory" />
               </SelectTrigger>
               <SelectContent>
@@ -154,23 +150,37 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
           </label>
 
           {sourceKey === null && (
-            <label className="flex min-w-48 flex-col gap-1.5 text-[0.84rem] font-medium">
-              Organization Memory permission
+            <label className="flex min-w-0 flex-col gap-1.5 text-[0.84rem] font-medium">
+              Permission
               <Select value={organizationAccess} onValueChange={(value) => setOrganizationAccess(value as "read" | "read_write")}>
-                <SelectTrigger aria-label="Organization Memory permission"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-10 w-full" aria-label="Organization Memory permission"><SelectValue /></SelectTrigger>
                 <SelectContent><SelectGroup>
-                  <SelectItem value="read">Read only — recall shared memories</SelectItem>
-                  <SelectItem value="read_write">Read and write — recall and save shared memories</SelectItem>
+                  <SelectItem value="read">Read only</SelectItem>
+                  <SelectItem value="read_write">Read and write</SelectItem>
                 </SelectGroup></SelectContent>
               </Select>
             </label>
           )}
 
-          {sourceId !== "" && sourceKey !== null && (
-            <p className="text-[0.84rem]">Read only. This Agent cannot write to the selected Agent&apos;s memory.</p>
+          {sourceKey !== null && (
+            <div className="flex min-w-0 flex-col gap-1.5 text-[0.84rem] font-medium">
+              <span>Permission</span>
+              <div className="flex h-10 items-center rounded-lg px-3 text-sm" style={{ background: "var(--bg-soft)", color: "var(--ink-3)" }}>
+                Read only
+              </div>
+            </div>
           )}
+        </div>
 
-          <button type="button" className="af-btn af-btn-primary" disabled={!canSubmit} onClick={() => void submit()}>
+        <div className="mt-5 flex flex-col gap-4 border-t pt-4 sm:flex-row sm:items-center sm:justify-between" style={{ borderColor: "var(--line)" }}>
+          <p className="m-0 max-w-lg text-sm leading-relaxed" style={{ color: "var(--ink-3)" }}>
+            {sourceKey === null
+              ? organizationAccess === "read_write"
+                ? "This Agent can recall shared memories and explicitly save new Organization Memory. Automatic saves stay private."
+                : "This Agent can recall shared Organization Memory. It cannot save new shared memories."
+              : "This Agent can recall the selected Agent's private memories. It cannot write to or change them."}
+          </p>
+          <button type="button" className="af-btn af-btn-primary shrink-0" disabled={!canSubmit} onClick={() => void submit()}>
             {createGrant.isPending ? "Granting…" : `Grant ${access === "read_write" ? "read and write" : "read"} access`}
           </button>
         </div>

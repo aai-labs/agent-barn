@@ -21,6 +21,16 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — sharing form polish
+
+- Changed: the sharing form uses a responsive card, full-width fields, short
+  permission labels, contextual explanations, and a separate action footer.
+  The settings sidebar now shrinks so its scrolling navigation does not push
+  the memory form outside a narrow viewport.
+- Verified: the 390px overflow regression failed before the sidebar fix; all
+  26 memory browser tests pass afterward, including desktop/narrow card checks.
+  Screenshots were inspected; UI lint/types pass.
+
 ### 2026-10-04 — terminal writer discovery
 
 - Fixed: runtime instructions invoke the Organization Memory writer by its
@@ -29,8 +39,9 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
   configuration and a restart for the corrected instructions.
 - Verified: the real Hermes terminal reproduces command-not-found on the original
   instructions; all four runtime memory contracts pass after the fix. API static
-  checks pass. Alex was refreshed, and its terminal accepted the requested
-  Organization name save through the authenticated gateway.
+  checks and 59 tool/builder tests pass. Alex was refreshed, and its terminal
+  accepted the requested Organization name save through the authenticated
+  gateway; a subsequent recall returns the Organization name.
 
 ### 2026-10-04 — combined Organization Memory permission
 
