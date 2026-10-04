@@ -58,6 +58,9 @@ required_vars=(
   AGENT_TOKEN_ENCRYPTION_KEY
   OPENROUTER_API_KEY LITELLM_MASTER_KEY OPENCLAW_IMAGE HERMES_IMAGE
 )
+if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
+  required_vars+=(HINDSIGHT_DB_PASSWORD HINDSIGHT_API_KEY HINDSIGHT_LITELLM_API_KEY)
+fi
 missing=()
 for var in "${required_vars[@]}"; do
   [[ -n "${!var:-}" ]] || missing+=("$var")
@@ -98,6 +101,10 @@ ${COMPOSE} build api
 ${COMPOSE} run --rm --no-deps --workdir /app/api api python -m alembic upgrade head
 
 step "Building and starting api, worker, communications, memory, ui"
+if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
+  step "Starting local Hindsight database and backend"
+  ${COMPOSE} up -d hindsight-db hindsight
+fi
 ${COMPOSE} up -d --build api worker communications memory ui
 
 # Prints a boxed row padded to the border width, measuring visible width only

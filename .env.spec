@@ -159,3 +159,9 @@ MEMORY_VIEW_BASE_URL=
 HINDSIGHT_BASE_URL=
 HINDSIGHT_API_KEY=
 MEMORY_LITELLM_KEY_HASHES=
+# Optional local backend (COMPOSE_PROFILES=local-hindsight). Use generated
+# URL-safe database/auth secrets and a dedicated, budgeted LiteLLM virtual key.
+# HINDSIGHT_BASE_URL=http://hindsight:8888 when this profile is enabled.
+COMPOSE_PROFILES=
+HINDSIGHT_DB_PASSWORD=
+HINDSIGHT_LITELLM_API_KEY=

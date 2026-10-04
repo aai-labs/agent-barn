@@ -141,8 +141,9 @@ starts `api`, `worker`, `communications`, `memory`, and `ui` with hot reload and
 the logs. `Ctrl-C` detaches without stopping anything; use `./run.sh --detach`
 to skip the logs entirely.
 
-The memory gateway needs a separately running Hindsight backend to list or save
-memories; see [Agent Memory deployment](docs/guidelines/operations.md#agent-memory-deployment).
+The memory gateway needs a running Hindsight backend to list or save memories.
+The optional `local-hindsight` Compose profile provides one; see
+[Agent Memory deployment](docs/guidelines/operations.md#agent-memory-deployment).
 
 If a startup value checked by `run.sh` is missing, the script fails immediately
 and lists it.

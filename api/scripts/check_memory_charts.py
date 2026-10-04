@@ -24,6 +24,25 @@ def render(chart: str, values: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def main() -> None:
+    compose = yaml.safe_load((ROOT / "compose.yml").read_text())
+    services = compose["services"]
+    local = services["hindsight"]
+    database = services["hindsight-db"]
+    assert local["profiles"] == database["profiles"] == ["local-hindsight"]
+    assert local["image"] == "ghcr.io/vectorize-io/hindsight:0.10.2"
+    assert database["image"] == "pgvector/pgvector:pg18"
+    assert "ports" not in local and "ports" not in database
+    assert "env_file" not in local and "env_file" not in database
+    assert database["networks"] == ["hindsight-storage"]
+    assert compose["networks"]["hindsight-storage"]["internal"] is True
+    assert database["volumes"] == ["hindsight_postgres_data:/var/lib/postgresql"]
+    assert local["environment"]["HINDSIGHT_ENABLE_CP"] == "false"
+    assert local["environment"]["HINDSIGHT_API_TENANT_EXTENSION"].endswith(":ApiKeyTenantExtension")
+    for name in ("api", "worker", "communications", "memory"):
+        assert services[name]["environment"]["HINDSIGHT_LITELLM_API_KEY"] == ""
+        assert services[name]["environment"]["HINDSIGHT_DB_PASSWORD"] == ""
+        if name != "memory":
+            assert services[name]["environment"]["HINDSIGHT_API_KEY"] == ""
     values = {
         "dbConnectionUrl": "postgresql://test:test@postgres-app/test",
         "secretSigningKey": "test",

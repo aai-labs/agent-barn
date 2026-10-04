@@ -12,8 +12,51 @@ x-api-env: &api-env
   ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
   WEB_APP_URL: ${WEB_APP_URL:?WEB_APP_URL is required}
   HINDSIGHT_API_KEY: ""
+  HINDSIGHT_DB_PASSWORD: ""
+  HINDSIGHT_LITELLM_API_KEY: ""
 
 services:
+  # Opt in with COMPOSE_PROFILES=local-hindsight. The backend has no published
+  # ports; only the gateway's authenticated endpoints are available to Agents.
+  hindsight-db:
+    profiles: [local-hindsight]
+    image: pgvector/pgvector:pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hindsight
+      POSTGRES_DB: hindsight
+      POSTGRES_PASSWORD: ${HINDSIGHT_DB_PASSWORD:-}
+    volumes:
+      - hindsight_postgres_data:/var/lib/postgresql
+    networks: [hindsight-storage]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hindsight -d hindsight"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  hindsight:
+    profiles: [local-hindsight]
+    image: ghcr.io/vectorize-io/hindsight:0.10.2
+    restart: unless-stopped
+    command: ["/app/api/.venv/bin/python", "/opt/agentbarn/start_hindsight.py", "--workers", "1"]
+    depends_on:
+      hindsight-db:
+        condition: service_healthy
+    environment:
+      HINDSIGHT_ENABLE_CP: "false"
+      HINDSIGHT_API_DATABASE_URL: postgresql://hindsight:${HINDSIGHT_DB_PASSWORD:-}@hindsight-db:5432/hindsight
+      HINDSIGHT_API_TENANT_EXTENSION: hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension
+      HINDSIGHT_API_TENANT_API_KEY: ${HINDSIGHT_API_KEY:-}
+      HINDSIGHT_API_LLM_PROVIDER: openai
+      HINDSIGHT_API_LLM_BASE_URL: http://litellm:4000/v1
+      HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_LITELLM_API_KEY:-}
+      HINDSIGHT_API_LLM_MODEL: openrouter/openai/gpt-4.1-mini
+      HINDSIGHT_API_WORKER_ID: local-hindsight
+    volumes:
+      - ./helm/hindsight/files/start_hindsight.py:/opt/agentbarn/start_hindsight.py:ro
+    networks: [default, hindsight-storage]
+
   db:
     image: postgres:16
     container_name: aai_db
@@ -264,3 +307,8 @@ volumes:
   aai_redis_data:
   aai_ui_node_modules:
   aai_ui_next_cache:
+  hindsight_postgres_data:
+
+networks:
+  hindsight-storage:
+    internal: true

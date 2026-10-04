@@ -21,6 +21,21 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — local Hindsight backend
+
+- Delivered: an opt-in `local-hindsight` Compose profile with authenticated
+  Hindsight 0.10.2, the existing cost attribution bridge, and persistent
+  pgvector/Postgres 18 storage. Backend/database ports remain unpublished;
+  model/database credentials are excluded from the shared application environment.
+- Configured: the local environment now uses this backend and a dedicated model
+  key limited to $10 per 30 days; only its hash reaches cost attribution settings.
+  Secrets remain in the ignored local `.env`.
+- Verified: Hindsight health succeeds; missing/wrong API keys return 401, and the
+  gateway key succeeds. Alex's authorized product API memory listing returns 200
+  with zero items. Static, migration-head, shell, and chart/Compose checks pass.
+- Follow-up: backups/restores remain deferred; restart opted-in Agents to activate
+  the memory provider when needed.
+
 ### 2026-10-04 — local startup review
 
 - Fixed: `./run.sh` now starts the Compose memory gateway alongside the other

@@ -45,12 +45,42 @@ The gateway runs from the API image as `api.memory_main:app` on port 8003, with
 access logging disabled so client paths cannot enter logs. `make dev-api` starts
 it alongside the other HTTP processes; `make dev-memory` runs it separately.
 For local use set `HINDSIGHT_BASE_URL` to the backend root and `HINDSIGHT_API_KEY`
-to its shared API key. Compose starts the gateway but does not start Hindsight.
+to its shared API key. Compose starts the gateway; the optional local backend is
+enabled separately with the `local-hindsight` profile.
 `./run.sh` includes the `memory` service. Its published `MEMORY_PORT` defaults
 to 8003; set a distinct port if the product API or another local service uses it.
 An Agent needs no messaging connection to view saved memories. A missing bank
 returns an empty list, while an absent gateway or unconfigured/unavailable
 Hindsight backend produces an unavailable error, including for a new Agent.
+
+To use the local backend, configure these values in the ignored `.env`:
+
+```dotenv
+COMPOSE_PROFILES=local-hindsight
+HINDSIGHT_BASE_URL=http://hindsight:8888
+HINDSIGHT_DB_PASSWORD=<generated URL-safe password>
+HINDSIGHT_API_KEY=<generated API authentication key>
+HINDSIGHT_LITELLM_API_KEY=<dedicated budgeted LiteLLM virtual key>
+MEMORY_LITELLM_KEY_HASHES=<SHA-256 of that virtual key>
+```
+
+Use a virtual key restricted to `openrouter/openai/gpt-4.1-mini`, with no
+Organization team assignment. Keep its hash alongside any retired hashes in
+`MEMORY_LITELLM_KEY_HASHES` for cost attribution. `./run.sh` starts the backend
+when that profile is enabled. To start it on an already running stack:
+
+```bash
+docker compose up -d hindsight-db hindsight memory
+docker compose up -d --no-deps api worker communications
+```
+
+The local backend uses the pinned Hindsight image and attribution bridge, with
+control plane disabled and API authentication enabled. Its Postgres 18 database
+has pgvector, an isolated storage network, and its own named volume; neither
+backend nor database publishes a host port. The LiteLLM model key and database
+password are blanked in the shared application environment, and only the
+gateway receives the backend authentication key. Stop preserves database data.
+Backups and tested restores remain deferred.
 The product API lists an Agent's saved memories through the gateway's separate
 viewer under `/memory/view/v1`, addressed by `MEMORY_VIEW_BASE_URL`. `make dev-api`
 points it at `localhost`, Compose at the `memory` service, and the chart at the
