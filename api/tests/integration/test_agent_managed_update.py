@@ -1,10 +1,13 @@
 import pytest
 from fastapi import HTTPException, status
-from hamcrest import assert_that, equal_to, has_length
+from hamcrest import assert_that, equal_to, has_length, none
+from unittest.mock import patch
 
 from api.core.config import Config
-from api.domains.agents.models import AgentStatus
+from api.domains.agents.models import AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.service import AgentService
+from api.domains.auth.models import CurrentUserContext
+from api.domains.restore_points.models import AgentRestorePointCreate
 from api.infrastructure.kubernetes import KubernetesClient
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -38,6 +41,7 @@ _GIVEN = [
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_IMAGE": "registry.example.com/agentbarn-api:test",
             "RESTORE_POINT_MAX_PER_AGENT": "2",
+            "AGENT_UPDATE_READY_POLL_SECONDS": "0",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -113,3 +117,130 @@ def test_teardown_workload_deletes_only_the_deployment():
             k8s.delete_deployment.assert_called_once_with(f"agent-{context.agent.id}", namespace)
             assert_that(k8s.delete_config_map.called, equal_to(False))
             assert_that(k8s.delete_secret.called, equal_to(False))
+
+
+# --- The managed-update orchestration -----------------------------------------
+
+
+def _job_with(status_kwargs):
+    from kubernetes.client import V1Job, V1JobStatus
+
+    return V1Job(status=V1JobStatus(**status_kwargs))
+
+
+def _user_context(context) -> CurrentUserContext:
+    return CurrentUserContext(
+        user=context.user,
+        organization_ids=[context.organization.id],
+        user_organization_map={context.organization.id: context.organization_user},
+        current_user_organization=context.organization_user,
+    )
+
+
+def _succeed_capture_job(context) -> None:
+    k8s = context.injector.get(KubernetesClient)
+    k8s.get_job.return_value = _job_with({"succeeded": 1})
+    k8s.read_job_logs.return_value = '{"bytes": 4096, "file_count": 12}\n'
+    # A bare MagicMock log body would reach the DB insert in
+    # _capture_logs_before_stop (swallowed, but noisy) — an empty read is a clean no-op.
+    k8s.read_pod_logs.return_value = ""
+
+
+def _restore_points(context) -> list[dict]:
+    response = context.client.get(
+        f"{_BASE}/{context.agent.id}/restore-points",
+        headers=_auth(context),
+    )
+    assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+    return response.json()["items"]
+
+
+def test_a_managed_update_captures_then_starts_on_the_new_image():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        context.injector.get(KubernetesClient).get_pod_readiness.return_value = ("ready", None)
+        service = context.injector.get(AgentService)
+
+        with when("the managed update runs end to end"):
+            service._run_managed_update(context.agent.id, _user_context(context))
+
+        with then("the agent runs again, backed by a PRE_UPGRADE restore point"):
+            body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(body["update_available"], equal_to(False))
+            assert_that(body["last_error"], none())
+
+            points = _restore_points(context)
+            assert_that(points, has_length(1))
+            assert_that(points[0]["origin"], equal_to(RestorePointOrigin.PRE_UPGRADE.value))
+            assert_that(points[0]["status"], equal_to(RestorePointStatus.READY.value))
+
+
+def test_a_managed_update_rolls_back_when_the_new_version_never_becomes_ready():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        context.injector.get(KubernetesClient).get_pod_readiness.side_effect = [
+            ("initializing", None),
+            ("initializing", None),
+            ("crashed", "BackOff"),
+            ("ready", None),
+        ]
+        service = context.injector.get(AgentService)
+
+        with when("the new version crashes and the rollback runs"):
+            service._run_managed_update(context.agent.id, _user_context(context))
+
+        with then("the agent is back, running its previous state"):
+            body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(body["last_error"], none())
+
+            points = _restore_points(context)
+            origins = sorted(point["origin"] for point in points)
+            assert_that(origins, equal_to(["PRE_RESTORE", "PRE_UPGRADE"]))
+
+
+def test_a_managed_update_that_cannot_capture_leaves_the_agent_stopped():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"failed": 1})
+        k8s.read_job_logs.return_value = "capture failed"
+        k8s.read_pod_logs.return_value = ""
+        service = context.injector.get(AgentService)
+
+        with when("the capture fails before any start"):
+            service._run_managed_update(context.agent.id, _user_context(context))
+
+        with then("the agent is stopped, and no new pod was ever built"):
+            body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
+            assert_that(k8s.create_deployment.called, equal_to(False))
+
+            points = _restore_points(context)
+            assert_that(points, has_length(1))
+            assert_that(points[0]["status"], equal_to(RestorePointStatus.FAILED.value))
+
+
+def test_a_managed_update_rolls_back_when_the_start_itself_fails():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        context.injector.get(KubernetesClient).get_pod_readiness.return_value = ("ready", None)
+        service = context.injector.get(AgentService)
+
+        real_provision = service._provision_and_start
+        starts = {"count": 0}
+
+        def flaky_provision(agent):
+            starts["count"] += 1
+            if starts["count"] == 1:
+                raise RuntimeError("cluster rejected the new image")
+            return real_provision(agent)
+
+        with when("the first start fails and the rollback starts again"):
+            with patch.object(service, "_provision_and_start", side_effect=flaky_provision):
+                service._run_managed_update(context.agent.id, _user_context(context))
+
+        with then("the agent ends up running on the rolled-back state"):
+            body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(starts["count"], equal_to(2))

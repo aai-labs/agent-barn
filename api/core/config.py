@@ -49,6 +49,7 @@ class Config(BaseSettings):
     # rolls back. Mirrors the agent readiness probe budget: 30s initial delay,
     # 15s period, 6 failures — a healthy pod is ready within 120s or it is failing.
     agent_update_ready_timeout_seconds: int = Field(default=120, ge=30, le=3600)
+    agent_update_ready_poll_seconds: int = Field(default=5, ge=0, le=60)
 
     openclaw_image: str = ""
     hermes_image: str = ""

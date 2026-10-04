@@ -4,7 +4,7 @@ import json
 import logging
 import secrets
 import time
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -94,6 +94,8 @@ from api.domains.agents.models import (
     FirecrawlContent,
     GoogleWorkspaceContent,
     JiraContent,
+    RestorePointOrigin,
+    RestorePointStatus,
     SecretProvider,
     SkillVersionPin,
     decrypt_content,
@@ -139,6 +141,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.restore_points.models import AgentRestorePointCreate, AgentRestorePointRestore
 from api.domains.restore_points.service import RestorePointService
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
@@ -181,6 +184,8 @@ _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
 RESTORE_POINT_IN_FLIGHT_DETAIL = (
     "A restore point capture or restore is still running for this Agent. Wait for it to finish."
 )
+
+MANAGED_UPDATE_BACKUP_LABEL = "Automatic backup before managed update"
 
 _PROVISIONING_FAILURE_STATUS: dict[AgentProvisioningErrorCategory, int] = {
     AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2431,6 +2436,148 @@ class AgentService:
         )
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return result.agent
+
+    # --- Managed updates (MDP-47 / AF-201) ----------------------------------
+
+    def managed_update(self, agent_id: UUID, context: CurrentUserContext, schedule: Callable[..., None]) -> AgentRead:
+        """One-click runtime update: capture, start on the new image, roll back on failure.
+
+        The orchestration runs as a scheduled background task; this call only
+        checks authority and preconditions. `schedule` is
+        `BackgroundTasks.add_task`, passed in by the route so this service
+        keeps no FastAPI request-scoped dependency.
+        """
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        if agent.status != AgentStatus.RUNNING:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A managed update applies to a running Agent.",
+            )
+        if self.restore_points.has_blocking_operation(agent.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
+        schedule(self._run_managed_update, agent.id, context)
+        return self._get_agent_read(agent, context)
+
+    def _run_managed_update(self, agent_id: UUID, context: CurrentUserContext) -> None:
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.status != AgentStatus.RUNNING:
+            return
+        actor = resolve_actor_identity(context, agent.organization_id)
+        logger.info("Managed update started for agent %s", agent.id)
+
+        # 1. Stop. The capture requires it (RWO volume), and the start that
+        #    follows is what lands the new image.
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                return
+            current = self.repository.get_by_id(agent.id)
+            if current is None or current.status != AgentStatus.RUNNING:
+                return
+            self._stop_agent_unchecked(current, actor)
+
+        # 2. Capture the pre-update state. Requires the Agent stopped — it now is.
+        try:
+            backup = self.restore_points.create_restore_point(
+                agent.id,
+                AgentRestorePointCreate(label=MANAGED_UPDATE_BACKUP_LABEL),
+                context,
+                origin=RestorePointOrigin.PRE_UPGRADE,
+            )
+            row = self.restore_points.wait_until_terminal(
+                agent.id,
+                backup.id,
+                timeout_seconds=self.config.restore_point_capture_timeout_seconds,
+            )
+        except HTTPException:
+            logger.exception("Managed update capture failed for agent %s", agent.id)
+            return  # Agent stays STOPPED; the FAILED row tells the user why
+
+        if row.status != RestorePointStatus.READY:
+            return
+
+        # 3. Start on the new image and watch it come up. A start that fails to
+        #    provision rolls back exactly like one that never becomes ready.
+        try:
+            self.start_agent(agent.id, context)
+            healthy = self._wait_for_ready(
+                agent.id,
+                self.config.agent_update_ready_timeout_seconds,
+                poll_seconds=self.config.agent_update_ready_poll_seconds,
+            )
+        except HTTPException:
+            logger.exception("Managed update start failed for agent %s", agent.id)
+            healthy = False
+
+        if healthy:
+            logger.info("Managed update succeeded for agent %s", agent.id)
+            return
+
+        # 4. Roll back: free the volume, restore archive and recorded
+        #    configuration, then start on the old image again.
+        self._rollback_managed_update(agent.id, backup.id, context, actor)
+
+    def _rollback_managed_update(
+        self,
+        agent_id: UUID,
+        restore_point_id: UUID,
+        context: CurrentUserContext,
+        actor: ActorIdentity,
+    ) -> None:
+        try:
+            agent = self.repository.get_by_id(agent_id)
+            if agent is None:
+                return
+            with self.repository.lifecycle_lock(agent.id) as acquired:
+                if not acquired:
+                    self._mark_update_failed(agent_id, restore_point_id)
+                    return
+                current = self.repository.get_by_id(agent.id)
+                if current is not None and current.status == AgentStatus.RUNNING:
+                    self._stop_agent_unchecked(current, actor)
+            # A start that failed to provision leaves its Deployment behind;
+            # the restore Job cannot run while any pod holds the volume.
+            self._teardown_workload(agent.id)
+
+            restored = self.restore_points.restore_restore_point(
+                agent_id,
+                restore_point_id,
+                AgentRestorePointRestore(reapply_configuration=True),
+                context,
+            )
+            self.restore_points.wait_until_terminal(
+                agent_id,
+                restored.id,
+                timeout_seconds=self.config.restore_point_restore_timeout_seconds,
+            )
+            self.start_agent(agent_id, context)
+            healthy = self._wait_for_ready(
+                agent_id,
+                self.config.agent_update_ready_timeout_seconds,
+                poll_seconds=self.config.agent_update_ready_poll_seconds,
+            )
+        except HTTPException:
+            logger.exception("Managed update rollback failed for agent %s", agent_id)
+            self._mark_update_failed(agent_id, restore_point_id)
+            return
+        if not healthy:
+            self._mark_update_failed(agent_id, restore_point_id)
+        else:
+            logger.info("Managed update rolled back successfully for agent %s", agent_id)
+
+    def _mark_update_failed(self, agent_id: UUID, restore_point_id: UUID) -> None:
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None:
+            return
+        agent.status = AgentStatus.ERROR
+        agent.last_error = "The managed update failed and the automatic rollback did not complete."
+        # last_error_code stays unset: this is hand-written text, not a
+        # normalized provisioning category, and the read boundary treats a
+        # missing code as exactly that.
+        agent.last_error_detail = (
+            f"Restore point {restore_point_id} holds the pre-update state. "
+            "Restore it from the Agent configuration page."
+        )
+        self.repository.save(agent)
 
     def _wait_for_ready(self, agent_id: UUID, timeout_seconds: int, poll_seconds: int = 5) -> bool:
         """Poll the Deployment's newest pod until it is ready, crashes, or time runs out.
