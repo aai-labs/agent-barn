@@ -110,49 +110,53 @@ test.describe("Agent update banner", () => {
     await expect(agentDetailPage.updateButton()).toHaveCount(0);
   });
 
-  test("updating stops the agent and starts it again", async ({ page }) => {
+  test("updating asks the server to run the managed update", async ({ page }) => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "RUNNING", update_available: true },
     });
-    await dataSupport.agents.interceptStopAgentRequest();
-    await dataSupport.agents.interceptStartAgentRequest();
+    await page.route(`**/agents/${MOCK_AGENT_ID}/managed-update`, async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ ...mockAgent, status: "RUNNING", update_available: true }),
+      });
+    });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
-    const stopped = page.waitForRequest(
+    const requested = page.waitForRequest(
       (request) =>
-        request.url().endsWith(`/agents/${MOCK_AGENT_ID}/stop`) && request.method() === "POST",
-    );
-    const started = page.waitForRequest(
-      (request) =>
-        request.url().endsWith(`/agents/${MOCK_AGENT_ID}/start`) && request.method() === "POST",
+        request.url().endsWith(`/agents/${MOCK_AGENT_ID}/managed-update`) &&
+        request.method() === "POST",
     );
 
     await agentDetailPage.updateButton().click();
 
-    await Promise.all([stopped, started]);
+    await requested;
   });
 
-  test("stays visible showing progress while the restart is still provisioning", async ({
+  test("stays visible showing progress while the managed update is in flight", async ({
     page,
   }) => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "RUNNING", update_available: true },
     });
-    await dataSupport.agents.interceptStopAgentRequest({
-      body: { ...mockAgent, status: "STOPPED", running_model: "", update_available: false },
-    });
 
-    let releaseStart = () => {};
-    const startHeld = new Promise<void>((resolve) => {
-      releaseStart = resolve;
+    let releaseUpdate = () => {};
+    const updateHeld = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
     });
-    await page.route(`**/agents/${MOCK_AGENT_ID}/start`, async (route) => {
-      await startHeld;
+    await page.route(`**/agents/${MOCK_AGENT_ID}/managed-update`, async (route) => {
+      await updateHeld;
       await route.fulfill({
-        status: 200,
+        status: 202,
         contentType: "application/json",
-        body: JSON.stringify({ ...mockAgent, status: "RUNNING", update_available: false }),
+        body: JSON.stringify({
+          ...mockAgent,
+          status: "STOPPED",
+          running_model: "",
+          update_available: false,
+        }),
       });
     });
 
@@ -162,7 +166,7 @@ test.describe("Agent update banner", () => {
     await expect(agentDetailPage.updateButton()).toBeVisible();
     await expect(agentDetailPage.updateButton()).toHaveText(/updating/i);
 
-    releaseStart();
+    releaseUpdate();
     await expect(agentDetailPage.updateButton()).toHaveCount(0);
   });
 

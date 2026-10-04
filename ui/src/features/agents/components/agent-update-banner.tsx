@@ -4,19 +4,19 @@ import { RotateCcw, Sparkles } from "lucide-react";
 
 import { toastError } from "@/shared/toast";
 
-import { useRestartAgent } from "../hooks/use-restart-agent";
+import { useManagedUpdate } from "../hooks/use-managed-update";
 import type { Agent } from "../schemas";
 
 const RELEASES_URL = "https://github.com/aai-labs/agent-barn/releases";
 
 export function AgentUpdateBanner({ agent }: { agent: Agent }) {
-  const restartAgent = useRestartAgent();
+  const managedUpdate = useManagedUpdate();
 
-  if (!agent.updateAvailable && !restartAgent.isPending) {
+  if (!agent.updateAvailable && !managedUpdate.isPending) {
     return null;
   }
 
-  const update = () => void restartAgent.restart(agent.id).catch(toastError);
+  const update = () => void managedUpdate.mutateAsync(agent.id).catch(toastError);
 
   return (
     <div
@@ -38,8 +38,9 @@ export function AgentUpdateBanner({ agent }: { agent: Agent }) {
           <Sparkles size={16} />
         </span>
         <p className="m-0 text-[0.844rem] leading-relaxed" style={{ color: "var(--accent-ink)" }}>
-          A new version of {agent.name} is available. Update to get the latest bug fixes and
-          features.{" "}
+          A new version of {agent.name} is available. Updating stops the Agent, saves a restore
+          point of its current state, then starts the new version. If the new version does not
+          come up healthy, it is rolled back automatically.{" "}
           <a
             href={RELEASES_URL}
             target="_blank"
@@ -54,10 +55,10 @@ export function AgentUpdateBanner({ agent }: { agent: Agent }) {
       <button
         className="af-btn af-btn-primary af-btn-sm flex-shrink-0"
         data-testid="agent-update-button"
-        disabled={restartAgent.isPending}
+        disabled={managedUpdate.isPending}
         onClick={update}
       >
-        <RotateCcw size={14} /> {restartAgent.isPending ? "Updating…" : "Update"}
+        <RotateCcw size={14} /> {managedUpdate.isPending ? "Updating…" : "Update"}
       </button>
     </div>
   );
