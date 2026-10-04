@@ -906,3 +906,47 @@ def test_split_memory_access_preserves_old_combined_grants_and_rollback(legacy_d
     command.downgrade(db.config, "a63e8c941d20")
     with db.engine.connect() as connection:
         assert_that(connection.execute(text("SELECT count(*) FROM agent_memory_grant")).scalar_one(), equal_to(1))
+
+
+@pytest.mark.parametrize(
+    "accesses,expected", [(["read"], "read"), (["write"], "read_write"), (["read", "write"], "read_write")]
+)
+def test_combined_memory_permissions_migrate_and_rollback(legacy_database, accesses, expected):
+    db = legacy_database
+    command.upgrade(db.config, "b84e19a7302f")
+    ids = {}
+    with db.engine.begin() as connection:
+        for access in accesses:
+            ids[access] = uuid7()
+            connection.execute(
+                text("""INSERT INTO agent_memory_grant
+                (id, created_at, updated_at, organization_id, agent_id, source_agent_id, access)
+                VALUES (:id, now(), now(), :org, :agent, NULL, :access)"""),
+                {"id": ids[access], "org": db.org_a, "agent": db.agent_a, "access": access},
+            )
+        connection.execute(
+            text("""INSERT INTO agent_memory_grant
+            (id, created_at, updated_at, organization_id, agent_id, source_agent_id, access)
+            VALUES (:id, now(), now(), :org, :agent, :source, 'read')"""),
+            {"id": uuid7(), "org": db.org_a, "agent": db.agent_a, "source": db.deleted_agent_a},
+        )
+    command.upgrade(db.config, "c95f20b8413a")
+    with db.engine.connect() as connection:
+        rows = connection.execute(text("SELECT id, access FROM agent_memory_grant WHERE source_agent_id IS NULL")).all()
+        assert_that(rows, equal_to([(ids.get("write", ids.get("read")), expected)]))
+        assert_that(
+            connection.execute(
+                text("SELECT access FROM agent_memory_grant WHERE source_agent_id IS NOT NULL")
+            ).scalar_one(),
+            equal_to("read"),
+        )
+    command.downgrade(db.config, "b84e19a7302f")
+    with db.engine.connect() as connection:
+        assert_that(
+            connection.execute(
+                text("SELECT access FROM agent_memory_grant WHERE source_agent_id IS NULL ORDER BY access")
+            )
+            .scalars()
+            .all(),
+            equal_to(["read"] if expected == "read" else ["read", "write"]),
+        )

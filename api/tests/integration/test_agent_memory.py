@@ -526,27 +526,41 @@ def test_migrated_schema_enforces_memory_grant_relationships(invalid_relationshi
 
 
 @pytest.mark.parametrize("role", [OrganizationRole.OWNER, OrganizationRole.ADMIN])
-def test_admin_can_grant_and_revoke_organization_write_independently(role):
+def test_admin_can_grant_and_revoke_organization_read_write(role):
     with given(
         agent_memory_api_setup(two_agents(), *([signed_in_as(role)] if role != OrganizationRole.OWNER else []))
     ) as context:
-        reader = _create_grant(context, context.triage.id)
-        writer = _create_grant(context, context.triage.id, access="write")
-        assert_that(reader.status_code, equal_to(201))
+        writer = _create_grant(context, context.triage.id, access="read_write")
         assert_that(writer.status_code, equal_to(201))
-        assert_that(writer.json()["access"], equal_to("write"))
+        assert_that(writer.json()["access"], equal_to("read_write"))
         result = context.client.delete(_GRANTS + "/" + writer.json()["id"], headers=_auth(context))
         assert_that(result.status_code, equal_to(204))
         remaining = context.client.get(_GRANTS, headers=_auth(context)).json()
-        assert_that([row["access"] for row in remaining], contains_exactly("read"))
+        assert_that(remaining, empty())
 
 
 def test_member_cannot_grant_organization_write():
     with given(agent_memory_api_setup(two_agents(), signed_in_as(OrganizationRole.MEMBER))) as context:
-        assert_that(_create_grant(context, context.triage.id, access="write").status_code, equal_to(403))
+        assert_that(_create_grant(context, context.triage.id, access="read_write").status_code, equal_to(403))
 
 
 def test_write_access_to_another_agents_private_memory_is_rejected():
     with given(agent_memory_api_setup(two_agents())) as context:
-        response = _create_grant(context, context.triage.id, context.billing.id, access="write")
+        response = _create_grant(context, context.triage.id, context.billing.id, access="read_write")
         assert_that(response.status_code, equal_to(400))
+
+
+@pytest.mark.parametrize("existing,new", [("read", "read_write"), ("read_write", "read")])
+def test_organization_memory_has_one_permission_per_agent(existing, new):
+    with given(agent_memory_api_setup(two_agents())) as context:
+        first = _create_grant(context, context.triage.id, access=existing)
+        assert_that(first.status_code, equal_to(201))
+        second = _create_grant(context, context.triage.id, access=new)
+        assert_that(second.status_code, equal_to(409))
+        rows = context.client.get(_GRANTS, headers=_auth(context)).json()
+        assert_that([row["access"] for row in rows], contains_exactly(existing))
+
+
+def test_write_only_is_not_a_supported_permission():
+    with given(agent_memory_api_setup(two_agents())) as context:
+        assert_that(_create_grant(context, context.triage.id, access="write").status_code, equal_to(422))

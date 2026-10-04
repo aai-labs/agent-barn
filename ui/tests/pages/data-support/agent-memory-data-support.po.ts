@@ -174,12 +174,12 @@ export class AgentMemoryDataSupport {
           const { agent_id: agentId, source_agent_id: sourceId, access } = entry.body as {
             agent_id: string;
             source_agent_id: string | null;
-            access: "read" | "write";
+            access: "read" | "read_write";
           };
           if (agentId === sourceId) {
             return json(route, 400, { detail: "An Agent already reads its own memories." });
           }
-          if ([...mock.grants, ...mock.unlisted].some((g) => g.agent_id === agentId && g.source_agent_id === sourceId && g.access === access)) {
+          if ([...mock.grants, ...mock.unlisted].some((g) => g.agent_id === agentId && g.source_agent_id === sourceId)) {
             return json(route, 409, { detail: "This Agent already has that memory grant." });
           }
           const created = {

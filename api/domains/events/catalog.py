@@ -242,8 +242,8 @@ class AgentMemoryGrantPayload(BaseModel):
     agent_id: UUID
     source_agent_id: UUID | None
     source_display: str
-    # Absent in historical combined Organization Memory grants.
-    access: Literal["read", "write"] | None = None
+    # Absent in original combined grants; "write" preserves historical split-grant events.
+    access: Literal["read", "read_write", "write"] | None = None
     actor_display: str
     subject_display: str
 

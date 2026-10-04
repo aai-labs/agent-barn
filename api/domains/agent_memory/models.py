@@ -12,10 +12,10 @@ from api.infrastructure.postgres.models import BaseModel
 
 
 class AgentMemoryGrant(BaseModel, table=True):
-    """Grants an Agent read access, or explicit Organization Memory write access.
+    """Grants an Agent read access, or Organization Memory read and write access.
 
     `agent_id` is the receiving Agent. A NULL `source_agent_id` grants Organization
-    Memory, with explicit read or write access; otherwise the grant lets the reader
+    Memory, with read-only or read and write access; otherwise the grant lets the reader
     recall that one source Agent's private memories. Grants are directional; granting
     or revoking access never rewrites stored memories.
     """
@@ -40,13 +40,12 @@ class AgentMemoryGrant(BaseModel, table=True):
             name="ck_agent_memory_grant_not_self",
         ),
         sa.CheckConstraint(
-            "access IN ('read', 'write') AND (source_agent_id IS NULL OR access = 'read')",
+            "access IN ('read', 'read_write') AND (source_agent_id IS NULL OR access = 'read')",
             name="ck_agent_memory_grant_access",
         ),
         sa.Index(
             "uq_agent_memory_grant_organization_memory",
             "agent_id",
-            "access",
             unique=True,
             postgresql_where=sa.text("source_agent_id IS NULL"),
         ),
@@ -64,7 +63,7 @@ class AgentMemoryGrant(BaseModel, table=True):
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
     agent_id: UUID = SqlField(nullable=False)
     source_agent_id: UUID | None = SqlField(default=None, nullable=True)
-    access: Literal["read", "write"] = SqlField(
+    access: Literal["read", "read_write"] = SqlField(
         default="read", sa_column=Column(sa.String(), nullable=False, server_default="read")
     )
     created_by_user_id: UUID | None = SqlField(
@@ -92,7 +91,7 @@ class AgentMemoryGrantCreate(PydanticBaseModel):
     agent_id: UUID
     # Omitted or null grants Organization Memory.
     source_agent_id: UUID | None = None
-    access: Literal["read", "write"] = "read"
+    access: Literal["read", "read_write"] = "read"
 
 
 class AgentMemoryGrantRead(PydanticBaseModel):
@@ -102,7 +101,7 @@ class AgentMemoryGrantRead(PydanticBaseModel):
     source_agent_id: UUID | None
     # None for an Organization Memory grant.
     source_agent_name: str | None
-    access: Literal["read", "write"]
+    access: Literal["read", "read_write"]
     created_at: datetime
 
 

@@ -104,13 +104,13 @@ class AgentMemoryRepository:
                 )
             ).all()
             organization_memory_write = any(
-                grant.source_agent_id is None and grant.access == "write" for grant in grants
+                grant.source_agent_id is None and grant.access == "read_write" for grant in grants
             )
             tags = [f"agent:{agent.id}"]
             tags.extend(
                 sorted(f"agent:{grant.source_agent_id}" for grant in grants if grant.source_agent_id is not None)
             )
-            if any(grant.source_agent_id is None and grant.access == "read" for grant in grants):
+            if any(grant.source_agent_id is None for grant in grants):
                 tags.append("scope:team")
             return MemoryAccess(agent.id, agent.organization_id, tuple(tags), organization_memory_write)
 

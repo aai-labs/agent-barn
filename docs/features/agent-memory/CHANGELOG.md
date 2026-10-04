@@ -11,8 +11,7 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
   authenticated gateway with current grant checks; hashed per-start Agent credentials; optional
   Hindsight and gateway Helm deployments; automatic Hermes/OpenClaw recall and retain alongside
   native memory for opted-in starts; Organization attribution of memory model costs;
-  retain/reflect gating against combined observed Organization spend; separate Organization
-  Memory read/write grants and an explicit shared writer command for both runtimes.
+  retain/reflect gating against combined observed Organization spend; Organization Memory Read only or Read and write grants and an explicit shared writer command for both runtimes.
 - In transition: runtime configuration and pinned-image contracts are implemented, but the
   optional deployment remains off by default. Deletion cleanup and durable retries
   are delivered; backups and restores are deferred by the maintainer.
@@ -21,6 +20,18 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-04 — combined Organization Memory permission
+
+- Changed: Organization Memory offers Read only or Read and write, with one grant
+  per Agent. Read and write permits both recall and explicit shared saves;
+  cross-Agent access remains read-only. To change a permission, revoke and regrant.
+- Migration: `c95f20b8413a` merges existing separate grants, preserving writer
+  provenance; previous write-only grants gain read access. Downgrade preserves
+  effective read/write authority as separate rows. Historical audit events remain valid.
+- Verified: the recall regression failed before the fix and passes after it;
+  124 API/schema tests, all 24 memory browser tests, API/UI static checks, and
+  the migration-head check pass. The local database is upgraded.
 
 ### 2026-10-04 — explicit memory access UI
 

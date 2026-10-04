@@ -12,7 +12,7 @@ export type CreateMemoryGrantInput = {
   agentId: string;
   /** Omit for an Organization Memory grant. */
   sourceAgentId?: string;
-  access: "read" | "write";
+  access: "read" | "read_write";
 };
 
 export function useCreateMemoryGrant() {

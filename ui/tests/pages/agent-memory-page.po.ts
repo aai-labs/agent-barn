@@ -72,7 +72,7 @@ export class AgentMemoryPage {
   }
 
   grantButton(): Locator {
-    return this.page.getByRole("button", { name: /Grant (read|write) access/ });
+    return this.page.getByRole("button", { name: /Grant (read|read and write) access/ });
   }
 
   async revoke(grantText: string) {

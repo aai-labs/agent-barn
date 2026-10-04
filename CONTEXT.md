@@ -113,7 +113,7 @@ Agent Memory marked for sharing across one Organization. Separate Organization M
 _Avoid_: team memory, shared bank
 
 **Memory Grant**:
-A directional permission, managed by Organization Owners and Admins, letting one Agent recall Organization Memory or one other Agent's private memories. Organization Memory read and write are independent grants; another Agent's memory is always read-only. Granting or revoking access never rewrites stored memories.
+A directional permission, managed by Organization Owners and Admins, letting one Agent recall Organization Memory or one other Agent's private memories. Organization Memory grants allow either read only or read and write; another Agent's memory is always read-only. Granting or revoking access never rewrites stored memories.
 _Avoid_: memory sharing, Agent Access
 
 **Pre-Restore Restore Point**:

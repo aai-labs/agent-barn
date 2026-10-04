@@ -116,7 +116,7 @@ class AgentMemoryService:
         context: CurrentUserContext,
     ) -> AgentMemoryGrantRead:
         scope = self._require_manage(organization_id, context)
-        if payload.source_agent_id is not None and payload.access == "write":
+        if payload.source_agent_id is not None and payload.access == "read_write":
             raise HTTPException(400, "Another Agent's memory can only be granted read access.")
         if payload.source_agent_id == payload.agent_id:
             raise HTTPException(
