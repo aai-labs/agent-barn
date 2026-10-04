@@ -28,6 +28,7 @@ from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePoi
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
 from api.domains.agents.service import AgentService
+from api.domains.auth.models import CurrentUserContext
 from api.domains.events.catalog import (
     AGENT_RESTORE_POINT_CREATED,
     AGENT_RESTORE_POINT_DELETED,
@@ -43,6 +44,7 @@ from api.domains.restore_points.constants import (
     RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
     RESTORE_POINT_RECONCILIATION_STALE_SECONDS,
 )
+from api.domains.restore_points.models import AgentRestorePointCreate
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
@@ -1748,3 +1750,26 @@ def test_wait_until_terminal_times_out_when_the_job_never_finishes():
             with pytest.raises(HTTPException) as exc_info:
                 wait()
             assert_that(exc_info.value.status_code, equal_to(504))
+
+
+def test_capture_records_a_caller_chosen_origin():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        service = context.injector.get(RestorePointService)
+        user_context = CurrentUserContext(
+            user=context.user,
+            organization_ids=[context.organization.id],
+            user_organization_map={context.organization.id: context.organization_user},
+            current_user_organization=context.organization_user,
+        )
+
+        with when("the orchestrator captures with the pre-upgrade origin"):
+            read = service.create_restore_point(
+                context.agent.id,
+                AgentRestorePointCreate(label="Automatic backup before managed update"),
+                user_context,
+                origin=RestorePointOrigin.PRE_UPGRADE,
+            )
+
+        with then("the row carries the origin the caller asked for"):
+            assert_that(read.origin, equal_to(RestorePointOrigin.PRE_UPGRADE.value))
+            assert_that(read.label, equal_to("Automatic backup before managed update"))

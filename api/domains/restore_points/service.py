@@ -424,6 +424,8 @@ class RestorePointService:
         agent_id: UUID,
         payload: AgentRestorePointCreate,
         context: CurrentUserContext,
+        *,
+        origin: RestorePointOrigin = RestorePointOrigin.MANUAL,
     ) -> AgentRestorePointRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
@@ -448,7 +450,7 @@ class RestorePointService:
                 created_by_user_id=context.user.id,
                 label=payload.label,
                 status=RestorePointStatus.PENDING,
-                origin=RestorePointOrigin.MANUAL,
+                origin=origin,
                 agent_type=current.agent_type,
                 pvc_name=restore_point_resource_name(restore_point_id),
                 job_name=capture_job_name(restore_point_id),
