@@ -7,6 +7,7 @@ import { ArrowLeft, CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AgentMemorySettings } from "@/features/agent-memory/components/agent-memory-settings";
 import { AgentWebhookSettings } from "@/features/agent-webhooks/components/agent-webhook-settings";
 
 import { useAgent } from "../hooks/use-agent";
@@ -102,6 +103,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   const canEdit = canAgent(agent, "agent.update");
   const canManageSecrets = canAgent(agent, "agent.secret.manage");
   const canDelete = canAgent(agent, "agent.delete");
+  const canManageMemory = canAgent(agent, "agent.memory.manage");
   const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
   const section = sections.find((item) => item.key === activeSection) ?? sections[0];
 
@@ -237,6 +239,14 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
               <AgentSkillsSettings
                 agent={agent}
                 canEdit={canEdit}
+              />
+            )}
+            {activeSection === "memory" && (
+              <AgentMemorySettings
+                agent={agent}
+                canEdit={canManageMemory}
+                editing={editingSection === "memory"}
+                onEdit={() => toggleEditing("memory")}
               />
             )}
             {activeSection === "keys" && (

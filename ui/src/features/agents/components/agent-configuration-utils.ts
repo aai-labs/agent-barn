@@ -19,6 +19,7 @@ export type AgentConfigurationSectionKey =
   | "channels"
   | "webhooks"
   | "skills"
+  | "memory"
   | "keys"
   | "override"
   | "restore"
@@ -55,6 +56,11 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     key: "skills",
     label: "Skills",
     description: "Assigned tools and the credentials they require.",
+  },
+  {
+    key: "memory",
+    label: "Memory",
+    description: "Long-term memory that adds to this Agent's own notes.",
   },
   {
     key: "keys",

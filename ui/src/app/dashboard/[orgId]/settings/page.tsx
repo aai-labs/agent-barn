@@ -1,10 +1,11 @@
 "use client";
 
-import { FileCode2, KeyRound, Sparkles, UserRound } from "lucide-react";
+import { Brain, FileCode2, KeyRound, Sparkles, UserRound } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
+import { MemoryAccessPanel } from "@/features/agent-memory/components/memory-access-panel";
 import { AgentDefaultsPanel } from "@/features/agent-settings/components/agent-defaults-panel";
 import { TemplatesPanel } from "@/features/templates/components/templates-panel";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
@@ -20,6 +21,7 @@ const ICONS = {
   agents: UserRound,
   templates: FileCode2,
   skills: Sparkles,
+  "memory-access": Brain,
   "shared-credentials": KeyRound,
 } as const;
 
@@ -87,6 +89,7 @@ export default function SettingsPage() {
             <TemplatesPanel scope={{ kind: "organization" }} canManage={canManage} />
           )}
           {section.key === "skills" && <SkillsPanel scope={{ kind: "organization" }} canManage={canManage} />}
+          {section.key === "memory-access" && <MemoryAccessPanel canManage={canManage} />}
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
         </SettingsPageLayout>
       </main>

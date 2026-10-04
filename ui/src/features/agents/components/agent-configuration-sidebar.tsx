@@ -1,4 +1,5 @@
 import {
+  Brain,
   FileCode2,
   History,
   KeyRound,
@@ -22,6 +23,7 @@ const ICONS = {
   channels: MessageSquare,
   webhooks: Webhook,
   skills: Sparkles,
+  memory: Brain,
   keys: KeyRound,
   override: SlidersHorizontal,
   restore: History,

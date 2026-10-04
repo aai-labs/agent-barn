@@ -31,6 +31,7 @@ const ORG_SCOPED_QUERY_KEYS = new Set([
   "cost",
   "skills",
   "shared-credentials",
+  "memory-grants",
   "agent-webhooks",
   "webhook-invocations",
 ]);

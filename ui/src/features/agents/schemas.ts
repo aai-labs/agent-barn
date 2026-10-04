@@ -55,6 +55,7 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.lifecycle.manage",
   "agent.access.manage",
   "agent.secret.manage",
+  "agent.memory.manage",
   "activity.read",
   "cost.read",
 ]);
@@ -119,6 +120,7 @@ export const AgentSchema = z.object({
   updateAvailable: z.boolean().default(false),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  memoryEnabled: z.boolean().default(false),
   lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
