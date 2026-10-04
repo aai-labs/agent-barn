@@ -21,6 +21,16 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-04 — slice 5 review — viewer navigation
+
+- Changed: previous-page data is retained only for the same Organization and Agent.
+  An empty later page keeps a way back when Hindsight's saved rows have changed.
+- Verified: independent parent review checks pass: 169 selected API tests (including
+  the real pinned Hindsight listing contract), 20 memory UI Playwright tests, API/UI
+  lint and types, formatting, migration-head, and enabled/disabled chart checks.
+- Follow-up: lifecycle purge and backups; memory editing and deletion controls are
+  outside the read-only viewer slice.
+
 ### 2026-10-04 — slice 5 — memory viewing UI
 
 - Delivered: Agent configuration → Memory toggles `memory_enabled` (needs

@@ -341,6 +341,24 @@ test.describe("Agent memory viewer", () => {
     await expect(memory.viewer()).toContainText("Long-term memory is off");
   });
 
+  test("can return from an empty later page when saved memories change", async ({ page }) => {
+    const items = Array.from({ length: 25 }, (_, index) => ({
+      id: `changed-${index}`,
+      type: "world",
+      text: `Saved note ${index}`,
+      mentioned_at: null,
+      shared: false,
+    }));
+    const { memory } = await open(page, { items });
+    await expect(memory.viewer()).toContainText("25 memories");
+    items.splice(5);
+    await memory.nextPage();
+    await expect(memory.viewer()).toContainText("No memories on this page");
+    await memory.viewer().getByRole("button", { name: "Previous", exact: true }).click();
+    await expect(memory.viewer()).toContainText("Saved note 0");
+    await expect(memory.viewer()).toContainText("5 memories");
+  });
+
   test("shows an inline error and recovers on retry", async ({ page }) => {
     const { memory, mock } = await open(page);
     await expect(memory.viewer()).toContainText("Customers prefer invoices");

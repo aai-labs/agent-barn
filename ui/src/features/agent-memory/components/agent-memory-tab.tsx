@@ -134,10 +134,12 @@ export function AgentMemoryTab({ agent }: { agent: Agent }) {
           style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-3)" }}
         >
           <div className="mb-1 text-[0.9375rem] font-medium" style={{ color: "var(--ink)" }}>
-            {search ? "No saved memories match" : "Nothing saved yet"}
+            {page > 1 ? "No memories on this page" : search ? "No saved memories match" : "Nothing saved yet"}
           </div>
           <div className="text-[0.844rem]">
-            {search
+            {page > 1
+              ? "Saved memories may have changed. Return to a previous page."
+              : search
               ? "Try a different search."
               : agent.memoryEnabled
                 ? `${agent.name} saves memories as it talks with people.`
@@ -157,10 +159,12 @@ export function AgentMemoryTab({ agent }: { agent: Agent }) {
               <MemoryRow key={item.id} item={item} />
             ))}
           </ul>
-          <div className="pt-4">
-            <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
-          </div>
         </>
+      )}
+      {!error && !isLoading && (items.length > 0 || page > 1) && (
+        <div className="pt-4">
+          <Pagination page={page} totalPages={Math.max(page, totalPages)} onPageChange={setPage} />
+        </div>
       )}
     </section>
   );

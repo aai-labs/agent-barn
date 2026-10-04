@@ -1,6 +1,6 @@
 "use client";
 
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { api } from "@/shared/api";
@@ -17,9 +17,10 @@ export function useAgentMemoryItems(
   { search, page, enabled }: { search: string; page: number; enabled: boolean },
 ) {
   const orgApiBase = useOrganizationApiBase();
+  const queryKey = agentMemoryKey.items(orgApiBase, agentId, { search, page });
 
   const query = useQuery({
-    queryKey: agentMemoryKey.items(orgApiBase, agentId, { search, page }),
+    queryKey,
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", String(page));
@@ -32,8 +33,12 @@ export function useAgentMemoryItems(
       return response.data;
     },
     enabled: enabled && !!agentId,
-    // Keep the previous page on screen while the next one loads.
-    placeholderData: keepPreviousData,
+    // Keep pages only within the same Agent and Organization. An observer may
+    // survive navigation; its previous data must not follow it to another target.
+    placeholderData: (previousData, previousQuery) =>
+      queryKey.slice(0, -1).every((part, index) => previousQuery?.queryKey[index] === part)
+        ? previousData
+        : undefined,
     retry: false,
   });
 
