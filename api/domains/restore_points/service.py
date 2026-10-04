@@ -207,6 +207,42 @@ class RestorePointService:
     def reconcile_row(self, row: AgentRestorePoint, *, respect_grace: bool = True) -> None:
         self._reconcile_row(row, respect_grace=respect_grace)
 
+    def wait_until_terminal(
+        self,
+        agent_id: UUID,
+        restore_point_id: UUID,
+        *,
+        timeout_seconds: int,
+        poll_seconds: int = 5,
+    ) -> AgentRestorePoint:
+        """Block until one restore point row resolves to READY or FAILED.
+
+        Drives `reconcile_agent` on every poll — that is what advances a row
+        whose Job has finished but which nobody has read yet. A FAILED row is
+        returned, not raised: the caller decides what a failed capture means
+        for the operation it was backing.
+        """
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            self.reconcile_agent(agent_id)
+            row = self.repository.get_by_id(restore_point_id)
+            if row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Restore point {restore_point_id} not found",
+                )
+            if row.status in TERMINAL_STATUSES:
+                return row
+            if time.monotonic() >= deadline:
+                raise HTTPException(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    detail=(
+                        f"Restore point {restore_point_id} did not finish "
+                        f"within {timeout_seconds} seconds"
+                    ),
+                )
+            time.sleep(poll_seconds)
+
     def apply_owed_replay(self, row: AgentRestorePoint) -> None:
         self._apply_recorded_configuration_after_restore(row)
 

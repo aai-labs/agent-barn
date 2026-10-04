@@ -1699,3 +1699,52 @@ def test_get_by_id_returns_none_for_an_unknown_row():
 
         with then("there is nothing there"):
             assert_that(row, none())
+
+
+def test_wait_until_terminal_returns_a_ready_row():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"succeeded": 1})
+        k8s.read_job_logs.return_value = '{"bytes": 4096, "file_count": 12}\n'
+        service = context.injector.get(RestorePointService)
+
+        with when("I wait for the capture to resolve"):
+            row = service.wait_until_terminal(context.agent.id, seeded.id, timeout_seconds=30, poll_seconds=0)
+
+        with then("the row is ready"):
+            assert_that(row.status, equal_to(RestorePointStatus.READY))
+            assert_that(row.archive_bytes, equal_to(4096))
+
+
+def test_wait_until_terminal_returns_a_failed_row():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"failed": 1})
+        k8s.read_job_logs.return_value = "capture failed"
+        service = context.injector.get(RestorePointService)
+
+        with when("I wait for a capture whose job failed"):
+            row = service.wait_until_terminal(context.agent.id, seeded.id, timeout_seconds=30, poll_seconds=0)
+
+        with then("the failed row is returned, not raised"):
+            assert_that(row.status, equal_to(RestorePointStatus.FAILED))
+
+
+def test_wait_until_terminal_times_out_when_the_job_never_finishes():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"active": 1})
+        service = context.injector.get(RestorePointService)
+
+        with when("I wait on a job that never finishes"):
+
+            def wait():
+                service.wait_until_terminal(context.agent.id, seeded.id, timeout_seconds=1, poll_seconds=0)
+
+        with then("it gives up with 504"):
+            with pytest.raises(HTTPException) as exc_info:
+                wait()
+            assert_that(exc_info.value.status_code, equal_to(504))
