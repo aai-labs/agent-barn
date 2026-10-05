@@ -6,7 +6,7 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { api } from "@/shared/api";
 
 import { MonthlyCostListSchema, type MonthlyCost } from "../schemas";
-import { costKey, monthlyCostParams, type CostFilters } from "../utils";
+import { costKey, costsPollingOptions, monthlyCostParams, type CostFilters } from "../utils";
 
 /** Calendar-month totals for the Organization, under the page's filters.
  *
@@ -27,6 +27,7 @@ export function useMonthlyCosts(filters: CostFilters) {
       );
       return response.data;
     },
+    ...costsPollingOptions,
   });
 
   return {
