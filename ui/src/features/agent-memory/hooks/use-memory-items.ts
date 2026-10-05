@@ -41,7 +41,8 @@ export function useMemoryItems(
       queryKey.slice(0, -1).every((part, index) => previousQuery?.queryKey[index] === part)
         ? previousData
         : undefined,
-    refetchInterval: agentId ? 5000 : false,
+    refetchInterval: agentId ? 60_000 : false,
+    refetchOnWindowFocus: true,
     retry: false,
   });
 

@@ -4,8 +4,6 @@ export PYTHONPATH="/app/config${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p /tmp/agentbarn-bin
 printf '#!/bin/sh\nexec python3 /app/config/agentbarn_message.py "$@"\n' > /tmp/agentbarn-bin/agentbarn-message
 chmod 755 /tmp/agentbarn-bin/agentbarn-message
-printf '#!/bin/sh\nexec python3 /app/config/agentbarn_memory.py "$@"\n' > /tmp/agentbarn-bin/agentbarn-memory
-chmod 755 /tmp/agentbarn-bin/agentbarn-memory
 export PATH="/tmp/agentbarn-bin:$PATH"
 
 node /app/config/healthz-server.js &

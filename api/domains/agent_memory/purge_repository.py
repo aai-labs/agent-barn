@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import sqlalchemy as sa
 from injector import inject, singleton
 from sqlmodel import Session, col, select
 
@@ -26,7 +27,18 @@ class MemoryPurgeRepository:
                     col(AgentMemoryPurge.next_attempt_at) <= now,
                     (col(AgentMemoryPurge.lease_until).is_(None)) | (col(AgentMemoryPurge.lease_until) <= now),
                 )
-                .order_by(col(AgentMemoryPurge.next_attempt_at), col(AgentMemoryPurge.id))
+                .order_by(
+                    sa.case(
+                        (
+                            col(AgentMemoryPurge.last_cleaned_at).is_(None) & (col(AgentMemoryPurge.attempts) == 0),
+                            0,
+                        ),
+                        (col(AgentMemoryPurge.last_error).is_not(None), 1),
+                        else_=2,
+                    ),
+                    col(AgentMemoryPurge.next_attempt_at),
+                    col(AgentMemoryPurge.id),
+                )
                 .limit(1)
                 .with_for_update(skip_locked=True)
             ).first()

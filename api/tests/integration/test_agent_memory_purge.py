@@ -335,3 +335,20 @@ def test_old_clean_tombstones_back_off_to_daily_sweeps():
         row = _rows(context, AgentMemoryPurge)[0]
         assert row.last_cleaned_at is not None
         assert timedelta(hours=23) < row.next_attempt_at - row.last_cleaned_at <= timedelta(days=1)
+
+
+def test_first_pass_cleanup_precedes_overdue_repeat_sweeps():
+    with given(_setup()) as context:
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        old = AgentMemoryPurge(
+            agent_id=uuid4(),
+            organization_id=context.organization.id,
+            next_attempt_at=datetime.now(UTC) - timedelta(days=3),
+            last_cleaned_at=datetime.now(UTC) - timedelta(days=4),
+        )
+        delegate.save(old)
+        assert_that(_delete(context).status_code, equal_to(204))
+        with when("a new deletion competes with an overdue maintenance sweep"):
+            claimed = context.injector.get(MemoryPurgeRepository).claim()
+        with then("the new deletion gets its first physical cleanup first"):
+            assert_that(claimed.agent_id, equal_to(context.billing.id))

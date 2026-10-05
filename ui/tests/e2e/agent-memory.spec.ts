@@ -364,14 +364,19 @@ test.describe("Agent memory viewer", () => {
   }
 
   test("hides Organization Memory after revocation and restores it after a new read grant", async ({ page }) => {
+    await page.clock.install();
     const items = [...mockMemoryItems];
     const { memory } = await open(page, { items });
     await expect(memory.viewer()).toContainText("Shared · Organization Memory");
     const shared = items.find((item) => item.shared)!;
     items.splice(items.indexOf(shared), 1);
+    await page.clock.fastForward(59_000);
+    await expect(memory.viewer()).toContainText(String(shared.text));
+    await page.clock.fastForward(1_000);
     await expect(memory.viewer()).not.toContainText(String(shared.text), { timeout: 10000 });
     await expect(memory.viewer()).toContainText(String(items[0].text));
     items.push(shared);
+    await page.clock.fastForward(60_000);
     await expect(memory.viewer()).toContainText(String(shared.text), { timeout: 10000 });
   });
 

@@ -73,7 +73,7 @@ permissions. This surface has no create, edit, or delete controls.
 - Agent configuration → **Memory** shows `memory_enabled` and, for people with `agent.memory.manage`, lets them change it. A running Agent with `agent.lifecycle.manage` uses **Save and Restart**: the UI stops it, saves the setting, and starts it again. If saving fails after stopping, the shared lifecycle flow still attempts to start it. Save or lifecycle failures remain visible inline. A stopped Agent uses **Save** and stays stopped. People without lifecycle permission can save without restarting; the UI explains that someone with lifecycle access must restart a running Agent to activate memory. The memory API itself does not restart the Agent; turning it off rejects memory requests immediately and keeps stored memories.
 - Organization Settings → **Memory access** is visible only to the Organization's Owners and Admins, matching `memory.access.manage`; a platform administrator who is only a Member does not see it. It lists grants, creates one for an Agent to Organization Memory with an explicit **Read only** or **Read and write** selection, or to another Agent's private memories marked **Read only** (never itself), and revokes one after confirmation. To change a permission, revoke the current grant and create the desired one. A duplicate is stopped before submission and shown if the server still returns 409. The grant form uses full-width Agent, memory source, and short permission selectors; contextual help and the grant action sit below the fields. Fields stack on narrow screens.
 - Organization Settings → **Organization Memory** is a dedicated read-only viewer, visible only to Organization Owners/Admins. It lists shared memories from all Agents with search, pagination, and retry; private memories are excluded.
-- Agent page → **Memory** appears only with `activity.read` and queries only then. It is read-only; see [View an Agent's saved memories](#view-an-agents-saved-memories). Memory text is rendered as plain text.
+- Agent page → **Memory** appears only with `activity.read` and queries only then. It is read-only; see [View an Agent's saved memories](#view-an-agents-saved-memories). Memory text is rendered as plain text. Visible Agent pages refresh once per minute and on window focus; grant changes invalidate the affected cached pages immediately.
 - Grants and memory items are Organization-scoped query families; the `memory-grants` and `organization-memory-items` families are evicted on an Organization switch and keys carry the Organization API base.
 
 ### Explicit Organization Memory saves
@@ -100,7 +100,8 @@ existing Agents must restart to receive them. Memory must be enabled. Instructio
 use the absolute installed path; a read-only executable ConfigMap entry is also
 mounted at `/usr/local/bin/agentbarn-memory` so the short command name survives
 terminal login-shell PATH resets. Both runtime Deployment builders mount this
-command with mode 0555. Agents must attempt each explicit save and report the
+command with mode 0555 as its sole installation, without a shadowing startup wrapper.
+Agents must attempt each explicit save and report the
 actual refusal rather than reuse earlier claims of tool unavailability. The Hermes
 runtime contract proves short-name discovery and permission refusals through its
 real terminal tool. Existing Agents need refreshed configuration and a restart
@@ -140,7 +141,9 @@ Cleanup does not block deletion. Until it runs, shared facts tagged `scope:team`
 remain in Hindsight; private source grants are removed immediately. This removes
 the deleted Agent's own documents, not copies other Agents may have retained.
 
-Workers claim one row with a ten-minute lease and `SKIP LOCKED`. Failures use
+Workers claim one row with a ten-minute lease and `SKIP LOCKED`, prioritizing first-pass
+deletions, then failed retries, then routine repeat sweeps. Old maintenance backlogs
+therefore cannot take the available slots ahead of new deletions. Failures use
 exponential delays from 30 seconds to one hour, serviced on the job's schedule.
 Expired leases are reclaimable; stale workers cannot overwrite newer claims. Runs
 are bounded to 20 tasks, 100 documents per task, and four minutes, with ten-second
@@ -156,6 +159,8 @@ Deletion sweeps process at most 20 tombstones per five-minute run (240 per hour)
 subject to a four-minute runtime bound. Larger backlogs delay repeat sweeps; hourly
 and daily schedules are minimum retry intervals, not completion guarantees.
 Tombstones remain durable because Hindsight has no enforced maximum job lifetime.
+An Agent currently having memory disabled does not prove it never saved memories;
+deletion still queues an initial sweep rather than risking an orphaned private/shared record.
 
 ### Use the memory gateway
 
