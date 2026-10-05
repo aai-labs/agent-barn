@@ -186,6 +186,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/llm-budgets",
+    "list_agent_llm_budgets_organizations__organization_id__agents_llm_budgets_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/models",
     "list_models_organizations__organization_id__agents_models_get"
   ],
@@ -283,6 +288,11 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/integrations/sharepoint/setup",
     "sharepoint_setup_organizations__organization_id__agents__agent_id__integrations_sharepoint_setup_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/llm-budget",
+    "get_agent_llm_budget_organizations__organization_id__agents__agent_id__llm_budget_get"
   ],
   [
     "GET",
@@ -518,6 +528,21 @@
     "GET",
     "/organizations/{organization_id}/templates/{template_key}/versions",
     "list_template_versions_organizations__organization_id__templates__template_key__versions_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/value",
+    "get_organization_value_organizations__organization_id__value_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/value-settings",
+    "get_value_settings_organizations__organization_id__value_settings_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/value/activity",
+    "get_organization_activity_organizations__organization_id__value_activity_get"
   ],
   [
     "GET",
@@ -1041,8 +1066,23 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/llm-budget",
+    "set_agent_llm_budget_organizations__organization_id__agents__agent_id__llm_budget_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/share",
     "replace_agent_share_settings_organizations__organization_id__agents__agent_id__share_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/llm-budget",
+    "set_organization_own_llm_budget_organizations__organization_id__llm_budget_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/value-settings",
+    "update_value_settings_organizations__organization_id__value_settings_put"
   ],
   [
     "PUT",
