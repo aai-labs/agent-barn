@@ -103,6 +103,9 @@ def retain_in_bank(
         timeout=60,
     )
     response.raise_for_status()
+    # Retain stores facts synchronously, but queues observations in the worker.
+    # Pagination comparisons need a settled bank, not a growing result set.
+    wait_for_consolidation(context, bank)
 
 
 def hindsight_listing(context, bank: str, tag: str, *, match: str = "any_strict") -> dict:
@@ -118,15 +121,26 @@ def hindsight_listing(context, bank: str, tag: str, *, match: str = "any_strict"
 def consolidate_bank(context, bank: str) -> None:
     response = httpx.post(f"{context.hindsight_url}/v1/default/banks/{bank}/consolidate", json={}, timeout=30)
     response.raise_for_status()
-    operation = response.json()["operation_id"]
+    wait_for_consolidation(context, bank)
+
+
+def wait_for_consolidation(context, bank: str) -> None:
+    """Wait for every queued consolidation, including follow-up operations."""
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        result = httpx.get(f"{context.hindsight_url}/v1/default/banks/{bank}/operations/{operation}", timeout=10)
+        result = httpx.get(
+            f"{context.hindsight_url}/v1/default/banks/{bank}/operations",
+            params={"type": "consolidation", "limit": 100},
+            timeout=10,
+        )
         result.raise_for_status()
-        status = result.json()["status"]
-        if status == "completed":
+        body = result.json()
+        if body["total"] > 100:
+            raise AssertionError("Too many consolidation operations to verify fixture readiness")
+        statuses = {operation["status"] for operation in body["operations"]}
+        if statuses & {"failed", "cancelled"}:
+            raise AssertionError(f"Consolidation did not succeed: {statuses}")
+        if statuses <= {"completed"}:
             return
-        if status in {"failed", "cancelled"}:
-            raise AssertionError(f"Consolidation {status}")
         time.sleep(0.2)
     raise AssertionError("Consolidation did not complete")

@@ -13,7 +13,12 @@ from api.domains.agent_memory.models import AgentMemoryGrant, AgentMemoryPurge
 from api.domains.agent_memory.purge import MemoryPurger
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
-from api.tests.helpers.hindsight_view_backend import hindsight_listing, pinned_hindsight_is_running, retain_in_bank
+from api.tests.helpers.hindsight_view_backend import (
+    hindsight_listing,
+    pinned_hindsight_is_running,
+    retain_in_bank,
+    wait_for_consolidation,
+)
 from api.tests.helpers.memory_backend import memory_viewer_is_served
 from api.tests.steps.agent import there_is_an_agent
 from api.tests.steps.agent_memory import agent_memory_api_setup, memory_is_enabled, purge_tasks_are_clean, two_agents
@@ -217,18 +222,20 @@ def test_organization_grants_control_shared_memories_in_the_agent_tab_including_
             document_id=f"agent:{context.billing.id}:team:seed",
             observation_scopes="per_tag",
         )
-        private = _list(context, reader.id, page_size=50)
-        assert_that(private.status_code, equal_to(200))
-        assert_that(all(not item["shared"] for item in private.json()["items"]), equal_to(True))
-        assert_that(any("Organization shared" in item["text"] for item in private.json()["items"]), equal_to(False))
-
         # Repairs old source tags via Hindsight's supported document update; this
         # invalidates the observations that used to fan out to the author's private tag.
+        # Repair must finish before checking privacy or comparing paginated totals.
         assert_that(
             retag_shared_documents(context.injector.get(HindsightClient), context.organization.id, batch_size=1),
             equal_to(2),
         )
         assert_that(retag_shared_documents(context.injector.get(HindsightClient), context.organization.id), equal_to(0))
+        wait_for_consolidation(context, bank)
+        private = _list(context, reader.id, page_size=50)
+        assert_that(private.status_code, equal_to(200))
+        assert_that(all(not item["shared"] for item in private.json()["items"]), equal_to(True))
+        assert_that(any("Organization shared" in item["text"] for item in private.json()["items"]), equal_to(False))
+
         grant = AgentMemoryGrant(organization_id=context.organization.id, agent_id=reader.id)
         delegate = context.injector.get(PostgresRepositoryDelegate)
         delegate.save(grant)
