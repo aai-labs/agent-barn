@@ -634,31 +634,12 @@ def test_local_tools_block_is_empty_when_the_skill_is_not_mounted():
     assert build_local_tools_policy_md([]) == ""
 
 
-def test_local_tools_block_tells_hermes_agents_how_to_attach_a_file():
-    """Producing a file is only half the job: Hermes attaches on an explicit MEDIA: token,
-    so naming the file in prose silently sends text and no attachment."""
+def test_local_tools_block_leaves_file_location_and_attaching_to_the_delivery_block():
+    """Where to write a shared file and how to attach it depend on the agent's Connections,
+    not on which tool produced it, so both live in the file-delivery block only."""
     md = build_local_tools_policy_md(["Excel"])
-    assert "MEDIA:<absolute path>" in md
-    assert "/workspace" in md
-    # The failure mode is silent, so the instruction has to be explicit about it.
-    assert "does **not** attach" in md
-
-
-def test_attaching_a_produced_file_is_the_default_not_a_request():
-    """Explaining the mechanism was not enough — agents described where they saved the file
-    and waited to be asked for it. Attaching has to read as standing behaviour."""
-    md = build_local_tools_policy_md(["Excel"])
-    assert "Always send back a file you produced" in md
-    assert "do not wait to be asked" in md
-
-
-def test_attach_token_is_documented_on_its_own_line_for_both_runtimes():
-    """Both runtimes parse MEDIA:, but OpenClaw also has a line-start-only extractor, so a
-    token buried mid-sentence would be dropped there while working on Hermes."""
-    md = build_local_tools_policy_md(["Excel"])
-    assert "on its own line" in md
-    # The worked example must itself put the token at the start of a line.
-    assert "\nMEDIA:/workspace/q1-report.xlsx\n" in md
+    assert "MEDIA:" not in md
+    assert "/workspace" not in md
 
 
 def test_local_tools_block_forbids_the_python_fallback():

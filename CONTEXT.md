@@ -21,8 +21,12 @@ The deployment-configured maximum number of non-deleted Organizations attributed
 _Avoid_: Membership limit, ownership limit, Platform Administrator quota
 
 **Model Spend Limit**:
-The amount an Organization may spend on model calls in one renewal period, set and changed only by a Platform Administrator. An Organization can neither see nor change its own. Absent means no limit; zero is a real limit of nothing. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
+The amount an Organization or one of its Agents may spend on model calls in one renewal period. An Organization's limit in force is its own limit when it has set one, otherwise its Spend Ceiling; an Agent's is its own limit when it has one, otherwise the Organization's default Agent limit, and never more than the Organization's. Zero is a real limit of nothing. The Organization and all its Agents share one renewal period and renew together. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
 _Avoid_: budget, allowance, quota, cap
+
+**Spend Ceiling**:
+The most an Organization may spend on model calls in one renewal period, set by a Platform Administrator. Every Organization has one, starting at the deployment default. The Organization may set a lower Model Spend Limit of its own, never a higher one, and lowering the ceiling beneath that limit pulls it down.
+_Avoid_: allowance, plan limit, platform budget
 
 **Spend Limit Coverage**:
 Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.
@@ -201,11 +205,11 @@ An unpublished, in-progress next version of a template lineage. Platform lineage
 _Avoid_: unpublished template, WIP template
 
 **Template Restore**:
-An action that seeds the Draft Template Version from any selected immutable published version of the same lineage, in either scope. Publishing the restored draft creates the next version in the lineage; it never mutates or removes the selected historical version.
+An action that seeds the Draft Template Version from any selected immutable published version of the same lineage. An Organization fork may select its own history or the source Platform history; publishing creates the next version in the draft's owning scope and never mutates or removes the selected historical version.
 _Avoid_: version pointer switch, destructive rollback
 
 **Fork Baseline Version**:
-The Platform Template Version whose complete snapshot was copied into the current Organization Template version. It is stored with the organization row and advances each time a Template Update clones a newer platform snapshot.
+The Platform Template Version whose complete snapshot was copied into the current Organization Template version. It is stored with the organization row and changes when a Template Update or Template Restore adopts a Platform snapshot, including when a restore selects an older baseline.
 _Avoid_: fork version, template merge baseline
 
 **Template Update**:
@@ -267,6 +271,18 @@ _Avoid_: domain event, outbox message, audit event
 **Tool Call**:
 An ingested record of one external tool execution by an agent, with pending, success, or error status.
 _Avoid_: integration call
+
+**Business Action**:
+A content-free record of one aai-cli or gog command an Agent ran, derived from a Tool Call at Ingest. It carries the command's integration (the aai-cli command group, such as `jira` or `microsoft`, or `google-<service>` for gog, such as `google-gmail`, distinct from an **Integration**), its resource and verb, whether it writes, its **Outcome Type**, and a SUCCESS, ERROR, or UNKNOWN status inferred from the command's result. It stores no arguments and no results.
+_Avoid_: event, activity, tool call
+
+**Outcome Type**:
+The kind of business result a write Business Action produces, such as `PULL_REQUEST_OPENED` or `RECORD_UPDATED`, with default minutes of value that an Organization may override. A write without an Outcome Type, or with one no longer in the catalogue, is unclassified and never valued. A classified write is valued only when it succeeded. With `UNKNOWN` status it is unverified, and with `ERROR` status it is failed.
+_Avoid_: action type, category
+
+**Request**:
+One piece of work asked of an Agent: an inbound Conversation Message, from a person on any Platform or through Web Chat, or a Webhook Invocation. Scheduled runs are not Requests, though their Tool Calls and spend still count toward an Agent's per-Request figures. See [`business-value.md`](docs/features/business-value.md#organization-activity).
+_Avoid_: task, job, conversation
 
 **Domain Event**:
 An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Barn.
@@ -334,7 +350,7 @@ _Avoid_: webhook
 - An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
 - A custom **Skill Lineage** can be hard-deleted from its owning Platform, Organization, or Agent scope only when no Agent pins any of its versions and no Template, Override, or fork-source reference remains; the delete cascades the lineage's own Drafts, Versions, and files.
 - A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
-- A **Platform Administrator** can inspect any immutable Platform Template Version and use a **Template Restore** to seed a new Draft Template Version from it; the restore leaves version history and existing Agent pins unchanged.
+- A **Platform Administrator** can restore an immutable Platform Template Version into a Platform draft; an Organization member with template management permission can restore an Organization version or a Built-in source version into an Organization draft. Both forms of **Template Restore** preserve published history and existing Agent pins.
 - An Organization Template fork tracks a **Fork Baseline Version**; the first fork is Organization v1 and a **Template Update** clones its origin's newer Platform Template snapshot into the next organization version.
 - Editing an Agent's Template from the Agent's own screen creates or updates one **Agent Template Override Draft** as a snapshot of the exact active shared Template Version or Agent Template Override Version, retaining its **Override Source Version** lineage; other Agents and the shared source lineage are unaffected. Selecting or rolling back a published version does not modify or discard that draft.
 - Publishing the draft validates it and creates the next immutable **Agent Template Override Version** without changing the Agent's pin. Selecting a published shared or Override Version changes the active pin immediately for a stopped Agent; a running Agent uses the explicit **Apply & Restart** workflow, which stops, selects, and starts it without a pending pin.

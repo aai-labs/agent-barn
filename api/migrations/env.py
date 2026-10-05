@@ -11,6 +11,7 @@ import api.domains.agent_webhooks.models
 import api.domains.agents.models
 import api.domains.api_keys.models
 import api.domains.auth.models
+import api.domains.business_value.models
 import api.domains.communications.models
 import api.domains.conversations.models
 import api.domains.costs.models

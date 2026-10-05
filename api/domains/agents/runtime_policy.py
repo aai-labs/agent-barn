@@ -2,8 +2,8 @@
 
 Both Hermes and OpenClaw auto-load AGENTS.md into the startup system prompt, so this
 is where cross-cutting "how to behave in chat" rules belong. Unlike
-``build_integrations_policy_md``, these blocks are unconditional — they don't depend on
-which integrations an agent has.
+``build_integrations_policy_md``, these blocks don't depend on which integrations an
+agent has; all but the file-delivery block are unconditional.
 """
 
 # Both runtimes expose gateway-level chat commands (Hermes: /help, /whoami, /new,
@@ -66,54 +66,60 @@ def build_role_scope_policy_md() -> str:
     return _ROLE_SCOPE_POLICY_MD
 
 
-_MESSAGING_POLICY_MD = """
-## Message Delivery
+# Chat platforms now run in each runtime's own gateway (COMMUNICATIONS_NATIVE_PLATFORMS), which
+# delivers replies and scheduled runs itself. The policy that used to sit here routed explicit
+# sends through the deprecated `agentbarn-message` client and forbade the message tool in cron
+# runs; native agents read it as binding and refused work their gateway supports. Only the
+# runtime-neutral rule for an empty scheduled run remains.
+_SCHEDULED_RUNS_POLICY_MD = """
+## Scheduled runs
 
-Agent Barn Communications owns Slack delivery. Never use provider tokens, direct
-provider APIs, native send_message tools, or integration CLIs to send chat
-messages. This delivery policy takes precedence over older transport
-instructions in template content.
-
-Ordinary responses are returned through the existing reply path. Send a separate
-message only when the user explicitly requests it during the current inbound
-execution. Use `agentbarn-message send --to <channel-or-person> --text <message>`;
-add `--kind user` for a person or `--thread <thread-id>` for a thread. Name the
-destination only: the message goes out on the same Connection the current
-conversation arrived on, so never ask for, invent, or pass a Connection ID. That
-also means a separate message stays inside the current workspace -- it cannot
-reach a different Slack, Discord, or Telegram Connection. Use provider IDs when
-names are ambiguous. The runtime supplies execution context and submission identity; never
-create or override either.
-Acceptance means queued, not delivered. Do not claim successful provider delivery
-from a queue receipt. Other platforms do not support initiated sends yet.
-
-Scheduled runs deliver too, and this is how recurring updates reach a home
-channel: whatever a cron run returns as its final response is delivered
-automatically. Write the update as the final response and it will be sent. A job
-created while talking to someone in a channel or thread delivers back there; a job
-created at startup, outside any conversation, delivers to the Agent's configured
-default. The runtime records this when the job is created -- never state a
-destination in the job prompt.
-
-A job may be moved within the channel it was created in, and nowhere else. To post
-at channel level instead of inside the thread, set the job's delivery to that same
-channel with an empty thread, `<platform>:<channel-id>:`; to target a specific
-thread, append it. Naming any other channel does not redirect the job, it stops it
-delivering at all. To reach a different channel, ask the user to create the job from
-there. When a run has nothing worth sending, return exactly the
-silence marker your template already uses -- `[SILENT]`, `SILENT`, `NO_REPLY`,
-`NO REPLY`, or `HEARTBEAT_OK`, in any case; each suppresses delivery. Any other text is delivered, so never return a status line,
-an acknowledgement, or a "nothing to report" sentence in its place.
-
-Do not call the message tool from a cron run. It is not a restriction on what
-cron may send, it is a mechanism: the tool needs an active inbound execution to
-send against, and a scheduled run has none. The final response is the delivery
-path for scheduled work. If the Agent has no available default the submission is
-rejected and an operator must configure or enable one in the Connection editor.
-Never substitute another destination.
+A scheduled run's final response is delivered to the job's destination. When a run
+has nothing worth sending, return exactly the silence marker your template already
+uses -- `[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`, in any case;
+each suppresses delivery. Any other text is delivered, so never return a status
+line, an acknowledgement, or a "nothing to report" sentence in its place.
 """
 
 
-def build_messaging_policy_md() -> str:
-    """Append the shared Communications policy to every assembled template."""
-    return _MESSAGING_POLICY_MD
+def build_scheduled_runs_policy_md() -> str:
+    """Append the empty-scheduled-run rule to every assembled template."""
+    return _SCHEDULED_RUNS_POLICY_MD
+
+
+# Naming a file in prose attaches nothing, and the failure is silent: agents saved a
+# report, replied with its path, and left the user holding a location they cannot open.
+# Both runtimes' native chat adapters attach on a MEDIA:<path> token -- Hermes matches it
+# anywhere, OpenClaw also has a line-start-only extractor, so the token must sit on its
+# own line. Gateway-owned Connections send text only, so the block is emitted only when
+# a native Slack, Discord or Telegram Connection will carry the reply.
+_FILE_DELIVERY_POLICY_MD = """
+## Sending Files
+
+**Always send back a file you produced.** When you create or update a file the user
+asked for, attach it in that same reply -- do not wait to be asked, and do not just
+tell them where you saved it. A path they cannot open is not an answer. Write it under
+`{workspace}` first.
+
+Attach it by putting `MEDIA:<absolute path>` **on its own line** at the end of the
+reply:
+
+```
+Here's the Q1 report.
+MEDIA:{workspace}/q1-report.xlsx
+```
+
+Naming the file in prose does **not** attach it -- delivery only happens when that
+token is present. Keep it on its own line and keep the path absolute: one runtime only
+scans line starts, so a token buried mid-sentence is silently ignored. Do not look for
+another way to share the file; this is the supported one.
+"""
+
+
+def build_file_delivery_policy_md(workspace_dir: str | None) -> str:
+    """Render the block that tells the agent how to attach a file to its reply.
+
+    ``workspace_dir`` is the runtime's workspace, where the agent can both write and
+    attach files; ``None`` when no native chat Connection carries the agent's replies.
+    """
+    return _FILE_DELIVERY_POLICY_MD.format(workspace=workspace_dir) if workspace_dir else ""

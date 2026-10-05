@@ -25,6 +25,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
 )
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
+from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import (
     Organization,
     OrganizationCreate,
@@ -36,7 +37,6 @@ from api.domains.organizations.models import (
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
-from api.infrastructure.litellm.client import LiteLLMClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ def _and_list(items: list[str]) -> str:
 @dataclass
 class OrganizationService:
     organization_repository: OrganizationRepository
-    litellm: LiteLLMClient
+    llm_budgets: OrganizationLlmBudgetService
     agent_service: AgentService
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
@@ -203,15 +203,9 @@ class OrganizationService:
                 detail=f"You can create up to {error.limit} organizations",
             ) from error
 
-        if config.litellm_base_url and config.litellm_secret_name:
-            try:
-                self.litellm.ensure_team_exists(str(organization.id))
-            except Exception as exc:
-                # Creation already committed; key generation retries provisioning
-                # and refuses to issue a key without its team.
-                logger.error(
-                    "LiteLLM team provisioning deferred for Organization %s (%s)", organization.id, type(exc).__name__
-                )
+        # With its limit already on it: a new Organization is capped from the start.
+        # Best effort — creation is committed, and key generation provisions again.
+        self.llm_budgets.provision_team(organization.id)
         organization_read = self.organization_repository.get_read(organization.id)
         if not organization_read:
             raise HTTPException(

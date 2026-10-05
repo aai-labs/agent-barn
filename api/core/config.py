@@ -59,6 +59,12 @@ class Config(BaseSettings):
     # Percentages of an Organization's limit at which it is notified. Empty falls back
     # to the default; 100 is always meaningful because it is the enforcement boundary.
     organization_llm_budget_alert_thresholds: str = "80,100"
+    # Model spend limits (USD) a new Organization and a new Agent start with. Required:
+    # nobody should be uncapped just because an administrator has not got to them yet.
+    # A platform administrator changes an Organization's afterwards; the Organization
+    # divides its own allowance among its Agents.
+    organization_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
+    agent_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
     # The API's own public base URL, used to show callers where to reach an Agent
     # Webhook or a Teams Connection. Deployments set it from API_HOST; locally it is
     # derived below, because the host port is the only thing that makes it up.
@@ -138,6 +144,14 @@ class Config(BaseSettings):
         """
         if not self.api_external_url and self.environment == "local":
             self.api_external_url = f"http://localhost:{self.api_port}"
+        return self
+
+    @model_validator(mode="after")
+    def agent_default_within_organization_default(self) -> Self:
+        """An Agent's limit may never exceed its Organization's, so a default that did
+        would put every new Agent in breach from its first call."""
+        if self.agent_default_llm_budget_usd > self.organization_default_llm_budget_usd:
+            raise ValueError("AGENT_DEFAULT_LLM_BUDGET_USD must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD")
         return self
 
     @field_validator("organization_llm_budget_alert_thresholds", mode="before")

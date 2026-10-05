@@ -3,6 +3,7 @@ from .hermes import (
     HERMES_BOOTLOADER_FOOTER,
     HERMES_HEALTHZ_PY,
     HERMES_START_SH,
+    HERMES_WORKSPACE_DIR,
     TELEMETRY_PUSH_PLUGIN_INIT,
     TELEMETRY_PUSH_PLUGIN_YAML,
     build_hermes_config_map,
@@ -17,6 +18,7 @@ from .hermes import (
 from .openclaw import (
     HEALTHZ_SERVER_JS,
     INIT_OPENCLAW_JS,
+    OPENCLAW_WORKSPACE_DIR,
     START_SH,
     TELEMETRY_PUSH_INDEX_JS,
     TELEMETRY_PUSH_PACKAGE_JSON,
@@ -39,6 +41,7 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     # openclaw
     "INIT_OPENCLAW_JS",
     "HEALTHZ_SERVER_JS",
+    "OPENCLAW_WORKSPACE_DIR",
     "START_SH",
     "TELEMETRY_PUSH_INDEX_JS",
     "TELEMETRY_PUSH_PACKAGE_JSON",
@@ -56,6 +59,7 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "HERMES_BOOTLOADER_FOOTER",
     "HERMES_HEALTHZ_PY",
     "HERMES_START_SH",
+    "HERMES_WORKSPACE_DIR",
     "TELEMETRY_PUSH_PLUGIN_YAML",
     "TELEMETRY_PUSH_PLUGIN_INIT",
     "build_hermes_gateway_config",

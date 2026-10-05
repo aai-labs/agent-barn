@@ -24,6 +24,7 @@ from starlette.testclient import TestClient
 
 from api.core.config import Config
 from api.domains.agents.models import (
+    AgentSecret,
     AgentStatus,
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
@@ -1292,6 +1293,32 @@ def test_start_agent_wires_telemetry_push_into_the_secret():
             assert_that(secret.string_data["INGEST_API_KEY"], is_not(equal_to("")))
 
 
+def test_start_with_stored_secret_that_no_longer_validates_returns_400():
+    """Stored content is re-validated on every start. A Pipedrive domain saved before the
+    single-label rule must stop the start with a fixable message, not an unhandled error."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"secrets": [{"provider": "pipedrive", "content": {"api_token": "pd-token", "domain": "acme"}}]},
+            headers=_auth(context),
+        )
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        [stored] = [s for s in delegate.find_all(AgentSecret) if s.agent_id == context.agent.id]
+        stored.content = encrypt_token(json.dumps({"api_token": "pd-token", "domain": "foo.bar"}), TEST_ENCRYPTION_KEY)
+        delegate.save(stored)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("it returns 400 naming the integration, and nothing is deployed"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that("Pipedrive" in response.json()["detail"], equal_to(True))
+            assert_that("save it again" in response.json()["detail"], equal_to(True))
+            k8s.create_deployment.assert_not_called()
+
+
 def test_start_already_running_returns_409():
     with given(
         [
@@ -1817,7 +1844,16 @@ def test_create_agent_calls_litellm_generate_key():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             agent_id = response.json()["id"]
             # the test uses _VALID_CREATE where name is "Test Agent"
-            litellm.generate_key.assert_called_once_with(agent_id, _VALID_CREATE["name"], str(context.organization.id))
+            # Capped from the first call at the default Agent limit, and a team created
+            # here would carry the Organization's (conftest: 25 and 100 per 30d).
+            litellm.generate_key.assert_called_once_with(
+                agent_id,
+                _VALID_CREATE["name"],
+                str(context.organization.id),
+                max_budget=25.0,
+                budget_duration="30d",
+                team_budget=100.0,
+            )
             litellm.delete_key.assert_not_called()
             litellm.block_key.assert_not_called()
 
@@ -2693,6 +2729,43 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
             assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
             service = k8s.create_service.call_args.args[1]
             assert_that([port.name for port in service.spec.ports], has_item("webhook"))
+
+
+@pytest.mark.parametrize(
+    "agent_type,workspace",
+    [(AgentType.OPENCLAW, "/home/node/.openclaw/workspace"), (AgentType.HERMES, "/workspace")],
+)
+def test_start_agent_with_native_chat_connection_tells_it_how_to_send_files(agent_type, workspace) -> None:
+    with given([*_GIVEN_WITH_NATIVE_PLATFORMS, there_is_an_agent(agent_type=agent_type), _native_slack_connection]) as (
+        context
+    ):
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent with a native Slack Connection and no file-producing skill starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md explains how to attach a file, since any reply can carry one"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(agents_md, contains_string("MEDIA:<absolute path>"))
+
+        with then("the example path is inside that runtime's workspace, where it can read files"):
+            assert_that(agents_md, contains_string(f"\nMEDIA:{workspace}/q1-report.xlsx\n"))
+
+
+def test_start_agent_without_native_chat_connection_does_not_promise_file_delivery() -> None:
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent reachable only through gateway-owned Connections starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md does not tell it to attach files the gateway would drop"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(agents_md, is_not(contains_string("MEDIA:")))
 
 
 @pytest.mark.parametrize(
