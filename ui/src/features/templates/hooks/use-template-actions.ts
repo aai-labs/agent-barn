@@ -40,11 +40,16 @@ export function useStartTemplateDraft(scope: TemplateScopeRef) {
     mutationFn: async ({
       templateKey,
       sourceVersion,
+      sourceScope,
     }: {
       templateKey: string;
       sourceVersion?: number;
+      sourceScope?: "organization" | "platform";
     }) => {
-      const query = sourceVersion === undefined ? "" : `?source_version=${sourceVersion}`;
+      const params = new URLSearchParams();
+      if (sourceVersion !== undefined) params.set("source_version", String(sourceVersion));
+      if (scope.kind === "organization" && sourceScope) params.set("source_scope", sourceScope);
+      const query = params.size ? `?${params}` : "";
       const response = await api.post<TemplateDraft>(
         `${basePath}/${templateKey}/draft${query}`,
         undefined,

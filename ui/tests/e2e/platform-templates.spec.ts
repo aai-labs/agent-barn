@@ -55,14 +55,14 @@ test.describe("Platform Template Admin", () => {
     const publishedVersion = page.getByRole("combobox", {
       name: "Published version",
     });
-    await expect(publishedVersion).toHaveText("Version v2");
+    await expect(publishedVersion).toHaveText("v2");
     await publishedVersion.click();
-    await page.getByRole("option", { name: "Version v1", exact: true }).click();
-    await expect(publishedVersion).toHaveText("Version v1");
+    await page.getByRole("option", { name: "v1", exact: true }).click();
+    await expect(publishedVersion).toHaveText("v1");
     await expect(page.getByText("Historical", { exact: true })).toBeVisible();
     await expect(page.getByLabel("SOUL.md content")).toHaveText(/version one/);
     await publishedVersion.click();
-    await page.getByRole("option", { name: "Version v2", exact: true }).click();
+    await page.getByRole("option", { name: "v2", exact: true }).click();
     await expect(page.getByText("Current", { exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: /continue editing draft/i }).click();
@@ -188,7 +188,7 @@ test.describe("Platform Template Admin", () => {
       name: "Published version",
     });
     await publishedVersion.click();
-    await page.getByRole("option", { name: "Version v1", exact: true }).click();
+    await page.getByRole("option", { name: "v1", exact: true }).click();
     await expect(page.getByText("Historical", { exact: true })).toBeVisible();
     await expect(page.getByLabel("SOUL.md content")).toHaveText(/version one/);
     await expect(page.getByRole("button", { name: "Restore v1 as draft" })).toBeVisible();

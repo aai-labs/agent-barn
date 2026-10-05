@@ -1,6 +1,7 @@
 from typing import cast
 from uuid import uuid7
 
+import pytest
 from fastapi import status
 from hamcrest import (
     assert_that,
@@ -2903,3 +2904,116 @@ def test_patch_template_endpoint_is_gone():
 
         with then("the method is no longer allowed"):
             assert_that(response.status_code, equal_to(status.HTTP_405_METHOD_NOT_ALLOWED))
+
+
+def test_org_fork_can_restore_a_shadowed_platform_version_without_moving_agent_pins():
+    with given([*_GIVEN, there_is_a_skill(global_skill=True)]) as context:
+        client: TestClient = context.client
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        platform_v1 = _platform_version("recovery", 1)
+        platform_v2 = _platform_version("recovery", 2)
+        repository.save_platform_template(platform_v1)
+        repository.save_platform_template_skills(platform_v1.id, {context.skill.id: (1, None)})
+        repository.save_platform_template(platform_v2)
+        _start_org_draft(client, context, "recovery")
+        client.patch(f"{_BASE}/recovery/draft", json={"soul_md": "Organization edit"}, headers=_auth(context))
+        fork = client.post(f"{_BASE}/recovery/draft/publish", headers=_auth(context))
+        assert_that(fork.status_code, equal_to(status.HTTP_201_CREATED))
+        agent = client.post(
+            _AGENTS_BASE, json={"name": "Pinned fork", "template_key": "recovery"}, headers=_auth(context)
+        )
+        assert_that(agent.status_code, equal_to(status.HTTP_201_CREATED))
+
+        with when("the organization explicitly restores Built-in v1, shadowed by Org v1"):
+            restored = client.post(
+                f"{_BASE}/recovery/draft?source_version=1&source_scope=platform", headers=_auth(context)
+            )
+
+        with then("the draft copies the complete built-in snapshot and requirements"):
+            assert_that(restored.status_code, equal_to(status.HTTP_201_CREATED))
+            body = restored.json()
+            for field in (
+                "soul_md",
+                "identity_md",
+                "user_md",
+                "tools_md",
+                "agents_md",
+                "boot_md",
+                "bootstrap_md",
+                "heartbeat_md",
+            ):
+                assert_that(body[field], equal_to(getattr(platform_v1, field)))
+            assert_that(body["required_skills"][0]["id"], equal_to(str(context.skill.id)))
+            assert_that(body["required_skills"][0]["version"], equal_to(1))
+            assert_that(body["forked_from_platform_template_id"], equal_to(str(platform_v2.id)))
+            assert_that(body["fork_baseline_platform_template_id"], equal_to(str(platform_v1.id)))
+
+        with when("the restored draft is published"):
+            published = client.post(f"{_BASE}/recovery/draft/publish", headers=_auth(context))
+
+        with then("Org v2 holds the restoration and the original edit and Agent pin survive"):
+            assert_that(published.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(published.json()["version"], equal_to(2))
+            assert_that(published.json()["organization_id"], equal_to(str(context.organization.id)))
+            history = client.get(f"{_BASE}/recovery/versions", headers=_auth(context)).json()
+            assert_that([row["soul_md"] for row in history], equal_to([platform_v1.soul_md, "Organization edit"]))
+            after = client.get(f"{_AGENTS_BASE}/{agent.json()['id']}", headers=_auth(context))
+            assert_that(after.json()["template_version"], equal_to(1))
+            assert_that(
+                cast(PlatformTemplate, repository.get_platform_template_by_key_version("recovery", 1)).soul_md,
+                equal_to(platform_v1.soul_md),
+            )
+
+
+def test_org_history_can_explicitly_include_both_source_scopes_with_colliding_versions():
+    with given([*_GIVEN, there_is_a_template(template_key="recovery", version=1)]) as context:
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        platform = _platform_version("recovery", 1)
+        repository.save_platform_template(platform)
+        own_template_id = context.template.id
+        other_org = Organization(name="Other Organization")
+        context.injector.get(OrganizationRepository).save(other_org)
+        there_is_a_template(template_key="recovery", organization_id=other_org.id)(context)
+        response = context.client.get(f"{_BASE}/recovery/versions?include_platform=true", headers=_auth(context))
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that({row["id"] for row in response.json()}, equal_to({str(platform.id), str(own_template_id)}))
+
+
+@pytest.mark.parametrize(
+    "query, expected_status",
+    [
+        ("source_version=1&source_scope=platform", 404),
+        ("source_version=1&source_scope=invalid", 422),
+        ("source_version=0&source_scope=platform", 422),
+    ],
+)
+def test_platform_restore_does_not_fall_back_to_an_org_version(query, expected_status):
+    with given([*_GIVEN, there_is_a_template(template_key="custom", version=1)]) as context:
+        response = context.client.post(f"{_BASE}/custom/draft?{query}", headers=_auth(context))
+        assert_that(response.status_code, equal_to(expected_status))
+
+
+def test_platform_restore_requires_template_manage_and_preserves_an_existing_draft():
+    with given(_GIVEN) as context:
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+        repository.save_platform_template(_platform_version("recovery", 1))
+        _start_org_draft(context.client, context, "recovery")
+        url = f"{_BASE}/recovery/draft?source_version=1&source_scope=platform"
+        assert_that(context.client.post(url, headers=_auth(context)).status_code, equal_to(409))
+        _there_is_a_member_actor()(context)
+        assert_that(context.client.post(url, headers=_auth(context)).status_code, equal_to(403))
+        assert_that(context.client.post(url).status_code, equal_to(401))
+
+
+def test_combined_template_history_requires_organization_read_permission():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_template(template_key="recovery"),
+            _there_is_a_member_actor(),
+            role_lacks_permission(OrganizationRole.MEMBER, PermissionKey.TEMPLATE_READ),
+        ]
+    ) as context:
+        url = f"{_BASE}/recovery/versions?include_platform=true"
+        assert_that(context.client.get(url, headers=_auth(context)).status_code, equal_to(403))
+        assert_that(context.client.get(url).status_code, equal_to(401))
