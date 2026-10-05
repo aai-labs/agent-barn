@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from hamcrest import assert_that, equal_to, has_entries, has_length, none
 from sqlmodel import Session, select
@@ -112,3 +112,28 @@ def test_memory_spend_is_scoped_to_origin_organization_and_half_open_window():
             spend = repository.memory_spend(context.organization.id, start, end)
         with then("only that Organization's memory origin inside the window counts"):
             assert_that(spend, equal_to(Decimal("1.25")))
+
+
+def test_registered_team_memory_key_is_attributed_only_to_its_own_bank():
+    with given(agent_memory_api_setup(cost_records_are_clean())) as context:
+        repository = context.injector.get(CostRepository)
+        logs = MemorySpendLogs(context.organization.id)
+        synchronizer = CostSynchronizer(
+            repository,
+            context.injector.get(AgentRepository),
+            logs,
+            MemoryGeneration(),
+            "",
+            memory_key_source=lambda: {"memory-hash": context.organization.id},
+        )
+        synchronizer.run_once()
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            row = session.exec(select(CostRecord)).one()
+        assert_that(row.is_memory, equal_to(True))
+        assert_that(row.organization_id, equal_to(context.organization.id))
+        forged = logs.get_spend_logs_v2(None, None)["data"][0]
+        forged["end_user"] = f"org-{uuid4()}"
+        foreign_id = UUID(forged["end_user"][4:])
+        parsed = synchronizer._to_record(forged, {}, {foreign_id: "Foreign Organization"})
+        assert parsed is not None
+        assert_that(parsed.organization_id, none())

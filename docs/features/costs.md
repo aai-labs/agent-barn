@@ -77,7 +77,8 @@ its spend log, including background retain/consolidation calls. Calls outside a
 bank context (such as server startup verification) remain platform costs.
 
 Cost sync recognizes this marker only on `MEMORY_LITELLM_KEY_HASHES`, the allowlist
-of dedicated Hindsight platform key hashes. A forged bank marker on an Agent key
+of dedicated Hindsight bootstrap key hashes or registered Organization memory keys.
+Registered keys must also match the canonical bank's Organization. A forged bank marker on an Agent key
 cannot change attribution. Invalid, noncanonical, or unknown bank markers remain
 in platform unattributed totals. No arbitrary end-user value, trace, prompt,
 response, or metadata is copied into `cost_record`.
@@ -108,34 +109,34 @@ Organization and Agent spend limits share the Organization's renewal window:
 
 ### Agent Memory spend gate
 
-The optional [Agent Memory](agent-memory.md) backend uses a separate, budgeted
-platform LiteLLM key. Its calls are attributed per Organization through cost sync.
-Before forwarding retain or reflect, the gateway reads the current
-Organization effective limit (`own ?? ceiling`) and adds its runtime team spend
-snapshot to exact persisted memory spend in the current budget window (`renewal - duration` through now). Only rows with
-that Organization and `is_memory=true` count as memory spend. The shared key must
-remain outside Organization teams to avoid counting memory twice.
+The optional [Agent Memory](agent-memory.md) backend resolves one encrypted
+LiteLLM virtual key per Organization, attached to the same team as its runtime
+keys. Retain, reflect, and queued consolidation therefore share the team's
+native spend cutoff with runtime calls. Memory keys are backend-only, allow the
+platform's configured models, and have no per-Agent budget: shared consolidation
+can combine multiple Agents' contributions.
 
-A zero limit blocks retain and reflect immediately. For positive Organization limits,
-the runtime snapshot must be at most 10 minutes old, the cost-sync heartbeat at
-most 20 minutes old, and the renewal must be in the future. Missing key hashes,
-missing/invalid accounting values or durations, future accounting timestamps,
-and stale data return 503. Combined observed spend at or above the limit returns
-429. Every Organization has a limit. Recall, readiness, and operation polling remain
-available under the usual memory authorization rules. Raising the limit is observed on the next request; no Agent restart is needed.
+For historical calls made using the shared bootstrap key, the Organization's
+remaining team allowance is reduced by that key's imported memory charges in the
+current renewal window. Only configured legacy key hashes are added to the team
+snapshot; new team memory charges already count there. Budget views and threshold
+alerts use this combined total. Reconciliation refreshes the reduced allowance as
+late legacy charges arrive. Migration `f69a2e0c847d` adds encrypted credentials and
+a partial `(organization_id, occurred_at)` index restricted to memory charges.
 
-Migration `f2a8d41b9c63` adds `cost_sync_state`. Cost sync records its heartbeat only
-after completing spend-log paging, including an empty successful run; a failed or
-truncated paging run does not refresh it. OpenRouter healing remains a separate
-phase. This gate uses observed spend without reservations: late billing, healing,
-concurrent requests, and already queued background consolidation can overshoot the
-limit. It does not cancel accepted jobs. Runtime LiteLLM team caps continue to
-enforce runtime calls independently; budget banners and threshold alerts still
-report runtime team spend, while Organization cost totals include memory spend.
+Before forwarding retain or reflect, the gateway also checks observed spend.
+A zero limit blocks immediately; positive limits need a runtime snapshot at most
+10 minutes old, a cost-sync heartbeat at most 20 minutes old, and a future renewal.
+Missing or invalid accounting returns 503, and observed exhaustion returns 429.
+Recall remains available. Migration `f2a8d41b9c63` adds the sync heartbeat, updated
+only after a complete paging pass, independently of OpenRouter healing.
 
-Memory processing is charged to the Organization and checked against its effective
-limit; per-Agent key limits apply to chat/runtime calls, since shared-bank
-consolidation may combine contributions from multiple Agents.
+LiteLLM enforcement uses observed billing, not reservations. Concurrent calls,
+late billing and healing can overshoot; accepted jobs are not cancelled. Queued
+jobs still encounter the same team cutoff when they make their model calls.
+Historical shared-key charges affect the cap after import and reconciliation.
+Calls made through an operator-run bridge without platform settings continue to
+use the bootstrap key and do not receive the shared-team guarantee.
 
 ### Runtime limit management
 
@@ -215,7 +216,7 @@ healing recovers costs LiteLLM booked as zero, into our table only, and cannot w
 them back — so a cap binds marginally late in real dollars and always fails open,
 never closed. Historical requests made before team attachment are not retroactively
 charged. In-flight requests can exceed any cap. This is a proxy spend cutoff, not an
-exact provider-invoice ceiling, and only calls using these LiteLLM Agent keys count.
+exact provider-invoice ceiling, and only calls using enrolled LiteLLM runtime or Organization memory keys count.
 A rejection does not stop the Agent container or suspend the Organization; model
 calls fail until the limit renews or is raised. Both runtimes' in-pod LLM proxy
 catches the rejection before the runtime sees it — matched on the error body, since

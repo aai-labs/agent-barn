@@ -1,56 +1,61 @@
-"""Live platform model selection for the pinned OpenAI-compatible provider.
-
-Models are bound to separate provider instances and frozen per operation. Updating
-settings cannot mutate an in-flight call or change its bank attribution.
-"""
+"""Freeze the platform model and Organization team credential per operation."""
 import asyncio
 import inspect
-import logging
 import os
 import time
 from collections import OrderedDict
 
 import httpx
 
-logger = logging.getLogger(__name__)
-
 
 class ModelSelection:
     def __init__(self, url, key):
         self.url, self.key = url, key
-        self.model = None
-        self.expires = 0
         self.lock = asyncio.Lock()
+        self.profiles = OrderedDict()
         self.operations = OrderedDict()
 
-    async def resolve(self, fallback, operation):
-        if operation and operation in self.operations:
-            return self.operations[operation]
+    async def resolve(self, fallback, operation, bank=None):
+        operation_key = (bank, operation)
+        if operation and operation_key in self.operations:
+            return self.operations[operation_key]
         async with self.lock:
-            if time.monotonic() >= self.expires:
+            profile, expires = self.profiles.get(bank, (None, 0))
+            if time.monotonic() >= expires:
                 try:
-                    async with httpx.AsyncClient(timeout=1, trust_env=False, follow_redirects=False) as client:
-                        response = await client.get(self.url, headers={"Authorization": f"Bearer {self.key}"})
+                    async with httpx.AsyncClient(timeout=2, trust_env=False, follow_redirects=False) as client:
+                        response = await client.get(
+                            self.url, params={"bank": bank} if bank else None,
+                            headers={"Authorization": f"Bearer {self.key}"},
+                        )
                         response.raise_for_status()
-                        model = response.json()["model"]
+                        payload = response.json()
+                        model, api_key = payload["model"], payload.get("api_key")
                         if not isinstance(model, str) or not model.startswith("openrouter/"):
                             raise ValueError("Unexpected memory model")
-                        self.model = model
+                        if bank and (not isinstance(api_key, str) or not api_key):
+                            raise ValueError("Organization memory credential unavailable")
+                        profile = (model, api_key)
                 except (httpx.HTTPError, ValueError, KeyError, TypeError):
-                    logger.warning("Memory model settings unavailable; retaining the last known model.")
-                self.expires = time.monotonic() + 5
-            model = self.model or fallback
+                    if bank:
+                        # Falling back to the bootstrap key bypasses the Organization cap.
+                        raise RuntimeError("Organization memory processing settings unavailable") from None
+                    profile = profile or (fallback, None)
+                self.profiles[bank] = (profile, time.monotonic() + 5)
+                self.profiles.move_to_end(bank)
+                if len(self.profiles) > 256:
+                    self.profiles.popitem(last=False)
         if operation:
-            self.operations[operation] = model
+            self.operations[operation_key] = profile
             if len(self.operations) > 1024:
                 self.operations.popitem(last=False)
-        return model
+        return profile
 
 
 def install_model_selection():
     url = os.environ.get("AGENTBARN_MEMORY_SETTINGS_URL")
     if not url:
-        return  # Compatibility with operator-run images not using platform settings.
+        return  # Operator-run images may not use platform settings.
     key = os.environ.get("HINDSIGHT_API_TENANT_API_KEY")
     if not key:
         raise RuntimeError("Memory settings require Hindsight's service credential.")
@@ -71,27 +76,26 @@ def install_model_selection():
         parameters.update(parameters.pop("kwargs", {}))
         original_init(self, *args, **kwargs)
         self._agentbarn_model_parameters = parameters
-        self._agentbarn_model_providers = {}
 
-    async def target(self):
+    async def invoke(self, method, args, kwargs):
         trace = current_trace_context()
-        model = await selection.resolve(self.model, trace.trace_id if trace else None)
-        if model == self.model:
-            return self
-        if model not in self._agentbarn_model_providers:
-            parameters = {**self._agentbarn_model_parameters, "model": model}
-            self._agentbarn_model_providers[model] = cls(**parameters)
-        return self._agentbarn_model_providers[model]
+        model, api_key = await selection.resolve(
+            self.model, trace.trace_id if trace else None, trace.bank_id if trace else None
+        )
+        parameters = {**self._agentbarn_model_parameters, "model": model}
+        if api_key:
+            parameters["api_key"] = api_key
+        provider = cls(**parameters)
+        try:
+            return await method(provider, *args, **kwargs)
+        finally:
+            # Bound client lifetime; no permanent provider pool per Organization.
+            await original_cleanup(provider)
 
     async def call(self, *args, **kwargs):
-        return await original_call(await target(self), *args, **kwargs)
+        return await invoke(self, original_call, args, kwargs)
 
     async def tools(self, *args, **kwargs):
-        return await original_tools(await target(self), *args, **kwargs)
+        return await invoke(self, original_tools, args, kwargs)
 
-    async def cleanup(self):
-        for provider in self._agentbarn_model_providers.values():
-            await original_cleanup(provider)
-        await original_cleanup(self)
-
-    cls.__init__, cls.call, cls.call_with_tools, cls.cleanup = initialize, call, tools, cleanup
+    cls.__init__, cls.call, cls.call_with_tools = initialize, call, tools

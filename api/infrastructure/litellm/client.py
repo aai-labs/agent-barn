@@ -295,6 +295,28 @@ class LiteLLMClient:
         if self.get_key_team(key) != org_id:
             raise LiteLLMError("LiteLLM did not apply the team assignment")
 
+    def generate_memory_key(self, org_id: str) -> str:
+        """A backend-only key sharing the runtime team's combined spend limit."""
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/generate",
+                headers=self._headers(self._master_key()),
+                json={
+                    "key_alias": f"agentbarn-memory-{org_id}",
+                    "team_id": org_id,
+                    "models": [],
+                    "metadata": {"organization_id": org_id, "agentbarn_memory": True},
+                },
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+            key = response.json()["key"]
+            if not isinstance(key, str) or not key:
+                raise ValueError()
+            return key
+        except httpx.HTTPError, KeyError, ValueError:
+            raise LiteLLMError("Could not provision memory processing key") from None
+
     def generate_key(
         self,
         agent_id: str,

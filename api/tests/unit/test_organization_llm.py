@@ -205,6 +205,7 @@ def organization_service(**overrides):
         "litellm": MagicMock(),
         "permission_policy": MagicMock(),
         "event_delivery_dispatcher": MagicMock(),
+        "memory_accounting": MagicMock(legacy_spend=MagicMock(return_value=0)),
     }
     deps.update(overrides)
     return OrganizationLlmBudgetService(**deps)
@@ -217,6 +218,11 @@ def configured():
 def test_reconcile_applies_each_organizations_stored_budget():
     repo = MagicMock()
     repo.list_budget_policies.return_value = [("a", 50.0, "30d"), ("b", 5.0, "7d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     with configured():
         service.reconcile_llm_budgets()
@@ -240,6 +246,11 @@ def test_reconcile_lowers_a_default_agent_limit_left_above_its_organizations():
     Agent limits."""
     repo = MagicMock()
     repo.list_budget_policies.return_value = [("a", 50.0, "30d"), ("b", 5.0, "7d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     with configured():
         service.reconcile_llm_budgets()
@@ -252,6 +263,11 @@ def test_reconcile_lowers_a_default_agent_limit_left_above_its_organizations():
 def test_reconcile_lowers_the_default_even_when_the_team_push_fails():
     repo = MagicMock()
     repo.list_budget_policies.return_value = [("a", 50.0, "30d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     service.litellm.apply_team_budget.side_effect = LiteLLMError("down")
     with configured():
@@ -263,6 +279,11 @@ def test_one_failing_organization_does_not_abort_the_sweep():
     """Drift repair is best effort: budgets are applied when set, not here."""
     repo = MagicMock()
     repo.list_budget_policies.return_value = [("a", 1.0, "30d"), ("b", 2.0, "30d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     service.litellm.apply_team_budget.side_effect = [LiteLLMError("down"), None]
     with configured():

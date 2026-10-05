@@ -70,6 +70,10 @@ class MemorySpendPolicy:
         # A policy update may leave an old renewal snapshot until the next refresh.
         if start > now:
             raise HTTPException(503, "Organization memory spend status is unavailable; try again later.")
-        memory_spend = self.costs.memory_spend(organization_id, start, now)
+        # New memory keys share the runtime team and are already in its spend.
+        # Only historical shared-key charges need adding to the team snapshot.
+        memory_spend = self.costs.memory_spend(
+            organization_id, start, now, key_hashes=self.config.memory_cost_key_hashes
+        )
         if Decimal(str(runtime_spend)) + memory_spend >= Decimal(str(limit)):
             raise HTTPException(429, "Organization model spend limit reached.")

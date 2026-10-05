@@ -61,6 +61,15 @@ async def main():
             ],
             max_retries=0,
         )
+        async with httpx.AsyncClient() as client:
+            await client.post(os.environ["CONTRACT_SETTINGS_URL"], json={"unavailable": True})
+        await asyncio.sleep(5.1)
+        try:
+            await call(BANKS[1], "unavailable-settings")
+        except Exception as exc:
+            assert "settings unavailable" in str(exc), str(exc)
+        else:
+            raise AssertionError("Bank processing fell back to the bootstrap key")
     await provider.cleanup()
     print("HINDSIGHT_COST_CONTRACT=ok")
 

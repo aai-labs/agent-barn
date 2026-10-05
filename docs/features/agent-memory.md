@@ -271,6 +271,12 @@ Revocation cannot erase existing conversation context or copies separately saved
 as private memories. The Agent tab refreshes every five seconds and after grant
 changes made in this UI; authorization is always rechecked by the gateway.
 
+Legacy shared documents can leave Agent-tag observations readable without an
+Organization grant before repair; exact source-fact filtering does not remove
+those derived rows. Run the repair before exposing legacy banks through the new
+gateway/viewers. The pinned-backend contract asserts this pre-repair exposure and
+its absence after repair.
+
 ## Platform memory-processing model
 
 Platform Admins choose the Hindsight model at **Platform Settings → Agent Memory**
@@ -297,14 +303,18 @@ leave the persisted setting unchanged. The choice and the Platform-scoped
 `platform.memory_model.changed` audit event commit atomically; repeated saves
 of an already persisted choice emit no additional event.
 
-The pinned Hindsight bridge reads `GET /memory/runtime/v1/model` on the separate
-gateway with the backend service credential, never an Agent token or viewer
+The pinned Hindsight bridge reads `GET /api/v1/memory/runtime/v1/model` on the
+product API with the backend service credential, never an Agent token or viewer
 capability. A five-second cache applies choices to new operations without Agent
-restarts; in-progress operations keep their model snapshot (up to 1,024 tracked
+restarts; canonical bank requests also receive an encrypted-at-rest Organization
+LiteLLM team key, provisioned by the product service. In-progress operations keep
+their model and key snapshot (up to 1,024 tracked
 operations). Separate provider instances preserve model-specific initialization
-and concurrent Organization cost attribution. During settings outages the bridge
-keeps its last known selection, or its startup model before its first successful
-fetch.
+and concurrent Organization cost attribution. Provider clients close after each call. During settings outages, new bank
+operations fail closed once the five-second cache expires; the bootstrap key
+cannot bypass Organization limits. Bankless startup verification can retain its
+last model selection or startup default. The Agent gateway neither receives
+LiteLLM master credentials nor provisions memory keys.
 
 Migration `d83f291bc7a0` adds the singleton table. Upgrade the database before
 starting the updated API and bridge; downgrade drops the choice and restores

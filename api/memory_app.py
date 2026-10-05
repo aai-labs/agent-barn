@@ -4,7 +4,6 @@ from injector import Injector
 
 from api.core.utils import create_injector
 from api.domains.agent_memory.gateway_routes import memory_gateway_router
-from api.domains.agent_memory.runtime_settings_routes import memory_runtime_settings_router
 from api.domains.agent_memory.view_routes import memory_view_router
 
 
@@ -19,11 +18,6 @@ def create_memory_app(injector: Injector | None = None) -> FastAPI:
     viewer = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     viewer.include_router(memory_view_router)
     app.mount("/memory/view/v1", viewer)
-
-    runtime = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    runtime.include_router(memory_runtime_settings_router)
-    app.mount("/memory/runtime/v1", runtime)
-    attach_injector(runtime, injector)
 
     @app.get("/health")
     def health() -> dict[str, str]:

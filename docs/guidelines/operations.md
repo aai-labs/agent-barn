@@ -114,12 +114,19 @@ The deployment workflows do not yet enable this optional release.
 This adds `postgres-hindsight` (pgvector/PostgreSQL 18, its own 10Gi PVC) and
 Hindsight 0.10.2. Only its API port 8888 is exposed, as ClusterIP; its control
 plane is off and API authentication is mandatory. The gateway gets the auth key
-through one Secret key reference; product API, worker, and Agent pods do not.
+through one Secret key reference. The product API receives the same service key
+for the internal model/credential endpoint; worker and Agent pods do not.
 Rotating the Helmfile API-key value rolls Hindsight and the gateway through
-their Secret/auth checksums. With a manually managed Secret, also restart the
+their Secret/auth checksums; restart the product API as well. With a manually managed Secret, also restart the
 gateway Deployment after rotation because environment variables are read at boot.
 
-Hindsight calls the existing LiteLLM endpoint with a dedicated platform key.
+Hindsight uses a dedicated platform key for bankless startup verification.
+Bank operations resolve an encrypted Organization key on its runtime LiteLLM
+team through the product API. Apply migration `f69a2e0c847d` before deploying
+this bridge; keep `AGENT_TOKEN_ENCRYPTION_KEY` stable so existing memory keys
+remain decryptable. The product API uses its existing LiteLLM master access
+to provision these keys; the Agent gateway needs neither master nor encryption
+credentials.
 `openrouter/openai/gpt-4.1-mini` is the initial default; Platform Admins can
 choose subsequent models in Platform Settings → Agent Memory. Do not share this key with Agents or attach it to
 an Organization team. The chart runs a pinned startup bridge that sends each
@@ -184,11 +191,11 @@ renders without connecting to a cluster. The API CI workflow runs the same check
 
 Apply migration `d83f291bc7a0` before deploying the settings API. Deploy both
 bridge files (`start_hindsight.py` and `memory_model.py`) and set
-`AGENTBARN_MEMORY_SETTINGS_URL` to the gateway's `/memory/runtime/v1/model`
-endpoint. Compose and Helm supply the internal URL. Existing backends need one
+`AGENTBARN_MEMORY_SETTINGS_URL` to the product API's
+`/api/v1/memory/runtime/v1/model` endpoint. Compose and Helm supply the internal URL. Existing backends need one
 restart to install the bridge; subsequent settings changes need none. The
-endpoint uses the existing Hindsight backend auth key, which product API and
-Agent pods do not receive.
+endpoint requires the existing Hindsight service key. The product API receives
+it through an explicit Secret reference; Agent pods do not.
 
 Set `MEMORY_LITELLM_ACTIVE_KEY_HASH` when retaining multiple attribution hashes.
 Helmfile derives it from the currently configured dedicated key; Compose

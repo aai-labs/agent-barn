@@ -68,6 +68,12 @@ class CostRecord(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("request_id", name="uq_cost_record_request_id"),
         sa.Index("ix_cost_record_org_occurred", "organization_id", "occurred_at"),
+        sa.Index(
+            "ix_cost_record_memory_org_occurred",
+            "organization_id",
+            "occurred_at",
+            postgresql_where=sa.text("is_memory IS TRUE"),
+        ),
         sa.Index("ix_cost_record_agent_occurred", "agent_id", "occurred_at"),
         sa.Index("ix_cost_record_occurred_at", "occurred_at"),
         sa.Index(

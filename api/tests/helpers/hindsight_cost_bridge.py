@@ -5,6 +5,7 @@ import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from api.tests.core.givenpy import LambdaWith
 
@@ -18,23 +19,34 @@ def hindsight_cost_boundary_is_ready():
         if exists.returncode:
             subprocess.run(["docker", "pull", IMAGE], check=True, capture_output=True)
         context.model_requests = []
+        context.settings_unavailable = False
         context.selected_model = "openrouter/contract/first"
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
+                if context.settings_unavailable:
+                    self.send_response(503)
+                    self.end_headers()
+                    return
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({"model": context.selected_model}).encode())
+                payload = {"model": context.selected_model}
+                bank = parse_qs(urlsplit(self.path).query).get("bank", [None])[0]
+                if bank:
+                    payload["api_key"] = f"memory-key-{bank}"
+                self.wfile.write(json.dumps(payload).encode())
 
             def do_POST(self):
                 payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 if self.path == "/settings":
-                    context.selected_model = payload["model"]
+                    context.selected_model = payload.get("model", context.selected_model)
+                    context.settings_unavailable = payload.get("unavailable", False)
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(b"{}")
                     return
+                payload["authorization"] = self.headers.get("Authorization")
                 context.model_requests.append(payload)
                 response = {
                     "id": "contract-model-response",

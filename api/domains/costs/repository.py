@@ -161,15 +161,21 @@ class CostRepository:
         with Session(self.delegate.engine) as session:
             return session.exec(select(sa.func.max(col(CostRecord.occurred_at)))).one()
 
-    def memory_spend(self, organization_id: UUID, start: datetime, end: datetime) -> Decimal:
+    def memory_spend(
+        self, organization_id: UUID, start: datetime, end: datetime, *, key_hashes: frozenset[str] | None = None
+    ) -> Decimal:
         """Organization Memory model charges within one renewal window, including healed costs."""
+        if key_hashes is not None and not key_hashes:
+            return Decimal(0)
         with Session(self.delegate.engine) as session:
+            predicates = [col(CostRecord.litellm_key_hash).in_(key_hashes)] if key_hashes is not None else []
             value = session.exec(
                 select(sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0)).where(
                     col(CostRecord.organization_id) == organization_id,
                     col(CostRecord.is_memory).is_(True),
                     col(CostRecord.occurred_at) >= start,
                     col(CostRecord.occurred_at) < end,
+                    *predicates,
                 )
             ).one()
             return Decimal(str(value))

@@ -128,7 +128,7 @@ def memory_budget_is_present(*, limit=10, runtime_spend=4, memory_spend="0", syn
                 [
                     CostRecord(
                         request_id=str(uuid4()),
-                        litellm_key_hash="memory-test-hash",
+                        litellm_key_hash="f" * 64,
                         occurred_at=now - timedelta(minutes=1),
                         spend=Decimal(memory_spend),
                         model="test",

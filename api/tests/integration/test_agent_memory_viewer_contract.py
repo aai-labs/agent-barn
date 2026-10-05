@@ -19,6 +19,7 @@ from api.infrastructure.hindsight.client import HindsightClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.helpers.hindsight_view_backend import (
+    consolidate_bank,
     hindsight_listing,
     pinned_hindsight_is_running,
     retain_in_bank,
@@ -301,10 +302,6 @@ def test_organization_grants_control_shared_memories_in_the_agent_tab_including_
 
 
 def test_shared_retagging_removes_legacy_private_observations_and_keeps_organization_facts():
-    from api.domains.agent_memory.retag_shared import retag_shared_documents
-    from api.infrastructure.hindsight.client import HindsightClient
-    from api.tests.helpers.hindsight_view_backend import consolidate_bank
-
     with given(_setup(two_agents())) as context:
         bank = _bank(context)
         tag = f"agent:{context.triage.id}"

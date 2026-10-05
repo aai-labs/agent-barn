@@ -405,3 +405,14 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
   10 plugin tests passed on rerun with the installed Node executable on PATH. Lint, format,
   type, migration-head, diff, and relative documentation-link checks pass.
 - Follow-up: the memory gateway, delivered in slice 2.
+
+## PR #265 review corrections
+
+Operator jobs boot from their documented minimal environment. New deletion purges
+precede repeat sweeps, and viewers poll once per minute with focus refresh.
+Organization memory processing uses an encrypted virtual key on the runtime
+LiteLLM team; historical shared-key charges reduce its allowance and appear in
+budget alerts. The pinned bridge fails closed when new bank credentials cannot
+be refreshed. A partial memory-cost index supports the spend check. Pinned
+backend tests document pre-repair legacy observation exposure and verify that
+consolidation is queued before retain returns.

@@ -36,7 +36,7 @@ def main() -> None:
     assert database["networks"] == ["hindsight-storage"]
     assert compose["networks"]["hindsight-storage"]["internal"] is True
     assert database["volumes"] == ["hindsight_postgres_data:/var/lib/postgresql"]
-    assert local["environment"]["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://memory:8003/memory/runtime/v1/model"
+    assert local["environment"]["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://api:8000/api/v1/memory/runtime/v1/model"
     assert any("memory_model.py" in mount for mount in local["volumes"])
     assert local["environment"]["HINDSIGHT_API_LLM_MODEL"] == services["api"]["environment"]["MEMORY_DEFAULT_MODEL"]
     assert local["environment"]["HINDSIGHT_ENABLE_CP"] == "false"
@@ -46,7 +46,7 @@ def main() -> None:
     for name in ("api", "worker", "communications"):
         assert services[name]["environment"]["HINDSIGHT_LITELLM_API_KEY"] == ""
         assert services[name]["environment"]["HINDSIGHT_DB_PASSWORD"] == ""
-        if name != "memory":
+        if name != "api":
             assert services[name]["environment"]["HINDSIGHT_API_KEY"] == ""
     values = {
         "dbConnectionUrl": "postgresql://test:test@postgres-app/test",
@@ -127,6 +127,8 @@ def main() -> None:
                     "key": "HINDSIGHT_API_TENANT_API_KEY",
                 }
                 assert "--no-access-log" in pod["containers"][0]["command"]
+            elif document["metadata"]["name"] == "agentbarn-api":
+                assert len(key_env) == 1
             else:
                 assert not key_env
     backend = render(
@@ -153,7 +155,7 @@ def main() -> None:
     assert "start_hindsight.py" in bridge["data"]
     assert "memory_model.py" in bridge["data"]
     environment = {entry["name"]: entry["value"] for entry in container["env"]}
-    assert environment["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://agentbarn-api-memory:8003/memory/runtime/v1/model"
+    assert environment["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://agentbarn-api:8000/api/v1/memory/runtime/v1/model"
     assert environment["HINDSIGHT_API_LLM_MODEL"] == shared_secret["stringData"]["MEMORY_DEFAULT_MODEL"]
     assert environment["HINDSIGHT_ENABLE_CP"] == "false"
     assert environment["HINDSIGHT_API_TENANT_EXTENSION"].endswith(":ApiKeyTenantExtension")

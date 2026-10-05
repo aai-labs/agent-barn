@@ -19,6 +19,7 @@ from api.core.config import get_config
 from api.domains.agent_settings.service import AgentSettingsService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.auth.models import CurrentUserContext
+from api.domains.costs.memory_budget import MemoryBudgetAccounting
 from api.domains.events import (
     ActorIdentity,
     ActorIdentityType,
@@ -89,6 +90,16 @@ class OrganizationLlmBudgetService:
     litellm: LiteLLMClient
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
+    memory_accounting: MemoryBudgetAccounting
+
+    def _proxy_limit(self, organization: Organization) -> float:
+        return max(0.0, organization.effective_llm_budget_usd - self.memory_accounting.legacy_spend(organization))
+
+    def ensure_memory_team(self, organization: Organization) -> None:
+        renewal = self.litellm.apply_team_budget(
+            str(organization.id), self._proxy_limit(organization), organization.llm_budget_duration
+        )
+        self._record_renewal(organization.id, renewal)
 
     def _litellm_configured(self) -> bool:
         config = get_config()
@@ -117,7 +128,10 @@ class OrganizationLlmBudgetService:
                 logger.exception("Default Agent limit reconciliation failed for Organization %s", organization_id)
             try:
                 self._record_renewal(
-                    organization_id, self.litellm.apply_team_budget(str(organization_id), budget, duration)
+                    organization_id,
+                    self.litellm.apply_team_budget(
+                        str(organization_id), self._proxy_limit(self._organization_or_404(organization_id)), duration
+                    ),
                 )
             except Exception:
                 failures += 1
@@ -209,7 +223,7 @@ class OrganizationLlmBudgetService:
             return
         try:
             renews_at = self.litellm.apply_team_budget(
-                str(organization_id), organization.effective_llm_budget_usd, organization.llm_budget_duration
+                str(organization_id), self._proxy_limit(organization), organization.llm_budget_duration
             )
         except Exception as exc:
             logger.error(
@@ -249,7 +263,7 @@ class OrganizationLlmBudgetService:
         if self._litellm_configured():
             try:
                 renews_at = self.litellm.apply_team_budget(
-                    str(organization_id), stored.effective_llm_budget_usd, stored.llm_budget_duration
+                    str(organization_id), self._proxy_limit(stored), stored.llm_budget_duration
                 )
             except Exception as exc:
                 logger.exception("Failed to apply LLM budget for Organization %s", organization_id)
@@ -305,6 +319,8 @@ class OrganizationLlmBudgetService:
         organization = self._organization_or_404(organization_id)
         limit = organization.effective_llm_budget_usd
         spend = organization.llm_spend_usd
+        if spend is not None:
+            spend += self.memory_accounting.legacy_spend(organization)
         observed = spend is not None and organization.llm_spend_observed_at is not None
         if not observed:
             state = OrganizationLlmBudgetState.UNKNOWN
@@ -419,6 +435,8 @@ class OrganizationLlmBudgetService:
         organization.llm_spend_observed_at = datetime.now(UTC)
         organization.llm_budget_renews_at = _parse_timestamp(renews_at)
 
+        spend += self.memory_accounting.legacy_spend(organization)
+
         # The key spans the window and the limit, so both a renewal and a limit change
         # re-arm the thresholds rather than leaving the Organization permanently quiet.
         alert_key = f"{renews_at}|{limit}"
@@ -499,6 +517,8 @@ class OrganizationLlmBudgetService:
             else:
                 uncovered.append(AgentLlmCoverageRead(agent_id=agent_id, agent_name=agent_name, status=status_))
         budget_status = self._team_budget_status(team_id)
+        if budget_status.get("spend") is not None:
+            budget_status["spend"] += self.memory_accounting.legacy_spend(self._organization_or_404(organization_id))
         return OrganizationLlmCoverageRead(
             total_agents=len(credentials),
             enrolled_agents=enrolled,

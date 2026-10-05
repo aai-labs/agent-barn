@@ -130,3 +130,12 @@ class AgentMemoryPurge(BaseModel, table=True):
     attempts: int = SqlField(default=0, nullable=False)
     last_cleaned_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True)))
     last_error: str | None = SqlField(default=None, max_length=32)
+
+
+class OrganizationMemoryKey(BaseModel, table=True):
+    """Backend-only processing credential on the Organization's LiteLLM team."""
+
+    __tablename__: str = "organization_memory_key"
+    organization_id: UUID = SqlField(foreign_key="organization.id", ondelete="CASCADE", unique=True)
+    key_encrypted: str = SqlField(repr=False)
+    key_hash: str = SqlField(unique=True, max_length=64)

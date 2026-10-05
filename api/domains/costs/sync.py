@@ -2,8 +2,9 @@ import argparse
 import hashlib
 import logging
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
@@ -125,6 +126,8 @@ class CostSynchronizer:
     generations: CostSyncGenerationSource
     encryption_key: str
     memory_key_hashes: frozenset[str] = frozenset()
+    memory_key_source: Callable[[], dict[str, UUID]] | None = None
+    memory_organization_keys: dict[str, UUID] = field(default_factory=dict, init=False)
 
     def run_once(self) -> CostSyncResult:
         started = time.monotonic()
@@ -138,6 +141,7 @@ class CostSynchronizer:
     # --- Phase 1: sync -----------------------------------------------------
 
     def _sync(self, started: float) -> CostSyncResult:
+        self.memory_organization_keys = self.memory_key_source() if self.memory_key_source else {}
         organization_names = self.repository.find_organization_names()
         attributions = self._build_attribution_map(organization_names)
         start_date, end_date = self._window()
@@ -241,7 +245,8 @@ class CostSynchronizer:
         every one. The mapping has to come from our agent table.
         """
         if organization_names is None:
-            organization_names = self.repository.find_organization_names()
+            self.memory_organization_keys = self.memory_key_source() if self.memory_key_source else {}
+        organization_names = self.repository.find_organization_names()
         attributions: dict[str, Attribution] = {}
         undecryptable = 0
 
@@ -283,7 +288,7 @@ class CostSynchronizer:
 
         key_hash = str(data["api_key"] or "")
         attribution = attributions.get(key_hash)
-        is_memory = key_hash in self.memory_key_hashes
+        is_memory = key_hash in self.memory_key_hashes or key_hash in self.memory_organization_keys
         if is_memory:
             # Trust only our backend key. Never store arbitrary end_user values or
             # use an Agent key's client-supplied user field to select tenancy.
@@ -298,6 +303,7 @@ class CostSynchronizer:
                     organization_id is not None
                     and organization_id in (organization_names or {})
                     and bank == f"org-{organization_id}"
+                    and self.memory_organization_keys.get(key_hash, organization_id) == organization_id
                 ):
                     attribution = Attribution(
                         agent_id=None,

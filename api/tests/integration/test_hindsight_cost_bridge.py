@@ -36,3 +36,8 @@ def test_platform_model_changes_reach_new_hindsight_calls_without_changing_in_fl
             assert_that(calls[operation]["model"], equal_to("openrouter/contract/second"))
         assert_that(calls["updated-model"]["user"], equal_to("org-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
         assert_that(calls["updated-tools"]["user"], equal_to("org-11111111-2222-3333-4444-555555555555"))
+
+        assert_that("unavailable-settings" in calls, equal_to(False))
+        for operation, call in calls.items():
+            key = f"memory-key-{call['user']}" if call.get("user") else "memory-cost-contract-key"
+            assert_that(call["authorization"], equal_to(f"Bearer {key}"), operation)

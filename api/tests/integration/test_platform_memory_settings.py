@@ -4,7 +4,6 @@ from uuid import uuid7
 import pytest
 from hamcrest import assert_that, equal_to, has_entries, has_length
 from sqlmodel import Session, select
-from starlette.testclient import TestClient
 
 from api.core.config import Config
 from api.domains.agent_memory.platform_models import PlatformMemorySettings
@@ -12,7 +11,6 @@ from api.domains.events.models import OutboxMessage
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
-from api.memory_app import create_memory_app
 from api.tests.core.givenpy import given
 from api.tests.steps.agent_memory import agent_memory_api_setup
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -147,12 +145,11 @@ def test_failed_model_key_update_does_not_persist_a_new_setting(monkeypatch):
 @pytest.mark.parametrize("token", [None, "agent-test-key", "é", "backend-service-test-key"])
 def test_runtime_model_endpoint_only_accepts_the_hindsight_service_credential(token):
     with given(agent_memory_api_setup(setup)) as context:
-        with TestClient(create_memory_app(context.injector)) as client:
-            response = client.get(
-                "/memory/runtime/v1/model",
-                headers={"Authorization": f"Bearer {token}".encode()} if token else {},
-            )
-            assert_that(response.status_code, equal_to(200 if token == "backend-service-test-key" else 401))
+        response = context.client.get(
+            "/api/v1/memory/runtime/v1/model",
+            headers={"Authorization": f"Bearer {token}".encode()} if token else {},
+        )
+        assert_that(response.status_code, equal_to(200 if token == "backend-service-test-key" else 401))
 
 
 @pytest.mark.parametrize("hashes,active", [("", ""), ("a" * 64 + "," + "b" * 64, ""), ("a" * 64, "b" * 64)])
@@ -177,8 +174,7 @@ def test_configured_default_is_returned_before_a_choice_is_saved():
         assert_that(
             context.client.get(BASE, headers=auth(context)).json(), has_entries(model="openrouter/custom/default")
         )
-        with TestClient(create_memory_app(context.injector)) as client:
-            response = client.get(
-                "/memory/runtime/v1/model", headers={"Authorization": "Bearer backend-service-test-key"}
-            )
-            assert_that(response.json(), has_entries(model="openrouter/custom/default"))
+        response = context.client.get(
+            "/api/v1/memory/runtime/v1/model", headers={"Authorization": "Bearer backend-service-test-key"}
+        )
+        assert_that(response.json(), has_entries(model="openrouter/custom/default"))

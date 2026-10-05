@@ -5,14 +5,15 @@ from typing import Annotated
 from fastapi import APIRouter, Header
 from fastapi_injector import Injected
 
-from api.domains.agent_memory.platform_service import PlatformMemoryService
+from api.domains.agent_memory.runtime_settings_service import MemoryRuntimeSettingsService
 
 memory_runtime_settings_router = APIRouter()
 
 
 @memory_runtime_settings_router.get("/model")
 def runtime_model(
-    service: Annotated[PlatformMemoryService, Injected(PlatformMemoryService)],
+    service: Annotated[MemoryRuntimeSettingsService, Injected(MemoryRuntimeSettingsService)],
     authorization: Annotated[str | None, Header()] = None,
+    bank: str | None = None,
 ):
-    return service.runtime_model(authorization)
+    return service.read(authorization, bank)

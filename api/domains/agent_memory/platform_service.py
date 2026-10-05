@@ -1,4 +1,3 @@
-import hmac
 from dataclasses import dataclass
 
 from fastapi import HTTPException
@@ -24,16 +23,6 @@ class PlatformMemoryService:
     litellm: LiteLLMClient
     config: Config
     dispatcher: EventDeliveryDispatcher
-
-    def runtime_model(self, authorization: str | None) -> dict[str, str]:
-        scheme, _, token = (authorization or "").partition(" ")
-        if (
-            scheme.lower() != "bearer"
-            or not self.config.hindsight_api_key
-            or not hmac.compare_digest(token.encode(), self.config.hindsight_api_key.encode())
-        ):
-            raise HTTPException(401, "Invalid memory service credential.")
-        return {"model": self.repository.read(self.config.memory_default_model).model}
 
     def read(self, context: CurrentUserContext) -> PlatformMemorySettingsRead:
         self.authority.require_platform_admin(context.user)
