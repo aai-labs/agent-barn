@@ -32,6 +32,8 @@ def _set_default(key: str, value: str) -> None:
 
 os.environ["ENVIRONMENT"] = "test"
 _set_default("SECRET_SIGNING_KEY", "test-secret-key")
+_set_default("ORGANIZATION_DEFAULT_LLM_BUDGET_USD", "100")
+_set_default("AGENT_DEFAULT_LLM_BUDGET_USD", "25")
 _set_default("PLATFORM_ADMIN_CREDENTIALS", "admin@example.com:StrongPass123")
 # Forced, not defaulted: a developer's real Cloudflare credentials in .env would otherwise
 # win and the suite would send live email to fixture addresses, burning sending quota and

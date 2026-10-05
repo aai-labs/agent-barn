@@ -127,7 +127,7 @@ starts, after the config and plugin directories are prepared so doctor validates
 the config Agent Barn just wrote; healthy workspaces never run the broad doctor
 repair during startup. A failed migration is logged and does not stop startup.
 
-Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be a recognized silence marker (`[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`); ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement.
+Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be a recognized silence marker (`[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`); ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement. The appended Scheduled runs policy carries only this rule. Agents are not told to send through `agentbarn-message` or to avoid their runtime's message tool in a scheduled run: with native Connections the runtime's own gateway delivers both, and that older instruction made native Agents refuse sends their gateway supports, such as a scheduled header message followed by a thread reply.
 
 ## Telemetry and costs
 
