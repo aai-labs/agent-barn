@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from api.core.config import Config
 from api.domains.agents.google_workspace_scopes import GOOGLE_SCOPE_PREFIX, WORKSPACE_SERVICE_SCOPES
 from api.domains.agents.models import GOOGLE_WORKSPACE_SERVICES, SecretProvider
+from api.domains.api_keys.models import ApiKeyAccessMode
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.auth.utils import get_current_user
@@ -218,6 +219,8 @@ def google_authorize_url(
     public and travels in the authorize URL — while the matching secret is supplied
     later, to ``/token``.
     """
+    if _context is not None and _context.api_key_access_mode == ApiKeyAccessMode.READ_ONLY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This API key is read-only")
     if provider != SecretProvider.GOOGLE_WORKSPACE.value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
