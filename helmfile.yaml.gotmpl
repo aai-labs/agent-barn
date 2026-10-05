@@ -36,6 +36,7 @@ releases:
     needs: ["{{ env "NAMESPACE" | default "agent-farm" }}/postgres-hindsight", "{{ env "NAMESPACE" | default "agent-farm" }}/litellm"]
     values:
       - databaseUrl: {{ printf "postgresql://hindsight:%s@postgres-hindsight:5432/hindsight" (env "HINDSIGHT_DB_PASSWORD" | urlquery | replace "+" "%20") | quote }}
+        runtimeServiceKey: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | required "MEMORY_RUNTIME_SERVICE_KEY is required" | quote }}
         apiKey: {{ env "HINDSIGHT_API_KEY" | required "HINDSIGHT_API_KEY is required" | quote }}
         llm:
           model: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}

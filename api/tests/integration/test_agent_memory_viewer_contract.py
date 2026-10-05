@@ -234,12 +234,22 @@ def test_organization_grants_control_shared_memories_in_the_agent_tab_including_
             any(item["type"] != "observation" and "Organization shared" in item["text"] for item in before_repair),
             equal_to(False),
         )
+        operations_url = f"{context.hindsight_url}/v1/default/banks/{bank}/operations"
+        previous = httpx.get(operations_url, params={"type": "consolidation"}, timeout=10)
+        previous.raise_for_status()
+        previous_ids = {operation["id"] for operation in previous.json()["operations"]}
         # Repairs old source tags via Hindsight's supported document update; this
         # invalidates the observations that used to fan out to the author's private tag.
         # Repair must finish before checking privacy or comparing paginated totals.
         assert_that(
             retag_shared_documents(context.injector.get(HindsightClient), context.organization.id, batch_size=1),
             equal_to(2),
+        )
+        after_patch = httpx.get(operations_url, params={"type": "consolidation"}, timeout=10)
+        after_patch.raise_for_status()
+        assert_that(
+            bool({operation["id"] for operation in after_patch.json()["operations"]} - previous_ids),
+            equal_to(True),
         )
         assert_that(retag_shared_documents(context.injector.get(HindsightClient), context.organization.id), equal_to(0))
         wait_for_consolidation(context, bank)

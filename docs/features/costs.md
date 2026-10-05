@@ -78,7 +78,8 @@ bank context (such as server startup verification) remain platform costs.
 
 Cost sync recognizes this marker only on `MEMORY_LITELLM_KEY_HASHES`, the allowlist
 of dedicated Hindsight bootstrap key hashes or registered Organization memory keys.
-Registered keys must also match the canonical bank's Organization. A forged bank marker on an Agent key
+Registered keys identify their Organization directly; request bank markers cannot
+change that identity. Shared legacy keys still require the canonical bank marker. A forged bank marker on an Agent key
 cannot change attribution. Invalid, noncanonical, or unknown bank markers remain
 in platform unattributed totals. No arbitrary end-user value, trace, prompt,
 response, or metadata is copied into `cost_record`.
@@ -134,7 +135,10 @@ only after a complete paging pass, independently of OpenRouter healing.
 LiteLLM enforcement uses observed billing, not reservations. Concurrent calls,
 late billing and healing can overshoot; accepted jobs are not cancelled. Queued
 jobs still encounter the same team cutoff when they make their model calls.
-Historical shared-key charges affect the cap after import and reconciliation.
+Historical shared-key charges affect the cap after import and reconciliation. The reconciler runs every 15 minutes: rollout
+can retain the old runtime allowance until that pass, and renewal can retain a
+legacy-reduced allowance until the next pass. Run reconciliation during rollout
+before accepting model traffic when legacy shared-key spend exists.
 Calls made through an operator-run bridge without platform settings continue to
 use the bootstrap key and do not receive the shared-team guarantee.
 
@@ -180,7 +184,9 @@ without undoing the committed Organization; first Agent key creation provisions 
 team again — with the Organization's limit, so it is never uncapped in between — and
 fails rather than issuing an unassigned key. `ensure_team_exists` never writes policy
 over an existing team: issuing a key must not re-assert a policy its caller was not
-given.
+given. The internal memory-key provisioning service does apply the stored
+Organization policy before issuing a key, so the shared team cap is already in
+force.
 
 Rows are authoritative and LiteLLM is a projection of them. A limit is stored with
 its change Event first and pushed second, so a proxy failure surfaces as `502` with

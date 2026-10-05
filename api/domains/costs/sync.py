@@ -245,8 +245,7 @@ class CostSynchronizer:
         every one. The mapping has to come from our agent table.
         """
         if organization_names is None:
-            self.memory_organization_keys = self.memory_key_source() if self.memory_key_source else {}
-        organization_names = self.repository.find_organization_names()
+            organization_names = self.repository.find_organization_names()
         attributions: dict[str, Attribution] = {}
         undecryptable = 0
 
@@ -293,24 +292,23 @@ class CostSynchronizer:
             # Trust only our backend key. Never store arbitrary end_user values or
             # use an Agent key's client-supplied user field to select tenancy.
             attribution = None
-            bank = row.get("end_user")
-            if isinstance(bank, str) and bank.startswith("org-"):
-                try:
-                    organization_id = UUID(bank[4:])
-                except ValueError:
-                    organization_id = None
-                if (
-                    organization_id is not None
-                    and organization_id in (organization_names or {})
-                    and bank == f"org-{organization_id}"
-                    and self.memory_organization_keys.get(key_hash, organization_id) == organization_id
-                ):
-                    attribution = Attribution(
-                        agent_id=None,
-                        agent_name="Agent Memory",
-                        organization_id=organization_id,
-                        organization_name=(organization_names or {})[organization_id],
-                    )
+            organization_id = self.memory_organization_keys.get(key_hash)
+            if organization_id is None:
+                bank = row.get("end_user")
+                if isinstance(bank, str) and bank.startswith("org-"):
+                    try:
+                        organization_id = UUID(bank[4:])
+                    except ValueError:
+                        organization_id = None
+                    if organization_id is not None and bank != f"org-{organization_id}":
+                        organization_id = None
+            if organization_id is not None and organization_id in (organization_names or {}):
+                attribution = Attribution(
+                    agent_id=None,
+                    agent_name="Agent Memory",
+                    organization_id=organization_id,
+                    organization_name=(organization_names or {})[organization_id],
+                )
 
         return CostRecord(
             request_id=str(request_id),

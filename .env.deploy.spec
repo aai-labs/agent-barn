@@ -51,6 +51,8 @@ POSTGRES_LITELLM_DB=litellm
 HINDSIGHT_ENABLED=false
 HINDSIGHT_DB_PASSWORD=
 HINDSIGHT_API_KEY=
+# Internal model/key settings credential; generate separately from Hindsight API auth.
+MEMORY_RUNTIME_SERVICE_KEY=
 HINDSIGHT_LITELLM_API_KEY=
 # Retired backend LiteLLM key SHA-256 hashes, comma separated (current hash is derived).
 MEMORY_LITELLM_KEY_HASHES=

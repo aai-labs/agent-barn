@@ -2,11 +2,12 @@ import time
 from uuid import uuid4
 
 import httpx
+import pytest
 from hamcrest import assert_that, equal_to
 
 from api.core.config import Config
 from api.infrastructure.kubernetes.client import KubernetesClient
-from api.infrastructure.litellm.client import LiteLLMClient
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.tests.core.givenpy import given
 from api.tests.helpers.litellm_memory_budget import MASTER_KEY, pinned_litellm_budget_is_running
 from api.tests.steps.agent_memory import agent_memory_api_setup
@@ -52,3 +53,31 @@ def test_memory_and_runtime_keys_share_the_real_litellm_team_cutoff(monkeypatch)
             )
             assert_that(response.is_error, equal_to(True), response.text)
             assert_that("budget" in response.text.lower(), equal_to(True), response.text)
+
+
+def test_a_proxy_that_drops_team_enrollment_does_not_issue_an_uncapped_memory_key(monkeypatch):
+    with given(agent_memory_api_setup(pinned_litellm_budget_is_running())) as context:
+        config = context.injector.get(Config)
+        config.litellm_base_url = context.litellm_url
+        client = LiteLLMClient(context.injector.get(KubernetesClient), config)
+        monkeypatch.setattr(client, "_master_key", lambda: MASTER_KEY)
+        org = str(uuid4())
+        client.apply_team_budget(org, 100, "30d")
+        original_post = httpx.post
+        generated = []
+
+        def drop_team(url, **kwargs):
+            if url.endswith("/key/generate"):
+                kwargs["json"] = {name: value for name, value in kwargs["json"].items() if name != "team_id"}
+                response = original_post(url, **kwargs)
+                response.raise_for_status()
+                generated.append(response.json()["key"])
+                return response
+            return original_post(url, **kwargs)
+
+        monkeypatch.setattr(httpx, "post", drop_team)
+        with pytest.raises(LiteLLMError, match="memory processing key"):
+            client.generate_memory_key(org)
+        assert_that(len(generated), equal_to(1))
+        with pytest.raises(LiteLLMError):
+            client.get_key_team(generated[0])

@@ -166,6 +166,8 @@ MEMORY_PORT=8003
 MEMORY_VIEW_BASE_URL=
 HINDSIGHT_BASE_URL=
 HINDSIGHT_API_KEY=
+# Internal model/key settings credential; generate separately from Hindsight API auth.
+MEMORY_RUNTIME_SERVICE_KEY=
 MEMORY_LITELLM_KEY_HASHES=
 # Optional initial model; shared by the API default and Hindsight startup.
 # MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini

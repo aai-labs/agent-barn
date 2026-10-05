@@ -36,7 +36,7 @@ def main() -> None:
     assert database["networks"] == ["hindsight-storage"]
     assert compose["networks"]["hindsight-storage"]["internal"] is True
     assert database["volumes"] == ["hindsight_postgres_data:/var/lib/postgresql"]
-    assert local["environment"]["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://api:8000/api/v1/memory/runtime/v1/model"
+    assert local["environment"]["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://api:8004/memory/runtime/v1/model"
     assert any("memory_model.py" in mount for mount in local["volumes"])
     assert local["environment"]["HINDSIGHT_API_LLM_MODEL"] == services["api"]["environment"]["MEMORY_DEFAULT_MODEL"]
     assert local["environment"]["HINDSIGHT_ENABLE_CP"] == "false"
@@ -46,8 +46,10 @@ def main() -> None:
     for name in ("api", "worker", "communications"):
         assert services[name]["environment"]["HINDSIGHT_LITELLM_API_KEY"] == ""
         assert services[name]["environment"]["HINDSIGHT_DB_PASSWORD"] == ""
-        if name != "api":
+        if name != "memory":
             assert services[name]["environment"]["HINDSIGHT_API_KEY"] == ""
+    assert services["api"]["environment"]["MEMORY_RUNTIME_SERVICE_KEY"] == "${MEMORY_RUNTIME_SERVICE_KEY:-}"
+    assert "8004:8004" not in services["api"]["ports"]
     values = {
         "dbConnectionUrl": "postgresql://test:test@postgres-app/test",
         "secretSigningKey": "test",
@@ -127,15 +129,34 @@ def main() -> None:
                     "key": "HINDSIGHT_API_TENANT_API_KEY",
                 }
                 assert "--no-access-log" in pod["containers"][0]["command"]
-            elif document["metadata"]["name"] == "agentbarn-api":
-                assert len(key_env) == 1
             else:
                 assert not key_env
+    api_deployment = next(
+        document
+        for document in enabled
+        if document["kind"] == "Deployment" and document["metadata"]["name"] == "agentbarn-api"
+    )
+    api_settings_key = next(
+        entry
+        for entry in api_deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        if entry["name"] == "MEMORY_RUNTIME_SERVICE_KEY"
+    )
+    assert api_settings_key["valueFrom"]["secretKeyRef"]["key"] == "AGENTBARN_MEMORY_SETTINGS_KEY"
+    api_service = next(
+        document
+        for document in enabled
+        if document["kind"] == "Service" and document["metadata"]["name"] == "agentbarn-api"
+    )
+    assert any(
+        port["name"] == "memory-runtime" and port["port"] == port["targetPort"] == 8004
+        for port in api_service["spec"]["ports"]
+    )
     backend = render(
         "hindsight",
         {
             "databaseUrl": "postgresql://test:test@postgres-hindsight/test",
             "apiKey": "test-backend-key",
+            "runtimeServiceKey": "test-memory-runtime-key",
             "llm": {"apiKey": "test-platform-key", "model": "openrouter/custom/default"},
         },
     )
@@ -155,7 +176,7 @@ def main() -> None:
     assert "start_hindsight.py" in bridge["data"]
     assert "memory_model.py" in bridge["data"]
     environment = {entry["name"]: entry["value"] for entry in container["env"]}
-    assert environment["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://agentbarn-api:8000/api/v1/memory/runtime/v1/model"
+    assert environment["AGENTBARN_MEMORY_SETTINGS_URL"] == "http://agentbarn-api:8004/memory/runtime/v1/model"
     assert environment["HINDSIGHT_API_LLM_MODEL"] == shared_secret["stringData"]["MEMORY_DEFAULT_MODEL"]
     assert environment["HINDSIGHT_ENABLE_CP"] == "false"
     assert environment["HINDSIGHT_API_TENANT_EXTENSION"].endswith(":ApiKeyTenantExtension")

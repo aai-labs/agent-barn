@@ -8,6 +8,7 @@ from unittest.mock import Mock
 from hamcrest import assert_that, equal_to, has_length
 from sqlalchemy import text
 from sqlmodel import Session, select
+from starlette.testclient import TestClient
 
 from api.core.config import Config
 from api.domains.agent_memory.models import OrganizationMemoryKey
@@ -16,20 +17,23 @@ from api.domains.costs.repository import CostRepository
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.infrastructure.litellm.client import LiteLLMClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.memory_runtime_app import create_memory_runtime_app
 from api.tests.core.givenpy import given
 from api.tests.steps.agent_memory import agent_memory_api_setup
 from api.tests.steps.cost import memory_budget_is_present
 
-URL = "/api/v1/memory/runtime/v1/model"
+URL = "/memory/runtime/v1/model"
 SERVICE_KEY = "memory-team-contract-service-key"
 
 
 def setup(context):
-    context.injector.get(Config).hindsight_api_key = SERVICE_KEY
+    context.injector.get(Config).memory_runtime_service_key = SERVICE_KEY
 
 
 def request(context, bank=None, token=SERVICE_KEY):
-    return context.client.get(URL, params={"bank": bank} if bank else {}, headers={"Authorization": f"Bearer {token}"})
+    return TestClient(create_memory_runtime_app(context.injector)).get(
+        URL, params={"bank": bank} if bank else {}, headers={"Authorization": f"Bearer {token}"}
+    )
 
 
 def test_bank_credentials_are_encrypted_reused_and_never_returned_to_agents(monkeypatch):
@@ -104,3 +108,14 @@ def test_memory_window_has_a_partial_index_and_legacy_hash_filter():
             ).scalar_one()
         assert_that("(organization_id, occurred_at)" in index, equal_to(True))
         assert_that("WHERE (is_memory IS TRUE)" in index, equal_to(True))
+
+
+def test_public_product_api_does_not_expose_processing_credentials():
+    with given(agent_memory_api_setup(setup)) as context:
+        assert_that(context.client.get("/api/v1/health").status_code, equal_to(200))
+        assert_that(
+            context.client.get(
+                "/api/v1/memory/runtime/v1/model", headers={"Authorization": f"Bearer {SERVICE_KEY}"}
+            ).status_code,
+            equal_to(404),
+        )

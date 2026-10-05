@@ -58,11 +58,11 @@ spec:
                 name: {{ .Values.litellmApiKeySecretName }}
           env:
             {{- if .Values.memory.enabled }}
-            - name: HINDSIGHT_API_KEY
+            - name: MEMORY_RUNTIME_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.memory.hindsightSecretName }}
-                  key: HINDSIGHT_API_TENANT_API_KEY
+                  key: AGENTBARN_MEMORY_SETTINGS_KEY
             {{- end }}
             # The namespace this release runs in — the API creates agent
             # workloads (Deployments/Services/PVCs/Secrets) here. Without it the

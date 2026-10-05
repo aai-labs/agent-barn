@@ -8,6 +8,7 @@ from types import SimpleNamespace
 sys.path.insert(0, "/opt/agentbarn")
 if os.environ.get("CONTRACT_SETTINGS_URL"):
     os.environ["AGENTBARN_MEMORY_SETTINGS_URL"] = os.environ["CONTRACT_SETTINGS_URL"]
+    os.environ["AGENTBARN_MEMORY_SETTINGS_KEY"] = "memory-settings-contract-key"
     os.environ["HINDSIGHT_API_TENANT_API_KEY"] = "backend-model-test-key"
 
 from start_hindsight import install  # ty: ignore[unresolved-import]

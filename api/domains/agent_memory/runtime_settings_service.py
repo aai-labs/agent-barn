@@ -29,8 +29,8 @@ class MemoryRuntimeSettingsService:
         scheme, _, token = (authorization or "").partition(" ")
         if (
             scheme.lower() != "bearer"
-            or not self.config.hindsight_api_key
-            or not hmac.compare_digest(token.encode(), self.config.hindsight_api_key.encode())
+            or not self.config.memory_runtime_service_key
+            or not hmac.compare_digest(token.encode(), self.config.memory_runtime_service_key.encode())
         ):
             raise HTTPException(401, "Invalid memory service credential.")
         model = self.settings.read(self.config.memory_default_model).model

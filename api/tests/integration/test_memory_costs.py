@@ -134,6 +134,8 @@ def test_registered_team_memory_key_is_attributed_only_to_its_own_bank():
         forged = logs.get_spend_logs_v2(None, None)["data"][0]
         forged["end_user"] = f"org-{uuid4()}"
         foreign_id = UUID(forged["end_user"][4:])
-        parsed = synchronizer._to_record(forged, {}, {foreign_id: "Foreign Organization"})
+        parsed = synchronizer._to_record(
+            forged, {}, {foreign_id: "Foreign Organization", context.organization.id: context.organization.name}
+        )
         assert parsed is not None
-        assert_that(parsed.organization_id, none())
+        assert_that(parsed.organization_id, equal_to(context.organization.id))

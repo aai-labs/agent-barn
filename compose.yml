@@ -52,7 +52,8 @@ services:
       HINDSIGHT_API_LLM_PROVIDER: openai
       HINDSIGHT_API_LLM_BASE_URL: http://litellm:4000/v1
       HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_LITELLM_API_KEY:-}
-      AGENTBARN_MEMORY_SETTINGS_URL: http://api:8000/api/v1/memory/runtime/v1/model
+      AGENTBARN_MEMORY_SETTINGS_URL: http://api:8004/memory/runtime/v1/model
+      AGENTBARN_MEMORY_SETTINGS_KEY: ${MEMORY_RUNTIME_SERVICE_KEY:-}
       HINDSIGHT_API_LLM_MODEL: ${MEMORY_DEFAULT_MODEL:-openrouter/openai/gpt-4.1-mini}
       HINDSIGHT_API_WORKER_ID: local-hindsight
     volumes:
@@ -98,6 +99,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c "uvicorn api.ingest_main:app --host 0.0.0.0 --port 8001 --reload &
+        uvicorn api.memory_runtime_main:app --host 0.0.0.0 --port 8004 --reload --no-access-log &
         exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
     depends_on:
       db:
@@ -111,7 +113,7 @@ services:
       - .env
     environment:
       <<: *api-env
-      HINDSIGHT_API_KEY: ${HINDSIGHT_API_KEY:-}
+      MEMORY_RUNTIME_SERVICE_KEY: ${MEMORY_RUNTIME_SERVICE_KEY:-}
       # Agent pods run in k3d, outside this Compose network, so they reach the
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}

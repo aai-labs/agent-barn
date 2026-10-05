@@ -297,6 +297,7 @@ class LiteLLMClient:
 
     def generate_memory_key(self, org_id: str) -> str:
         """A backend-only key sharing the runtime team's combined spend limit."""
+        key = None
         try:
             response = httpx.post(
                 f"{self.config.litellm_base_url}/key/generate",
@@ -313,8 +314,12 @@ class LiteLLMClient:
             key = response.json()["key"]
             if not isinstance(key, str) or not key:
                 raise ValueError()
+            if self.get_key_team(key) != org_id:
+                raise LiteLLMError("Memory key is not enrolled in its Organization team")
             return key
-        except httpx.HTTPError, KeyError, ValueError:
+        except httpx.HTTPError, KeyError, ValueError, TypeError, LiteLLMError:
+            if key and not self.delete_key(key):
+                self.block_key(key)
             raise LiteLLMError("Could not provision memory processing key") from None
 
     def generate_key(

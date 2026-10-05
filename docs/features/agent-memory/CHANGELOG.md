@@ -16,7 +16,9 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
   optional deployment remains off by default. Deletion cleanup and durable retries
   are delivered; backups and restores are deferred by the maintainer.
 - Next, in order:
-  1. Backups and tested restore when requested; deferred for now.
+  1. Bound tombstone retention after proving an in-flight retain/queued-job drain;
+     first-pass priority is delivered, but repeat-sweep storage and load still grow.
+  2. Backups and tested restore when requested; deferred for now.
 - Blockers: none.
 
 ## Changes
@@ -416,3 +418,8 @@ budget alerts. The pinned bridge fails closed when new bank credentials cannot
 be refreshed. A partial memory-cost index supports the spend check. Pinned
 backend tests document pre-repair legacy observation exposure and verify that
 consolidation is queued before retain returns.
+
+Opus review tightened credential isolation: settings now use a separate service
+key and internal port 8004, absent from public API routes. Memory key creation
+verifies team enrollment and revokes a key when verification fails. Retag tests
+also prove that PATCH queues fresh consolidation before returning.

@@ -11,7 +11,8 @@ import httpx
 class ModelSelection:
     def __init__(self, url, key):
         self.url, self.key = url, key
-        self.lock = asyncio.Lock()
+        # Bounded stripes avoid serializing unrelated Organizations or retaining a lock per bank.
+        self.locks = [asyncio.Lock() for _ in range(64)]
         self.profiles = OrderedDict()
         self.operations = OrderedDict()
 
@@ -19,11 +20,11 @@ class ModelSelection:
         operation_key = (bank, operation)
         if operation and operation_key in self.operations:
             return self.operations[operation_key]
-        async with self.lock:
+        async with self.locks[hash(bank) % len(self.locks)]:
             profile, expires = self.profiles.get(bank, (None, 0))
             if time.monotonic() >= expires:
                 try:
-                    async with httpx.AsyncClient(timeout=2, trust_env=False, follow_redirects=False) as client:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(45, connect=2), trust_env=False, follow_redirects=False) as client:
                         response = await client.get(
                             self.url, params={"bank": bank} if bank else None,
                             headers={"Authorization": f"Bearer {self.key}"},
@@ -38,6 +39,9 @@ class ModelSelection:
                         profile = (model, api_key)
                 except (httpx.HTTPError, ValueError, KeyError, TypeError):
                     if bank:
+                        self.profiles[bank] = (None, time.monotonic() + 1)
+                        if len(self.profiles) > 256:
+                            self.profiles.popitem(last=False)
                         # Falling back to the bootstrap key bypasses the Organization cap.
                         raise RuntimeError("Organization memory processing settings unavailable") from None
                     profile = profile or (fallback, None)
@@ -45,6 +49,8 @@ class ModelSelection:
                 self.profiles.move_to_end(bank)
                 if len(self.profiles) > 256:
                     self.profiles.popitem(last=False)
+        if profile is None:
+            raise RuntimeError("Organization memory processing settings unavailable")
         if operation:
             self.operations[operation_key] = profile
             if len(self.operations) > 1024:
@@ -56,9 +62,9 @@ def install_model_selection():
     url = os.environ.get("AGENTBARN_MEMORY_SETTINGS_URL")
     if not url:
         return  # Operator-run images may not use platform settings.
-    key = os.environ.get("HINDSIGHT_API_TENANT_API_KEY")
-    if not key:
-        raise RuntimeError("Memory settings require Hindsight's service credential.")
+    key = os.environ.get("AGENTBARN_MEMORY_SETTINGS_KEY")
+    if not key or key == os.environ.get("HINDSIGHT_API_TENANT_API_KEY"):
+        raise RuntimeError("Memory settings require a dedicated service credential.")
     from hindsight_api.engine.llm_trace import current_trace_context
     from hindsight_api.engine.providers.openai_compatible_llm import OpenAICompatibleLLM
 

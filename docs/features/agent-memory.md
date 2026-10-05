@@ -51,7 +51,7 @@ Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md)
 - Content authorization reuses the Agent Permission `activity.read` through the normal Agent visibility checks: hidden, other-Organization, and deleted Agents are 404, and a visible Agent without `activity.read` is 403. `agent.memory.manage` governs the memory setting; `memory.access.manage` governs grants and the Organization viewer, not reading an Agent's saved content.
 - Private memories use the selected Agent's exact singleton tag scope. All Organization Memory, including contributions from other Agents, is included only while the selected Agent holds a current `read` or `read_write` Organization grant. Revocation hides every shared record here, including its own contributions; records remain in the Owner/Admin Organization viewer. Source-Agent grants do not expand this tab. Private memories remain viewable while the Agent is stopped or memory is disabled, until it is deleted.
 - `mentioned_at` is the time Hindsight recorded for the memory, not necessarily when it was persisted; Hindsight 0.10.2 does not expose a creation time on this endpoint. Private memories come first, followed by Organization Memory; each scope is ordered most recently mentioned first. Memories without a mention time have none.
-- After authorizing the person, the product API sends the gateway's separate viewer (`/memory/view/v1/memories`, never the Agent allowlist) a 30-second JWT naming one Organization and Agent, with an audience and operation distinct from user access tokens and Agent credentials. The gateway rechecks that the Agent is undeleted in an existing Organization, derives the `org-<organization_id>` bank, forces `tags=agent:<agent_id>&tags_match=exact` for private records and adds a separate strict `scope:team` listing only with a current Organization grant, and accepts only `search`, `limit`, and `offset`. Agent credentials are still refused on every list path.
+- The product API holds no Hindsight credential. After authorizing the person, it sends the gateway's separate viewer (`/memory/view/v1/memories`, never the Agent allowlist) a 30-second JWT naming one Organization and Agent, with an audience and operation distinct from user access tokens and Agent credentials. The gateway rechecks that the Agent is undeleted in an existing Organization, derives the `org-<organization_id>` bank, forces `tags=agent:<agent_id>&tags_match=exact` for private records and adds a separate strict `scope:team` listing only with a current Organization grant, and accepts only `search`, `limit`, and `offset`. Agent credentials are still refused on every list path.
 - Hindsight 0.10.2 applies the tag filter before counting, so `total` is the sum of the disjoint private and currently permitted shared scopes. The gateway fails closed with a generic 502 if any returned row lacks that tag, has an unknown type, or the page is larger than requested or than its total. A bank that does not exist yet is an empty page. Search is a case-insensitive substring match on memory text and context with SQL wildcards escaped; it can match context that is not shown. Upstream errors are generic 502 or 503.
 
 ### View Organization Memory
@@ -268,7 +268,7 @@ idempotent, leaves private documents and memory text unchanged, validates the
 Agent/team document namespace, and never becomes an Agent-accessible route.
 
 Revocation cannot erase existing conversation context or copies separately saved
-as private memories. The Agent tab refreshes every five seconds and after grant
+as private memories. The Agent tab refreshes once per minute, on window focus, and after grant
 changes made in this UI; authorization is always rechecked by the gateway.
 
 Legacy shared documents can leave Agent-tag observations readable without an
@@ -303,14 +303,20 @@ leave the persisted setting unchanged. The choice and the Platform-scoped
 `platform.memory_model.changed` audit event commit atomically; repeated saves
 of an already persisted choice emit no additional event.
 
-The pinned Hindsight bridge reads `GET /api/v1/memory/runtime/v1/model` on the
-product API with the backend service credential, never an Agent token or viewer
+The pinned Hindsight bridge reads `GET /memory/runtime/v1/model` on a dedicated internal
+listener (port 8004) alongside the product API, with a distinct
+`MEMORY_RUNTIME_SERVICE_KEY`, never an Agent token or viewer
 capability. A five-second cache applies choices to new operations without Agent
 restarts; canonical bank requests also receive an encrypted-at-rest Organization
-LiteLLM team key, provisioned by the product service. In-progress operations keep
+LiteLLM team key, provisioned by the internal settings service using the API workload's existing
+LiteLLM access. Neither the public API routes nor the Agent gateway expose this
+credential endpoint. In-progress operations keep
 their model and key snapshot (up to 1,024 tracked
 operations). Separate provider instances preserve model-specific initialization
-and concurrent Organization cost attribution. Provider clients close after each call. During settings outages, new bank
+and concurrent Organization cost attribution. Provider clients close after each call. Bounded lock stripes let unrelated banks
+refresh concurrently, and a one-second negative cache bounds repeated failures.
+Initial provisioning has a 45-second response timeout with a two-second connection
+timeout. During settings outages, new bank
 operations fail closed once the five-second cache expires; the bootstrap key
 cannot bypass Organization limits. Bankless startup verification can retain its
 last model selection or startup default. The Agent gateway neither receives

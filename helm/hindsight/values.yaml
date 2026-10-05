@@ -8,7 +8,7 @@ apiKey: ""
 llm:
   baseUrl: http://litellm:4000/v1
   apiKey: ""
-  settingsUrl: http://agentbarn-api:8000/api/v1/memory/runtime/v1/model
+  settingsUrl: http://agentbarn-api:8004/memory/runtime/v1/model
   model: openrouter/openai/gpt-4.1-mini
 resources:
   requests:
@@ -17,3 +17,5 @@ resources:
   limits:
     memory: 4Gi
     cpu: 2000m
+
+runtimeServiceKey: ""
