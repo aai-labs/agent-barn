@@ -140,6 +140,8 @@ def wait_for_consolidation(context, bank: str) -> None:
         statuses = {operation["status"] for operation in body["operations"]}
         if statuses & {"failed", "cancelled"}:
             raise AssertionError(f"Consolidation did not succeed: {statuses}")
+        if not statuses:
+            raise AssertionError("Retain returned without a queued consolidation operation")
         if statuses <= {"completed"}:
             return
         time.sleep(0.2)

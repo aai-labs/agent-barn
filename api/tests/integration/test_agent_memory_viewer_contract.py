@@ -4,13 +4,18 @@ These prove what the stand-in tests assume: the tag filter applies before `total
 counted, search and pagination run inside that filter, and an absent bank is a 404.
 """
 
+import json
 from uuid import uuid4
 
+import httpx
 from hamcrest import assert_that, contains_inanyorder, empty, equal_to, greater_than, has_entries, has_item, is_not
 from sqlmodel import Session, select
 
+from api.domains.agent_memory.gateway_service import MemoryGatewayService
 from api.domains.agent_memory.models import AgentMemoryGrant, AgentMemoryPurge
 from api.domains.agent_memory.purge import MemoryPurger
+from api.domains.agent_memory.retag_shared import retag_shared_documents
+from api.infrastructure.hindsight.client import HindsightClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.helpers.hindsight_view_backend import (
@@ -198,9 +203,6 @@ def test_organization_viewer_scopes_items_total_search_and_paging_to_shared_memo
 
 
 def test_organization_grants_control_shared_memories_in_the_agent_tab_including_its_own_contributions():
-    from api.domains.agent_memory.retag_shared import retag_shared_documents
-    from api.infrastructure.hindsight.client import HindsightClient
-
     with given(_setup(two_agents(), memory_is_enabled())) as context:
         bank = _bank(context)
         reader = context.triage
@@ -221,6 +223,15 @@ def test_organization_grants_control_shared_memories_in_the_agent_tab_including_
             [f"agent:{context.billing.id}", "scope:team"],
             document_id=f"agent:{context.billing.id}:team:seed",
             observation_scopes="per_tag",
+        )
+        before_repair = _list(context, reader.id, page_size=50).json()["items"]
+        assert_that(
+            any(item["type"] == "observation" and "Organization shared" in item["text"] for item in before_repair),
+            equal_to(True),
+        )
+        assert_that(
+            any(item["type"] != "observation" and "Organization shared" in item["text"] for item in before_repair),
+            equal_to(False),
         )
         # Repairs old source tags via Hindsight's supported document update; this
         # invalidates the observations that used to fan out to the author's private tag.
@@ -253,8 +264,6 @@ def test_organization_grants_control_shared_memories_in_the_agent_tab_including_
             equal_to([item["id"] for item in full["items"][:4]]),
         )
         # The real recall boundary accepts the gateway's compound scopes too.
-        from api.domains.agent_memory.gateway_service import MemoryGatewayService
-
         gateway = context.injector.get(MemoryGatewayService)
         access = gateway.authenticate(f"Bearer {context.memory_key}")
         recall = gateway.forward(
@@ -263,8 +272,6 @@ def test_organization_grants_control_shared_memories_in_the_agent_tab_including_
             "v1/default/banks/forged/memories/recall",
             {"query": "Organization shared convention", "types": ["world", "experience"], "budget": "high"},
         )
-        import json
-
         recalled = json.loads(recall.content)["results"]
         assert_that(any("scope:team" in row["tags"] for row in recalled), equal_to(True))
         delegate.delete(grant)
@@ -317,3 +324,22 @@ def test_shared_retagging_removes_legacy_private_observations_and_keeps_organiza
         assert_that(hindsight_listing(context, bank, "scope:team")["total"], greater_than(0))
         consolidate_bank(context, bank)
         assert_that(hindsight_listing(context, bank, tag), has_entries(total=0, items=empty()))
+
+
+def test_consolidation_operation_is_visible_before_retain_response_returns():
+    with given(_setup(two_agents())) as context:
+        bank = _bank(context)
+        response = httpx.post(
+            f"{context.hindsight_url}/v1/default/banks/{bank}/memories",
+            json={"items": [{"content": "A durable contract fact", "tags": [f"agent:{context.billing.id}"]}]},
+            timeout=60,
+        )
+        response.raise_for_status()
+        operations = httpx.get(
+            f"{context.hindsight_url}/v1/default/banks/{bank}/operations",
+            params={"type": "consolidation"},
+            timeout=10,
+        )
+        operations.raise_for_status()
+        assert_that(operations.json()["total"], greater_than(0))
+        wait_for_consolidation(context, bank)
