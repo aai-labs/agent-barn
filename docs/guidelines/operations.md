@@ -157,7 +157,9 @@ the optional release pauses physical cleanup.
 
 For local operation, schedule `make purge-agent-memory` with `DB_CONNECTION_URL`,
 `HINDSIGHT_BASE_URL`, and `HINDSIGHT_API_KEY`. Repeating runs after a failure or
-restart is safe. Inspect `agent_memory_purge.last_error`, `attempts`,
+restart is safe. The cleanup/repair launchers supply inert creation-budget defaults
+because they never create Organizations or Agents; no deployment budget settings or
+user-authentication credentials are required. Inspect `agent_memory_purge.last_error`, `attempts`,
 `next_attempt_at`, and `last_cleaned_at` for progress without reading memory content.
 The [deletion contract](../features/agent-memory.md#deletion-cleanup) owns retry
 leases, runtime limits, and hourly sweeps for previously accepted Hindsight work.

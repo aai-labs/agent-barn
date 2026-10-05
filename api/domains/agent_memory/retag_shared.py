@@ -5,6 +5,7 @@ import json
 from urllib.parse import quote
 from uuid import UUID
 
+from api.core.config import Config
 from api.infrastructure.hindsight.client import HindsightClient
 
 
@@ -60,13 +61,19 @@ def retag_shared_documents(client: HindsightClient, organization_id: UUID, *, ba
 
 
 def main() -> None:
-    from api.core.config import Config
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("organization_id", type=UUID)
     args = parser.parse_args()
     count = retag_shared_documents(
-        HindsightClient(Config(secret_signing_key="", platform_admin_credentials="")), args.organization_id
+        HindsightClient(
+            Config(
+                secret_signing_key="",
+                platform_admin_credentials="",
+                organization_default_llm_budget_usd=0,
+                agent_default_llm_budget_usd=0,
+            )
+        ),
+        args.organization_id,
     )
     print(f"Retagged {count} shared documents.")
 

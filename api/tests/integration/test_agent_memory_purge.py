@@ -1,5 +1,4 @@
 import json
-import os
 import subprocess
 import sys
 import time
@@ -245,7 +244,7 @@ def test_operator_launcher_needs_only_database_and_backend_configuration():
                 [sys.executable, "-c", "from api.domains.agent_memory.purge import main; main()"],
                 cwd=Path(__file__).resolve().parents[3],
                 env={
-                    **os.environ,
+                    "PYTHON_DOTENV_DISABLED": "1",
                     "DB_CONNECTION_URL": context.injector.get(PostgresRepositoryDelegate).engine.url.render_as_string(
                         hide_password=False
                     ),

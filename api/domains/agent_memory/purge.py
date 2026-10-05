@@ -9,9 +9,11 @@ from urllib.parse import quote
 from fastapi import HTTPException
 from injector import inject
 
+from api.core.config import Config
 from api.domains.agent_memory.models import AgentMemoryPurge
 from api.domains.agent_memory.purge_repository import MemoryPurgeRepository
 from api.infrastructure.hindsight.client import HindsightClient
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 logger = logging.getLogger(__name__)
 MAX_RUNTIME_SECONDS = 240
@@ -107,13 +109,17 @@ class MemoryPurger:
 
 
 def main() -> None:
-    from api.core.config import Config
-    from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
-
     # The job has a bounded runtime and no need to wait through an extraction timeout.
     # This operator process does not authenticate people or bootstrap an admin.
     # Do not require their signing key/credentials just to load shared settings.
-    config = Config(secret_signing_key="", platform_admin_credentials="")
+    # Cleanup never creates an Organization or Agent, so creation-budget defaults
+    # are unused. Keep this operator's environment limited to DB and backend access.
+    config = Config(
+        secret_signing_key="",
+        platform_admin_credentials="",
+        organization_default_llm_budget_usd=0,
+        agent_default_llm_budget_usd=0,
+    )
     config.hindsight_request_timeout_seconds = min(10, config.hindsight_request_timeout_seconds)
     logging.basicConfig(level=logging.INFO)
     delegate = PostgresRepositoryDelegate(config)
