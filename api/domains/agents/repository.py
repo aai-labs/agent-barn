@@ -524,8 +524,14 @@ class AgentRepository:
         self,
         authorization_scope: AuthorizationScope,
         agent_filter: AgentFilter,
-        pagination: Pagination,
+        pagination: Pagination | None,
     ) -> tuple[list[Agent], int]:
+        """Agents the scope may read, oldest first, and how many there are in all.
+
+        `pagination=None` returns every one of them, for a caller that has to rank before
+        it cuts (the agents overview), where a page taken in creation order would drop the
+        very Agents the ranking is meant to find.
+        """
         with Session(self.delegate.engine) as session:
             visibility = agent_scope_predicates(authorization_scope)
             query = select(Agent).where(*visibility)
@@ -537,11 +543,9 @@ class AgentRepository:
                 count_query = count_query.where(status_filter)
 
             total = session.scalar(count_query) or 0
-            query = (
-                query.order_by(col(Agent.created_at).asc())
-                .offset((pagination.page - 1) * pagination.size)
-                .limit(pagination.size)
-            )
+            query = query.order_by(col(Agent.created_at).asc())
+            if pagination is not None:
+                query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
             return list(session.exec(query).all()), total
 
     def get_active_communication_platforms_for_agents(

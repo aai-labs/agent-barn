@@ -10,6 +10,7 @@ from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
 from hamcrest import assert_that, contains_exactly, equal_to, has_length, is_not, none
+from kubernetes.client.exceptions import ApiException
 
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.provisioning_errors import persisted_provisioning_error
@@ -774,3 +775,31 @@ def test_an_unreachable_prometheus_leaves_usage_unavailable_and_the_rest_in_plac
         assert_that(body["resource_usage"]["availability"], equal_to("unavailable"))
         assert_that(body["health_status"], equal_to("ok"))
         assert_that(body["restart_count"], equal_to(3))
+
+
+def test_a_cluster_error_asking_about_the_pod_leaves_health_empty_and_the_rest_in_place():
+    """An API-server hiccup on the pod lookup must not fail the row, as the restart read does not."""
+
+    def pod_lookup_fails(context):
+        k8s: Any = context.injector.get(KubernetesClient)
+        k8s.get_pod_readiness.side_effect = ApiException(status=500, reason="API server hiccup")
+
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-s@example.com", "owner-det-t@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            _cluster_says(),
+            pod_lookup_fails,
+            *_platform_admin("admin-details-pod@example.com"),
+        ]
+    ) as context:
+        response = _details(context, context.cy.id)
+
+        body = response.json()
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(body["health_status"], none())
+        # Everything the cluster could still answer is there.
+        assert_that(body["name"], equal_to("Cy"))
+        assert_that(body["restart_count"], equal_to(3))
+        assert_that(body["resource_usage"]["availability"], equal_to("available"))

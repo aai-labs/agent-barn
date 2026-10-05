@@ -38,8 +38,8 @@ export function noticeFor(
       };
     case "unsupported":
       return {
-        title: "This agent's host can't report resource usage",
-        body: "Its container can't read cgroup v2 statistics. That depends on the cluster node, not on the agent.",
+        title: "Resource usage isn't available for this agent",
+        body: "It runs somewhere that can't report CPU and memory, so there is nothing to show. Everything else about the agent is unaffected.",
       };
     case "no_data":
       return {

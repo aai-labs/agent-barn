@@ -81,10 +81,45 @@ test.describe("Agents overview", () => {
     expect(await overview.names()).toEqual(["Ada", "Maya"]);
 
     await overview.sortButton("memory").click();
-    // Ada uses 75% of its memory, Maya 33%.
+    // Ada uses 768 MiB, Maya 342 MiB.
     expect(await overview.names()).toEqual(["Ada", "Maya"]);
     await overview.sortButton("memory").click();
     expect(await overview.names()).toEqual(["Maya", "Ada"]);
+  });
+
+  test("sorts CPU and memory by what an agent uses, whether or not it has a limit", async () => {
+    // "Free" has no limits. "Limited" uses less CPU than Free but more of its limit, and more
+    // memory than Free but a smaller share of its limit than Free's raw bytes would suggest.
+    const free = mockOverviewItem({
+      name: "Free",
+      resource_usage: mockUsageSnapshot({
+        cpu_cores: 0.3,
+        cpu_limit_cores: null,
+        memory_working_set_bytes: 300_000_000,
+        memory_limit_bytes: null,
+      }),
+    });
+    const limited = mockOverviewItem({
+      id: MOCK_SECOND_AGENT_ID,
+      name: "Limited",
+      resource_usage: mockUsageSnapshot({
+        cpu_cores: 0.25,
+        cpu_limit_cores: 0.5,
+        memory_working_set_bytes: 600_000_000,
+        memory_limit_bytes: 1_073_741_824,
+      }),
+    });
+    await dataSupportPage.resourceUsage.interceptAgentOverview({ body: mockAgentOverview([free, limited]) });
+    await overview.goto();
+    await expect(overview.rows()).toHaveCount(2);
+
+    // 0.3 cores is more than 0.25, though 0.25 of a 0.5 limit is the bigger share.
+    await overview.sortButton("cpu").click();
+    expect(await overview.names()).toEqual(["Free", "Limited"]);
+
+    // 600 MB is more than 300 MB, which a ratio mixed with raw bytes would have reversed.
+    await overview.sortButton("memory").click();
+    expect(await overview.names()).toEqual(["Limited", "Free"]);
   });
 
   test("marks an agent that CPU-throttling is holding back", async () => {

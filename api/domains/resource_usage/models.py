@@ -53,7 +53,8 @@ _RANGE_STEP_SECONDS = {
 }
 
 # The cap on the agents overview. Its queries and its per-row health polling grow with
-# the page, so a bounded page is a deliberate limit, and `total` reports the rest.
+# the page, so a bounded page is a deliberate limit, and `total` reports the rest. The cap
+# keeps the Agents that spent the most, so a page that opens sorted by spend shows them.
 OVERVIEW_MAX_AGENTS = 100
 
 

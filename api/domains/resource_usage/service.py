@@ -30,7 +30,6 @@ from api.domains.resource_usage.models import (
 )
 from api.domains.resource_usage.repository import ResourceUsageRepository
 from api.infrastructure.prometheus.client import PrometheusError
-from api.infrastructure.shared.models import Pagination
 
 logger = logging.getLogger(__name__)
 
@@ -182,14 +181,20 @@ class AgentOverviewService:
     def get_overview(self, context: CurrentUserContext, window: StatsWindow) -> AgentOverviewRead:
         read_scope = self.agent_authorization.require_collection_scope(context, PermissionKey.AGENT_READ)
         organization_id = read_scope.organization_id
-        agents, total = self.agent_repository.find_all_active(
-            read_scope, AgentFilter(), Pagination(page=1, size=OVERVIEW_MAX_AGENTS)
-        )
-        allowed = self.agent_authorization.allowed_actions(context, agents)
+        # Every Agent the caller can read, not a page of them: the cap below must drop the
+        # Agents that spent least, and a page in creation order would drop the newest
+        # instead, which can be the biggest spenders in a page that opens sorted by spend.
+        everyone, total = self.agent_repository.find_all_active(read_scope, AgentFilter(), None)
+        allowed = self.agent_authorization.allowed_actions(context, everyone)
 
         spend = self.cost_service.spend_for_agents(
-            context, window, [a.id for a in agents if PermissionKey.COST_READ in allowed.get(a.id, [])]
+            context, window, [a.id for a in everyone if PermissionKey.COST_READ in allowed.get(a.id, [])]
         )
+        # Highest spend first, oldest first among equals. An Agent whose spend the caller may
+        # not read ranks with those that spent nothing, since no figure can place it higher.
+        agents = sorted(everyone, key=lambda a: (-(spend[a.id].spend if a.id in spend else 0), a.created_at))[
+            :OVERVIEW_MAX_AGENTS
+        ]
         # A stopped Agent has no container to measure, so it is not asked about.
         measurable = [
             a.id

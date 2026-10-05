@@ -127,9 +127,9 @@ test.describe("Agent Detail Page — Resource usage tab", () => {
         text: "Restart this agent to start reporting CPU and memory",
       },
       {
-        name: "a host without cgroup v2",
+        name: "an environment that cannot report usage",
         body: mockResourceUsage({ state: "unsupported", ...NOTHING }),
-        text: "This agent's host can't report resource usage",
+        text: "Resource usage isn't available for this agent",
       },
       {
         name: "an agent with no readings yet",

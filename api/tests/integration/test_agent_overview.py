@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 from uuid import uuid4, uuid7
 
 from fastapi import status
@@ -256,6 +257,63 @@ def test_spend_outside_the_selected_period_is_not_counted():
             response = client.get(_url(context), params={"period": "THIRTY_DAYS"}, headers=_auth(context))
         with then("both calls are counted"):
             assert_that(response.json()["items"][0]["spend"]["spend"], close_to(14.0, 1e-6))
+
+
+# --- the cap ---------------------------------------------------------------
+
+
+def test_the_cap_keeps_the_agents_that_spent_the_most_not_the_oldest():
+    """A page in creation order would drop the newest agents, which can be the biggest spenders."""
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_agent_named("Oldest"),
+            _there_is_an_agent_named("Middle"),
+            _there_is_an_agent_named("Newest"),
+        ]
+    ) as context:
+        agents = context.agents
+        there_are_cost_records(count=1, spend="1.0", agent_id=agents["Oldest"].id)(context)
+        there_are_cost_records(count=1, spend="10.0", agent_id=agents["Middle"].id)(context)
+        there_are_cost_records(count=1, spend="5.0", agent_id=agents["Newest"].id)(context)
+
+        with when("the page can hold only two agents"):
+            with patch("api.domains.resource_usage.service.OVERVIEW_MAX_AGENTS", 2):
+                body = context.client.get(_url(context), headers=_auth(context)).json()
+
+        with then("it holds the two that spent most, highest first, and still reports all three"):
+            assert_that([item["name"] for item in body["items"]], contains_exactly("Middle", "Newest"))
+            assert_that(body["total"], equal_to(3))
+
+
+def test_equal_spend_ranks_the_older_agent_first_and_a_hidden_spend_ranks_as_none():
+    with given(
+        [
+            *_GIVEN,
+            _there_is_an_agent_named("First"),
+            _there_is_an_agent_named("Second"),
+            _there_is_an_agent_named("Third"),
+        ]
+    ) as context:
+        agents = context.agents
+        for name in ("Second", "Third"):
+            there_are_cost_records(count=1, spend="2.0", agent_id=agents[name].id)(context)
+
+        with patch("api.domains.resource_usage.service.OVERVIEW_MAX_AGENTS", 2):
+            body = context.client.get(_url(context), headers=_auth(context)).json()
+
+        # Second and Third tie, so the older one leads, and First, which spent nothing, is cut.
+        assert_that([item["name"] for item in body["items"]], contains_exactly("Second", "Third"))
+
+
+def test_under_the_cap_every_agent_is_listed_whatever_it_spent():
+    with given([*_GIVEN, _there_is_an_agent_named("Quiet"), _there_is_an_agent_named("Busy")]) as context:
+        there_are_cost_records(count=2, spend="3.0", agent_id=context.agents["Busy"].id)(context)
+
+        body = context.client.get(_url(context), headers=_auth(context)).json()
+
+        assert_that({item["name"] for item in body["items"]}, equal_to({"Quiet", "Busy"}))
+        assert_that(body["items"][0]["name"], equal_to("Busy"))
 
 
 # --- per-agent access ------------------------------------------------------

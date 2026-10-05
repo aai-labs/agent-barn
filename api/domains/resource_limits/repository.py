@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, col, select
 
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
@@ -49,11 +50,27 @@ class ResourceLimitsRepository:
         visible without its audit record. The row is locked while it is read, so two
         administrators saving at once cannot both record the same "previous" value. A value
         that equals the stored one is not a transition and writes nothing.
+
+        `SELECT ... FOR UPDATE` locks only a row that already exists, so on the very first
+        save, with no row yet, two administrators would both INSERT it and one would fail on
+        the primary key. The row is therefore created first with `ON CONFLICT DO NOTHING`,
+        in this same transaction: a second INSERT waits for the first to commit or roll back,
+        then does nothing, and both reach the locked read in turn.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
+            created_at = datetime.now(UTC)
+            # On the session's own connection, so it is part of this transaction.
+            inserted = (
+                session.connection()
+                .execute(
+                    pg_insert(PlatformResourceLimits)
+                    .values(id=PLATFORM_RESOURCE_LIMITS_ID, created_at=created_at, updated_at=created_at)
+                    .on_conflict_do_nothing(index_elements=["id"])
+                )
+                .rowcount
+            )
             limits = session.get(PlatformResourceLimits, PLATFORM_RESOURCE_LIMITS_ID, with_for_update=True)
-            if limits is None:
-                limits = PlatformResourceLimits(id=PLATFORM_RESOURCE_LIMITS_ID)
+            assert limits is not None  # inserted above, or already there
 
             moved: list[tuple[str, int | float | None, int | float | None]] = []
             for setting, value in changes.items():
@@ -62,7 +79,9 @@ class ResourceLimitsRepository:
                     moved.append((setting, previous, value))
                     setattr(limits, setting, value)
             if not moved:
-                return ResourceLimitsChangeResult(limits=limits, delivery_ids=[])
+                # Nothing to save, and nothing is committed: closing the session rolls back a
+                # row created above, so it is reported as absent, as the database would say.
+                return ResourceLimitsChangeResult(limits=None if inserted else limits, delivery_ids=[])
 
             now = datetime.now(UTC)
             limits.updated_at = now

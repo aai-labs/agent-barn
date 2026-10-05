@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
-from api.domains.agents.models import Agent, AgentStatus, PlatformAgentIdentity
+from api.domains.agents.models import Agent, AgentHealthRead, AgentStatus, PlatformAgentIdentity
 from api.domains.agents.provisioning_errors import persisted_provisioning_error
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
@@ -291,7 +291,7 @@ class PlatformResourceUsageService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
         has_container = agent.status != AgentStatus.STOPPED
-        health = self.agent_service.agent_health(agent) if has_container else None
+        health = self._health_or_none(agent) if has_container else None
         diagnostics = self.agent_service.runtime_restarts(agent) if has_container else None
         usage = self.resource_usage_service.usage_for(agent, ResourceUsageRange.ONE_DAY) if has_container else None
         organization_id = agent.organization_id
@@ -317,6 +317,19 @@ class PlatformResourceUsageService:
                 else None
             ),
         )
+
+    def _health_or_none(self, agent: Agent) -> AgentHealthRead | None:
+        """The Agent's health, or None when it cannot be read, so the rest of the row still renders.
+
+        `agent_health` already answers None for an unreachable healthz server. A Kubernetes
+        error from asking the cluster about the pod (an API-server hiccup) would otherwise
+        fail the whole request, where the restart read beside it degrades to None.
+        """
+        try:
+            return self.agent_service.agent_health(agent)
+        except Exception:
+            logger.exception("Health unavailable for agent %s", agent.id)
+            return None
 
     def _combined_series(
         self,

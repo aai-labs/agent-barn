@@ -40,9 +40,10 @@ const STATE_HINT: Record<AgentUsageSnapshot["state"], string> = {
   no_data: "No data yet",
 };
 
-/** What a column sorts by. Usage sorts by share of its limit when there is one, since
- *  "using 90% of its memory" is the comparison that matters, and by the raw amount
- *  otherwise. Null means "nothing to compare", which always sorts last. */
+/** What a column sorts by: the amount in use, in cores or bytes, so two Agents compare on
+ *  what they use whether or not they have a limit. The share of a limit is a different
+ *  number per Agent and has no common scale, so it stays in the meter, not in the order.
+ *  Null means "nothing to compare", which always sorts last. */
 function sortValue(item: AgentOverviewItem, key: SortKey): string | number | null {
   switch (key) {
     case "name":
@@ -52,12 +53,12 @@ function sortValue(item: AgentOverviewItem, key: SortKey): string | number | nul
     case "cpu": {
       const usage = item.resourceUsage;
       if (!usage || usage.state !== "reporting") return null;
-      return usageRatio(usage.cpuCores, usage.cpuLimitCores) ?? usage.cpuCores;
+      return usage.cpuCores;
     }
     case "memory": {
       const usage = item.resourceUsage;
       if (!usage || usage.state !== "reporting") return null;
-      return usageRatio(usage.memoryWorkingSetBytes, usage.memoryLimitBytes) ?? usage.memoryWorkingSetBytes;
+      return usage.memoryWorkingSetBytes;
     }
   }
 }

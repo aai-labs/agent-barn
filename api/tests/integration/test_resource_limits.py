@@ -5,6 +5,9 @@ the tenant service account cannot read the quota. Each change leaves one audit E
 save that changes nothing leaves none.
 """
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from uuid import uuid7
 
 import pytest
@@ -14,7 +17,12 @@ from pydantic import ValidationError
 
 from api.domains.events.catalog import PLATFORM_RESOURCE_LIMITS_CHANGED
 from api.domains.events.models import EventScope, OutboxMessage
-from api.domains.resource_limits.models import PLATFORM_RESOURCE_LIMITS_ID, ResourceLimitsUpdate
+from api.domains.resource_limits.models import (
+    PLATFORM_RESOURCE_LIMITS_ID,
+    PlatformResourceLimits,
+    ResourceLimitsUpdate,
+)
+from api.domains.resource_limits.repository import ResourceLimitsRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -238,3 +246,57 @@ def test_clearing_a_limit_is_recorded_as_a_change_to_none():
         assert_that(last.payload["setting"], equal_to("cpu_limit_cores"))
         assert_that(last.payload["previous"], equal_to(24.0))
         assert_that(last.payload["current"], none())
+
+
+# --- the very first save ---------------------------------------------------
+
+
+def _save_when_released(repository: ResourceLimitsRepository, barrier: threading.Barrier, gib: int):
+    barrier.wait()  # both are past their setup and about to write
+    return repository.set_with_events(
+        {"memory_limit_bytes": gib * _GiB}, actor_user_id=uuid7(), actor_display=f"admin-{gib}"
+    )
+
+
+def test_two_administrators_saving_for_the_first_time_at_once_both_succeed():
+    """With no row yet, FOR UPDATE has nothing to lock, so both used to INSERT it and one failed."""
+    with given(_BASE_GIVEN) as context:
+        repository = context.injector.get(ResourceLimitsRepository)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        seen: set = set()
+
+        for _ in range(8):
+            # Back to "no row yet", which is the only state the race exists in.
+            delegate.delete_all(PlatformResourceLimits)
+            barrier = threading.Barrier(2)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                # map re-raises whatever either thread raised, so an IntegrityError fails here.
+                results = list(pool.map(partial(_save_when_released, repository, barrier), (50, 70)))
+
+            assert_that(results, has_length(2))
+            events = [m for m in _limit_events(context) if m.event_id not in seen]
+            seen.update(m.event_id for m in events)
+            moves = [(m.payload["previous"], m.payload["current"]) for m in events]
+            # One saved first (from nothing) and the other saved over it, and neither
+            # recorded the same "previous" value as the other.
+            assert_that(moves, has_length(2))
+            first = next(move for move in moves if move[0] is None)
+            second = next(move for move in moves if move[0] is not None)
+            assert_that(second[0], equal_to(first[1]))
+            stored = repository.get()
+            assert stored is not None
+            assert_that(float(stored.memory_limit_bytes or 0), equal_to(second[1]))
+
+
+def test_a_first_save_that_changes_nothing_leaves_no_row_and_reports_none():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-first-noop@example.com")]) as context:
+        with when("the admin saves a blank limit when none was ever set"):
+            response = _put(context, {"memory_limit_bytes": None})
+
+        with then("nothing is stored, and the answer says so rather than inventing a time"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["updated_at"], none())
+            assert_that(response.json()["memory_limit_bytes"], none())
+            assert_that(context.injector.get(ResourceLimitsRepository).get(), none())
+            assert_that(_limit_events(context), empty())
