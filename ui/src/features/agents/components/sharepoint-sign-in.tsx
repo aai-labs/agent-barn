@@ -498,6 +498,14 @@ export function SharePointSignIn({
             download and upload them.
           </Note>
         )}
+        {granted.sites.length > 0 && (
+          <Note>
+            {selectedSites
+              ? "Removing SharePoint from the agent stops it using these sites, but they stay granted to its Microsoft Teams app "
+              : "Switching to a person's sign-in stops the agent using its selected sites, but they stay granted to its Microsoft Teams app "}
+            until an administrator removes them in SharePoint.
+          </Note>
+        )}
       </fieldset>
 
       {showGuide && setup.data && (

@@ -1282,6 +1282,22 @@ test.describe("Agent configuration page", () => {
       expect(authorizeQuery?.get("read_only")).toBe("false");
     });
 
+    test("says granted sites keep their grant when switching to a person's sign-in", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(
+        page,
+        [teamsConnection],
+        [{ ...mockAgent, status: "STOPPED", skills: [] }],
+        { email: "admin@contoso.com", read_only: false, mode: "selected_sites", sites: [FINANCE] },
+      );
+
+      await expect(section.getByText("until an administrator removes them in SharePoint", { exact: false })).toBeVisible();
+      await expect(section.getByText("Switching to a person's sign-in", { exact: false })).toHaveCount(0);
+
+      await section.getByLabel("Everything the person signing in can open").check();
+
+      await expect(section.getByText("Switching to a person's sign-in", { exact: false })).toBeVisible();
+    });
+
     test("refuses an address that isn't a SharePoint site", async ({ page }) => {
       const section = await openSkillsWithSharePoint(page, [teamsConnection]);
       await section.getByLabel("Only sites you choose").check();
