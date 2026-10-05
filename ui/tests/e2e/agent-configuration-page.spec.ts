@@ -1019,6 +1019,7 @@ test.describe("Agent configuration page", () => {
 
     test("walks through setting up the Teams app with direct links", async ({ page }) => {
       const section = await openSkillsWithSharePoint(page, [teamsConnection]);
+      await section.getByLabel("Everything the person signing in can open").check();
       const guide = section.getByRole("list", { name: "Set up the Microsoft Teams app" });
 
       await expect(guide.getByRole("link", { name: "Open the app in Microsoft Entra" })).toHaveAttribute(
@@ -1130,6 +1131,7 @@ test.describe("Agent configuration page", () => {
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(signedInAgent) });
       });
 
+      await section.getByLabel("Everything the person signing in can open").check();
       await section.getByLabel("Read-only", { exact: true }).check();
       await expect(
         section.getByText("Signing in saves SharePoint access for this agent straight away", { exact: false }),
@@ -1167,6 +1169,7 @@ test.describe("Agent configuration page", () => {
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
       await section.getByRole("button", { name: "SharePoint" }).click();
+      await section.getByLabel("Everything the person signing in can open").check();
 
       await expect(section.getByRole("list", { name: "Set up the Microsoft Teams app" })).toBeVisible();
       await expect(section.getByRole("button", { name: "Sign in with Microsoft" })).toBeDisabled();
@@ -1175,11 +1178,24 @@ test.describe("Agent configuration page", () => {
       await expect(section.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
     });
 
-    test("defaults to everything the person signing in can open", async ({ page }) => {
+    test("defaults to only the sites you choose", async ({ page }) => {
       const section = await openSkillsWithSharePoint(page, [teamsConnection]);
 
+      await expect(section.getByLabel("Only sites you choose")).toBeChecked();
+      await expect(section.getByLabel("SharePoint site address")).toBeVisible();
+      await expect(section.getByRole("button", { name: "Sign in as an administrator to grant sites" })).toBeVisible();
+      await expect(section.getByRole("button", { name: "Sign in with Microsoft" })).toHaveCount(0);
+    });
+
+    test("keeps an agent signed in as a person on that mode", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(
+        page,
+        [teamsConnection],
+        [{ ...mockAgent, status: "STOPPED", skills: [] }],
+        { email: "someone@contoso.com", read_only: false, mode: "delegated", sites: [] },
+      );
+
       await expect(section.getByLabel("Everything the person signing in can open")).toBeChecked();
-      await expect(section.getByRole("button", { name: "Sign in with Microsoft" })).toBeVisible();
       await expect(section.getByLabel("SharePoint site address")).toHaveCount(0);
     });
 
@@ -1312,6 +1328,7 @@ test.describe("Agent configuration page", () => {
         await route.fulfill({ status: 200, contentType: "text/html", body: "<script>window.close();</script>" });
       });
 
+      await section.getByLabel("Everything the person signing in can open").check();
       await section.getByLabel("Read-only", { exact: true }).check();
       await section.getByRole("button", { name: "Sign in with Microsoft" }).click();
 

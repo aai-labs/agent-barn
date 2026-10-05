@@ -366,7 +366,7 @@ export function SharePointSignIn({
   const { signIn, isSigningIn } = useSharePointSignIn(agentId);
   const access = useSharePointAccess(agentId);
   const [error, setError] = useState<string | null>(null);
-  // Unset until the person picks one: the agent's current mode, or everything by default.
+  // Unset until the person picks one: the agent's current mode, or only chosen sites by default.
   const [chosenMode, setChosenMode] = useState<SharePointMode | null>(null);
   // Sites granted so far, as last confirmed by Microsoft through a sign-in.
   const [grantedOverride, setGrantedOverride] = useState<{ email: string; sites: string[] } | null>(null);
@@ -383,7 +383,7 @@ export function SharePointSignIn({
   const signedIn = isOAuthConnected(draft);
   const email = typeof draft.content.email === "string" ? draft.content.email : "";
   const current = access.data ?? null;
-  const mode: SharePointMode = chosenMode ?? current?.mode ?? "delegated";
+  const mode: SharePointMode = chosenMode ?? current?.mode ?? "selected_sites";
   const selectedSites = mode === "selected_sites";
   const granted =
     grantedOverride ??
@@ -458,8 +458,8 @@ export function SharePointSignIn({
         </legend>
         {(
           [
-            ["delegated", "Everything the person signing in can open"],
             ["selected_sites", "Only sites you choose"],
+            ["delegated", "Everything the person signing in can open"],
           ] as const
         ).map(([value, label]) => (
           <label key={value} className="flex items-center gap-2 cursor-pointer">

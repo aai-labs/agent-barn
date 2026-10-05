@@ -64,7 +64,7 @@ Flow:
 
 ## SharePoint selected sites
 
-The second mode, one per agent (`SharePointContent.mode`, default `delegated`): the agent reaches only sites an administrator granted to the agent's Teams app under the **application** permission `Sites.Selected`, independent of any person's access. Microsoft only supports `Sites.Selected` app-only, and app-only tokens are minted with the Teams app's secret, so the API mints them and the pod never sees that secret.
+The second mode, one per agent (`SharePointContent.mode`; stored credentials without it read as `delegated`, while the UI offers selected sites first and preselects it for an agent without SharePoint): the agent reaches only sites an administrator granted to the agent's Teams app under the **application** permission `Sites.Selected`, independent of any person's access. Microsoft only supports `Sites.Selected` app-only, and app-only tokens are minted with the Teams app's secret, so the API mints them and the pod never sees that secret.
 
 Extra setup on the Teams app: API permissions → Microsoft Graph → **Application** → `Sites.Selected`, admin-consented (`app_permission_consent_url` from `/setup`, a `/v2.0/adminconsent` link for `.default`). The redirect URI and public client flows are still needed for the administrator's sign-in.
 
