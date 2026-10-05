@@ -87,7 +87,7 @@ Memory rows have `is_memory=true`, their Organization identity and captured name
 `agent_id=NULL`, and the display name `Agent Memory`. They count in Organization
 and platform totals, without appearing in any Agent's Costs tab or active-Agent
 count. They use the same request ID, exact spend, replay guard, and OpenRouter
-healing as all other LiteLLM rows, so the shared key's calls are counted once.
+healing as all other LiteLLM rows, so each model call is counted once.
 Migration `e4c9b72a6f10` defaults existing rows to `is_memory=false`.
 
 The deployment bridge is pinned to Hindsight 0.10.2's OpenAI-compatible provider;
