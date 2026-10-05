@@ -1206,6 +1206,9 @@ test.describe("Agent configuration page", () => {
 
       await expect(guide.getByText("Application permissions").first()).toBeVisible();
       await expect(guide.getByText("Sites.Selected").first()).toBeVisible();
+      // The administrator's grant sign-in needs this one, as a delegated permission.
+      await expect(guide.getByText("Delegated permissions").first()).toBeVisible();
+      await expect(guide.getByText("Sites.FullControl.All").first()).toBeVisible();
       await expect(guide.getByText("Sites.ReadWrite.All")).toHaveCount(0);
       await expect(guide.getByText(REDIRECT_URI)).toBeVisible();
       await expect(guide.getByRole("button", { name: "Approve as an administrator" })).toBeVisible();

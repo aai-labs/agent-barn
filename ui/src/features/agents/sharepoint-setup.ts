@@ -27,8 +27,10 @@ export const MICROSOFT_GUIDES = {
   adminConsent: "https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent",
 } as const;
 
-// Selected-sites mode: an application permission that reaches only sites granted one by one.
+// Selected-sites mode: an application permission that reaches only sites granted one by one,
+// and the delegated permission an administrator's sign-in uses to grant them.
 export const SELECTED_SITES_PERMISSION = "Sites.Selected";
+export const SITE_GRANT_PERMISSION = "Sites.FullControl.All";
 
 export function sharepointPermission(readOnly: boolean): string {
   return readOnly ? "Sites.Read.All" : "Sites.ReadWrite.All";

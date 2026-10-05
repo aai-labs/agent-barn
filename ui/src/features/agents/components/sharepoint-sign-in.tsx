@@ -16,7 +16,13 @@ import {
   type SharePointSetup,
 } from "../hooks/use-sharepoint-sign-in";
 import { isOAuthConnected, type IntegrationDraft, type IntegrationProvider } from "../integrations";
-import { MICROSOFT_GUIDES, SELECTED_SITES_PERMISSION, entraAppLinks, sharepointPermission } from "../sharepoint-setup";
+import {
+  MICROSOFT_GUIDES,
+  SELECTED_SITES_PERMISSION,
+  SITE_GRANT_PERMISSION,
+  entraAppLinks,
+  sharepointPermission,
+} from "../sharepoint-setup";
 import { normalizeSiteUrl } from "../sharepoint-sites";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { IntegrationFields } from "./integration-fields";
@@ -179,7 +185,7 @@ function TeamsAppSetupGuide({
           </Links>
         </Step>
 
-        <Step n={4} title="Add the SharePoint permission">
+        <Step n={4} title={selectedSites ? "Add the SharePoint permissions" : "Add the SharePoint permission"}>
           <Note>
             Under <strong>API permissions</strong>, select <strong>Add a permission</strong> →{" "}
             <strong>Microsoft Graph</strong> →{" "}
@@ -187,6 +193,14 @@ function TeamsAppSetupGuide({
             <code>{permission}</code> and select <strong>Add permissions</strong>.
             {selectedSites && " On its own it reaches no site until an administrator grants each one below."}
           </Note>
+          {selectedSites && (
+            <Note>
+              Then add a second one: <strong>Add a permission</strong> → <strong>Microsoft Graph</strong> →{" "}
+              <strong>Delegated permissions</strong>, tick <code>{SITE_GRANT_PERMISSION}</code> and select{" "}
+              <strong>Add permissions</strong>. Only the administrator&apos;s sign-in uses it, to grant the sites;
+              the agent never gets it.
+            </Note>
+          )}
           <Links>
             <ExternalLink href={links.apiPermissions}>Open API permissions</ExternalLink>
             <ExternalLink
@@ -197,10 +211,10 @@ function TeamsAppSetupGuide({
           </Links>
         </Step>
 
-        <Step n={5} title="Approve it for your organization">
+        <Step n={5} title={selectedSites ? "Approve them for your organization" : "Approve it for your organization"}>
           <Note>
             {selectedSites
-              ? "A Microsoft 365 administrator must approve it: they select "
+              ? "A Microsoft 365 administrator must approve both: they select "
               : "If your organization only lets administrators approve apps, a Microsoft 365 administrator selects "}
             <strong>Grant admin consent</strong> on the API permissions page, or opens this approval link. Send it
             to them, or approve here if you are one.
