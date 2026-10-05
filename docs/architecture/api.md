@@ -78,5 +78,5 @@ When adding or moving a product router, update `../../api/api_app.py`; telemetry
 
 ## Supported external API
 
-The `/api/v1` product API accepts User session JWTs and User-owned Personal API Keys through the shared authentication dependencies. Keys resolve to the same `CurrentUserContext`; current Organization Membership, Agent Access, and Platform Administrator checks then apply. Read-only key mode is enforced before write handlers execute. Ingest, Communications, and provider webhooks retain their protocol-specific credentials. The public schema, discovery endpoint, and developer guides are described in [`../features/public-api.md`](../features/public-api.md).
+The `/api/v1` product API accepts User session JWTs and User-owned Personal API Keys through the shared authentication dependencies. Keys resolve to the same `CurrentUserContext`; current Organization Membership, Agent Access, and Platform Administrator checks then apply. Read-only key mode is enforced before write handlers execute. Ingest, Communications, provider webhooks, the Agent Memory gateway (`memory_app.py`), and the internal memory settings listener (`memory_runtime_app.py`) retain their protocol-specific credentials. The public schema, discovery endpoint, and developer guides are described in [`../features/public-api.md`](../features/public-api.md).
 
