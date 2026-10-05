@@ -221,6 +221,7 @@ memory:
   litellmActiveKeyHash: ""
   enabled: false
   authChecksum: ""
+  settingsKeyChecksum: ""
   replicaCount: 1
   hindsightBaseUrl: "http://hindsight:8888"
   hindsightSecretName: hindsight

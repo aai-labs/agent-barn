@@ -141,7 +141,8 @@ jobs still encounter the same team cutoff when they make their model calls.
 Historical shared-key charges affect the cap after import and reconciliation. The reconciler runs every 15 minutes: rollout
 can retain the old runtime allowance until that pass, and renewal can retain a
 legacy-reduced allowance until the next pass. Run reconciliation during rollout
-before accepting model traffic when legacy shared-key spend exists.
+with `make reconcile-llm-budgets` before accepting model traffic when legacy
+shared-key spend exists (see [budget operations](../guidelines/operations.md#organization-llm-budgets)).
 Calls made through an operator-run bridge without platform settings continue to
 use the bootstrap key and do not receive the shared-team guarantee.
 

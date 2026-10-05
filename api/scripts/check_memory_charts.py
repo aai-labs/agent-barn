@@ -46,8 +46,9 @@ def main() -> None:
     for name in ("api", "worker", "communications"):
         assert services[name]["environment"]["HINDSIGHT_LITELLM_API_KEY"] == ""
         assert services[name]["environment"]["HINDSIGHT_DB_PASSWORD"] == ""
-        if name != "memory":
-            assert services[name]["environment"]["HINDSIGHT_API_KEY"] == ""
+        assert services[name]["environment"]["HINDSIGHT_API_KEY"] == ""
+    for name in ("worker", "cost-sync", "budget-snapshots", "communications"):
+        assert services[name]["environment"]["MEMORY_RUNTIME_SERVICE_KEY"] == ""
     assert services["api"]["environment"]["MEMORY_RUNTIME_SERVICE_KEY"] == "${MEMORY_RUNTIME_SERVICE_KEY:-}"
     assert "8004:8004" not in services["api"]["ports"]
     values = {
@@ -70,6 +71,7 @@ def main() -> None:
             "litellmKeyHashes": "f" * 64,
             "litellmActiveKeyHash": "f" * 64,
             "defaultModel": "openrouter/custom/default",
+            "settingsKeyChecksum": "test-settings-key-checksum",
         },
     }
     try:
@@ -135,6 +137,12 @@ def main() -> None:
         document
         for document in enabled
         if document["kind"] == "Deployment" and document["metadata"]["name"] == "agentbarn-api"
+    )
+    assert api_deployment["spec"]["template"]["metadata"]["annotations"]["checksum/memory-settings-key"] == (
+        "test-settings-key-checksum"
+    )
+    assert {"name": "memory-settings", "containerPort": 8004} in (
+        api_deployment["spec"]["template"]["spec"]["containers"][0]["ports"]
     )
     api_settings_key = next(
         entry

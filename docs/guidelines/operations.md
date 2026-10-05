@@ -118,9 +118,12 @@ through one Secret key reference. The product API holds no Hindsight auth key. A
 `MEMORY_RUNTIME_SERVICE_KEY`, distinct from `HINDSIGHT_API_KEY`, is provided only
 to its internal settings listener and the Hindsight bridge; worker and Agent
 pods receive neither.
-Rotating the Helmfile API-key value rolls Hindsight and the gateway through
-their Secret/auth checksums; restart the product API as well. With a manually managed Secret, also restart the
-gateway Deployment after rotation because environment variables are read at boot.
+Rotating `HINDSIGHT_API_KEY` through Helmfile rolls Hindsight and the gateway
+through their Secret/auth checksums. Rotating `MEMORY_RUNTIME_SERVICE_KEY` rolls
+Hindsight and the product API through their Secret/settings-key checksums.
+With a manually managed Secret, restart Hindsight and the gateway after rotating
+the Hindsight auth key; restart Hindsight and the product API after rotating the
+settings key. Environment variables are read at boot.
 
 Hindsight uses a dedicated platform key for bankless startup verification.
 Bank operations resolve an encrypted Organization key on its runtime LiteLLM

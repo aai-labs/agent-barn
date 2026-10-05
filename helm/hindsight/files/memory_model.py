@@ -40,6 +40,7 @@ class ModelSelection:
                 except (httpx.HTTPError, ValueError, KeyError, TypeError):
                     if bank:
                         self.profiles[bank] = (None, time.monotonic() + 1)
+                        self.profiles.move_to_end(bank)
                         if len(self.profiles) > 256:
                             self.profiles.popitem(last=False)
                         # Falling back to the bootstrap key bypasses the Organization cap.

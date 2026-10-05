@@ -195,6 +195,8 @@ releases:
         value: {{ if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}{{ printf "%s,%s" (env "HINDSIGHT_LITELLM_API_KEY" | sha256sum) (env "MEMORY_LITELLM_KEY_HASHES") | quote }}{{ else }}{{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}{{ end }}
       - name: memory.litellmActiveKeyHash
         value: {{ if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}{{ env "HINDSIGHT_LITELLM_API_KEY" | sha256sum | quote }}{{ else }}{{ env "MEMORY_LITELLM_ACTIVE_KEY_HASH" | default "" | quote }}{{ end }}
+      - name: memory.settingsKeyChecksum
+        value: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | sha256sum | quote }}
       - name: memory.authChecksum
         value: {{ env "HINDSIGHT_API_KEY" | sha256sum | quote }}
       - name: secretSigningKey

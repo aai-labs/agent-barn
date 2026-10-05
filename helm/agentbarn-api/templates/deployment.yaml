@@ -30,6 +30,9 @@ spec:
         # Also roll on kubeconfig secret changes (mounted as a volume). The
         # litellm-api-key secret is created by a Job at runtime, so it has no
         # render-time content to checksum and is intentionally not tracked here.
+        {{- if .Values.memory.enabled }}
+        checksum/memory-settings-key: {{ .Values.memory.settingsKeyChecksum | quote }}
+        {{- end }}
         checksum/kubeconfig: {{ include (print $.Template.BasePath "/kubeconfig-secret.yaml") . | sha256sum }}
         # Roll the pods on every deploy of a new commit even when the image
         # tag itself is an unchanged moving tag (e.g. `latest`) — otherwise
@@ -51,6 +54,10 @@ spec:
               containerPort: 8000
             - name: ingest
               containerPort: {{ .Values.service.ingestPort }}
+            {{- if .Values.memory.enabled }}
+            - name: memory-settings
+              containerPort: 8004
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
