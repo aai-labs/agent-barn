@@ -49,3 +49,7 @@ Use `make lint-ui`, `make check-ui`, and relevant Playwright tests for changed b
 ## Change impact
 
 When adding a feature query, define its schema and centralized key, decide whether it is organization-scoped, and verify switch behavior. When changing page-blocking data, align route loading/error boundaries with component-owned retry behavior. When changing API contracts, update the corresponding Zod schemas, hooks, mocks, and Playwright expectations.
+
+## Personal API Key settings
+
+The account feature manages User-owned keys through the shared API client. The complete key appears only in local component state after creation; list responses return safe metadata. Key-list queries are account-scoped and refresh after creation or revocation. The root `llms.txt` routes forward public developer content from the Product API.

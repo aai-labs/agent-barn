@@ -13,6 +13,7 @@ import {
   COSTS_PAGE_SIZE,
   costFilterParams,
   costKey,
+  costsPollingOptions,
   mergeCostPages,
   type CostFilters,
 } from "../utils";
@@ -38,6 +39,7 @@ export function useCosts(filters: CostFilters) {
         ? nextPage
         : undefined;
     },
+    ...costsPollingOptions,
   });
 
   return {

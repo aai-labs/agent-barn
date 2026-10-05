@@ -223,7 +223,8 @@ the persisted choice.
 Migration `e94b17c62a30` joins the memory and self-service spend-limit histories.
 Existing local databases can upgrade in place; applied memory revisions are kept
 rather than squashed, preserving saved records, grants, and development data.
-Run migrations before restarting API processes after integrating staging. Both
+Migration `e81c2a97b4f3` also joins the memory team-key history with staging's
+Personal API Keys history. Run migrations before restarting API processes after integrating staging. Both
 `ORGANIZATION_DEFAULT_LLM_BUDGET_USD` and `AGENT_DEFAULT_LLM_BUDGET_USD` are required;
 set them before startup. The new local `budget-snapshots` service uses the same
 `--watch` loop as the budget job entry point, refreshing every five minutes.

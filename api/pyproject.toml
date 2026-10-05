@@ -25,6 +25,7 @@ dependencies = [
     "sqlmodel>=0.0.39",
     "testcontainers[postgres]>=4.15.0",
     "kubernetes>=36.0.3",
+    "markdown-it-py>=4.2.0",
     "pyyaml>=6.0.3",
     "httpx>=0.28.1",
     "dramatiq[redis,watch]>=2.2.0",
