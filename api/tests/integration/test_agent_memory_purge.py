@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -242,6 +243,7 @@ def test_operator_launcher_needs_only_database_and_backend_configuration():
         with when("the operator launcher runs with no backend available"):
             result = subprocess.run(
                 [sys.executable, "-c", "from api.domains.agent_memory.purge import main; main()"],
+                cwd=Path(__file__).resolve().parents[3],
                 env={
                     **os.environ,
                     "DB_CONNECTION_URL": context.injector.get(PostgresRepositoryDelegate).engine.url.render_as_string(

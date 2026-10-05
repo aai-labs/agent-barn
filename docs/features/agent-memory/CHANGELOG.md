@@ -21,6 +21,16 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-05 — final review CI launcher correction
+
+- Fixed: the purge-launcher contract test runs its child process from the
+  repository root, independently of pytest's working directory. The launcher
+  now imports correctly when verification runs from `api/`, as CI does.
+- Verified: reproduced the failing launcher test from `api/` before the fix;
+  all 14 purge tests and API static checks pass afterward. Opus confirmed all
+  six preceding remarks were resolved and made approval conditional only on
+  this correction, with no further review required.
+
 ### 2026-10-05 — full-branch approval and non-blocking follow-ups
 
 - Reviewed: Opus 5.5 approved the full branch at `2ea2dc5c` after independently
