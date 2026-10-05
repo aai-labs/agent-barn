@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import UserContext from "../fixtures/user-context.json";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
   MOCK_PLATFORM_TEMPLATE_SKILL_ID,
@@ -199,5 +200,27 @@ test.describe("Platform Template Admin", () => {
     await expect(page.getByRole("button", { name: "Save draft" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "SOUL.md", exact: true })).toHaveAttribute("data-state", "active");
     await expect(page.getByRole("textbox", { name: "SOUL.md content" })).toHaveValue(/version one/);
+  });
+
+  test("opens a platform template when no organizations exist", async ({ page }) => {
+    const data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest({
+      userContext: { ...UserContext, organization_users: [] },
+    });
+    await data.users.interceptGetOrganizationsRequest({
+      body: { page: 1, page_size: 20, total: 0, items: [] },
+    });
+    await data.platformTemplates.interceptGetLineages();
+    await data.platformTemplates.interceptGetVersions();
+    await data.platformTemplates.interceptGetDraft();
+    await data.platformTemplates.interceptGetGlobalSkills();
+
+    await page.goto("/dashboard/platform/templates");
+    await page.getByRole("button", { name: /code reviewer/i }).click();
+
+    await expect(page).toHaveURL(/\/dashboard\/platform\/templates\/code-reviewer$/);
+    await expect(page.getByRole("heading", { name: "Code Reviewer" })).toBeVisible();
+    await expect(page.getByText("We couldn't load this dashboard page")).not.toBeVisible();
   });
 });
