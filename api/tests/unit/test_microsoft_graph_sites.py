@@ -49,11 +49,14 @@ def test_a_site_is_looked_up_by_host_and_path(graph):
     assert_that(recorder.calls[0]["headers"], equal_to({"Authorization": "Bearer admin-token"}))
 
 
-def test_an_unknown_site_is_reported_as_not_found(graph):
+def test_an_unknown_site_is_reported_by_its_address(graph):
     graph(httpx.Response(404, json={"error": {"code": "itemNotFound"}}))
 
-    with pytest.raises(SiteNotFound):
+    with pytest.raises(SiteNotFound) as exc:
         MicrosoftGraphSites().resolve_site_id("admin-token", "https://contoso.sharepoint.com/sites/nope")
+
+    # The address people typed, never Graph's own path.
+    assert_that(str(exc.value), equal_to("https://contoso.sharepoint.com/sites/nope"))
 
 
 def test_granting_names_the_app_and_the_role(graph):

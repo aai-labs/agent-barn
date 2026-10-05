@@ -7,7 +7,7 @@ from fastapi import status
 from hamcrest import assert_that, contains_string, empty, equal_to, has_entries, is_not, none, not_
 
 from api.core.config import Config
-from api.domains.agents.microsoft_graph_sites import SiteAccessRefused, SitesUnavailable
+from api.domains.agents.microsoft_graph_sites import SiteAccessRefused, SiteNotFound, SitesUnavailable
 from api.domains.agents.models import SecretProvider, SharePointContent, decrypt_content
 from api.domains.agents.sharepoint_service import decode_sign_in_state
 from api.tests.core.givenpy import given, then, when
@@ -319,6 +319,39 @@ def test_an_unknown_site_is_named_and_nothing_is_granted() -> None:
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string(_LEGAL))
             assert_that(graph.grants, empty())
+
+
+def test_a_site_gone_by_the_time_it_is_granted_is_named_by_its_address() -> None:
+    with given(_GIVEN) as context:
+        graph = fake_graph_sites(context)
+        # What the real client raises when the grant itself gets a 404.
+        graph.grant_failures[site_id_for(_LEGAL)] = SiteNotFound(f"/sites/{site_id_for(_LEGAL)}/permissions")
+
+        with when("a site disappears between its lookup and its grant"):
+            response = _admin_signs_in(context, _FINANCE, _LEGAL)
+
+        with then("the error names the site's address, not Microsoft's internal path"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string(_LEGAL))
+            assert_that(response.json()["detail"], not_(contains_string("/permissions")))
+            assert_that([r["permission_id"] for r in graph.revokes], equal_to(["perm-1"]))
+
+
+def test_a_failed_sign_in_puts_changed_access_levels_back() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE, read_only=True)]) as context:
+        graph = fake_graph_sites(context)
+        graph.grant_failures[site_id_for(_LEGAL)] = SiteAccessRefused("HTTP 403")
+
+        with when("an administrator switches to read and write and adds a site, and the new grant is refused"):
+            response = _admin_signs_in(context, _FINANCE, _LEGAL)
+
+        with then("the kept site goes back to read-only, matching the record"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            assert_that(
+                [(u["site_id"], u["role"]) for u in graph.role_updates],
+                equal_to([(site_id_for(_FINANCE), "write"), (site_id_for(_FINANCE), "read")]),
+            )
+            assert_that(_stored(context).read_only, equal_to(True))
 
 
 def test_a_grant_that_could_not_be_removed_is_kept_on_record_for_the_next_sign_in() -> None:

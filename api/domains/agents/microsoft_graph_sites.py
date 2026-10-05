@@ -29,8 +29,11 @@ class SitesUnavailable(Exception):
 @singleton
 class MicrosoftGraphSites:
     def resolve_site_id(self, token: str, site_url: str) -> str:
-        """Graph's id for the site at a normalised site URL."""
-        payload = self._call("GET", f"/sites/{site_graph_path(site_url)}", token)
+        """Graph's id for the site at a normalised site URL. Not found names the URL, not Graph's path."""
+        try:
+            payload = self._call("GET", f"/sites/{site_graph_path(site_url)}", token)
+        except SiteNotFound:
+            raise SiteNotFound(site_url) from None
         site_id = payload.get("id") if isinstance(payload, dict) else None
         if not site_id:
             raise SitesUnavailable("site response without an id")

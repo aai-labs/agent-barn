@@ -477,8 +477,9 @@ class SharePointService:
         different app (the Teams connection now uses another one) are all replaced. The token is
         used only here and never stored. Ordered so a failure leaves the record true to
         Microsoft, or one sign-in away from it: every new site is looked up before anything
-        changes, a failed grant takes back this attempt's grants, and a grant that couldn't be
-        removed stays on record so the next sign-in tries again.
+        changes, a failed grant or level change takes back this attempt's grants and puts changed
+        levels back, and a grant that couldn't be removed stays on record so the next sign-in
+        tries again.
         """
         if SITE_GRANT_PERMISSION not in granted_permissions(tokens.scope.split()):
             raise HTTPException(
@@ -498,23 +499,35 @@ class SharePointService:
         kept = {url: site for url, site in existing.items() if url in state.sites}
         removed = [site for site in recorded if site.url not in kept]
 
+        updated: list[GrantedSite] = []
+        granted: dict[str, GrantedSite] = {}
         try:
             site_ids = {url: self.graph_sites.resolve_site_id(token, url) for url in state.sites if url not in kept}
-            if level_changed:
-                for site in kept.values():
-                    self.graph_sites.update_site_role(
-                        token, site_id=site.site_id, permission_id=site.permission_id, role=role
-                    )
-            granted: dict[str, GrantedSite] = {}
             try:
+                if level_changed:
+                    for site in kept.values():
+                        try:
+                            self.graph_sites.update_site_role(
+                                token, site_id=site.site_id, permission_id=site.permission_id, role=role
+                            )
+                        except SiteNotFound:
+                            raise SiteNotFound(site.url) from None
+                        updated.append(site)
                 for url, site_id in site_ids.items():
-                    permission_id = self.graph_sites.grant_site(
-                        token, site_id=site_id, app_id=app_id, display_name=agent.name, role=role
-                    )
+                    try:
+                        permission_id = self.graph_sites.grant_site(
+                            token, site_id=site_id, app_id=app_id, display_name=agent.name, role=role
+                        )
+                    except SiteNotFound:
+                        raise SiteNotFound(url) from None
                     granted[url] = GrantedSite(url=url, site_id=site_id, permission_id=permission_id)
             except SiteAccessRefused, SiteNotFound, SitesUnavailable:
                 for site in granted.values():
                     self._revoke_quietly(token, site)
+                # Only a level change puts sites in `updated`, so a previous record exists.
+                previous_role = "read" if previous is not None and previous.read_only else "write"
+                for site in updated:
+                    self._restore_role_quietly(token, site, previous_role)
                 raise
         except SiteNotFound as exc:
             raise HTTPException(
@@ -607,6 +620,12 @@ class SharePointService:
             self.graph_sites.revoke_site(token, site_id=site.site_id, permission_id=site.permission_id)
         except SiteAccessRefused, SitesUnavailable:
             logger.warning("SharePoint site grant could not be taken back after a failed sign-in")
+
+    def _restore_role_quietly(self, token: str, site: GrantedSite, role: str) -> None:
+        try:
+            self.graph_sites.update_site_role(token, site_id=site.site_id, permission_id=site.permission_id, role=role)
+        except SiteAccessRefused, SiteNotFound, SitesUnavailable:
+            logger.warning("SharePoint site access level could not be put back after a failed sign-in")
 
     def _stored_content(self, agent_id: UUID) -> SharePointContent | None:
         secret = self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT)
