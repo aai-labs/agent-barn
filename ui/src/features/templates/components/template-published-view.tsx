@@ -40,7 +40,7 @@ export function TemplatePublishedView({
   lineage,
   template,
   versions,
-  selectedVersion,
+  selectedVersionId,
   isLoading,
   error,
   isStartingDraft,
@@ -54,13 +54,13 @@ export function TemplatePublishedView({
   lineage: TemplateLineageSummary | null;
   template: PublishedPlatformTemplate | undefined;
   versions: PublishedPlatformTemplate[];
-  selectedVersion: number | null;
+  selectedVersionId: string | null;
   isLoading: boolean;
   error: unknown;
   isStartingDraft: boolean;
   canManage?: boolean;
   onRetry: () => void;
-  onVersionChange: (version: number) => void;
+  onVersionChange: (versionId: string) => void;
   onStartEditing: () => void;
   onClose: () => void;
 }) {
@@ -80,11 +80,10 @@ export function TemplatePublishedView({
         ? "This template is being used by an agent"
         : null;
   const templateForm = template ? formFromDraft(template) : null;
-  const latestPublishedVersion = Math.max(
-    0,
-    ...versions.map(({ version }) => version),
-  );
-  const isCurrentVersion = template?.version === latestPublishedVersion;
+  const currentVersion =
+    versions.find((version) => version.organizationId !== null) ?? versions[0];
+  const isCurrentVersion = template?.id === currentVersion?.id;
+  const isBuiltInRestore = isOrg && lineage?.isFork && template?.organizationId === null;
 
   return (
     <div className="max-w-[1100px] mx-auto px-4 sm:px-8 lg:px-10 pt-8 pb-24">
@@ -132,6 +131,7 @@ export function TemplatePublishedView({
               </h1>
               <p className="text-[14px] m-0" style={{ color: "var(--ink-3)" }}>
                 Version v{template.version}
+                {isOrg && template.organizationId === null && " · Built-in"}
                 {isOrg && isFork && (
                   <>
                     {" · Organization fork"}
@@ -143,10 +143,8 @@ export function TemplatePublishedView({
             </div>
             <div className="flex items-center gap-2">
               <Select
-                value={
-                  selectedVersion === null ? undefined : String(selectedVersion)
-                }
-                onValueChange={(value) => onVersionChange(Number(value))}
+                value={selectedVersionId ?? undefined}
+                onValueChange={onVersionChange}
               >
                 <SelectTrigger
                   className="w-auto min-w-32"
@@ -157,8 +155,13 @@ export function TemplatePublishedView({
                 <SelectContent>
                   <SelectGroup>
                     {versions.map((version) => (
-                      <SelectItem key={version.id} value={String(version.version)}>
-                        Version v{version.version}
+                      <SelectItem key={version.id} value={version.id}>
+                        <span>v{version.version}</span>
+                        {isOrg && version.organizationId === null && (
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                            Built-in
+                          </span>
+                        )}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -172,7 +175,7 @@ export function TemplatePublishedView({
                     : { color: "var(--ink-3)", background: "var(--bg-soft)" }
                 }
               >
-                {isCurrentVersion ? "Current" : "Historical"}
+                {isCurrentVersion ? "Current" : isBuiltInRestore ? "Built-in source" : "Historical"}
               </span>
               {lineage?.hasDraft && (
                 <span
@@ -199,6 +202,10 @@ export function TemplatePublishedView({
               >
                 This published version is read-only. Restore it as a new draft
                 to roll the lineage back without altering its immutable history.
+                {isBuiltInRestore && (
+                  <> Publishing this draft creates a new Organization fork version;
+                    earlier edits and Agent pins are preserved.</>
+                )}
               </p>
             </div>
 
@@ -314,7 +321,7 @@ export function TemplatePublishedView({
                       </Tooltip>
                     </TooltipProvider>
                   )}
-                  {isOrg && canManage && lineage?.platformUpdateAvailable && (
+                  {isOrg && canManage && isFork && lineage?.platformUpdateAvailable && (
                     <button className="af-btn" onClick={() => setUpdateOpen(true)}>
                       <RefreshCw size={14} /> Apply platform update
                     </button>
@@ -333,9 +340,11 @@ export function TemplatePublishedView({
                     )}
                     {lineage?.hasDraft
                       ? "Continue editing draft"
-                      : template.version === versions[0]?.version
-                        ? "Start draft"
-                        : `Restore v${template.version} as draft`}
+                      : isBuiltInRestore
+                        ? `Restore Built-in v${template.version} as draft`
+                        : isCurrentVersion
+                          ? "Start draft"
+                          : `Restore v${template.version} as draft`}
                   </button>
                 )}
               </div>

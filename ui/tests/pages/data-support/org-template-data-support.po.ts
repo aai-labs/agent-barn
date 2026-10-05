@@ -92,6 +92,46 @@ export const mockOrgTemplatePublishedV1 = {
 
 export const mockOrgTemplateVersions = [mockOrgTemplatePublished, mockOrgTemplatePublishedV1];
 
+export const mockBuiltInTemplateV1 = {
+  ...mockOrgTemplatePublishedV1,
+  id: "11111111-1111-4111-8111-111111111111",
+  organization_id: null,
+  template_key: MOCK_ORG_FORK_KEY,
+  template_name: "General Purpose",
+  template_source: "pre-defined",
+  soul_md: "Original built-in instructions.",
+};
+
+export const mockOrgForkV1 = {
+  ...mockBuiltInTemplateV1,
+  id: MOCK_ORG_TEMPLATE_ID,
+  organization_id: TEST_ORG_ID,
+  forked_from_platform_template_id: mockBuiltInTemplateV1.id,
+  fork_baseline_platform_template_id: mockBuiltInTemplateV1.id,
+  fork_baseline_platform_version: 1,
+  soul_md: "Organization customizations.",
+  created_at: "2026-02-01T00:00:00Z",
+};
+
+export const mockOrgForkV2 = {
+  ...mockOrgForkV1,
+  id: "55555555-5555-4555-8555-555555555553",
+  version: 2,
+  soul_md: "New organization customizations.",
+  created_at: "2026-03-01T00:00:00Z",
+};
+
+export const mockRestoredBuiltInDraft = {
+  ...mockOrgTemplateDraft,
+  template_key: MOCK_ORG_FORK_KEY,
+  template_name: "General Purpose",
+  template_source: "pre-defined",
+  forked_from_platform_template_id: mockBuiltInTemplateV1.id,
+  fork_baseline_platform_template_id: mockBuiltInTemplateV1.id,
+  fork_baseline_platform_version: 1,
+  soul_md: mockBuiltInTemplateV1.soul_md,
+};
+
 export class OrgTemplateDataSupport {
   constructor(private page: Page) {}
 
@@ -130,7 +170,7 @@ export class OrgTemplateDataSupport {
     templateKey = MOCK_ORG_TEMPLATE_KEY,
     body = mockOrgTemplateVersions,
   }: { templateKey?: string; body?: unknown } = {}) {
-    await this.page.route(`${ORG_BASE}/${templateKey}/versions`, async (route) => {
+    await this.page.route(`${ORG_BASE}/${templateKey}/versions*`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
