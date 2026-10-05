@@ -3,19 +3,24 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
-import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
+import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 import { TemplateReadSchema, type TemplateRead } from "../schemas";
 import { templatesKey } from "../utils";
 
 export function useUpdateTemplateFromPlatform() {
   const queryClient = useQueryClient();
-  const orgApiBase = useOrganizationApiBase();
+  // Mounted by the published view for every scope, so resolve the org at call
+  // time: Platform views have no active organization and must not throw on render.
+  const { selectedOrganization } = useOrganizationContext();
 
   return useMutation({
     mutationFn: async (templateKey: string) => {
+      if (!selectedOrganization) {
+        throw new Error("No active organization is available for an organization-scoped request");
+      }
       const response = await api.post<TemplateRead>(
-        `${orgApiBase}/templates/${templateKey}/platform-update`,
+        `/api/v1/organizations/${selectedOrganization.id}/templates/${templateKey}/platform-update`,
         undefined,
         { schema: TemplateReadSchema },
       );
