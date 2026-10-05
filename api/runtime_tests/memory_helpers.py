@@ -245,12 +245,12 @@ def configure_memory(context, *, enabled: bool):
     )
     if context.runtime == "hermes":
         config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", memory_enabled=enabled)
-        config_map = build_hermes_config_map(*args, config)
+        config_map = build_hermes_config_map(*args, config, memory_enabled=enabled)
         driver = "hermes_runtime_driver.py"
         command = "#!/bin/sh\nexec python3 /contract-commands/hermes_runtime_driver.py\n"
     else:
         config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", memory_enabled=enabled)
-        config_map = build_config_map(*args[:-1], "", args[-1], config)
+        config_map = build_config_map(*args[:-1], "", args[-1], config, memory_enabled=enabled)
         driver = "openclaw_runtime_driver.mjs"
         # Channel installation is unrelated to memory; the driver uses the real core loader.
         command = (

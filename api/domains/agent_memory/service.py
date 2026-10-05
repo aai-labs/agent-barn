@@ -62,6 +62,8 @@ class AgentMemoryService:
             actor=resolve_actor_identity(context, agent.organization_id),
             actor_display=_actor_display(context),
         )
+        if delivery_ids is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found.")
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         return AgentMemoryRead(agent_id=agent.id, enabled=enabled)
 

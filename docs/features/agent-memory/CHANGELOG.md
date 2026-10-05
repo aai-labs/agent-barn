@@ -21,6 +21,20 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-05 — full-branch approval and non-blocking follow-ups
+
+- Reviewed: Opus 5.5 approved the full branch at `2ea2dc5c` after independently
+  checking the required fixes and killing all six review mutations.
+- Addressed: its remaining non-blocking remarks. Test budget defaults are fixed
+  independently of deployment configuration; memory-toggle HTTP errors are
+  translated by the service; purge age comparison preserves timezone offsets.
+  Runtime contracts pass the opt-in flag and discover writer instructions in
+  `TOOLS.md`. Memory and cost documentation now place each contract in its
+  corresponding section.
+- Verification: 145 spend-limit, Organization budget, memory, purge, and spend-gate
+  integration tests pass with the normal developer environment; API static
+  checks and all five Hermes/OpenClaw runtime image contracts pass.
+
 ### 2026-10-04 — full-branch review integration and corrections
 
 - Integrated: current staging spend limits, RBAC, Organization Settings, and

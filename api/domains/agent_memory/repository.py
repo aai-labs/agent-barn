@@ -4,7 +4,6 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
-from fastapi import HTTPException
 from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -158,8 +157,8 @@ class AgentMemoryRepository:
         *,
         actor: ActorIdentity,
         actor_display: str,
-    ) -> list[UUID]:
-        """Persists the toggle and stages its Event in one commit."""
+    ) -> list[UUID] | None:
+        """Persist the toggle and Event, or return None if the Agent disappeared."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = session.exec(
                 select(Agent)
@@ -171,7 +170,7 @@ class AgentMemoryRepository:
                 .with_for_update()
             ).one_or_none()
             if agent is None:
-                raise HTTPException(404, "Agent not found.")
+                return None
             if agent.memory_enabled == enabled:
                 return []
             agent.memory_enabled = enabled

@@ -80,7 +80,9 @@ with given(
 ## Verification commands
 
 Complete the [README development setup](../../README.md#development), then
-invoke verification from the repository root.
+invoke verification from the repository root. API tests force Organization and
+Agent budget defaults to $100 and $25 respectively, so developer `.env`
+deployment limits cannot change their expected budget contracts.
 
 | Command | Coverage | Additional prerequisites |
 | --- | --- | --- |

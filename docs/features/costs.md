@@ -97,21 +97,32 @@ requires checking this contract. Key rotation and local setup belong in
 
 ## Organization LLM budgets
 
+Organization and Agent spend limits share the Organization's renewal window:
+
+| Limit | Set by | Stored on | Enforced on |
+| --- | --- | --- | --- |
+| Spend Ceiling | Platform Administrator | `organization.llm_budget_usd` (never NULL) | — |
+| The Organization's own limit | Owners and Admins (`llm_budget.manage`) | `organization.llm_own_budget_usd` (NULL follows the ceiling) | The Organization's team: `own ?? ceiling` |
+| Default Agent limit | Owners and Admins | `organization_agent_settings.default_agent_llm_budget_usd` (NULL follows `AGENT_DEFAULT_LLM_BUDGET_USD`) | — |
+| An Agent's own limit | Owners and Admins | `agent.llm_budget_usd` (NULL follows the default) | The Agent's key: `min(own ?? default, Organization limit)` |
+
+### Agent Memory spend gate
+
 The optional [Agent Memory](agent-memory.md) backend uses a separate, budgeted
 platform LiteLLM key. Its calls are attributed per Organization through cost sync.
-Before forwarding retain or reflect, the gateway reads the current Organization
-effective limit (`own ?? ceiling`) and adds its runtime team spend snapshot to exact persisted memory spend
-in the current budget window (`renewal - duration` through now). Only rows with
+Before forwarding retain or reflect, the gateway reads the current
+Organization effective limit (`own ?? ceiling`) and adds its runtime team spend
+snapshot to exact persisted memory spend in the current budget window (`renewal - duration` through now). Only rows with
 that Organization and `is_memory=true` count as memory spend. The shared key must
 remain outside Organization teams to avoid counting memory twice.
 
-A zero limit blocks retain and reflect immediately. For other capped Organizations,
+A zero limit blocks retain and reflect immediately. For positive Organization limits,
 the runtime snapshot must be at most 10 minutes old, the cost-sync heartbeat at
 most 20 minutes old, and the renewal must be in the future. Missing key hashes,
-missing/invalid accounting values or durations, future accounting timestamps, and stale data
-return 503. Combined observed spend at or above the limit returns 429. Every Organization has a limit. Recall, readiness, and operation polling remain
-available under the usual memory authorization rules. Raising the
-limit is observed on the next request; no Agent restart is needed.
+missing/invalid accounting values or durations, future accounting timestamps,
+and stale data return 503. Combined observed spend at or above the limit returns
+429. Every Organization has a limit. Recall, readiness, and operation polling remain
+available under the usual memory authorization rules. Raising the limit is observed on the next request; no Agent restart is needed.
 
 Migration `f2a8d41b9c63` adds `cost_sync_state`. Cost sync records its heartbeat only
 after completing spend-log paging, including an empty successful run; a failed or
@@ -126,14 +137,7 @@ Memory processing is charged to the Organization and checked against its effecti
 limit; per-Agent key limits apply to chat/runtime calls, since shared-bank
 consolidation may combine contributions from multiple Agents.
 
-Three limits, each enforced by LiteLLM, all sharing the Organization's renewal window:
-
-| Limit | Set by | Stored on | Enforced on |
-| --- | --- | --- | --- |
-| Spend Ceiling | Platform Administrator | `organization.llm_budget_usd` (never NULL) | — |
-| The Organization's own limit | Owners and Admins (`llm_budget.manage`) | `organization.llm_own_budget_usd` (NULL follows the ceiling) | The Organization's team: `own ?? ceiling` |
-| Default Agent limit | Owners and Admins | `organization_agent_settings.default_agent_llm_budget_usd` (NULL follows `AGENT_DEFAULT_LLM_BUDGET_USD`) | — |
-| An Agent's own limit | Owners and Admins | `agent.llm_budget_usd` (NULL follows the default) | The Agent's key: `min(own ?? default, Organization limit)` |
+### Runtime limit management
 
 `../../api/domains/organizations/llm_budget_service.py` owns the ceiling and the
 Organization's own limit; `../../api/domains/agents/llm_budget.py` owns Agent limits;

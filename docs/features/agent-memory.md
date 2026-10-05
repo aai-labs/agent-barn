@@ -152,6 +152,11 @@ codes; logs contain only Agent, Organization, and result. No cleanup endpoint is
 exposed to users, Agent tokens, or viewer capabilities. Scheduling/manual execution
 belong in [operations](../guidelines/operations.md#agent-memory-deployment).
 
+Deletion sweeps process at most 20 tombstones per five-minute run (240 per hour),
+subject to a four-minute runtime bound. Larger backlogs delay repeat sweeps; hourly
+and daily schedules are minimum retry intervals, not completion guarantees.
+Tombstones remain durable because Hindsight has no enforced maximum job lifetime.
+
 ### Use the memory gateway
 
 The separate `api.memory_main:app` process serves port 8003 under `/memory/v1`. The plugin API URL is that base; plugin requests append `/v1/default/banks/{bank_id}/...`. Every request under this base requires the per-start Agent bearer credential. The unprefixed `/health` is a process probe only.
@@ -172,11 +177,19 @@ Private retain forces only `agent:<agent_id>`. Shared retain forces `author:<age
 
 Recall traces, bank-wide entity-name expansion, raw chunks, and source-fact expansion are disabled. Reflect excludes mental models, global directive application, and fact/tool-call traces. These response surfaces remain disabled until their tag isolation is verified. Requests use a bounded subset of the pinned Hindsight 0.10.2 contract: at most 2MiB per body, 20 retain items, and 100,000 content characters per item. Malformed supported requests return 422; oversized bodies return 413.
 
+The gateway in Compose and Helm receives explicitly selected settings and credentials,
+including DB access and its signing/backend key, rather than the shared API Secret.
+Kubernetes network reachability still relies on cluster policy and backend auth.
+
 The gateway sends only its own Hindsight bearer credential upstream and does not follow redirects or environment proxies. Upstream errors become generic errors without backend content or headers. Request logs contain Agent, Organization, canonical bank/endpoint, effective access tags, and status; memory content, client paths, and credentials are excluded.
 
 Organization suspension is not a current lifecycle state, so there is no suspension gate. Organization model costs are attributed through LiteLLM. Retain and reflect return 429 when combined observed runtime and memory spend reaches the Organization limit, or 503 when capped-Organization accounting data is unavailable or stale. Recall remains available. See [Costs](costs.md#organization-llm-budgets) for the authoritative spend-limit contract and its accounting delay. Deployment and credential rotation belong to [`operations.md`](../guidelines/operations.md#agent-memory-deployment).
 
 ## Runtime integration
+
+Memory writer instructions are included once in `TOOLS.md`, only for memory-enabled
+Agents. The executable remains installed for both runtimes; disabled Agents retain
+their native prompts without shared-memory instructions.
 
 At start, `memory_enabled` selects the Hindsight provider alongside native memory.
 Hermes keeps its `MEMORY.md` and `USER.md` stores enabled. OpenClaw keeps its
@@ -291,16 +304,3 @@ fetch.
 Migration `d83f291bc7a0` adds the singleton table. Upgrade the database before
 starting the updated API and bridge; downgrade drops the choice and restores
 deployment-default selection. See [operations](../guidelines/operations.md#agent-memory-deployment).
-
-
-Memory writer instructions are included once in `TOOLS.md`, only for memory-enabled
-Agents. The executable remains installed for both runtimes; disabled Agents retain
-their native prompts without shared-memory instructions.
-
-Deletion sweeps process at most 20 tombstones per five-minute run (240 per hour),
-subject to a four-minute runtime bound. Larger backlogs delay repeat sweeps; hourly
-and daily schedules are minimum retry intervals, not completion guarantees.
-Tombstones remain durable because Hindsight has no enforced maximum job lifetime.
-The gateway in Compose and Helm receives explicitly selected settings and credentials,
-including DB access and its signing/backend key, rather than the shared API Secret.
-Kubernetes network reachability still relies on cluster policy and backend auth.
