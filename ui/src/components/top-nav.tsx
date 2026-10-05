@@ -95,7 +95,7 @@ export function TopNav({ onHire }: TopNavProps) {
 
   return (
     <header
-      className="flex items-center gap-4 px-4 lg:gap-6 lg:px-6 xl:gap-9 xl:px-10 sticky top-0 z-10 h-[61px] flex-shrink-0"
+      className="flex items-center gap-4 px-4 lg:px-6 xl:gap-9 xl:px-10 sticky top-0 z-10 h-[61px] flex-shrink-0"
       style={{ borderBottom: "1px solid var(--line)", background: "var(--bg)" }}
     >
       <Sheet open={navOpen} onOpenChange={setNavOpen}>
@@ -153,7 +153,7 @@ export function TopNav({ onHire }: TopNavProps) {
           <Link
             key={href}
             href={href}
-            className="flex-shrink-0 whitespace-nowrap px-2.5 xl:px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
+            className="flex-shrink-0 whitespace-nowrap px-2 xl:px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
             style={{
               color: isActive(href) ? "var(--ink)" : "var(--ink-3)",
               fontWeight: isActive(href) ? 600 : 500,
