@@ -82,6 +82,12 @@ agentModelAllowlist: ""
 # Gateway, providing an environment-level rollback switch.
 communicationsNativePlatforms: ""
 
+# Agent Barn's own Telegram bot (token from @BotFather, and its @username without
+# the @). Empty hides the Agent Barn Telegram Platform. Use a separate bot per
+# environment: Telegram lets only one deployment poll a bot.
+agentbarnTelegramBotToken: ""
+agentbarnTelegramBotUsername: ""
+
 # Default model preselected in the picker and used at runtime when an agent has
 # no model set. Format: litellm/openrouter/<slug>. Empty uses the code default.
 agentDefaultModel: ""

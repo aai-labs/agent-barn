@@ -305,6 +305,9 @@ jobs:
           ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${{ github.ref_name == 'staging' && vars.STAGING_ORGANIZATION_DEFAULT_LLM_BUDGET_USD || vars.ORGANIZATION_DEFAULT_LLM_BUDGET_USD }}
           AGENT_DEFAULT_LLM_BUDGET_USD: ${{ github.ref_name == 'staging' && vars.STAGING_AGENT_DEFAULT_LLM_BUDGET_USD || vars.AGENT_DEFAULT_LLM_BUDGET_USD }}
           COMMUNICATIONS_NATIVE_PLATFORMS: ${{ vars.COMMUNICATIONS_NATIVE_PLATFORMS }}
+          # Each environment polls its own bot; Telegram allows one consumer per bot.
+          AGENTBARN_TELEGRAM_BOT_TOKEN: ${{ github.ref_name == 'staging' && secrets.STAGING_AGENTBARN_TELEGRAM_BOT_TOKEN || secrets.AGENTBARN_TELEGRAM_BOT_TOKEN }}
+          AGENTBARN_TELEGRAM_BOT_USERNAME: ${{ github.ref_name == 'staging' && vars.STAGING_AGENTBARN_TELEGRAM_BOT_USERNAME || vars.AGENTBARN_TELEGRAM_BOT_USERNAME }}
           STORAGE_CLASS: ${{ vars.STORAGE_CLASS }}
           SECRET_SIGNING_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_SECRET_SIGNING_KEY || secrets.SECRET_SIGNING_KEY }}
           PLATFORM_ADMIN_CREDENTIALS: ${{ github.ref_name == 'staging' && secrets.STAGING_PLATFORM_ADMIN_CREDENTIALS || secrets.PLATFORM_ADMIN_CREDENTIALS }}
