@@ -46,6 +46,8 @@ def hindsight_cost_boundary_is_ready():
                     self.end_headers()
                     self.wfile.write(b"{}")
                     return
+                if payload["messages"][0]["content"] == "Say 'ok'":
+                    payload["messages"][0]["content"] = "startup"
                 payload["authorization"] = self.headers.get("Authorization")
                 context.model_requests.append(payload)
                 response = {

@@ -4,8 +4,12 @@ import inspect
 import os
 import time
 from collections import OrderedDict
+from contextvars import ContextVar
 
 import httpx
+
+
+startup_verification = ContextVar("agentbarn_startup_verification", default=False)
 
 
 class ModelSelection:
@@ -17,6 +21,8 @@ class ModelSelection:
         self.operations = OrderedDict()
 
     async def resolve(self, fallback, operation, bank=None):
+        if bank is None and not startup_verification.get():
+            raise RuntimeError("Memory processing requires an Organization bank outside startup verification")
         operation_key = (bank, operation)
         if operation and operation_key in self.operations:
             return self.operations[operation_key]

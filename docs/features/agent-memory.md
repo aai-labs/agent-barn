@@ -318,8 +318,10 @@ refresh concurrently, and a one-second negative cache bounds repeated failures.
 Initial provisioning has a 45-second response timeout with a two-second connection
 timeout. During settings outages, new bank
 operations fail closed once the five-second cache expires; the bootstrap key
-cannot bypass Organization limits. Bankless startup verification can retain its
-last model selection or startup default. The Agent gateway neither receives
+cannot bypass Organization limits. Bankless calls are allowed only inside the pinned provider's explicit connection
+verification method, with a task-local flag reset on exit. Other bankless calls
+fail before reaching the model, including calls on newly added upstream paths.
+Startup verification can retain its last model selection or startup default. The Agent gateway neither receives
 LiteLLM master credentials nor provisions memory keys.
 
 Migration `d83f291bc7a0` adds the singleton table. Upgrade the database before

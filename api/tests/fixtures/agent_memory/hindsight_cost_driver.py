@@ -44,7 +44,13 @@ async def main():
         call(BANKS[1], "reflect"),
         asyncio.create_task(call(BANKS[0], "consolidation")),
     )
-    await provider.call(messages=[{"role": "user", "content": "startup"}], max_retries=0)
+    try:
+        await provider.call(messages=[{"role": "user", "content": "missing-bank"}], max_retries=0)
+    except Exception as exc:
+        assert "bank" in str(exc).lower(), str(exc)
+    else:
+        raise AssertionError("Bankless processing used the bootstrap key outside verification")
+    await provider.verify_connection()
     if os.environ.get("CONTRACT_SETTINGS_URL"):
         import httpx
 

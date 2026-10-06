@@ -6,6 +6,8 @@ quietly dropping attribution. ContextVars cover foreground and background calls.
 
 from uuid import UUID
 
+from memory_model import startup_verification
+
 
 def install():
     from hindsight_api.engine.llm_trace import current_trace_context
@@ -15,6 +17,15 @@ def install():
     if getattr(original, "_agentbarn_attribution", False):
         return
 
+    original_verify = OpenAICompatibleLLM.verify_connection
+
+    async def verify_connection(self):
+        token = startup_verification.set(True)
+        try:
+            return await original_verify(self)
+        finally:
+            startup_verification.reset(token)
+
     def apply_defaults(self, extra_body):
         original(self, extra_body)
         if self.provider != "openai":
@@ -23,7 +34,9 @@ def install():
         context = current_trace_context()
         bank = context.bank_id if context else None
         if bank is None:
-            return  # Server verification calls have no Organization to charge.
+            if not startup_verification.get():
+                raise RuntimeError("Memory processing requires an Organization bank outside startup verification")
+            return
         try:
             organization_id = UUID(bank.removeprefix("org-"))
         except (ValueError, AttributeError):
@@ -34,6 +47,7 @@ def install():
 
     apply_defaults._agentbarn_attribution = True
     OpenAICompatibleLLM._apply_provider_extra_body_defaults = apply_defaults
+    OpenAICompatibleLLM.verify_connection = verify_connection
     from memory_model import install_model_selection
 
     install_model_selection()
