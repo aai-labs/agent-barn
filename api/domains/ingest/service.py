@@ -142,6 +142,10 @@ class IngestService:
         except MultipleResultsFound:
             logger.warning("native %s events for agent %s match several Connections; dropped", platform, agent_id)
             return None
+        if connection is None and platform == "telegram":
+            # Agent Barn Telegram runs the same Telegram adapter, which reports
+            # itself as "telegram"; an Agent holds only one Telegram-type Connection.
+            connection = self.connection_repository.get_active_by_platform_key(agent_id, "agentbarn_telegram")
         return connection.id if connection else None
 
     def _process_tool_calls(self, agent: Agent, batch: IngestBatchRequest) -> None:

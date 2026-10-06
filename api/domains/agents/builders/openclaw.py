@@ -5,6 +5,11 @@ from uuid import UUID
 from kubernetes import client
 
 from api.domains.communications.models import ConversationLocation
+from api.domains.communications.plugins.agentbarn_telegram import (
+    RUNTIME_WEBHOOK_PATH,
+    RUNTIME_WEBHOOK_PORT,
+    AgentBarnTelegramRuntime,
+)
 
 from .common import _labels, _resource_name, _setting_ids
 
@@ -231,6 +236,37 @@ def native_discord_channel(settings: dict) -> dict:
     else:
         channel["defaultTo"] = _NO_HOME_CHANNEL_TARGET
     return channel
+
+
+def agentbarn_telegram_channel(runtime: AgentBarnTelegramRuntime) -> dict:
+    """OpenClaw's bundled Telegram channel behind Agent Barn's shared bot.
+
+    Every Bot API call goes to Agent Barn's proxy (``apiRoot``), and the
+    updates Agent Barn forwards arrive on a private webhook. Linking already
+    admitted each sender, so DMs are open; groups are not part of the product.
+    """
+    return {
+        "enabled": True,
+        "dmPolicy": "open",
+        "allowFrom": ["*"],
+        "groupPolicy": "disabled",
+        "apiRoot": runtime.api_root,
+        "webhookUrl": runtime.webhook_url,
+        # Resolved from the Secret at startup, so the value never sits in openclaw.json.
+        "webhookSecret": "${AGENTBARN_TELEGRAM_WEBHOOK_SECRET}",
+        "webhookHost": "0.0.0.0",
+        "webhookPort": RUNTIME_WEBHOOK_PORT,
+        "webhookPath": RUNTIME_WEBHOOK_PATH,
+        "defaultTo": _NO_HOME_CHANNEL_TARGET,
+    }
+
+
+def agentbarn_telegram_channel_env(runtime: AgentBarnTelegramRuntime) -> dict[str, str]:
+    """Secret entries for ``agentbarn_telegram_channel``."""
+    return {
+        "TELEGRAM_BOT_TOKEN": runtime.api_token,
+        "AGENTBARN_TELEGRAM_WEBHOOK_SECRET": runtime.webhook_secret,
+    }
 
 
 def native_telegram_channel(settings: dict) -> dict:

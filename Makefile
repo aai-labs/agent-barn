@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers forward-telegram seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -51,6 +51,8 @@ API_DEV_PORT ?= 8000
 TEAMS_RUNTIME_WEBHOOK_URL ?= http://localhost:3978/api/messages
 # Same for Agent Webhook dispatch through the local `forward-triggers` port-forward.
 AGENT_TRIGGER_URL ?= http://localhost:8082/agent-triggers/v1/invocations
+# Same for Agent Barn Telegram forwarding through the local `forward-telegram` port-forward.
+AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL ?= http://localhost:8443/telegram
 
 # Runs Ingest and Communications alongside the main app so native development
 # has the same service topology as Docker and Helm. The trap kills every child
@@ -59,7 +61,7 @@ dev-api:
 	@cd api && \
 	trap 'kill 0' EXIT INT TERM; \
 	uv run python -m fastapi dev ingest_main.py --host 0.0.0.0 --port $(INGEST_PORT) & \
-	uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) & \
+	AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL=$(AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL) uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) & \
 	INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
 # Ingest on its own — `make dev-api` already starts it; use this to run or
@@ -70,7 +72,7 @@ dev-ingest:
 
 # Communications on its own — `make dev-api` already starts it.
 dev-communications:
-	cd api && uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
+	cd api && AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL=$(AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL) uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
 
 # Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
 # in k3d, so expose one Agent's webhook port on the host. Re-run after the pod
@@ -84,6 +86,12 @@ forward-teams:
 forward-triggers:
 	@test -n "$(AGENT)" || { echo "usage: make forward-triggers AGENT=<agent-uuid>"; exit 1; }
 	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/agent-$(AGENT) 8082:8082
+
+# Local Agent Barn Telegram: same reason as forward-teams, for the private Telegram
+# webhook. Re-run after the pod restarts. Usage: make forward-telegram AGENT=<agent-uuid>
+forward-telegram:
+	@test -n "$(AGENT)" || { echo "usage: make forward-telegram AGENT=<agent-uuid>"; exit 1; }
+	KUBECONFIG=.k3d/kubeconfig-host.yaml kubectl -n agent-farm port-forward --address 0.0.0.0 svc/agent-$(AGENT) 8443:8443
 
 dev-ui:
 	cd ui && pnpm dev

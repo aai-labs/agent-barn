@@ -3,6 +3,8 @@ from uuid import UUID
 
 from kubernetes import client
 
+from api.domains.communications.plugins.agentbarn_telegram import RUNTIME_WEBHOOK_PORT
+
 _NON_LABEL_CHARS = re.compile(r"[^a-z0-9]+")
 
 
@@ -73,6 +75,7 @@ def build_service(
     org_id: UUID,
     namespace: str,
     include_webhook_port: bool = False,
+    include_telegram_webhook_port: bool = False,
     org_name: str = "",
     agent_name: str = "",
     runtime: str = "",
@@ -84,6 +87,11 @@ def build_service(
     ]
     if include_webhook_port:
         ports.append(client.V1ServicePort(port=3978, target_port=3978, name="webhook"))
+    if include_telegram_webhook_port:
+        # Agent Barn Telegram forwards linked users' updates here; ClusterIP only.
+        ports.append(
+            client.V1ServicePort(port=RUNTIME_WEBHOOK_PORT, target_port=RUNTIME_WEBHOOK_PORT, name="tg-webhook")
+        )
     return client.V1Service(
         metadata=client.V1ObjectMeta(
             name=_resource_name(agent_id),

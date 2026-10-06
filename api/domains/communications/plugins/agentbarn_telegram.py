@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+from dataclasses import dataclass
 from typing import Protocol
 
 from api.domains.communications.models import CommunicationPlatform
@@ -8,6 +9,11 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
 )
+
+# Where an Agent's runtime listens for the updates Agent Barn forwards. Both
+# runtimes take the port and path as settings, so one value serves both.
+RUNTIME_WEBHOOK_PORT = 8443
+RUNTIME_WEBHOOK_PATH = "/telegram"
 
 _RUNTIME_WEBHOOK_SECRET_CONTEXT = b"agentbarn-telegram-runtime-webhook"
 
@@ -34,6 +40,20 @@ def runtime_api_token(driver_key: str, bot_token: str) -> str:
     bot_id = bot_token.split(":", 1)[0]
     secret = hmac.new(driver_key.encode("utf-8"), _RUNTIME_API_TOKEN_CONTEXT, hashlib.sha256).hexdigest()
     return f"{bot_id}:{secret}"
+
+
+@dataclass(frozen=True)
+class AgentBarnTelegramRuntime:
+    """What an Agent's runtime needs to use Agent Barn Telegram through the proxy."""
+
+    # The Bot API root to use instead of https://api.telegram.org.
+    api_root: str
+    # Stand-in bot token accepted only by the proxy, for this Connection.
+    api_token: str
+    # Secret the runtime's webhook requires on every forwarded update.
+    webhook_secret: str
+    # Where Agent Barn reaches the runtime's webhook; the runtime only registers it.
+    webhook_url: str
 
 
 class AgentBarnTelegramConfig(Protocol):

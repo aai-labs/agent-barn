@@ -29,6 +29,9 @@ from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
     HERMES_WORKSPACE_DIR,
     OPENCLAW_WORKSPACE_DIR,
+    agentbarn_telegram_channel,
+    agentbarn_telegram_channel_env,
+    agentbarn_telegram_env,
     build_config_map,
     build_deployment,
     build_hermes_config_map,
@@ -127,6 +130,11 @@ from api.domains.agents.selection import (
 )
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
+from api.domains.communications.plugins.agentbarn_telegram import (
+    AgentBarnTelegramRuntime,
+    runtime_api_token,
+    runtime_webhook_secret,
+)
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
@@ -548,7 +556,8 @@ class AgentService:
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
-            native_platform_keys=sorted(self.config.native_platform_keys),
+            # Agent Barn Telegram has no gateway path, so it is runtime-owned everywhere.
+            native_platform_keys=sorted(self.config.native_platform_keys | {"agentbarn_telegram"}),
             allowed_actions=allowed_actions or [],
             created_at=agent.created_at,
             updated_at=agent.updated_at,
@@ -1794,6 +1803,29 @@ class AgentService:
         )
         return _NativeConnectionConfiguration(settings=connection.settings, credentials=credentials)
 
+    def _agentbarn_telegram_runtime(self, agent_id: UUID) -> AgentBarnTelegramRuntime | None:
+        """Runtime settings for an enabled Agent Barn Telegram Connection.
+
+        Always runtime-owned, whatever COMMUNICATIONS_NATIVE_PLATFORMS says. The
+        runtime gets a stand-in token and the proxy's address; the shared bot's
+        real token never leaves the Communications process.
+        """
+        bot_token = self.config.agentbarn_telegram_bot_token.strip()
+        if not bot_token or not self.config.agentbarn_telegram_bot_username.strip():
+            return None
+        connection = self.connection_repository.get_active_by_platform_key(agent_id, "agentbarn_telegram")
+        if connection is None or not connection.enabled:
+            return None
+        driver_key = decrypt_token(connection.driver_key_encrypted, self.config.agent_token_encryption_key)
+        return AgentBarnTelegramRuntime(
+            api_root=f"{self.config.communications_base_url.rstrip('/')}/telegram/{connection.id}",
+            api_token=runtime_api_token(driver_key, bot_token),
+            webhook_secret=runtime_webhook_secret(driver_key),
+            webhook_url=self.config.agentbarn_telegram_runtime_webhook_url.format(
+                agent_id=agent_id, namespace=self.config.k8s_namespace
+            ),
+        )
+
     def _native_slack_connection(self, agent_id: UUID) -> tuple[dict, dict, ConversationLocation | None] | None:
         """The settings, credentials, and resolved home channel of a native Slack Connection."""
         connection = self._native_connection_configuration(agent_id, "slack")
@@ -1907,11 +1939,13 @@ class AgentService:
 
         runtime_api_key = secrets.token_urlsafe(32)
         runtime_teams = self._native_connection_configuration(agent.id, "teams")
+        agentbarn_telegram = self._agentbarn_telegram_runtime(agent.id)
         service = build_service(
             agent.id,
             org_id,
             ns,
             include_webhook_port=runtime_teams is not None,
+            include_telegram_webhook_port=agentbarn_telegram is not None,
             org_name=org_name,
             agent_name=agent.name,
         )
@@ -1932,6 +1966,7 @@ class AgentService:
                 telegram_settings=native_telegram.settings if native_telegram else None,
                 runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,
+                agentbarn_telegram=agentbarn_telegram,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1952,6 +1987,8 @@ class AgentService:
                 secret.string_data.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
             if runtime_teams is not None:
                 secret.string_data.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
+            if agentbarn_telegram is not None:
+                secret.string_data.update(agentbarn_telegram_env(agentbarn_telegram))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -1974,6 +2011,10 @@ class AgentService:
             if runtime_teams is not None:
                 native_credentials["msteams"] = runtime_teams.credentials
                 native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
+            if agentbarn_telegram is not None:
+                # The runtime's Telegram channel, carried through Agent Barn's proxy.
+                native_credentials["telegram"] = {"bot_token": agentbarn_telegram.api_token}
+                native_channels["telegram"] = agentbarn_telegram_channel(agentbarn_telegram)
             overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
             hermes_cfg = None
             secret = build_secret_runtime(
@@ -1986,6 +2027,8 @@ class AgentService:
             )
             if native_credentials:
                 secret.string_data.update(native_channel_env(native_credentials))
+            if agentbarn_telegram is not None:
+                secret.string_data.update(agentbarn_telegram_channel_env(agentbarn_telegram))
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -2182,7 +2225,9 @@ class AgentService:
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_file_delivery_policy_md(
                 # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
-                workspace_dir if any(c is not None for c in (native_slack, native_discord, native_telegram)) else None
+                workspace_dir
+                if any(c is not None for c in (native_slack, native_discord, native_telegram, agentbarn_telegram))
+                else None
             )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
