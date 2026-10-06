@@ -108,6 +108,12 @@ class MemoryGroupService:
         `memory_group.manage` — the caller owns the access check for its own surface."""
         return {g.id: g.name for g in self.repository.find_all_for_org(org_id)}
 
+    def organization_by_group(self) -> dict[UUID, UUID]:
+        """Group id → owning Organization, deployment-wide, for the budget
+        enforcement pass. System-only: it spans every Organization, so it must never
+        back a route."""
+        return {g.id: g.organization_id for g in self.repository.find_all()}
+
     def add_agent(self, group_id: UUID, agent_id: UUID, context: CurrentUserContext) -> None:
         """Add an Agent to a group (opt it into the group's shared memory).
 
@@ -181,6 +187,7 @@ class MemoryGroupService:
                 detail="Memory sharing requires Honcho-backed memory to be enabled.",
             )
         source = self._get_or_404(source_group_id, org_id)
+        self.memory.require_memory_not_paused(org_id)
 
         # Resolve and validate every target up front — a bad target is a client
         # error, not a per-item outcome — then do the writes, where a Honcho hiccup
@@ -259,7 +266,8 @@ class MemoryGroupService:
     def search_memory(
         self, group_id: UUID, query: str, context: CurrentUserContext, *, limit: int
     ) -> list[MemoryItemRead]:
-        workspace, _org_id = self._require_pool_workspace(group_id, context)
+        workspace, org_id = self._require_pool_workspace(group_id, context)
+        self.memory.require_memory_not_paused(org_id)
         return self.memory.search_memory_for_workspace(
             workspace, query, limit=limit, scope=self.memory.name_resolution_scope(context)
         )
@@ -278,7 +286,8 @@ class MemoryGroupService:
         observer: str | None = None,
         observed: str | None = None,
     ) -> MemoryItemRead:
-        workspace, _org_id = self._require_pool_workspace(group_id, context)
+        workspace, org_id = self._require_pool_workspace(group_id, context)
+        self.memory.require_memory_not_paused(org_id)
         return self.memory.correct_in_workspace(
             workspace,
             memory_id,

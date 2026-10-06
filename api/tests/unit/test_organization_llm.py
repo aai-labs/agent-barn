@@ -571,7 +571,7 @@ def coverage_service(credentials, team_of, **overrides):
     # into the response model.
     litellm.get_team_budget_status.return_value = None
     repo = MagicMock()
-    repo.get.return_value = MagicMock(id=ORG)
+    repo.get.return_value = MagicMock(id=ORG, memory_spend_this_window_usd=0.0)
     return organization_service(agent_budgets=agents, litellm=litellm, organization_repository=repo, **overrides)
 
 
@@ -771,6 +771,7 @@ def capped(org_id="org", limit=50.0, alerted=None, key=None, renews="2026-10-01T
         name="Acme",
         llm_budget_usd=limit,
         effective_llm_budget_usd=limit,
+        memory_spend_this_window_usd=0.0,
         llm_alerted_threshold=alerted,
         llm_alert_key=key,
     )

@@ -3,7 +3,7 @@ COMPOSE := docker compose -f compose.yml
 .PHONY: \
 	setup run stop stop-clean \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-memory-proxy dev-ui dev-worker reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts enforce-llm-memory-budgets backfill-business-actions forward-teams forward-triggers seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -43,6 +43,7 @@ setup:
 INGEST_PORT ?= 8001
 INGEST_BASE_URL ?= http://host.docker.internal:$(INGEST_PORT)/ingest/v1
 COMMUNICATIONS_PORT ?= 8002
+MEMORY_PROXY_PORT ?= 8003
 COMMUNICATIONS_BASE_URL ?= http://host.docker.internal:$(COMMUNICATIONS_PORT)/communications/v1
 # Overridable so a second worktree can run its own stack without port clashes.
 API_DEV_PORT ?= 8000
@@ -71,6 +72,9 @@ dev-ingest:
 # Communications on its own — `make dev-api` already starts it.
 dev-communications:
 	cd api && uv run python -m fastapi dev communications_main.py --host 0.0.0.0 --port $(COMMUNICATIONS_PORT)
+
+dev-memory-proxy:
+	cd api && uv run python -m fastapi dev memory_proxy_main.py --host 0.0.0.0 --port $(MEMORY_PROXY_PORT)
 
 # Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
 # in k3d, so expose one Agent's webhook port on the host. Re-run after the pod
@@ -116,6 +120,9 @@ run-llm-budget-alerts:
 # rows and removes rows the catalogue no longer produces, and never changes their status.
 backfill-business-actions:
 	cd api && uv run python -c "from api.domains.business_value.backfill import main; main()"
+
+enforce-llm-memory-budgets:
+	cd api && uv run python -c "from api.domains.organizations.llm_budget_enforcement import main; main()"
 
 # Local-only: populate the dev database with realistic Event Deliveries for
 # manually exercising the Platform Event Delivery Monitor UI. Safe to re-run.

@@ -19,6 +19,7 @@ from api.domains.agents.memory_sharing import AgentMemoryService, MemoryItemUpda
 from api.domains.agents.models import Agent, AgentType
 from api.domains.agents.repository import AgentRepository, PoolMemoryProvenance, SharedPoolMemoryFactRepository
 from api.domains.auth.models import CurrentUserContext
+from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.honcho.client import HonchoClient, HonchoError
 
@@ -37,7 +38,7 @@ def _agent() -> Agent:
     return agent
 
 
-def _service(*, honcho_enabled: bool = True):
+def _service(*, honcho_enabled: bool = True, suspended: bool = False):
     authorization = Mock(spec=AgentAuthorization)
     authorization.require_action.return_value = _agent()
     honcho = Mock(spec=HonchoClient)
@@ -51,6 +52,8 @@ def _service(*, honcho_enabled: bool = True):
     # Manager check is a no-op by default; a test sets side_effect to deny it.
     permission_policy = Mock(spec=PermissionPolicy)
     permission_policy.require_organization.return_value = None
+    organization_lookup = Mock(spec=OrganizationLookupService)
+    organization_lookup.memory_suspended.return_value = suspended
     service = AgentMemoryService(
         agent_authorization=authorization,
         honcho=honcho,
@@ -58,6 +61,7 @@ def _service(*, honcho_enabled: bool = True):
         pool_provenance=pool_provenance,
         agents=agents,
         permission_policy=permission_policy,
+        organization_lookup=organization_lookup,
     )
     # permission_policy is reachable as service.permission_policy where a test needs it.
     return service, authorization, honcho, pool_provenance
@@ -455,3 +459,41 @@ def test_mine_scope_pins_the_query_to_this_agent():
     # Peer identity is the stable agent id (not the name), so a rename never
     # orphans memory and Honcho never renormalizes the peer.
     assert_that(honcho.list_conclusions.call_args.kwargs["observer"], equal_to(f"agent-{AGENT_ID}"))
+
+
+# --- a suspended Organization's memory costs nothing from the app (AF-338) ----
+
+
+def test_searching_a_suspended_organizations_memory_is_refused_before_any_model_call():
+    """Search embeds the query on Honcho's key, which is what suspension stops."""
+    service, _, honcho, _ = _service(suspended=True)
+    with pytest.raises(HTTPException) as raised:
+        service.search_memory(AGENT_ID, "anything", _context(), limit=5)
+    assert_that(raised.value.status_code, equal_to(409))
+    honcho.search_conclusions.assert_not_called()
+
+
+def test_correcting_a_suspended_organizations_memory_is_refused():
+    """A correction writes a new memory, which is embedded."""
+    service, _, honcho, _ = _service(suspended=True)
+    with pytest.raises(HTTPException) as raised:
+        service.correct(AGENT_ID, "c1", MemoryItemUpdate(content="new"), _context())
+    assert_that(raised.value.status_code, equal_to(409))
+    honcho.create_conclusion.assert_not_called()
+
+
+def test_the_refusal_says_what_happened_without_naming_any_system():
+    service, _, _, _ = _service(suspended=True)
+    with pytest.raises(HTTPException) as raised:
+        service.search_memory(AGENT_ID, "anything", _context(), limit=5)
+    detail = raised.value.detail.lower()
+    assert_that("spend limit" in detail, equal_to(True))
+    assert_that(any(word in detail for word in ("honcho", "litellm", "proxy", "embedding")), equal_to(False))
+
+
+def test_browsing_a_suspended_organizations_memory_stays_open():
+    """Listing reads stored memory and costs nothing, so people can still see it."""
+    service, _, honcho, _ = _service(suspended=True)
+    honcho.list_conclusions.return_value = ([], 0)
+    service.list_memory(AGENT_ID, _context(), page=1, size=10, scope="mine")
+    honcho.list_conclusions.assert_called()

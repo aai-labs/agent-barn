@@ -178,9 +178,6 @@ def _openclaw_config_core(
                 "model": {
                     "primary": model,
                 },
-                "memorySearch": {
-                    "provider": "none",
-                },
                 "heartbeat": {"every": "0m", "target": "none"},
             },
             # Only when memory is on: an explicit agent entry with the distinct

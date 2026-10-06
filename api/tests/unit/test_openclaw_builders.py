@@ -46,6 +46,24 @@ def test_gateway_config_isolates_each_persons_direct_messages() -> None:
     assert config["session"]["dmScope"] == "per-channel-peer"
 
 
+def test_gateway_config_carries_no_key_openclaw_2026_8_rejects() -> None:
+    """OpenClaw 2026.8 refuses to start on `agents.defaults.memorySearch` (init prunes
+    it from an old config for that reason); memory search is `memory.search` now.
+    Both with memory off and with a Honcho pool."""
+    for config in (
+        build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+        build_openclaw_gateway_config(
+            "litellm/gpt-5",
+            "http://litellm:4000",
+            honcho_base_url="http://memory",
+            honcho_workspace_id="af-pool-1",
+            honcho_agent_id="agent-1",
+        ),
+    ):
+        assert "memorySearch" not in config["agents"]["defaults"]
+        assert config["memory"] == {"search": {"provider": "none"}}
+
+
 def test_workspace_comes_from_one_constant() -> None:
     """The file-delivery policy names OPENCLAW_WORKSPACE_DIR as the place to write
     attachments, so the runtime config and the migration script must use the same path."""

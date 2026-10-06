@@ -90,9 +90,10 @@ agentDefaultModel: ""
 # up only when it is stopped and started again.
 honchoEnabled: false
 honchoBaseUrl: "http://honcho:8000"
-# What Agent pods call. In-cluster this is the same Service; it exists because
-# locally the API and Agents reach Honcho by different names.
-agentHonchoBaseUrl: ""
+# What Agent pods call for memory: the memory proxy, never Honcho itself. Empty uses
+# this release's memory-proxy Service; set it only where Agents reach the proxy by a
+# different name (local k3d).
+agentMemoryProxyBaseUrl: ""
 # Shared secret the Ingest service checks on Honcho usage posts.
 honchoTelemetryKey: ""
 # Honcho's LiteLLM key, read-only here: it is what memory spend is looked up on.
@@ -209,6 +210,16 @@ organizationLlmBudgets:
     # informational — the proxy enforces the limit in the request path, so this only
     # bounds how late someone is told, never how much is spent.
     schedule: "*/5 * * * *"
+  enforcement:
+    enabled: true
+    # Every 5 minutes. Counts each Organization's memory spend against its limit:
+    # lowers the team's ceiling by it and suspends memory once agents and memory
+    # together reach the limit. Memory keeps spending between runs, so this interval
+    # bounds the overshoot.
+    schedule: "*/5 * * * *"
+    # Share of the limit (1-100) at which memory is suspended. Below 100 trips early
+    # to absorb the spend that lands between runs.
+    suspendPercent: 100
 
 worker:
   enabled: true
@@ -220,6 +231,21 @@ worker:
     limits:
       memory: 512Mi
       cpu: 1000m
+
+# Agents' only route to memory (deployed whenever honchoEnabled). Checks each
+# request against the Agent's current state and forwards it to Honcho with a token
+# scoped to the Agent's pool, so an Agent never holds a Honcho credential.
+memoryProxy:
+  replicaCount: 1
+  service:
+    port: 8003
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 500m
 
 communications:
   enabled: true
