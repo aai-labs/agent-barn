@@ -19,7 +19,11 @@ ORG_NAME = "Acme Inc"
 
 
 class FakeCostRepository:
+    def record_sync_completion(self, completed_at):
+        self.completed_at = completed_at
+
     def __init__(self, *, watermark=None, candidates=None, organization_names=None, drop_healed=False):
+        self.completed_at = None
         self.watermark = watermark
         # Mirror the real predicate: a healed row stops being a candidate.
         self.drop_healed = drop_healed
@@ -232,6 +236,7 @@ def test_a_failed_page_stops_the_run_instead_of_skipping_it():
 
     assert result.pages_read == 1
     assert result.truncated is True
+    assert repository.completed_at is None
 
 
 def test_an_empty_page_ends_the_run():
@@ -242,6 +247,7 @@ def test_an_empty_page_ends_the_run():
 
     assert result.pages_read == 0
     assert result.truncated is False
+    assert repository.completed_at is not None
 
 
 # --- Projection --------------------------------------------------------------
@@ -403,6 +409,7 @@ def test_the_deadline_stops_paging_and_marks_the_run_truncated(monkeypatch):
     result = _synchronizer(repository, spend_logs=spend_logs).run_once()
 
     assert result.truncated is True
+    assert repository.completed_at is None
     # Two pages read, then the deadline hit — not zero, which would pass vacuously.
     assert result.pages_read == 2
 
@@ -456,3 +463,101 @@ def test_healing_stops_when_only_unresolvable_rows_are_left():
     # Each row tried once, not once per loop pass.
     assert sorted(generations.looked_up) == ["gen-x", "gen-y"]
     assert result.truncated is False
+
+
+def test_memory_costs_use_the_trusted_key_and_canonical_bank_only():
+    repository = FakeCostRepository()
+    synchronizer = CostSynchronizer(
+        repository, FakeAgentRepository(), FakeSpendLogs(), FakeGenerations(), "", frozenset({"memory-hash"})
+    )
+    record = synchronizer._to_record(
+        _row(api_key="memory-hash", end_user=f"org-{ORG_ID}", spend=0.123456789123), {}, {ORG_ID: ORG_NAME}
+    )
+    assert record is not None
+    assert record.organization_id == ORG_ID
+    assert record.agent_id is None
+    assert record.agent_name == "Agent Memory"
+    assert record.is_memory is True
+    assert record.spend == Decimal("0.123456789123")
+    assert "end_user" not in record.model_dump()
+    assert "metadata" not in record.model_dump()
+
+
+def test_an_untrusted_key_cannot_select_an_organization_through_a_bank_marker():
+    synchronizer = CostSynchronizer(
+        FakeCostRepository(), FakeAgentRepository(), FakeSpendLogs(), FakeGenerations(), "", frozenset({"memory-hash"})
+    )
+    for bank in (f"org-{ORG_ID}", "private-user-marker"):
+        record = synchronizer._to_record(_row(api_key="other-hash", end_user=bank), {}, {ORG_ID: ORG_NAME})
+        assert record is not None
+        assert record.organization_id is None
+        assert record.is_memory is False
+
+
+def test_invalid_or_unknown_memory_bank_stays_in_platform_unattributed_costs():
+    synchronizer = CostSynchronizer(
+        FakeCostRepository(), FakeAgentRepository(), FakeSpendLogs(), FakeGenerations(), "", frozenset({"memory-hash"})
+    )
+    for bank in (None, "private-user-marker", f"org-{str(ORG_ID).upper()}", f"org-{uuid4()}", "org-invalid"):
+        record = synchronizer._to_record(_row(api_key="memory-hash", end_user=bank), {}, {ORG_ID: ORG_NAME})
+        assert record is not None
+        assert record.organization_id is None
+        assert record.is_memory is True
+
+
+def test_memory_rows_count_as_organization_attributed_without_counting_as_agent_calls():
+    repository = FakeCostRepository()
+    synchronizer = CostSynchronizer(
+        repository,
+        FakeAgentRepository(),
+        FakeSpendLogs([_page([_row(api_key="memory-hash", end_user=f"org-{ORG_ID}")])]),
+        FakeGenerations(),
+        "",
+        frozenset({"memory-hash"}),
+    )
+    result = synchronizer.run_once()
+    assert result.attributed == 1
+    assert result.unattributed == 0
+    assert repository.upserted[0][0].agent_id is None
+
+
+def test_local_watch_syncs_immediately_and_retries_a_failed_run(monkeypatch):
+    from unittest.mock import Mock
+
+    import pytest
+
+    from api.domains.costs import sync
+
+    synchronizer = Mock()
+    synchronizer.run_once.side_effect = [RuntimeError("transient outage"), None]
+    monkeypatch.setattr(sync, "build_synchronizer", lambda: synchronizer)
+    monkeypatch.setattr("sys.argv", ["cost-sync", "--watch"])
+    waits = []
+
+    def wait(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(sync.time, "sleep", wait)
+    with pytest.raises(KeyboardInterrupt):
+        sync.main()
+    assert synchronizer.run_once.call_count == 2
+    assert len(waits) == 2
+    assert all(0 < seconds <= 900 for seconds in waits)
+
+
+def test_one_shot_cost_sync_still_reports_failure(monkeypatch):
+    from unittest.mock import Mock
+
+    import pytest
+
+    from api.domains.costs import sync
+
+    synchronizer = Mock()
+    synchronizer.run_once.side_effect = RuntimeError("outage")
+    monkeypatch.setattr(sync, "build_synchronizer", lambda: synchronizer)
+    monkeypatch.setattr("sys.argv", ["cost-sync"])
+    with pytest.raises(RuntimeError, match="outage"):
+        sync.main()
+    assert synchronizer.run_once.call_count == 1

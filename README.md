@@ -76,6 +76,7 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 | `8000`  | API                        |
 | `8001`  | Ingest (runtime telemetry) |
 | `8002`  | Communications gateway     |
+| `8003`  | Agent Memory gateway       |
 | `16443` | k3d Kubernetes API         |
 
 Make sure these ports are free before starting the full stack. The configurable
@@ -136,9 +137,13 @@ the cluster is up.
 
 This validates `.env`, brings up the k3d cluster and LiteLLM, builds and loads
 the agent base images, starts `db` and `redis`, runs database migrations, then
-starts `api`, `worker`, `communications`, and `ui` with hot reload and follows
+starts `api`, `worker`, `communications`, `memory`, and `ui` with hot reload and follows
 the logs. `Ctrl-C` detaches without stopping anything; use `./run.sh --detach`
 to skip the logs entirely.
+
+The memory gateway needs a running Hindsight backend to list or save memories.
+The optional `local-hindsight` Compose profile provides one; see
+[Agent Memory deployment](docs/guidelines/operations.md#agent-memory-deployment).
 
 If a startup value checked by `run.sh` is missing, the script fails immediately
 and lists it.
@@ -302,11 +307,12 @@ separate terminals, alongside `make db-up`:
 make setup         # uv sync + pnpm install; creates .env from .env.spec if absent
 make db-up         # Postgres only
 make migrate       # apply migrations
-make dev-api       # API on :8000; also starts Ingest :8001 and Communications :8002
+make dev-api       # API :8000, Ingest :8001, Communications :8002, Memory :8003
 make dev-ui        # UI on :3000, hot reload
 make dev-worker    # Dramatiq worker, hot reload
 make dev-ingest    # Ingest only (normally started by dev-api)
 make dev-communications  # Communications only (normally started by dev-api)
+make dev-memory    # Memory gateway only (normally started by dev-api)
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 ```
 
@@ -314,7 +320,7 @@ make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 The worker and reconciliation command also need a Redis server reachable at the
 `REDIS_URL` in `.env`. The Compose Redis service does not publish a host port,
 so `make redis-up` alone cannot serve those host-run processes. This path uses
-host ports `3000`, `8000`, `8001`, and `8002`, so don't run it alongside
+host ports `3000`, `8000`, `8001`, `8002`, and `8003`, so don't run it alongside
 `./run.sh`'s containers.
 
 Two gotchas specific to this path:
@@ -343,7 +349,8 @@ export K8S_KUBECONFIG_PATH="$PWD/.k3d/kubeconfig-host.yaml"
 Agents run as Kubernetes resources, so `./run.sh` brings up a cluster
 automatically. We use [k3d](https://k3d.io) (k3s in Docker) from a helper
 container, so no host `k3d` or `helm` install is needed — only Docker and
-`kubectl`. The Kubernetes integration job provisions its own k3d cluster with
+`kubectl` (the optional [local Prometheus](#resource-usage-local-prometheus) also
+needs `helm`). The Kubernetes integration job provisions its own k3d cluster with
 [`AbsaOSS/k3d-action`](https://github.com/AbsaOSS/k3d-action).
 
 `./run.sh` drives `docker/k3d/k3d-up.sh` (cluster + LiteLLM) and
@@ -431,6 +438,43 @@ side by side. Share one full stack, or run only the required native services
 against separately named dependencies.
 
 </details>
+
+#### Resource usage (local Prometheus)
+
+The Resource usage tab and the Agents overview read each Agent's CPU and memory
+from Prometheus. Compose has none, so until you install one those views say
+resource usage is not configured; status and cost are unaffected.
+
+To see real numbers locally, install the monitoring chart into the k3d cluster. This
+is the one step that needs `helm` and `kubectl` on the host:
+
+```bash
+make dev-monitoring
+```
+
+Keep the port-forward running in its own terminal. The API in Docker reaches
+Prometheus through it:
+
+```bash
+make forward-prometheus
+```
+
+Recreate the API container so it picks up the new `PROMETHEUS_PASSWORD`:
+
+```bash
+docker compose up -d api
+```
+
+Then stop and start an Agent. The script that reports usage ships with the Agent's
+configuration, so a running Agent reports only after a restart.
+
+`make dev-monitoring` installs the same `helm/monitoring` chart a deploy uses, with
+the LiteLLM metrics-key hook skipped because LiteLLM runs in Compose. It writes a
+`PROMETHEUS_PASSWORD` to `.env` if there is none, creates the `agent-farm-user`
+ServiceAccount Prometheus runs as, and is safe to run again. Set `PROMETHEUS_PORT` to
+change the host port (default `9090`). Running the API natively (`make dev-api`)? Add
+`PROMETHEUS_URL=http://localhost:9090` to `.env`. To remove it:
+`helm uninstall monitoring -n agent-farm`.
 
 ### Windows
 

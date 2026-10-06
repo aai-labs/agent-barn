@@ -73,6 +73,17 @@ agentFirecrawlBaseUrl: "http://firecrawl:3002"
 agentFirecrawlApiKey: ""
 ingestBaseUrl: "http://agentbarn-api:8001/ingest/v1"
 
+# The monitoring release's Prometheus, queried for each Agent's CPU and memory (the
+# Resource usage views). The Service is release-name-derived, so the short name
+# resolves within this namespace for staging and production alike. Prometheus
+# requires basic auth (helm/monitoring webAuth); helmfile sets the password from
+# MONITORING_WEB_PASSWORD, passed directly rather than read from that release's
+# Secret, which is created after this release on a fresh install.
+prometheus:
+  url: "http://monitoring-prometheus-server"
+  username: monitoring
+  password: ""
+
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""
@@ -213,6 +224,24 @@ communications:
   replicaCount: 1
   service:
     port: 8002
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+memory:
+  defaultModel: "openrouter/openai/gpt-4.1-mini"
+  litellmKeyHashes: ""
+  litellmActiveKeyHash: ""
+  enabled: false
+  authChecksum: ""
+  settingsKeyChecksum: ""
+  replicaCount: 1
+  hindsightBaseUrl: "http://hindsight:8888"
+  hindsightSecretName: hindsight
   resources:
     requests:
       memory: 256Mi

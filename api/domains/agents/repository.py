@@ -11,6 +11,7 @@ from sqlalchemy import exists, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
+from api.domains.agent_memory.repository import stage_agent_memory_cleanup
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
@@ -20,6 +21,7 @@ from api.domains.agents.models import (
     AgentSecret,
     AgentSkill,
     AgentStatus,
+    PlatformAgentIdentity,
     SecretProvider,
 )
 from api.domains.communications.email_address_repository import release_agent_email_addresses
@@ -44,6 +46,7 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.organizations.models import Organization
 from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.catalog import (
     AGENT_OWNER_ROLE_ID,
@@ -531,8 +534,14 @@ class AgentRepository:
         self,
         authorization_scope: AuthorizationScope,
         agent_filter: AgentFilter,
-        pagination: Pagination,
+        pagination: Pagination | None,
     ) -> tuple[list[Agent], int]:
+        """Agents the scope may read, oldest first, and how many there are in all.
+
+        `pagination=None` returns every one of them, for a caller that has to rank before
+        it cuts (the agents overview), where a page taken in creation order would drop the
+        very Agents the ranking is meant to find.
+        """
         with Session(self.delegate.engine) as session:
             visibility = agent_scope_predicates(authorization_scope)
             query = select(Agent).where(*visibility)
@@ -544,11 +553,9 @@ class AgentRepository:
                 count_query = count_query.where(status_filter)
 
             total = session.scalar(count_query) or 0
-            query = (
-                query.order_by(col(Agent.created_at).asc())
-                .offset((pagination.page - 1) * pagination.size)
-                .limit(pagination.size)
-            )
+            query = query.order_by(col(Agent.created_at).asc())
+            if pagination is not None:
+                query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
             return list(session.exec(query).all()), total
 
     def get_active_communication_platforms_for_agents(
@@ -996,6 +1003,7 @@ class AgentRepository:
             persisted.last_error_code = agent.last_error_code
             persisted.last_error_detail = agent.last_error_detail
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
+            persisted.memory_key_hash = agent.memory_key_hash
             persisted.running_model = agent.running_model
             persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
@@ -1116,8 +1124,10 @@ class AgentRepository:
                 return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
             now = datetime.now(UTC)
             persisted.deleted_at = now
+            persisted.memory_key_hash = None
             session.add(persisted)
             session.flush()
+            stage_agent_memory_cleanup(session, persisted.id, persisted.organization_id, now)
             # Agent deletion is a soft delete, so the database FK cascade does
             # not retire the Agent-owned Communication Connections. Release
             # their provider credentials in this same transaction so retired
@@ -1402,6 +1412,26 @@ class AgentRepository:
                 .order_by(col(Agent.organization_id), col(Agent.created_at))
             )
             return list(session.exec(query).all())
+
+    def find_live_for_platform_usage(self) -> list[PlatformAgentIdentity]:
+        """Every live Agent on the platform, with its Organization's name.
+
+        Platform-wide by design, for the Platform resource usage page behind
+        `require_platform_admin`. Only identity and lifecycle columns are read.
+        """
+        query = (
+            sa.select(
+                col(Agent.id),
+                col(Agent.name),
+                col(Agent.status),
+                col(Agent.organization_id),
+                col(Organization.name),
+            )
+            .join(Organization, col(Organization.id) == col(Agent.organization_id))
+            .where(col(Agent.deleted_at).is_(None))
+        )
+        with self.delegate.engine.connect() as connection:
+            return [PlatformAgentIdentity(*row) for row in connection.execute(query).all()]
 
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""

@@ -63,6 +63,7 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `agent.stopped` — emitted after an Agent transitions to `STOPPED`.
 - `platform.user_privilege.granted` — emitted atomically when Platform Privilege is granted.
 - `platform.user_privilege.revoked` — emitted atomically when Platform Privilege is revoked.
+- `platform.resource_limits.changed` — emitted atomically when a Platform Administrator changes a capacity limit, one event per limit that moved, naming the setting with its previous and current value. The subject is the `SYSTEM` limits row. Not emitted when a save leaves the value unchanged.
 
 AF-167 broadens Security Audit Record coverage to additional mutations:
 
@@ -78,6 +79,10 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
   - Emitted by `PUT /organizations/{organization_id}/value-settings` (see [`business-value.md`](business-value.md#value-settings)).
 - `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
+
+Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, carrying previous/current model IDs and safe actor/subject display snapshots, projected by `security_audit.projection`.
+
+Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
 
 AF-273 adds Communications operational events as Organization-scoped audit inputs:
 

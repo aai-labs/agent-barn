@@ -83,4 +83,7 @@ export AGENTBARN_SCHEDULED_DELIVERY="${AGENTBARN_SCHEDULED_DELIVERY:-1}"
 if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then
   python3 /app/config/agentbarn_message.py drain &
 fi
+if [ -n "${MEMORY_API_KEY:-}" ]; then
+  python3 /app/config/memory-gateway-ready.py || true
+fi
 exec openclaw gateway --allow-unconfigured
