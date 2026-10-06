@@ -3,13 +3,14 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import cast
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
 
 from api.core.config import Config
 from api.domains.communications.agentbarn_telegram_ingress import AgentBarnTelegramIngress
+from api.infrastructure.telegram.client import TelegramPollError
 
 _TOKEN = "424242:agentbarn-secret-token"
 
@@ -20,8 +21,14 @@ class BotConfig:
     agentbarn_telegram_bot_username: str = "AgentBarnTestBot"
 
 
-def _ingress(repository: Mock, config: BotConfig | None = None) -> AgentBarnTelegramIngress:
-    return AgentBarnTelegramIngress(config=cast(Config, config or BotConfig()), repository=repository)
+def _ingress(
+    repository: Mock, config: BotConfig | None = None, processor: Mock | None = None
+) -> AgentBarnTelegramIngress:
+    return AgentBarnTelegramIngress(
+        config=cast(Config, config or BotConfig()),
+        repository=repository,
+        processor=processor or Mock(),
+    )
 
 
 def _client(handler) -> httpx.AsyncClient:
@@ -141,3 +148,54 @@ def test_httpx_request_logs_redact_bot_tokens(caplog: pytest.LogCaptureFixture) 
 
     assert _TOKEN not in caplog.text
     assert "https://api.telegram.org/bot<redacted>/getUpdates" in caplog.text
+
+
+def test_each_cycle_processes_what_was_stored_including_leftovers() -> None:
+    order: list[str] = []
+    repository = Mock()
+    repository.store_updates.side_effect = lambda updates: order.append("store")
+    processor = Mock()
+    processor.process_pending.side_effect = lambda: order.append("process")
+    batches = [{"ok": True, "result": [{"update_id": 7}]}, {"ok": True, "result": []}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=batches.pop(0))
+
+    ingress = _ingress(repository, processor=processor)
+
+    async def exercise() -> None:
+        async with _client(handler) as client:
+            await ingress.cycle(client)
+            await ingress.cycle(client)
+
+    asyncio.run(exercise())
+
+    # The second, empty poll still processes anything left from before.
+    assert order == ["store", "process", "process"]
+
+
+def test_the_poller_backs_off_after_a_failure_and_releases_its_lease_on_stop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = Mock()
+    repository.claim_ingress_lease.return_value = True
+    ingress = _ingress(repository)
+    stop = asyncio.Event()
+    cycles: list[str] = []
+
+    async def failing_then_stopping(client: httpx.AsyncClient) -> None:
+        cycles.append("cycle")
+        if len(cycles) == 1:
+            raise TelegramPollError("Telegram getUpdates failed (HTTP 502)")
+        stop.set()
+
+    async def exercise() -> None:
+        with patch.object(ingress, "cycle", side_effect=failing_then_stopping):
+            await asyncio.wait_for(ingress.run(stop), timeout=5)
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(exercise())
+
+    assert cycles == ["cycle", "cycle"]
+    assert "retrying in 1s: Telegram getUpdates failed (HTTP 502)" in caplog.text
+    repository.release_ingress_lease.assert_called_once_with(ingress.owner_id)

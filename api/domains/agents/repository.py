@@ -256,6 +256,15 @@ class AgentRepository:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
             return session.exec(query).first()
 
+    def find_membership_with_user(self, membership_id: UUID) -> tuple[OrganizationUser, User | None] | None:
+        with Session(self.delegate.engine) as session:
+            row = session.exec(
+                select(OrganizationUser, User)
+                .join(User, col(User.id) == col(OrganizationUser.user_id), isouter=True)
+                .where(col(OrganizationUser.id) == membership_id)
+            ).first()
+            return (row[0], row[1]) if row is not None else None
+
     def get_active_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(

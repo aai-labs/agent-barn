@@ -17,6 +17,7 @@ from api.domains.communications.models import (
     AgentBarnTelegramLink,
     AgentBarnTelegramLinkToken,
     AgentBarnTelegramUpdate,
+    AgentBarnTelegramUpdateStatus,
     CommunicationConnection,
     CommunicationPlatform,
 )
@@ -270,3 +271,77 @@ class AgentBarnTelegramRepository:
             stored = session.exec(statement).all()  # type: ignore[call-overload]
             session.commit()
             return len(stored)
+
+    def received_updates(self, *, limit: int) -> list[AgentBarnTelegramUpdate]:
+        """Unprocessed updates in the order Telegram issued them."""
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(AgentBarnTelegramUpdate)
+                    .where(col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.RECEIVED)
+                    .order_by(col(AgentBarnTelegramUpdate.update_id))
+                    .limit(limit)
+                )
+            )
+
+    def settle_update(self, update_id: int) -> None:
+        """Mark an update handled by the bot itself and drop its content."""
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(AgentBarnTelegramUpdate)
+                .where(col(AgentBarnTelegramUpdate.update_id) == update_id)
+                .values(status=AgentBarnTelegramUpdateStatus.HANDLED, payload=None)
+            )  # type: ignore[call-overload]
+            session.commit()
+
+    def queue_update(self, update_id: int, *, telegram_user_id: int, agent_id: UUID, connection_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(AgentBarnTelegramUpdate)
+                .where(col(AgentBarnTelegramUpdate.update_id) == update_id)
+                .values(
+                    status=AgentBarnTelegramUpdateStatus.QUEUED,
+                    telegram_user_id=telegram_user_id,
+                    agent_id=agent_id,
+                    connection_id=connection_id,
+                )
+            )  # type: ignore[call-overload]
+            session.commit()
+
+    def find_routable_link(self, telegram_user_id: int) -> AgentBarnTelegramLink | None:
+        """The user's active link, while its Connection is in use and its Agent exists."""
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(AgentBarnTelegramLink)
+                .join(
+                    CommunicationConnection, col(CommunicationConnection.id) == col(AgentBarnTelegramLink.connection_id)
+                )
+                .join(Agent, col(Agent.id) == col(AgentBarnTelegramLink.agent_id))
+                .where(
+                    col(AgentBarnTelegramLink.telegram_user_id) == telegram_user_id,
+                    col(AgentBarnTelegramLink.unlinked_at).is_(None),
+                    col(CommunicationConnection.platform_key) == CommunicationPlatform.AGENTBARN_TELEGRAM.value,
+                    col(CommunicationConnection.enabled).is_(True),
+                    col(CommunicationConnection.retired_at).is_(None),
+                    col(Agent.deleted_at).is_(None),
+                )
+            ).one_or_none()
+
+    def end_active_link(self, telegram_user_id: int, *, now: datetime) -> bool:
+        with Session(self.delegate.engine) as session:
+            ended = session.exec(
+                sa.update(AgentBarnTelegramLink)
+                .where(
+                    col(AgentBarnTelegramLink.telegram_user_id) == telegram_user_id,
+                    col(AgentBarnTelegramLink.unlinked_at).is_(None),
+                )
+                .values(unlinked_at=now)
+                .returning(col(AgentBarnTelegramLink.id))
+            ).first()  # type: ignore[call-overload]
+            session.commit()
+            return ended is not None
+
+    def agent_names(self, agent_ids: list[UUID]) -> dict[UUID, str]:
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(select(Agent.id, Agent.name).where(col(Agent.id).in_(agent_ids))).all()
+            return {agent_id: name for agent_id, name in rows}

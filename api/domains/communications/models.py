@@ -417,6 +417,7 @@ class AgentBarnTelegramUpdate(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("update_id", name="uq_agentbarn_telegram_update_update_id"),
         sa.Index("ix_agentbarn_telegram_update_status", "status", "update_id"),
+        sa.Index("ix_agentbarn_telegram_update_agent", "agent_id"),
     )
 
     update_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
@@ -425,6 +426,15 @@ class AgentBarnTelegramUpdate(BaseModel, table=True):
         sa_column=Column(sa.Enum(AgentBarnTelegramUpdateStatus), nullable=False),
     )
     payload: dict[str, Any] | None = SqlField(default=None, sa_column=Column(JSONB, nullable=True))
+    # Set when the update is queued for a linked user's Agent.
+    telegram_user_id: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
+    agent_id: UUID | None = SqlField(default=None, nullable=True, foreign_key="agent.id", ondelete="CASCADE")
+    connection_id: UUID | None = SqlField(
+        default=None,
+        nullable=True,
+        foreign_key="communication_connection.id",
+        ondelete="CASCADE",
+    )
 
 
 class CommunicationDelivery(BaseModel, table=True):

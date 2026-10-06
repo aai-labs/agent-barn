@@ -40,13 +40,20 @@ def upgrade() -> None:
         sa.Column("update_id", sa.BigInteger(), nullable=False),
         sa.Column("status", _STATUS, nullable=False),
         sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column("telegram_user_id", sa.BigInteger(), nullable=True),
+        sa.Column("agent_id", sa.Uuid(), nullable=True),
+        sa.Column("connection_id", sa.Uuid(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
+        sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["connection_id"], ["communication_connection.id"], ondelete="CASCADE"),
         sa.UniqueConstraint("update_id", name="uq_agentbarn_telegram_update_update_id"),
     )
     op.create_index("ix_agentbarn_telegram_update_status", "agentbarn_telegram_update", ["status", "update_id"])
+    op.create_index("ix_agentbarn_telegram_update_agent", "agentbarn_telegram_update", ["agent_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_agentbarn_telegram_update_agent", table_name="agentbarn_telegram_update")
     op.drop_index("ix_agentbarn_telegram_update_status", table_name="agentbarn_telegram_update")
     op.drop_table("agentbarn_telegram_update")
     op.drop_table("agentbarn_telegram_ingress_lease")

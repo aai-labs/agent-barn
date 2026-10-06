@@ -8,6 +8,7 @@ import httpx
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.communications.agentbarn_telegram_processor import AgentBarnTelegramUpdateProcessor
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
 from api.infrastructure.telegram.client import TelegramPollError, get_updates
@@ -37,6 +38,7 @@ class AgentBarnTelegramIngress:
 
     config: Config
     repository: AgentBarnTelegramRepository
+    processor: AgentBarnTelegramUpdateProcessor
     offset: int | None = field(default=None, init=False)
     owner_id: str = field(default_factory=lambda: str(uuid4()), init=False)
 
@@ -65,6 +67,11 @@ class AgentBarnTelegramIngress:
         if update_ids:
             self.offset = max(update_ids) + 1
 
+    async def cycle(self, client: httpx.AsyncClient) -> None:
+        """Poll once, then act on everything stored, including leftovers from before a restart."""
+        await self.poll_once(client)
+        await asyncio.to_thread(self.processor.process_pending)
+
     async def run(self, stop: asyncio.Event) -> None:
         backoff = _BACKOFF_INITIAL_SECONDS
         try:
@@ -74,7 +81,7 @@ class AgentBarnTelegramIngress:
                         if not await asyncio.to_thread(self.should_poll, owner=self.owner_id):
                             await _wait(stop, _IDLE_SECONDS)
                             continue
-                        await self.poll_once(client)
+                        await self.cycle(client)
                         backoff = _BACKOFF_INITIAL_SECONDS
                     except Exception as exc:
                         # TelegramPollError text is token-free; anything else is reported by type only.
