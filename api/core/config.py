@@ -100,6 +100,11 @@ class Config(BaseSettings):
     # Communications supervisor, for Hermes and OpenClaw alike. Replaced by a
     # per-Connection transport once the spike is accepted.
     communications_native_platforms: str = ""
+    # Agent Barn's own Telegram bot, shared by every Agent on the agentbarn_telegram
+    # Platform. The platform is offered only when both are set; the token never
+    # leaves the Communications deployment.
+    agentbarn_telegram_bot_token: str = ""
+    agentbarn_telegram_bot_username: str = ""
 
     @property
     def native_platform_keys(self) -> frozenset[str]:

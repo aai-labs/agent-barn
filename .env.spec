@@ -52,6 +52,12 @@ SENDER_EMAIL=
 AGENT_EMAIL_DOMAIN=
 EMAIL_INBOUND_SECRET=
 
+# Optional: Agent Barn's own Telegram bot, shared by every Organization. Unset hides
+# the Agent Barn Telegram platform; bring-your-own Telegram is unaffected. Create the
+# bot with @BotFather and use a separate bot per environment. Both are required.
+AGENTBARN_TELEGRAM_BOT_TOKEN=
+AGENTBARN_TELEGRAM_BOT_USERNAME=
+
 # Optional: shared Google OAuth 2.0 "Web application" client for the Gmail
 # "Authenticate with Google" flow. If unset, the flow is disabled. Register
 # "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.

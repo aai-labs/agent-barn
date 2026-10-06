@@ -29,6 +29,7 @@ class CommunicationPlatform(str, enum.Enum):
     SLACK = "slack"
     TEAMS = "teams"
     TELEGRAM = "telegram"
+    AGENTBARN_TELEGRAM = "agentbarn_telegram"
     DISCORD = "discord"
     WEB = "web"
     EMAIL = "email"
@@ -177,6 +178,14 @@ class CommunicationConnection(BaseModel, table=True):
             "platform_key",
             unique=True,
             postgresql_where=sa.text("retired_at IS NULL"),
+        ),
+        # An Agent runs a single Telegram adapter, so it uses either its own bot or
+        # Agent Barn's shared one, never both.
+        sa.Index(
+            "uq_communication_connection_active_telegram",
+            "agent_id",
+            unique=True,
+            postgresql_where=sa.text("retired_at IS NULL AND platform_key IN ('telegram', 'agentbarn_telegram')"),
         ),
         sa.Index(
             "uq_communication_connection_active_name",

@@ -3,6 +3,7 @@ from injector import Module, provider, singleton
 from api.core.config import Config, get_config
 from api.domains.agents.event_handlers import AgentBudgetEmailHandler, AgentLifecycleEmailHandler
 from api.domains.agents.repository import AgentRepository
+from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.email import EmailPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
@@ -62,6 +63,7 @@ class AppModule(Module):
     ) -> PlatformPluginRegistry:
         return PlatformPluginRegistry(
             [
+                AgentBarnTelegramPlatformPlugin(config),
                 DiscordPlatformPlugin(config),
                 EmailPlatformPlugin(config, email_client),
                 SlackPlatformPlugin(config),

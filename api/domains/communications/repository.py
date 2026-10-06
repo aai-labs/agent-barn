@@ -506,6 +506,8 @@ class CommunicationConnectionRepository:
             return "This Agent already has a default delivery target; clear it before selecting another"
         if "uq_communication_connection_active_platform" in message:
             return "This Agent already has a Connection on this platform; remove it before adding another"
+        if "uq_communication_connection_active_telegram" in message:
+            return "This Agent already has a Telegram connection; remove it before adding another"
         if "uq_communication_connection_active_name" in message:
             return "An active Communication Connection already uses this display name"
         if "uq_communication_connection_credential" in message:

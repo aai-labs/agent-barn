@@ -13,6 +13,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-06 — Add the Agent Barn Telegram Platform (AF-367) — PR pending
+
+- Added: `agentbarn_telegram`, a Platform for Telegram through Agent Barn's own bot, shared by every Organization, beside bring-your-own `telegram`. A Connection needs no settings or credentials and reports the shared bot's `@username` as its external identity. Linking Telegram accounts and carrying traffic land in follow-up changes; until then the Platform declares no gateway capabilities, so the supervisor never polls it and no Communication Deliveries are created for it.
+- Added: `AGENTBARN_TELEGRAM_BOT_TOKEN` and `AGENTBARN_TELEGRAM_BOT_USERNAME`. The Platform is offered in the catalogue, and accepted on create, only when both are set. It stays registered either way, so existing Connections remain readable after the bot is unconfigured. `PlatformPlugin.is_offered()` is the generic seam for this.
+- Changed: an Agent may hold at most one active Telegram-type Connection, either `telegram` or `agentbarn_telegram`, enforced by `uq_communication_connection_active_telegram` (migration `d7aaf4231438`), because a runtime runs one Telegram adapter.
+
 ### 2026-10-02 — Drop the gateway messaging policy from AGENTS.md — PR pending
 
 - Changed: The "Message Delivery" section appended to every Agent's AGENTS.md (from [PR #188](https://github.com/aai-labs/agent-barn/pull/188)) is removed. It told Agents to send through the deprecated `agentbarn-message` client and never to call the message tool from a cron run. Since OpenClaw Slack and Discord run in OpenClaw's own gateway, native Agents read it as binding and refused sends their gateway supports: a Pipedrive Sales Analyst Agent refused to post its scheduled daily update as a header message with the update in its thread. A "Scheduled runs" section keeps the runtime-neutral rule that an empty scheduled run returns a silence marker.
