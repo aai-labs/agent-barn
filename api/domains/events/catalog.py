@@ -499,19 +499,15 @@ class CommunicationDeliveryRecoveredPayload(BaseModel):
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
     for event_name, payload_model in (
-        (ORGANIZATION_ROLE_CHANGED, OrganizationRoleChangedPayload),
         (AGENT_ACCESS_GRANTED, AgentAccessGrantedPayload),
         (AGENT_ACCESS_REVOKED, AgentAccessRevokedPayload),
         (AGENT_GENERAL_ACCESS_CHANGED, AgentGeneralAccessChangedPayload),
-        (AGENT_UPDATED, AgentUpdatedPayload),
-        (AGENT_DELETED, AgentDeletedPayload),
         (TEMPLATE_CREATED, TemplateCreatedPayload),
         (TEMPLATE_UPDATED, TemplateUpdatedPayload),
         (TEMPLATE_DELETED, TemplateDeletedPayload),
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
         (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
         (ORGANIZATION_VALUE_SETTINGS_CHANGED, OrganizationValueSettingsChangedPayload),
-        (ORGANIZATION_OWNERSHIP_TRANSFERRED, OrganizationOwnershipTransferredPayload),
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
         (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
     ):
@@ -521,6 +517,21 @@ def build_default_event_registry() -> DomainEventRegistry:
                 schema_version=1,
                 payload_model=payload_model,
                 handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    for event_name, payload_model in (
+        (ORGANIZATION_ROLE_CHANGED, OrganizationRoleChangedPayload),
+        (AGENT_UPDATED, AgentUpdatedPayload),
+        (AGENT_DELETED, AgentDeletedPayload),
+        (ORGANIZATION_OWNERSHIP_TRANSFERRED, OrganizationOwnershipTransferredPayload),
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=payload_model,
+                handler_names=(SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER),
                 event_scope=EventScope.ORGANIZATION,
             )
         )
@@ -540,7 +551,7 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_name=event_name,
                 schema_version=1,
                 payload_model=OrganizationMemberChangedPayload,
-                handler_names=(SECURITY_AUDIT_HANDLER,),
+                handler_names=(SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER),
                 event_scope=EventScope.ORGANIZATION,
             )
         )
@@ -549,6 +560,7 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=AGENT_CREATED,
             schema_version=1,
             payload_model=AgentCreatedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )
     )
@@ -596,7 +608,7 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_name=event_name,
                 schema_version=1,
                 payload_model=AgentLifecyclePayload,
-                handler_names=(AGENT_LIFECYCLE_EMAIL_HANDLER,),
+                handler_names=(AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER),
                 event_scope=EventScope.ORGANIZATION,
             )
         )

@@ -26,11 +26,22 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - **User details:** `$set` email and name are added only when `ANALYTICS_INCLUDE_USER_DETAILS` is true.
   - **Skipped silently:** analytics disabled, non-human actors, and actors that can't be resolved.
   - **When PostHog fails:** an unreachable PostHog is retried on attempts 1 and 2, then dropped with a warning on attempt 3. A rejected batch dead-letters.
-- In transition: the handler is registered but no catalogue event lists it yet, so it receives no deliveries.
-- Next: subscribe the nine slice-1 events in `catalog.py` and update the tests that pin handler lists.
+- Also delivered: the nine slice-1 events now list `product_analytics.posthog` alongside their existing handlers. The behaviour contract is [`../product-analytics.md`](../product-analytics.md).
+- In transition: analytics is still off in every deployment, because `ANALYTICS_ENABLED` defaults to false and no deployment sets it yet. Deliveries for the nine events succeed without sending.
+- Next: deployment wiring (Helm values and Secret, Helmfile, env templates, workflows, operations doc, README).
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-06 — AF-357 — Subscribe the slice-1 events
+
+- Delivered: the slice-1 events produce a `product_analytics.posthog` delivery.
+  - Agent events: `agent.created`, `agent.updated`, `agent.started`, `agent.stopped`, `agent.deleted`.
+  - Organization events: `organization.member.added`, `organization.member.removed`, `organization.role.changed`, `organization.ownership_transferred`.
+  - `agent.created` previously had no handler. The monitor's handler-less example is now `agent.restore_point.created`.
+- Changed: `api/domains/events/catalog.py`. Tests that pinned handler lists, or assumed a single delivery per event, now expect the new handler or select by handler name. These are in `test_outbox_messages.py`, `test_event_delivery_monitor.py`, `test_agent_lifecycle_email_handler.py`, `test_agents.py`, `test_organization_members.py`, and `test_event_handler_registry_wiring.py`.
+- Docs: new [`product-analytics.md`](../product-analytics.md); updated `domain-events.md`, `CONTEXT.md` (Installation), `system-map.md`, `api.md`, and `INDEX.md`.
+- Follow-up: the deployment wiring slice.
 
 ### 2026-10-06 — AF-357 — Product analytics Event Handler
 
