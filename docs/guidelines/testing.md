@@ -170,8 +170,8 @@ hooks directly. Shared setup lives in
   `../../hermes-base/test-image.sh`, invoked by
   `../../.github/workflows/hermes-base.yml`. Both that workflow and
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
-  selects the matching workflow when base-image, builder, startup, or
-  telemetry-plugin paths change.
+  selects the matching workflow when base-image, builder, startup,
+  telemetry-plugin, or matching runtime-fixture paths change.
 - `../../openclaw-base/test-startup.sh` proves OpenClaw startup behavior in the
   pinned image: a legacy workspace PVC migrates with `doctor --fix` and a clean
   one never runs doctor, and a stale PVC heartbeat is replaced and stays

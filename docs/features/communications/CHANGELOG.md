@@ -18,9 +18,15 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 - Corrected: bridge retirement no longer denies OpenClaw's native `message` tool. Explicit native sends and replies to an Agent's own messages can use the runtime transport; the retired gateway message endpoint remains `410`.
 - Upgrade/restore: startup removes only the saved `message` deny entry, retaining unrelated tool restrictions and native message policy. The [runtime contract](../../architecture/runtime-and-deployment.md#runtime-neutral-communications) distinguishes native outbound controls from Connection admission allowlists.
-- Coverage: pinned-image regressions exercise actual tool availability, native dry-run sends to an existing message and another channel, and native context guards with fresh/upgraded/restored state. The regression fails before the fix; changing only the builder still fails on upgraded state.
+- Coverage: pinned-image regressions exercise actual tool availability, native dry-run sends to an existing message and another channel, and native context guards with fresh/upgraded/restored state. The regression fails before the fix; changing only the builder still fails on upgraded state. CI selects the OpenClaw runtime checks when the message-tool fixture changes.
 - Validation: all 447 focused API tests, API lint/format/type checks, OpenClaw startup and native-runtime contracts, and the shared Hermes retirement contract pass.
 - Rollout: deploy the API correction and restart affected OpenClaw Agents. No base-image or schema change is required.
+
+### 2026-10-06 — Merge supported-API staging compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Preserved: staging `f07f4c05` Personal API Key, discovery, and permission contracts alongside the retired gateway boundary. The API documentation conflict retains both contracts; the merge leaves runtime source unchanged.
+- Migration: revision `a309cd8a0ccc` merges the gateway-retirement and staging API-key histories without schema or data changes.
+- Verified after merge: all 3,314 API tests and 460 browser tests pass, along with API/UI static checks, a single Alembic head, CI YAML parsing, and selection of the OpenClaw workflow for message-tool fixture changes. The separate Kubernetes mutation test remains excluded under the read-only infrastructure restriction.
 
 ### 2026-10-03 — Merge staging compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 
