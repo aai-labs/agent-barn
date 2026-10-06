@@ -2579,11 +2579,22 @@ class AgentService:
                 AgentRestorePointRestore(reapply_configuration=True),
                 context,
             )
-            self.restore_points.wait_until_terminal(
+            row = self.restore_points.wait_until_terminal(
                 agent_id,
                 restored.id,
                 timeout_seconds=self.config.restore_point_restore_timeout_seconds,
             )
+            if row.status != RestorePointStatus.READY:
+                logger.error("Managed update rollback restore failed for agent %s", agent_id)
+                # Point the pin at the previous image even though the restore
+                # failed: a later manual restore + start should land on the old
+                # runtime, not on whatever the platform pin says now.
+                failed = self.repository.get_by_id(agent_id)
+                if failed is not None and failed.pinned_runtime_image != previous_image:
+                    failed.pinned_runtime_image = previous_image
+                    self.repository.save(failed)
+                self._mark_update_failed(agent.id, restored.id)
+                return
             current = self.repository.get_by_id(agent_id)
             if current is None:
                 return
