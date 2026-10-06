@@ -28,8 +28,9 @@ Kubernetes cluster. No seat licence, no second workspace to check.
 
 Everything runs in your namespace: the control plane, the database, the model
 proxy, and one pod per running agent. Outbound traffic goes to OpenRouter through
-the LiteLLM proxy you operate, to whichever tool APIs you connect, and, unless you
-opt out, to Agent Barn's product analytics ([usage analytics](#usage-analytics)).
+the LiteLLM proxy you operate, to whichever tool APIs you connect, and, for release
+bundle installs that keep it on, to Agent Barn's product analytics
+([usage analytics](#usage-analytics)).
 Credentials are encrypted at rest in your own PostgreSQL.
 
 ## Contents
@@ -607,9 +608,11 @@ and [`docs/guidelines/operations.md`](docs/guidelines/operations.md).
 
 ### Usage analytics
 
-Kubernetes installs send business events to Agent Barn's PostHog project (EU) by
-default. These are events such as an agent being created, started, or deleted,
-or a member joining an organisation. Each event carries random IDs (user,
+Installs from an Agent Barn release bundle send business events to Agent Barn's
+PostHog project (EU), because the bundle's `.env.deploy` sets
+`ANALYTICS_ENABLED=true`. A plain Helm or Helmfile install sends nothing unless you
+set it. These are events such as an agent being created, started, or deleted, or a
+member joining an organisation. Each event carries random IDs (user,
 organisation, agent) and a name for your install, which defaults to your web app's
 host. It never carries agent or organisation names, prompts, conversations,
 credentials, or changed values. User email and name are sent only if you set

@@ -339,5 +339,31 @@ def test_a_redelivered_event_carries_the_same_ids():
         _handle(context, event, attempt_count=2)
 
         first, second = posthog.batches
-        assert_that([message["uuid"] for message in second], equal_to([message["uuid"] for message in first]))
+        assert_that(
+            [(m["uuid"], m["timestamp"], m["distinct_id"]) for m in second if m["event"] == AGENT_CREATED],
+            equal_to([(m["uuid"], m["timestamp"], m["distinct_id"]) for m in first if m["event"] == AGENT_CREATED]),
+        )
         assert_that(UUID(first[1]["uuid"]), is_not(equal_to(event.event_id)))
+
+
+def test_the_installation_is_identified_once_per_process():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        _handle(context, _agent_created(context))
+        _handle(context, _agent_created(context))
+
+        first, second = posthog.batches
+        assert_that([message["event"] for message in first], equal_to([AGENT_CREATED, "$groupidentify"]))
+        assert_that([message["event"] for message in second], equal_to([AGENT_CREATED]))
+
+
+def test_the_installation_is_identified_again_after_a_failed_send():
+    posthog = MockPostHogModule(error=RetryablePostHogException("down"))
+    with given(_given(posthog)) as context:
+        with pytest.raises(RetryableEventHandlerError):
+            _handle(context, _agent_created(context))
+        posthog.error = None
+
+        _handle(context, _agent_created(context))
+
+        assert_that([message["event"] for message in posthog.batches[0]], equal_to([AGENT_CREATED, "$groupidentify"]))

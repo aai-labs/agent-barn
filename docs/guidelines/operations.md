@@ -155,14 +155,12 @@ talks to the provider; `EmailService` above it is transport-agnostic.
 Business events go to the Agent Barn PostHog project (EU) through the `product_analytics.posthog` Event Handler. What is sent is defined in [`../features/product-analytics.md`](../features/product-analytics.md).
 
 - **`ANALYTICS_ENABLED`** flows through `helmfile.yaml.gotmpl` into the API chart's Secret. Every API process reads that Secret, the worker included.
-  - The Helmfile default is `true`, so a Helm install reports unless it opts out.
-  - `Config` defaults to off, so Docker Compose and tests send nothing.
-  - Blank counts as off in `Config`, but the Helmfile turns a blank value into `true`.
+  - It is off unless it is explicitly set to `true`. The chart, the Helmfile and `Config` all default to off, and a blank value counts as off. Docker Compose, tests and developer installs send nothing.
 - **Where it is on, and where it is off:**
   - `deploy.yml` sets it to `true` on `main` and `false` on `staging`.
   - `deploy-public.yml` sets it to `true`.
-  - `.env.deploy.spec` ships `false`, so developer `deploy.sh` installs stay off. `release-bundle.yml` rewrites it to `true` in customer bundles.
-  - A developer `.env.deploy` created before this setting existed lacks the key, so it falls back to the Helmfile default `true`. Add `ANALYTICS_ENABLED=false` to it.
+  - `.env.deploy.spec` ships `false`. `release-bundle.yml` rewrites it to `true`, so customer bundles report.
+  - A customer who builds `.env.deploy` by hand from the spec, rather than using the bundle, stays off until they set `true`.
 - **`ANALYTICS_INCLUDE_USER_DETAILS`** adds user email and name as PostHog person properties. It is `true` only in our production deploys (`deploy.yml` on `main`, `deploy-public.yml`) and defaults to `false` everywhere else.
 - **`INSTALLATION_NAME`** labels the install's PostHog group. Unset, it falls back to the `WEB_APP_URL` host, which is what our deploys use.
 - **`ANALYTICS_POSTHOG_HOST`** and **`ANALYTICS_POSTHOG_PROJECT_TOKEN`** default to the EU host and the Agent Barn project token committed in `api/core/config.py`. Override them only to point an install at a test receiver. The project token is write-only and public by design; never commit a personal API key (`phx_`).

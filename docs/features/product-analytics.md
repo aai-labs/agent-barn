@@ -10,7 +10,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 ## Invariants
 
-- **On switch.** Analytics is off unless `ANALYTICS_ENABLED` is true and a project token is set. A blank `ANALYTICS_ENABLED` counts as off. When it is off, the handler completes every delivery without sending anything. Helm installs default it to on; per-deployment defaults and the opt-out are in [`../guidelines/operations.md`](../guidelines/operations.md#product-analytics).
+- **On switch.** Analytics is off unless `ANALYTICS_ENABLED` is true and a project token is set. A blank `ANALYTICS_ENABLED` counts as off. When it is off, the handler completes every delivery without sending anything. Helm installs default it to off; release bundles and AAI Labs production deploys turn it on. Per-deployment defaults and the opt-out are in [`../guidelines/operations.md`](../guidelines/operations.md#product-analytics).
 - **Who an event is attributed to.**
   - Only events with a human actor (Membership or User) are sent. System and Runtime actors are skipped.
   - `distinct_id` is the acting user's UUID.
@@ -25,7 +25,8 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
   - `installation`, keyed by the Installation id. It is named from `INSTALLATION_NAME`, or the `WEB_APP_URL` host when that is unset.
   - `organization`, keyed by the Organization id.
 - **Labels and privacy flags.** Every event carries `source: agentbarn-api` and `$lib: agentbarn-api`, so app events can be separated from website events. It also carries `$geoip_disable: true`.
-- **Redelivery.** A redelivered event sends the same message ids: the capture's `uuid` is the `event_id` and its timestamp is `occurred_at`. PostHog de-duplicates matching events eventually, not immediately.
+- **Redelivery.** A redelivered event sends the same capture ids: the capture's `uuid` is the `event_id` and its timestamp is `occurred_at`. PostHog de-duplicates matching events eventually, not immediately.
+- **Installation naming.** Each worker process names the Installation group once, with a `$groupidentify` in the first batch it sends successfully. It names it again only if the name changes. A failed or dropped send does not count, so the next batch retries the naming.
 - **Failure handling.**
   - An unreachable PostHog (transport error, 408, 429 or 5xx) is retried on delivery attempts 1 and 2, then dropped with a warning on attempt 3.
   - Any other rejection dead-letters the delivery.
@@ -35,7 +36,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 1. A business mutation commits its Domain Event together with one Event Delivery per intended handler.
 2. The worker claims the `product_analytics.posthog` delivery.
-3. The handler resolves the actor to a user and builds one `/batch/` request with two messages: the event capture, and a `$groupidentify` that names the Installation group.
+3. The handler resolves the actor to a user and builds one `/batch/` request. The request holds the event capture, plus a `$groupidentify` naming the Installation group when this process has not named it yet.
 4. `PostHogClient` posts the batch to `{ANALYTICS_POSTHOG_HOST}/batch/` with a 5-second limit.
 
 ## Events

@@ -42,11 +42,11 @@ cloudflareAccountId: ""
 cloudflareApiToken: ""
 senderEmail: ""
 
-# Product analytics (PostHog). On by default so every Helm install reports business
-# events; set analyticsEnabled to false to opt out. User email and name are sent only
-# when analyticsIncludeUserDetails is true. installationName labels this install in
+# Product analytics (PostHog). Off unless set: release bundles and AAI Labs production
+# deploys turn it on, so development installs never report. User email and name are sent
+# only when analyticsIncludeUserDetails is true. installationName labels this install in
 # PostHog; blank falls back to the webAppUrl host. See docs/features/product-analytics.md.
-analyticsEnabled: true
+analyticsEnabled: false
 analyticsIncludeUserDetails: false
 installationName: ""
 

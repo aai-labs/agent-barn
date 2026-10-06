@@ -1,10 +1,10 @@
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
 from uuid import UUID, uuid5
 
-from injector import inject
+from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.analytics.repository import InstallationRepository
@@ -62,6 +62,7 @@ def _as_uuid(value: object) -> UUID | None:
 
 
 @inject
+@singleton
 @dataclass
 class ProductAnalyticsHandler:
     config: Config
@@ -69,6 +70,7 @@ class ProductAnalyticsHandler:
     organization_user_repository: OrganizationUserRepository
     user_repository: UserRepository
     posthog_client: PostHogClient
+    _identified_installation_name: str | None = field(default=None, init=False)
 
     name: ClassVar[str] = PRODUCT_ANALYTICS_HANDLER
     supported_events: ClassVar[Sequence[SupportedEvent]] = tuple(
@@ -89,8 +91,10 @@ class ProductAnalyticsHandler:
             )
             return
 
+        installation_name = self.config.installation_display_name
+        identify = installation_name != self._identified_installation_name
         try:
-            self.posthog_client.send_batch(self._messages(event, event.organization_id, user))
+            self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify))
         except RetryablePostHogException as exc:
             if context.attempt_count < MAX_DELIVERY_ATTEMPTS:
                 raise RetryableEventHandlerError(str(exc)) from exc
@@ -103,6 +107,9 @@ class ProductAnalyticsHandler:
             )
         except TerminalPostHogException as exc:
             raise TerminalEventHandlerError(str(exc)) from exc
+        else:
+            if identify:
+                self._identified_installation_name = installation_name
 
     def _resolve_user(self, event: DomainEventEnvelope, organization_id: UUID) -> User | None:
         actor_id = _as_uuid(event.actor.id)
@@ -116,7 +123,9 @@ class ProductAnalyticsHandler:
         member = self.organization_user_repository.get_member_with_user_by_membership_id(actor_id, organization_id)
         return member[1] if member is not None else None
 
-    def _messages(self, event: DomainEventEnvelope, organization_id: UUID, user: User) -> list[dict[str, Any]]:
+    def _messages(
+        self, event: DomainEventEnvelope, organization_id: UUID, user: User, identify: bool
+    ) -> list[dict[str, Any]]:
         installation_id = str(self.installation_repository.get_id())
         common = {"source": SOURCE, "$geoip_disable": True, "$lib": SOURCE}
         properties: dict[str, Any] = {
@@ -129,8 +138,11 @@ class ProductAnalyticsHandler:
         if self.config.analytics_include_user_details:
             properties["$set"] = {"email": user.email, "name": user.full_name}
         envelope = {"distinct_id": str(user.id), "timestamp": event.occurred_at.isoformat()}
+        messages = [{**envelope, "event": event.event_name, "uuid": str(event.event_id), "properties": properties}]
+        if not identify:
+            return messages
         return [
-            {**envelope, "event": event.event_name, "uuid": str(event.event_id), "properties": properties},
+            *messages,
             {
                 **envelope,
                 "event": "$groupidentify",
