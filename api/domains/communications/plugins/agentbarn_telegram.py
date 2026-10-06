@@ -3,7 +3,7 @@ import hmac
 from dataclasses import dataclass
 from typing import Protocol
 
-from api.domains.communications.models import CommunicationPlatform
+from api.domains.communications.models import CommunicationPlatform, PlatformCapability
 from api.domains.communications.plugins.base import (
     PlatformCredentials,
     PlatformPlugin,
@@ -81,6 +81,7 @@ class AgentBarnTelegramPlatformPlugin(PlatformPlugin):
     key = CommunicationPlatform.AGENTBARN_TELEGRAM.value
     display_name = "Agent Barn Telegram"
     setup_hint = "Talk to this agent in Telegram without creating a bot. After adding it, link your Telegram account."
+    capabilities = frozenset({PlatformCapability.ACCOUNT_LINKING})
     settings_model = AgentBarnTelegramSettings
     credentials_model = AgentBarnTelegramCredentials
 

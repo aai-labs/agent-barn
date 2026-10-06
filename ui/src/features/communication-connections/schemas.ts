@@ -188,10 +188,28 @@ export const CommunicationInstallLinkSchema = z.object({
   url: z.string().url(),
 });
 
+export const TelegramLinkTokenSchema = z.object({
+  id: z.string().uuid(),
+  status: z.enum(["waiting", "linked", "expired"]),
+  expiresAt: z.string(),
+  telegramUsername: z.string().nullable(),
+  // Present only on the response that creates the link.
+  url: z.string().url().optional(),
+});
+
+export const TelegramLinkedAccountSchema = z.object({
+  id: z.string().uuid(),
+  telegramUsername: z.string().nullable(),
+  linkedByMembershipId: z.string().uuid(),
+  createdAt: z.string(),
+});
+
 export type CommunicationDirectoryEntry = z.infer<typeof CommunicationDirectoryEntrySchema>;
 export type CommunicationDirectoryPreview = z.infer<typeof CommunicationDirectoryPreviewSchema>;
 export type CommunicationPlatform = z.infer<typeof CommunicationPlatformSchema>;
 export type CommunicationInstallLink = z.infer<typeof CommunicationInstallLinkSchema>;
+export type TelegramLinkToken = z.infer<typeof TelegramLinkTokenSchema>;
+export type TelegramLinkedAccount = z.infer<typeof TelegramLinkedAccountSchema>;
 export type CommunicationConnection = z.infer<typeof CommunicationConnectionSchema>;
 export type CommunicationDiagnostics = z.infer<typeof CommunicationDiagnosticsSchema>;
 export type CommunicationJournalEntry = z.infer<typeof CommunicationJournalEntrySchema>;

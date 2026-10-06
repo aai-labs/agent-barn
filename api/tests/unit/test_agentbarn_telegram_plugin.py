@@ -112,3 +112,10 @@ def test_each_connection_gets_its_own_runtime_webhook_secret() -> None:
     assert "driver-key-one" not in first
     # Telegram's secret_token allows 1-256 of these characters.
     assert re.fullmatch(r"[A-Za-z0-9_-]{1,256}", first)
+
+
+def test_agentbarn_telegram_tells_the_dashboard_it_links_accounts() -> None:
+    plugin = AgentBarnTelegramPlatformPlugin(BotConfig())
+
+    assert PlatformCapability.ACCOUNT_LINKING in plugin.capabilities
+    assert "account_linking" in plugin.descriptor.capabilities

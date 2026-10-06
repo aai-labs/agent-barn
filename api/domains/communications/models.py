@@ -48,6 +48,8 @@ class PlatformCapability(str, enum.Enum):
     PROCESSING_FEEDBACK = "processing_feedback"
     SUPERVISED_INGRESS = "supervised_ingress"
     INTERACTIVE_COMPONENTS = "interactive_components"
+    # People link their own chat account to the Agent from the dashboard.
+    ACCOUNT_LINKING = "account_linking"
 
 
 class ProcessingFeedbackStage(str, enum.Enum):
