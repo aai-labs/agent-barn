@@ -174,6 +174,24 @@ def test_a_successful_managed_update_pins_the_agent_to_the_new_image():
             assert_that(pinned, equal_to(service.config.openclaw_image))
 
 
+def test_a_pinned_agent_running_an_older_image_reports_update_available():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        context.injector.get(KubernetesClient).get_pod_readiness.return_value = ("ready", None)
+        service = context.injector.get(AgentService)
+        service._run_managed_update(context.agent.id, _user_context(context))  # pins to v2, digest current
+
+        with when("the agent's pin is moved back to an older image"):
+            agent = service.repository.get_by_id(context.agent.id)
+            agent.pinned_runtime_image = "registry.example.com/agentbarn-openclaw:v1"
+            service.repository.save(agent)
+
+            body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with then("the stale pin is advertised as an available update"):
+            assert_that(body["update_available"], equal_to(True))
+
+
 def test_a_managed_update_captures_then_starts_on_the_new_image():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         _succeed_capture_job(context)
