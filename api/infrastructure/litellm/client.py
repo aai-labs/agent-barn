@@ -169,7 +169,7 @@ class LiteLLMClient:
             return None
         return {"spend": info.get("spend"), "renews_at": info.get("budget_reset_at")}
 
-    def _key_info(self, key: str, failure: str) -> dict:
+    def _key_info(self, key: str, failure: str, *, hashed: bool = False) -> dict:
         """The key's /key/info record.
 
         Every failure path here deliberately drops the exception chain: the key
@@ -181,7 +181,7 @@ class LiteLLMClient:
                 f"{self.config.litellm_base_url}/key/info",
                 # The hash, not the key: LiteLLM resolves either, and a query string
                 # reaches its access log, any intermediate proxy and log aggregation.
-                params={"key": hashlib.sha256(key.encode()).hexdigest()},
+                params={"key": key if hashed else hashlib.sha256(key.encode()).hexdigest()},
                 headers=self._headers(self._master_key()),
                 timeout=self._TIMEOUT,
             )
@@ -196,6 +196,22 @@ class LiteLLMClient:
             raise
         except httpx.HTTPError, ValueError, KeyError, TypeError:
             raise LiteLLMError(failure) from None
+
+    def get_memory_key_info(self, key: str) -> dict:
+        return self._key_info(key, "Failed to validate memory processing credential")
+
+    def revoke_memory_key(self, key_hash: str) -> bool:
+        # LiteLLM accepts hashes for deletion and blocking; no plaintext is needed.
+        if self.delete_key(key_hash):
+            return True
+        try:
+            self._key_info(key_hash, "Failed to inspect cleanup credential", hashed=True)
+        except LiteLLMKeyNotFound:
+            return True  # Already absent: repeated cleanup is successful.
+        except LiteLLMError:
+            pass
+        self.block_key(key_hash)
+        return False
 
     def get_key_team(self, key: str) -> str | None:
         """The team this key belongs to, or None when it belongs to none."""

@@ -77,7 +77,8 @@ ID. We therefore do not ingest or price its traces. The pinned Hindsight startup
 bridge carries the canonical `org-<uuid>` bank from its operation ContextVar into
 the OpenAI-compatible request's `user` field. LiteLLM stores that as `end_user` in
 its spend log, including background retain/consolidation calls. Calls outside a
-bank context (such as server startup verification) remain platform costs.
+bank context are permitted only during explicit server connection verification
+and remain platform costs. Other bankless calls fail before model execution.
 
 Cost sync recognizes this marker only on `MEMORY_LITELLM_KEY_HASHES`, the allowlist
 of dedicated Hindsight bootstrap key hashes or registered Organization memory keys.

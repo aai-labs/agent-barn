@@ -206,6 +206,7 @@ def organization_service(**overrides):
         "permission_policy": MagicMock(),
         "event_delivery_dispatcher": MagicMock(),
         "memory_accounting": MagicMock(legacy_spend=MagicMock(return_value=0)),
+        "memory_keys": MagicMock(),
     }
     deps.update(overrides)
     return OrganizationLlmBudgetService(**deps)

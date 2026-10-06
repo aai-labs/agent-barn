@@ -309,7 +309,19 @@ listener (port 8004) alongside the product API, with a distinct
 capability. A five-second cache applies choices to new operations without Agent
 restarts; canonical bank requests also receive an encrypted-at-rest Organization
 LiteLLM team key, provisioned by the internal settings service using the API workload's existing
-LiteLLM access. Neither the public API routes nor the Agent gateway expose this
+LiteLLM access. Cached settings refreshes validate stored keys against LiteLLM.
+Confirmed missing keys or mismatched team assignments cause replacement; blocked
+keys and proxy outages return 503 without creating a replacement. Missing teams
+are recreated with the Organization's current cap. Encryption-key changes do not
+silently discard stored credentials; migrate encryption as described in operations.
+
+Remote cleanup uses a hash-only `memory_key_revocation` journal. Organization
+deletion queues its current key atomically with deleting the Organization and
+uses the same advisory lock as provisioning. Failed registration attempts revoke
+the newly issued key immediately, or queue cleanup if remote deletion fails.
+The budget reconciler retries pending revocations, including after Organization
+deletion. Old hashes remain attributable while the Organization exists, so delayed
+billing after replacement is not lost. Neither the public API routes nor the Agent gateway expose this
 credential endpoint. In-progress operations keep
 their model and key snapshot (up to 1,024 tracked
 operations). Separate provider instances preserve model-specific initialization

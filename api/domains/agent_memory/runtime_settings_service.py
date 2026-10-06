@@ -11,7 +11,7 @@ from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agent_memory.platform_repository import PlatformMemoryRepository
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.repository import OrganizationRepository
-from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
+from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError, LiteLLMKeyNotFound
 
 
 @inject
@@ -52,8 +52,27 @@ class MemoryRuntimeSettingsService:
             self.budgets.ensure_memory_team(organization)
             return self.litellm.generate_memory_key(str(organization_id))
 
+        def validate(key: str) -> bool:
+            try:
+                info = self.litellm.get_memory_key_info(key)
+            except LiteLLMKeyNotFound:
+                return False
+            if info.get("blocked") is True:
+                raise LiteLLMError("Memory processing credential is blocked")
+            if info.get("team_id") != str(organization_id):
+                return False
+            if self.litellm.get_team_budget_status(str(organization_id)) is None:
+                self.budgets.ensure_memory_team(organization)
+            return True
+
         try:
-            key = self.keys.resolve(organization_id, self.config.agent_token_encryption_key, create)
+            key = self.keys.resolve(
+                organization_id,
+                self.config.agent_token_encryption_key,
+                create,
+                validate,
+                self.litellm.revoke_memory_key,
+            )
         except LiteLLMError, ValueError, InvalidToken:
             raise HTTPException(503, "Memory processing credentials are unavailable.") from None
         return {"model": model, "api_key": key}

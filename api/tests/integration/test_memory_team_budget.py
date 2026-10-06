@@ -41,6 +41,7 @@ def test_bank_credentials_are_encrypted_reused_and_never_returned_to_agents(monk
         litellm = context.injector.get(LiteLLMClient)
         key = "sk-memory-team-contract"
         monkeypatch.setattr(litellm, "generate_memory_key", Mock(return_value=key))
+        monkeypatch.setattr(litellm, "_key_info", Mock(return_value={"team_id": str(context.organization.id)}))
         bank = f"org-{context.organization.id}"
         assert_that(request(context, bank, token="agent-test-key").status_code, equal_to(401))
         first = request(context, bank)

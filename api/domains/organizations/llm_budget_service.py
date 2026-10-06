@@ -16,6 +16,7 @@ from injector import inject
 from sqlmodel import Session
 
 from api.core.config import get_config
+from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agent_settings.service import AgentSettingsService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.auth.models import CurrentUserContext
@@ -91,6 +92,7 @@ class OrganizationLlmBudgetService:
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
     memory_accounting: MemoryBudgetAccounting
+    memory_keys: MemoryKeyRepository
 
     def _proxy_limit(self, organization: Organization) -> float:
         return max(0.0, organization.effective_llm_budget_usd - self.memory_accounting.legacy_spend(organization))
@@ -114,6 +116,7 @@ class OrganizationLlmBudgetService:
         """
         if not self._litellm_configured():
             return
+        self.memory_keys.revoke_pending(self.litellm.revoke_memory_key)
         policies = self.organization_repository.list_budget_policies()
         failures = 0
         for organization_id, budget, duration in policies:

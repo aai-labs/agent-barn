@@ -4,6 +4,15 @@ Status: Active
 Epic: Hindsight Agent Memory (no ticket yet)
 Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENTATION-BRIEF.md`](../rbac/IMPLEMENTATION-BRIEF.md), [`../costs.md`](../costs.md), [`../../architecture/runtime-and-deployment.md`](../../architecture/runtime-and-deployment.md)
 
+## Follow-up review: credential lifecycle
+
+- Bootstrap model access is restricted to explicit provider connection verification.
+- Stored credentials recover from confirmed missing keys or wrong team assignment,
+  while blocked keys and decryption failures fail closed.
+- Failed registrations compensate remote issuance. Organization deletion journals
+  hash-only cleanup atomically; the existing budget reconciler retries failures.
+- Retired hashes retain delayed cost attribution while their Organization exists.
+
 ## Current state
 
 - Delivered: Platform Admin memory model selection and live Hindsight switching; the Agent memory setting, Organization memory-access page, and read-only

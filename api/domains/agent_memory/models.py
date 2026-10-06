@@ -139,3 +139,15 @@ class OrganizationMemoryKey(BaseModel, table=True):
     organization_id: UUID = SqlField(foreign_key="organization.id", ondelete="CASCADE", unique=True)
     key_encrypted: str = SqlField(repr=False)
     key_hash: str = SqlField(unique=True, max_length=64)
+
+
+class MemoryKeyRevocation(BaseModel, table=True):
+    """Durable hash-only cleanup, surviving Organization deletion."""
+
+    __tablename__: str = "memory_key_revocation"
+    __table_args__ = (
+        sa.Index("ix_memory_key_revocation_pending", "updated_at", postgresql_where=sa.text("revoked_at IS NULL")),
+    )
+    revoked_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
+    organization_id: UUID
+    key_hash: str = SqlField(unique=True, max_length=64)

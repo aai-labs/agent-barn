@@ -129,7 +129,19 @@ Hindsight uses a dedicated platform key for bankless startup verification.
 Bank operations resolve an encrypted Organization key on its runtime LiteLLM
 team through the internal settings listener. Apply migration `f69a2e0c847d` before deploying
 this bridge; keep `AGENT_TOKEN_ENCRYPTION_KEY` stable so existing memory keys
-remain decryptable. The internal listener uses the API workload's existing LiteLLM master access
+remain decryptable. Apply migration `f03a9c61d872` for the memory-key cleanup
+journal. The existing `llm-budget-reconciler` job retries up to 20 remote key
+revocations per pass; `make reconcile-llm-budgets` runs the same cleanup locally.
+Only hashes are journaled, so cleanup also works after an encryption-key change.
+Do not rotate `AGENT_TOKEN_ENCRYPTION_KEY` without migrating encrypted values:
+decryption failures return 503 and preserve the existing record. Deliberately
+blocked LiteLLM keys also return 503; unblocking requires an operator action.
+A confirmed missing key or mismatched team assignment is repaired on settings
+refresh, while transient proxy failures never trigger new key issuance.
+If both database journaling and remote revocation are unavailable after issuance,
+use LiteLLM's `agentbarn_memory` metadata to identify and revoke the orphan;
+distributed issuance cannot guarantee cleanup during simultaneous outages.
+The internal listener uses the API workload's existing LiteLLM master access
 to provision these keys; the Agent gateway needs neither master nor encryption
 credentials.
 `openrouter/openai/gpt-4.1-mini` is the initial default; Platform Admins can
