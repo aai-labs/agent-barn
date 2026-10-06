@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Self
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic import Field, PostgresDsn, field_validator, model_validator
@@ -8,6 +9,9 @@ from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(ROOT_ENV_PATH, override=False)
+
+DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_AjhfVLSegE5yXsARYYJsGJDC3bwBPdKfUD3dLvoLjbw7"
+DEFAULT_POSTHOG_HOST = "https://eu.i.posthog.com"
 
 
 class Config(BaseSettings):
@@ -134,6 +138,27 @@ class Config(BaseSettings):
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
+
+    analytics_enabled: bool = False
+    analytics_include_user_details: bool = False
+    analytics_posthog_host: str = DEFAULT_POSTHOG_HOST
+    analytics_posthog_project_token: str = DEFAULT_POSTHOG_PROJECT_TOKEN
+    installation_name: str = ""
+
+    @field_validator("analytics_enabled", "analytics_include_user_details", mode="before")
+    @classmethod
+    def blank_switch_is_off(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return False
+        return value
+
+    @property
+    def is_analytics_enabled(self) -> bool:
+        return self.analytics_enabled and bool(self.analytics_posthog_project_token.strip())
+
+    @property
+    def installation_display_name(self) -> str:
+        return self.installation_name.strip() or (urlparse(self.web_app_url).hostname or "")
 
     @model_validator(mode="after")
     def local_api_external_url(self) -> Self:

@@ -14,6 +14,7 @@ from api.core.config import get_config
 from api.infrastructure.openrouter.client import clear_models_cache
 from api.infrastructure.slack.client import clear_directory_cache
 from api.tests.mocks.email import make_email_blocking_post
+from api.tests.mocks.posthog import make_posthog_blocking_post
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -41,6 +42,7 @@ _set_default("PLATFORM_ADMIN_CREDENTIALS", "admin@example.com:StrongPass123")
 os.environ["CLOUDFLARE_ACCOUNT_ID"] = "test-account-id"
 os.environ["CLOUDFLARE_API_TOKEN"] = "test-api-token"
 os.environ["SENDER_EMAIL"] = "noreply@example.com"
+os.environ["ANALYTICS_ENABLED"] = "false"
 
 alembic_dir = Path(__file__).resolve().parents[1]
 alembic_ini_path = alembic_dir / "alembic.ini"
@@ -82,5 +84,14 @@ def block_outbound_email():
     with patch(
         "api.infrastructure.email.client.httpx.post",
         new=make_email_blocking_post(httpx.post),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def block_outbound_analytics():
+    with patch(
+        "api.infrastructure.posthog.client.httpx.post",
+        new=make_posthog_blocking_post(httpx.post),
     ):
         yield
