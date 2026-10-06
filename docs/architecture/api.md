@@ -18,7 +18,7 @@ routes.py → service.py → repository.py → PostgresRepositoryDelegate
 - Routes authenticate, parse, delegate, and return.
 - Services own business rules, permission-sensitive behavior, error translation, and cross-domain orchestration.
 - Repositories own SQLModel/SQLAlchemy queries and persistence behavior.
-- Infrastructure adapters own PostgreSQL, Kubernetes, email, provider HTTP clients, LiteLLM, OpenRouter, crypto, and related external concerns. Shipped communication-platform behavior belongs in `domains/communications/plugins/`, above those clients.
+- Infrastructure adapters own PostgreSQL, Kubernetes, email, provider HTTP clients, LiteLLM, OpenRouter, Prometheus, crypto, and related external concerns. Shipped communication-platform behavior belongs in `domains/communications/plugins/`, above those clients.
 
 Nearby domains are the implementation template. Costs and Ingest intentionally differ from CRUD-shaped domains, while Agents has additional route, builder, artifact, and runtime files.
 

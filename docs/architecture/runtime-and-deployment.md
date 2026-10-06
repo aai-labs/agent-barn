@@ -151,6 +151,8 @@ Every release's namespace and `needs:` entries are templated on a `NAMESPACE` en
 
 `../../helm/monitoring/` deploys namespace-scoped Prometheus, Grafana, and Alertmanager charts. The product API exposes platform probes on `:8000`, Ingest exposes telemetry metrics on `:8001`, and Communications exposes HTTP metrics on `:8002`; LiteLLM and Agent health services retain their existing scrape targets. Alert rules route through Alertmanager, and Grafana dashboards are provisioned from chart ConfigMaps.
 
+Each Agent's healthz server also reports its own container's CPU and memory, read from the cgroup v2 files, on the same `/metrics` page the `agent` scrape job already reads. The product API queries that Prometheus over HTTP with the monitoring basic-auth password to show Agent Resource Usage; helmfile passes `MONITORING_WEB_PASSWORD` to the `agentbarn-api` release directly, since the monitoring release deploys after it. The chart's cAdvisor and kubelet jobs stay disabled, so the figures come only from the Agents themselves. See [`../features/resource-usage.md`](../features/resource-usage.md).
+
 ## Restore point Jobs
 
 Capture and restore run as `batch/v1` Jobs rather than pods managed by the API, and reuse the
@@ -242,6 +244,8 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Deployment workflow             | `../../.github/workflows/deploy.yml` (k3s), `../../.github/workflows/deploy-public.yml` (Talos public) |
 | Monitoring stack                | `../../helm/monitoring/`                                                               |
 | API metrics                     | `../../api/core/metrics.py`, `../../api/domains/communications/metrics.py`             |
+| Agent CPU and memory series     | `../../api/domains/agents/scripts/hermes/healthz-server.py`, `../../api/domains/agents/scripts/openclaw/healthz-server.js`, [`../features/resource-usage.md`](../features/resource-usage.md) |
+| Local Prometheus (k3d)          | `../../docker/k3d/k3d-monitoring.sh`, `../../docker/k3d/monitoring-values.yaml`         |
 
 ## Change impact
 

@@ -534,6 +534,8 @@ Documentation-only changes do not change a service image and do not require a se
   [`testing.md`](testing.md#verification-commands). CI selects
   `.github/workflows/monitoring.yml` for `helm/monitoring/**` changes.
 - Agents that were already running before the monitoring deploy are invisible to Prometheus until stopped and started once: the `/metrics` sidecar script and the Service labels the agent scrape config relies on (`agentbarn.io/component`, `agent-name`, `org-name`) only apply when the API rebuilds the agent's resources in the start flow. When only the scrape label is missing (e.g. agents predating the agentfarm→agentbarn rebrand), no restart is needed — patch the Service labels in place, which does not disturb running pods: `kubectl -n NAMESPACE label svc -l agentfarm.io/component=agent agentbarn.io/component=agent --overwrite`.
+- The product API also queries this Prometheus, for Agent CPU and memory ([`resource-usage.md`](../features/resource-usage.md)). helmfile passes `MONITORING_WEB_PASSWORD` straight to the `agentbarn-api` release (`prometheus.password`), so the API and the monitoring release always share one password, and rotating it rolls the API pods too. It is passed directly, not read from the `monitoring-web-auth` Secret, because the monitoring release deploys after the API. With the password unset, or Prometheus unreachable, the Resource usage views say so and everything else keeps working.
+- Agents report CPU and memory from their healthz script, which ships in the Agent's ConfigMap. After a deploy that changes it, a running Agent shows "Restart this agent to start reporting CPU and memory" (and "update available") until it is stopped and started once.
 
 ## Operational safety
 

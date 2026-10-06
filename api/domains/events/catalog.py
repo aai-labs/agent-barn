@@ -41,6 +41,7 @@ ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
 PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
+PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
 API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
@@ -462,6 +463,23 @@ class PlatformUserPrivilegeChangedPayload(BaseModel):
     reason: str
 
 
+class PlatformResourceLimitsChangedPayload(BaseModel):
+    """One changed capacity limit, named by `setting`, with its before and after values.
+
+    Each is a single bounded number, so both can be carried. `previous` is None when the
+    limit was unset, and `current` is None when it was cleared.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    setting: str
+    previous: float | None
+    current: float | None
+
+
 class ApiKeyChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -693,6 +711,15 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.PLATFORM,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_RESOURCE_LIMITS_CHANGED,
+            schema_version=1,
+            payload_model=PlatformResourceLimitsChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
     for event_name in (API_KEY_CREATED, API_KEY_REVOKED):
         registry.register(
             DomainEventDefinition(

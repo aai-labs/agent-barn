@@ -35,6 +35,7 @@ Organization
     ├── Runtime resources ── Kubernetes
     ├── Conversation Messages ← Communications Gateway
     ├── Tool Calls ← Ingest
+    ├── Resource usage ← Prometheus ← healthz /metrics
     └── LiteLLM key ── Costs
 ```
 
@@ -54,6 +55,7 @@ The Agent Memory domain owns the persisted opt-in and Organization-managed Memor
 - Signed Agent Webhook ingress creates a Webhook Invocation and immediately submits a native one-shot Agent Trigger Job. The runtime delivers its result through the selected runtime-owned Connection without creating a Communication Delivery or passing through the Communications Gateway.
 - Domain-specific repository operations that produce Domain Events own one explicit SQLModel transaction for business state, the event Outbox Message, and intended Event Deliveries.
 - Costs are queried from LiteLLM and joined to agents by LiteLLM key identity; they are not derived from conversation or tool-call records.
+- Agent Resource Usage is read from Prometheus, not stored. Each Agent reports its own container's CPU and memory, and the `resource_usage` domain queries them by `app` and `org_id`; see [`../features/resource-usage.md`](../features/resource-usage.md).
 
 ## Cross-cutting invariants
 

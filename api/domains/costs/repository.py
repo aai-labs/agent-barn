@@ -10,6 +10,8 @@ from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, SQLModel, col, select
 
+from api.domains.agents.models import Agent
+from api.domains.agents.repository import agent_scope_predicates
 from api.domains.costs.constants import COST_HISTOGRAM_BOUNDS, TOP_AGENTS_IN_SERIES
 from api.domains.costs.models import (
     COST_RECORD_STATUS_SUCCESS,
@@ -22,10 +24,18 @@ from api.domains.costs.models import (
 )
 from api.domains.organizations.models import Organization
 from api.domains.platform_admin.models import StatsWindow
+from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AgentSpendTotals:
+    spend: Decimal
+    calls: int
+    last_call_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -669,6 +679,42 @@ class CostRepository:
         with self.delegate.engine.connect() as connection:
             rows = connection.execute(query).all()
         return [(row[0], row[1], Decimal(str(row[2])), int(row[3]), int(row[4]), int(row[5])) for row in rows]
+
+    def spend_for_agents(
+        self,
+        window: StatsWindow,
+        authorization_scope: AuthorizationScope,
+        agent_ids: list[UUID],
+    ) -> dict[UUID, AgentSpendTotals]:
+        """Spend for exactly these Agents, and only those the scope can see.
+
+        Reads the same `_predicates` as every other cost read, so a figure here matches
+        the Agent's own Costs tab for the same window. The scope join is the
+        authorization: an id the caller cannot see is absent from the result, and an
+        Agent with no calls in the window is absent too (the caller reads that as zero).
+        """
+        if not agent_ids:
+            return {}
+        query = (
+            sa.select(
+                col(CostRecord.agent_id),
+                sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0),
+                sa.func.count(),
+                sa.func.max(col(CostRecord.occurred_at)),
+            )
+            .join(Agent, col(Agent.id) == col(CostRecord.agent_id))
+            .where(
+                *self._predicates(window, CostFilter(organization_id=authorization_scope.organization_id)),
+                col(CostRecord.agent_id).in_(agent_ids),
+                *agent_scope_predicates(authorization_scope),
+            )
+            .group_by(col(CostRecord.agent_id))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return {
+            row[0]: AgentSpendTotals(spend=Decimal(str(row[1])), calls=int(row[2]), last_call_at=row[3]) for row in rows
+        }
 
     def unattributed_totals(self, window: StatsWindow, filters: CostFilter) -> tuple[Decimal, int]:
         """Spend that resolved to no agent — the honest gap in attribution.

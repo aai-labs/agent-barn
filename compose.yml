@@ -149,6 +149,12 @@ services:
       # LITELLM_BASE_URL is host-facing (127.0.0.1) and env_file would pull it in
       # verbatim, where it resolves to this container instead of the proxy.
       LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
+      # Prometheus for the Resource usage views runs in k3d (`make dev-monitoring`),
+      # which the container cannot resolve, so it goes through `make
+      # forward-prometheus` on the host. Left empty until dev-monitoring has written a
+      # PROMETHEUS_PASSWORD to .env, so a setup without it reads "not configured"
+      # rather than "unavailable". The password itself arrives through env_file.
+      PROMETHEUS_URL: ${API_PROMETHEUS_URL:-${PROMETHEUS_PASSWORD:+http://host.docker.internal:${PROMETHEUS_PORT:-9090}}}
     extra_hosts:
       # Reach the host-published k8s API from inside the container. No-op on
       # Docker Desktop; required on Linux/CI where host.docker.internal is unset.
