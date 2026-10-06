@@ -90,7 +90,7 @@ deployment limits cannot change their expected budget contracts.
 | `make fix-api` | Ruff autofix and formatting; modifies files | None |
 | `make check-migrations` | Exactly one Alembic head | None |
 | `make check-memory` | Rendered gateway/backend isolation and authentication contracts | Helm 3.19.0 |
-| `make test-api` | API unit and integration tests, excluding the Kubernetes client test | Docker for Testcontainers PostgreSQL, plus Node.js for the OpenClaw plugin test |
+| `make test-api` | API unit and integration tests, excluding the Kubernetes client test | Docker for Testcontainers PostgreSQL and the pinned Prometheus image, plus Node.js for the OpenClaw plugin and healthz metrics tests |
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
 | `make coverage` | All API tests with terminal and XML coverage, including the Kubernetes client test | Docker, Node.js, and the Kubernetes prerequisites above |
@@ -204,6 +204,13 @@ hooks directly. Shared setup lives in
   subprocess against a throwaway HTTP listener, following the same
   subprocess-and-real-HTTP pattern as `../../api/tests/unit/test_healthz_server_metrics.py`.
   `node` is required; a missing `node` MUST fail rather than skip.
+- The healthz `/metrics` tests run both runtimes' scripts over a fake cgroup directory
+  (`HEALTHZ_CGROUP_ROOT`) and compare their output, so the two cannot drift.
+  `../../api/tests/integration/test_resource_usage_prometheus_contract.py` goes further:
+  a real Prometheus (image `TESTCONTAINERS_PROMETHEUS_IMAGE`, default the pin in
+  `../../helm/monitoring/tests/run.sh`) scrapes the real script with basic auth on, and
+  the queries are read back through the API's own client. It needs Docker to reach the
+  host through `host.docker.internal`.
 - Fakes of runtime objects can only prove our own logic. Anything that depends
   on runtime behavior MUST also be checked inside the pinned image. The Hermes
   SessionStore, PVC, native Telegram access, Teams runtime webhook, and image smoke contracts run through
@@ -212,6 +219,10 @@ hooks directly. Shared setup lives in
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
   selects the matching workflow when base-image, builder, startup, or
   telemetry-plugin paths change.
+- `../../hermes-base/test-image.sh` and `../../openclaw-base/test-healthz-metrics.sh`
+  run each healthz script in its pinned image under `--memory 1g --cpus 0.5`, as the
+  image's own user, and check the CPU and memory it reports. Whether the cgroup files
+  exist and are readable to that user depends on the image, not on our code.
 - `../../openclaw-base/test-startup.sh` proves OpenClaw startup behavior in the
   pinned image: a legacy workspace PVC migrates with `doctor --fix` and a clean
   one never runs doctor, and a stale PVC heartbeat is replaced and stays

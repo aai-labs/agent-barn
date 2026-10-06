@@ -181,6 +181,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agent-overview",
+    "get_agent_overview_organizations__organization_id__agent_overview_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agent-settings",
     "get_agent_settings_organizations__organization_id__agent_settings_get"
   ],
@@ -318,6 +323,11 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/memory/items",
     "list_agent_memories_organizations__organization_id__agents__agent_id__memory_items_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/resource-usage",
+    "get_agent_resource_usage_organizations__organization_id__agents__agent_id__resource_usage_get"
   ],
   [
     "GET",
@@ -628,6 +638,16 @@
     "GET",
     "/platform/organizations/{organization_id}/members",
     "list_platform_members_platform_organizations__organization_id__members_get"
+  ],
+  [
+    "GET",
+    "/platform/resource-usage",
+    "get_platform_resource_usage_platform_resource_usage_get"
+  ],
+  [
+    "GET",
+    "/platform/resource-usage/agents/{agent_id}",
+    "get_platform_agent_details_platform_resource_usage_agents__agent_id__get"
   ],
   [
     "GET",
@@ -1133,6 +1153,11 @@
     "PUT",
     "/platform/organizations/{organization_id}/llm-budget",
     "set_organization_llm_budget_platform_organizations__organization_id__llm_budget_put"
+  ],
+  [
+    "PUT",
+    "/platform/resource-limits",
+    "update_platform_resource_limits_platform_resource_limits_put"
   ],
   [
     "PUT",

@@ -19,6 +19,10 @@ from api.domains.restore_points.reconciliation import (
 )
 
 _NAMESPACE = "agent-farm"
+# Older only gets older, so a timestamp taken at import stays old however long the suite runs.
+# There is deliberately no import-time "recent" one: pytest imports every test file before it
+# runs any, and the reconciler measures age when the test runs, so a "recent" timestamp taken
+# at import is past the minimum age once the suite has run that long (a slow CI run did).
 _OLD = datetime.now(UTC) - timedelta(seconds=RESTORE_POINT_ORPHAN_MIN_AGE_SECONDS * 2)
 
 

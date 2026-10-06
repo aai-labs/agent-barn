@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
-import { FileText, Menu, Receipt, Settings, Sparkles } from "lucide-react";
+import { Activity, FileText, Menu, Receipt, Settings, Sparkles } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
 import {
   Sheet,
@@ -46,16 +46,27 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: "/dashboard/platform/organizations", label: "Organizations" },
         { href: "/dashboard/platform/event-deliveries", label: "Event Deliveries" },
         { href: "/dashboard/platform/costs", label: "Costs" },
+        { href: "/dashboard/platform/resource-usage", label: "Resources" },
         { href: "/dashboard/platform/templates", label: "Templates" },
         { href: "/dashboard/platform/skills", label: "Skills" },
         { href: "/dashboard/platform/settings", label: "Settings" },
       ]
     : [
         { href: orgBase, label: "Home" },
+        // Every member: the page lists the agents they can read, with what each costs and
+        // uses, and shows each figure only where they hold the permission for it.
+        { href: `${orgBase}/agents`, label: "Usage" },
         // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
         ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
+  // Platform view has nine tabs, and they do not fit inline until about 1300px: with the
+  // compact spacing they are 73px short at 1024px, and when the roomier spacing starts at
+  // 1280px they are 17px short, so no `lg` or `xl` breakpoint works. It keeps them in the
+  // drawer until 1360px, which leaves room to spare. The class names are written out whole
+  // so Tailwind can find them.
+  const drawerTrigger = isPlatformView ? "min-[1360px]:hidden" : "lg:hidden";
+  const inlineTabs = isPlatformView ? "min-[1360px]:flex" : "lg:flex";
   const [menuOpen, setMenuOpen] = useState(false);
   const routeKey = pathname ?? "";
   const [navOpenedOn, setNavOpenedOn] = useState<string | null>(null);
@@ -83,9 +94,14 @@ export function TopNav({ onHire }: TopNavProps) {
   const isActive = (href: string) => {
     // Home and Overview are prefixes of every tab beside them, so a prefix test would
     // report them active on every page in their section. Both match exactly instead —
-    // Home additionally claims the agent pages, which have no tab of their own.
+    // Home additionally claims the agent pages, which have no tab of their own (their
+    // back link says "Your team" and leads Home).
     if (href === orgBase) {
-      return pathname === orgBase || pathname.startsWith(`${orgBase}/agents`);
+      return pathname === orgBase || pathname.startsWith(`${orgBase}/agents/`);
+    }
+    // Usage lives at /agents, the parent of every agent page, so it too matches exactly.
+    if (href === `${orgBase}/agents`) {
+      return pathname === href;
     }
     if (href === PLATFORM_BASE) {
       return pathname === PLATFORM_BASE;
@@ -100,7 +116,7 @@ export function TopNav({ onHire }: TopNavProps) {
     >
       <Sheet open={navOpen} onOpenChange={setNavOpen}>
         <SheetTrigger
-          className="af-hover-bg -ml-1.5 grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg lg:hidden"
+          className={`af-hover-bg -ml-1.5 grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg ${drawerTrigger}`}
           style={{ color: "var(--ink-2)" }}
           aria-label="Open navigation"
         >
@@ -148,7 +164,7 @@ export function TopNav({ onHire }: TopNavProps) {
 
       <OrgSwitcher />
 
-      <nav className="no-scrollbar hidden min-w-0 flex-1 gap-0.5 overflow-x-auto lg:flex">
+      <nav className={`no-scrollbar hidden min-w-0 flex-1 gap-0.5 overflow-x-auto ${inlineTabs}`}>
         {navTabs.map(({ href, label }) => (
           <Link
             key={href}
@@ -173,8 +189,8 @@ export function TopNav({ onHire }: TopNavProps) {
         ))}
       </nav>
 
-      {/* The drawer carries the tabs below lg, so keep the actions right-aligned. */}
-      <div className="flex-1 lg:hidden" />
+      {/* The drawer carries the tabs below that width, so keep the actions right-aligned. */}
+      <div className={`flex-1 ${drawerTrigger}`} />
 
       <div className="flex flex-shrink-0 items-center gap-2.5">
         {!isPlatformView && (
@@ -279,6 +295,14 @@ export function TopNav({ onHire }: TopNavProps) {
                   <Link href="/dashboard/platform/settings" className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
                     style={{ color: "var(--ink-2)" }} onClick={() => setMenuOpen(false)}>
                     <Settings size={14} /> Settings
+                  </Link>
+                  <Link
+                    href="/dashboard/platform/resource-usage"
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <Activity size={14} /> Resources
                   </Link>
                   <Link
                     href="/dashboard/platform/templates"

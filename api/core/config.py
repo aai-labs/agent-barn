@@ -137,6 +137,15 @@ class Config(BaseSettings):
     # (GET /key with the inference key above; no management key involved).
     openrouter_credits_cache_ttl_seconds: int = 300
 
+    # The in-namespace Prometheus (helm/monitoring) that stores each Agent's CPU and
+    # memory. Empty means resource usage reports "not configured", which is the normal
+    # local state until `make dev-monitoring`. Prometheus requires basic auth; the
+    # password is the monitoring release's MONITORING_WEB_PASSWORD.
+    prometheus_url: str = ""
+    prometheus_username: str = "monitoring"
+    prometheus_password: str = ""
+    prometheus_timeout_seconds: float = Field(default=5, gt=0, le=30)
+
     redis_url: str = "redis://localhost:6379/0"
 
     # Comma-separated glob patterns (fnmatch) matched against OpenRouter model
