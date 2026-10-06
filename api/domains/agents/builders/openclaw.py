@@ -80,8 +80,6 @@ def _openclaw_config_core(
         ),
         "tools": {
             "profile": "full",
-            # Separate initiated sends remain retired; native replies/cron own delivery.
-            "deny": ["message"],
             "exec": {"mode": "full"},
         },
         "memory": {"search": {"provider": "none"}},

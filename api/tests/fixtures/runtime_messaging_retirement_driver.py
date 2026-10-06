@@ -16,6 +16,30 @@ for kind in ("fresh", "upgraded", "restored"):
     old = plugins / "agentbarn-messaging"
     native = state / "npm/projects/recorded/node_modules/@openclaw/slack/package.json"
     jobs = state / "cron/jobs.json"
+    if runtime == "openclaw":
+        (state / "openclaw.json").write_text(
+            json.dumps(
+                {
+                    "tools": (
+                        {
+                            "deny": ["message", "exec"],
+                            "message": {
+                                "actions": {"allow": ["send"]},
+                                "crossContext": {"allowAcrossProviders": False},
+                            },
+                        }
+                        if kind != "fresh"
+                        else {}
+                    ),
+                    "plugins": {
+                        "entries": {"agentbarn-messaging": {"enabled": True}},
+                        "installs": {"slack": {"version": "native"}, "agentbarn-messaging": {}},
+                        "allow": ["agentbarn-messaging"],
+                        "load": {"paths": [str(old)]},
+                    },
+                }
+            )
+        )
     if kind != "fresh":
         old.mkdir(parents=True)
         (old / "obsolete.py").write_text("retired")
@@ -43,18 +67,6 @@ for kind in ("fresh", "upgraded", "restored"):
         assert native.read_text() == "native package and installation record"
         assert (state / "agentbarn-messages.sqlite3").read_text() == "private queued content"
     if runtime == "openclaw":
-        (state / "openclaw.json").write_text(
-            json.dumps(
-                {
-                    "plugins": {
-                        "entries": {"agentbarn-messaging": {"enabled": True}},
-                        "installs": {"slack": {"version": "native"}, "agentbarn-messaging": {}},
-                        "allow": ["agentbarn-messaging"],
-                        "load": {"paths": [str(old)]},
-                    }
-                }
-            )
-        )
         source = (
             Path("/scripts/openclaw/init-openclaw.js")
             .read_text()
@@ -66,21 +78,11 @@ for kind in ("fresh", "upgraded", "restored"):
         merged = (state / "openclaw.json").read_text()
         assert "agentbarn-messaging" not in merged
         assert json.loads(merged)["plugins"]["installs"]["slack"] == {"version": "native"}
-        subprocess.run(
-            [
-                "node",
-                "--input-type=module",
-                "-e",
-                (
-                    "import {isToolAllowedByPolicyName as allowed} from "
-                    "'/usr/local/lib/node_modules/openclaw/dist/tool-policy-match-BKTxaTvX.js';"
-                    "const policy = JSON.parse(process.argv[1]).tools;"
-                    "if (allowed('message', policy) || !allowed('cron', policy)) process.exit(1);"
-                ),
-                merged,
-            ],
-            check=True,
-        )
+        subprocess.run(["node", "/message-tool-driver.mjs", str(state / "openclaw.json")], check=True)
+        if kind != "fresh":
+            assert json.loads(merged)["tools"]["deny"] == ["exec"]
+            assert json.loads(merged)["tools"]["message"]["crossContext"] == {"allowAcrossProviders": False}
+            assert json.loads(merged)["tools"]["message"]["actions"] == {"allow": ["send"]}
     else:
         target = state / "config.yaml"
         target.write_text(

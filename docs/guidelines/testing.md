@@ -188,10 +188,13 @@ hooks directly. Shared setup lives in
   and restored persistent state using generated configuration in both pinned images.
   Hermes image tests also drive native origin/home scheduled delivery and silence.
   `../../openclaw-base/test-native-runtime.sh` checks native one-shot scheduling,
-  observer hooks, retirement, and the generated native tool policy (`message` denied,
-  `cron` allowed). Hermes checks that its send engine is absent from the agent tool
-  registry. Scheduler fixtures simulate model/provider execution;
-  they prove native routing and execution boundaries without sending live messages.
+  observer hooks, retirement, and native `message`/`cron` tool access. Its pinned-image
+  message fixture uses the real tool factory/filter and dry-run sends for replies
+  to an existing message and other channels, and verifies native context restrictions.
+  Upgraded/restored state retains unrelated tool denies and message policy while
+  removing the stale `message` deny. Hermes checks that its send engine is absent
+  from the agent tool registry. Scheduler fixtures simulate model/provider execution;
+  message fixtures use dry runs. These checks send no live provider messages.
 - The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
   generated runtime configuration in the real image and proves materialized
   Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The

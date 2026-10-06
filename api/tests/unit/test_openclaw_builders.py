@@ -345,7 +345,7 @@ def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -
     }
 
 
-def test_gateway_config_disables_separate_initiated_message_tool() -> None:
+def test_gateway_config_allows_native_message_tool() -> None:
     config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
-    assert config["tools"]["deny"] == ["message"]
+    assert "message" not in config["tools"].get("deny", [])

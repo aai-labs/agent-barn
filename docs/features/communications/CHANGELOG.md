@@ -6,13 +6,21 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Current state
 
-- Delivered: scoped Communication Connection CRUD and strict Platform configuration/credential validation; permanent native Slack, Discord, Telegram, and Teams transport on both runtimes; authenticated Teams public relay; native transcript and health observation; Web Chat/Email durable delivery through the shared runtime protocol; permission-scoped diagnostics and content-free historical Journal/Delivery timelines; gateway Delivery retry, bounded retention, safe errors, and low-cardinality Communications metrics. Native provider sessions, replies, approvals, and schedules belong to the selected runtime.
+- Delivered: scoped Communication Connection CRUD and strict Platform configuration/credential validation; permanent native Slack, Discord, Telegram, and Teams transport on both runtimes; authenticated Teams public relay; native transcript and health observation; Web Chat/Email durable delivery through the shared runtime protocol; permission-scoped diagnostics and content-free historical Journal/Delivery timelines; gateway Delivery retry, bounded retention, safe errors, and low-cardinality Communications metrics. Native provider sessions, replies, approvals, and schedules belong to the selected runtime; OpenClaw also exposes its native message tool for explicit sends.
 - Changed: Agents are headless and no longer own a single Platform. Legacy provider configuration tables, DTO fields, routes, and provider-specific UI have been removed after their data is migrated into Communication Connections.
 - In transition: chat gateway transport is fenced out; retired physical schema fields and compatibility routes remain pending cleanup. Config and deployment allowlist inputs are removed; the chart retains a hard-coded Secret fence for older replicas during rollout; transport ownership remains fixed by Platform. All four chat gateway transports, senders, and provider approval codecs are removed. Runtime assembly retires the old messaging artifacts on each start. Only an authenticated legacy `410` handler remains until the documented deployed-client cutoff; the initiated-message service/repository and execution-token issuance are removed.
 - Next: remove the hard-coded `COMMUNICATIONS_NATIVE_PLATFORMS` Secret fence after every application replica and background worker runs fixed ownership; obtain deployed-consumer cutoff evidence before physical schema contraction and remaining compatibility route removal. Evaluate iMessage transport constraints independently of Agent runtimes. Email supports inbound and reply, but not agent-initiated outbound; native Discord, Telegram, and Teams deliver scheduled results to their origin or configured home.
 - Blockers: deployed application, runtime, UI, and Worker consumer inventories and rollout cutoff evidence remain operator verification tasks.
 
 ## Changes
+
+### 2026-10-06 — Restore OpenClaw native message-tool access — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Corrected: bridge retirement no longer denies OpenClaw's native `message` tool. Explicit native sends and replies to an Agent's own messages can use the runtime transport; the retired gateway message endpoint remains `410`.
+- Upgrade/restore: startup removes only the saved `message` deny entry, retaining unrelated tool restrictions and native message policy. The [runtime contract](../../architecture/runtime-and-deployment.md#runtime-neutral-communications) distinguishes native outbound controls from Connection admission allowlists.
+- Coverage: pinned-image regressions exercise actual tool availability, native dry-run sends to an existing message and another channel, and native context guards with fresh/upgraded/restored state. The regression fails before the fix; changing only the builder still fails on upgraded state.
+- Validation: all 447 focused API tests, API lint/format/type checks, OpenClaw startup and native-runtime contracts, and the shared Hermes retirement contract pass.
+- Rollout: deploy the API correction and restart affected OpenClaw Agents. No base-image or schema change is required.
 
 ### 2026-10-03 — Merge staging compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 

@@ -88,6 +88,10 @@ try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
 if (config.tools && config.tools.exec) {
   delete config.tools.exec;
 }
+// Bridge retirement briefly denied the native message tool; preserve all other restrictions.
+if (Array.isArray(config.tools?.deny)) {
+  config.tools.deny = config.tools.deny.filter(tool => tool !== 'message');
+}
 // OpenClaw 2026.8 rejects these at startup; deep-merge would otherwise keep them.
 if (config.agents && config.agents.defaults) delete config.agents.defaults.memorySearch;
 if (config.memory) delete config.memory.backend;
