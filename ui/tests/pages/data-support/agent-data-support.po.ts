@@ -868,17 +868,20 @@ export class AgentDataSupport {
     status?: number;
     body?: unknown;
   } = {}) {
+    const requests = { count: 0 };
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/healthz`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
+      requests.count += 1;
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(body ?? { status: "ok" }),
       });
     });
+    return requests;
   }
 
   async interceptGetConversationChannelsRequest({

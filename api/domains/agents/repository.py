@@ -20,6 +20,7 @@ from api.domains.agents.models import (
     AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
     AgentSecret,
+    AgentSecretRead,
     AgentSkill,
     AgentStatus,
     PlatformAgentIdentity,
@@ -1477,14 +1478,27 @@ class AgentRepository:
             query = select(AgentSecret).where(col(AgentSecret.agent_id) == agent_id)
             return list(session.exec(query).all())
 
-    def get_secrets_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, list[AgentSecret]]:
+    def get_secret_summaries_for_agents(
+        self, agent_ids: list[UUID], authorization_scope: AuthorizationScope
+    ) -> dict[UUID, list[AgentSecretRead]]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            query = select(AgentSecret).where(col(AgentSecret.agent_id).in_(agent_ids))
-            result: dict[UUID, list[AgentSecret]] = {}
-            for secret in session.exec(query).all():
-                result.setdefault(secret.agent_id, []).append(secret)
+            query = (
+                select(
+                    AgentSecret.agent_id,
+                    AgentSecret.provider,
+                    AgentSecret.secret_name,
+                    AgentSecret.shared_credential_id,
+                )
+                .join(Agent, col(Agent.id) == col(AgentSecret.agent_id))
+                .where(col(AgentSecret.agent_id).in_(agent_ids), *agent_scope_predicates(authorization_scope))
+            )
+            result: dict[UUID, list[AgentSecretRead]] = {}
+            for agent_id, provider, name, credential_id in session.exec(query).all():
+                result.setdefault(agent_id, []).append(
+                    AgentSecretRead(provider=provider, secret_name=name, shared_credential_id=credential_id)
+                )
             return result
 
     # --- Skills ---

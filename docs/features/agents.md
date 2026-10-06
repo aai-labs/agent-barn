@@ -77,6 +77,11 @@ when more Agents exist than are loaded.
 List reads batch shared credential labels for the visible page within the
 Organization; resolving each card must not issue a credential lookup per Agent.
 Response fields and credential-content exclusion match detail reads.
+Pin display queries load only IDs, keys, and versions, and credential list
+projections load only labels and references, excluding Markdown and encrypted
+payload columns. Home cards poll health every 30 seconds only for running
+Agents with `activity.read`; without that permission, a running Agent is labeled
+“Running” without claiming a known health state.
 
 ## State model
 

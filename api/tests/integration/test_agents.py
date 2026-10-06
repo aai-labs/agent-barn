@@ -5946,7 +5946,7 @@ def test_agent_list_batches_shared_credential_labels(agent_count):
             there_is_an_agent(name=f"Teammate {index}")(context)
             shared_credential_is_attached_to_agent()(context)
         repository = context.injector.get(SharedCredentialRepository)
-        with patch.object(repository, "get_by_ids_and_org", wraps=repository.get_by_ids_and_org) as lookup:
+        with patch.object(repository, "get_names_by_ids_and_org", wraps=repository.get_names_by_ids_and_org) as lookup:
             response = context.client.get(
                 _BASE,
                 params={"page": 1, "page_size": 50},
@@ -5970,3 +5970,66 @@ def test_agent_list_batches_shared_credential_labels(agent_count):
             )
         assert_that(lookup.call_count, equal_to(1))
         assert_that(lookup.call_args.args, equal_to(([context.shared_credential.id], context.organization.id)))
+
+
+@pytest.mark.parametrize("pin_type", ["organization", "platform", "override"])
+def test_agent_list_projects_pin_metadata_without_loading_template_documents(pin_type):
+    from api.tests.helpers.sql_queries import capture_sql_statements
+    from api.tests.steps.template import agent_uses_template_pin
+
+    with given([*_GIVEN, there_is_an_agent(), agent_uses_template_pin(pin_type)]) as context:
+        with capture_sql_statements(context.postgres_delegate.engine) as statements:
+            response = context.client.get(_BASE, headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        body = response.json()["items"][0]
+        key, version, kind, override_version = context.expected_template_pin
+        assert_that(
+            body,
+            has_entries(
+                template_key=key, template_version=version, template_pin_type=kind, override_version=override_version
+            ),
+        )
+        for column in (
+            "soul_md",
+            "identity_md",
+            "user_md",
+            "tools_md",
+            "agents_md",
+            "boot_md",
+            "bootstrap_md",
+            "heartbeat_md",
+        ):
+            assert_that("\n".join(statements), is_not(contains_string(f".{column}")))
+
+
+def test_agent_list_credential_projections_do_not_load_encrypted_contents():
+    from api.tests.helpers.sql_queries import capture_sql_statements
+    from api.tests.steps.agent import shared_credential_is_attached_to_agent, there_is_a_shared_credential
+
+    with given(
+        [*_GIVEN, there_is_an_agent(), there_is_a_shared_credential(), shared_credential_is_attached_to_agent()]
+    ) as context:
+        context.postgres_delegate.save(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=SecretProvider.FIRECRAWL,
+                secret_name="Manual Firecrawl",
+                content="encrypted-fixture",
+            )
+        )
+        with capture_sql_statements(context.postgres_delegate.engine) as statements:
+            response = context.client.get(_BASE, headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        assert_that(
+            response.json()["items"][0]["secrets"],
+            has_item(
+                has_entries(
+                    provider="firecrawl",
+                    secret_name="Manual Firecrawl",
+                    shared_credential_id=None,
+                    shared_credential_name=None,
+                )
+            ),
+        )
+        assert_that("\n".join(statements), is_not(contains_string("agent_secret.content")))
+        assert_that("\n".join(statements), is_not(contains_string("shared_credential.content")))

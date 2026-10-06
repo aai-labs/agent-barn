@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
-import { agentListWithMetadata, agentListWithoutMetadata } from "../fixtures/agent-list";
+import { agentListWithMetadata, agentListWithoutMetadata, agentListWithPollingStates } from "../fixtures/agent-list";
 import { MOCK_AGENT_ID, mockAgent } from "../pages/data-support/agent-data-support.po";
 import { TEST_ORG_ID } from "../constants";
 
@@ -35,6 +35,23 @@ test.describe("Dashboard Page", () => {
     await dashboardPage.goto();
 
     await expect(page.getByText(/working now/)).toBeVisible();
+  });
+
+  test("polls permitted running cards every 30 seconds and skips restricted or stopped cards", async ({ page }) => {
+    await page.clock.install();
+    await dataSupportPage.agents.interceptGetAgentsRequest({ body: agentListWithPollingStates });
+    const requests = await Promise.all(agentListWithPollingStates.items.map((agent) =>
+      dataSupportPage.agents.interceptGetAgentHealthRequest({ agentId: agent.id }),
+    ));
+    await dashboardPage.goto();
+    await expect.poll(() => requests[0].count).toBe(1);
+    await expect(dashboardPage.agentCard("Read-only metadata")).toBeVisible();
+    await expect(dashboardPage.agentCard("Read-only metadata").getByText("Running", { exact: true })).toBeVisible();
+    await page.clock.runFor(29_000);
+    expect(requests.map((request) => request.count)).toEqual([1, 0, 0]);
+    await page.clock.runFor(1_000);
+    await expect.poll(() => requests[0].count).toBe(2);
+    expect(requests.map((request) => request.count)).toEqual([2, 0, 0]);
   });
 
   test("shows creator and exact last-message time directly on the card", async () => {

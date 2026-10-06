@@ -31,3 +31,11 @@ export const agentListWithoutMetadata = {
   total: 1,
   items: [{ ...mockAgent, creator: undefined, last_message_at: undefined }],
 };
+
+export const agentListWithPollingStates = {
+  ...agentListWithMetadata,
+  items: agentListWithMetadata.items.map((agent, index) => ({
+    ...agent,
+    status: index === 1 ? "STOPPED" : "RUNNING",
+  })),
+};

@@ -927,6 +927,7 @@ def test_agent_list_metadata_queries_exclude_hidden_cross_org_and_deleted_agents
     from datetime import UTC, datetime
 
     from api.domains.agents.authorization import AgentAuthorization
+    from api.domains.agents.models import AgentSecret, SecretProvider
     from api.domains.conversations.repository import ConversationRepository
     from api.tests.steps.conversation import there_is_a_recorded_message
 
@@ -947,6 +948,12 @@ def test_agent_list_metadata_queries_exclude_hidden_cross_org_and_deleted_agents
         there_is_an_agent(deleted=True, created_by_user_id=creator_id)(context)
         deleted = context.agent
         there_is_a_recorded_message(occurred_at)(context)
+        for agent in (visible, hidden, cross_org, deleted):
+            context.postgres_delegate.save(
+                AgentSecret(
+                    agent_id=agent.id, provider=SecretProvider.GITHUB, secret_name="GitHub", content="encrypted-fixture"
+                )
+            )
         _switch_to_member()(context)
         there_is_agent_access(agent_id=visible.id)(context)
         ids = [visible.id, hidden.id, cross_org.id, deleted.id]
@@ -957,5 +964,10 @@ def test_agent_list_metadata_queries_exclude_hidden_cross_org_and_deleted_agents
         messages = context.injector.get(ConversationRepository).latest_message_times_for_agents(
             ids, authorization.authorization_scope(context.current_user_context, PermissionKey.ACTIVITY_READ)
         )
+        secrets = context.injector.get(AgentRepository).get_secret_summaries_for_agents(
+            ids, authorization.authorization_scope(context.current_user_context, PermissionKey.AGENT_READ)
+        )
+        assert_that(set(secrets), equal_to({visible.id}))
+        assert_that(secrets[visible.id][0].secret_name, equal_to("GitHub"))
         assert_that(set(creators), equal_to({visible.id}))
         assert_that(messages, equal_to({visible.id: occurred_at}))

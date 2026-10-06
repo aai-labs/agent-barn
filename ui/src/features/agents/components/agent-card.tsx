@@ -19,10 +19,15 @@ interface AgentCardProps {
 }
 
 export function AgentCard({ agent, href }: AgentCardProps) {
-  const { health } = useAgentHealth(agent.id, agent.status === "RUNNING");
+  const hasActivityPermission = canAgent(agent, "activity.read");
+  const { health } = useAgentHealth(
+    agent.id,
+    agent.status === "RUNNING" && hasActivityPermission,
+    30_000,
+  );
   const creatorName = agent.creator?.fullName?.trim() || agent.creator?.email;
   const lastMessage = agent.lastMessageAt ? new Date(agent.lastMessageAt) : null;
-  const canReadActivity = canAgent(agent, "activity.read") && agent.lastMessageAt !== undefined;
+  const canReadActivity = hasActivityPermission && agent.lastMessageAt !== undefined;
 
   return (
     <Link
@@ -42,7 +47,11 @@ export function AgentCard({ agent, href }: AgentCardProps) {
           </div>
         </div>
         <div id={`${agent.id}-status`} className="ml-auto shrink-0 pt-1">
-          <StatusLine status={agent.status} health={health} />
+          {agent.status === "RUNNING" && !hasActivityPermission ? (
+            <span className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>Running</span>
+          ) : (
+            <StatusLine status={agent.status} health={health} />
+          )}
         </div>
       </div>
 
