@@ -128,6 +128,12 @@ export const AgentSchema = z.object({
   /** Platforms whose Connections this Agent's runtime runs itself; changing one requires a restart. */
   nativePlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
+  creator: z.object({
+    id: z.string().uuid(),
+    fullName: z.string().nullable(),
+    email: z.string(),
+  }).nullable().optional().default(null),
+  lastMessageAt: z.string().datetime({ offset: true }).nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

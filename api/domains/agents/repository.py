@@ -15,6 +15,7 @@ from api.domains.agent_memory.repository import stage_agent_memory_cleanup
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
+    AgentCreatorRead,
     AgentFilter,
     AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
@@ -548,6 +549,24 @@ class AgentRepository:
             if pagination is not None:
                 query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
             return list(session.exec(query).all()), total
+
+    def get_creators_for_agents(
+        self,
+        agent_ids: list[UUID],
+        authorization_scope: AuthorizationScope,
+    ) -> dict[UUID, AgentCreatorRead]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, User.id, User.full_name, User.email)
+                .join(User, col(User.id) == col(Agent.created_by_user_id))
+                .where(col(Agent.id).in_(agent_ids), *agent_scope_predicates(authorization_scope))
+            ).all()
+        return {
+            agent_id: AgentCreatorRead(id=user_id, full_name=full_name, email=email)
+            for agent_id, user_id, full_name, email in rows
+        }
 
     def get_active_communication_platforms_for_agents(
         self,

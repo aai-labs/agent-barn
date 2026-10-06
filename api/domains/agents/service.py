@@ -61,6 +61,7 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentConfigurationVersionRead,
     AgentCreate,
+    AgentCreatorRead,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
@@ -130,6 +131,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.conversations.repository import ConversationRepository
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -279,6 +281,7 @@ class AgentService:
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
+    conversation_repository: ConversationRepository
     plugins: PlatformPluginRegistry
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -468,6 +471,8 @@ class AgentService:
         source_update_skill_ids: set[UUID] | None = None,
         effective_default_model: str = "",
         configured_platform_keys: list[str] | None = None,
+        creator: AgentCreatorRead | None = None,
+        last_message_at: dt.datetime | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
         shared_creds_by_id = {}
@@ -552,6 +557,8 @@ class AgentService:
             configured_platform_keys=configured_platform_keys or [],
             native_platform_keys=sorted(self.config.native_platform_keys),
             allowed_actions=allowed_actions or [],
+            creator=creator,
+            last_message_at=last_message_at,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
@@ -577,6 +584,10 @@ class AgentService:
             template_key = template.template_key
         read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
+        creators = self.repository.get_creators_for_agents([agent.id], read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            [agent.id], self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
         return self._build_agent_read(
             agent,
             secrets,
@@ -585,6 +596,8 @@ class AgentService:
             allowed_actions,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(agent.organization_id),
             configured_platform_keys=configured_platform_keys.get(agent.id, []),
+            creator=creators.get(agent.id),
+            last_message_at=message_times.get(agent.id),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
@@ -866,6 +879,7 @@ class AgentService:
             template_key=template.template_key,
             template_version=template.version,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(org_id),
+            creator=AgentCreatorRead.model_validate(context.user),
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -1458,6 +1472,10 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, agents)
 
         agent_ids = [a.id for a in agents]
+        creators = self.repository.get_creators_for_agents(agent_ids, read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            agent_ids, self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
         skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
         assigned_skill_ids = list(
@@ -1492,6 +1510,8 @@ class AgentService:
                 source_update_skill_ids=source_update_skill_ids,
                 effective_default_model=effective_default_model,
                 configured_platform_keys=configured_platform_keys.get(agent.id, []),
+                creator=creators.get(agent.id),
+                last_message_at=message_times.get(agent.id),
             )
             for agent in agents
         ]
