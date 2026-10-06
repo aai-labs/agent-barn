@@ -223,7 +223,7 @@ def main() -> None:
 
     if backup:
         try:
-            emit_result(capture(target, backup, runtime))
+            emit_result(capture(target, Path(backup), runtime))
         except Exception as exc:
             emit_failure(f"pre-restore capture failed: {exc}")
             raise SystemExit(EXIT_BACKUP_FAILED) from exc

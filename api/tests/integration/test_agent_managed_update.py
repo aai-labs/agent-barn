@@ -369,18 +369,21 @@ def test_a_rollback_whose_restore_fails_does_not_restart_the_agent():
         k8s = context.injector.get(KubernetesClient)
         # Job reads, in order: PRE_UPGRADE capture, then the restore itself.
         _reads = []
+
         def _tracked_get_job(name, ns):
             # Reads, in order: PRE_UPGRADE capture, then the restore itself.
             _reads.append(name)
             i = len(_reads) - 1
             statuses = [{"succeeded": 1}, {"failed": 1}, {"failed": 1}, {"failed": 1}, {"failed": 1}]
             return _job_with(statuses[min(i, 4)])
+
         k8s.get_job.side_effect = _tracked_get_job
         k8s.read_job_logs.return_value = "restore failed"
         # Extraction-phase failure: the Job wiped the volume but could not put
         # the archive back, so the row must FAIL — a backup-phase failure would
         # leave the volume untouched and mark the row READY (restart is safe).
         from api.domains.agents.restore_point_job import EXIT_RESTORE_FAILED
+
         k8s.get_job_exit_code.return_value = EXIT_RESTORE_FAILED
         k8s.get_pod_name_for_job.return_value = "some-pod"
         k8s.get_pod_readiness.return_value = ("crashed", "BackOff")

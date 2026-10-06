@@ -541,10 +541,7 @@ class AgentService:
             update_available=(
                 agent.status == AgentStatus.RUNNING
                 and (
-                    (
-                        agent.pinned_runtime_image != ""
-                        and agent.pinned_runtime_image != self._platform_pin_for(agent)
-                    )
+                    (agent.pinned_runtime_image != "" and agent.pinned_runtime_image != self._platform_pin_for(agent))
                     or (
                         agent.pinned_runtime_image == ""
                         and agent.running_config_digest
@@ -2500,10 +2497,9 @@ class AgentService:
             # pin, so "previous pin" is concrete — and correct even when the
             # platform pin moved underneath a long-running pod that never
             # pinned itself.
-            previous_image = (
-                self.k8s.get_pod_image(f"agent-{current.id}", self.config.k8s_namespace)
-                or self._effective_runtime_image(current)
-            )
+            previous_image = self.k8s.get_pod_image(
+                f"agent-{current.id}", self.config.k8s_namespace
+            ) or self._effective_runtime_image(current)
             if current.pinned_runtime_image != previous_image:
                 current.pinned_runtime_image = previous_image
                 self.repository.save(current)
