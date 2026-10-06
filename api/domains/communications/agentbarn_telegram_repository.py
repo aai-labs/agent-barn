@@ -465,3 +465,42 @@ class AgentBarnTelegramRepository:
                 if user_id is not None:
                     counts[user_id] = counts.get(user_id, 0) + 1
             return counts
+
+    def proxy_connection(self, connection_id: UUID) -> CommunicationConnection | None:
+        """An Agent Barn Telegram Connection that may still use the proxy."""
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(CommunicationConnection)
+                .join(Agent, col(Agent.id) == col(CommunicationConnection.agent_id))
+                .where(
+                    col(CommunicationConnection.id) == connection_id,
+                    col(CommunicationConnection.platform_key) == CommunicationPlatform.AGENTBARN_TELEGRAM.value,
+                    col(CommunicationConnection.enabled).is_(True),
+                    col(CommunicationConnection.retired_at).is_(None),
+                    col(Agent.deleted_at).is_(None),
+                )
+            ).one_or_none()
+
+    def linked_user_ids(self, connection_id: UUID) -> set[int]:
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(AgentBarnTelegramLink.telegram_user_id).where(
+                        col(AgentBarnTelegramLink.connection_id) == connection_id,
+                        col(AgentBarnTelegramLink.unlinked_at).is_(None),
+                    )
+                )
+            )
+
+    def end_link_for_connection(self, connection_id: UUID, telegram_user_id: int, *, now: datetime) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(AgentBarnTelegramLink)
+                .where(
+                    col(AgentBarnTelegramLink.connection_id) == connection_id,
+                    col(AgentBarnTelegramLink.telegram_user_id) == telegram_user_id,
+                    col(AgentBarnTelegramLink.unlinked_at).is_(None),
+                )
+                .values(unlinked_at=now)
+            )  # type: ignore[call-overload]
+            session.commit()

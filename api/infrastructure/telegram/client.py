@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 _BOT_TOKEN_IN_URL = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
 
 
-class _RedactBotTokens(logging.Filter):
-    """Keep Telegram bot tokens out of httpx's request log lines."""
+class RedactBotTokens(logging.Filter):
+    """Keep Telegram bot tokens, real or stand-in, out of log lines that print request URLs."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
@@ -27,7 +27,7 @@ class _RedactBotTokens(logging.Filter):
         return True
 
 
-logging.getLogger("httpx").addFilter(_RedactBotTokens())
+logging.getLogger("httpx").addFilter(RedactBotTokens())
 
 _BASE = "https://api.telegram.org"
 _TIMEOUT_SECONDS = 15

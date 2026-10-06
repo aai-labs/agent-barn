@@ -21,6 +21,21 @@ def runtime_webhook_secret(driver_key: str) -> str:
     return hmac.new(driver_key.encode("utf-8"), _RUNTIME_WEBHOOK_SECRET_CONTEXT, hashlib.sha256).hexdigest()
 
 
+_RUNTIME_API_TOKEN_CONTEXT = b"agentbarn-telegram-runtime-api"
+
+
+def runtime_api_token(driver_key: str, bot_token: str) -> str:
+    """The stand-in bot token an Agent's runtime uses against Agent Barn's Telegram proxy.
+
+    It keeps the real bot's numeric id, so it is shaped like any bot token, and
+    replaces the secret half with one derived from the Connection's driver key.
+    The real token never reaches the Agent.
+    """
+    bot_id = bot_token.split(":", 1)[0]
+    secret = hmac.new(driver_key.encode("utf-8"), _RUNTIME_API_TOKEN_CONTEXT, hashlib.sha256).hexdigest()
+    return f"{bot_id}:{secret}"
+
+
 class AgentBarnTelegramConfig(Protocol):
     agentbarn_telegram_bot_token: str
     agentbarn_telegram_bot_username: str

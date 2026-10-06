@@ -1,0 +1,95 @@
+import logging
+from types import SimpleNamespace
+from typing import cast
+from unittest.mock import Mock
+from uuid import uuid4
+
+import httpx
+import pytest
+
+from api.core.config import Config
+from api.domains.communications.agentbarn_telegram_proxy import AgentBarnTelegramProxy
+from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
+from api.infrastructure.crypto import encrypt_token
+from api.tests.steps.agent import TEST_ENCRYPTION_KEY
+
+_REAL_TOKEN = "424242:the-real-shared-bot-token"
+_DRIVER_KEY = "driver-key"
+
+
+def _proxy(handler) -> AgentBarnTelegramProxy:
+    repository = Mock()
+    repository.proxy_connection.return_value = SimpleNamespace(
+        driver_key_encrypted=encrypt_token(_DRIVER_KEY, TEST_ENCRYPTION_KEY)
+    )
+    repository.linked_user_ids.return_value = {5550001}
+    proxy = AgentBarnTelegramProxy(
+        config=cast(
+            Config,
+            SimpleNamespace(agentbarn_telegram_bot_token=_REAL_TOKEN, agent_token_encryption_key=TEST_ENCRYPTION_KEY),
+        ),
+        repository=repository,
+    )
+    proxy.client = httpx.Client(transport=httpx.MockTransport(handler))
+    return proxy
+
+
+def _call(proxy: AgentBarnTelegramProxy, method: str, params: dict | None = None):
+    return proxy.handle(
+        uuid4(),
+        runtime_api_token(_DRIVER_KEY, _REAL_TOKEN),
+        method,
+        params=params or {},
+        body=b"{}",
+        content_type="application/json",
+    )
+
+
+def test_an_unreachable_telegram_is_reported_without_the_real_token(caplog: pytest.LogCaptureFixture) -> None:
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with caplog.at_level(logging.DEBUG):
+        response = _call(_proxy(unreachable), "sendMessage", {"chat_id": 5550001})
+
+    assert response.status_code == 502
+    assert "the-real-shared-bot-token" not in str(response.body)
+    assert "the-real-shared-bot-token" not in caplog.text
+
+
+def test_a_failed_bot_lookup_is_passed_on_and_not_cached() -> None:
+    answers = [
+        httpx.Response(500, json={"ok": False, "error_code": 500}),
+        httpx.Response(200, json={"ok": True, "result": {"id": 424242}}),
+    ]
+    proxy = _proxy(lambda request: answers.pop(0))
+
+    first = _call(proxy, "getMe")
+    second = _call(proxy, "getMe")
+
+    assert first.status_code == 500
+    assert second.body == {"ok": True, "result": {"id": 424242}}
+
+
+def test_an_answer_that_is_not_json_becomes_a_bad_gateway() -> None:
+    response = _call(_proxy(lambda request: httpx.Response(200, text="<html>oops</html>")), "getFile", {"file_id": "f"})
+
+    assert response.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "file_path",
+    ["../getUpdates", "photos/../../bot424242:x/getUpdates", "photos/..", "photos/%2e%2e/x", "photos/file.jpg?x=1", ""],
+)
+def test_only_plain_file_paths_are_fetched(file_path: str) -> None:
+    requests: list[httpx.Request] = []
+
+    def telegram(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"x")
+
+    proxy = _proxy(telegram)
+    downloaded = proxy.download(uuid4(), runtime_api_token(_DRIVER_KEY, _REAL_TOKEN), file_path)
+
+    assert downloaded.status_code == 404
+    assert requests == []
