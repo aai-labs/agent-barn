@@ -1,7 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
 from hamcrest import assert_that, contains_exactly, equal_to
-from sqlmodel import Session, col, select
+from sqlalchemy import text
+from sqlmodel import Session, col, func, select
 
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.models import AgentBarnTelegramUpdate, AgentBarnTelegramUpdateStatus
@@ -78,3 +79,21 @@ def test_an_expired_or_released_lease_can_be_taken_over() -> None:
 
         with then("another replica can take over each time"):
             assert_that((after_expiry, after_release), equal_to((True, True)))
+
+
+def test_a_settled_update_keeps_no_content_at_all() -> None:
+    # The ORM reads JSON null and SQL NULL alike; only the database can tell them apart.
+    with given(_GIVEN) as context:
+        _repo(context).store_updates([_update(30), _update(31), _update(32)])
+
+        with when("updates are handled, forwarded, and dropped"):
+            _repo(context).settle_update(30)
+            _repo(context).mark_forwarded(31)
+            _repo(context).drop(32)
+
+        with then("none of them holds a payload, not even a JSON null"):
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                with_content = session.exec(
+                    select(func.count()).select_from(AgentBarnTelegramUpdate).where(text("payload is not null"))
+                ).one()
+            assert_that(with_content, equal_to(0))

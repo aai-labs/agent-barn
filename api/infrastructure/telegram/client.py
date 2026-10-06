@@ -12,19 +12,28 @@ from api.infrastructure.shared.cache import cached as _cached
 
 logger = logging.getLogger(__name__)
 
-# Bot API URLs carry the token in their path (/bot<id>:<secret>/method).
-_BOT_TOKEN_IN_URL = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
+# Bot API URLs carry the token in their path (/bot<id>:<secret>/method); clients
+# may percent-encode the colon, and access logs print the path as sent.
+_BOT_TOKEN_IN_URL = re.compile(r"/bot\d+(?::|%3[Aa])[A-Za-z0-9_-]+")
 
 
 class RedactBotTokens(logging.Filter):
     """Keep Telegram bot tokens, real or stand-in, out of log lines that print request URLs."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        if "/bot" in message:
-            record.msg = _BOT_TOKEN_IN_URL.sub("/bot<redacted>", message)
-            record.args = None
+        # Redact inside the arguments rather than flattening them: formatters such
+        # as uvicorn's AccessFormatter unpack record.args by position.
+        if isinstance(record.args, tuple):
+            record.args = tuple(_redacted(arg) for arg in record.args)
+        if isinstance(record.msg, str):
+            record.msg = _BOT_TOKEN_IN_URL.sub("/bot<redacted>", record.msg)
         return True
+
+
+def _redacted(arg: object) -> object:
+    """The argument with any bot token removed, keeping its type when it has none (for %d and the like)."""
+    text = str(arg)
+    return _BOT_TOKEN_IN_URL.sub("/bot<redacted>", text) if _BOT_TOKEN_IN_URL.search(text) else arg
 
 
 logging.getLogger("httpx").addFilter(RedactBotTokens())

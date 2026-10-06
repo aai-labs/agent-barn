@@ -426,7 +426,8 @@ class AgentBarnTelegramUpdate(BaseModel, table=True):
         default=AgentBarnTelegramUpdateStatus.RECEIVED,
         sa_column=Column(sa.Enum(AgentBarnTelegramUpdateStatus), nullable=False),
     )
-    payload: dict[str, Any] | None = SqlField(default=None, sa_column=Column(JSONB, nullable=True))
+    # none_as_null: clearing the content must leave SQL NULL, not a JSON null value.
+    payload: dict[str, Any] | None = SqlField(default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True))
     # Set when the update is queued for a linked user's Agent.
     telegram_user_id: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
     agent_id: UUID | None = SqlField(default=None, nullable=True, foreign_key="agent.id", ondelete="CASCADE")
