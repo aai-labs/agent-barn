@@ -389,3 +389,48 @@ def test_a_file_path_cannot_reach_anything_but_a_file(file_path: str) -> None:
         # Whichever route the path resolves to, the real token never leaves for it.
         assert_that(response.status_code, is_in([401, 404]))
         assert_that(context.telegram.received, equal_to([]))
+
+
+_GIVEN_TIGHT_BUDGET = [
+    set_env_variable({"AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND": "2"}),
+    *_GIVEN,
+]
+
+
+def test_an_organization_over_its_budget_is_asked_to_retry_shortly() -> None:
+    with given(_GIVEN_TIGHT_BUDGET) as context:
+        with when("the agent sends three messages at once on a budget of two per second"):
+            responses = [_call(context, "sendMessage", {"chat_id": _JANE, "text": f"part {n}"}) for n in range(3)]
+
+        with then("two reach Telegram and the third is asked to retry in a second, as Telegram itself would"):
+            assert_that([response.status_code for response in responses], equal_to([200, 200, 429]))
+            assert_that(
+                responses[2].json(),
+                has_entries(ok=False, error_code=429, parameters=has_entries(retry_after=1)),
+            )
+            assert_that(context.telegram.methods(), equal_to(["sendMessage", "sendMessage"]))
+
+
+def test_typing_indicators_over_budget_are_skipped_rather_than_refused() -> None:
+    with given(_GIVEN_TIGHT_BUDGET) as context:
+        for n in range(2):
+            _call(context, "sendMessage", {"chat_id": _JANE, "text": f"part {n}"})
+
+        with when("the agent shows typing while its budget is spent"):
+            response = _call(context, "sendChatAction", {"chat_id": _JANE, "action": "typing"})
+
+        with then("it is told it succeeded, and the indicator is simply not shown"):
+            assert_that(response.json(), equal_to({"ok": True, "result": True}))
+            assert_that(context.telegram.methods(), equal_to(["sendMessage", "sendMessage"]))
+
+
+def test_bot_lookups_and_button_answers_do_not_use_the_budget() -> None:
+    with given(_GIVEN_TIGHT_BUDGET) as context:
+        for n in range(2):
+            _call(context, "sendMessage", {"chat_id": _JANE, "text": f"part {n}"})
+
+        with when("the agent looks the bot up and answers a button while its budget is spent"):
+            responses = [_call(context, "getMe"), _call(context, "answerCallbackQuery", {"callback_query_id": "cb"})]
+
+        with then("both go through"):
+            assert_that([response.status_code for response in responses], equal_to([200, 200]))

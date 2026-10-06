@@ -1,6 +1,8 @@
 import logging
+import math
 import re
 import secrets
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -10,6 +12,7 @@ import httpx
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.communications.agentbarn_telegram_rate_limit import TelegramRateLimiter
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
 from api.infrastructure.crypto import decrypt_token
@@ -117,6 +120,13 @@ class AgentBarnTelegramProxy:
     repository: AgentBarnTelegramRepository
     client: httpx.Client = field(default_factory=lambda: httpx.Client(timeout=_TIMEOUT_SECONDS), init=False)
     _bot: dict[str, Any] | None = field(default=None, init=False)
+    _limiter: TelegramRateLimiter = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._limiter = TelegramRateLimiter(
+            bot_per_second=self.config.agentbarn_telegram_bot_rate_per_second,
+            organization_per_second=self.config.agentbarn_telegram_organization_rate_per_second,
+        )
 
     def handle(
         self,
@@ -128,9 +138,10 @@ class AgentBarnTelegramProxy:
         body: bytes,
         content_type: str | None,
     ) -> ProxyResponse:
-        real_token = self._authenticate(connection_id, token)
-        if real_token is None:
+        authenticated = self._authenticate(connection_id, token)
+        if authenticated is None:
             return _error(401, "Unauthorized")
+        real_token, organization_id = authenticated
 
         name = method.lower()
         if name == "getme":
@@ -147,6 +158,21 @@ class AgentBarnTelegramProxy:
             chats = self._named_chats(params)
             if not chats or not chats <= self.repository.linked_user_ids(connection_id):
                 return _error(403, "Forbidden: this chat is not linked to this agent")
+            wait = self._limiter.acquire(organization_id, now=time.monotonic())
+            if wait > 0:
+                if name == "sendchataction":
+                    # A typing indicator is a courtesy; skipping one beats delaying the reply.
+                    return ProxyResponse(200, {"ok": True, "result": True})
+                retry_after = max(1, math.ceil(wait))
+                return ProxyResponse(
+                    429,
+                    {
+                        "ok": False,
+                        "error_code": 429,
+                        "description": f"Too Many Requests: retry after {retry_after}",
+                        "parameters": {"retry_after": retry_after},
+                    },
+                )
         elif name not in _UNSCOPED:
             return _error(403, "Forbidden: this method is not available")
 
@@ -162,9 +188,10 @@ class AgentBarnTelegramProxy:
 
     def download(self, connection_id: UUID, token: str, file_path: str) -> ProxyFile:
         """A file a linked user sent, from Telegram's file area, fetched with the real token."""
-        real_token = self._authenticate(connection_id, token)
-        if real_token is None:
+        authenticated = self._authenticate(connection_id, token)
+        if authenticated is None:
             return ProxyFile(401, b"", None)
+        real_token, _ = authenticated
         if not _FILE_PATH.match(file_path):
             return ProxyFile(404, b"", None)
         try:
@@ -176,8 +203,8 @@ class AgentBarnTelegramProxy:
             return ProxyFile(response.status_code, b"", None)
         return ProxyFile(200, response.content, response.headers.get("Content-Type"))
 
-    def _authenticate(self, connection_id: UUID, token: str) -> str | None:
-        """The real bot token when ``token`` is this Connection's stand-in; otherwise None."""
+    def _authenticate(self, connection_id: UUID, token: str) -> tuple[str, UUID] | None:
+        """The real bot token and caller's Organization when ``token`` is this Connection's stand-in."""
         connection = self.repository.proxy_connection(connection_id)
         real_token = self.config.agentbarn_telegram_bot_token.strip()
         if connection is None or not real_token:
@@ -185,7 +212,7 @@ class AgentBarnTelegramProxy:
         driver_key = decrypt_token(connection.driver_key_encrypted, self.config.agent_token_encryption_key)
         if not secrets.compare_digest(token, runtime_api_token(driver_key, real_token)):
             return None
-        return real_token
+        return real_token, connection.organization_id
 
     @staticmethod
     def _named_chats(params: dict[str, Any]) -> set[int] | None:

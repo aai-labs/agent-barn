@@ -108,6 +108,11 @@ class Config(BaseSettings):
     # Where the Communications process delivers a linked user's updates to their
     # Agent's Telegram webhook. Local Docker/k3d cannot resolve cluster DNS.
     agentbarn_telegram_runtime_webhook_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:8443/telegram"
+    # Calls per second Agents may make through the shared bot: in total, kept under
+    # Telegram's limit of about 30, and per Organization, so no one Organization can
+    # use up the bot for the others.
+    agentbarn_telegram_bot_rate_per_second: float = Field(default=25, gt=0)
+    agentbarn_telegram_organization_rate_per_second: float = Field(default=5, gt=0)
 
     @property
     def native_platform_keys(self) -> frozenset[str]:
