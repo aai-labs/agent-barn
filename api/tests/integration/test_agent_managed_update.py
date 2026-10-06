@@ -160,7 +160,9 @@ def _restore_points(context) -> list[dict]:
 def test_a_successful_managed_update_pins_the_agent_to_the_new_image():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         _succeed_capture_job(context)
-        context.injector.get(KubernetesClient).get_pod_readiness.return_value = ("ready", None)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_pod_image.return_value = None  # no live pod to read in this mock
+        k8s.get_pod_readiness.return_value = ("ready", None)
         service = context.injector.get(AgentService)
 
         with when("the managed update runs end to end"):
@@ -177,7 +179,9 @@ def test_a_successful_managed_update_pins_the_agent_to_the_new_image():
 def test_a_pinned_agent_running_an_older_image_reports_update_available():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         _succeed_capture_job(context)
-        context.injector.get(KubernetesClient).get_pod_readiness.return_value = ("ready", None)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_pod_image.return_value = None  # no live pod to read in this mock
+        k8s.get_pod_readiness.return_value = ("ready", None)
         service = context.injector.get(AgentService)
         service._run_managed_update(context.agent.id, _user_context(context))  # pins to v2, digest current
 
@@ -241,6 +245,7 @@ def test_a_rollback_restarts_the_agent_on_its_previous_image():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         _succeed_capture_job(context)
         k8s = context.injector.get(KubernetesClient)
+        k8s.get_pod_image.return_value = None  # the pre-set pin is the ground truth here
         k8s.get_pod_readiness.side_effect = [
             ("crashed", "BackOff"),  # the updated pod never comes up
             ("ready", None),  # the rolled-back pod does
@@ -317,6 +322,27 @@ def test_a_managed_update_rolls_back_when_the_start_itself_fails():
 
 
 # --- The HTTP route -----------------------------------------------------------
+
+
+def test_a_first_update_rolls_back_to_the_image_the_pod_actually_ran():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        k8s = context.injector.get(KubernetesClient)
+        # The pod is still on v1 even though the platform pin moved to v2 —
+        # a long-running Agent that never pinned itself.
+        k8s.get_pod_image.return_value = "registry.example.com/agentbarn-openclaw:v1"
+        k8s.get_pod_readiness.side_effect = [
+            ("crashed", "BackOff"),  # the updated pod never comes up
+            ("ready", None),  # the rolled-back pod does
+        ]
+        service = context.injector.get(AgentService)
+
+        with when("the first managed update runs against the moved platform pin"):
+            service._run_managed_update(context.agent.id, _user_context(context))
+
+        with then("the rollback restarts the runtime the pod was actually running"):
+            pinned = service.repository.get_by_id(context.agent.id).pinned_runtime_image
+            assert_that(pinned, equal_to("registry.example.com/agentbarn-openclaw:v1"))
 
 
 def test_a_rollback_whose_restore_fails_does_not_restart_the_agent():

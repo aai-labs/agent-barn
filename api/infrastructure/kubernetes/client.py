@@ -384,6 +384,21 @@ class KubernetesClient:
             return "initializing", None
         return None, None
 
+    def get_pod_image(self, deployment_name: str, namespace: str) -> str | None:
+        """The runtime image the Agent's newest pod is actually running, if any.
+
+        An Agent's "previous runtime" during a managed update is what its pod
+        proves it ran — not what the platform pin or the pin column says —
+        because both can move underneath a long-running pod.
+        """
+        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        if pod is None:
+            return None
+        for container in pod.spec.containers or []:
+            if container.name == "agent":
+                return container.image
+        return None
+
     def get_runtime_diagnostics(self, deployment_name: str, namespace: str) -> dict[str, object]:
         """Bounded evidence from the newest non-deleting pod, including failed pods.
 

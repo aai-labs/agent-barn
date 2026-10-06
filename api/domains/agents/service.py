@@ -2496,9 +2496,14 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None or current.status != AgentStatus.RUNNING:
                 return
-            # Adopt today's effective image as the Agent's own pin, so "previous
-            # pin" is concrete even if the Agent never pinned itself before.
-            previous_image = self._effective_runtime_image(current)
+            # Adopt the image this pod is actually running as the Agent's own
+            # pin, so "previous pin" is concrete — and correct even when the
+            # platform pin moved underneath a long-running pod that never
+            # pinned itself.
+            previous_image = (
+                self.k8s.get_pod_image(f"agent-{current.id}", self.config.k8s_namespace)
+                or self._effective_runtime_image(current)
+            )
             if current.pinned_runtime_image != previous_image:
                 current.pinned_runtime_image = previous_image
                 self.repository.save(current)
