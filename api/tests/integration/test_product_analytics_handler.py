@@ -1,0 +1,343 @@
+from datetime import UTC, datetime
+from uuid import UUID, uuid4, uuid7
+
+import pytest
+from hamcrest import assert_that, equal_to, has_entries, has_key, is_not
+
+from api.domains.analytics.event_handlers import ProductAnalyticsHandler
+from api.domains.analytics.repository import InstallationRepository
+from api.domains.events.catalog import (
+    AGENT_CREATED,
+    AGENT_UPDATED,
+    ORGANIZATION_MEMBER_REMOVED,
+    ORGANIZATION_ROLE_CHANGED,
+    PRODUCT_ANALYTICS_HANDLER,
+)
+from api.domains.events.handlers import (
+    EventDeliveryContext,
+    EventHandlerRegistry,
+    RetryableEventHandlerError,
+    TerminalEventHandlerError,
+)
+from api.domains.events.models import (
+    ActorIdentity,
+    ActorIdentityType,
+    DomainEventEnvelope,
+    EventScope,
+    SubjectIdentity,
+    SubjectIdentityType,
+)
+from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.infrastructure.posthog.exceptions import RetryablePostHogException, TerminalPostHogException
+from api.tests.core.givenpy import given
+from api.tests.core.modules import prepare_injector, set_env_variable
+from api.tests.mocks.posthog import MockPostHogModule
+from api.tests.steps.database import database_is_clean, database_repo_is_ready
+from api.tests.steps.organization import there_is_an_organization, there_is_an_organization_with_user_and_access_token
+from api.tests.steps.user import there_is_a_user
+
+OCCURRED_AT = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+
+
+def _given(posthog: MockPostHogModule, *, enabled: bool = True, user_details: bool = False):
+    return [
+        set_env_variable(
+            {
+                "ANALYTICS_ENABLED": str(enabled).lower(),
+                "ANALYTICS_INCLUDE_USER_DETAILS": str(user_details).lower(),
+                "INSTALLATION_NAME": "test-installation",
+            }
+        ),
+        prepare_injector(modules=[posthog]),
+        database_repo_is_ready(),
+        database_is_clean(),
+        there_is_an_organization_with_user_and_access_token(),
+    ]
+
+
+def _membership_actor(context) -> ActorIdentity:
+    return ActorIdentity(
+        type=ActorIdentityType.MEMBERSHIP, id=str(context.organization_user.id), organization_id=context.organization.id
+    )
+
+
+def _envelope(context, event_name: str, payload: dict, actor: ActorIdentity | None = None) -> DomainEventEnvelope:
+    return DomainEventEnvelope(
+        event_name=event_name,
+        schema_version=1,
+        occurred_at=OCCURRED_AT,
+        event_scope=EventScope.ORGANIZATION,
+        organization_id=context.organization.id,
+        actor=actor or _membership_actor(context),
+        subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=uuid7(), organization_id=context.organization.id),
+        correlation_id=uuid4(),
+        payload=payload,
+    )
+
+
+def _agent_created(context, actor: ActorIdentity | None = None) -> DomainEventEnvelope:
+    return _envelope(
+        context,
+        AGENT_CREATED,
+        {
+            "organization_id": str(context.organization.id),
+            "agent_id": str(uuid7()),
+            "agent_name": "Secret Project Agent",
+            "created_by_user_id": str(context.user.id),
+            "runtime": "HERMES",
+        },
+        actor,
+    )
+
+
+def _delivery(event: DomainEventEnvelope, attempt_count: int = 1) -> EventDeliveryContext:
+    return EventDeliveryContext(
+        delivery_id=uuid7(),
+        event_id=event.event_id,
+        handler_name=PRODUCT_ANALYTICS_HANDLER,
+        attempt_count=attempt_count,
+        correlation_id=event.correlation_id,
+        organization_id=event.organization_id,
+    )
+
+
+def _handle(context, event: DomainEventEnvelope, attempt_count: int = 1) -> None:
+    context.injector.get(ProductAnalyticsHandler).handle(event, _delivery(event, attempt_count))
+
+
+def test_is_registered_in_the_application_handler_registry():
+    with given(_given(MockPostHogModule())) as context:
+        registry = context.injector.get(EventHandlerRegistry)
+
+        assert_that(registry.get(PRODUCT_ANALYTICS_HANDLER).name, equal_to(PRODUCT_ANALYTICS_HANDLER))
+
+
+def test_sends_the_event_as_the_acting_user_with_installation_and_organization_groups():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        event = _agent_created(context)
+
+        _handle(context, event)
+
+        installation_id = str(context.injector.get(InstallationRepository).get_id())
+        assert_that(len(posthog.batches), equal_to(1))
+        capture, group_identify = posthog.batches[0]
+        assert_that(
+            capture,
+            has_entries(
+                {
+                    "event": AGENT_CREATED,
+                    "distinct_id": str(context.user.id),
+                    "uuid": str(event.event_id),
+                    "timestamp": OCCURRED_AT.isoformat(),
+                }
+            ),
+        )
+        assert_that(
+            capture["properties"],
+            equal_to(
+                {
+                    "agent_id": event.payload["agent_id"],
+                    "runtime": "HERMES",
+                    "source": "agentbarn-api",
+                    "organization_id": str(context.organization.id),
+                    "installation_id": installation_id,
+                    "$groups": {"installation": installation_id, "organization": str(context.organization.id)},
+                    "$geoip_disable": True,
+                    "$lib": "agentbarn-api",
+                }
+            ),
+        )
+        assert_that(group_identify["event"], equal_to("$groupidentify"))
+        assert_that(group_identify["distinct_id"], equal_to(str(context.user.id)))
+        assert_that(
+            group_identify["properties"],
+            has_entries(
+                {
+                    "$group_type": "installation",
+                    "$group_key": installation_id,
+                    "$group_set": {"name": "test-installation"},
+                }
+            ),
+        )
+
+
+def test_sends_only_the_role_change_fields_for_a_role_change():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        membership_id = str(uuid7())
+        event = _envelope(
+            context,
+            ORGANIZATION_ROLE_CHANGED,
+            {
+                "organization_id": str(context.organization.id),
+                "membership_id": membership_id,
+                "user_id": str(uuid7()),
+                "previous_role": "MEMBER",
+                "new_role": "ADMIN",
+                "actor_display": "Admin Person",
+                "subject_display": "Member Person",
+            },
+        )
+
+        _handle(context, event)
+
+        properties = posthog.batches[0][0]["properties"]
+        assert_that(
+            {key: properties[key] for key in ("membership_id", "previous_role", "new_role")},
+            equal_to({"membership_id": membership_id, "previous_role": "MEMBER", "new_role": "ADMIN"}),
+        )
+        assert_that(properties, is_not(has_key("actor_display")))
+        assert_that(properties, is_not(has_key("subject_display")))
+        assert_that(properties, is_not(has_key("user_id")))
+
+
+def test_sends_changed_field_names_but_never_their_values():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        event = _envelope(
+            context,
+            AGENT_UPDATED,
+            {
+                "organization_id": str(context.organization.id),
+                "agent_id": str(uuid7()),
+                "field_changes": {"name": {"from": "Old", "to": "New"}, "model": {"from": "a", "to": "b"}},
+                "actor_display": "Admin Person",
+                "subject_display": "New",
+            },
+        )
+
+        _handle(context, event)
+
+        properties = posthog.batches[0][0]["properties"]
+        assert_that(sorted(properties["changed_fields"]), equal_to(["model", "name"]))
+        assert_that(properties, is_not(has_key("field_changes")))
+
+
+def test_a_member_who_left_is_attributed_to_themselves():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        organization = context.organization
+        there_is_a_user(email="leaver@example.com", role=OrganizationRole.MEMBER)(context)
+        leaver, membership = context.user, context.organization_user
+        context.injector.get(OrganizationUserRepository).delete(membership)
+        event = _envelope(
+            context,
+            ORGANIZATION_MEMBER_REMOVED,
+            {
+                "organization_id": str(organization.id),
+                "membership_id": str(membership.id),
+                "user_id": str(leaver.id),
+                "role": "MEMBER",
+                "actor_display": "Leaver",
+                "subject_display": "Leaver",
+            },
+            ActorIdentity(type=ActorIdentityType.MEMBERSHIP, id=str(membership.id), organization_id=organization.id),
+        )
+
+        _handle(context, event)
+
+        assert_that(posthog.batches[0][0]["distinct_id"], equal_to(str(leaver.id)))
+
+
+def test_an_actor_whose_membership_is_gone_is_skipped():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        actor = ActorIdentity(
+            type=ActorIdentityType.MEMBERSHIP, id=str(uuid7()), organization_id=context.organization.id
+        )
+
+        _handle(context, _agent_created(context, actor))
+
+        assert_that(posthog.batches, equal_to([]))
+
+
+def test_a_membership_from_another_organization_is_not_resolved():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        foreign_actor = _membership_actor(context)
+        there_is_an_organization(name="Other Organization")(context)
+
+        _handle(context, _agent_created(context, foreign_actor))
+
+        assert_that(posthog.batches, equal_to([]))
+
+
+def test_a_user_actor_without_membership_is_resolved_by_user_id():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        actor = ActorIdentity(type=ActorIdentityType.USER, id=context.user.id)
+
+        _handle(context, _agent_created(context, actor))
+
+        assert_that(posthog.batches[0][0]["distinct_id"], equal_to(str(context.user.id)))
+
+
+@pytest.mark.parametrize("actor_type", [ActorIdentityType.SYSTEM, ActorIdentityType.RUNTIME])
+def test_events_without_a_human_actor_are_skipped(actor_type):
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        actor = ActorIdentity(type=actor_type, id="agent-maintenance", organization_id=context.organization.id)
+
+        _handle(context, _agent_created(context, actor))
+
+        assert_that(posthog.batches, equal_to([]))
+
+
+def test_nothing_is_sent_while_analytics_is_disabled():
+    posthog = MockPostHogModule()
+    with given(_given(posthog, enabled=False)) as context:
+        _handle(context, _agent_created(context))
+
+        assert_that(posthog.batches, equal_to([]))
+
+
+def test_user_details_are_left_out_by_default():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        _handle(context, _agent_created(context))
+
+        assert_that(posthog.batches[0][0]["properties"], is_not(has_key("$set")))
+
+
+def test_user_details_are_set_when_enabled():
+    posthog = MockPostHogModule()
+    with given(_given(posthog, user_details=True)) as context:
+        _handle(context, _agent_created(context))
+
+        assert_that(
+            posthog.batches[0][0]["properties"]["$set"],
+            equal_to({"email": context.user.email, "name": context.user.full_name}),
+        )
+
+
+@pytest.mark.parametrize("attempt_count", [1, 2])
+def test_an_unreachable_posthog_is_retried_on_early_attempts(attempt_count):
+    with given(_given(MockPostHogModule(error=RetryablePostHogException("down")))) as context:
+        with pytest.raises(RetryableEventHandlerError):
+            _handle(context, _agent_created(context), attempt_count)
+
+
+def test_an_unreachable_posthog_is_given_up_on_the_third_attempt():
+    with given(_given(MockPostHogModule(error=RetryablePostHogException("down")))) as context:
+        _handle(context, _agent_created(context), attempt_count=3)
+
+
+def test_a_rejected_batch_is_terminal():
+    with given(_given(MockPostHogModule(error=TerminalPostHogException("bad")))) as context:
+        with pytest.raises(TerminalEventHandlerError):
+            _handle(context, _agent_created(context))
+
+
+def test_a_redelivered_event_carries_the_same_ids():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        event = _agent_created(context)
+
+        _handle(context, event)
+        _handle(context, event, attempt_count=2)
+
+        first, second = posthog.batches
+        assert_that([message["uuid"] for message in second], equal_to([message["uuid"] for message in first]))
+        assert_that(UUID(first[1]["uuid"]), is_not(equal_to(event.event_id)))

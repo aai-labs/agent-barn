@@ -3,6 +3,7 @@ from injector import Module, provider, singleton
 from api.core.config import Config, get_config
 from api.domains.agents.event_handlers import AgentBudgetEmailHandler, AgentLifecycleEmailHandler
 from api.domains.agents.repository import AgentRepository
+from api.domains.analytics.event_handlers import ProductAnalyticsHandler
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.email import EmailPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
@@ -79,6 +80,7 @@ class AppModule(Module):
         organization_budget_email_handler: OrganizationBudgetEmailHandler,
         agent_budget_email_handler: AgentBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
+        product_analytics_handler: ProductAnalyticsHandler,
     ) -> EventHandlerRegistry:
         return EventHandlerRegistry(
             [
@@ -86,6 +88,7 @@ class AppModule(Module):
                 organization_budget_email_handler,
                 agent_budget_email_handler,
                 security_audit_projection,
+                product_analytics_handler,
             ]
         )
 

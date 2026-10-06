@@ -54,6 +54,7 @@ SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
+PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
 
 
 class OrganizationRoleChangedPayload(BaseModel):
