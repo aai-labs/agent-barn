@@ -76,6 +76,7 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 | `8000`  | API                        |
 | `8001`  | Ingest (runtime telemetry) |
 | `8002`  | Communications gateway     |
+| `8003`  | Agent Memory gateway       |
 | `16443` | k3d Kubernetes API         |
 
 Make sure these ports are free before starting the full stack. The configurable
@@ -136,9 +137,13 @@ the cluster is up.
 
 This validates `.env`, brings up the k3d cluster and LiteLLM, builds and loads
 the agent base images, starts `db` and `redis`, runs database migrations, then
-starts `api`, `worker`, `communications`, and `ui` with hot reload and follows
+starts `api`, `worker`, `communications`, `memory`, and `ui` with hot reload and follows
 the logs. `Ctrl-C` detaches without stopping anything; use `./run.sh --detach`
 to skip the logs entirely.
+
+The memory gateway needs a running Hindsight backend to list or save memories.
+The optional `local-hindsight` Compose profile provides one; see
+[Agent Memory deployment](docs/guidelines/operations.md#agent-memory-deployment).
 
 If a startup value checked by `run.sh` is missing, the script fails immediately
 and lists it.
@@ -302,11 +307,12 @@ separate terminals, alongside `make db-up`:
 make setup         # uv sync + pnpm install; creates .env from .env.spec if absent
 make db-up         # Postgres only
 make migrate       # apply migrations
-make dev-api       # API on :8000; also starts Ingest :8001 and Communications :8002
+make dev-api       # API :8000, Ingest :8001, Communications :8002, Memory :8003
 make dev-ui        # UI on :3000, hot reload
 make dev-worker    # Dramatiq worker, hot reload
 make dev-ingest    # Ingest only (normally started by dev-api)
 make dev-communications  # Communications only (normally started by dev-api)
+make dev-memory    # Memory gateway only (normally started by dev-api)
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 ```
 
@@ -314,7 +320,7 @@ make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 The worker and reconciliation command also need a Redis server reachable at the
 `REDIS_URL` in `.env`. The Compose Redis service does not publish a host port,
 so `make redis-up` alone cannot serve those host-run processes. This path uses
-host ports `3000`, `8000`, `8001`, and `8002`, so don't run it alongside
+host ports `3000`, `8000`, `8001`, `8002`, and `8003`, so don't run it alongside
 `./run.sh`'s containers.
 
 Two gotchas specific to this path:
@@ -649,6 +655,14 @@ deploy the published base images without rebuilding them. The current local
 builder requires a GitHub token only to authenticate that public clone; it does
 not require private-source permission. Third-party components keep their own
 licences.
+
+## Programmatic API
+
+Create a Personal API Key in Account settings to use the existing user-authenticated
+`/api/v1` routes. The deployed API serves an interactive reference at
+`/api/v1/docs`, an OpenAPI schema at `/api/v1/openapi.json`, and agent guidance
+at `/llms.txt`. See the [API quickstart](api/developer_docs/quickstart.md) for
+a Bearer-token example.
 
 ## Getting help and contributing
 

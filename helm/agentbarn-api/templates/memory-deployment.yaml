@@ -1,0 +1,105 @@
+{{- if .Values.memory.enabled }}
+{{- $_ := required "memory.litellmKeyHashes is required for memory cost attribution" .Values.memory.litellmKeyHashes }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-memory
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory
+spec:
+  replicas: {{ .Values.memory.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentbarn-api.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: memory
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        build-sha: {{ .Values.buildSha | quote }}
+        checksum/hindsight-auth: {{ .Values.memory.authChecksum | quote }}
+      labels:
+        {{- include "agentbarn-api.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: memory
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+        - name: memory
+          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uvicorn", "api.memory_main:app", "--host", "0.0.0.0", "--port", "8003", "--no-access-log"]
+          ports:
+            - name: memory
+              containerPort: 8003
+          env:
+            # This process has no platform-user management surface.
+            - name: PLATFORM_ADMIN_CREDENTIALS
+              value: ""
+            - name: DB_CONNECTION_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: DB_CONNECTION_URL
+            - name: SECRET_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: SECRET_SIGNING_KEY
+            - name: ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: ENVIRONMENT
+            - name: MEMORY_DEFAULT_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: MEMORY_DEFAULT_MODEL
+            - name: MEMORY_LITELLM_KEY_HASHES
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: MEMORY_LITELLM_KEY_HASHES
+            - name: ORGANIZATION_DEFAULT_LLM_BUDGET_USD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: ORGANIZATION_DEFAULT_LLM_BUDGET_USD
+            - name: AGENT_DEFAULT_LLM_BUDGET_USD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: AGENT_DEFAULT_LLM_BUDGET_USD
+            - name: HINDSIGHT_BASE_URL
+              value: {{ .Values.memory.hindsightBaseUrl | required "memory.hindsightBaseUrl is required" | quote }}
+            - name: HINDSIGHT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.memory.hindsightSecretName | required "memory.hindsightSecretName is required" }}
+                  key: HINDSIGHT_API_TENANT_API_KEY
+          readinessProbe:
+            httpGet: {path: /health, port: memory}
+          livenessProbe:
+            httpGet: {path: /health, port: memory}
+          resources:
+            {{- toYaml .Values.memory.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-memory
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: memory
+      port: 8003
+      targetPort: memory
+  selector:
+    {{- include "agentbarn-api.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: memory
+{{- end }}

@@ -7,8 +7,8 @@ import { DashboardPage } from "../pages/dashboard-page.po";
  * The top nav is a single flex row whose children default to `min-width: auto`,
  * so without explicit shrink rules it forces the page wider than the viewport
  * instead of adapting. Below `lg` the tabs move into a drawer; at `lg` and up
- * they stay inline. `lg` is the threshold because Platform view needs ~1079px
- * to lay its tabs out at full spacing, so every tablet width gets the drawer.
+ * they stay inline with compact spacing until `xl`. The Platform view has the
+ * most tabs, including Settings, so it pins both inline spacing boundaries.
  * These specs pin the outcomes — the page never scrolls sideways and every tab
  * stays reachable — not the utilities behind them.
  */
@@ -150,23 +150,28 @@ test.describe("Top nav responsiveness", () => {
     });
   });
 
-  test.describe("at the narrowest inline width", () => {
-    test.use({ viewport: { width: 1024, height: 900 } });
+  for (const width of [1024, 1280]) {
+    test.describe(`at the inline spacing boundary (${width}px)`, () => {
+      test.use({ viewport: { width, height: 900 } });
 
-    test("fits every tab without an internal scroll", async ({ page }) => {
-      await dashboardPage.gotoUsers();
+      test("fits every tab without an internal scroll", async ({ page }) => {
+        await dashboardPage.gotoUsers();
 
-      const nav = page.locator("header nav");
-      await expect(nav).toBeVisible();
+        const nav = page.locator("header nav");
+        await expect(nav).toBeVisible();
+        await expect(
+          nav.getByRole("link", { name: "Settings", exact: true }),
+        ).toBeVisible();
 
-      const navCutOff = await nav.evaluate(
-        (el) => el.scrollWidth > el.clientWidth,
-      );
+        const navCutOff = await nav.evaluate(
+          (el) => el.scrollWidth > el.clientWidth,
+        );
 
-      expect(navCutOff).toBe(false);
-      expect(await horizontalOverflow(page)).toBe(0);
+        expect(navCutOff).toBe(false);
+        expect(await horizontalOverflow(page)).toBe(0);
+      });
     });
-  });
+  }
 
   test.describe("on a desktop viewport", () => {
     test.use({ viewport: { width: 1440, height: 900 } });

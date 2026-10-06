@@ -17,6 +17,7 @@ from api.domains.costs.models import (
     CostRecord,
     CostRecordSource,
     CostSortDirection,
+    CostSyncState,
     MonthlyWindow,
 )
 from api.domains.organizations.models import Organization
@@ -80,6 +81,7 @@ _REFRESHABLE_COLUMNS = (
     "request_duration_ms",
     "agent_id",
     "organization_id",
+    "is_memory",
 )
 
 
@@ -88,6 +90,21 @@ _REFRESHABLE_COLUMNS = (
 @dataclass
 class CostRepository:
     delegate: PostgresRepositoryDelegate
+
+    def record_sync_completion(self, completed_at: datetime) -> None:
+        table = SQLModel.metadata.tables["cost_sync_state"]
+        statement = pg_insert(table).values(source="litellm", completed_at=completed_at)
+        statement = statement.on_conflict_do_update(
+            index_elements=[table.c.source], set_={"completed_at": statement.excluded.completed_at}
+        )
+        with Session(self.delegate.engine) as session:
+            session.exec(statement)  # type: ignore[call-overload]
+            session.commit()
+
+    def last_sync_completed_at(self) -> datetime | None:
+        with Session(self.delegate.engine) as session:
+            state = session.get(CostSyncState, "litellm")
+            return state.completed_at if state else None
 
     def upsert_many(self, records: list[CostRecord]) -> int:
         """Insert or refresh cost rows, keyed on request_id. Returns rows written.
@@ -143,6 +160,25 @@ class CostRepository:
         """
         with Session(self.delegate.engine) as session:
             return session.exec(select(sa.func.max(col(CostRecord.occurred_at)))).one()
+
+    def memory_spend(
+        self, organization_id: UUID, start: datetime, end: datetime, *, key_hashes: frozenset[str] | None = None
+    ) -> Decimal:
+        """Organization Memory model charges within one renewal window, including healed costs."""
+        if key_hashes is not None and not key_hashes:
+            return Decimal(0)
+        with Session(self.delegate.engine) as session:
+            predicates = [col(CostRecord.litellm_key_hash).in_(key_hashes)] if key_hashes is not None else []
+            value = session.exec(
+                select(sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0)).where(
+                    col(CostRecord.organization_id) == organization_id,
+                    col(CostRecord.is_memory).is_(True),
+                    col(CostRecord.occurred_at) >= start,
+                    col(CostRecord.occurred_at) < end,
+                    *predicates,
+                )
+            ).one()
+            return Decimal(str(value))
 
     def find_heal_candidates(self, limit: int) -> list[CostRecord]:
         """Rows that recorded no money for a call that plainly consumed tokens.

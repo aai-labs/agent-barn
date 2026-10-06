@@ -13,6 +13,7 @@ const REPLACE_PATHS = [
   ['channels'],
   ['bindings'],
   ['agents', 'defaults', 'heartbeat'],
+  ['plugins', 'entries', 'hindsight-openclaw'],
 ];
 
 function getPath(obj, parts) {

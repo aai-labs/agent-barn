@@ -1,0 +1,21 @@
+image:
+  repository: ghcr.io/vectorize-io/hindsight
+  tag: "0.10.2"
+  pullPolicy: IfNotPresent
+secretName: hindsight
+databaseUrl: ""
+apiKey: ""
+llm:
+  baseUrl: http://litellm:4000/v1
+  apiKey: ""
+  settingsUrl: http://agentbarn-api:8004/memory/runtime/v1/model
+  model: openrouter/openai/gpt-4.1-mini
+resources:
+  requests:
+    memory: 2Gi
+    cpu: 500m
+  limits:
+    memory: 4Gi
+    cpu: 2000m
+
+runtimeServiceKey: ""

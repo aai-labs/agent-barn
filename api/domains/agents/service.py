@@ -1,5 +1,6 @@
 import datetime as dt
 import fnmatch
+import hashlib
 import json
 import logging
 import secrets
@@ -556,6 +557,7 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            memory_enabled=agent.memory_enabled,
             last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
             skills=skills_read,
@@ -1952,6 +1954,7 @@ class AgentService:
                 telegram_settings=native_telegram.settings if native_telegram else None,
                 runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,
+                memory_enabled=agent.memory_enabled,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1994,7 +1997,9 @@ class AgentService:
             if runtime_teams is not None:
                 native_credentials["msteams"] = runtime_teams.credentials
                 native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
-            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
+            overlay = build_openclaw_gateway_config(
+                effective_model, llm_proxy_url, native_channels, memory_enabled=agent.memory_enabled
+            )
             hermes_cfg = None
             secret = build_secret_runtime(
                 agent.id,
@@ -2134,6 +2139,9 @@ class AgentService:
 
         ingest_key = secrets.token_urlsafe(32)
         communication_key = secrets.token_urlsafe(32)
+        memory_key = secrets.token_urlsafe(32) if agent.memory_enabled else None
+        if memory_key:
+            secret.string_data.update({"MEMORY_URL": self.config.memory_base_url, "MEMORY_API_KEY": memory_key})
         secret.string_data.update(
             {
                 "AGENT_ID": str(agent.id),
@@ -2220,6 +2228,7 @@ class AgentService:
                 user_md=rendered.user_md,
                 tools_md=tools_md,
                 agents_md=agents_md,
+                memory_enabled=agent.memory_enabled,
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
@@ -2238,6 +2247,7 @@ class AgentService:
                 user_md=rendered.user_md,
                 tools_md=tools_md,
                 agents_md=agents_md,
+                memory_enabled=agent.memory_enabled,
                 boot_md=rendered.boot_md,
                 bootstrap_md=rendered.bootstrap_md,
                 heartbeat_md=rendered.heartbeat_md,
@@ -2280,6 +2290,7 @@ class AgentService:
                 self.config.hermes_image,
             )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
+        agent.memory_key_hash = hashlib.sha256(memory_key.encode()).hexdigest() if memory_key else None
         agent.communication_key_encrypted = encrypt_token(
             communication_key,
             self.config.agent_token_encryption_key,
