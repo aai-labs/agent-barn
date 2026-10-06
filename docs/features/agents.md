@@ -74,6 +74,10 @@ footer stays at the bottom even when names or pending model notes wrap. The
 dashboard search filters the currently loaded page, and identifies that limit
 when more Agents exist than are loaded.
 
+List reads batch shared credential labels for the visible page within the
+Organization; resolving each card must not issue a credential lookup per Agent.
+Response fields and credential-content exclusion match detail reads.
+
 ## State model
 
 ```text

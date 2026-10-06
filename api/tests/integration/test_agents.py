@@ -5934,3 +5934,39 @@ def test_legacy_agent_list_metadata_does_not_guess_creator_or_message_time():
         response = context.client.get(_BASE, headers={"Authorization": f"Bearer {context.access_token}"})
         assert_that(response.status_code, equal_to(200))
         assert_that(response.json()["items"][0], has_entries(creator=None, last_message_at=None))
+
+
+@pytest.mark.parametrize("agent_count", [1, 20])
+def test_agent_list_batches_shared_credential_labels(agent_count):
+    from api.domains.shared_credentials.repository import SharedCredentialRepository
+    from api.tests.steps.agent import shared_credential_is_attached_to_agent, there_is_a_shared_credential
+
+    with given([*_GIVEN, there_is_a_shared_credential()]) as context:
+        for index in range(agent_count):
+            there_is_an_agent(name=f"Teammate {index}")(context)
+            shared_credential_is_attached_to_agent()(context)
+        repository = context.injector.get(SharedCredentialRepository)
+        with patch.object(repository, "get_by_ids_and_org", wraps=repository.get_by_ids_and_org) as lookup:
+            response = context.client.get(
+                _BASE,
+                params={"page": 1, "page_size": 50},
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["items"], has_length(agent_count))
+        for agent in response.json()["items"]:
+            assert_that(
+                agent["secrets"],
+                equal_to(
+                    [
+                        {
+                            "provider": context.shared_credential.provider,
+                            "secret_name": context.shared_credential.name,
+                            "shared_credential_id": str(context.shared_credential.id),
+                            "shared_credential_name": context.shared_credential.name,
+                        }
+                    ]
+                ),
+            )
+        assert_that(lookup.call_count, equal_to(1))
+        assert_that(lookup.call_args.args, equal_to(([context.shared_credential.id], context.organization.id)))

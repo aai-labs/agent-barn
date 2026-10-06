@@ -142,6 +142,7 @@ from api.domains.events.catalog import (
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.service import RestorePointService
+from api.domains.shared_credentials.models import SharedCredential
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
@@ -473,10 +474,11 @@ class AgentService:
         configured_platform_keys: list[str] | None = None,
         creator: AgentCreatorRead | None = None,
         last_message_at: dt.datetime | None = None,
+        shared_credentials: Mapping[UUID, SharedCredential] | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
-        shared_creds_by_id = {}
-        if shared_ids:
+        shared_creds_by_id = shared_credentials if shared_credentials is not None else {}
+        if shared_credentials is None and shared_ids:
             shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, agent.organization_id)
             shared_creds_by_id = {c.id: c for c in shared_creds}
         secrets_read = []
@@ -1477,6 +1479,20 @@ class AgentService:
             agent_ids, self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
         )
         secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
+        shared_credential_ids = list(
+            {
+                secret.shared_credential_id
+                for secrets in secrets_by_agent.values()
+                for secret in secrets
+                if secret.shared_credential_id is not None
+            }
+        )
+        shared_credentials = {
+            credential.id: credential
+            for credential in self.shared_credential_repository.get_by_ids_and_org(
+                shared_credential_ids, read_scope.organization_id
+            )
+        }
         skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
         assigned_skill_ids = list(
             {pinned.skill.id for agent_skills in skills_by_agent.values() for pinned in agent_skills}
@@ -1512,6 +1528,7 @@ class AgentService:
                 configured_platform_keys=configured_platform_keys.get(agent.id, []),
                 creator=creators.get(agent.id),
                 last_message_at=message_times.get(agent.id),
+                shared_credentials=shared_credentials,
             )
             for agent in agents
         ]
