@@ -18,11 +18,18 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - A 408, a 429, a 5xx or a transport failure raises `RetryablePostHogException`. Any other non-200 status raises `TerminalPostHogException`.
   - Never logs the token.
 - Also delivered: test safety. The test suite forces `ANALYTICS_ENABLED=false`, and an autouse guard blocks any call to a `posthog.com` URL. `MockPostHogModule` is a recording fake for handler tests.
-- In transition: nothing calls the client yet.
-- Next: the org-scoped membership lookup.
+- Also delivered: `OrganizationUserRepository.get_member_with_user_by_membership_id(membership_id, organization_id)`. It resolves a Membership Actor to its user, and only within the given Organization.
+- In transition: nothing calls the client or the membership lookup yet.
+- Next: the product analytics Event Handler, registered but not yet subscribed to any event.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-06 — AF-357 — Org-scoped membership lookup
+
+- Delivered: membership-to-user resolution scoped to one Organization. A membership from another Organization, or one that no longer exists, resolves to nothing.
+- Changed: `api/domains/users/organization_users/repository.py`.
+- Follow-up: the Event Handler slice.
 
 ### 2026-10-06 — AF-357 — PostHog client
 
