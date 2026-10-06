@@ -7,6 +7,7 @@ import {
   platformCostSummary,
 } from "../pages/data-support/cost-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
+import { COSTS_REFRESH_INTERVAL_MS } from "@/features/costs/utils";
 
 const PLATFORM_COSTS_URL = "/dashboard/platform/costs";
 
@@ -218,5 +219,46 @@ test.describe("Platform costs (platform_admin)", () => {
     await page.goto(PLATFORM_COSTS_URL);
 
     await expect(page.getByTestId("cost-row")).toContainText("Globex");
+  });
+});
+
+test.describe("Platform costs auto-refresh", () => {
+  let data: DataSupport;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.costs.interceptPlatformFilterOptions();
+    await data.costs.interceptPlatformOrganizations();
+    await data.costs.interceptPlatformMonthly();
+    await data.costs.interceptPlatformList({ items: [platformCostRecord()], total: 1 });
+  });
+
+  test("picks up a falling OpenRouter balance a minute later", async ({ page }) => {
+    await page.clock.install();
+    let calls = 0;
+    await page.route("**/api/v1/platform/costs/summary?*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      calls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          platformCostSummary({ credits_remaining: calls === 1 ? 250 : 3 }),
+        ),
+      });
+    });
+
+    await page.goto(PLATFORM_COSTS_URL);
+    await expect(page.getByTestId("cost-credits")).toContainText("$250.00");
+
+    await page.clock.runFor(COSTS_REFRESH_INTERVAL_MS);
+
+    // Crossing the low-credit threshold is the case worth catching on a page
+    // nobody is clicking: the warning has to arrive on its own.
+    await expect(page.getByTestId("cost-credits")).toContainText("$3.00");
+    await expect(page.getByTestId("cost-credits-warning")).toBeVisible();
   });
 });

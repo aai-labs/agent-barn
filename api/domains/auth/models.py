@@ -9,6 +9,7 @@ from pydantic import Field as PydanticField
 from sqlalchemy import Column, DateTime, Index
 from sqlmodel.main import Field
 
+from api.domains.api_keys.models import ApiKeyAccessMode
 from api.domains.auth.exceptions import ForbiddenException
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import (
@@ -86,6 +87,8 @@ class PasswordResetToken(BaseModel, table=True):
 class CurrentUserContext(PydanticBaseModel):
     user: User
     credential_class: CredentialClass = CredentialClass.USER_SESSION
+    api_key_id: UUID | None = None
+    api_key_access_mode: ApiKeyAccessMode | None = None
     organization_ids: list[UUID] = Field(default_factory=list)
     user_organization_map: dict[UUID, OrganizationUser] = Field(default_factory=dict)
     current_user_organization: OrganizationUser | None = None

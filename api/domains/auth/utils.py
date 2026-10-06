@@ -11,6 +11,8 @@ from injector import inject
 from jwt.exceptions import InvalidTokenError
 
 from api.core.config import Config
+from api.domains.api_keys.models import ApiKeyAccessMode
+from api.domains.api_keys.service import ApiKeyService
 from api.domains.auth.exceptions import (
     CredentialsException,
     EmailNotVerifiedException,
@@ -25,7 +27,10 @@ from api.domains.users.organization_users.models import (
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="/api/v1/auth/login",
+    description="Session access JWT or user-owned Personal API Key (abk_...), sent as a Bearer credential.",
+)
 
 
 def get_organization_id(request: Request) -> uuid.UUID | None:
@@ -54,21 +59,27 @@ def get_authenticated_user(
     organization_id: uuid.UUID | None = None,
     organization_roles: AbstractSet[OrganizationRole] | None = None,
     verified_required: bool = False,
+    api_key_service: ApiKeyService | None = None,
 ) -> CurrentUserContext:
-    try:
-        payload = jwt.decode(token, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM])
-        current_user_id: str | None = payload.get("user_id")
-        token_type: str | None = payload.get("token_type")
-        credential_class = CredentialClass(payload.get("credential_class"))
-
-        if current_user_id is None or token_type != "access":
+    api_key = None
+    if token.startswith("abk_"):
+        if api_key_service is None:
             raise CredentialsException()
-    except InvalidTokenError, ValueError:
-        raise CredentialsException()
-
-    user = user_repository.get(uuid.UUID(current_user_id))
-    if user is None:
-        raise CredentialsException()
+        user, api_key = api_key_service.authenticate(token)
+        credential_class = CredentialClass.API_KEY
+    else:
+        try:
+            payload = jwt.decode(token, config.secret_signing_key, algorithms=[JWT_ENCODING_ALGORITHM])
+            current_user_id: str | None = payload.get("user_id")
+            token_type: str | None = payload.get("token_type")
+            credential_class = CredentialClass(payload.get("credential_class"))
+            if current_user_id is None or token_type != "access" or credential_class == CredentialClass.API_KEY:
+                raise CredentialsException()
+            user = user_repository.get(uuid.UUID(current_user_id))
+            if user is None or (payload.get("stamp") and payload["stamp"] != user.security_stamp):
+                raise CredentialsException()
+        except InvalidTokenError, ValueError:
+            raise CredentialsException()
 
     if verified_required and user.email_verified_at is None:
         raise EmailNotVerifiedException()
@@ -91,6 +102,8 @@ def get_authenticated_user(
     return CurrentUserContext(
         user=user,
         credential_class=credential_class,
+        api_key_id=api_key.id if api_key else None,
+        api_key_access_mode=api_key.access_mode if api_key else None,
         organization_ids=organization_ids,
         user_organization_map=user_organization_map,
         current_user_organization=user_organization,
@@ -110,6 +123,7 @@ def get_current_user(
         user_repository: UserRepository = Injected(UserRepository),
         organization_user_repository: OrganizationUserRepository = Injected(OrganizationUserRepository),
         config: Config = Injected(Config),
+        api_key_service: ApiKeyService = Injected(ApiKeyService),
     ) -> CurrentUserContext:
         # Some endpoints (e.g. /auth/me) only need the authenticated user and must work
         # before an org is chosen. The user's full membership map is still populated
@@ -123,7 +137,14 @@ def get_current_user(
             organization_id=organization_id,
             organization_roles=organization_roles,
             verified_required=verified_required,
+            api_key_service=api_key_service,
         )
+        if context.api_key_access_mode == ApiKeyAccessMode.READ_ONLY and request.method not in {
+            "GET",
+            "HEAD",
+            "OPTIONS",
+        }:
+            raise ForbiddenException(detail="This API key is read-only")
         if check_platform_admin and not context.user.is_platform_admin:
             raise ForbiddenException(detail=f"User {context.user.id} is not a platform administrator")
         return context
@@ -136,11 +157,13 @@ def require_platform_admin(
 ) -> Callable[..., CurrentUserContext]:
     @inject
     def wrapper(
+        request: Request,
         token: Annotated[str, Depends(oauth2_scheme)],
         user_repository: UserRepository = Injected(UserRepository),
         organization_user_repository: OrganizationUserRepository = Injected(OrganizationUserRepository),
         platform_admin_service: PlatformAdminService = Injected(PlatformAdminService),
         config: Config = Injected(Config),
+        api_key_service: ApiKeyService = Injected(ApiKeyService),
     ) -> CurrentUserContext:
         context = get_authenticated_user(
             token=token,
@@ -149,9 +172,16 @@ def require_platform_admin(
             organization_user_repository=organization_user_repository,
             organization_id=None,
             verified_required=verified_required,
+            api_key_service=api_key_service,
         )
-        if context.credential_class != CredentialClass.USER_SESSION:
-            raise ForbiddenException(detail="Platform authority requires an authenticated user session")
+        if context.credential_class not in {CredentialClass.USER_SESSION, CredentialClass.API_KEY}:
+            raise ForbiddenException(detail="Platform authority requires a user credential")
+        if context.api_key_access_mode == ApiKeyAccessMode.READ_ONLY and request.method not in {
+            "GET",
+            "HEAD",
+            "OPTIONS",
+        }:
+            raise ForbiddenException(detail="This API key is read-only")
         platform_admin_service.require_platform_admin(context.user)
         return context
 
