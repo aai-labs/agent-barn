@@ -11,8 +11,57 @@ x-api-env: &api-env
   PLATFORM_ADMIN_CREDENTIALS: ${PLATFORM_ADMIN_CREDENTIALS:?PLATFORM_ADMIN_CREDENTIALS is required}
   ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
   WEB_APP_URL: ${WEB_APP_URL:?WEB_APP_URL is required}
+  MEMORY_DEFAULT_MODEL: ${MEMORY_DEFAULT_MODEL:-openrouter/openai/gpt-4.1-mini}
+  HINDSIGHT_API_KEY: ""
+  MEMORY_RUNTIME_SERVICE_KEY: ""
+  HINDSIGHT_DB_PASSWORD: ""
+  HINDSIGHT_LITELLM_API_KEY: ""
 
 services:
+  # Opt in with COMPOSE_PROFILES=local-hindsight. The backend has no published
+  # ports; only the gateway's authenticated endpoints are available to Agents.
+  hindsight-db:
+    profiles: [local-hindsight]
+    image: pgvector/pgvector:pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hindsight
+      POSTGRES_DB: hindsight
+      POSTGRES_PASSWORD: ${HINDSIGHT_DB_PASSWORD:-}
+    volumes:
+      - hindsight_postgres_data:/var/lib/postgresql
+    networks: [hindsight-storage]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hindsight -d hindsight"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  hindsight:
+    profiles: [local-hindsight]
+    image: ghcr.io/vectorize-io/hindsight:0.10.2
+    restart: unless-stopped
+    command: ["/app/api/.venv/bin/python", "/opt/agentbarn/start_hindsight.py", "--workers", "1"]
+    depends_on:
+      hindsight-db:
+        condition: service_healthy
+    environment:
+      HINDSIGHT_ENABLE_CP: "false"
+      HINDSIGHT_API_DATABASE_URL: postgresql://hindsight:${HINDSIGHT_DB_PASSWORD:-}@hindsight-db:5432/hindsight
+      HINDSIGHT_API_TENANT_EXTENSION: hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension
+      HINDSIGHT_API_TENANT_API_KEY: ${HINDSIGHT_API_KEY:-}
+      HINDSIGHT_API_LLM_PROVIDER: openai
+      HINDSIGHT_API_LLM_BASE_URL: http://litellm:4000/v1
+      HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_LITELLM_API_KEY:-}
+      AGENTBARN_MEMORY_SETTINGS_URL: http://api:8004/memory/runtime/v1/model
+      AGENTBARN_MEMORY_SETTINGS_KEY: ${MEMORY_RUNTIME_SERVICE_KEY:-}
+      HINDSIGHT_API_LLM_MODEL: ${MEMORY_DEFAULT_MODEL:-openrouter/openai/gpt-4.1-mini}
+      HINDSIGHT_API_WORKER_ID: local-hindsight
+    volumes:
+      - ./helm/hindsight/files/start_hindsight.py:/opt/agentbarn/start_hindsight.py:ro
+      - ./helm/hindsight/files/memory_model.py:/opt/agentbarn/memory_model.py:ro
+    networks: [default, hindsight-storage]
+
   db:
     image: postgres:16
     container_name: aai_db
@@ -51,6 +100,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c "uvicorn api.ingest_main:app --host 0.0.0.0 --port 8001 --reload &
+        uvicorn api.memory_runtime_main:app --host 0.0.0.0 --port 8004 --reload --no-access-log &
         exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
     depends_on:
       db:
@@ -64,9 +114,12 @@ services:
       - .env
     environment:
       <<: *api-env
+      MEMORY_RUNTIME_SERVICE_KEY: ${MEMORY_RUNTIME_SERVICE_KEY:-}
       # Agent pods run in k3d, outside this Compose network, so they reach the
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
+      MEMORY_BASE_URL: ${MEMORY_BASE_URL:-http://host.docker.internal:${MEMORY_PORT:-8003}/memory/v1}
+      MEMORY_VIEW_BASE_URL: ${MEMORY_VIEW_BASE_URL:-http://memory:8003/memory/view/v1}
       # The API container cannot resolve k3d cluster DNS, so runtime-owned Teams
       # relays through `make forward-teams` on the host instead.
       TEAMS_RUNTIME_WEBHOOK_URL: ${TEAMS_RUNTIME_WEBHOOK_URL:-http://host.docker.internal:3978/api/messages}
@@ -120,6 +173,33 @@ services:
       # request needs the agent's INGEST_API_KEY as a bearer token.
       - "${INGEST_PORT:-8001}:8001"
 
+  memory:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["uvicorn", "api.memory_main:app", "--host", "0.0.0.0", "--port", "8003", "--reload", "--no-access-log"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      SECRET_SIGNING_KEY: ${SECRET_SIGNING_KEY:?SECRET_SIGNING_KEY is required}
+      PLATFORM_ADMIN_CREDENTIALS: ""
+      ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT is required}
+      MEMORY_DEFAULT_MODEL: ${MEMORY_DEFAULT_MODEL:-openrouter/openai/gpt-4.1-mini}
+      MEMORY_LITELLM_KEY_HASHES: ${MEMORY_LITELLM_KEY_HASHES:-}
+      ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${ORGANIZATION_DEFAULT_LLM_BUDGET_USD:?ORGANIZATION_DEFAULT_LLM_BUDGET_USD is required}
+      AGENT_DEFAULT_LLM_BUDGET_USD: ${AGENT_DEFAULT_LLM_BUDGET_USD:?AGENT_DEFAULT_LLM_BUDGET_USD is required}
+      HINDSIGHT_BASE_URL: ${HINDSIGHT_BASE_URL:-}
+      HINDSIGHT_API_KEY: ${HINDSIGHT_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./api:/app/api
+    ports:
+      - "${MEMORY_PORT:-8003}:8003"
+
   worker:
     build:
       context: .
@@ -139,13 +219,62 @@ services:
     volumes:
       - ./api:/app/api
 
+  # Helm schedules cost ingestion in production. Local k3d needs its own runner.
+  cost-sync:
+    profiles: [k3d]
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-c", "from api.domains.costs.sync import main; main()", "--watch"]
+    depends_on:
+      db:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+      LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
+      K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH:-${K8S_KUBECONFIG_PATH-}}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./api:/app/api
+      - ./.k3d:/app/.k3d:ro
+
+  budget-snapshots:
+    profiles: [k3d]
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-c", "from api.domains.organizations.llm_budget_alerts import main; main()", "--watch"]
+    depends_on:
+      db:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+      LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
+      K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH:-${K8S_KUBECONFIG_PATH-}}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./api:/app/api
+      - ./.k3d:/app/.k3d:ro
+
   communications:
     build:
       context: .
       dockerfile: api/Dockerfile
     container_name: aai_communications
     restart: unless-stopped
-    command: ["uvicorn", "api.communications_main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+    command: ["uvicorn", "api.communications_main:app", "--host", "0.0.0.0", "--port", "8002", "--reload", "--timeout-graceful-shutdown", "5"]
     depends_on:
       db:
         condition: service_healthy
@@ -247,3 +376,8 @@ volumes:
   aai_redis_data:
   aai_ui_node_modules:
   aai_ui_next_cache:
+  hindsight_postgres_data:
+
+networks:
+  hindsight-storage:
+    internal: true

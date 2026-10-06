@@ -80,6 +80,10 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
 - `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
 
+Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, carrying previous/current model IDs and safe actor/subject display snapshots, projected by `security_audit.projection`.
+
+Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
+
 AF-273 adds Communications operational events as Organization-scoped audit inputs:
 
 - `communication.connection.health.changed` — emitted when a Connection's observed provider health changes.

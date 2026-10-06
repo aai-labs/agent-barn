@@ -169,7 +169,7 @@ class LiteLLMClient:
             return None
         return {"spend": info.get("spend"), "renews_at": info.get("budget_reset_at")}
 
-    def _key_info(self, key: str, failure: str) -> dict:
+    def _key_info(self, key: str, failure: str, *, hashed: bool = False) -> dict:
         """The key's /key/info record.
 
         Every failure path here deliberately drops the exception chain: the key
@@ -181,7 +181,7 @@ class LiteLLMClient:
                 f"{self.config.litellm_base_url}/key/info",
                 # The hash, not the key: LiteLLM resolves either, and a query string
                 # reaches its access log, any intermediate proxy and log aggregation.
-                params={"key": hashlib.sha256(key.encode()).hexdigest()},
+                params={"key": key if hashed else hashlib.sha256(key.encode()).hexdigest()},
                 headers=self._headers(self._master_key()),
                 timeout=self._TIMEOUT,
             )
@@ -196,6 +196,22 @@ class LiteLLMClient:
             raise
         except httpx.HTTPError, ValueError, KeyError, TypeError:
             raise LiteLLMError(failure) from None
+
+    def get_memory_key_info(self, key: str) -> dict:
+        return self._key_info(key, "Failed to validate memory processing credential")
+
+    def revoke_memory_key(self, key_hash: str) -> bool:
+        # LiteLLM accepts hashes for deletion and blocking; no plaintext is needed.
+        if self.delete_key(key_hash):
+            return True
+        try:
+            self._key_info(key_hash, "Failed to inspect cleanup credential", hashed=True)
+        except LiteLLMKeyNotFound:
+            return True  # Already absent: repeated cleanup is successful.
+        except LiteLLMError:
+            pass
+        self.block_key(key_hash)
+        return False
 
     def get_key_team(self, key: str) -> str | None:
         """The team this key belongs to, or None when it belongs to none."""
@@ -295,6 +311,33 @@ class LiteLLMClient:
         if self.get_key_team(key) != org_id:
             raise LiteLLMError("LiteLLM did not apply the team assignment")
 
+    def generate_memory_key(self, org_id: str) -> str:
+        """A backend-only key sharing the runtime team's combined spend limit."""
+        key = None
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/generate",
+                headers=self._headers(self._master_key()),
+                json={
+                    "key_alias": f"agentbarn-memory-{org_id}",
+                    "team_id": org_id,
+                    "models": [],
+                    "metadata": {"organization_id": org_id, "agentbarn_memory": True},
+                },
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+            key = response.json()["key"]
+            if not isinstance(key, str) or not key:
+                raise ValueError()
+            if self.get_key_team(key) != org_id:
+                raise LiteLLMError("Memory key is not enrolled in its Organization team")
+            return key
+        except httpx.HTTPError, KeyError, ValueError, TypeError, LiteLLMError:
+            if key and not self.delete_key(key):
+                self.block_key(key)
+            raise LiteLLMError("Could not provision memory processing key") from None
+
     def generate_key(
         self,
         agent_id: str,
@@ -391,6 +434,32 @@ class LiteLLMClient:
             return info
         except Exception as exc:
             raise LiteLLMError(f"Failed to fetch key info: {exc}") from exc
+
+    def allow_memory_models(self, key_hash: str, models: list[str]) -> None:
+        """Expand only the memory key's model allowlist; preserve budgets and spend.
+
+        Keeping previous models permits in-flight calls and startup fallback.
+        Empty existing restrictions already permit every configured proxy model.
+        """
+        try:
+            info = self.get_key_info(key_hash)
+            if info.get("team_id"):
+                raise LiteLLMError("Memory processing requires a dedicated platform key")
+            allowed = info.get("models", [])
+            if not isinstance(allowed, list) or not all(isinstance(item, str) for item in allowed):
+                raise LiteLLMError("Unexpected memory key model restrictions")
+            allowed = [str(item) for item in allowed]
+            if not allowed or set(models).issubset(allowed):
+                return
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/update",
+                headers=self._headers(self._master_key()),
+                json={"key": key_hash, "models": sorted(set(allowed + models))},
+                timeout=10,
+            )
+            response.raise_for_status()
+        except Exception:
+            raise LiteLLMError("Could not enable the memory model") from None
 
     def get_key_spend(self, key: str) -> float:
         """Return the total spend (USD) accumulated by this virtual key."""

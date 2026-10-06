@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
-import { Activity, FileText, Menu, Receipt, Sparkles } from "lucide-react";
+import { Activity, FileText, Menu, Receipt, Settings, Sparkles } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
 import {
   Sheet,
@@ -49,6 +49,7 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: "/dashboard/platform/resource-usage", label: "Resources" },
         { href: "/dashboard/platform/templates", label: "Templates" },
         { href: "/dashboard/platform/skills", label: "Skills" },
+        { href: "/dashboard/platform/settings", label: "Settings" },
       ]
     : [
         { href: orgBase, label: "Home" },
@@ -59,10 +60,13 @@ export function TopNav({ onHire }: TopNavProps) {
         ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
-  // Platform view has the most tabs, so it keeps them in the drawer until there is room
-  // for all of them inline. The class names are written out so Tailwind can find them.
-  const drawerTrigger = isPlatformView ? "xl:hidden" : "lg:hidden";
-  const inlineTabs = isPlatformView ? "xl:flex" : "lg:flex";
+  // Platform view has nine tabs, and they do not fit inline until about 1300px: with the
+  // compact spacing they are 73px short at 1024px, and when the roomier spacing starts at
+  // 1280px they are 17px short, so no `lg` or `xl` breakpoint works. It keeps them in the
+  // drawer until 1360px, which leaves room to spare. The class names are written out whole
+  // so Tailwind can find them.
+  const drawerTrigger = isPlatformView ? "min-[1360px]:hidden" : "lg:hidden";
+  const inlineTabs = isPlatformView ? "min-[1360px]:flex" : "lg:flex";
   const [menuOpen, setMenuOpen] = useState(false);
   const routeKey = pathname ?? "";
   const [navOpenedOn, setNavOpenedOn] = useState<string | null>(null);
@@ -107,7 +111,7 @@ export function TopNav({ onHire }: TopNavProps) {
 
   return (
     <header
-      className="flex items-center gap-4 px-4 lg:gap-6 lg:px-6 xl:gap-9 xl:px-10 sticky top-0 z-10 h-[61px] flex-shrink-0"
+      className="flex items-center gap-4 px-4 lg:px-6 xl:gap-9 xl:px-10 sticky top-0 z-10 h-[61px] flex-shrink-0"
       style={{ borderBottom: "1px solid var(--line)", background: "var(--bg)" }}
     >
       <Sheet open={navOpen} onOpenChange={setNavOpen}>
@@ -165,7 +169,7 @@ export function TopNav({ onHire }: TopNavProps) {
           <Link
             key={href}
             href={href}
-            className="flex-shrink-0 whitespace-nowrap px-2.5 xl:px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
+            className="flex-shrink-0 whitespace-nowrap px-2 xl:px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
             style={{
               color: isActive(href) ? "var(--ink)" : "var(--ink-3)",
               fontWeight: isActive(href) ? 600 : 500,
@@ -287,6 +291,10 @@ export function TopNav({ onHire }: TopNavProps) {
                     onClick={() => setMenuOpen(false)}
                   >
                     <Receipt size={14} /> Costs
+                  </Link>
+                  <Link href="/dashboard/platform/settings" className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }} onClick={() => setMenuOpen(false)}>
+                    <Settings size={14} /> Settings
                   </Link>
                   <Link
                     href="/dashboard/platform/resource-usage"

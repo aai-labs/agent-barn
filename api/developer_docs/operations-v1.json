@@ -56,6 +56,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/memory-grants/{grant_id}",
+    "revoke_memory_grant_organizations__organization_id__memory_grants__grant_id__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/shared-credentials/{credential_id}",
     "delete_shared_credential_organizations__organization_id__shared_credentials__credential_id__delete"
   ],
@@ -316,6 +321,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/memory/items",
+    "list_agent_memories_organizations__organization_id__agents__agent_id__memory_items_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/resource-usage",
     "get_agent_resource_usage_organizations__organization_id__agents__agent_id__resource_usage_get"
   ],
@@ -468,6 +478,16 @@
     "GET",
     "/organizations/{organization_id}/members",
     "list_members_organizations__organization_id__members_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/memory-grants",
+    "list_memory_grants_organizations__organization_id__memory_grants_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/memory/items",
+    "list_organization_memories_organizations__organization_id__memory_items_get"
   ],
   [
     "GET",
@@ -628,6 +648,16 @@
     "GET",
     "/platform/resource-usage/agents/{agent_id}",
     "get_platform_agent_details_platform_resource_usage_agents__agent_id__get"
+  ],
+  [
+    "GET",
+    "/platform/settings/agent-memory",
+    "read_settings_platform_settings_agent_memory_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/agent-memory/models",
+    "list_models_platform_settings_agent_memory_models_get"
   ],
   [
     "GET",
@@ -976,6 +1006,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/memory-grants",
+    "create_memory_grant_organizations__organization_id__memory_grants_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/shared-credentials",
     "create_shared_credential_organizations__organization_id__shared_credentials_post"
   ],
@@ -1091,6 +1126,11 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/memory",
+    "set_agent_memory_organizations__organization_id__agents__agent_id__memory_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/share",
     "replace_agent_share_settings_organizations__organization_id__agents__agent_id__share_put"
   ],
@@ -1113,5 +1153,10 @@
     "PUT",
     "/platform/resource-limits",
     "update_platform_resource_limits_platform_resource_limits_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/agent-memory",
+    "update_settings_platform_settings_agent_memory_put"
   ]
 ]

@@ -226,6 +226,24 @@ communications:
       memory: 512Mi
       cpu: 500m
 
+memory:
+  defaultModel: "openrouter/openai/gpt-4.1-mini"
+  litellmKeyHashes: ""
+  litellmActiveKeyHash: ""
+  enabled: false
+  authChecksum: ""
+  settingsKeyChecksum: ""
+  replicaCount: 1
+  hindsightBaseUrl: "http://hindsight:8888"
+  hindsightSecretName: hindsight
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
 resources:
   requests:
     memory: 256Mi

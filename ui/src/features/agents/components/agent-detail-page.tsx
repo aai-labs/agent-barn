@@ -26,6 +26,7 @@ import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
 import { ActivityTab } from "./activity-tab";
+import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
@@ -39,6 +40,7 @@ type Tab =
   | "conversations"
   | "tool-calls"
   | "logs"
+  | "memory"
   | "activity"
   | "costs"
   | "resource-usage"
@@ -48,6 +50,7 @@ const VALID_TABS: Tab[] = [
   "conversations",
   "tool-calls",
   "logs",
+  "memory",
   "activity",
   "costs",
   "resource-usage",
@@ -93,6 +96,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["conversations", "Conversations"],
           ["tool-calls", "Tool calls"],
           ["logs", "Logs"],
+          // Memory content is conversation content, so it follows activity.read.
+          ["memory", "Memory"],
         ] as [Tab, string][])
       : []),
     // Every part of Activity needs activity.read: the runtime diagnostics on
@@ -312,6 +317,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             )}
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
+            {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
             {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}
             {resolvedTab === "resource-usage" && (

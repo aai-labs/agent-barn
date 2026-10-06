@@ -120,6 +120,18 @@ _Avoid_: platform
 A captured, restorable copy of one Agent's persistent volume contents, together with a record of the Agent's configuration pins at capture time. Capture and restore both require a stopped Agent, and restore replaces the volume contents in place. The archive deliberately excludes credential material and any state the Agent's start script regenerates, so it holds the Agent's own work rather than a byte-exact image of the volume.
 _Avoid_: snapshot, backup, volume image, checkpoint
 
+**Agent Memory**:
+Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, credentials, automatic Runtime use, and read-only viewing of an Agent's own and currently permitted Organization memories, an Owner/Admin Organization viewer, and asynchronous deletion purging are implemented. See [Agent Memory](docs/features/agent-memory.md).
+_Avoid_: MEMORY.md, Runtime memory, knowledge base
+
+**Organization Memory**:
+Agent Memory marked for sharing across one Organization. One Organization Memory grant gives an Agent either Read only access for recall or Read and write access for recall and explicit shared saves.
+_Avoid_: team memory, shared bank
+
+**Memory Grant**:
+A directional permission, managed by Organization Owners and Admins, letting one Agent recall Organization Memory or one other Agent's private memories. Organization Memory grants allow either read only or read and write; another Agent's memory is always read-only. Granting or revoking access never rewrites stored memories.
+_Avoid_: memory sharing, Agent Access
+
 **Pre-Restore Restore Point**:
 An Agent Restore Point the system captures automatically at the start of a restore, before the target volume is modified. It is the rollback path when a restore is unwanted or fails partway, and it does not count against the per-Agent retention cap.
 _Avoid_: automatic backup, undo point
