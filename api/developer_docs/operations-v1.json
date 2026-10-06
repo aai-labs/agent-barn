@@ -901,6 +901,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/managed-update",
+    "managed_update_organizations__organization_id__agents__agent_id__managed_update_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/restore-points",
     "create_restore_point_organizations__organization_id__agents__agent_id__restore_points_post"
   ],
