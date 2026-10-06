@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import Column
+from sqlmodel import Column, SQLModel
 from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
@@ -374,6 +374,57 @@ class AgentBarnTelegramLinkToken(BaseModel, table=True):
         foreign_key="agentbarn_telegram_link.id",
         ondelete="SET NULL",
     )
+
+
+class AgentBarnTelegramIngressLease(SQLModel, table=True):
+    """Which Communications replica polls Agent Barn's shared bot.
+
+    Telegram allows one getUpdates consumer per bot, so a single row with a
+    fixed key is leased the way per-Connection ingress is.
+    """
+
+    __tablename__: str = "agentbarn_telegram_ingress_lease"
+
+    key: str = SqlField(primary_key=True, max_length=32)
+    owner: str = SqlField(nullable=False, max_length=64)
+    expires_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+
+
+class AgentBarnTelegramUpdateStatus(str, enum.Enum):
+    # Stored before Telegram is told it was received; not yet processed.
+    RECEIVED = "RECEIVED"
+    # Waiting for its Agent's runtime to accept it.
+    QUEUED = "QUEUED"
+    # Handled by the bot itself (linking, sign-up prompt) or ignored.
+    HANDLED = "HANDLED"
+    FORWARDED = "FORWARDED"
+    # Undeliverable within the hold window.
+    DROPPED = "DROPPED"
+
+
+class AgentBarnTelegramUpdate(BaseModel, table=True):
+    """One update received by Agent Barn's shared bot.
+
+    Stored before Telegram's offset moves past it, so nothing is lost across a
+    restart; `update_id` makes a re-delivered update a no-op. The payload holds
+    message content only until the update is settled.
+    """
+
+    __tablename__: str = "agentbarn_telegram_update"
+    __table_args__ = (
+        sa.UniqueConstraint("update_id", name="uq_agentbarn_telegram_update_update_id"),
+        sa.Index("ix_agentbarn_telegram_update_status", "status", "update_id"),
+    )
+
+    update_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
+    status: AgentBarnTelegramUpdateStatus = SqlField(
+        default=AgentBarnTelegramUpdateStatus.RECEIVED,
+        sa_column=Column(sa.Enum(AgentBarnTelegramUpdateStatus), nullable=False),
+    )
+    payload: dict[str, Any] | None = SqlField(default=None, sa_column=Column(JSONB, nullable=True))
 
 
 class CommunicationDelivery(BaseModel, table=True):

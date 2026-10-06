@@ -1,13 +1,33 @@
 import hashlib
 import json
 import logging
+import re
 from typing import Any
+
+import httpx
 
 from api.core.config import get_config
 from api.infrastructure.http import resilient_request
 from api.infrastructure.shared.cache import cached as _cached
 
 logger = logging.getLogger(__name__)
+
+# Bot API URLs carry the token in their path (/bot<id>:<secret>/method).
+_BOT_TOKEN_IN_URL = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
+
+
+class _RedactBotTokens(logging.Filter):
+    """Keep Telegram bot tokens out of httpx's request log lines."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "/bot" in message:
+            record.msg = _BOT_TOKEN_IN_URL.sub("/bot<redacted>", message)
+            record.args = None
+        return True
+
+
+logging.getLogger("httpx").addFilter(_RedactBotTokens())
 
 _BASE = "https://api.telegram.org"
 _TIMEOUT_SECONDS = 15
@@ -164,3 +184,32 @@ def send_message(
             raise RuntimeError("Telegram sendMessage returned no message id")
     assert message_id is not None
     return str(message_id)
+
+
+class TelegramPollError(RuntimeError):
+    """A failed getUpdates call, described without the URL that carries the bot token."""
+
+
+async def get_updates(
+    client: httpx.AsyncClient,
+    bot_token: str,
+    *,
+    offset: int | None,
+    timeout_seconds: int,
+    allowed_updates: list[str],
+) -> list[dict[str, Any]]:
+    """Long-poll Telegram once; every update below ``offset`` is confirmed as received."""
+    params: dict[str, Any] = {"timeout": timeout_seconds, "allowed_updates": json.dumps(allowed_updates)}
+    if offset is not None:
+        params["offset"] = offset
+    try:
+        response = await client.get(f"{_BASE}/bot{bot_token}/getUpdates", params=params)
+    except httpx.HTTPError as exc:
+        # httpx errors carry the request URL, and with it the token.
+        raise TelegramPollError(f"Telegram getUpdates failed ({type(exc).__name__})") from None
+    if response.status_code != 200:
+        raise TelegramPollError(f"Telegram getUpdates failed (HTTP {response.status_code})")
+    body = response.json()
+    if not body.get("ok"):
+        raise TelegramPollError(f"Telegram getUpdates error: {body.get('description', 'unknown error')}")
+    return [update for update in body.get("result", []) if isinstance(update, dict)]

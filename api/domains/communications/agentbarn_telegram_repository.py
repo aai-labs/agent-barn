@@ -1,17 +1,22 @@
 import enum
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any
 from uuid import UUID
 
+import sqlalchemy as sa
 from injector import inject, singleton
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
 from api.domains.communications.models import (
+    AgentBarnTelegramIngressLease,
     AgentBarnTelegramLink,
     AgentBarnTelegramLinkToken,
+    AgentBarnTelegramUpdate,
     CommunicationConnection,
     CommunicationPlatform,
 )
@@ -21,6 +26,7 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 # Two first-time links for one Telegram user can race on the active-link index;
 # the loser retries once and then replaces the winner like any later link.
 _CONSUME_ATTEMPTS = 2
+_INGRESS_LEASE_KEY = "shared_bot"
 
 
 class LinkTokenOutcome(str, enum.Enum):
@@ -213,3 +219,54 @@ class AgentBarnTelegramRepository:
             session.add(link)
             session.commit()
             return True
+
+    def claim_ingress_lease(self, owner: str, *, now: datetime, lease_seconds: int = 60) -> bool:
+        """Take or renew the right to poll the shared bot; False while another replica holds it."""
+        expires_at = now + timedelta(seconds=lease_seconds)
+        statement = (
+            pg_insert(AgentBarnTelegramIngressLease)
+            .values(key=_INGRESS_LEASE_KEY, owner=owner, expires_at=expires_at)
+            .on_conflict_do_update(
+                index_elements=["key"],
+                set_={"owner": owner, "expires_at": expires_at},
+                where=sa.or_(
+                    col(AgentBarnTelegramIngressLease.owner) == owner,
+                    col(AgentBarnTelegramIngressLease.expires_at) < now,
+                ),
+            )
+            .returning(col(AgentBarnTelegramIngressLease.key))
+        )
+        with Session(self.delegate.engine) as session:
+            claimed = session.exec(statement).first()  # type: ignore[call-overload]
+            session.commit()
+            return claimed is not None
+
+    def release_ingress_lease(self, owner: str) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.delete(AgentBarnTelegramIngressLease).where(
+                    col(AgentBarnTelegramIngressLease.key) == _INGRESS_LEASE_KEY,
+                    col(AgentBarnTelegramIngressLease.owner) == owner,
+                )
+            )  # type: ignore[call-overload]
+            session.commit()
+
+    def store_updates(self, updates: list[dict[str, Any]]) -> int:
+        """Store received updates once each and return how many were new."""
+        rows = [
+            AgentBarnTelegramUpdate(update_id=update["update_id"], payload=update).model_dump()
+            for update in updates
+            if isinstance(update.get("update_id"), int)
+        ]
+        if not rows:
+            return 0
+        statement = (
+            pg_insert(AgentBarnTelegramUpdate)
+            .values(rows)
+            .on_conflict_do_nothing(constraint="uq_agentbarn_telegram_update_update_id")
+            .returning(col(AgentBarnTelegramUpdate.update_id))
+        )
+        with Session(self.delegate.engine) as session:
+            stored = session.exec(statement).all()  # type: ignore[call-overload]
+            session.commit()
+            return len(stored)

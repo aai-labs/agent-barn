@@ -9,6 +9,7 @@ from prometheus_client import REGISTRY
 
 from api.core.metrics import CONTENT_TYPE_LATEST, render_metrics, setup_http_metrics
 from api.core.utils import create_injector
+from api.domains.communications.agentbarn_telegram_ingress import AgentBarnTelegramIngress
 from api.domains.communications.gateway_routes import (
     driver_communications_router,
     provider_webhook_router,
@@ -41,11 +42,16 @@ def create_communications_app(injector: Injector | None = None) -> FastAPI:
             injector.get(PlatformIngressSupervisor).run(ingress_stop),
             name="communications-ingress-supervisor",
         )
+        # Idles until Agent Barn's own bot is configured.
+        shared_bot_task = asyncio.create_task(
+            injector.get(AgentBarnTelegramIngress).run(ingress_stop),
+            name="communications-agentbarn-telegram-ingress",
+        )
         try:
             yield
         finally:
             ingress_stop.set()
-            await ingress_task
+            await asyncio.gather(ingress_task, shared_bot_task)
             stop.set()
             worker.join(timeout=5)
 
