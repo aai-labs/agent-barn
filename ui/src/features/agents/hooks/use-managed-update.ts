@@ -28,6 +28,10 @@ export function useManagedUpdate() {
       return response.data;
     },
     onSuccess: (data, agentId) => {
+      // The flow runs server-side for a couple of minutes; this flag turns on
+      // detail-query polling (see useAgent) so the banner follows the real
+      // outcome instead of freezing on the 202's snapshot.
+      queryClient.setQueryData(agentsKey.updateInFlight(data.id), { startedAt: Date.now() });
       queryClient.setQueryData(agentsKey.detail(data.id), data);
       void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
       void queryClient.invalidateQueries({ queryKey: agentsKey.restorePoints(agentId) });

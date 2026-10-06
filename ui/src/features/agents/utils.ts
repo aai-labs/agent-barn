@@ -30,6 +30,7 @@ export const agentsKey = {
   llmBudget: (id: string) => [..._agentsKeyBase.detail(id), "llm-budget"] as const,
   llmBudgets: (organizationId: string) => [..._agentsKeyBase.all, "llm-budgets", organizationId] as const,
   shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
+  updateInFlight: (id: string) => [..._agentsKeyBase.detail(id), "update-in-flight"] as const,
   shareRoles: () => [..._agentsKeyBase.all, "share-roles"] as const,
   conversationChannels: (agentId: string) =>
     [..._agentsKeyBase.detail(agentId), "conversation-channels"] as const,
