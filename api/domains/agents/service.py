@@ -2548,7 +2548,7 @@ class AgentService:
 
         # 4. Roll back: free the volume, restore archive and recorded
         #    configuration, then start on the old image again.
-        self._rollback_managed_update(agent.id, backup.id, context, actor)
+        self._rollback_managed_update(agent.id, backup.id, context, actor, previous_image=previous_image)
 
     def _rollback_managed_update(
         self,
@@ -2556,6 +2556,7 @@ class AgentService:
         restore_point_id: UUID,
         context: CurrentUserContext,
         actor: ActorIdentity,
+        previous_image: str,
     ) -> None:
         try:
             agent = self.repository.get_by_id(agent_id)
@@ -2583,6 +2584,11 @@ class AgentService:
                 restored.id,
                 timeout_seconds=self.config.restore_point_restore_timeout_seconds,
             )
+            current = self.repository.get_by_id(agent_id)
+            if current is None:
+                return
+            current.pinned_runtime_image = previous_image
+            self.repository.save(current)
             self.start_agent(agent_id, context)
             healthy = self._wait_for_ready(
                 agent_id,

@@ -237,6 +237,39 @@ def test_a_managed_update_rolls_back_when_the_new_version_never_becomes_ready():
             assert_that(origins, equal_to(["PRE_RESTORE", "PRE_UPGRADE"]))
 
 
+def test_a_rollback_restarts_the_agent_on_its_previous_image():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_pod_readiness.side_effect = [
+            ("crashed", "BackOff"),  # the updated pod never comes up
+            ("ready", None),  # the rolled-back pod does
+        ]
+        service = context.injector.get(AgentService)
+
+        with when("the update is rolled back"):
+            agent = service.repository.get_by_id(context.agent.id)
+            agent.pinned_runtime_image = "registry.example.com/agentbarn-openclaw:v1"
+            service.repository.save(agent)
+            service._run_managed_update(context.agent.id, _user_context(context))
+
+        with then("the agent runs again, pinned to its previous image"):
+            body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(body["last_error"], none())
+            assert_that(body["update_available"], equal_to(True))  # pin (v1) behind the platform pin (v2)
+
+            pinned = service.repository.get_by_id(context.agent.id).pinned_runtime_image
+            assert_that(pinned, equal_to("registry.example.com/agentbarn-openclaw:v1"))
+            starts = k8s.create_deployment.call_args_list
+            assert_that(len(starts), equal_to(2))  # failed update start + rollback start
+            rolled_back = starts[1].args[1]
+            assert_that(
+                rolled_back.spec.template.spec.containers[0].image,
+                equal_to("registry.example.com/agentbarn-openclaw:v1"),
+            )
+
+
 def test_a_managed_update_that_cannot_capture_leaves_the_agent_stopped():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         k8s = context.injector.get(KubernetesClient)
