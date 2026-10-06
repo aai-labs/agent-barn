@@ -1857,6 +1857,14 @@ class AgentService:
             detail=_provisioning_error_dto(normalized).model_dump(mode="json"),
         )
 
+    def _platform_pin_for(self, agent: Agent) -> str:
+        """The platform-wide runtime image the Agent's flavor is pinned to."""
+        return self.config.hermes_image if agent.agent_type == AgentType.HERMES else self.config.openclaw_image
+
+    def _effective_runtime_image(self, agent: Agent) -> str:
+        """The image this Agent starts on: its own pin, else the platform pin."""
+        return agent.pinned_runtime_image or self._platform_pin_for(agent)
+
     def _provision_and_start(self, agent: Agent) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
@@ -1962,7 +1970,7 @@ class AgentService:
                 agent.id,
                 org_id,
                 ns,
-                self.config.hermes_image,
+                self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
             )
         else:
@@ -1996,7 +2004,7 @@ class AgentService:
                 agent.id,
                 org_id,
                 ns,
-                self.config.openclaw_image,
+                self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
             )
 
@@ -2255,10 +2263,16 @@ class AgentService:
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
-        agent.running_config_digest = agent_runtime_config_digest(
-            self.config.openclaw_image,
-            self.config.hermes_image,
-        )
+        if agent.agent_type == AgentType.HERMES:
+            agent.running_config_digest = agent_runtime_config_digest(
+                self.config.openclaw_image,
+                self._effective_runtime_image(agent),
+            )
+        else:
+            agent.running_config_digest = agent_runtime_config_digest(
+                self._effective_runtime_image(agent),
+                self.config.hermes_image,
+            )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
         agent.communication_key_encrypted = encrypt_token(
             communication_key,
@@ -2473,6 +2487,12 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None or current.status != AgentStatus.RUNNING:
                 return
+            # Adopt today's effective image as the Agent's own pin, so "previous
+            # pin" is concrete even if the Agent never pinned itself before.
+            previous_image = self._effective_runtime_image(current)
+            if current.pinned_runtime_image != previous_image:
+                current.pinned_runtime_image = previous_image
+                self.repository.save(current)
             self._stop_agent_unchecked(current, actor)
 
         # 2. Capture the pre-update state. Requires the Agent stopped — it now is.
@@ -2498,6 +2518,11 @@ class AgentService:
         # 3. Start on the new image and watch it come up. A start that fails to
         #    provision rolls back exactly like one that never becomes ready.
         try:
+            fresh = self.repository.get_by_id(agent.id)
+            if fresh is None:
+                return
+            fresh.pinned_runtime_image = self._platform_pin_for(fresh)
+            self.repository.save(fresh)
             self.start_agent(agent.id, context)
             healthy = self._wait_for_ready(
                 agent.id,

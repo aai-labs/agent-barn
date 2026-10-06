@@ -1,15 +1,13 @@
 import uuid
-
-import pytest
-from fastapi import HTTPException, status
-from hamcrest import assert_that, contains_string, equal_to, has_length, none
 from unittest.mock import patch
+
+from fastapi import status
+from hamcrest import assert_that, contains_string, equal_to, has_length, none
 
 from api.core.config import Config
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
-from api.domains.restore_points.models import AgentRestorePointCreate
 from api.domains.restore_points.repository import RestorePointRepository
 from api.infrastructure.kubernetes import KubernetesClient
 from api.tests.core.givenpy import given, then, when
@@ -20,7 +18,6 @@ from api.tests.core.modules import (
     set_env_variable,
 )
 from api.tests.steps.agent import (
-    FAKE_LITELLM_KEY,
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
@@ -43,6 +40,8 @@ _GIVEN = [
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "API_IMAGE": "registry.example.com/agentbarn-api:test",
+            "HERMES_IMAGE": "registry.example.com/agentbarn-hermes:v2",
+            "OPENCLAW_IMAGE": "registry.example.com/agentbarn-openclaw:v2",
             "RESTORE_POINT_MAX_PER_AGENT": "2",
             "AGENT_UPDATE_READY_POLL_SECONDS": "0",
         }
@@ -156,6 +155,23 @@ def _restore_points(context) -> list[dict]:
     )
     assert_that(response.status_code, equal_to(status.HTTP_200_OK))
     return response.json()["items"]
+
+
+def test_a_successful_managed_update_pins_the_agent_to_the_new_image():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        context.injector.get(KubernetesClient).get_pod_readiness.return_value = ("ready", None)
+        service = context.injector.get(AgentService)
+
+        with when("the managed update runs end to end"):
+            service._run_managed_update(context.agent.id, _user_context(context))
+
+        with then("the agent is pinned to the platform's current image and is not stale"):
+            body = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(body["update_available"], equal_to(False))
+            pinned = service.repository.get_by_id(context.agent.id).pinned_runtime_image
+            assert_that(pinned, equal_to(service.config.openclaw_image))
 
 
 def test_a_managed_update_captures_then_starts_on_the_new_image():
