@@ -395,6 +395,15 @@ class Agent(BaseModel, table=True):
         default="",
         sa_column=Column(sa.String(64), nullable=False, server_default=""),
     )
+    # The exact runtime image this Agent starts on. Empty means "follow the
+    # platform pin" (config.openclaw_image / config.hermes_image). Managed
+    # updates write it: adopt the current effective image before updating,
+    # point it at the new image on success, and back at the previous image
+    # when the update fails — so a rollback restarts the OLD runtime.
+    pinned_runtime_image: str = SqlField(
+        default="",
+        sa_column=Column(sa.String(255), nullable=False, server_default=""),
+    )
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
