@@ -285,6 +285,97 @@ class AgentEmailAddress(BaseModel, table=True):
     )
 
 
+class AgentBarnTelegramLink(BaseModel, table=True):
+    """A Telegram user whose private chat with Agent Barn's shared bot reaches one Agent.
+
+    The link records the Membership that issued it, so removing that Member
+    removes their links. A Telegram user holds at most one active link at a time;
+    linking another Agent ends the previous one.
+    """
+
+    __tablename__: str = "agentbarn_telegram_link"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["connection_id", "organization_id"],
+            ["communication_connection.id", "communication_connection.organization_id"],
+            name="fk_agentbarn_telegram_link_connection_organization",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["linked_by_membership_id", "organization_id"],
+            ["user_organization.id", "user_organization.organization_id"],
+            name="fk_agentbarn_telegram_link_membership_organization",
+            ondelete="CASCADE",
+        ),
+        sa.Index(
+            "uq_agentbarn_telegram_link_active_user",
+            "telegram_user_id",
+            unique=True,
+            postgresql_where=sa.text("unlinked_at IS NULL"),
+        ),
+        sa.Index("ix_agentbarn_telegram_link_connection", "connection_id"),
+        sa.Index("ix_agentbarn_telegram_link_agent", "agent_id"),
+    )
+
+    organization_id: UUID = SqlField(nullable=False)
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    connection_id: UUID = SqlField(nullable=False)
+    linked_by_membership_id: UUID = SqlField(nullable=False)
+    telegram_user_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
+    telegram_username: str | None = SqlField(default=None, nullable=True, max_length=64)
+    unlinked_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+
+
+class AgentBarnTelegramLinkToken(BaseModel, table=True):
+    """A one-time, short-lived token a Member opens in Telegram to link their account.
+
+    Only the token's SHA-256 hash is stored; the raw token lives in the deep link.
+    """
+
+    __tablename__: str = "agentbarn_telegram_link_token"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["connection_id", "organization_id"],
+            ["communication_connection.id", "communication_connection.organization_id"],
+            name="fk_agentbarn_telegram_link_token_connection_organization",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["requested_by_membership_id", "organization_id"],
+            ["user_organization.id", "user_organization.organization_id"],
+            name="fk_agentbarn_telegram_link_token_membership_organization",
+            ondelete="CASCADE",
+        ),
+        sa.UniqueConstraint("token_hash", name="uq_agentbarn_telegram_link_token_hash"),
+        sa.Index("ix_agentbarn_telegram_link_token_connection", "connection_id"),
+    )
+
+    organization_id: UUID = SqlField(nullable=False)
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    connection_id: UUID = SqlField(nullable=False)
+    requested_by_membership_id: UUID = SqlField(nullable=False)
+    token_hash: str = SqlField(nullable=False, max_length=64)
+    expires_at: datetime = SqlField(
+        nullable=False,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    consumed_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    link_id: UUID | None = SqlField(
+        default=None,
+        nullable=True,
+        foreign_key="agentbarn_telegram_link.id",
+        ondelete="SET NULL",
+    )
+
+
 class CommunicationDelivery(BaseModel, table=True):
     __tablename__: str = "communication_delivery"
     __table_args__ = (
