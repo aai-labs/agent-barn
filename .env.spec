@@ -43,6 +43,12 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
+# Optional: product analytics (PostHog). Off unless set to true; leave it off locally
+# so development data never reaches the Agent Barn PostHog project.
+# ANALYTICS_ENABLED=false
+# ANALYTICS_INCLUDE_USER_DETAILS=false
+# INSTALLATION_NAME=
+
 # Optional: per-Agent email addresses. Unset leaves the Email platform refusing new
 # Communication Connections; nothing else changes. Both are required on top of the three
 # values above. AGENT_EMAIL_DOMAIN must be onboarded for BOTH Email Routing and Email

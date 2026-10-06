@@ -28,7 +28,8 @@ Kubernetes cluster. No seat licence, no second workspace to check.
 
 Everything runs in your namespace: the control plane, the database, the model
 proxy, and one pod per running agent. Outbound traffic goes to OpenRouter through
-the LiteLLM proxy you operate, and to whichever tool APIs you connect.
+the LiteLLM proxy you operate, to whichever tool APIs you connect, and, unless you
+opt out, to Agent Barn's product analytics ([usage analytics](#usage-analytics)).
 Credentials are encrypted at rest in your own PostgreSQL.
 
 ## Contents
@@ -37,7 +38,7 @@ Credentials are encrypted at rest in your own PostgreSQL.
 - [What ships in the box](#what-ships-in-the-box) — [agents](#agents), [skills](#skills), [runtimes](#runtimes)
 - [Capabilities](#capabilities)
 - [Development](#development) — [native](#native-non-docker-development), [k3d](#local-kubernetes-k3d), [migrations](#database-migrations), [tests](#tests-and-checks), [troubleshooting](#troubleshooting)
-- [Deploying to Kubernetes](#deploying-to-kubernetes) — [connecting agent email](#connecting-agent-email-manual-step)
+- [Deploying to Kubernetes](#deploying-to-kubernetes) — [usage analytics](#usage-analytics), [connecting agent email](#connecting-agent-email-manual-step)
 - [Repository layout](#repository-layout)
 - [Getting help and contributing](#getting-help-and-contributing)
 
@@ -603,6 +604,21 @@ reuses the explicitly tagged images already in the registry.
 Background:
 [`docs/architecture/runtime-and-deployment.md`](docs/architecture/runtime-and-deployment.md)
 and [`docs/guidelines/operations.md`](docs/guidelines/operations.md).
+
+### Usage analytics
+
+Kubernetes installs send business events to Agent Barn's PostHog project (EU) by
+default. These are events such as an agent being created, started, or deleted,
+or a member joining an organisation. Each event carries random IDs (user,
+organisation, agent) and a name for your install, which defaults to your web app's
+host. It never carries agent or organisation names, prompts, conversations,
+credentials, or changed values. User email and name are sent only if you set
+`ANALYTICS_INCLUDE_USER_DETAILS=true`.
+
+To opt out, set `ANALYTICS_ENABLED=false` in `.env.deploy` and redeploy.
+`INSTALLATION_NAME` changes how your install is labelled. Local Docker Compose
+runs send nothing. The full list of events and fields is in
+[`docs/features/product-analytics.md`](docs/features/product-analytics.md).
 
 ### Connecting agent email (manual step)
 

@@ -150,6 +150,24 @@ talks to the provider; `EmailService` above it is transport-agnostic.
   starve real invites.
 - Message size is capped at 5 MiB including attachments. The inline barn logo is sent as a base64 attachment with `disposition: "inline"` and a snake_case `content_id` matching the `cid:` reference in the MJML templates — `contentId` is the Workers binding's spelling and is not accepted by the REST API.
 
+## Product analytics
+
+Business events go to the Agent Barn PostHog project (EU) through the `product_analytics.posthog` Event Handler. What is sent is defined in [`../features/product-analytics.md`](../features/product-analytics.md).
+
+- **`ANALYTICS_ENABLED`** flows through `helmfile.yaml.gotmpl` into the API chart's Secret. Every API process reads that Secret, the worker included.
+  - The Helmfile default is `true`, so a Helm install reports unless it opts out.
+  - `Config` defaults to off, so Docker Compose and tests send nothing.
+  - Blank counts as off in `Config`, but the Helmfile turns a blank value into `true`.
+- **Where it is on, and where it is off:**
+  - `deploy.yml` sets it to `true` on `main` and `false` on `staging`.
+  - `deploy-public.yml` sets it to `true`.
+  - `.env.deploy.spec` ships `false`, so developer `deploy.sh` installs stay off. `release-bundle.yml` rewrites it to `true` in customer bundles.
+  - A developer `.env.deploy` created before this setting existed lacks the key, so it falls back to the Helmfile default `true`. Add `ANALYTICS_ENABLED=false` to it.
+- **`ANALYTICS_INCLUDE_USER_DETAILS`** adds user email and name as PostHog person properties. It is `true` only in our production deploys (`deploy.yml` on `main`, `deploy-public.yml`) and defaults to `false` everywhere else.
+- **`INSTALLATION_NAME`** labels the install's PostHog group. Unset, it falls back to the `WEB_APP_URL` host, which is what our deploys use.
+- **`ANALYTICS_POSTHOG_HOST`** and **`ANALYTICS_POSTHOG_PROJECT_TOKEN`** default to the EU host and the Agent Barn project token committed in `api/core/config.py`. Override them only to point an install at a test receiver. The project token is write-only and public by design; never commit a personal API key (`phx_`).
+- **Testing.** Never point a local or staging stack at the real project, because test events cannot be removed from it. For end-to-end checks, set `ANALYTICS_POSTHOG_HOST` to a local recording endpoint.
+
 ## Per-Agent email addresses
 
 Agents reachable by email get their own address on a dedicated subdomain, receive mail through a Cloudflare Email Worker, and reply through the same Email Sending path as transactional mail. Rationale for the Worker: [`../adr/2026-08-31-cloudflare-worker-for-inbound-email.md`](../adr/2026-08-31-cloudflare-worker-for-inbound-email.md).

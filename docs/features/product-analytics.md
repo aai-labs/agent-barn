@@ -10,7 +10,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 ## Invariants
 
-- **On switch.** Analytics is off unless `ANALYTICS_ENABLED` is true and a project token is set. A blank `ANALYTICS_ENABLED` counts as off. When it is off, the handler completes every delivery without sending anything.
+- **On switch.** Analytics is off unless `ANALYTICS_ENABLED` is true and a project token is set. A blank `ANALYTICS_ENABLED` counts as off. When it is off, the handler completes every delivery without sending anything. Helm installs default it to on; per-deployment defaults and the opt-out are in [`../guidelines/operations.md`](../guidelines/operations.md#product-analytics).
 - **Who an event is attributed to.**
   - Only events with a human actor (Membership or User) are sent. System and Runtime actors are skipped.
   - `distinct_id` is the acting user's UUID.

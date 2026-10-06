@@ -27,11 +27,26 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - **Skipped silently:** analytics disabled, non-human actors, and actors that can't be resolved.
   - **When PostHog fails:** an unreachable PostHog is retried on attempts 1 and 2, then dropped with a warning on attempt 3. A rejected batch dead-letters.
 - Also delivered: the nine slice-1 events now list `product_analytics.posthog` alongside their existing handlers. The behaviour contract is [`../product-analytics.md`](../product-analytics.md).
-- In transition: analytics is still off in every deployment, because `ANALYTICS_ENABLED` defaults to false and no deployment sets it yet. Deliveries for the nine events succeed without sending.
-- Next: deployment wiring (Helm values and Secret, Helmfile, env templates, workflows, operations doc, README).
+- Also delivered: deployment wiring.
+  - The API chart renders `ANALYTICS_ENABLED`, which defaults to true, and `ANALYTICS_INCLUDE_USER_DETAILS`. It renders `INSTALLATION_NAME` only when set.
+  - `deploy.yml` enables analytics and user details on `main` only, so staging is off. `deploy-public.yml` enables both.
+  - `.env.deploy.spec` ships analytics off, and `release-bundle.yml` turns it on in customer bundles.
+  - The opt-out is documented in `operations.md` and the README.
+- In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle. It is not yet verified against a recording endpoint or against PostHog.
+- Next: the local end-to-end check against a fake PostHog on k3d, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-06 — AF-357 — Deployment wiring
+
+- Delivered: the analytics switches reach every API process through the chart Secret. They are on for Helm installs, our `main` deploy, and public releases, and off for staging and developer deploys.
+- Changed: `helm/agentbarn-api/values.yaml`, `templates/secret.yaml`, `helmfile.yaml.gotmpl`, `.env.deploy.spec`, `.env.spec`, `.github/workflows/deploy.yml`, `deploy-public.yml`, `release-bundle.yml`, `docs/guidelines/operations.md`, `README.md`, `product-analytics.md`.
+- Verified:
+  - `helm template` and `helmfile template` render `"true"`/`"false"` and the optional name as expected for unset, opt-out and override values.
+  - The release-bundle `sed` turns the spec's `false` into `true`.
+  - `helm lint` is clean.
+- Follow-up: the local end-to-end check and the production confirmation.
 
 ### 2026-10-06 — AF-357 — Subscribe the slice-1 events
 
