@@ -5,8 +5,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlmodel import Session
 
+from api.core.config import get_config
 from api.domains.costs.models import CostRecord, CostRecordSource
+from api.domains.costs.repository import CostRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.tests.core.givenpy import LambdaWith
 
 
 def cost_records_are_clean():
@@ -15,7 +18,7 @@ def cost_records_are_clean():
     def step(context):
         delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
         with delegate.engine.begin() as connection:
-            connection.execute(text("TRUNCATE cost_record"))
+            connection.execute(text("TRUNCATE cost_record, cost_sync_state"))
 
     return step
 
@@ -49,7 +52,7 @@ def there_are_cost_records(
     org-scoped endpoints under test. Passing None cannot express "no agent", since
     that is also what "not specified" looks like — use ``unattributed=True``, which
     is the state the platform page's unattributed bucket reports on. ``without_agent=True``
-    keeps the Organization and drops only the Agent, a state the sync never writes.
+    keeps the Organization and drops only the Agent, as memory costs do.
 
     ``occurred_at`` pins the calls to an exact instant instead of ``minutes_ago``,
     for tests that care which calendar month a row lands in.
@@ -98,5 +101,46 @@ def there_are_cost_records(
         with Session(delegate.engine) as session:
             session.add_all(records)
             session.commit()
+
+    return step
+
+
+def memory_budget_is_present(*, limit=10, runtime_spend=4, memory_spend="0", synced=True, **overrides):
+    def step(context):
+        now = datetime.now(UTC)
+        organization = context.organization
+        settings = {
+            "llm_budget_usd": limit,
+            "llm_budget_duration": "30d",
+            "llm_spend_usd": runtime_spend,
+            "llm_spend_observed_at": now,
+            "llm_budget_renews_at": now + timedelta(days=1),
+            **overrides,
+        }
+        for field, value in settings.items():
+            setattr(organization, field, value)
+        context.injector.get(PostgresRepositoryDelegate).save(organization)
+        costs = context.injector.get(CostRepository)
+        if synced:
+            costs.record_sync_completion(now)
+        if Decimal(memory_spend):
+            costs.upsert_many(
+                [
+                    CostRecord(
+                        request_id=str(uuid4()),
+                        litellm_key_hash="f" * 64,
+                        occurred_at=now - timedelta(minutes=1),
+                        spend=Decimal(memory_spend),
+                        model="test",
+                        status="success",
+                        is_memory=True,
+                        organization_id=organization.id,
+                    )
+                ]
+            )
+        config = get_config()
+        previous = config.memory_litellm_key_hashes
+        config.memory_litellm_key_hashes = "f" * 64
+        return LambdaWith(lambda: None, lambda: setattr(config, "memory_litellm_key_hashes", previous))
 
     return step

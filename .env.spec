@@ -156,3 +156,27 @@ INGEST_PORT=
 # Optional. Host port for the Communications gateway. Agent pods reach it
 # through host.docker.internal; defaults to 8002.
 COMMUNICATIONS_PORT=
+
+# Memory gateway. Choose a port distinct from API_PORT and other local services.
+# The backend is configured
+# separately; its shared key must never be injected into Agent runtime Secrets.
+MEMORY_PORT=8003
+# Optional. How the Docker-run product API reaches the gateway's read-only memory
+# viewer; defaults to the compose service (http://memory:8003/memory/view/v1).
+MEMORY_VIEW_BASE_URL=
+HINDSIGHT_BASE_URL=
+HINDSIGHT_API_KEY=
+# Internal model/key settings credential; generate separately from Hindsight API auth.
+MEMORY_RUNTIME_SERVICE_KEY=
+MEMORY_LITELLM_KEY_HASHES=
+# Optional initial model; shared by the API default and Hindsight startup.
+# MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini
+# Active key SHA-256 hash when several attribution hashes are retained.
+# Compose infers it for one hash; enabled Helmfile derives it from the current key.
+# MEMORY_LITELLM_ACTIVE_KEY_HASH=
+# Optional local backend (COMPOSE_PROFILES=local-hindsight). Use generated
+# URL-safe database/auth secrets and a dedicated, budgeted LiteLLM virtual key.
+# HINDSIGHT_BASE_URL=http://hindsight:8888 when this profile is enabled.
+COMPOSE_PROFILES=
+HINDSIGHT_DB_PASSWORD=
+HINDSIGHT_LITELLM_API_KEY=

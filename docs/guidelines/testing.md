@@ -80,13 +80,16 @@ with given(
 ## Verification commands
 
 Complete the [README development setup](../../README.md#development), then
-invoke verification from the repository root.
+invoke verification from the repository root. API tests force Organization and
+Agent budget defaults to $100 and $25 respectively, so developer `.env`
+deployment limits cannot change their expected budget contracts.
 
 | Command | Coverage | Additional prerequisites |
 | --- | --- | --- |
 | `make check-api` | Ruff lint/format check and Python type checking | None |
 | `make fix-api` | Ruff autofix and formatting; modifies files | None |
 | `make check-migrations` | Exactly one Alembic head | None |
+| `make check-memory` | Rendered gateway/backend isolation and authentication contracts | Helm 3.19.0 |
 | `make test-api` | API unit and integration tests, excluding the Kubernetes client test | Docker for Testcontainers PostgreSQL, plus Node.js for the OpenClaw plugin test |
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
@@ -152,6 +155,43 @@ Representative sources:
 
 ## Runtime plugin tests
 
+Agent Memory gateway tests replay sanitized Hermes and OpenClaw request captures
+from `../../api/tests/fixtures/agent_memory/` through a real HTTP listener. They
+cover the outbound bank, forced tags, document/operation namespaces, lifecycle
+credential rotation, and response redaction. The wire models target Hindsight
+0.10.2. Changes to this contract should also validate rewritten payloads against
+that pinned image's `RecallRequest`, `RetainRequest`, and `ReflectRequest` models.
+
+The API suite also runs the Hindsight cost bridge contract inside the pinned
+`ghcr.io/vectorize-io/hindsight:0.10.2` image, pulling it if absent. A deterministic
+HTTP model listener verifies concurrent bank identity and background consolidation;
+no real model key is used. Memory cost integration tests cover exact persistence,
+replay/healing, Organization totals, renewal-window isolation, and migration rollback.
+Deletion cleanup tests cover atomic tombstone/grant changes, rollback/replay, backend
+recovery, expired leases and stale completions, unsafe targets, and late retained
+documents. The pinned-image purge test verifies private/shared removal without
+changing another Agent or bank. Test queue migrations against already deleted Agents.
+Explicit Organization Memory write tests cover read-only and combined read/write grants, immediate revocation, cross-Agent write rejection, runtime credential use, content-only payloads, and refusal handling. The shared writer targets Python 3.12 in Ruff, matching the oldest runtime. Both pinned-runtime startup contracts execute the mounted writer command; Hermes
+executes the command from its generated instructions through the real terminal
+tool, covering short-name discovery after shell PATH changes and explicit 403
+refusals. Runtime fixtures mount the same executable ConfigMap command into the
+standard binary directory. Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
+memory charges, and successful-sync heartbeats. Cover exhausted/zero/uncapped
+limits, precise combined totals, missing/stale data, renewal, immediate limit
+changes, and recall availability when changing this policy. Failed and truncated
+spend-log runs must leave the heartbeat unchanged.
+
+The pinned viewer tests also cover exact private scopes, grant/revoke visibility
+for the author's own and other Agents' shared records, real recall with compound
+scopes, multi-page shared-document retagging, and invalidation of legacy private
+observations after retagging and re-consolidation.
+
+The Agent and Organization Memory viewers' list contract (tag-filtered items and total, search, and
+pagination) is proven against the same pinned image running with its embedded database
+and mock extraction model, in
+`../../api/tests/integration/test_agent_memory_viewer_contract.py`; its stand-in tests
+cover authorization and failure handling. Pull or build the image first when absent.
+
 The Hermes and OpenClaw telemetry plugins run inside agent containers but are
 delivered from repository source through runtime configuration, rather than as
 importable API modules. Tests load them from their source paths and call their
@@ -188,6 +228,13 @@ hooks directly. Shared setup lives in
   generated runtime configuration in the real image and proves materialized
   Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The
   workflow runs it against the same image after the image contract tests.
+- Both runtime workflows run the Agent Memory contracts against their built image.
+  Use `HERMES_TEST_IMAGE=<image> make test-api-runtime` or
+  `OPENCLAW_TEST_IMAGE=<image> make test-api-runtime RUNTIME=openclaw`. These prove
+  the real provider loader and hooks recall and retain alongside native memory,
+  replace stale settings, avoid persisting credentials, and disable Hindsight on
+  the same volume. Hermes exercises its actual turn loop with a deterministic
+  streaming model endpoint; OpenClaw exercises its core hook runner directly.
 
 ## UI and browser tests
 
@@ -223,6 +270,13 @@ Avoid assertions inside page objects. Avoid feature-specific network interceptio
 | UI schema/query hook         | Typecheck, lint, and focused browser coverage                 |
 | Helm/Kubernetes behavior     | Chart/render checks and Kubernetes integration when available |
 | Contributor-facing documentation only | Link/path/format validation; application tests are optional |
+
+Platform Agent Memory model changes require settings API authorization and
+failure-atomicity tests, browser selection/save/retry and Organization Owner
+denial tests, and the pinned Hindsight provider contract. That contract records
+actual outgoing models for new and in-progress operations, tool calls, and
+concurrent bank attribution. Run `make check-memory` for bridge/chart wiring and
+`make check-migrations` for the singleton settings migration.
 
 ## Failure handling
 

@@ -24,6 +24,9 @@ ARG APT_MIRROR
 
 ENV HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace
 
+# The gateway contract captures this client; memory must not install dependencies at boot.
+RUN uv pip install --python /opt/hermes/.venv/bin/python 'hindsight-client==0.6.1'
+
 # Route scheduled completions through the durable bridge instead of native transports.
 COPY patch-agent-message-completions.py /tmp/patch-agent-message-completions.py
 RUN python3 /tmp/patch-agent-message-completions.py && rm /tmp/patch-agent-message-completions.py

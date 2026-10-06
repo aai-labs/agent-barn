@@ -58,6 +58,8 @@ class MockLiteLLMModule(Module):
         mock: Any = MagicMock(spec=LiteLLMClient)
         mock.generate_key.return_value = FAKE_LITELLM_KEY
         mock.delete_key.return_value = True
+        mock.revoke_memory_key.side_effect = lambda key_hash: LiteLLMClient.revoke_memory_key(mock, key_hash)
+        mock.get_memory_key_info.side_effect = lambda key: LiteLLMClient.get_memory_key_info(mock, key)
         # Explicit defaults for the reads that feed response models: a bare MagicMock
         # return value fails validation rather than behaving like "no data".
         mock.get_team_budget_status.return_value = None

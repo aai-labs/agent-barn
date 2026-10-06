@@ -56,6 +56,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/memory-grants/{grant_id}",
+    "revoke_memory_grant_organizations__organization_id__memory_grants__grant_id__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/shared-credentials/{credential_id}",
     "delete_shared_credential_organizations__organization_id__shared_credentials__credential_id__delete"
   ],
@@ -311,6 +316,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/memory/items",
+    "list_agent_memories_organizations__organization_id__agents__agent_id__memory_items_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/restore-points",
     "list_restore_points_organizations__organization_id__agents__agent_id__restore_points_get"
   ],
@@ -461,6 +471,16 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/memory-grants",
+    "list_memory_grants_organizations__organization_id__memory_grants_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/memory/items",
+    "list_organization_memories_organizations__organization_id__memory_items_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/shared-credentials",
     "list_shared_credentials_organizations__organization_id__shared_credentials_get"
   ],
@@ -608,6 +628,16 @@
     "GET",
     "/platform/organizations/{organization_id}/members",
     "list_platform_members_platform_organizations__organization_id__members_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/agent-memory",
+    "read_settings_platform_settings_agent_memory_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/agent-memory/models",
+    "list_models_platform_settings_agent_memory_models_get"
   ],
   [
     "GET",
@@ -956,6 +986,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/memory-grants",
+    "create_memory_grant_organizations__organization_id__memory_grants_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/shared-credentials",
     "create_shared_credential_organizations__organization_id__shared_credentials_post"
   ],
@@ -1071,6 +1106,11 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/memory",
+    "set_agent_memory_organizations__organization_id__agents__agent_id__memory_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/share",
     "replace_agent_share_settings_organizations__organization_id__agents__agent_id__share_put"
   ],
@@ -1088,5 +1128,10 @@
     "PUT",
     "/platform/organizations/{organization_id}/llm-budget",
     "set_organization_llm_budget_platform_organizations__organization_id__llm_budget_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/agent-memory",
+    "update_settings_platform_settings_agent_memory_put"
   ]
 ]

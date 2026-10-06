@@ -22,6 +22,8 @@ from api.core.metrics import (
 )
 from api.core.utils import create_injector
 from api.domains.activity.routes import activity_router
+from api.domains.agent_memory.platform_routes import platform_memory_router
+from api.domains.agent_memory.routes import agent_memory_router, memory_grants_router, organization_memory_router
 from api.domains.agent_settings.routes import agent_settings_router
 from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agent_webhooks_router
 from api.domains.agents.routes import agents_router
@@ -123,6 +125,10 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agents_router)
     subapi.include_router(agent_webhooks_router)
     subapi.include_router(agent_settings_router)
+    subapi.include_router(platform_memory_router)
+    subapi.include_router(agent_memory_router)
+    subapi.include_router(memory_grants_router)
+    subapi.include_router(organization_memory_router)
     subapi.include_router(auth_router)
     subapi.include_router(api_keys_router)
     subapi.include_router(business_value_router)
