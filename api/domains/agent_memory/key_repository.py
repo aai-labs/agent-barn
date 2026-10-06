@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,12 +14,22 @@ from api.domains.organizations.models import Organization
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
+logger = logging.getLogger(__name__)
+
 
 @inject
 @singleton
 @dataclass
 class MemoryKeyRepository:
     delegate: PostgresRepositoryDelegate
+
+    @staticmethod
+    def _try_revoke(revoke: Callable[[str], bool], key_hash: str) -> bool:
+        try:
+            return revoke(key_hash)
+        except Exception as exc:
+            logger.warning("Memory credential revocation deferred: %s", type(exc).__name__)
+            return False
 
     @staticmethod
     def _lock(session: Session, organization_id: UUID) -> None:
@@ -66,7 +77,7 @@ class MemoryKeyRepository:
                 session.rollback()
                 # Remote issuance cannot participate in the database transaction.
                 # Revoke immediately; persist a retry if the proxy is unavailable.
-                if not revoke(key_hash):
+                if not self._try_revoke(revoke, key_hash):
                     session.add(MemoryKeyRevocation(organization_id=organization_id, key_hash=key_hash))
                     session.commit()
                 raise
@@ -97,6 +108,18 @@ class MemoryKeyRepository:
     ) -> int:
         removed = 0
         with Session(self.delegate.engine) as session:
+            # A cleanup may complete concurrently with Organization deletion.
+            orphaned = session.exec(
+                select(MemoryKeyRevocation)
+                .where(
+                    col(MemoryKeyRevocation.revoked_at).is_not(None),
+                    ~col(MemoryKeyRevocation.organization_id).in_(select(Organization.id)),
+                )
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            ).all()
+            for row in orphaned:
+                session.delete(row)
             query = select(MemoryKeyRevocation).where(col(MemoryKeyRevocation.revoked_at).is_(None))
             if organization_id is not None:
                 query = query.where(MemoryKeyRevocation.organization_id == organization_id)
@@ -104,7 +127,7 @@ class MemoryKeyRepository:
                 query.order_by(col(MemoryKeyRevocation.updated_at)).limit(limit).with_for_update(skip_locked=True)
             ).all()
             for row in rows:
-                if revoke(row.key_hash):
+                if self._try_revoke(revoke, row.key_hash):
                     if session.get(Organization, row.organization_id) is None:
                         session.delete(row)
                     else:

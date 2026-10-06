@@ -320,7 +320,9 @@ deletion queues its current key atomically with deleting the Organization and
 uses the same advisory lock as provisioning. Failed registration attempts revoke
 the newly issued key immediately, or queue cleanup if remote deletion fails.
 The budget reconciler retries pending revocations, including after Organization
-deletion. Old hashes remain attributable while the Organization exists, so delayed
+deletion. Cleanup errors do not stop the budget reconciliation pass; completed
+cleanup records whose Organization no longer exists are removed on a later pass.
+Old hashes remain attributable while the Organization exists, so delayed
 billing after replacement is not lost. Neither the public API routes nor the Agent gateway expose this
 credential endpoint. In-progress operations keep
 their model and key snapshot (up to 1,024 tracked

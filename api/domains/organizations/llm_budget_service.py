@@ -116,7 +116,10 @@ class OrganizationLlmBudgetService:
         """
         if not self._litellm_configured():
             return
-        self.memory_keys.revoke_pending(self.litellm.revoke_memory_key)
+        try:
+            self.memory_keys.revoke_pending(self.litellm.revoke_memory_key)
+        except Exception as exc:
+            logger.warning("Memory key cleanup failed; continuing budget repair: %s", type(exc).__name__)
         policies = self.organization_repository.list_budget_policies()
         failures = 0
         for organization_id, budget, duration in policies:
