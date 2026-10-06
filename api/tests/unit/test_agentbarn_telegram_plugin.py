@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -5,7 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from api.domains.communications.models import CommunicationPlatform, PlatformCapability
-from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
+from api.domains.communications.plugins.agentbarn_telegram import (
+    AgentBarnTelegramPlatformPlugin,
+    runtime_webhook_secret,
+)
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.web import WebPlatformPlugin
 
@@ -97,3 +101,14 @@ def test_the_catalogue_lists_only_offered_platforms_but_still_resolves_the_rest(
 
     assert [descriptor.key for descriptor in registry.descriptors()] == ["web"]
     assert registry.require("agentbarn_telegram") is unconfigured
+
+
+def test_each_connection_gets_its_own_runtime_webhook_secret() -> None:
+    first = runtime_webhook_secret("driver-key-one")
+    second = runtime_webhook_secret("driver-key-two")
+
+    assert first == runtime_webhook_secret("driver-key-one")
+    assert first != second
+    assert "driver-key-one" not in first
+    # Telegram's secret_token allows 1-256 of these characters.
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,256}", first)

@@ -418,6 +418,7 @@ class AgentBarnTelegramUpdate(BaseModel, table=True):
         sa.UniqueConstraint("update_id", name="uq_agentbarn_telegram_update_update_id"),
         sa.Index("ix_agentbarn_telegram_update_status", "status", "update_id"),
         sa.Index("ix_agentbarn_telegram_update_agent", "agent_id"),
+        sa.Index("ix_agentbarn_telegram_update_user_queue", "telegram_user_id", "update_id"),
     )
 
     update_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
@@ -434,6 +435,19 @@ class AgentBarnTelegramUpdate(BaseModel, table=True):
         nullable=True,
         foreign_key="communication_connection.id",
         ondelete="CASCADE",
+    )
+    # Forwarding state while QUEUED.
+    attempt_count: int = SqlField(default=0, sa_column=Column(sa.Integer(), nullable=False, server_default="0"))
+    next_attempt_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    # When the user was told their Agent is waking up or offline, so they are told once.
+    notice_sent_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
 
 

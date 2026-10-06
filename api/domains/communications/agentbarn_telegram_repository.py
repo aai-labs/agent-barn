@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent
+from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
 from api.domains.communications.models import (
     AgentBarnTelegramIngressLease,
@@ -43,6 +43,16 @@ class LinkTokenConsumption:
     link: AgentBarnTelegramLink | None = None
     # The Telegram user's previous active link, ended by this one.
     replaced_link: AgentBarnTelegramLink | None = None
+
+
+@dataclass(frozen=True)
+class ForwardTarget:
+    """Where a queued update would go, as of now."""
+
+    agent_status: AgentStatus | None
+    # False once the Connection is retired, disabled, or its Agent deleted.
+    in_use: bool
+    driver_key_encrypted: str
 
 
 @inject
@@ -345,3 +355,113 @@ class AgentBarnTelegramRepository:
         with Session(self.delegate.engine) as session:
             rows = session.exec(select(Agent.id, Agent.name).where(col(Agent.id).in_(agent_ids))).all()
             return {agent_id: name for agent_id, name in rows}
+
+    def queue_heads(self, *, limit: int) -> list[AgentBarnTelegramUpdate]:
+        """Each Telegram user's oldest queued update; later ones wait behind it."""
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(AgentBarnTelegramUpdate)
+                    .where(col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.QUEUED)
+                    .distinct(col(AgentBarnTelegramUpdate.telegram_user_id))
+                    .order_by(col(AgentBarnTelegramUpdate.telegram_user_id), col(AgentBarnTelegramUpdate.update_id))
+                    .limit(limit)
+                )
+            )
+
+    def queue_head_for_user(self, telegram_user_id: int) -> AgentBarnTelegramUpdate | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(AgentBarnTelegramUpdate)
+                .where(
+                    col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.QUEUED,
+                    col(AgentBarnTelegramUpdate.telegram_user_id) == telegram_user_id,
+                )
+                .order_by(col(AgentBarnTelegramUpdate.update_id))
+                .limit(1)
+            ).first()
+
+    def forward_target(self, agent_id: UUID, connection_id: UUID) -> ForwardTarget | None:
+        with Session(self.delegate.engine) as session:
+            row = session.exec(
+                select(Agent.status, Agent.deleted_at, CommunicationConnection)
+                .join(CommunicationConnection, col(CommunicationConnection.agent_id) == col(Agent.id))
+                .where(col(Agent.id) == agent_id, col(CommunicationConnection.id) == connection_id)
+            ).first()
+            if row is None:
+                return None
+            status, deleted_at, connection = row
+            return ForwardTarget(
+                agent_status=status,
+                in_use=deleted_at is None and connection.enabled and connection.retired_at is None,
+                driver_key_encrypted=connection.driver_key_encrypted,
+            )
+
+    def mark_forwarded(self, update_id: int) -> None:
+        self._finish(update_id, AgentBarnTelegramUpdateStatus.FORWARDED)
+
+    def drop(self, update_id: int) -> None:
+        self._finish(update_id, AgentBarnTelegramUpdateStatus.DROPPED)
+
+    def _finish(self, update_id: int, status: AgentBarnTelegramUpdateStatus) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(AgentBarnTelegramUpdate)
+                .where(col(AgentBarnTelegramUpdate.update_id) == update_id)
+                .values(status=status, payload=None)
+            )  # type: ignore[call-overload]
+            session.commit()
+
+    def schedule_retry(self, update_id: int, *, at: datetime) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(AgentBarnTelegramUpdate)
+                .where(col(AgentBarnTelegramUpdate.update_id) == update_id)
+                .values(
+                    attempt_count=AgentBarnTelegramUpdate.attempt_count + 1,  # type: ignore[operator]
+                    next_attempt_at=at,
+                )
+            )  # type: ignore[call-overload]
+            session.commit()
+
+    def claim_notice(self, telegram_user_id: int, *, now: datetime) -> bool:
+        """Record that the user was told their Agent is unavailable; False if already told."""
+        with Session(self.delegate.engine) as session:
+            already = session.exec(
+                select(AgentBarnTelegramUpdate.id).where(
+                    col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.QUEUED,
+                    col(AgentBarnTelegramUpdate.telegram_user_id) == telegram_user_id,
+                    col(AgentBarnTelegramUpdate.notice_sent_at).is_not(None),
+                )
+            ).first()
+            if already is not None:
+                return False
+            session.exec(
+                sa.update(AgentBarnTelegramUpdate)
+                .where(
+                    col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.QUEUED,
+                    col(AgentBarnTelegramUpdate.telegram_user_id) == telegram_user_id,
+                )
+                .values(notice_sent_at=now)
+            )  # type: ignore[call-overload]
+            session.commit()
+            return True
+
+    def drop_expired(self, *, received_before: datetime) -> dict[int, int]:
+        """Drop queued updates received before the cutoff; return how many each Telegram user lost."""
+        with Session(self.delegate.engine) as session:
+            dropped = session.exec(
+                sa.update(AgentBarnTelegramUpdate)
+                .where(
+                    col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.QUEUED,
+                    col(AgentBarnTelegramUpdate.created_at) < received_before,
+                )
+                .values(status=AgentBarnTelegramUpdateStatus.DROPPED, payload=None)
+                .returning(col(AgentBarnTelegramUpdate.telegram_user_id))
+            ).all()  # type: ignore[call-overload]
+            session.commit()
+            counts: dict[int, int] = {}
+            for (user_id,) in dropped:
+                if user_id is not None:
+                    counts[user_id] = counts.get(user_id, 0) + 1
+            return counts

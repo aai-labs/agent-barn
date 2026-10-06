@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from typing import Protocol
 
 from api.domains.communications.models import CommunicationPlatform
@@ -6,6 +8,17 @@ from api.domains.communications.plugins.base import (
     PlatformPlugin,
     PlatformSettings,
 )
+
+_RUNTIME_WEBHOOK_SECRET_CONTEXT = b"agentbarn-telegram-runtime-webhook"
+
+
+def runtime_webhook_secret(driver_key: str) -> str:
+    """The secret Agent Barn presents to an Agent's Telegram webhook, from its Connection's driver key.
+
+    Both sides derive it, so it is never stored or sent on its own, and each
+    Connection's differs. Hex output fits Telegram's secret_token alphabet.
+    """
+    return hmac.new(driver_key.encode("utf-8"), _RUNTIME_WEBHOOK_SECRET_CONTEXT, hashlib.sha256).hexdigest()
 
 
 class AgentBarnTelegramConfig(Protocol):

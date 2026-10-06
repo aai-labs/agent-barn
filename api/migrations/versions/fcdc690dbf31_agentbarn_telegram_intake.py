@@ -43,6 +43,9 @@ def upgrade() -> None:
         sa.Column("telegram_user_id", sa.BigInteger(), nullable=True),
         sa.Column("agent_id", sa.Uuid(), nullable=True),
         sa.Column("connection_id", sa.Uuid(), nullable=True),
+        sa.Column("attempt_count", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("notice_sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["agent_id"], ["agent.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["connection_id"], ["communication_connection.id"], ondelete="CASCADE"),
@@ -50,9 +53,13 @@ def upgrade() -> None:
     )
     op.create_index("ix_agentbarn_telegram_update_status", "agentbarn_telegram_update", ["status", "update_id"])
     op.create_index("ix_agentbarn_telegram_update_agent", "agentbarn_telegram_update", ["agent_id"])
+    op.create_index(
+        "ix_agentbarn_telegram_update_user_queue", "agentbarn_telegram_update", ["telegram_user_id", "update_id"]
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_agentbarn_telegram_update_user_queue", table_name="agentbarn_telegram_update")
     op.drop_index("ix_agentbarn_telegram_update_agent", table_name="agentbarn_telegram_update")
     op.drop_index("ix_agentbarn_telegram_update_status", table_name="agentbarn_telegram_update")
     op.drop_table("agentbarn_telegram_update")

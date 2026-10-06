@@ -22,12 +22,16 @@ class BotConfig:
 
 
 def _ingress(
-    repository: Mock, config: BotConfig | None = None, processor: Mock | None = None
+    repository: Mock,
+    config: BotConfig | None = None,
+    processor: Mock | None = None,
+    forwarder: Mock | None = None,
 ) -> AgentBarnTelegramIngress:
     return AgentBarnTelegramIngress(
         config=cast(Config, config or BotConfig()),
         repository=repository,
         processor=processor or Mock(),
+        forwarder=forwarder or Mock(),
     )
 
 
@@ -199,3 +203,30 @@ def test_the_poller_backs_off_after_a_failure_and_releases_its_lease_on_stop(
     assert cycles == ["cycle", "cycle"]
     assert "retrying in 1s: Telegram getUpdates failed (HTTP 502)" in caplog.text
     repository.release_ingress_lease.assert_called_once_with(ingress.owner_id)
+
+
+def test_forwarding_runs_only_on_the_replica_that_holds_the_lease() -> None:
+    repository = Mock()
+    repository.claim_ingress_lease.return_value = False
+    forwarder = Mock()
+    ingress = _ingress(repository, forwarder=forwarder)
+    stop = asyncio.Event()
+
+    async def exercise() -> int:
+        loop = asyncio.create_task(ingress.forward_loop(stop))
+        ingress.should_poll(owner="replica-a")
+        ingress.wake_forwarder()
+        await asyncio.sleep(0.05)
+        without_lease = forwarder.forward_due.call_count
+        repository.claim_ingress_lease.return_value = True
+        ingress.should_poll(owner="replica-a")
+        ingress.wake_forwarder()
+        await asyncio.sleep(0.05)
+        stop.set()
+        await asyncio.wait_for(loop, timeout=2)
+        return without_lease
+
+    without_lease = asyncio.run(exercise())
+
+    assert without_lease == 0
+    assert forwarder.forward_due.call_count >= 1
