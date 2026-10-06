@@ -22,3 +22,7 @@ Organization Template editing published a new immutable `agent_template` version
 - **Version history stops merging scopes.** `resolve_versions` returned Organization and Platform rows merged by version number, with the Organization row shadowing a Platform row at the same number — a premise invalidated when `f6a7b8c9d0e1_normalize_org_fork_versions` gave org forks an independent `1..N` sequence. A lineage with any Organization rows now lists only Organization versions; a never-edited built-in falls back to the Platform lineage. `get_shared_versions`, which deliberately returns both scopes without shadowing for Agent configuration selection, is unchanged.
 - **Abandoned drafts are not garbage-collected.** A stale draft only marks its lineage with a `Draft` badge. Tenant deletion cascades from `organization`, and lineage deletion purges the draft. The Platform side has the same property; accepting it keeps both scopes on one model.
 - **A draft holds `RESTRICT` references to Skill Versions.** An Organization manager can now be blocked from deleting a Skill by their own unpublished draft.
+
+## Subsequent clarification — AF-360
+
+Per-scope history remains the default. Organization editors now explicitly request both scopes to restore Built-in source snapshots without version-number shadowing; scoped source selection creates an Organization draft and preserves its original fork origin. See the [current restore contract](../features/templates-and-skills.md).

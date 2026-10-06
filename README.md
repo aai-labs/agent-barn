@@ -653,6 +653,14 @@ builder requires a GitHub token only to authenticate that public clone; it does
 not require private-source permission. Third-party components keep their own
 licences.
 
+## Programmatic API
+
+Create a Personal API Key in Account settings to use the existing user-authenticated
+`/api/v1` routes. The deployed API serves an interactive reference at
+`/api/v1/docs`, an OpenAPI schema at `/api/v1/openapi.json`, and agent guidance
+at `/llms.txt`. See the [API quickstart](api/developer_docs/quickstart.md) for
+a Bearer-token example.
+
 ## Getting help and contributing
 
 Support, issue, discussion, and pull-request routes are collected in

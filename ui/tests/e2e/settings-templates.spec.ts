@@ -9,7 +9,12 @@ import {
   mockOrgTemplateLineages,
   mockOrgTemplatePublished,
   mockOrgTemplatePublishedV1,
+  mockBuiltInTemplateV1,
+  mockOrgForkV1,
+  mockOrgForkV2,
+  mockRestoredBuiltInDraft,
 } from "../pages/data-support/org-template-data-support.po";
+import { TemplatePublishedPage } from "../pages/template-published-page.po";
 
 const TEMPLATES_TAB = `/dashboard/${TEST_ORG_ID}/settings`;
 
@@ -26,6 +31,7 @@ test.describe("Settings · Templates", () => {
     await dataSupport.users.interceptGetUserContextRequest();
     await dataSupport.users.interceptGetOrganizationsRequest();
     await dataSupport.organizations.interceptAgentSettings();
+    await dataSupport.organizations.interceptGetOrganizationLlmBudget();
     await dataSupport.orgTemplates.interceptGetLineages();
     await dataSupport.orgTemplates.interceptGetOrgSkills();
   });
@@ -70,6 +76,41 @@ test.describe("Settings · Templates", () => {
 
     await expect(page.getByLabel("SOUL.md content")).toHaveText(/version one/);
     await expect(page.getByText("Historical", { exact: true })).toBeVisible();
+  });
+
+  test("restores Built-in v1 separately from Org v1", async ({ page }) => {
+    await dataSupport.orgTemplates.interceptGetLineages({
+      body: [{ ...mockOrgTemplateLineages[0], is_fork: true, latest_published_version: 2 }],
+    });
+    await dataSupport.orgTemplates.interceptGetVersions({
+      templateKey: MOCK_ORG_FORK_KEY,
+      body: [mockBuiltInTemplateV1, mockOrgForkV2, mockOrgForkV1],
+    });
+    await dataSupport.orgTemplates.interceptGetDraft({ templateKey: MOCK_ORG_FORK_KEY, status: 404 });
+    await dataSupport.orgTemplates.interceptStartDraft({
+      templateKey: MOCK_ORG_FORK_KEY, body: mockRestoredBuiltInDraft,
+    });
+    const view = new TemplatePublishedPage(page);
+    const versionsRequest = page.waitForRequest((request) => request.url().includes(`${MOCK_ORG_FORK_KEY}/versions`));
+    await page.goto(`${TEMPLATES_TAB}/templates/${MOCK_ORG_FORK_KEY}`);
+    expect(new URL((await versionsRequest).url()).searchParams.get("include_platform")).toBe("true");
+    await expect(view.soulContent).toHaveText(mockOrgForkV2.soul_md);
+    await view.openVersionPicker();
+    await expect(view.versionOptions).toHaveText(["v2", "v1", "v1Built-in"]);
+    await view.closeVersionPicker();
+    await view.selectLastVersionWithKeyboard();
+    await expect(view.soulContent).toHaveText(mockBuiltInTemplateV1.soul_md);
+    await view.selectVersion("v1");
+    await expect(view.soulContent).toHaveText(mockOrgForkV1.soul_md);
+    await view.selectVersion("v1 Built-in");
+    const restoreRequest = page.waitForRequest((request) =>
+      request.method() === "POST" && request.url().includes(`${MOCK_ORG_FORK_KEY}/draft`),
+    );
+    await view.restoreBuiltIn(1);
+    const restoreUrl = new URL((await restoreRequest).url());
+    expect(restoreUrl.searchParams.get("source_scope")).toBe("platform");
+    expect(restoreUrl.searchParams.get("source_version")).toBe("1");
+    await expect(view.editableSoulContent).toHaveValue(mockBuiltInTemplateV1.soul_md);
   });
 
   test("starts a draft, edits it, saves, and publishes", async ({ page }) => {
