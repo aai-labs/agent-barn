@@ -84,6 +84,11 @@ class AgentBarnTelegramRepository:
                 )
             ).one_or_none()
 
+    def get_link(self, link_id: UUID) -> AgentBarnTelegramLink | None:
+        """Unscoped read; callers reach a link only through a token they already read in scope."""
+        with Session(self.delegate.engine) as session:
+            return session.get(AgentBarnTelegramLink, link_id)
+
     def consume_link_token(
         self,
         token_hash: str,

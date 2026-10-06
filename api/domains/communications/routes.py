@@ -7,6 +7,7 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.models import (
     CommunicationConnectionCreate,
     CommunicationConnectionRead,
@@ -22,6 +23,9 @@ from api.domains.communications.models import (
     CommunicationReconnectRead,
     CommunicationRetryRead,
     PlatformDescriptorRead,
+    TelegramLinkRead,
+    TelegramLinkTokenCreated,
+    TelegramLinkTokenRead,
 )
 from api.domains.communications.service import MAX_DIAGNOSTICS_WINDOW_DAYS, CommunicationsService
 from api.infrastructure.shared.models import PaginatedItems
@@ -245,3 +249,59 @@ def retry_communication_delivery(
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
 ):
     return service.retry_delivery(agent_id, connection_id, delivery_id, context)
+
+
+@communications_router.post(
+    "/agents/{agent_id}/connections/{connection_id}/telegram-link-tokens",
+    response_model=TelegramLinkTokenCreated,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_telegram_link_token(
+    agent_id: UUID,
+    connection_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentBarnTelegramService, Injected(AgentBarnTelegramService)],
+):
+    return service.create_link_token(agent_id, connection_id, context)
+
+
+@communications_router.get(
+    "/agents/{agent_id}/connections/{connection_id}/telegram-link-tokens/{token_id}",
+    response_model=TelegramLinkTokenRead,
+)
+def get_telegram_link_token(
+    agent_id: UUID,
+    connection_id: UUID,
+    token_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentBarnTelegramService, Injected(AgentBarnTelegramService)],
+):
+    return service.get_link_token(agent_id, connection_id, token_id, context)
+
+
+@communications_router.get(
+    "/agents/{agent_id}/connections/{connection_id}/telegram-links",
+    response_model=list[TelegramLinkRead],
+)
+def list_telegram_links(
+    agent_id: UUID,
+    connection_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentBarnTelegramService, Injected(AgentBarnTelegramService)],
+):
+    return service.list_links(agent_id, connection_id, context)
+
+
+@communications_router.delete(
+    "/agents/{agent_id}/connections/{connection_id}/telegram-links/{link_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def unlink_telegram_account(
+    agent_id: UUID,
+    connection_id: UUID,
+    link_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentBarnTelegramService, Injected(AgentBarnTelegramService)],
+) -> Response:
+    service.unlink(agent_id, connection_id, link_id, context)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

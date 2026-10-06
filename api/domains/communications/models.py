@@ -912,3 +912,32 @@ class CommunicationInstallLinkRead(PydanticBaseModel):
     """Provider-built install URL for a saved Connection's bot."""
 
     url: str
+
+
+class TelegramLinkTokenStatus(str, enum.Enum):
+    WAITING = "waiting"
+    LINKED = "linked"
+    EXPIRED = "expired"
+
+
+class TelegramLinkTokenRead(PydanticBaseModel):
+    """A one-time Agent Barn Telegram link and whether someone has used it yet."""
+
+    id: UUID
+    status: TelegramLinkTokenStatus
+    expires_at: datetime
+    telegram_username: str | None = None
+
+
+class TelegramLinkTokenCreated(TelegramLinkTokenRead):
+    # The deep link carries the raw token, so it is returned only when created.
+    url: str
+
+
+class TelegramLinkRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    telegram_username: str | None
+    linked_by_membership_id: UUID
+    created_at: datetime
