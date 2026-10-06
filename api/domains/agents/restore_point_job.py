@@ -218,14 +218,15 @@ def main() -> None:
         raise SystemExit(f"Unknown {ENV_MODE}: {mode}")
 
     target = _required_env(ENV_TARGET)
-    backup = _required_env(ENV_BACKUP)
+    backup = os.environ.get(ENV_BACKUP)
     archive_dir = _required_env(ENV_ARCHIVE)
 
-    try:
-        emit_result(capture(target, backup, runtime))
-    except Exception as exc:
-        emit_failure(f"pre-restore capture failed: {exc}")
-        raise SystemExit(EXIT_BACKUP_FAILED) from exc
+    if backup:
+        try:
+            emit_result(capture(target, backup, runtime))
+        except Exception as exc:
+            emit_failure(f"pre-restore capture failed: {exc}")
+            raise SystemExit(EXIT_BACKUP_FAILED) from exc
 
     try:
         apply_archive(target, archive_dir)

@@ -2583,6 +2583,7 @@ class AgentService:
                 restore_point_id,
                 AgentRestorePointRestore(reapply_configuration=True),
                 context,
+                capture_backup=False,
             )
             row = self.restore_points.wait_until_terminal(
                 agent_id,

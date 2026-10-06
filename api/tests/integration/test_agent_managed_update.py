@@ -2,7 +2,7 @@ import uuid
 from unittest.mock import patch
 
 from fastapi import status
-from hamcrest import assert_that, contains_string, equal_to, has_length, none
+from hamcrest import assert_that, contains_string, equal_to, has_item, has_length, none, not_
 
 from api.core.config import Config
 from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
@@ -238,7 +238,7 @@ def test_a_managed_update_rolls_back_when_the_new_version_never_becomes_ready():
 
             points = _restore_points(context)
             origins = sorted(point["origin"] for point in points)
-            assert_that(origins, equal_to(["PRE_RESTORE", "PRE_UPGRADE"]))
+            assert_that(origins, equal_to(["PRE_UPGRADE"]))
 
 
 def test_a_rollback_restarts_the_agent_on_its_previous_image():
@@ -343,6 +343,25 @@ def test_a_first_update_rolls_back_to_the_image_the_pod_actually_ran():
         with then("the rollback restarts the runtime the pod was actually running"):
             pinned = service.repository.get_by_id(context.agent.id).pinned_runtime_image
             assert_that(pinned, equal_to("registry.example.com/agentbarn-openclaw:v1"))
+
+
+def test_a_rollback_takes_no_extra_safety_backup():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _succeed_capture_job(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_pod_readiness.side_effect = [
+            ("crashed", "BackOff"),  # the updated pod never comes up
+            ("ready", None),  # the rolled-back pod does
+        ]
+        service = context.injector.get(AgentService)
+
+        with when("the managed update is rolled back"):
+            service._run_managed_update(context.agent.id, _user_context(context))
+
+        with then("the rollback restores the pre-upgrade archive without a second safety copy"):
+            origins = [point["origin"] for point in _restore_points(context)]
+            assert_that(origins, not_(has_item(RestorePointOrigin.PRE_RESTORE.value)))
+            assert_that(origins, has_item(RestorePointOrigin.PRE_UPGRADE.value))
 
 
 def test_a_rollback_whose_restore_fails_does_not_restart_the_agent():

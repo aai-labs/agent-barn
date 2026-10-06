@@ -471,6 +471,7 @@ class RestorePointService:
         restore_point_id: UUID,
         payload: AgentRestorePointRestore,
         context: CurrentUserContext,
+        capture_backup: bool = True,
     ) -> AgentRestorePointRead:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
         scope = self.agent_authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
@@ -510,7 +511,12 @@ class RestorePointService:
                 self._validate_recorded_configuration(current, target)
 
             job_name = restore_job_name(target.id)
-            backup = self._create_pre_restore_row(current, job_name)
+            # The safety copy of the volume exists for restores whose source
+            # archive may be worse than what is on the volume now. A managed-update
+            # rollback restores the pre-upgrade archive, which is newer and better
+            # by construction than whatever the failed update left behind — so it
+            # skips the copy instead of paying ~20s and a confusing row for it.
+            backup = self._create_pre_restore_row(current, job_name) if capture_backup else None
             result = self.repository.update_status_with_event(
                 target.id,
                 RestorePointStatus.RESTORING,
@@ -685,22 +691,23 @@ class RestorePointService:
         self,
         agent: Agent,
         target: AgentRestorePoint,
-        backup: AgentRestorePoint,
+        backup: AgentRestorePoint | None,
         job_name: str,
     ) -> None:
         namespace = self.config.k8s_namespace
         try:
-            self.k8s.create_pvc(
-                namespace,
-                build_restore_point_pvc(
-                    backup.id,
-                    agent.id,
-                    agent.organization_id,
+            if backup is not None:
+                self.k8s.create_pvc(
                     namespace,
-                    self.config.restore_point_size,
-                    self.config.storage_class or None,
-                ),
-            )
+                    build_restore_point_pvc(
+                        backup.id,
+                        agent.id,
+                        agent.organization_id,
+                        namespace,
+                        self.config.restore_point_size,
+                        self.config.storage_class or None,
+                    ),
+                )
             self.k8s.create_job(
                 namespace,
                 build_restore_job(
@@ -712,7 +719,7 @@ class RestorePointService:
                     image=self.config.api_image,
                     runtime=agent.agent_type,
                     agent_pvc=f"agent-{agent.id}",
-                    backup_pvc=backup.pvc_name,
+                    backup_pvc=backup.pvc_name if backup is not None else None,
                     archive_pvc=target.pvc_name,
                     timeout_seconds=self.config.restore_point_restore_timeout_seconds,
                     image_pull_secret=self.config.agent_image_pull_secret or None,
@@ -723,9 +730,10 @@ class RestorePointService:
             # apiserver's account of what it rejected is kept only in the log.
             logger.exception("Could not provision the restore of restore point %s onto agent %s", target.id, agent.id)
             reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.RESTORE)
-            self.repository.mark_failed(backup.id, reason[:_MAX_FAILURE_REASON])
+            if backup is not None:
+                self.repository.mark_failed(backup.id, reason[:_MAX_FAILURE_REASON])
+                self.k8s.delete_pvc(backup.pvc_name, namespace)
             self.repository.mark_restored(target.id, cancel_replay=True)
-            self.k8s.delete_pvc(backup.pvc_name, namespace)
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=reason) from exc
 
     def delete_restore_point(
