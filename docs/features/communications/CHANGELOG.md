@@ -14,6 +14,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-07 — Clarify native setup and compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Corrected: Telegram group setup explains administrator access or disabling privacy and re-adding the bot; runtime mention/reply and Connection gates still apply.
+- Documented: read-only rollout preflight checks live API, Communications, and worker process allowlists before the pre-upgrade migration hook.
+- Compatibility: reconnect stays in the v1 operation inventory, marked deprecated with terminal `409` and Agent restart guidance. Authentication and tenant/permission handling remain intact.
+- Verified: all 70 Connection integration tests, both public API contract tests, API static checks, and the single migration head pass.
+
 ### 2026-10-07 — Protect retained rollout columns — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 
 - Corrected: Alembic autogeneration cannot propose dropping the three unmapped legacy Connection columns before deployed-consumer cutoff. Explicit contraction remains a later migration.

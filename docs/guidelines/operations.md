@@ -193,6 +193,23 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 
 - Transport ownership is fixed by Platform under the [runtime ownership contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary). Current Config, chart values/Helmfile, deployment workflows, and deployment spec no longer expose or forward `COMMUNICATIONS_NATIVE_PLATFORMS`/`communicationsNativePlatforms`. Stale environment values are ignored and cannot restore chat gateway transport. Retire externally managed GitHub variables and deployment overrides as an operator task after older releases no longer depend on them.
 - Before replacing flag-controlled application replicas, verify their existing allowlist is `slack,discord,telegram,teams`, excluding chat gateway sessions and claims. This chart retains that hard-coded Secret key to fence older replicas restarting during its pre-upgrade hook. Roll every application replica and background worker onto fixed ownership before removing the key in a follow-up release; an older replica restarting against a Secret without the key could otherwise restore its empty-default gateway fallback. Restart affected Agents onto compatible Hermes/OpenClaw images to rebuild native configuration; application rollout alone does not restart Agent pods.
+- Before deploying the chart or running its pre-upgrade migration hook, inspect the **running processes** in every API, Communications, and worker replica of the older release. Updating a repository variable or Secret does not change an existing process environment. Use the target namespace and release below; this prints only the transport allowlist:
+
+  ```bash
+  rollout_namespace='<namespace>'
+  rollout_release='<api-helm-release>'
+  for component in api communications worker; do
+    for pod in $(kubectl -n "$rollout_namespace" get pods \
+      -l "app.kubernetes.io/name=agentbarn-api,app.kubernetes.io/instance=$rollout_release,app.kubernetes.io/component=$component" \
+      -o name); do
+      echo "$component $pod"
+      kubectl -n "$rollout_namespace" exec "$pod" -c "$component" -- \
+        python -c 'import pathlib; entries=pathlib.Path("/proc/1/environ").read_bytes().split(b"\0"); print(next((v.decode() for v in entries if v.startswith(b"COMMUNICATIONS_NATIVE_PLATFORMS=")), "COMMUNICATIONS_NATIVE_PLATFORMS=<missing>"))'
+    done
+  done
+  ```
+
+  Confirm every expected replica was inspected and every flag-controlled process includes all four `slack,discord,telegram,teams` platforms. An empty result is not success. If PID 1 is a launcher, inspect the actual application process environment instead. A missing/incomplete value blocks retirement migration: first roll the older chart/application with the complete allowlist, verify live processes and cessation of native gateway sessions/claims, then deploy this release. Keep the Secret fence until all application and worker consumers run fixed ownership.
 - Rollback requires a compatible application/runtime release. Never re-enable legacy provider sessions or replay historical chat Deliveries. Web Chat and Email still require the Communications deployment.
 - Before applying native-work retirement revision `72c4a9e1b6d8`, fence older applications from native sessions/claims using the allowlist above and stop their in-flight provider sessions. The chart migration hook runs before application rollout. This data-only revision cancels pending/processing native work atomically with content-free journal entries; it does not drop columns, change credentials/history, or touch Web/Email work. Its downgrade changes only the Alembic revision marker and never undoes cancellations or removes journal history. Physical driver/ingress-lease column removal must wait until all mapped readers/writers of those columns have exited.
 - Deploy a Hermes image built without the retired completion-capture patch together with the new runtime assembly, then restart affected Agents. Old pods keep their mounted bridge until restarted; restored volumes run the same sanitation at start. The retained history patch must remain in the Hermes image.

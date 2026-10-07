@@ -235,7 +235,10 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("/newbot"),
                     contains_string("getUpdates"),
                     contains_string("native runtime"),
-                    contains_string("privacy mode already delivers"),
+                    contains_string("group administrator"),
+                    contains_string("/setprivacy"),
+                    contains_string("remove and re-add"),
+                    contains_string("only when mentioned or replied to"),
                     contains_string("webhook"),
                 ),
             )
