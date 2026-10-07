@@ -2,7 +2,7 @@
 
 ## Read when
 
-Read before changing how Agent Barn derives Business Actions from Tool Calls, the aai-cli or gog command catalogues, Outcome Types or their default minutes, the `business_action` table, the `agentbarn_business_actions` metric, or any read that reports value from Business Actions. Also read before changing the Organization activity read, or what counts as a Request, a handled delivery, or a response time.
+Read before changing how Agent Barn derives Business Actions from Tool Calls, the aai-cli or gog command catalogues, Outcome Types or their default minutes, the `business_action` table, the `agentbarn_business_actions` metric, or any read that reports value from Business Actions. Also read before changing the Organization activity read, or what counts as a Request, a handled delivery, or a response time, and before changing the KPIs dashboard UI.
 
 ## Role in the system
 
@@ -238,7 +238,7 @@ What the delivery statuses mean:
 
 ### Coverage
 
-- Only Connections on the Communications Gateway create Communication Deliveries. Platforms listed in `COMMUNICATIONS_NATIVE_PLATFORMS` run natively. That is Slack, Discord, Telegram, and Teams in deployed environments; the setting is empty by default and in local k3d.
+- Only Connections on the Communications Gateway create Communication Deliveries. Platforms listed in `COMMUNICATIONS_NATIVE_PLATFORMS` run natively. Each deployment sets that list (see [`../guidelines/operations.md`](../guidelines/operations.md)); it is empty by default and in local k3d.
 - Native traffic is mirrored into `agent_chat_message` through Ingest but has no delivery rows. Web Chat and Email always create them.
 - The handled rate and the response time therefore cover only part of the Requests. Each is returned with its coverage count, so the dashboard can say "based on 120 of 480 requests".
 - Native avoidance is transport routing, not a check when a delivery is accepted. A delivery created before its Platform switched to native stays PENDING and is left out of the denominator.
@@ -270,6 +270,97 @@ What the delivery statuses mean:
 - **An approval answer is a Request.** Answering a command approval in Web Chat sends a new inbound message and delivery.
 - **Webhook Invocations without an event id are never deduplicated.** Each one is its own row, and so its own Request.
 - **Inbound messages may be overcounted** on Hermes, as described in [Known gaps](#known-gaps).
+
+## KPI dashboard
+
+The Organization's KPIs page, `/dashboard/{organization_id}/kpis`, renders value settings, the Organization value, and Organization activity on one page. It reads only the three endpoints above.
+
+### Access
+
+- The page is for Owners and Admins. The "KPIs" navigation entry sits right after Costs, inside the same `canManage` check, so desktop and the mobile drawer both hide it from Members.
+- The page gates with `useRequireOrgManager`, as Costs does. A Member who opens the URL is redirected to the Organization's home, and the dashboard never mounts, so it sends no value or activity read.
+
+### Date range
+
+- One date range drives every figure. `from` and `to` live in the page URL, as on Costs, and are sent as `from_date` and `to_date`.
+- With no range chosen, neither is sent, so the server's 30-day default applies. The page shows the window each response echoes.
+
+### Headline tiles
+
+| Tile | Source | Shown |
+|---|---|---|
+| Hours saved | `/value` `totals.minutes_saved` | Hours to one decimal; a non-zero figure under 0.05 h reads "<0.1 h". Hint: the successful write count. |
+| Value | `/value` `totals.value` | USD, with the rate used as the hint. |
+| LLM spend | `/value` `totals.spend` | USD, with a "View in Costs" link carrying the same `from` and `to`. |
+| Value per dollar spent | `/value` `totals.value_to_spend_ratio` | "$X.XX per $1"; a non-zero ratio under $0.005 reads "<$0.01 per $1". |
+| Requests | `/value/activity` `totals.requests` | A count. |
+| Handled without failure | `/value/activity` `totals.handled_without_failure_rate` | A percentage, with one decimal below 0.5% and from 99.5% up to 100%, so a real failure never rounds to 100% and a real success never rounds to 0%. Hint: "based on {handled_coverage} of {requests} requests routed through Agent Barn". It names no channels, because which ones are routed depends on the environment's `COMMUNICATIONS_NATIVE_PLATFORMS`. |
+
+The dashboard never shows `$0` or `0%` for an unknown figure:
+
+- With no hourly rate set, Value and Value per dollar read "Set an hourly rate".
+- Any other null, such as the ratio when spend is zero, or the handled rate without deliveries, reads "not enough data".
+- A missing figure shows "—" with its reason on the line below, so the reason is never cut off.
+
+Each tile has a clickable information button with its calculation and scope. The hints work with a mouse, keyboard, or touch. Hours saved is labelled as an estimate: it sums successful actions × effective minutes per Outcome Type, then divides by 60. Value is hours saved × hourly rate; Value per dollar is value ÷ LLM spend, with a worked example and the missing-rate/zero-spend requirements. The other hints explain the spend, Request, and handled-rate inputs.
+
+Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Unable to load" with a Retry; the other endpoint's tiles still render.
+
+### Trend chart
+
+- One chart with two tabs, labelled by the bucket granularity each response echoes.
+  - **Value vs spend** (the default) draws `/value` `series`: value and spend per bucket.
+  - **Requests** draws `/value/activity` `requests_series`.
+- The Value vs spend tab labels the figures as estimated value and recorded LLM spend per interval, using the echoed granularity. Its information button explains that each point is the interval's hours saved × hourly rate and recorded LLM costs, with separate amounts per interval rather than cumulative totals.
+- With no hourly rate set, every value point is null, so the chart draws spend alone and says "Set an hourly rate to chart value".
+- Each tab belongs to one endpoint. A failed endpoint shows "Unable to load" with a Retry inside its own tab, and the other tab still renders.
+
+### Agents table
+
+- One row per Agent in either response, merged on `agent_id`.
+  - A null `agent_id` is the "Unattributed" row, and only that row carries the name.
+  - Otherwise the name comes from `/value`, then `/value/activity`. A hard-deleted Agent with no stored name reads "Deleted agent".
+  - A row whose `agent_deleted` is true in either response carries a "Deleted" badge.
+- An Agent that one response omits had nothing to report there: `/value` lists every Agent with a successful write or spend, and `/value/activity` every Agent with Requests, deliveries, Tool Calls, or spend. Its figures from that response read as zero, and its rates as "not enough data".
+- Columns: Agent, Value, Hours saved, LLM spend, Value per dollar, Requests, Handled without failure, Median response, Cost per request, and Tool calls per request.
+  - The handled rate and the median response show their coverage, the `handled_coverage` and `response_time_coverage` counts, for example "75% · 100 reqs" and "1.5 s · 80 reqs".
+  - The response time reads "<1 s", "1.5 s", "2m 05s", or "1h 02m".
+  - Null figures follow the same wording as the tiles.
+- Rows open sorted by hours saved, descending. Every column sorts, a second click reverses it, and unknown figures stay last in both directions.
+- A failed endpoint, including a failed refetch after a successful read, shows "—" in its own columns and one "Unable to load … figures" line with a Retry above the table.
+
+### Footnotes
+
+- "Top outcomes" lists `/value` `top_outcome_types` in the server's order. Each entry shows its label, its successful write count, its hours, and its value. Labels are derived from the Outcome Type code (`PULL_REQUEST_OPENED` reads "Pull request opened"), so a new catalogue Outcome Type needs no UI change.
+- The unverified write and unclassified action counts from `/value` `totals`.
+- A fixed note: value counts only successful aai-cli and gog write actions, and the handled rate and response time cover only requests routed through Agent Barn, while natively connected channels count as Requests but are not timed.
+
+### Empty and loading states
+
+- **Empty.** When both responses arrive and both list no Agents, a card replaces the chart and table. It explains that value comes from successful aai-cli and gog write actions, and activity from messages and webhook invocations. The tiles and footnotes still show the period's zero counts.
+- **Loading.** Each section has its own skeleton:
+  - a tile skeleton while its endpoint is loading;
+  - a chart skeleton in a tab whose endpoint is loading;
+  - a table skeleton until both endpoints have answered, so a still-loading endpoint is not shown as "—" like a failure.
+
+### Value settings modal
+
+- A "Value settings" button opens a centered modal over the dashboard, with a scrollable form and a footer that stays visible on smaller screens. It reads `GET …/value-settings` only while open.
+- The modal states that changes recalculate every figure on the page, including past periods. Inline guidance explains the hourly rate as the estimated cost of human work and minutes per outcome as adjustable assumptions, rather than measured working time.
+- **Hourly rate (USD).** Empty means no rate. Otherwise it must be from 0 to 10,000 with at most two decimals, the bounds of [Value settings](#value-settings).
+- **Minutes per Outcome Type,** in catalogue order. Each row shows a "Default" or "Custom" badge.
+  - Editing a row makes it Custom.
+  - "Reset to default (N min)" returns a Custom row to its default.
+  - Minutes must be a whole number from 1 to 1,440.
+- The editing session captures its settings and baseline together. A background refetch never changes that baseline or clears the draft; Save sends only the fields the user changed. Reopening starts a new session from the stored settings.
+- Invalid fields show an inline error, and Save stays disabled while any field is invalid or nothing has changed.
+- Closing with unsaved edits, by Cancel, the close button, Escape, or the overlay, asks "Discard unsaved changes?" through `ConfirmationDialog`. Cancel there keeps the edits, and Discard closes the modal. The next open starts again from the stored settings.
+- A failed settings read shows an inline error with a Retry inside the modal.
+- **Saving.**
+  - Save sends `PUT …/value-settings` with only the fields that changed: `hourly_rate_usd` (`null` for an emptied rate) and `outcome_minutes` keyed by Outcome Type (`null` for a reset row).
+  - On success the modal closes, and the Organization value and value settings refetch. Activity does not, because value settings never change it.
+  - The dashboard then shows every figure recalculated at the new settings, past periods included.
+  - On failure the server's message shows as a toast, and the modal stays open with the edits.
 
 ## Known gaps
 
@@ -336,6 +427,8 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 | Organization value aggregates | `../../api/domains/business_value/repository.py` (`BusinessActionRepository.category_counts`, `successful_counts_by_bucket`, `successful_counts_by_agent`) |
 | Organization activity aggregates | `../../api/domains/business_value/repository.py` (`ValueActivityRepository`: inbound messages, webhook invocations, delivery outcomes, and tool calls, all scoped through the Agent join), served by migration `45bcefcb0749` (`ix_communication_delivery_agent_direction_completed`, `ix_agent_chat_message_agent_direction_occurred`) |
 | HTTP routes | `../../api/domains/business_value/routes.py` |
+| KPI dashboard UI | `../../ui/src/features/business-value/`, route `../../ui/src/app/dashboard/[orgId]/kpis/page.tsx`, navigation entry in `../../ui/src/components/top-nav.tsx` |
+| KPI dashboard tests | `../../ui/tests/e2e/kpis.spec.ts`, `../../ui/tests/e2e/kpis-guidance.spec.ts`, `../../ui/tests/pages/kpis-page.po.ts` |
 | Test seeding | `../../api/tests/steps/business_action.py`, `../../api/tests/steps/cost.py` (`without_agent`), `../../api/tests/steps/communication.py` (connections, deliveries, messages, webhook invocations, tool calls) |
 | Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_gog_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/unit/test_metrics.py`, `../../api/tests/unit/test_business_value_valuation.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_business_action_backfill.py`, `../../api/tests/integration/test_value_settings.py`, `../../api/tests/integration/test_organization_value.py`, `../../api/tests/integration/test_organization_activity.py`, `../../api/tests/integration/test_cross_org_isolation.py` |
 

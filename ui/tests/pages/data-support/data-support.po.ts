@@ -7,6 +7,7 @@ import { AuthSupport } from "./auth-support.po";
 import { CommunicationConnectionDataSupport } from "./communication-connection-data-support.po";
 import { CostDataSupport } from "./cost-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
+import { KpisDataSupport } from "./kpis-data-support.po";
 import { OrganizationDataSupport } from "./organization-data-support.po";
 import { OrgTemplateDataSupport } from "./org-template-data-support.po";
 import { PlatformMemoryDataSupport } from "./platform-memory-data-support.po";
@@ -27,6 +28,7 @@ export class DataSupport {
   public organizations: OrganizationDataSupport;
   public costs: CostDataSupport;
   public eventDeliveries: EventDeliveryDataSupport;
+  public kpis: KpisDataSupport;
   public orgTemplates: OrgTemplateDataSupport;
   public platformTemplates: PlatformTemplateDataSupport;
   public platformMemory: PlatformMemoryDataSupport;
@@ -44,6 +46,7 @@ export class DataSupport {
     this.organizations = new OrganizationDataSupport(page);
     this.costs = new CostDataSupport(page);
     this.eventDeliveries = new EventDeliveryDataSupport(page);
+    this.kpis = new KpisDataSupport(page);
     this.orgTemplates = new OrgTemplateDataSupport(page);
     this.platformTemplates = new PlatformTemplateDataSupport(page);
     this.platformMemory = new PlatformMemoryDataSupport(page);
