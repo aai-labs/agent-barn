@@ -42,6 +42,16 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 
 ## Changes
 
+### 2026-10-07 — AF-357 — organization.updated uses a User actor
+
+- Delivered: `organization.updated` now carries a User actor (the acting user) instead of a Membership actor. It still reaches PostHog when the Organization, and with it the Membership, is deleted before the worker delivers it. This fixes the E2E finding. `organization.model_allowlist.changed` keeps its Membership actor for the security audit.
+- Changed: `organizations/service.py` (the `organization.updated` actor only), `test_organization_updated_event.py`, `domain-events.md`.
+- Verified:
+  - The new regression test (rename, delete, then process the delivery) sends as the owner with the organization group. It failed before the fix.
+  - The actor assertion is now USER, and the allowlist event still has a MEMBERSHIP actor.
+  - `test_organization_update_models`, `test_organization_updated_event` and the wiring test pass (28).
+- Remaining by design: other Membership-actor events (agent and member events) are still skipped if the actor's Membership is gone before delivery (skip-and-log).
+
 ### 2026-10-07 — AF-357 — Local end-to-end verification of the new events and message counts
 
 - Observed on local k3d (image from this branch, migration `6c3f9a2e8b41`, chart default `ANALYTICS_ENABLED=false`).

@@ -353,7 +353,7 @@ class OrganizationService:
                     schema_version=1,
                     occurred_at=datetime.now(UTC),
                     organization_id=organization_id,
-                    actor=actor,
+                    actor=ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
                     subject=SubjectIdentity(
                         type=SubjectIdentityType.ORGANIZATION,
                         id=organization_id,

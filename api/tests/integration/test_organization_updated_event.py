@@ -11,11 +11,13 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.events.models import OutboxMessage
+from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given
-from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector
+from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
+from api.tests.mocks.posthog import MockPostHogModule
 from api.tests.steps.agent import MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -23,10 +25,11 @@ from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_u
 ORG_ID = uuid7()
 
 
-def _given():
+def _given(posthog: MockPostHogModule | None = None):
     owner_id = uuid7()
     return [
-        prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+        set_env_variable({"ANALYTICS_ENABLED": "true"}),
+        prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), posthog or MockPostHogModule()]),
         prepare_api_server(),
         create_test_client(),
         database_repo_is_ready(),
@@ -63,7 +66,7 @@ def test_renaming_an_organization_records_organization_updated_with_the_changed_
         assert_that(
             events[0].payload, equal_to({"organization_id": str(ORG_ID), "changed_fields": ["description", "name"]})
         )
-        assert_that(events[0].actor["type"], equal_to("MEMBERSHIP"))
+        assert_that(events[0].actor, equal_to({"type": "USER", "id": str(context.user.id), "organization_id": None}))
         deliveries = context.injector.get(OutboxMessageRepository).list_deliveries_for_event(events[0].event_id)
         assert_that([delivery.handler_name for delivery in deliveries], equal_to([PRODUCT_ANALYTICS_HANDLER]))
 
@@ -89,6 +92,7 @@ def test_a_rename_with_an_allowlist_change_records_and_enqueues_both_events():
         updated = _events(context, ORGANIZATION_UPDATED)
         allowlist = _events(context, ORGANIZATION_MODEL_ALLOWLIST_CHANGED)
         assert_that((len(updated), len(allowlist)), equal_to((1, 1)))
+        assert_that(allowlist[0].actor["type"], equal_to("MEMBERSHIP"))
         outbox = context.injector.get(OutboxMessageRepository)
         staged = [
             delivery.id
@@ -96,3 +100,25 @@ def test_a_rename_with_an_allowlist_change_records_and_enqueues_both_events():
             for delivery in outbox.list_deliveries_for_event(event.event_id)
         ]
         assert_that(enqueue.call_args.args[0], contains_inanyorder(*staged))
+
+
+def test_a_rename_is_still_sent_when_the_organization_is_deleted_before_delivery():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        with patch.object(EventDeliveryDispatcher, "enqueue_immediate"):
+            _patch(context, {"name": "Renamed Before Delete"})
+            deleted = context.client.delete(
+                f"/api/v1/organizations/{ORG_ID}", headers={"Authorization": f"Bearer {context.access_token}"}
+            )
+        assert_that(deleted.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        outbox = context.injector.get(OutboxMessageRepository)
+        delivery = outbox.list_deliveries_for_event(_events(context, ORGANIZATION_UPDATED)[0].event_id)[0]
+        outbox.mark_delivery_enqueued(delivery.id)
+
+        context.injector.get(EventDeliveryProcessor).process(delivery.id)
+
+        captures = [
+            message for batch in posthog.batches for message in batch if message["event"] == ORGANIZATION_UPDATED
+        ]
+        assert_that([capture["distinct_id"] for capture in captures], equal_to([str(context.user.id)]))
+        assert_that(captures[0]["properties"]["$groups"]["organization"], equal_to(str(ORG_ID)))
