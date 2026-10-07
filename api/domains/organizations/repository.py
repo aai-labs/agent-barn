@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -529,11 +530,26 @@ class OrganizationRepository:
         self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
         return self.outbox_repository.delivery_ids_for_event(session, event.event_id)
 
-    def delete(self, organization_id: UUID) -> bool:
-        return self.delegate.delete_one(Organization, organization_id)
-
-    def delete_with_event(self, organization_id: UUID, actor: ActorIdentity) -> list[UUID]:
+    def delete(self, organization_id: UUID, before_delete: Callable[[Session], None] | None = None) -> bool:
         with Session(self.delegate.engine) as session:
+            if before_delete:
+                before_delete(session)
+            organization = session.get(Organization, organization_id)
+            if organization is None:
+                return False
+            session.delete(organization)
+            session.commit()
+            return True
+
+    def delete_with_event(
+        self,
+        organization_id: UUID,
+        actor: ActorIdentity,
+        before_delete: Callable[[Session], None] | None = None,
+    ) -> list[UUID]:
+        with Session(self.delegate.engine) as session:
+            if before_delete:
+                before_delete(session)
             organization = session.exec(
                 select(Organization).where(col(Organization.id) == organization_id).with_for_update()
             ).first()

@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-attribution
+  namespace: {{ .Release.Namespace }}
+data:
+  start_hindsight.py: |
+{{ .Files.Get "files/start_hindsight.py" | indent 4 }}
+  memory_model.py: |
+{{ .Files.Get "files/memory_model.py" | indent 4 }}

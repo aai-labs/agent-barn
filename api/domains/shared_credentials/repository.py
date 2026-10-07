@@ -127,6 +127,17 @@ class SharedCredentialRepository:
                 session.commit()
             return len(rows)
 
+    def get_names_by_ids_and_org(self, ids: list[UUID], org_id: UUID) -> dict[UUID, str]:
+        if not ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(SharedCredential.id, SharedCredential.name).where(
+                    col(SharedCredential.id).in_(ids), col(SharedCredential.organization_id) == org_id
+                )
+            ).all()
+            return dict(rows)
+
     def get_by_ids_and_org(self, ids: list[UUID], org_id: UUID) -> list[SharedCredential]:
         if not ids:
             return []

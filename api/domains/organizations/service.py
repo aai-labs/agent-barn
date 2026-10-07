@@ -9,6 +9,7 @@ from injector import inject, singleton
 from sqlmodel import Session
 
 from api.core.config import get_config
+from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.selection import _OPENROUTER_MODEL_PREFIX, is_model_allowed
@@ -65,6 +66,7 @@ class OrganizationService:
     event_delivery_dispatcher: EventDeliveryDispatcher
     agent_settings_lookup: AgentSettingsLookupService
     agent_repository: AgentRepository
+    memory_keys: MemoryKeyRepository
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a platform administrator in explicit Organization context) may
@@ -404,6 +406,13 @@ class OrganizationService:
                 detail=(f"Delete this organization's agents before deleting it ({active_agents} still active)."),
             )
         delivery_ids = self.organization_repository.delete_with_event(
-            organization.id, ActorIdentity(type=ActorIdentityType.USER, id=context.user.id)
+            organization.id,
+            ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
+            before_delete=lambda session: self.memory_keys.enqueue_deletion(organization.id, session),
         )
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+        try:
+            self.memory_keys.revoke_pending(self.llm_budgets.litellm.revoke_memory_key, organization_id=organization.id)
+        except Exception as exc:
+            # The durable cleanup intent already committed with deletion.
+            logger.warning("Memory credential cleanup deferred: %s", type(exc).__name__)

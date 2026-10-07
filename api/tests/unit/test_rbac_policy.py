@@ -65,6 +65,7 @@ def test_organization_role_permission_matrix_is_exact():
         PermissionKey.SKILL_MANAGE,
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
+        PermissionKey.MEMORY_ACCESS_MANAGE,
         # Setting the Organization's own limit, its Agents' default and each Agent's.
         PermissionKey.LLM_BUDGET_MANAGE,
     }

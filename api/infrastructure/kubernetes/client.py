@@ -384,11 +384,15 @@ class KubernetesClient:
             return "initializing", None
         return None, None
 
-    def get_runtime_diagnostics(self, deployment_name: str, namespace: str) -> dict[str, object]:
+    def get_runtime_diagnostics(
+        self, deployment_name: str, namespace: str, *, include_logs: bool = True
+    ) -> dict[str, object]:
         """Bounded evidence from the newest non-deleting pod, including failed pods.
 
         Container messages and cluster exception bodies are deliberately excluded.
         Log text follows the existing activity-authorized Agent log boundary.
+        `include_logs=False` skips the log reads entirely, for callers outside that
+        boundary (the Platform view), which want only restarts and why the last one ended.
         """
         result: dict[str, object] = {"observed_at": datetime.now(UTC), "available": False}
         pods = self._core_v1.list_namespaced_pod(
@@ -424,6 +428,8 @@ class KubernetesClient:
                 finished_at=terminated.finished_at,
             )
         for previous, key in ((False, "current"), (True, "previous")):
+            if not include_logs:
+                break
             if previous and not container.restart_count:
                 continue
             try:

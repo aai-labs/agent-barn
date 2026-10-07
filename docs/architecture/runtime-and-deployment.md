@@ -15,7 +15,7 @@ Starting an agent is an API-orchestrated deployment flow:
 5. Combine explicitly assigned skills with eligible built-in provider skills.
 6. Materialize aai-cli integrations and Google Workspace's gog artifacts from encrypted Agent Secrets.
 7. Append tool pointers, integration policy, and unconditional runtime behaviour policies to rendered Markdown.
-8. Generate fresh Ingest and Communications protocol credentials.
+8. Generate fresh Ingest and Communications protocol credentials, and an Agent Memory credential when opted in.
 9. Build ConfigMap, Secret, PVC, Service, and Deployment resources, including the runtime-neutral communications adapter and any enabled native gateway configuration.
 10. Apply resources through the Kubernetes client and mark the Agent running.
 11. Record the runtime configuration digest the pod was built from.
@@ -35,6 +35,8 @@ An `always` grant is broader than it reads. For a dangerous-pattern finding Herm
 Progress visibility (the persisted `verbose_mode` field) is Hermes-only for a different reason: it isn't a missing config mapping, it's a missing transport. Hermes's `/v1/runs` API exposes mid-turn `tool.started`/`subagent.*` events over HTTP, which `communications-runtime-adapter.py` relays to chat only when `verbose_mode` is set. OpenClaw has the same kind of signal internally (`onAgentEvent` emits `"tool"`/`"thinking"`/`"item"` streams), but neither of its external HTTP surfaces (`/v1/chat/completions`, `/v1/responses`) forwards anything but the final assistant content and a terminal lifecycle event — there is no HTTP channel for the adapter to read progress from. Reaching parity needs an in-process OpenClaw plugin (same plugin SDK the shipped `telemetry-push` plugin uses) that bridges `onAgentEvent` progress out to Communications; until that exists, the API rejects `verbose_mode=true` for an OpenClaw Agent rather than accepting a setting with no effect. Tracked as the same follow-up as OpenClaw approval parity.
 
 Hermes uses `/workspace` as its terminal and messaging working directory while its managed state remains under `/opt/data`. Agent Barn materializes assigned Skills under `/workspace/skills` and declares that directory in Hermes' `skills.external_dirs`, because the runtime's native discovery root is `/opt/data/skills`.
+
+Opted-in Agent Memory configures each runtime's pinned Hindsight provider alongside native memory during assembly. Startup replaces stale provider settings and keeps the per-start credential in environment variables; a bounded authenticated health wait lets the API persist that credential before provider initialization. See [Agent Memory runtime integration](../features/agent-memory.md#runtime-integration) for plugin versions and behavior.
 
 ### Runtime configuration digest
 
@@ -135,7 +137,7 @@ Agent runtimes report messages and tool-call state to the separate Ingest API us
 
 ## Service deployment
 
-`../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, UI, and the monitoring stack. The API chart deploys separate product, Ingest, and Communications processes; the Communications Service is reachable internally by runtimes and exposes only the provider-webhook prefix through ingress. API deployment mounts Kubernetes access so the product service can manage Agent resources. An API Helm hook runs Alembic before installation or upgrade.
+`../../helmfile.yaml.gotmpl` orders PostgreSQL releases, LiteLLM, API, UI, and the monitoring stack. The API chart deploys separate product, Ingest, Communications, and optional Memory processes; the Communications Service is reachable internally by runtimes and exposes only the provider-webhook prefix through ingress. API deployment mounts Kubernetes access so the product service can manage Agent resources. An API Helm hook runs Alembic before installation or upgrade. The optional Memory gateway runs on port 8003 with its own Hindsight auth-key reference; Hindsight and its pgvector database have separate releases. Hindsight resolves its model and Organization team credential through the API workload's internal port-8004 listener with its separate settings credential; ingress routes no traffic to that listener; the gateway holds neither LiteLLM master access nor key-encryption credentials. Agent pods disable automatic ServiceAccount token mounting. See [Agent Memory](../features/agent-memory.md) for gateway contracts and [operations](../guidelines/operations.md#agent-memory-deployment) for configuration.
 
 The API image also runs Domain Event delivery workloads with different commands: a Dramatiq worker deployment processes committed Event Delivery IDs from Redis, and a CronJob runs the one-shot Event Delivery reconciler. Communications uses PostgreSQL-backed leases and durable Communication Deliveries, distinct from Domain Event delivery.
 
@@ -148,6 +150,8 @@ Every release's namespace and `needs:` entries are templated on a `NAMESPACE` en
 ## Observability
 
 `../../helm/monitoring/` deploys namespace-scoped Prometheus, Grafana, and Alertmanager charts. The product API exposes platform probes on `:8000`, Ingest exposes telemetry metrics on `:8001`, and Communications exposes HTTP metrics on `:8002`; LiteLLM and Agent health services retain their existing scrape targets. Alert rules route through Alertmanager, and Grafana dashboards are provisioned from chart ConfigMaps.
+
+Each Agent's healthz server also reports its own container's CPU and memory, read from the cgroup v2 files, on the same `/metrics` page the `agent` scrape job already reads. The product API queries that Prometheus over HTTP with the monitoring basic-auth password to show Agent Resource Usage; helmfile passes `MONITORING_WEB_PASSWORD` to the `agentbarn-api` release directly, since the monitoring release deploys after it. The chart's cAdvisor and kubelet jobs stay disabled, so the figures come only from the Agents themselves. See [`../features/resource-usage.md`](../features/resource-usage.md).
 
 ## Restore point Jobs
 
@@ -240,6 +244,8 @@ Kubernetes `stream()` and `portforward()` temporarily monkey-patch `ApiClient.re
 | Deployment workflow             | `../../.github/workflows/deploy.yml` (k3s), `../../.github/workflows/deploy-public.yml` (Talos public) |
 | Monitoring stack                | `../../helm/monitoring/`                                                               |
 | API metrics                     | `../../api/core/metrics.py`, `../../api/domains/communications/metrics.py`             |
+| Agent CPU and memory series     | `../../api/domains/agents/scripts/hermes/healthz-server.py`, `../../api/domains/agents/scripts/openclaw/healthz-server.js`, [`../features/resource-usage.md`](../features/resource-usage.md) |
+| Local Prometheus (k3d)          | `../../docker/k3d/k3d-monitoring.sh`, `../../docker/k3d/monitoring-values.yaml`         |
 
 ## Change impact
 

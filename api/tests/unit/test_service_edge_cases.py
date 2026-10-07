@@ -107,6 +107,7 @@ def test_organization_service_update_not_found_raises_404():
     repo.get.return_value = None
     org_service = OrganizationService(
         llm_budgets=Mock(),
+        memory_keys=Mock(),
         organization_repository=repo,
         agent_service=Mock(),
         permission_policy=Mock(),

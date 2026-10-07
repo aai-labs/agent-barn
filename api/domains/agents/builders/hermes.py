@@ -7,6 +7,14 @@ from kubernetes import client
 from api.domains.communications.models import ConversationLocation
 
 from .common import _labels, _resource_name, _setting_ids
+from .memory import (
+    MEMORY_COMMAND,
+    MEMORY_TOOL_INSTRUCTIONS,
+    MEMORY_WRITE_TOOL,
+    hermes_memory_settings,
+    memory_command_mount,
+    memory_command_volume,
+)
 
 # Matches OpenClaw, so limits.memory (100Gi quota) never binds before
 # requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
@@ -29,6 +37,8 @@ _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
+HERMES_MEMORY_SETUP_PY: str = (_SCRIPTS / "memory-setup.py").read_text()
+MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
@@ -150,11 +160,15 @@ def build_hermes_gateway_config(
     telegram_settings: dict | None = None,
     runtime_teams: bool = False,
     verbose_mode: bool = False,
+    memory_enabled: bool = False,
 ) -> dict:
     plugins = ["telemetry-push", "agentbarn-messaging"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams:
         plugins.append("agentbarn-observer")
     config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
+    config["memory"]["provider"] = "hindsight" if memory_enabled else ""
+    if memory_enabled:
+        config["memory"]["hindsight"] = hermes_memory_settings()
     if native_slack:
         config["slack"] = {
             "reply_in_thread": True,
@@ -347,12 +361,15 @@ def build_hermes_config_map(
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
     skills_json: str | None = None,
+    memory_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
-        "TOOLS.md": tools_md,
+        "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn-memory": MEMORY_COMMAND,
+        "TOOLS.md": tools_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "AGENTS.md": agents_md,
         "BOOT.md": boot_md,
         "HEARTBEAT.md": heartbeat_md,
@@ -363,6 +380,8 @@ def build_hermes_config_map(
         "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
+        "memory-setup.py": HERMES_MEMORY_SETUP_PY,
+        "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
@@ -454,6 +473,7 @@ def build_hermes_deployment(
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
+                    automount_service_account_token=False,
                     image_pull_secrets=(
                         [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
                     ),
@@ -509,6 +529,7 @@ def build_hermes_deployment(
                             ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
+                                memory_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -532,6 +553,7 @@ def build_hermes_deployment(
                         )
                     ],
                     volumes=[
+                        memory_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

@@ -112,6 +112,8 @@ export const mockAgent = {
   skills: [],
   configured_platform_keys: ["slack", "discord"],
   allowed_actions: mockAgentAllowedActions,
+  creator: { id: MOCK_MEMBER_USER_ID, full_name: "Tommy", email: "tommy@example.com" },
+  last_message_at: "2026-05-14T09:14:00Z",
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
 };
@@ -866,17 +868,20 @@ export class AgentDataSupport {
     status?: number;
     body?: unknown;
   } = {}) {
+    const requests = { count: 0 };
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/healthz`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
+      requests.count += 1;
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(body ?? { status: "ok" }),
       });
     });
+    return requests;
   }
 
   async interceptGetConversationChannelsRequest({

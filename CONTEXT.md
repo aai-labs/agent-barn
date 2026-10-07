@@ -53,7 +53,7 @@ The product mode where a Platform Administrator manages Platform Resources and P
 _Avoid_: default Organization, admin Organization, global workspace
 
 **Platform Oversight Data**:
-An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
+An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
 _Avoid_: Organization View, impersonation, unrestricted tenant access
 
 **Organization View**:
@@ -108,6 +108,14 @@ _Avoid_: model usage, observed model
 The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
 _Avoid_: configured model, current model
 
+**Agent Resource Usage**:
+The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
+_Avoid_: model usage, observed model usage, cost, spend
+
+**Capacity Limit**:
+A ceiling on the total memory or CPU limits of the namespace's containers, typed in by a Platform Administrator, normally the namespace's ResourceQuota. It is entered by hand because the tenant service account cannot read the quota. Platform Resource Usage compares it with what the namespace's pods have committed in limits, which is not the same as what they use.
+_Avoid_: quota (the cluster's own object), usage limit, budget
+
 **Runtime**:
 The implementation that executes an agent. Agent Barn currently supports Hermes and OpenClaw.
 _Avoid_: platform
@@ -115,6 +123,18 @@ _Avoid_: platform
 **Agent Restore Point**:
 A captured, restorable copy of one Agent's persistent volume contents, together with a record of the Agent's configuration pins at capture time. Capture and restore both require a stopped Agent, and restore replaces the volume contents in place. The archive deliberately excludes credential material and any state the Agent's start script regenerates, so it holds the Agent's own work rather than a byte-exact image of the volume.
 _Avoid_: snapshot, backup, volume image, checkpoint
+
+**Agent Memory**:
+Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, credentials, automatic Runtime use, and read-only viewing of an Agent's own and currently permitted Organization memories, an Owner/Admin Organization viewer, and asynchronous deletion purging are implemented. See [Agent Memory](docs/features/agent-memory.md).
+_Avoid_: MEMORY.md, Runtime memory, knowledge base
+
+**Organization Memory**:
+Agent Memory marked for sharing across one Organization. One Organization Memory grant gives an Agent either Read only access for recall or Read and write access for recall and explicit shared saves.
+_Avoid_: team memory, shared bank
+
+**Memory Grant**:
+A directional permission, managed by Organization Owners and Admins, letting one Agent recall Organization Memory or one other Agent's private memories. Organization Memory grants allow either read only or read and write; another Agent's memory is always read-only. Granting or revoking access never rewrites stored memories.
+_Avoid_: memory sharing, Agent Access
 
 **Pre-Restore Restore Point**:
 An Agent Restore Point the system captures automatically at the start of a restore, before the target volume is modified. It is the rollback path when a restore is unwanted or fails partway, and it does not count against the per-Agent retention cap.
