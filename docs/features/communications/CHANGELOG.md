@@ -14,6 +14,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-07 — Protect retained rollout columns — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Corrected: Alembic autogeneration cannot propose dropping the three unmapped legacy Connection columns before deployed-consumer cutoff. Explicit contraction remains a later migration.
+- Verified: real PostgreSQL metadata comparison reproduces the unguarded drop proposals, preserves those columns with the guard, and still detects unrelated additions, removals, and type changes. API static checks and the single migration head pass.
+
 ### 2026-10-07 — Harden startup retirement audit — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 
 - Corrected: malformed jobs cannot abort startup or hide later repair warnings; managed files and symlinks are removed safely. Genuine required plugin-removal failures remain fatal.

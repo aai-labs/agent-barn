@@ -29,6 +29,8 @@ before autogenerating a revision. `make merge-heads` operates on revision files
 and does not require a database.
 
 Schema changes require a migration under `../../api/migrations/versions/`.
+Alembic autogeneration excludes only reflected, unmapped `driver_key_encrypted`, `ingress_lease_owner`, and `ingress_lease_expires_at` columns on `communication_connection`, through `api/migrations/autogenerate.py`. This prevents accidental contraction while older deployed readers/writers remain. After the [native rollout cutoff](#native-runtime-gateway-rollout), remove the guard with an explicit contraction migration. Other schema differences remain visible.
+
 Review generated migrations before applying them and run the migration check
 listed in [`testing.md`](testing.md#verification-commands). Deployment runs
 Alembic through the API chart migration hook described in
