@@ -250,6 +250,13 @@ class RestorePointRepository:
             },
         )
 
+    def mark_failed_restore_target_ready(self, restore_point_id: UUID) -> bool:
+        return self._conditional_update(
+            restore_point_id,
+            (RestorePointStatus.FAILED,),
+            {"status": RestorePointStatus.READY, "failure_reason": None},
+        )
+
     def mark_configuration_failed(self, restore_point_id: UUID, reason: str) -> None:
         """Record why replay could not complete and clear its pending intent."""
         with Session(self.delegate.engine) as session:

@@ -1,7 +1,7 @@
 import enum
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Self
 from uuid import UUID
 
@@ -43,6 +43,18 @@ class RestorePointOrigin(str, enum.Enum):
     PRE_RESTORE = "PRE_RESTORE"
     PRE_RESET = "PRE_RESET"
     PRE_UPGRADE = "PRE_UPGRADE"
+
+
+class ManagedUpdateOutcome(str, enum.Enum):
+    """How an Agent's last managed update ended."""
+
+    SUCCEEDED = "SUCCEEDED"
+    # The automatic backup could not be taken. The Agent was stopped but not changed.
+    BACKUP_FAILED = "BACKUP_FAILED"
+    # The new version never became healthy; the backup and the old image are back.
+    ROLLED_BACK = "ROLLED_BACK"
+    # The rollback did not finish. The backup holds the pre-update state.
+    ROLLBACK_FAILED = "ROLLBACK_FAILED"
 
 
 class CommandApprovalMode(str, enum.Enum):
@@ -398,14 +410,30 @@ class Agent(BaseModel, table=True):
         sa_column=Column(sa.String(64), nullable=False, server_default=""),
     )
     # The exact runtime image this Agent starts on. Empty means "follow the
-    # platform pin" (config.openclaw_image / config.hermes_image). Managed
-    # updates write it: adopt the current effective image before updating,
-    # point it at the new image on success, and back at the previous image
-    # when the update fails — so a rollback restarts the OLD runtime.
+    # platform pin" (config.openclaw_image / config.hermes_image). Only a
+    # managed update's rollback sets it, to the image the pod ran before the
+    # update, so the rolled-back Agent stays on the runtime that worked for it.
+    # The next managed update clears it again before starting the new image.
     pinned_runtime_image: str = SqlField(
         default="",
         sa_column=Column(sa.String(255), nullable=False, server_default=""),
     )
+    # Refreshed by a running managed update; NULL when none is running. A value
+    # older than MANAGED_UPDATE_STALE_SECONDS means the process running it died,
+    # so the Agent is no longer blocked. See `managed_update_in_flight`.
+    managed_update_heartbeat_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    # How the last managed update ended, the backup it took, and — for a backup
+    # that failed — why. Cleared when the next managed update starts.
+    managed_update_outcome: ManagedUpdateOutcome | None = SqlField(
+        default=None,
+        sa_column=Column(sa.String(20), nullable=True),
+    )
+    managed_update_restore_point_id: UUID | None = SqlField(default=None, nullable=True)
+    managed_update_failure_reason: str | None = SqlField(default=None, nullable=True, max_length=500)
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
@@ -456,6 +484,19 @@ class Agent(BaseModel, table=True):
     )
     llm_alerted_threshold: int | None = SqlField(default=None, nullable=True)
     llm_alert_key: str | None = SqlField(default=None, nullable=True, max_length=128)
+
+
+# A managed update refreshes its heartbeat on every poll while it waits. It runs
+# as a background task in one API process; if that process dies, nothing clears
+# the heartbeat, so one this old is treated as no update at all. Long enough to
+# cover the slowest single step between beats (a stop or a start).
+MANAGED_UPDATE_STALE_SECONDS = 120
+
+
+def managed_update_in_flight(agent: Agent) -> bool:
+    """True while a managed update is running for this Agent."""
+    beat = agent.managed_update_heartbeat_at
+    return beat is not None and beat > datetime.now(UTC) - timedelta(seconds=MANAGED_UPDATE_STALE_SECONDS)
 
 
 class AgentAccess(BaseModel, table=True):
@@ -1306,6 +1347,16 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 AgentModelSource = Literal["default", "override"]
 
 
+class AgentManagedUpdateRead(PydanticBaseModel):
+    """How the Agent's last managed update ended."""
+
+    outcome: ManagedUpdateOutcome
+    #: The automatic backup the update took, when it got that far.
+    restore_point_id: UUID | None = None
+    #: Why the backup failed; set only for BACKUP_FAILED.
+    failure_reason: str | None = None
+
+
 class AgentProvisioningErrorRead(PydanticBaseModel):
     """A failed start, as shown to anyone who can read the Agent.
 
@@ -1354,6 +1405,10 @@ class AgentRead(PydanticBaseModel):
     #: surface can say what a restart would switch it to without recomputing the rule.
     pending_model: str
     update_available: bool = False
+    #: A managed update is running. Lifecycle and restore point actions are
+    #: refused until it ends; a client polls until this goes back to false.
+    update_in_progress: bool = False
+    last_managed_update: AgentManagedUpdateRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)

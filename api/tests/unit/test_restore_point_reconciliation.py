@@ -258,8 +258,6 @@ def test_jobs_are_deleted_before_volumes_so_no_pod_still_holds_one():
 
 
 def test_a_resource_younger_than_the_minimum_age_is_left_alone():
-    # Fresh at test time, not import time: a long run must not make the
-    # "recent" volume older than the orphan cutoff while the suite waits.
     cluster = FakeCluster(pvcs=[_resource("restore-point-new", created=datetime.now(UTC))])
 
     result = _reconciler(FakeRepository(), cluster=cluster).run_once()

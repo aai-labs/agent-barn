@@ -23,6 +23,36 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-10-07 — AF-201 — Managed update review fixes
+
+- Fixed: a rollback restore Job killed with no output (OOM, deadline, eviction) was read as "never
+  started" and returned the pre-update row to `READY`. The rollback then started the Agent on a
+  wiped or half-extracted volume. `_restore_outcome` now reads the Job's own spec. A restore with no
+  safety copy runs nothing before the wipe, so no missing manifest can prove the volume untouched,
+  and it always fails.
+- Fixed: after a failed rollback restore the pre-update row was `FAILED`, so the user had no way
+  back through the product. The orchestrator now returns it to `READY`
+  (`reopen_failed_restore`): a failed restore target keeps its volume, and the Job mounts that
+  archive read-only.
+- Fixed: nothing marked an update as running, so a stop, start, delete, second update, or deletion
+  of the update's own backup could race it. A heartbeat column now does, and those are refused
+  with `409`. `create_restore_point(origin=...)` and `restore_restore_point(capture_backup=...)`
+  became one keyword, `managed_update=True`: the update's own capture and rollback restore are the
+  only calls allowed through.
+- Fixed: only `HTTPException` was caught, so a Kubernetes or database error escaped the task and
+  could leave the Agent running unhealthy on the new image with no rollback. Every step boundary
+  now catches everything.
+- Changed: the update waits up to 120s for the stopped pod to release the volume before capturing,
+  instead of having capture refuse after the 30s grace period with no one left to retry.
+- Changed: the readiness window is 600s (was 120s), and image pull errors no longer end it early.
+- Changed: how the update ended is recorded on the Agent (`last_managed_update`), not in
+  `last_error`. Text stored there without a code is dropped at the read boundary, so the old
+  rollback-failure message never reached anyone.
+- Changed: `pinned_runtime_image` is set only by a rollback. A successful update clears it, and a
+  failed capture leaves it alone. `update_available` is back to the plain digest comparison, which
+  already catches a pinned Agent because the digest is computed from the image the pod starts on.
+- Decision: automatic `PRE_UPGRADE` backups are kept until a user deletes them; nothing prunes them.
+
 ### 2026-10-05 — AF-201 — Managed updates wire restore points into the update flow
 
 - Delivered: `POST /organizations/{org}/agents/{id}/managed-update`, returning `202` after
@@ -30,27 +60,26 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   Point labelled "Automatic backup before managed update" with the `PRE_UPGRADE` origin (the
   enum value reserved in the original migration and unused until now), starts the Agent on the
   current platform images, polls `get_pod_readiness` for `agent_update_ready_timeout_seconds`
-  (new setting, default 120 — the readiness probe's own 30+15×6 budget), and on failure rolls
+  (new setting; default 600 since the review fixes above), and on failure rolls
   back by itself: deletes the leftover Deployment to free the RWO volume, restores the
   pre-update point with the recorded configuration replayed, and starts again.
 - Decision: the orchestration reuses the public `create_restore_point` /
   `restore_restore_point` / `start_agent` seams rather than restating them — the only new
   primitives are `wait_until_terminal` (polls `reconcile_agent` so an unwatched capture
   resolves), the readiness poll, and the teardown. `create_restore_point` gained a
-  keyword-only `origin`, so the HTTP route keeps emitting `MANUAL`.
+  keyword-only flag (now `managed_update`), so the HTTP route keeps emitting `MANUAL`.
 - Decision: `RestorePointRepository.get_by_id` reads without an authorization scope, for the
   orchestrator that already holds the Agent.
 - Decision: no new Domain Events. `agent.stopped` / `agent.started` and the
   `agent.restore_point.*` events already narrate the whole flow; a dedicated
   `agent.managed_update.*` event waits for a consumer.
-- Limitation: the background task is process-local. With `replicaCount: 1` this is sound; a
-  restart mid-update leaves the Agent STOPPED with a non-terminal `PRE_UPGRADE` row, which the
-  scheduled reconciliation resolves and the user can carry by hand. A durable queue is the
-  price of multi-replica, not paid here.
-- Limitation: a rollback that itself fails leaves the Agent in `ERROR` with `last_error`
-  naming the restore point that holds the safe state — automatic recovery is one deep, not
-  two. `last_error_code` stays unset on that row, since the text is hand-written rather than a
-  normalized provisioning category.
+- Limitation: the background task is process-local. A restart mid-update leaves the Agent where
+  the update was; its heartbeat goes stale within two minutes, after which the user can carry it
+  by hand, and the scheduled reconciliation resolves any non-terminal row. A durable queue is the
+  price of resuming instead, not paid here.
+- Limitation: a rollback that itself fails leaves the Agent in `ERROR`, with
+  `last_managed_update` naming the restore point that holds the safe state. Automatic recovery
+  is one deep, not two.
 - Note: the update banner's button now calls the managed path; the explicit Restart control
   remains a plain stop-and-start with no backup, which is the deliberate safe-vs-destructive
   distinction between the two surfaces.

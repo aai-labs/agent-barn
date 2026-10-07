@@ -2,6 +2,7 @@ import enum
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
@@ -21,11 +22,18 @@ from api.domains.agents.builders.restore_point import (
     restore_point_resource_name,
 )
 from api.domains.agents.error_messages import friendly_k8s_error
-from api.domains.agents.models import Agent, AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
+from api.domains.agents.models import (
+    Agent,
+    AgentRestorePoint,
+    AgentStatus,
+    RestorePointOrigin,
+    RestorePointStatus,
+    managed_update_in_flight,
+)
 from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.provisioning_errors import AgentProvisioningOperation
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
+from api.domains.agents.restore_point_job import ENV_BACKUP, EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
 from api.domains.agents.selection import SelectionValidator
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import ActorIdentity, ActorIdentityType
@@ -74,6 +82,7 @@ DELETE_IN_FLIGHT_DETAIL = "This restore point is still being worked on. Wait for
 PRE_RESTORE_LABEL = "Automatic backup before restore"
 NOT_REPLAYABLE_DETAIL = "This restore point predates the recorded configuration, so there is nothing to re-apply."
 STILL_SHUTTING_DOWN_DETAIL = "The Agent is still shutting down. Try again in a moment."
+MANAGED_UPDATE_IN_FLIGHT_DETAIL = "A managed update is in progress for this Agent. Wait for it to finish."
 
 
 def _selection_type(agent: Agent) -> str:
@@ -119,6 +128,18 @@ def _parse_manifest(logs: str) -> dict:
 def _deadline_exceeded(job: V1Job) -> bool:
     conditions = job.status.conditions if job.status is not None else None
     return any(c.type == "Failed" and c.status == "True" and c.reason == "DeadlineExceeded" for c in conditions or [])
+
+
+def _ran_safety_copy(job: V1Job) -> bool:
+    """Whether this restore Job copied the volume aside before wiping it.
+
+    Read from the Job itself, because a managed-update rollback restores without
+    one. A Job whose spec cannot be read counts as having none, which is the
+    side that destroys nothing.
+    """
+    template = job.spec.template if job.spec is not None else None
+    containers = template.spec.containers if template is not None and template.spec is not None else None
+    return any(env.name == ENV_BACKUP for container in containers or [] for env in container.env or [])
 
 
 @inject
@@ -214,16 +235,20 @@ class RestorePointService:
         *,
         timeout_seconds: int,
         poll_seconds: int = 5,
+        on_poll: Callable[[], None] | None = None,
     ) -> AgentRestorePoint:
         """Block until one restore point row resolves to READY or FAILED.
 
         Drives `reconcile_agent` on every poll — that is what advances a row
         whose Job has finished but which nobody has read yet. A FAILED row is
         returned, not raised: the caller decides what a failed capture means
-        for the operation it was backing.
+        for the operation it was backing. `on_poll` runs on every poll, so a
+        long wait can show it is still alive.
         """
         deadline = time.monotonic() + timeout_seconds
         while True:
+            if on_poll is not None:
+                on_poll()
             self.reconcile_agent(agent_id)
             row = self.repository.get_by_id(restore_point_id)
             if row is None:
@@ -315,7 +340,7 @@ class RestorePointService:
             self._fail_capture(row, reason)
             return
 
-        outcome = self._restore_outcome(row.job_name or "", namespace)
+        outcome = self._restore_outcome(job, row.job_name or "", namespace)
         if row.status == RestorePointStatus.RESTORING:
             # Neither branch replaced the volume, so any configuration owed for this
             # restore is owed no longer. BACKUP_FAILED returns the row to READY
@@ -338,13 +363,19 @@ class RestorePointService:
         else:
             self._fail(row, reason)
 
-    def _restore_outcome(self, job_name: str, namespace: str) -> _RestoreOutcome:
+    def _restore_outcome(self, job: V1Job, job_name: str, namespace: str) -> _RestoreOutcome:
         if self.k8s.get_pod_name_for_job(job_name, namespace) is None:
             return _RestoreOutcome.UNKNOWN
         exit_code = self.k8s.get_job_exit_code(job_name, namespace)
         if exit_code == EXIT_BACKUP_FAILED:
             return _RestoreOutcome.BACKUP_FAILED
         if exit_code == EXIT_RESTORE_FAILED:
+            return _RestoreOutcome.EXTRACTION_FAILED
+        if not _ran_safety_copy(job):
+            # The missing manifest below proves the wipe never ran only because
+            # the safety copy prints one first. Without that phase nothing runs
+            # before the wipe, so a pod killed mid-extraction (OOM, deadline,
+            # eviction) looks the same as one that never started.
             return _RestoreOutcome.EXTRACTION_FAILED
         logs = self.k8s.read_job_logs(job_name, namespace)
         if logs is None:
@@ -422,8 +453,14 @@ class RestorePointService:
         payload: AgentRestorePointCreate,
         context: CurrentUserContext,
         *,
-        origin: RestorePointOrigin = RestorePointOrigin.MANUAL,
+        managed_update: bool = False,
     ) -> AgentRestorePointRead:
+        """Capture the Agent's volume.
+
+        `managed_update` marks the capture a managed update takes of its own
+        Agent: it is recorded as PRE_UPGRADE and is the one capture allowed
+        while that update runs.
+        """
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
 
         self._await_agent_volume_release(agent.id)
@@ -438,6 +475,8 @@ class RestorePointService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Agent {agent_id} not found",
                 )
+            if not managed_update:
+                self._refuse_during_managed_update(current)
             self._assert_capturable(current)
 
             restore_point_id = uuid7()
@@ -447,7 +486,7 @@ class RestorePointService:
                 created_by_user_id=context.user.id,
                 label=payload.label,
                 status=RestorePointStatus.PENDING,
-                origin=origin,
+                origin=RestorePointOrigin.PRE_UPGRADE if managed_update else RestorePointOrigin.MANUAL,
                 agent_type=current.agent_type,
                 pvc_name=restore_point_resource_name(restore_point_id),
                 job_name=capture_job_name(restore_point_id),
@@ -471,8 +510,14 @@ class RestorePointService:
         restore_point_id: UUID,
         payload: AgentRestorePointRestore,
         context: CurrentUserContext,
-        capture_backup: bool = True,
+        *,
+        managed_update: bool = False,
     ) -> AgentRestorePointRead:
+        """Put a restore point's archive back onto the Agent's volume.
+
+        `managed_update` marks a managed update's rollback: it is the one restore
+        allowed while that update runs, and it skips the safety copy (see below).
+        """
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
         scope = self.agent_authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
 
@@ -487,6 +532,8 @@ class RestorePointService:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
             if current.status == AgentStatus.RUNNING:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_RESTORE_DETAIL)
+            if not managed_update:
+                self._refuse_during_managed_update(current)
 
             target = self.repository.get_in_scope(restore_point_id, agent_id, scope)
             if target is None:
@@ -516,7 +563,10 @@ class RestorePointService:
             # rollback restores the pre-upgrade archive, which is newer and better
             # by construction than whatever the failed update left behind — so it
             # skips the copy instead of paying ~20s and a confusing row for it.
-            backup = self._create_pre_restore_row(current, job_name) if capture_backup else None
+            # Without the copy a failed extraction has nothing to fall back to;
+            # the caller keeps the target restorable instead (see
+            # `reopen_failed_restore`).
+            backup = None if managed_update else self._create_pre_restore_row(current, job_name)
             result = self.repository.update_status_with_event(
                 target.id,
                 RestorePointStatus.RESTORING,
@@ -643,6 +693,7 @@ class RestorePointService:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
             if current.status == AgentStatus.RUNNING:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_RESTORE_DETAIL)
+            self._refuse_during_managed_update(current)
 
             target = self.repository.get_in_scope(restore_point_id, agent_id, scope)
             if target is None:
@@ -758,6 +809,8 @@ class RestorePointService:
         agent = self.agent_repository.get_by_id(agent_id)
         if agent is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        # Above all the update's own backup, which its rollback restores from.
+        self._refuse_during_managed_update(agent)
 
         namespace = self.config.k8s_namespace
         if restore_point.job_name:
@@ -806,6 +859,19 @@ class RestorePointService:
         for pvc in self.k8s.list_pvcs(namespace, selector):
             self.k8s.delete_pvc(pvc.metadata.name, namespace)
         self.repository.delete_for_agent(agent_id)
+
+    def reopen_failed_restore(self, restore_point_id: UUID) -> bool:
+        """Make a restore point restorable again after a restore from it failed.
+
+        A failed restore target keeps its volume, and the restore Job mounts that
+        archive read-only, so the archive is intact. A managed-update rollback runs
+        without a safety copy, so this archive is the only way back.
+        """
+        return self.repository.mark_failed_restore_target_ready(restore_point_id)
+
+    def _refuse_during_managed_update(self, agent: Agent) -> None:
+        if managed_update_in_flight(agent):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
 
     def _await_agent_volume_release(self, agent_id: UUID) -> None:
         """Block until no Agent pod holds the volume, or refuse.

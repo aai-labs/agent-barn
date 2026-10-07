@@ -52,6 +52,8 @@ class MockK8sModule(Module):
         # Same idea: "no pod to read" is the sane default, so a MagicMock never
         # reaches the pinned_runtime_image column.
         mock.get_pod_image.return_value = None
+        # A MagicMock cannot be compared with an int, and a fresh pod has not restarted.
+        mock.get_pod_restart_count.return_value = 0
         return mock
 
 

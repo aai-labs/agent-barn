@@ -96,6 +96,12 @@ export const AgentProvisioningErrorSchema = z.object({
   detail: z.string().nullish(),
 });
 
+export const AgentManagedUpdateSchema = z.object({
+  outcome: z.enum(["SUCCEEDED", "BACKUP_FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"]),
+  restorePointId: z.string().uuid().nullish(),
+  failureReason: z.string().nullish(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -118,6 +124,10 @@ export const AgentSchema = z.object({
   pendingModel: z.string().default(""),
   /** True when a running Agent's pod was built from older platform code or images. */
   updateAvailable: z.boolean().default(false),
+  /** A managed update is running; lifecycle actions are refused until it ends. */
+  updateInProgress: z.boolean().default(false),
+  /** How the last managed update ended; cleared when the next one starts. */
+  lastManagedUpdate: AgentManagedUpdateSchema.nullish(),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
   memoryEnabled: z.boolean().default(false),
@@ -378,6 +388,7 @@ export type CommandApprovalMode = "manual" | "auto" | "off";
 export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentProvisioningError = z.infer<typeof AgentProvisioningErrorSchema>;
+export type AgentManagedUpdate = z.infer<typeof AgentManagedUpdateSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;

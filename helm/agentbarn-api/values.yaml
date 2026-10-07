@@ -125,6 +125,11 @@ restorePoints:
     # time to finish.
     schedule: "*/10 * * * *"
 
+# Managed updates (the Update button): how long the new pod has to report ready
+# before the update rolls back. Covers pulling an image the node has not seen.
+managedUpdate:
+  readyTimeoutSeconds: 600
+
 registry:
   server: ""
   username: ""

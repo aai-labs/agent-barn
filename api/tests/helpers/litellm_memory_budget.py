@@ -63,9 +63,7 @@ general_settings:
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            # CI runners starve: docker start + litellm boot can crawl well past
-            # a minute. 300s keeps the contract test from flaking on load.
-            deadline = time.monotonic() + 300
+            deadline = time.monotonic() + 120
             while time.monotonic() < deadline:
                 try:
                     if httpx.get(f"{context.litellm_url}/health/liveliness", timeout=2).status_code == 200:

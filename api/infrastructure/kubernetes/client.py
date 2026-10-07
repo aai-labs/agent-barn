@@ -399,6 +399,16 @@ class KubernetesClient:
                 return container.image
         return None
 
+    def get_pod_restart_count(self, deployment_name: str, namespace: str) -> int:
+        """How many times the newest pod's agent container has restarted; 0 if unknown."""
+        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        if pod is None:
+            return 0
+        for container_status in pod.status.container_statuses or []:
+            if container_status.name == "agent":
+                return container_status.restart_count or 0
+        return 0
+
     def get_runtime_diagnostics(
         self, deployment_name: str, namespace: str, *, include_logs: bool = True
     ) -> dict[str, object]:

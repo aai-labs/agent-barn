@@ -10,18 +10,14 @@ import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
 
 /**
- * While a managed update is in flight, the detail query keeps polling: the
- * server's own state tells the banner's story (hidden mid-flow, gone on
- * success, back after a rollback) — but only if the cache keeps looking.
- * The query itself neither polls nor refetches on focus, so without this the
- * banner would freeze on whatever was true the moment Update was clicked.
+ * While a managed update runs, the detail query polls: the server's own
+ * `updateInProgress` flag says when it has ended, and its status and
+ * `lastManagedUpdate` say how. The query otherwise neither polls nor refetches
+ * on focus, so without this the page would freeze on the 202's snapshot. The
+ * server drops the flag by itself if the process running the update dies, so
+ * this never polls forever.
  */
 const UPDATE_POLL_INTERVAL_MS = 5_000;
-// Hard cap: a flow that outlives this (hung backend) stops polling and falls
-// back to today's behaviour — a stale banner until the next reload.
-const UPDATE_POLL_MAX_MS = 10 * 60 * 1000;
-
-const RESTORE_POINT_BUSY = new Set(["PENDING", "CAPTURING", "RESTORING", "DELETING"]);
 
 export function useAgent(agentId: string) {
   const orgApiBase = useOrganizationApiBase();
@@ -35,48 +31,21 @@ export function useAgent(agentId: string) {
       return response.data;
     },
     enabled: !!agentId,
-    refetchInterval: () =>
-      queryClient.getQueryData(agentsKey.updateInFlight(agentId)) ? UPDATE_POLL_INTERVAL_MS : false,
+    refetchInterval: (current) => (current.state.data?.updateInProgress ? UPDATE_POLL_INTERVAL_MS : false),
   });
 
-  const agent = query.data;
-  // RUNNING -> STOPPED is how every flow begins; only a return to RUNNING (or
-  // a terminal failure) after that proves the flow resolved, so the first
-  // post-click RUNNING read is never mistaken for "done".
-  const sawBusyRef = useRef(false);
-
+  // When an update ends, the restore points, the list card and the health
+  // read it touched are stale too.
+  const updateInProgress = query.data?.updateInProgress ?? false;
+  const wasInProgressRef = useRef(updateInProgress);
   useEffect(() => {
-    if (!agentId || !agent) return;
-    const inFlight = queryClient.getQueryData<{ startedAt: number }>(agentsKey.updateInFlight(agentId));
-    if (!inFlight) {
-      sawBusyRef.current = false;
-      return;
-    }
-    if (Date.now() - inFlight.startedAt > UPDATE_POLL_MAX_MS) {
-      queryClient.removeQueries({ queryKey: agentsKey.updateInFlight(agentId) });
-      return;
-    }
-
-    if (agent.status !== "RUNNING") {
-      sawBusyRef.current = true;
-      // A capture failure or a failed rollback ends the flow without ever
-      // returning to RUNNING. The restore-point rows (or the recorded error)
-      // say so; with no rows visible yet the cache is undecided — keep asking.
-      const points = queryClient.getQueryData(agentsKey.restorePoints(agentId)) as
-        | { pages?: { items: { status: string }[] }[] }
-        | undefined;
-      const busyRows = points?.pages?.some((page) => page.items.some((item) => RESTORE_POINT_BUSY.has(item.status)));
-      if (agent.lastError || busyRows === false) {
-        queryClient.removeQueries({ queryKey: agentsKey.updateInFlight(agentId) });
-        void queryClient.invalidateQueries({ queryKey: agentsKey.restorePoints(agentId) });
-      }
-      return;
-    }
-    if (sawBusyRef.current) {
-      queryClient.removeQueries({ queryKey: agentsKey.updateInFlight(agentId) });
+    if (wasInProgressRef.current && !updateInProgress) {
       void queryClient.invalidateQueries({ queryKey: agentsKey.restorePoints(agentId) });
+      void queryClient.invalidateQueries({ queryKey: agentsKey.health(agentId) });
+      void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
     }
-  }, [agent, agentId, queryClient]);
+    wasInProgressRef.current = updateInProgress;
+  }, [agentId, queryClient, updateInProgress]);
 
   return {
     agent: query.data,

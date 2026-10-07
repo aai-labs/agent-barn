@@ -319,12 +319,6 @@ services:
     build:
       context: .
       dockerfile: docker/k3d/Dockerfile
-      # Build on the host network so the k3d download uses the host resolver
-      # (systemd-resolved) instead of the build sandbox's direct-to-router
-      # nameserver, which drops out for minutes at a time and fails to resolve
-      # GitHub's release-assets CDN. Retries in the Dockerfile can't outlast
-      # those outages; this avoids the unreliable resolver entirely.
-      network: host
     profiles: ["k3d"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
