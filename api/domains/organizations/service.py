@@ -15,6 +15,8 @@ from api.domains.agents.selection import _OPENROUTER_MODEL_PREFIX, is_model_allo
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import (
+    ActorIdentity,
+    ActorIdentityType,
     EventDeliveryDispatcher,
     SubjectIdentity,
     SubjectIdentityType,
@@ -192,16 +194,18 @@ class OrganizationService:
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
-            self.organization_repository.create_for_user(
+            _, delivery_ids = self.organization_repository.create_for_user(
                 organization,
                 actor.user.id,
                 config.organization_creation_limit,
+                ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id),
             )
         except OrganizationCreationLimitReached as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"You can create up to {error.limit} organizations",
             ) from error
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
         # With its limit already on it: a new Organization is capped from the start.
         # Best effort — creation is committed, and key generation provisions again.

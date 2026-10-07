@@ -35,10 +35,20 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: local end-to-end verification against a recording stub (see the 2026-10-06 entry). A one-off check against the real project from a local stack, labelled `local-dev-test` at the user's request, showed the events arriving in Live Events.
 - In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle.
 - Also delivered: the handler supports platform-scoped events (installation group only).
-- Next: `organization.created`, `organization.updated`, `organization.deleted`, `user.logged_in`, `user.signed_up`, hourly message counts. Then the production confirmation after release.
+- Also delivered: `organization.created`.
+- Next: `organization.updated`, `organization.deleted`, `user.logged_in`, `user.signed_up`, hourly message counts. Then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-07 — AF-357 — organization.created
+
+- Delivered: `organization.created` (organization scope, User Actor, payload `organization_id` and `created_by_user_id`), sent to `product_analytics.posthog` only.
+  - It is staged in the creating transaction for `POST /organizations` (actor: the creator) and for `POST /platform/users` (actor: the Platform Administrator, whose context the route now passes to `UserService.create_platform_user`).
+  - Delivery ids are enqueued after commit.
+- Changed: `events/catalog.py`, `OrganizationRepository.create_for_user` (now takes the actor and returns the delivery ids) and the new `stage_organization_created`, `OrganizationService`, `UserService`, `users/routes.py`, `analytics/event_handlers.py`, `product-analytics.md`, `domain-events.md`.
+- Verified: the new tests in `test_organizations.py`, `test_users.py`, `test_product_analytics_handler.py` and the wiring test. The regression suites still pass (`test_platform_admin_operations`, `test_organization_members`, `test_api_keys`, `test_organization_operations_extended`, `test_user_listing_scope`: 97 passed).
+- Follow-up: `organization.updated`.
 
 ### 2026-10-07 — AF-357 — Platform-scoped analytics
 

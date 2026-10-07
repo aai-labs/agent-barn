@@ -10,6 +10,7 @@ from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_UPDATED,
     API_KEY_CREATED,
+    ORGANIZATION_CREATED,
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_ROLE_CHANGED,
     PRODUCT_ANALYTICS_HANDLER,
@@ -394,3 +395,24 @@ def test_the_installation_is_identified_again_after_a_failed_send():
         _handle(context, _agent_created(context))
 
         assert_that([message["event"] for message in posthog.batches[0]], equal_to([AGENT_CREATED, "$groupidentify"]))
+
+
+def test_organization_created_is_sent_with_the_organization_group_and_no_extra_fields():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        event = _envelope(
+            context,
+            ORGANIZATION_CREATED,
+            {"organization_id": str(context.organization.id), "created_by_user_id": str(context.user.id)},
+            ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
+        )
+
+        _handle(context, event)
+
+        capture = posthog.batches[0][0]
+        assert_that(capture["event"], equal_to(ORGANIZATION_CREATED))
+        assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
+        assert_that(
+            set(capture["properties"]),
+            equal_to({"source", "installation_id", "organization_id", "$groups", "$geoip_disable", "$lib"}),
+        )

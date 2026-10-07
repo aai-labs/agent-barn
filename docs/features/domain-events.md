@@ -77,6 +77,7 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
   - Not emitted when a save changes nothing.
   - Emitted by `PUT /organizations/{organization_id}/value-settings` (see [`business-value.md`](business-value.md#value-settings)).
 - `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
+- `organization.created` — emitted in the creating transaction, both for self-service creation (`POST /organizations`, User Actor = creator) and for Platform Administrator onboarding (`POST /platform/users`, User Actor = administrator). Its only intended handler is `product_analytics.posthog`.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
 
 AF-273 adds Communications operational events as Organization-scoped audit inputs:
