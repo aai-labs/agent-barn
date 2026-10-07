@@ -180,13 +180,21 @@ def provision(namespace: str, model: str, budget: float) -> dict[str, str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", required=True, type=Path)
+    parser.add_argument(
+        "--credentials-only",
+        action="store_true",
+        help="Persist credentials before starting LiteLLM; verify afterwards.",
+    )
     args = parser.parse_args()
     try:
-        values = provision(
-            os.environ["NAMESPACE"],
-            os.environ.get("MEMORY_DEFAULT_MODEL") or "openrouter/openai/gpt-4.1-mini",
-            float(os.environ.get("MEMORY_STARTUP_KEY_BUDGET_USD") or "5"),
-        )
+        if args.credentials_only:
+            values = credentials(os.environ["NAMESPACE"])
+        else:
+            values = provision(
+                os.environ["NAMESPACE"],
+                os.environ.get("MEMORY_DEFAULT_MODEL") or "openrouter/openai/gpt-4.1-mini",
+                float(os.environ.get("MEMORY_STARTUP_KEY_BUDGET_USD") or "5"),
+            )
         if os.environ.get("GITHUB_ACTIONS") == "true":
             for value in values.values():
                 escaped = value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -198,7 +206,8 @@ def main() -> None:
         with os.fdopen(fd, "w") as output:
             for name, value in values.items():
                 output.write(f"{name}={shlex.quote(value)}\n")
-        print("Agent Memory credentials provisioned and verified; existing credentials preserved.")
+        status = "prepared" if args.credentials_only else "provisioned and verified"
+        print(f"Agent Memory credentials {status}; existing credentials preserved.")
     except ProvisioningError as error:
         raise SystemExit(str(error)) from None
     except (KeyError, ValueError, subprocess.TimeoutExpired):

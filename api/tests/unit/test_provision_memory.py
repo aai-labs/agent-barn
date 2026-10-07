@@ -178,3 +178,17 @@ def test_budget_configuration_does_not_reset_existing_spend_policy(cluster):
     first = bootstrap.provision("agent-farm-staging", "openrouter/openai/gpt-4.1-mini", 10)
     assert provision() == first
     assert next(iter(cluster["keys"].values()))["max_budget"] == 10
+
+
+def test_prepare_credentials_before_litellm_startup_then_verify_without_rotation(cluster, monkeypatch, tmp_path):
+    destination = tmp_path / "credentials"
+    monkeypatch.setenv("NAMESPACE", "agent-farm-staging")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr("sys.argv", ["provision_memory.py", "--credentials-only", "--env-file", str(destination)])
+    bootstrap.main()
+    prepared = destination.read_text()
+    assert cluster["issued"] == 0
+    monkeypatch.setattr("sys.argv", ["provision_memory.py", "--env-file", str(destination)])
+    bootstrap.main()
+    assert destination.read_text() == prepared
+    assert cluster["issued"] == 1

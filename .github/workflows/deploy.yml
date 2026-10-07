@@ -218,7 +218,6 @@ jobs:
     permissions:
       contents: read
     env:
-      HINDSIGHT_ENABLED: "true"
       MEMORY_DEFAULT_MODEL: ${{ vars[format('{0}MEMORY_DEFAULT_MODEL', github.ref_name == 'staging' && 'STAGING_' || '')] }}
       MEMORY_LITELLM_KEY_HASHES: ${{ vars[format('{0}MEMORY_LITELLM_KEY_HASHES', github.ref_name == 'staging' && 'STAGING_' || '')] }}
       MEMORY_STARTUP_KEY_BUDGET_USD: ${{ vars[format('{0}MEMORY_STARTUP_KEY_BUDGET_USD', github.ref_name == 'staging' && 'STAGING_' || '')] }}
@@ -336,16 +335,16 @@ jobs:
           GRAFANA_HOST: ${{ github.ref_name == 'staging' && vars.STAGING_GRAFANA_HOST || vars.GRAFANA_HOST }}
         run: |
           set -euo pipefail
-          # The optional memory releases require credentials at render time.
-          # Start LiteLLM and its dependencies first without rendering memory.
-          HINDSIGHT_ENABLED=false helmfile -f helmfile.yaml.gotmpl -l name=litellm sync --include-needs --wait
           credentials_file="$(mktemp)"
           trap 'rm -f "$credentials_file"' EXIT
-          python3 api/scripts/provision_memory.py --env-file "$credentials_file"
+          # Persist credentials before Helmfile renders the full release list.
+          python3 api/scripts/provision_memory.py --credentials-only --env-file "$credentials_file"
           set -a
           # shellcheck disable=SC1090
           source "$credentials_file"
           set +a
+          helmfile -f helmfile.yaml.gotmpl -l name=litellm sync --include-needs --wait
+          python3 api/scripts/provision_memory.py --env-file "$credentials_file"
           helmfile -f helmfile.yaml.gotmpl sync --wait
 
   # ═══════════════════════════════════════════════════════════════

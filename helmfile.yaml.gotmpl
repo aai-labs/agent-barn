@@ -14,7 +14,6 @@ helmDefaults:
   timeout: 600
 
 releases:
-{{- if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}
   - name: postgres-hindsight
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -41,7 +40,6 @@ releases:
         llm:
           model: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
           apiKey: {{ env "HINDSIGHT_LITELLM_API_KEY" | required "HINDSIGHT_LITELLM_API_KEY is required" | quote }}
-{{- end }}
   - name: postgres-app
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -190,11 +188,11 @@ releases:
       - name: memory.defaultModel
         value: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
       - name: memory.enabled
-        value: {{ env "HINDSIGHT_ENABLED" | default "false" }}
+        value: true
       - name: memory.litellmKeyHashes
-        value: {{ if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}{{ printf "%s,%s" (env "HINDSIGHT_LITELLM_API_KEY" | sha256sum) (env "MEMORY_LITELLM_KEY_HASHES") | quote }}{{ else }}{{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}{{ end }}
+        value: {{ printf "%s,%s" (env "HINDSIGHT_LITELLM_API_KEY" | sha256sum) (env "MEMORY_LITELLM_KEY_HASHES") | quote }}
       - name: memory.litellmActiveKeyHash
-        value: {{ if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}{{ env "HINDSIGHT_LITELLM_API_KEY" | sha256sum | quote }}{{ else }}{{ env "MEMORY_LITELLM_ACTIVE_KEY_HASH" | default "" | quote }}{{ end }}
+        value: {{ env "HINDSIGHT_LITELLM_API_KEY" | sha256sum | quote }}
       - name: memory.settingsKeyChecksum
         value: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | sha256sum | quote }}
       - name: memory.authChecksum
@@ -270,9 +268,7 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
       - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
-{{- if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}
       - {{ env "NAMESPACE" | default "agent-farm" }}/hindsight
-{{- end }}
 
   - name: agentbarn-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
