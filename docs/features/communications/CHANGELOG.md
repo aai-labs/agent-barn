@@ -14,6 +14,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-07 — Verify review follow-up slices — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Verified: all 3,335 API tests and 460 browser tests pass after the three review slices. API lint/format/type checks, a single Alembic head, OpenClaw startup and native scheduler/observer contracts, and both runtimes’ fresh/upgraded/restored retirement checks pass.
+- Preserved: the separate Kubernetes mutation test remains excluded under the read-only infrastructure restriction. Runtime message checks use native dry runs; no live provider messages or deployment changes were performed.
+
 ### 2026-10-07 — Clarify native setup and compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 
 - Corrected: Telegram group setup explains administrator access or disabling privacy and re-adding the bot; runtime mention/reply and Connection gates still apply.
