@@ -342,14 +342,19 @@ jobs:
           credentials_file="$(mktemp)"
           trap 'rm -f "$credentials_file"' EXIT
           # Persist credentials before Helmfile renders the full release list.
-          python3 api/scripts/provision_memory.py --credentials-only --env-file "$credentials_file"
+          python3 api/scripts/provision_memory.py --env-file "$credentials_file"
           set -a
           # shellcheck disable=SC1090
           source "$credentials_file"
           set +a
-          helmfile -f helmfile.yaml.gotmpl -l name=litellm sync --include-needs --wait
-          python3 api/scripts/provision_memory.py --env-file "$credentials_file"
-          helmfile -f helmfile.yaml.gotmpl sync --wait
+          helmfile -f helmfile.yaml.gotmpl -l name=hindsight sync --include-transitive-needs --wait
+          python3 api/scripts/provision_memory.py --include-key-hashes --env-file "$credentials_file"
+          set -a
+          # shellcheck disable=SC1090
+          source "$credentials_file"
+          set +a
+          # Hindsight already synced: do not rotate its key again in this run.
+          helmfile -f helmfile.yaml.gotmpl -l name!=hindsight sync --wait
 
   # Runs after `deploy` on purpose: the Worker posts inbound mail into this
   # cluster's Communications service, so the cluster must already hold the

@@ -32,6 +32,8 @@ releases:
   - name: hindsight
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/hindsight
+    labels:
+      name: hindsight
     needs: ["{{ env "NAMESPACE" | default "agent-farm" }}/postgres-hindsight", "{{ env "NAMESPACE" | default "agent-farm" }}/litellm"]
     values:
       - databaseUrl: {{ printf "postgresql://hindsight:%s@postgres-hindsight:5432/hindsight" (env "HINDSIGHT_DB_PASSWORD" | urlquery | replace "+" "%20") | quote }}
@@ -39,7 +41,9 @@ releases:
         apiKey: {{ env "HINDSIGHT_API_KEY" | required "HINDSIGHT_API_KEY is required" | quote }}
         llm:
           model: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
-          apiKey: {{ env "HINDSIGHT_LITELLM_API_KEY" | required "HINDSIGHT_LITELLM_API_KEY is required" | quote }}
+          keyBudgetUsd: {{ env "MEMORY_STARTUP_KEY_BUDGET_USD" | default "5" | quote }}
+          retiredKeyHashes: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
+        litellmKeyServiceAccountName: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
   - name: postgres-app
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -190,9 +194,9 @@ releases:
       - name: memory.enabled
         value: true
       - name: memory.litellmKeyHashes
-        value: {{ printf "%s,%s" (env "HINDSIGHT_LITELLM_API_KEY" | sha256sum) (env "MEMORY_LITELLM_KEY_HASHES") | quote }}
+        value: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
       - name: memory.litellmActiveKeyHash
-        value: {{ env "HINDSIGHT_LITELLM_API_KEY" | sha256sum | quote }}
+        value: {{ env "MEMORY_LITELLM_ACTIVE_KEY_HASH" | default "" | quote }}
       - name: memory.settingsKeyChecksum
         value: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | sha256sum | quote }}
       - name: memory.authChecksum

@@ -46,20 +46,20 @@ POSTGRES_LITELLM_USER=litellm
 POSTGRES_LITELLM_PASSWORD=
 POSTGRES_LITELLM_DB=litellm
 
-# Hindsight is always deployed. Supply distinct database/auth secrets and a
-# budgeted LiteLLM virtual key for operator-run syncs; CI provisions these automatically.
+# Hindsight is always deployed. Supply distinct database/auth secrets and an
+# internal settings key for operator-run syncs; CI provisions these automatically.
 HINDSIGHT_DB_PASSWORD=
 HINDSIGHT_API_KEY=
 # Internal model/key settings credential; generate separately from Hindsight API auth.
 MEMORY_RUNTIME_SERVICE_KEY=
-HINDSIGHT_LITELLM_API_KEY=
 # Retired backend LiteLLM key SHA-256 hashes, comma separated (current hash is derived).
 MEMORY_LITELLM_KEY_HASHES=
 # Optional initial model; shared by the API default and Hindsight startup.
 # MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini
 # Active key SHA-256 hash when several attribution hashes are retained.
-# Compose infers it for one hash; Helmfile derives it from the current key.
-# MEMORY_LITELLM_ACTIVE_KEY_HASH=
+# Compose infers it for one hash; deployment loads it from the hook-generated hash Secret.
+# Set the hook-generated key budget (USD); defaults to 5, renewing every 30 days.
+# MEMORY_STARTUP_KEY_BUDGET_USD=5
 
 # ── LiteLLM + OpenRouter ─────────────────────────────────────────────────────
 # Any strong secret prefixed with sk-; LiteLLM uses it to mint agent-scoped

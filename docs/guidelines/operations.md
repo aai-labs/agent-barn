@@ -105,49 +105,49 @@ Agents so they receive the current configuration and fresh credentials. Runtime
 startup waits briefly for authenticated gateway health before loading the plugin;
 native memory remains available when the gateway is unavailable.
 
-Helmfile always deploys the backend and gateway. For an operator-run Helmfile
-deployment, supply `HINDSIGHT_DB_PASSWORD`, `HINDSIGHT_API_KEY`,
-`MEMORY_RUNTIME_SERVICE_KEY`, and `HINDSIGHT_LITELLM_API_KEY` in `.env.deploy`.
-Use distinct database/auth secrets and a budgeted LiteLLM virtual key for the last value.
-The branch deployment workflow (`deploy.yml`) and public release workflow
-(`deploy-public.yml`) provision these automatically. They persist credentials
-before Helmfile renders its releases, sync LiteLLM and its dependencies, verify
-the memory key, then sync the full stack. No additional GitHub memory secrets or
-manual LiteLLM key creation are needed.
+Helmfile always deploys the backend and gateway. For an operator-run deployment,
+provide `HINDSIGHT_DB_PASSWORD`, `HINDSIGHT_API_KEY`, and
+`MEMORY_RUNTIME_SERVICE_KEY` in `.env.deploy`, using distinct values, then run
+`./deploy.sh`. The branch and public release workflows prepare these three
+credentials automatically with `api/scripts/provision_memory.py`; they remain
+stable in the namespace-local `agentbarn-memory-bootstrap` Secret. Existing
+Hindsight and database Secrets are adopted together without rotation. Missing or
+incomplete credentials beside existing storage require restoring the original
+Secret. The runner needs namespaced Secret `get`/`create`, and exports credentials
+through a temporary mode-0600 file with Actions masking.
 
-Provisioning stores the database password, backend authentication key, internal
-settings key, and platform LiteLLM key in the namespace-local
-`agentbarn-memory-bootstrap` Secret. The first three are generated independently;
-the LiteLLM candidate is persisted before remote creation, so retrying after a
-lost response verifies the same key instead of issuing another. Later deployments
-reuse credentials and verify the remote key by its hash. Existing Hindsight and
-database Secrets are adopted together without rotating their credentials. Missing
-or incomplete credentials beside existing storage fail deployment and require
-restoring the original Secret; never delete the bootstrap Secret to rotate keys.
-The deploy identity needs namespaced Secret `get`/`create` and `pods/exec` access.
-Provisioning runs requests inside LiteLLM, keeping its master credential in the pod.
+Hindsight's `pre-install,pre-upgrade` LiteLLM key Job follows the same pattern as
+the `agentbarn-api` key Job: wait for LiteLLM, delete the previous key by alias,
+call `/key/generate`, then create or update a Kubernetes Secret. The alias is
+`agentbarn-hindsight`; `hindsight-litellm-key` stores its `LITELLM_API_KEY` and only
+the Hindsight backend references it. The hook uses the existing LiteLLM Secret
+and selected tenant ServiceAccount, which needs Secret `get`/`create`/`update`.
+The runner no longer generates LiteLLM keys or executes code inside its pod.
 
-The dedicated platform key has no Organization team, permits only the initial
-memory model, never expires, and starts with a $5 budget renewing every 30 days.
-It is used for bankless startup verification; Organization operations use their
-own runtime-team keys. Optional repository variable `MEMORY_STARTUP_KEY_BUDGET_USD`
-(or `STAGING_MEMORY_STARTUP_KEY_BUDGET_USD` / `PUBLIC_MEMORY_STARTUP_KEY_BUDGET_USD`)
-changes the budget at creation time.
-Existing key budgets are preserved; change them through LiteLLM administration.
-Blocked, expired, team-assigned, unbudgeted, or incompatible keys fail deployment
-rather than being silently replaced or unblocked.
+The key is recreated on every Hindsight install or upgrade, including a repeated
+deployment of the same commit. A release-revision annotation rolls the backend
+to load the new key. It has no Organization team, never expires, and starts with
+a $5 budget renewing every 30 days; recreation resets that key's spend. Optional
+repository variable `MEMORY_STARTUP_KEY_BUDGET_USD` (with `STAGING_` or `PUBLIC_`
+counterparts) changes the generated key's budget. It is used for bankless startup
+verification; Organization processing retains its runtime-team keys.
+Like the application key hook, it allows the proxy's configured models; the
+Platform Memory setting selects the model Hindsight uses.
+
+A separate `hindsight-litellm-hashes` Secret contains only the active key's SHA-256
+hash and all retained platform-key hashes. The hook carries old hashes forward
+for late/replayed cost attribution. Deployments first sync Hindsight and its
+transitive dependencies, load those hashes, then sync the other releases without
+rerunning Hindsight's hook. The API and memory gateway receive only these hashes,
+never the platform key. This ordering is shared by `deploy.sh`, `deploy.yml`, and
+`deploy-public.yml`.
 
 Optional repository variables `MEMORY_DEFAULT_MODEL` and
-`MEMORY_LITELLM_KEY_HASHES` (with `STAGING_` counterparts) select the initial model
-and retain retired platform-key hashes for attribution. Public releases use
-their `PUBLIC_` counterparts. The model defaults to
-`openrouter/openai/gpt-4.1-mini`; Helmfile includes the current key's hash automatically.
-Provisioning rejects a changed initial model when the persisted platform key's
-allowlist differs; update that key's allowlist deliberately before redeploying.
-Generated credentials are masked in Actions and reach Helmfile through a temporary
-mode-0600 file removed on step exit. Credential rotation remains an operator action:
-update the bootstrap Secret and deployed Secrets consistently, and retain old
-platform-key hashes as described below.
+`MEMORY_LITELLM_KEY_HASHES` (with `STAGING_` or `PUBLIC_` counterparts) select the
+initial model and seed retired hashes when recovering deployment state. The
+model defaults to `openrouter/openai/gpt-4.1-mini`. Database/backend/settings
+credential rotation remains an operator action: update the bootstrap Secret and
+deployed Secrets consistently. Do not delete the bootstrap Secret to rotate them.
 
 This adds `postgres-hindsight` (pgvector/PostgreSQL 18, its own 10Gi PVC) and
 Hindsight 0.10.2. Only its API port 8888 is exposed, as ClusterIP; its control
@@ -187,9 +187,9 @@ choose subsequent models in Platform Settings → Agent Memory. Do not share thi
 an Organization team. The chart runs a pinned startup bridge that sends each
 operation's canonical bank as the model request's `user` field; the existing cost
 CronJob attributes LiteLLM's billed calls to that Organization without reading
-Hindsight traces. Helmfile derives the current key's SHA-256 hash into
-`MEMORY_LITELLM_KEY_HASHES`. On rotation, retain the old hash in that comma-separated
-`.env.deploy` setting so late/replayed calls keep their attribution. Only hashes,
+Hindsight traces. Deployment loads the current key's SHA-256 hash through the hook-generated
+`hindsight-litellm-hashes` Secret into `MEMORY_LITELLM_KEY_HASHES`. The hook retains
+retired hashes so late/replayed calls keep their attribution. Only hashes,
 never the platform key, enter the API's shared Secret.
 
 For a locally operated Hindsight instance, run `helm/hindsight/files/start_hindsight.py`
@@ -256,7 +256,7 @@ or routed through ingress. The API workload receives only the settings key
 through an explicit Secret reference; Agent pods do not.
 
 Set `MEMORY_LITELLM_ACTIVE_KEY_HASH` when retaining multiple attribution hashes.
-Helmfile derives it from the currently configured dedicated key; Compose
+The Hindsight hook writes it to the hash Secret and deployment loads it; Compose
 operators supply it in `.env`. With a single hash the API infers the active one.
 Settings saves expand only that key's model allowlist and preserve prior models,
 budgets, and spend. On key rotation provision the persisted model, startup

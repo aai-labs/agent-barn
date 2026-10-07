@@ -2,10 +2,9 @@
 
 import argparse
 import base64
-import hashlib
 import json
-import math
 import os
+import re
 import secrets
 import shlex
 import subprocess
@@ -17,28 +16,7 @@ CREDENTIAL_NAMES = (
     "HINDSIGHT_DB_PASSWORD",
     "HINDSIGHT_API_KEY",
     "MEMORY_RUNTIME_SERVICE_KEY",
-    "HINDSIGHT_LITELLM_API_KEY",
 )
-# Run inside LiteLLM: its master credential never leaves the pod. Only captured
-# JSON crosses kubectl's stdout; errors omit backend bodies and credentials.
-LITELLM_REQUEST = """
-import json, os, urllib.request, urllib.error
-request = json.load(__import__('sys').stdin)
-body = request.get('body')
-req = urllib.request.Request(
-    'http://127.0.0.1:4000' + request['path'],
-    data=None if body is None else json.dumps(body).encode(),
-    headers={'Authorization': 'Bearer ' + os.environ['LITELLM_MASTER_KEY'],
-             'Content-Type': 'application/json'},
-)
-try:
-    with urllib.request.urlopen(req, timeout=30) as response:
-        print(json.dumps({'status': response.status, 'body': json.load(response)}))
-except urllib.error.HTTPError as error:
-    print(json.dumps({'status': error.code}))
-except Exception:
-    raise SystemExit('LiteLLM request failed; credential and response details omitted.')
-"""
 
 
 class ProvisioningError(Exception):
@@ -90,7 +68,6 @@ def credentials(namespace: str) -> dict[str, str]:
             "HINDSIGHT_DB_PASSWORD": db_values["POSTGRES_PASSWORD"],
             "HINDSIGHT_API_KEY": backend_values["HINDSIGHT_API_TENANT_API_KEY"],
             "MEMORY_RUNTIME_SERVICE_KEY": backend_values["AGENTBARN_MEMORY_SETTINGS_KEY"],
-            "HINDSIGHT_LITELLM_API_KEY": backend_values["HINDSIGHT_API_LLM_API_KEY"],
         }
     else:
         # A missing Secret must never silently rotate the password of an existing volume.
@@ -98,13 +75,10 @@ def credentials(namespace: str) -> dict[str, str]:
         if pvc.strip():
             raise ProvisioningError("Hindsight storage already exists; restore its credentials before bootstrapping.")
         values = {name: secrets.token_hex(32) for name in CREDENTIAL_NAMES}
-        values["HINDSIGHT_LITELLM_API_KEY"] = "sk-" + values["HINDSIGHT_LITELLM_API_KEY"]
     if any(not values.get(name) for name in CREDENTIAL_NAMES):
         raise ProvisioningError("Existing memory credentials are incomplete.")
     if values["MEMORY_RUNTIME_SERVICE_KEY"] == values["HINDSIGHT_API_KEY"]:
         raise ProvisioningError("Memory settings and backend authentication keys must differ.")
-    # Persist the candidate key BEFORE its remote creation. After a lost response,
-    # the next deployment looks up the same hash instead of issuing another key.
     kubectl(
         namespace,
         ["create", "-f", "-"],
@@ -119,82 +93,31 @@ def credentials(namespace: str) -> dict[str, str]:
     return values
 
 
-def litellm_request(namespace: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-    return json.loads(
-        kubectl(
-            namespace,
-            ["exec", "-i", "deploy/litellm", "--", "python", "-c", LITELLM_REQUEST],
-            {"path": path, "body": body},
-        )
-    )
-
-
-def ensure_key(namespace: str, key: str, model: str, budget: float) -> None:
-    path = "/key/info?key=" + hashlib.sha256(key.encode()).hexdigest()
-    response = litellm_request(namespace, path)
-    if response["status"] == 404:
-        created = litellm_request(
-            namespace,
-            "/key/generate",
-            {
-                "key": key,
-                "key_alias": "agentbarn-hindsight-startup",
-                "models": [model],
-                "max_budget": budget,
-                "budget_duration": "30d",
-                "duration": None,
-                "team_id": None,
-                "metadata": {"agentbarn_memory": True, "purpose": "bankless-startup"},
-            },
-        )
-        if created["status"] != 200 or created.get("body", {}).get("key") != key:
-            raise ProvisioningError("LiteLLM memory key creation failed; retry reuses the persisted candidate key.")
-        response = litellm_request(namespace, path)
-    if response["status"] != 200:
-        raise ProvisioningError("LiteLLM memory key validation failed; credentials were preserved.")
-    info = response.get("body", {}).get("info", {})
-    max_budget = info.get("max_budget")
-    if (
-        info.get("team_id") is not None
-        or info.get("blocked")
-        or info.get("expires") is not None
-        or info.get("models") != [model]
-        or not isinstance(max_budget, (int, float))
-        or not math.isfinite(max_budget)
-        or max_budget <= 0
-        or info.get("budget_duration") != "30d"
-    ):
-        raise ProvisioningError("Memory key must be unblocked, non-expiring, model-restricted, budgeted, and teamless.")
-
-
-def provision(namespace: str, model: str, budget: float) -> dict[str, str]:
-    if not math.isfinite(budget) or budget <= 0:
-        raise ProvisioningError("Memory startup key budget must be a positive finite USD amount.")
-    values = credentials(namespace)
-    if values["MEMORY_RUNTIME_SERVICE_KEY"] == values["HINDSIGHT_API_KEY"]:
-        raise ProvisioningError("Memory settings and backend authentication keys must differ.")
-    ensure_key(namespace, values["HINDSIGHT_LITELLM_API_KEY"], model, budget)
-    return values
+def key_hashes(namespace: str) -> dict[str, str]:
+    saved = read_secret(namespace, "hindsight-litellm-hashes")
+    if saved is None:
+        raise ProvisioningError("Hindsight key hook has not created its hash Secret.")
+    values = decode_secret(saved)
+    active = values.get("MEMORY_LITELLM_ACTIVE_KEY_HASH", "")
+    hashes = values.get("MEMORY_LITELLM_KEY_HASHES", "").split(",")
+    if active not in hashes or any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in hashes):
+        raise ProvisioningError("Hindsight key hook returned invalid attribution hashes.")
+    return {name: values[name] for name in ("MEMORY_LITELLM_ACTIVE_KEY_HASH", "MEMORY_LITELLM_KEY_HASHES")}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", required=True, type=Path)
     parser.add_argument(
-        "--credentials-only",
-        action="store_true",
-        help="Persist credentials before starting LiteLLM; verify afterwards.",
+        "--include-key-hashes", action="store_true", help="Load attribution hashes after the Hindsight hook."
     )
     args = parser.parse_args()
     try:
-        if args.credentials_only:
-            values = credentials(os.environ["NAMESPACE"])
-        else:
-            values = provision(
-                os.environ["NAMESPACE"],
-                os.environ.get("MEMORY_DEFAULT_MODEL") or "openrouter/openai/gpt-4.1-mini",
-                float(os.environ.get("MEMORY_STARTUP_KEY_BUDGET_USD") or "5"),
-            )
+        values = credentials(os.environ["NAMESPACE"])
+        if values["MEMORY_RUNTIME_SERVICE_KEY"] == values["HINDSIGHT_API_KEY"]:
+            raise ProvisioningError("Memory settings and backend authentication keys must differ.")
+        if args.include_key_hashes:
+            values.update(key_hashes(os.environ["NAMESPACE"]))
         if os.environ.get("GITHUB_ACTIONS") == "true":
             for value in values.values():
                 escaped = value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -206,8 +129,7 @@ def main() -> None:
         with os.fdopen(fd, "w") as output:
             for name, value in values.items():
                 output.write(f"{name}={shlex.quote(value)}\n")
-        status = "prepared" if args.credentials_only else "provisioned and verified"
-        print(f"Agent Memory credentials {status}; existing credentials preserved.")
+        print("Agent Memory credentials prepared; existing authentication credentials preserved.")
     except ProvisioningError as error:
         raise SystemExit(str(error)) from None
     except (KeyError, ValueError, subprocess.TimeoutExpired):

@@ -630,8 +630,11 @@ cp .env.deploy.spec .env.deploy
 ```
 
 Helmfile brings up PostgreSQL (one instance each for the app, LiteLLM, and
-Firecrawl), Redis, the LiteLLM proxy, Firecrawl, the API with its worker and
-communications gateway, the UI, and a namespace-scoped Prometheus and Grafana.
+Firecrawl, and Hindsight), Redis, the LiteLLM proxy, Firecrawl, Hindsight, the API
+with its worker, communications gateway, and memory gateway, the UI, and a
+namespace-scoped Prometheus and Grafana. Hindsight's Helm hook generates its
+LiteLLM key automatically, using the same pattern as the application key; see
+[Agent Memory deployment](docs/guidelines/operations.md#agent-memory-deployment).
 Ordering, values, and secrets live in
 [`helmfile.yaml.gotmpl`](helmfile.yaml.gotmpl); the charts are in
 [`helm/`](helm/). Every option in `.env.deploy.spec` is commented.
