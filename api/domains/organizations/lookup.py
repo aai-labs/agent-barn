@@ -1,9 +1,25 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
 
 from api.domains.organizations.repository import OrganizationRepository
+
+
+@dataclass(frozen=True)
+class OrganizationLlmLimit:
+    """The limit in force on an Organization's team, and the window it renews on.
+
+    Agent limits are held beneath `limit_usd` and share `window`, so the Organization
+    and every one of its Agents renew at the same moment.
+    """
+
+    limit_usd: float
+    window: str
+    # When the Organization's window next renews — and so every Agent key's, since
+    # they share it. None until the proxy has reported one.
+    renews_at: datetime | None = None
 
 
 @inject
@@ -31,3 +47,14 @@ class OrganizationLookupService:
         """
         organization = self.repository.get(organization_id)
         return organization.allowed_models if organization else None
+
+    def get_llm_limit(self, organization_id: UUID) -> OrganizationLlmLimit | None:
+        """None when the Organization does not exist."""
+        organization = self.repository.get(organization_id)
+        if organization is None:
+            return None
+        return OrganizationLlmLimit(
+            limit_usd=organization.effective_llm_budget_usd,
+            window=organization.llm_budget_duration,
+            renews_at=organization.llm_budget_renews_at,
+        )

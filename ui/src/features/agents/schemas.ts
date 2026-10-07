@@ -55,6 +55,7 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.lifecycle.manage",
   "agent.access.manage",
   "agent.secret.manage",
+  "agent.memory.manage",
   "activity.read",
   "cost.read",
 ]);
@@ -119,6 +120,7 @@ export const AgentSchema = z.object({
   updateAvailable: z.boolean().default(false),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  memoryEnabled: z.boolean().default(false),
   lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
@@ -126,6 +128,12 @@ export const AgentSchema = z.object({
   /** Platforms whose Connections this Agent's runtime runs itself; changing one requires a restart. */
   nativePlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
+  creator: z.object({
+    id: z.string().uuid(),
+    fullName: z.string().nullable(),
+    email: z.string(),
+  }).nullable().optional().default(null),
+  lastMessageAt: z.string().datetime({ offset: true }).nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -493,6 +501,27 @@ export type RestorePointSkill = z.infer<typeof RestorePointSkillSchema>;
 export type RestorePointConfigManifest = z.infer<typeof RestorePointConfigManifestSchema>;
 export type RestorePoint = z.infer<typeof RestorePointSchema>;
 export type PaginatedRestorePoints = z.infer<typeof PaginatedRestorePointsSchema>;
+
+export const AgentLlmBudgetSchema = z.object({
+  // The limit in force on this Agent.
+  limitUsd: z.number(),
+  // The Agent's own limit. Null follows the organization's default.
+  ownLimitUsd: z.number().nullable().optional(),
+  // Where the limit in force comes from; "organization" means a higher own limit or
+  // default is being held to the organization's limit instead.
+  source: z.enum(["agent", "default", "organization"]),
+  // Organization-wide figures: sent only when canManage, null otherwise.
+  defaultLimitUsd: z.number().nullable().optional(),
+  organizationLimitUsd: z.number().nullable().optional(),
+  window: z.string(),
+  state: z.enum(["ok", "warning", "exhausted", "unknown"]),
+  // Null means not yet observed. Never coalesce it to 0.
+  spendUsd: z.number().nullable().optional(),
+  renewsAt: z.string().nullable().optional(),
+  canManage: z.boolean(),
+});
+
+export type AgentLlmBudget = z.infer<typeof AgentLlmBudgetSchema>;
 
 // --- Activity ---------------------------------------------------------------
 //

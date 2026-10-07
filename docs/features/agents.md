@@ -13,7 +13,8 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Every Agent belongs to one Organization and pins an exact active shared Template Version or Agent Template Override Version. The Organization owns the Agent; creator identity is immutable provenance rather than ownership.
 - Human Agent creation atomically records creator provenance and explicit Agent Owner access for the creator.
 - Organization Owner/Admin have implicit Agent Owner authority over every Agent. An Organization Member requires explicit Agent Access, applicable Agent General Access, or both; inaccessible and cross-Organization Agents are concealed with 404.
-- The locked Agent Viewer role grants read, activity, and cost access; Agent Editor adds configuration, lifecycle, Skill assignment, and credential management; Agent Owner adds deletion and access management. Start and stop share the single `agent.lifecycle.manage` Permission because lifecycle authority is granted as one capability; current Agent state determines which transition is available.
+- The locked Agent Viewer role grants read, activity, and cost access; Agent Editor adds configuration, lifecycle, Skill assignment, and credential management; Agent Owner adds deletion, access management, and Agent Memory management. Start and stop share the single `agent.lifecycle.manage` Permission because lifecycle authority is granted as one capability; current Agent state determines which transition is available.
+- Agent Memory is opt-in and its setting is exposed as `memory_enabled` on Agent reads. Opted-in starts configure automatic Hindsight recall and retain alongside native runtime memory. See [`Agent Memory`](agent-memory.md) for its permissions and sharing contract.
 - Any effective role containing access-management Permission may replace the Agent's full share settings: Agent General Access plus the complete explicit Agent Access assignment list. Creator provenance is immutable but is not a separate authorization source.
 - Explicit Agent Access is granted only to accepted Organization Members in the same Organization. Pending invitees and cross-Organization users are ineligible; removing a Membership cascades its access rows.
 - Agent General Access is an Agent-level setting: Restricted or All Organization Members with one Agent Access Role. It applies only to accepted Memberships and is additive with explicit Agent Access; removing one source leaves the other source intact.
@@ -47,6 +48,40 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Secret values are encrypted at rest and omitted from read DTOs. Google Workspace credentials are validated as one service-scoped OAuth payload and materialized through the gog CLI; retired per-service Google providers are not supported.
 - Agent Restore Points capture and restore only while the Agent is `STOPPED`, and only one capture or restore may be in flight per Agent — enforced by a database constraint, not only a service check. The per-Agent retention cap counts manual restore points that still hold a volume: Pre-Restore Restore Points and failed captures do not consume it, so an Agent at the cap can still roll back and a run of failures cannot lock it out of capturing.
 - A restore point archive never contains credential material or state the runtime regenerates on boot, so it is not a byte-exact image of the volume. It also never contains a member a restore could not extract: capture offers every member to the same safety filter the restore applies, and drops what that filter refuses — a link pointing outside the volume, for instance, which is unusable once the volume is mounted somewhere else. The count of dropped members is reported with the archive's size. Without this a single such link fails the entire restore rather than costing one link. Reads authorize on `activity.read`; capture, restore, and delete on `agent.lifecycle.manage`. No restore-point-specific Permission exists.
+
+## Agent list metadata
+
+Organization Agent reads expose `creator` (User ID, full name, and email) and
+`last_message_at`. Creator identity is immutable provenance, displayed as
+“By <name>” on the team card, with email as the fallback when no name is set.
+Legacy or deleted-user provenance is null and displays “Creator not recorded”;
+the UI never guesses a creator from access assignments. The creation date is
+labeled separately.
+
+`last_message_at` is the greatest recorded Conversation Message occurrence time
+across inbound and outbound directions and all Connections, including Web Chat
+and retired Connections. It is independent of runtime health and billed calls.
+Reads use the Agent visibility query and require `activity.read` for that
+Agent; without it the timestamp is null and the card says “Not available”. With
+permission, null means “No messages yet”. No message content is returned.
+An older API response that omits the field also displays “Not available”.
+The card shows relative recency alongside an exact timestamp in the reader's
+local time zone. Late ingestion uses occurrence time rather than insertion time.
+
+Team cards are whole-card links with keyboard navigation and no separate Open
+button. Hiring a teammate is a header action instead of a grid tile. Their last-message
+footer stays at the bottom even when names or pending model notes wrap. The
+dashboard search filters the currently loaded page, and identifies that limit
+when more Agents exist than are loaded.
+
+List reads batch shared credential labels for the visible page within the
+Organization; resolving each card must not issue a credential lookup per Agent.
+Response fields and credential-content exclusion match detail reads.
+Pin display queries load only IDs, keys, and versions, and credential list
+projections load only labels and references, excluding Markdown and encrypted
+payload columns. Home cards poll health every 30 seconds only for running
+Agents with `activity.read`; without that permission, a running Agent is labeled
+“Running” without claiming a known health state.
 
 ## State model
 
@@ -105,7 +140,7 @@ Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenCl
 
 ### Stop and delete
 
-Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. Individual Communication Connection retirement remains an independent Communications workflow.
+Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. It also revokes memory credentials and grants and schedules [Agent Memory cleanup](agent-memory.md#deletion-cleanup). Individual Communication Connection retirement remains an independent Communications workflow.
 
 ### Capture and restore
 
@@ -180,3 +215,8 @@ stored provisioning errors and retained Logs remain separate sources.
 This is not durable crash history. Pod replacement resets counts and can remove
 previous logs; the latest exit does not establish when a crash loop began. Reading
 diagnostics never restarts an Agent, executes a command, or mutates its workspace.
+
+How much CPU and memory the container is using, against its limits, is a separate
+read behind the same `activity.read`: the Resource usage tab. See
+[`resource-usage.md`](resource-usage.md). Its out-of-memory callout reads
+`termination_reason` from these diagnostics.

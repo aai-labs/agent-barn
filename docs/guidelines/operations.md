@@ -39,30 +39,277 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+## Local Communications reload
+
+Compose and `make dev-api` / `make dev-communications` run the Communications
+gateway with a five-second graceful shutdown timeout. Its persistent runtime
+control streams otherwise keep Uvicorn waiting indefinitely during a code reload,
+leaving accepted Web Chat messages queued. After the timeout, open streams are
+cancelled and runtimes reconnect; PostgreSQL retains pending deliveries. If an
+already running local gateway is stuck, recreate it with
+`docker compose up -d --no-deps communications` to load these launch flags.
+
+## Agent Memory deployment
+
+The gateway runs from the API image as `api.memory_main:app` on port 8003, with
+access logging disabled so client paths cannot enter logs. `make dev-api` starts
+it alongside the other HTTP processes; `make dev-memory` runs it separately.
+For local use set `HINDSIGHT_BASE_URL` to the backend root and `HINDSIGHT_API_KEY`
+to its shared API key. Compose starts the gateway; the optional local backend is
+enabled separately with the `local-hindsight` profile.
+`./run.sh` includes the `memory` service. Its published `MEMORY_PORT` defaults
+to 8003; set a distinct port if the product API or another local service uses it.
+An Agent needs no messaging connection to view saved memories. A missing bank
+returns an empty list, while an absent gateway or unconfigured/unavailable
+Hindsight backend produces an unavailable error, including for a new Agent.
+
+To use the local backend, configure these values in the ignored `.env`:
+
+```dotenv
+COMPOSE_PROFILES=local-hindsight
+HINDSIGHT_BASE_URL=http://hindsight:8888
+HINDSIGHT_DB_PASSWORD=<generated URL-safe password>
+HINDSIGHT_API_KEY=<generated API authentication key>
+HINDSIGHT_LITELLM_API_KEY=<dedicated budgeted LiteLLM virtual key>
+MEMORY_LITELLM_KEY_HASHES=<SHA-256 of that virtual key>
+```
+
+Initially use a virtual key restricted to `openrouter/openai/gpt-4.1-mini`, with no
+Organization team assignment. Keep its hash alongside any retired hashes in
+`MEMORY_LITELLM_KEY_HASHES` for cost attribution. `./run.sh` starts the backend
+when that profile is enabled. To start it on an already running stack:
+
+```bash
+docker compose up -d hindsight-db hindsight memory
+docker compose up -d --no-deps api worker communications
+```
+
+The local backend uses the pinned Hindsight image and attribution bridge, with
+control plane disabled and API authentication enabled. Its Postgres 18 database
+has pgvector, an isolated storage network, and its own named volume; neither
+backend nor database publishes a host port. The LiteLLM model key and database
+password are blanked in the shared application environment, and only the
+gateway receives the backend authentication key. Stop preserves database data.
+Backups and tested restores remain deferred.
+The product API lists an Agent's saved memories through the gateway's separate
+viewer under `/memory/view/v1`, addressed by `MEMORY_VIEW_BASE_URL`. `make dev-api`
+points it at `localhost`, Compose at the `memory` service, and the chart at the
+`<release>-memory` Service; override it only when the gateway lives elsewhere.
+The viewer authenticates a short-lived capability signed with the platform signing
+key, which the gateway already receives from the shared API Secret; no additional
+Hindsight or Kubernetes credential reaches the product API.
+Opted-in starts configure Hermes and OpenClaw for automatic recall and retain
+alongside native memory. Rebuild the runtime base images to install the pinned
+Hindsight clients/plugin before using this integration, then restart opted-in
+Agents so they receive the current configuration and fresh credentials. Runtime
+startup waits briefly for authenticated gateway health before loading the plugin;
+native memory remains available when the gateway is unavailable.
+
+Helmfile leaves the backend and gateway off by default. For an operator-run
+Helmfile deployment, set `HINDSIGHT_ENABLED=true`, `HINDSIGHT_DB_PASSWORD`,
+`HINDSIGHT_API_KEY`, `MEMORY_RUNTIME_SERVICE_KEY`, and `HINDSIGHT_LITELLM_API_KEY` in `.env.deploy`. Use distinct
+database/auth secrets and a budgeted LiteLLM virtual key for the last value.
+The deployment workflows do not yet enable this optional release.
+
+This adds `postgres-hindsight` (pgvector/PostgreSQL 18, its own 10Gi PVC) and
+Hindsight 0.10.2. Only its API port 8888 is exposed, as ClusterIP; its control
+plane is off and API authentication is mandatory. The gateway gets the auth key
+through one Secret key reference. The product API holds no Hindsight auth key. A separate
+`MEMORY_RUNTIME_SERVICE_KEY`, distinct from `HINDSIGHT_API_KEY`, is provided only
+to its internal settings listener and the Hindsight bridge; worker and Agent
+pods receive neither.
+Rotating `HINDSIGHT_API_KEY` through Helmfile rolls Hindsight and the gateway
+through their Secret/auth checksums. Rotating `MEMORY_RUNTIME_SERVICE_KEY` rolls
+Hindsight and the product API through their Secret/settings-key checksums.
+With a manually managed Secret, restart Hindsight and the gateway after rotating
+the Hindsight auth key; restart Hindsight and the product API after rotating the
+settings key. Environment variables are read at boot.
+
+Hindsight uses a dedicated platform key for bankless startup verification.
+Bank operations resolve an encrypted Organization key on its runtime LiteLLM
+team through the internal settings listener. Apply migration `f69a2e0c847d` before deploying
+this bridge; keep `AGENT_TOKEN_ENCRYPTION_KEY` stable so existing memory keys
+remain decryptable. Apply migration `f03a9c61d872` for the memory-key cleanup
+journal. The existing `llm-budget-reconciler` job retries up to 20 remote key
+revocations per pass; `make reconcile-llm-budgets` runs the same cleanup locally.
+Only hashes are journaled, so cleanup also works after an encryption-key change.
+Do not rotate `AGENT_TOKEN_ENCRYPTION_KEY` without migrating encrypted values:
+decryption failures return 503 and preserve the existing record. Deliberately
+blocked LiteLLM keys also return 503; unblocking requires an operator action.
+A confirmed missing key or mismatched team assignment is repaired on settings
+refresh, while transient proxy failures never trigger new key issuance.
+If both database journaling and remote revocation are unavailable after issuance,
+use LiteLLM's `agentbarn_memory` metadata to identify and revoke the orphan;
+distributed issuance cannot guarantee cleanup during simultaneous outages.
+The internal listener uses the API workload's existing LiteLLM master access
+to provision these keys; the Agent gateway needs neither master nor encryption
+credentials.
+`openrouter/openai/gpt-4.1-mini` is the initial default; Platform Admins can
+choose subsequent models in Platform Settings → Agent Memory. Do not share this key with Agents or attach it to
+an Organization team. The chart runs a pinned startup bridge that sends each
+operation's canonical bank as the model request's `user` field; the existing cost
+CronJob attributes LiteLLM's billed calls to that Organization without reading
+Hindsight traces. Helmfile derives the current key's SHA-256 hash into
+`MEMORY_LITELLM_KEY_HASHES`. On rotation, retain the old hash in that comma-separated
+`.env.deploy` setting so late/replayed calls keep their attribution. Only hashes,
+never the platform key, enter the API's shared Secret.
+
+For a locally operated Hindsight instance, run `helm/hindsight/files/start_hindsight.py`
+with the pinned image's Python, external database, OpenAI provider, and normal
+Hindsight auth/LLM environment. Set `MEMORY_LITELLM_KEY_HASHES` in `.env` to the
+SHA-256 of its dedicated LiteLLM key. The standard upstream entrypoint does not
+install our bridge and cannot attribute memory spend per Organization.
+
+The enabled gateway chart requires attribution key hashes. Keep the existing
+cost-sync CronJob (every 15 minutes) and LLM-budget-alerts snapshot job (every
+5 minutes) running. All Organizations need a successful cost sync and a current
+runtime snapshot before retain/reflect become available. The local `./run.sh`
+stack runs cost sync immediately and every 15 minutes through Compose's
+`cost-sync` service. Restart that service after changing its Python code or
+environment. Compose's `budget-snapshots` service refreshes runtime snapshots immediately
+and every five minutes. Restart it after changes to code or environment. Host-run setups also need cost sync
+on its schedule (`cd api && uv run python -c "from api.domains.costs.sync import main; main()"`). See
+[Costs](../features/costs.md#organization-llm-budgets) for freshness
+requirements, 429/503 behavior, and the observed-spend limitation. The gateway
+uses persisted accounting and needs no LiteLLM master key or Kubernetes credentials.
+
+When memory is enabled, the chart deploys `agentbarn-api-memory-purge` every five
+minutes with `Forbid` concurrency and a 280-second pod deadline. It holds only the
+product database URL and Hindsight auth key, mounts no kubeconfig, and disables
+service-account token mounting. Keep it running while tombstones remain; disabling
+the optional release pauses physical cleanup.
+
+For local operation, schedule `make purge-agent-memory` with `DB_CONNECTION_URL`,
+`HINDSIGHT_BASE_URL`, and `HINDSIGHT_API_KEY`. Repeating runs after a failure or
+restart is safe. The cleanup/repair launchers supply inert creation-budget defaults
+because they never create Organizations or Agents; no deployment budget settings or
+user-authentication credentials are required. Inspect `agent_memory_purge.last_error`, `attempts`,
+`next_attempt_at`, and `last_cleaned_at` for progress without reading memory content.
+The [deletion contract](../features/agent-memory.md#deletion-cleanup) owns retry
+leases, runtime limits, and hourly sweeps for previously accepted Hindsight work.
+Downgrading `a63e8c941d20` drops pending cleanup; it cannot restore removed grants.
+Complete cleanup before retiring this table/job. Backups and restore work are
+deferred in the [delivery log](../features/agent-memory/CHANGELOG.md).
+
+When upgrading from shared writes tagged with `agent:<id>`, repair each affected
+Organization using `uv run --project api python -m api.domains.agent_memory.retag_shared
+<organization_id>` from the repository root with `HINDSIGHT_BASE_URL` and
+`HINDSIGHT_API_KEY`. Stop shared writes and let outstanding extraction and consolidation work
+finish before this one-time repair. Repeat the command after any earlier
+extraction work finishes. It reports document
+counts only. The [memory upgrade contract](../features/agent-memory.md#upgrade-legacy-shared-ownership-tags)
+owns tag replacement and observation invalidation. This does not require a
+Postgres schema migration.
+
+Run `make check-memory` with Helm installed to validate both enabled and disabled
+renders without connecting to a cluster. The API CI workflow runs the same check.
+
+### Operating Platform Agent Memory model settings
+
+Apply migration `d83f291bc7a0` before deploying the settings API. Deploy both
+bridge files (`start_hindsight.py` and `memory_model.py`) and set
+`AGENTBARN_MEMORY_SETTINGS_URL` to the API workload's internal port 8004
+`/memory/runtime/v1/model` endpoint. Set `MEMORY_RUNTIME_SERVICE_KEY` to a
+separate random credential and supply it to the bridge as
+`AGENTBARN_MEMORY_SETTINGS_KEY`; never reuse Hindsight's API auth key. Compose and Helm supply the internal URL. Existing backends need one
+restart to install the bridge; subsequent settings changes need none. The
+endpoint is absent from the public product API and is not published by Compose
+or routed through ingress. The API workload receives only the settings key
+through an explicit Secret reference; Agent pods do not.
+
+Set `MEMORY_LITELLM_ACTIVE_KEY_HASH` when retaining multiple attribution hashes.
+Helmfile derives it from the currently configured dedicated key; Compose
+operators supply it in `.env`. With a single hash the API infers the active one.
+Settings saves expand only that key's model allowlist and preserve prior models,
+budgets, and spend. On key rotation provision the persisted model, startup
+fallback, and models needed by in-progress operations on the new key. Keep
+retired hashes for delayed cost attribution.
+
+Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
+customize the initial model. Both deployments use that one setting for the API
+default and Hindsight startup model. When using charts directly, set API
+`memory.defaultModel` and Hindsight `llm.model` to the same value. Gateway outages
+retain the last known selection,
+or the startup model before the first successful fetch. A schema downgrade drops
+the persisted choice.
+
+### Integrating Agent Memory with staging spend limits
+
+Migration `e94b17c62a30` joins the memory and self-service spend-limit histories.
+Existing local databases can upgrade in place; applied memory revisions are kept
+rather than squashed, preserving saved records, grants, and development data.
+Migration `e81c2a97b4f3` also joins the memory team-key history with staging's
+Personal API Keys history. Run migrations before restarting API processes after integrating staging. Both
+`ORGANIZATION_DEFAULT_LLM_BUDGET_USD` and `AGENT_DEFAULT_LLM_BUDGET_USD` are required;
+set them before startup. The new local `budget-snapshots` service uses the same
+`--watch` loop as the budget job entry point, refreshing every five minutes.
+
 ## Organization LLM budgets
 
-Each Organization has its own LLM spend ceiling, set by a Platform Administrator
-through `PUT /platform/organizations/{id}/llm-budget`. There is no deployment-wide
-budget and no environment variable: an amount belongs to one Organization, and an
-Organization cannot raise its own. The behaviour contract is in
+Every Organization has a Spend Ceiling, set by a Platform Administrator through
+`PUT /platform/organizations/{id}/llm-budget`; beneath it the Organization's Owners and
+Admins set a lower limit of their own, a default for their Agents, and a limit per
+Agent. The behaviour contract is in
 [Costs](../features/costs.md#organization-llm-budgets).
 
-Budgets are off until set. With LiteLLM configured, teams are still provisioned and
-new keys assigned even when no amount is set anywhere. No Agent restart is required,
-and a change takes effect as soon as it is saved — there is nothing to redeploy.
+Two deployment settings are **required** — the API, its worker, every CronJob and the
+migration job all refuse to start without them:
 
-`budget_usd` is a non-negative finite number, where `0` is a limit of nothing and
-omitting it removes the cap. `budget_duration` is a positive integer followed by
-`s`, `m`, `h` or `d`, defaulting to `30d` — a 30-day interval, not a calendar month.
-Clearing the amount also clears the renewal schedule. Changing only the amount
-preserves spend and the renewal date; changing the duration moves the next renewal
-without resetting spend.
+| Setting | Meaning |
+| --- | --- |
+| `ORGANIZATION_DEFAULT_LLM_BUDGET_USD` | The ceiling a new Organization starts with. The migration that introduced it also gave it to every existing Organization that had none. |
+| `AGENT_DEFAULT_LLM_BUDGET_USD` | The limit an Agent is held to until its Organization sets a default or the Agent its own. Must not exceed the Organization default. |
 
-Saving a budget writes the Organization row first and then pushes it to LiteLLM. A
+Deploys read them from repository variables, following the usual prefixes:
+production uses the names above, staging `STAGING_ORGANIZATION_DEFAULT_LLM_BUDGET_USD` /
+`STAGING_AGENT_DEFAULT_LLM_BUDGET_USD` (falling back to the production ones when unset),
+and the public deployment `PUBLIC_ORGANIZATION_DEFAULT_LLM_BUDGET_USD` /
+`PUBLIC_AGENT_DEFAULT_LLM_BUDGET_USD`. They reach the chart's
+`organizationLlmBudgets.defaultOrganizationUsd` / `defaultAgentUsd` through
+`helmfile.yaml.gotmpl` and render into the shared API Secret; the chart refuses to
+render without them, so a deploy with either variable unset fails before anything
+changes.
+Local runs read them from `.env`, and the API test suite sets its own in
+`api/tests/conftest.py`.
+
+No Agent restart is required: a change takes effect as soon as it is saved.
+`budget_usd` is a non-negative finite number and is required on the ceiling — it can
+be changed but not cleared, so "no practical limit" is a very large amount.
+`budget_duration` is one of `1d`, `7d` or `30d`, defaulting to `30d`; LiteLLM renews
+these on calendar boundaries (next midnight, next Monday, the 1st of the month), which
+is what keeps the Organization and its Agents renewing together. Changing only an
+amount preserves spend and the renewal date; changing the window moves the next
+renewal without resetting spend.
+
+**Rollout (AF-337): no manual step is needed.** LiteLLM keeps one running spend total
+per key and per team and only zeroes it when a window renews, so a key or team that
+was never capped carries everything it has ever spent into its first window. Three
+things keep that from refusing anyone at rollout:
+
+- The migration gives every existing Organization without a ceiling $10,000 a month
+  rather than `ORGANIZATION_DEFAULT_LLM_BUDGET_USD`: high enough that its team's
+  lifetime spend refuses nobody, while the team gets a window and renews on the 1st.
+- It sets every existing Organization's default Agent limit to its ceiling (that
+  $10,000, or the ceiling it already had from AF-303), so existing Agents are not held
+  to `AGENT_DEFAULT_LLM_BUDGET_USD`; the team stays the only limit that binds.
+- The first time a limit is written to a key that has never had a window (every key
+  created before AF-337), the API zeroes that key's spend first
+  (`POST /key/{key}/reset_spend`), so its cap measures from then. This happens on the
+  reconciler's first pass after the deploy. Spend logs, and so cost records, are
+  untouched.
+
+From the first renewal on, team spend is per window, and a platform administrator can
+set a real limit without any reset. One edge case remains: LiteLLM cannot zero a
+single team, so an Organization without a ceiling whose team has already spent more
+than $10,000 in total, or one given a real limit before its first renewal, is measured
+against lifetime spend until the 1st. LiteLLM's only team-wide option is
+`POST /global/spend/reset`, which zeroes every key and team at once.
+
+Saving a limit writes the row first and then pushes it to LiteLLM. A
 proxy failure returns `502` with the amount already stored, because losing an
 administrator's setting because the proxy blinked is worse than a delayed push. The
-`<release>-llm-budget-reconciler` CronJob pushes stored budgets onto their teams every
-15 minutes to repair exactly that kind of drift, logging
+`<release>-llm-budget-reconciler` CronJob pushes stored limits onto every team and
+Agent key every 15 minutes to repair exactly that kind of drift, logging
 `Organization LiteLLM budgets reconciled`. Like the other reconcilers it runs under
 `concurrencyPolicy: Forbid`, so one runner regardless of API replica count, and the
 API itself never contacts the proxy at startup. A budget saved while the proxy was
@@ -73,15 +320,17 @@ Run either pass by hand with `make reconcile-llm-budgets` or `make run-llm-budge
 Organization's Owners and Admins are notified — comma separated, each between 1 and
 100, defaulting to `80,100`. A malformed list refuses to boot rather than quietly
 alerting nobody. The value is read by the API and by the
-`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over Organizations
-that have a limit set. Alerting is informational: the limit is enforced in the
-request path, so the interval only bounds how late someone is told.
+`<release>-llm-budget-alerts` CronJob, which runs every 5 minutes over every
+Organization and every Agent key. The same thresholds apply to an Agent's own limit,
+whose alerts go to its creator and Owners. Alerting is informational: the limit is
+enforced in the request path, so the interval only bounds how late someone is told.
 
-Agents created before an Organization had a limit carry no team on their key, so a
-limit does not bind them until they are enrolled. A Platform Administrator does that
-from the Organization's page — the spend limit controls stay hidden until every Agent
-is covered, and the button reports anything it could not enroll by name. Historical
-pre-enrollment spend stays in reports but is not added to the new team counter.
+Agents created before an Organization had a team carry none on their key, so the
+Organization's limit does not bind them until they are enrolled. A Platform
+Administrator does that from the Organization's page, where uncovered Agents are
+named beside the limit controls and the button reports anything it could not enroll.
+Historical pre-enrollment spend stays in reports but is not added to the new team
+counter.
 
 ## Transactional email
 
@@ -285,6 +534,8 @@ Documentation-only changes do not change a service image and do not require a se
   [`testing.md`](testing.md#verification-commands). CI selects
   `.github/workflows/monitoring.yml` for `helm/monitoring/**` changes.
 - Agents that were already running before the monitoring deploy are invisible to Prometheus until stopped and started once: the `/metrics` sidecar script and the Service labels the agent scrape config relies on (`agentbarn.io/component`, `agent-name`, `org-name`) only apply when the API rebuilds the agent's resources in the start flow. When only the scrape label is missing (e.g. agents predating the agentfarm→agentbarn rebrand), no restart is needed — patch the Service labels in place, which does not disturb running pods: `kubectl -n NAMESPACE label svc -l agentfarm.io/component=agent agentbarn.io/component=agent --overwrite`.
+- The product API also queries this Prometheus, for Agent CPU and memory ([`resource-usage.md`](../features/resource-usage.md)). helmfile passes `MONITORING_WEB_PASSWORD` straight to the `agentbarn-api` release (`prometheus.password`), so the API and the monitoring release always share one password, and rotating it rolls the API pods too. It is passed directly, not read from the `monitoring-web-auth` Secret, because the monitoring release deploys after the API. With the password unset, or Prometheus unreachable, the Resource usage views say so and everything else keeps working.
+- Agents report CPU and memory from their healthz script, which ships in the Agent's ConfigMap. After a deploy that changes it, a running Agent shows "Restart this agent to start reporting CPU and memory" (and "update available") until it is stopped and started once.
 
 ## Operational safety
 

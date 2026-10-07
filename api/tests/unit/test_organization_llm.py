@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from hamcrest import assert_that, equal_to
+from hamcrest import assert_that, equal_to, is_not
 
 from api.core.config import Config
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -170,7 +170,8 @@ def test_generated_key_carries_team_and_attribution_metadata():
         patch("api.infrastructure.litellm.client.httpx.post", return_value=response({"key": "sk-test"})) as post,
     ):
         assert_that(c.generate_key("agent", "Agent", "org"), equal_to("sk-test"))
-    ensure.assert_called_once_with("org")
+    # No budget passed: a team created here would carry none, exactly as before.
+    ensure.assert_called_once_with("org", None, None)
     apply_budget.assert_not_called()
     assert_that(
         post.call_args.kwargs["json"],
@@ -199,10 +200,13 @@ def organization_service(**overrides):
 
     deps = {
         "organization_repository": MagicMock(),
-        "agent_repository": MagicMock(),
+        "agent_budgets": MagicMock(),
+        "agent_settings": MagicMock(),
         "litellm": MagicMock(),
         "permission_policy": MagicMock(),
         "event_delivery_dispatcher": MagicMock(),
+        "memory_accounting": MagicMock(legacy_spend=MagicMock(return_value=0)),
+        "memory_keys": MagicMock(),
     }
     deps.update(overrides)
     return OrganizationLlmBudgetService(**deps)
@@ -214,20 +218,73 @@ def configured():
 
 def test_reconcile_applies_each_organizations_stored_budget():
     repo = MagicMock()
-    repo.list_budget_policies.return_value = [("a", 50.0, "30d"), ("b", None, None)]
+    repo.list_budget_policies.return_value = [("a", 50.0, "30d"), ("b", 5.0, "7d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     with configured():
         service.reconcile_llm_budgets()
     assert_that(
         [call.args for call in service.litellm.apply_team_budget.call_args_list],
-        equal_to([("a", 50.0, "30d"), ("b", None, None)]),
+        equal_to([("a", 50.0, "30d"), ("b", 5.0, "7d")]),
     )
+
+
+def test_reconcile_brings_agent_keys_in_step_after_the_teams():
+    service = organization_service()
+    service.organization_repository.list_budget_policies.return_value = []
+    with configured():
+        service.reconcile_llm_budgets()
+    service.agent_budgets.reconcile_key_budgets.assert_called_once_with()
+
+
+def test_reconcile_lowers_a_default_agent_limit_left_above_its_organizations():
+    """A request interrupted between saving a lower Organization limit and lowering the
+    default leaves the stored default above it; the sweep repairs that, as it does
+    Agent limits."""
+    repo = MagicMock()
+    repo.list_budget_policies.return_value = [("a", 50.0, "30d"), ("b", 5.0, "7d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
+    service = organization_service(organization_repository=repo)
+    with configured():
+        service.reconcile_llm_budgets()
+    assert_that(
+        [call.args for call in service.agent_settings.lower_default_agent_llm_budget.call_args_list],
+        equal_to([("a", 50.0), ("b", 5.0)]),
+    )
+
+
+def test_reconcile_lowers_the_default_even_when_the_team_push_fails():
+    repo = MagicMock()
+    repo.list_budget_policies.return_value = [("a", 50.0, "30d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
+    service = organization_service(organization_repository=repo)
+    service.litellm.apply_team_budget.side_effect = LiteLLMError("down")
+    with configured():
+        service.reconcile_llm_budgets()
+    service.agent_settings.lower_default_agent_llm_budget.assert_called_once()
 
 
 def test_one_failing_organization_does_not_abort_the_sweep():
     """Drift repair is best effort: budgets are applied when set, not here."""
     repo = MagicMock()
     repo.list_budget_policies.return_value = [("a", 1.0, "30d"), ("b", 2.0, "30d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     service.litellm.apply_team_budget.side_effect = [LiteLLMError("down"), None]
     with configured():
@@ -245,76 +302,121 @@ def test_reconcile_is_skipped_when_litellm_is_not_configured():
     service.litellm.apply_team_budget.assert_not_called()
 
 
-def test_setting_a_budget_stores_it_and_pushes_it_to_the_proxy():
+def stored_org(ceiling=None, window="30d", own=None, org_id="org"):
+    from api.domains.organizations.models import Organization
+
+    return Organization(
+        id=org_id if org_id != "org" else ORG,
+        name="Acme",
+        llm_budget_usd=100.0 if ceiling is None else ceiling,
+        llm_budget_duration=window,
+        llm_own_budget_usd=own,
+    )
+
+
+def ceiling_service(organization, *, saved=None, **overrides):
+    """A budget service whose repository records the write and echoes the row back."""
     repo = MagicMock()
-    organization = MagicMock(id="org", llm_budget_usd=None, llm_budget_duration=None)
     repo.get.return_value = organization
-    service = organization_service(organization_repository=repo)
-    with configured():
-        service.set_llm_budget("org", 50.0, "30d")
-    assert_that(organization.llm_budget_usd, equal_to(50.0))
-    assert_that(organization.llm_budget_duration, equal_to("30d"))
-    repo.save.assert_called_once_with(organization)
-    service.litellm.apply_team_budget.assert_called_once_with("org", 50.0, "30d")
+
+    def write(organization_id, *, ceiling_usd, window, **_):
+        """The repository's contract: an own limit above the new ceiling comes down
+        to it (decided under the row lock; exercised against a real row in the
+        integration suite)."""
+        if saved is False:
+            return None
+        organization.llm_budget_usd = ceiling_usd
+        organization.llm_budget_duration = window or organization.llm_budget_duration
+        own = organization.llm_own_budget_usd
+        organization.llm_own_budget_usd = ceiling_usd if own is not None and own > ceiling_usd else own
+        return organization, []
+
+    repo.set_llm_ceiling_with_event.side_effect = write
+    return organization_service(organization_repository=repo, **overrides)
 
 
-def test_the_stored_budget_survives_a_proxy_failure():
+def acting():
+    """The actor is resolved from a real membership; these tests are about budgets."""
+    return patch("api.domains.organizations.llm_budget_service.resolve_actor_identity")
+
+
+def test_setting_a_ceiling_stores_it_with_its_audit_record_and_pushes_it():
+    organization = stored_org(ceiling=100.0)
+    service = ceiling_service(organization)
+    with configured(), acting():
+        service.set_llm_budget(organization.id, 50.0, "30d", MagicMock())
+    service.organization_repository.set_llm_ceiling_with_event.assert_called_once()
+    service.litellm.apply_team_budget.assert_called_once_with(str(organization.id), 50.0, "30d")
+
+
+def test_the_stored_ceiling_survives_a_proxy_failure():
     """The row is authoritative; the proxy is a projection the sweep will repair."""
     from fastapi import HTTPException
 
-    repo = MagicMock()
-    repo.get.return_value = MagicMock(id="org", llm_budget_usd=None, llm_budget_duration=None)
-    service = organization_service(organization_repository=repo)
+    organization = stored_org()
+    service = ceiling_service(organization)
     service.litellm.apply_team_budget.side_effect = LiteLLMError("down")
-    with configured(), pytest.raises(HTTPException) as raised:
-        service.set_llm_budget("org", 50.0, "30d")
+    with configured(), acting(), pytest.raises(HTTPException) as raised:
+        service.set_llm_budget(organization.id, 50.0, "30d", MagicMock())
     assert_that(raised.value.status_code, equal_to(502))
-    repo.save.assert_called_once()
+    assert_that(organization.llm_budget_usd, equal_to(50.0))
 
 
-def test_setting_a_budget_on_a_missing_organization_is_404():
+def test_setting_a_ceiling_on_a_missing_organization_is_404():
     from fastapi import HTTPException
 
-    repo = MagicMock()
-    repo.get.return_value = None
-    service = organization_service(organization_repository=repo)
+    service = organization_service()
+    service.organization_repository.get.return_value = None
     with configured(), pytest.raises(HTTPException) as raised:
-        service.set_llm_budget("nope", 50.0, "30d")
+        service.set_llm_budget("nope", 50.0, "30d", MagicMock())
     assert_that(raised.value.status_code, equal_to(404))
 
 
 def test_changing_only_the_amount_keeps_the_configured_window():
-    """The docs promise an amount-only change preserves the renewal date, and
-    apply_team_budget reschedules whenever the duration differs."""
-    repo = MagicMock()
-    organization = MagicMock(id="org", llm_budget_usd=50.0, llm_budget_duration="7d")
-    repo.get.return_value = organization
-    service = organization_service(organization_repository=repo)
-    with configured():
-        service.set_llm_budget("org", 75.0, None)
-    assert_that(organization.llm_budget_duration, equal_to("7d"))
-    service.litellm.apply_team_budget.assert_called_once_with("org", 75.0, "7d")
+    """An amount-only change must preserve the renewal date, and apply_team_budget
+    reschedules whenever the duration differs."""
+    organization = stored_org(ceiling=50.0, window="7d")
+    service = ceiling_service(organization)
+    with configured(), acting():
+        service.set_llm_budget(organization.id, 75.0, None, MagicMock())
+    service.litellm.apply_team_budget.assert_called_once_with(str(organization.id), 75.0, "7d")
 
 
-def test_a_first_budget_without_a_window_gets_the_default():
-    repo = MagicMock()
-    organization = MagicMock(id="org", llm_budget_usd=None, llm_budget_duration=None)
-    repo.get.return_value = organization
-    service = organization_service(organization_repository=repo)
-    with configured():
-        service.set_llm_budget("org", 75.0, None)
-    assert_that(organization.llm_budget_duration, equal_to("30d"))
+def test_a_ceiling_below_the_organizations_own_limit_pulls_it_down():
+    organization = stored_org(ceiling=100.0, own=80.0)
+    service = ceiling_service(organization)
+    with configured(), acting():
+        service.set_llm_budget(organization.id, 50.0, None, MagicMock())
+    write = service.organization_repository.set_llm_ceiling_with_event.call_args.kwargs
+    assert_that(write["reason_if_lowered"], is_not(None))
+    service.litellm.apply_team_budget.assert_called_once_with(str(organization.id), 50.0, "30d")
+
+
+def test_a_ceiling_above_the_organizations_own_limit_leaves_it_alone():
+    organization = stored_org(ceiling=100.0, own=30.0)
+    service = ceiling_service(organization)
+    with configured(), acting():
+        service.set_llm_budget(organization.id, 200.0, None, MagicMock())
+    # The Organization's own limit is still the one in force.
+    service.litellm.apply_team_budget.assert_called_once_with(str(organization.id), 30.0, "30d")
+
+
+def test_a_ceiling_change_brings_agents_and_the_default_within_it():
+    organization = stored_org(ceiling=100.0)
+    service = ceiling_service(organization)
+    with configured(), acting():
+        service.set_llm_budget(organization.id, 20.0, None, MagicMock())
+    assert_that(service.agent_settings.lower_default_agent_llm_budget.call_args.args, equal_to((organization.id, 20.0)))
+    service.agent_budgets.fit_to_organization.assert_called_once()
 
 
 def test_an_organization_deleted_mid_write_is_404_not_a_broken_response():
     from fastapi import HTTPException
 
-    repo = MagicMock()
-    repo.get.return_value = MagicMock(id="org", llm_budget_usd=None, llm_budget_duration=None)
-    repo.get_platform_read.return_value = None
-    service = organization_service(organization_repository=repo)
-    with configured(), pytest.raises(HTTPException) as raised:
-        service.set_llm_budget("org", 50.0, "30d")
+    organization = stored_org()
+    service = ceiling_service(organization, saved=False)
+    with configured(), acting(), pytest.raises(HTTPException) as raised:
+        service.set_llm_budget(organization.id, 50.0, "30d", MagicMock())
     assert_that(raised.value.status_code, equal_to(404))
 
 
@@ -470,7 +572,7 @@ def coverage_service(credentials, team_of, **overrides):
     from api.infrastructure.litellm.client import LiteLLMError
 
     agents = MagicMock()
-    agents.list_llm_credentials.return_value = credentials
+    agents.llm_credentials.return_value = credentials
     litellm = MagicMock()
 
     def get_key_team(key):
@@ -492,7 +594,7 @@ def coverage_service(credentials, team_of, **overrides):
     litellm.get_team_budget_status.return_value = None
     repo = MagicMock()
     repo.get.return_value = MagicMock(id=ORG)
-    return organization_service(agent_repository=agents, litellm=litellm, organization_repository=repo, **overrides)
+    return organization_service(agent_budgets=agents, litellm=litellm, organization_repository=repo, **overrides)
 
 
 def _decrypting():
@@ -686,7 +788,14 @@ def budget_service(orgs, spend_by_org, publishes=True, **overrides):
 
 
 def capped(org_id="org", limit=50.0, alerted=None, key=None, renews="2026-10-01T00:00:00Z"):
-    return MagicMock(id=org_id, name="Acme", llm_budget_usd=limit, llm_alerted_threshold=alerted, llm_alert_key=key)
+    return MagicMock(
+        id=org_id,
+        name="Acme",
+        llm_budget_usd=limit,
+        effective_llm_budget_usd=limit,
+        llm_alerted_threshold=alerted,
+        llm_alert_key=key,
+    )
 
 
 def status_at(spend, renews="2026-10-01T00:00:00Z"):
@@ -789,12 +898,11 @@ def test_the_alerts_cronjob_entrypoint_runs_one_pass():
     service.check_llm_budget_thresholds.assert_called_once_with()
 
 
-def test_uncapped_organizations_are_never_read_from_the_proxy():
-    """They have nothing to threshold against, so they cost no proxy call at all."""
+def test_the_threshold_pass_also_checks_every_agents_own_limit():
     service = budget_service([], {})
     with configured():
-        assert_that(service.check_llm_budget_thresholds(), equal_to([]))
-    service.litellm.get_team_budget_status.assert_not_called()
+        service.check_llm_budget_thresholds()
+    service.agent_budgets.check_llm_budget_thresholds.assert_called_once_with()
 
 
 # --- the Organization's own view --------------------------------------------
@@ -806,13 +914,17 @@ def org_budget_service(organization, **overrides):
     return organization_service(organization_repository=repo, **overrides)
 
 
-def viewed(limit=50.0, spend=40.0, renews="2026-10-01T00:00:00Z", observed=True):
+def viewed(limit=50.0, spend=40.0, renews="2026-10-01T00:00:00Z", observed=True, own=None):
     from datetime import UTC, datetime
 
-    return MagicMock(
+    from api.domains.organizations.models import Organization
+
+    return Organization(
         id=ORG,
+        name="Acme",
         llm_budget_usd=limit,
         llm_budget_duration="30d",
+        llm_own_budget_usd=own,
         llm_spend_usd=spend,
         llm_spend_observed_at=datetime.now(UTC) if observed else None,
         llm_budget_renews_at=datetime.fromisoformat(renews) if renews else None,
@@ -843,11 +955,12 @@ def test_state_follows_spend_against_the_limit(spend, limit, expected):
     assert_that(service.get_organization_llm_budget(ORG, MagicMock()).state, equal_to(expected))
 
 
-def test_an_uncapped_organization_reports_no_limit_at_all():
-    service = org_budget_service(viewed(limit=None, spend=None))
+def test_the_organizations_own_limit_is_the_one_in_force():
+    service = org_budget_service(viewed(limit=100.0, own=40.0, spend=35.0))
     read = service.get_organization_llm_budget(ORG, MagicMock())
-    assert_that(read.state, equal_to("none"))
-    assert_that(read.limit_usd, equal_to(None))
+    assert_that((read.limit_usd, read.ceiling_usd, read.own_limit_usd), equal_to((40.0, 100.0, 40.0)))
+    # Spend is measured against the limit in force, not the ceiling.
+    assert_that(read.state, equal_to("warning"))
 
 
 def test_a_limit_with_no_observation_yet_is_unknown_not_zero():
@@ -1181,3 +1294,24 @@ def test_a_key_is_looked_up_by_hash_so_it_never_enters_a_query_string():
     sent = get.call_args.kwargs["params"]["key"]
     assert_that(sent, equal_to(hashlib.sha256(SECRET_KEY.encode()).hexdigest()))
     assert_that(SECRET_KEY in str(get.call_args), equal_to(False))
+
+
+def test_local_budget_watch_refreshes_immediately_and_retries_failures(monkeypatch):
+    from api.domains.organizations import llm_budget_alerts, llm_budget_cron
+
+    service = MagicMock()
+    service.check_llm_budget_thresholds.side_effect = [RuntimeError("temporary outage"), None]
+    monkeypatch.setattr(llm_budget_cron, "build_service", lambda: service)
+    monkeypatch.setattr("sys.argv", ["llm-budget-alerts", "--watch"])
+    waits = []
+
+    def wait(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(llm_budget_cron.time, "sleep", wait)
+    with pytest.raises(KeyboardInterrupt):
+        llm_budget_alerts.main()
+    assert service.check_llm_budget_thresholds.call_count == 2
+    assert all(0 < seconds <= 300 for seconds in waits)

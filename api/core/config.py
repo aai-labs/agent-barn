@@ -59,6 +59,12 @@ class Config(BaseSettings):
     # Percentages of an Organization's limit at which it is notified. Empty falls back
     # to the default; 100 is always meaningful because it is the enforcement boundary.
     organization_llm_budget_alert_thresholds: str = "80,100"
+    # Model spend limits (USD) a new Organization and a new Agent start with. Required:
+    # nobody should be uncapped just because an administrator has not got to them yet.
+    # A platform administrator changes an Organization's afterwards; the Organization
+    # divides its own allowance among its Agents.
+    organization_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
+    agent_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
     # The API's own public base URL, used to show callers where to reach an Agent
     # Webhook or a Teams Connection. Deployments set it from API_HOST; locally it is
     # derived below, because the host port is the only thing that makes it up.
@@ -68,6 +74,20 @@ class Config(BaseSettings):
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
+    memory_base_url: str = "http://agentbarn-api-memory:8003/memory/v1"
+    # Where the product API reaches the gateway's read-only viewer; Agents never use it.
+    memory_view_base_url: str = "http://agentbarn-api-memory:8003/memory/view/v1"
+    # Non-secret SHA-256 hashes of current and retired Hindsight LiteLLM keys.
+    memory_litellm_key_hashes: str = ""
+
+    memory_runtime_service_key: str = ""
+
+    memory_default_model: str = "openrouter/openai/gpt-4.1-mini"
+    memory_litellm_active_key_hash: str = ""
+
+    hindsight_base_url: str = ""
+    hindsight_api_key: str = ""
+    hindsight_request_timeout_seconds: int = Field(default=120, ge=1, le=600)
     communications_base_url: str = (
         "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
     )
@@ -112,6 +132,15 @@ class Config(BaseSettings):
     # (GET /key with the inference key above; no management key involved).
     openrouter_credits_cache_ttl_seconds: int = 300
 
+    # The in-namespace Prometheus (helm/monitoring) that stores each Agent's CPU and
+    # memory. Empty means resource usage reports "not configured", which is the normal
+    # local state until `make dev-monitoring`. Prometheus requires basic auth; the
+    # password is the monitoring release's MONITORING_WEB_PASSWORD.
+    prometheus_url: str = ""
+    prometheus_username: str = "monitoring"
+    prometheus_password: str = ""
+    prometheus_timeout_seconds: float = Field(default=5, gt=0, le=30)
+
     redis_url: str = "redis://localhost:6379/0"
 
     # Comma-separated glob patterns (fnmatch) matched against OpenRouter model
@@ -140,6 +169,14 @@ class Config(BaseSettings):
             self.api_external_url = f"http://localhost:{self.api_port}"
         return self
 
+    @model_validator(mode="after")
+    def agent_default_within_organization_default(self) -> Self:
+        """An Agent's limit may never exceed its Organization's, so a default that did
+        would put every new Agent in breach from its first call."""
+        if self.agent_default_llm_budget_usd > self.organization_default_llm_budget_usd:
+            raise ValueError("AGENT_DEFAULT_LLM_BUDGET_USD must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD")
+        return self
+
     @field_validator("organization_llm_budget_alert_thresholds", mode="before")
     @classmethod
     def valid_thresholds(cls, value: object) -> object:
@@ -164,6 +201,10 @@ class Config(BaseSettings):
     def llm_budget_alert_thresholds(self) -> list[int]:
         """Sorted and de-duplicated by the validator above."""
         return [int(part) for part in self.organization_llm_budget_alert_thresholds.split(",")]
+
+    @property
+    def memory_cost_key_hashes(self) -> frozenset[str]:
+        return frozenset(part.strip() for part in self.memory_litellm_key_hashes.split(",") if part.strip())
 
     @property
     def is_email_delivery_enabled(self) -> bool:

@@ -169,3 +169,22 @@ def test_get_authenticated_user_rejects_invalid_token_type():
         ),
         raises(CredentialsException),
     )
+
+
+def test_get_authenticated_user_rejects_api_key_class_in_jwt():
+    user = User(email="forged-key@example.com", hashed_password="x", email_verified_at=datetime.now(UTC))
+    config = SimpleNamespace(secret_signing_key="x" * 32)
+    token = jwt.encode(
+        {"user_id": str(user.id), "token_type": "access", "credential_class": CredentialClass.API_KEY.value},
+        config.secret_signing_key,
+        algorithm="HS256",
+    )
+    assert_that(
+        calling(get_authenticated_user).with_args(
+            token=token,
+            config=cast(Config, config),
+            user_repository=cast(UserRepository, DummyUserRepo(user)),
+            organization_user_repository=cast(OrganizationUserRepository, DummyOrgUserRepo([])),
+        ),
+        raises(CredentialsException),
+    )

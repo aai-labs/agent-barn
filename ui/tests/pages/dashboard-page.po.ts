@@ -37,6 +37,35 @@ export class DashboardPage {
     return this.page.getByRole("heading", { name: "Your team" });
   }
 
+  agentCard(name: string): Locator {
+    return this.page.getByRole("link", { name: `View ${name}`, exact: true });
+  }
+
+  lastMessageTime(name: string): Locator {
+    return this.agentCard(name).locator("time");
+  }
+
+  async openAgent(name: string, keyboard = false) {
+    const card = this.agentCard(name);
+    if (keyboard) {
+      await card.focus();
+      await card.press("Enter");
+    } else {
+      await card.click();
+    }
+  }
+
+  async searchTeammates(value: string) {
+    await this.page.getByRole("searchbox", { name: "Search displayed teammates" }).fill(value);
+  }
+
+  async cardFooterBottomGap(name: string): Promise<number> {
+    return this.agentCard(name).evaluate((card) => {
+      const footer = card.lastElementChild!;
+      return card.getBoundingClientRect().bottom - footer.getBoundingClientRect().bottom;
+    });
+  }
+
   async gotoUsers() {
     await this.page.goto("/dashboard/platform/users");
   }

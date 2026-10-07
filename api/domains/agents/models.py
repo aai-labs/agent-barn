@@ -2,7 +2,7 @@ import enum
 import json
 import re
 from datetime import datetime
-from typing import Any, Literal, Self
+from typing import Any, Literal, NamedTuple, Self
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -335,6 +335,7 @@ class Agent(BaseModel, table=True):
             "+ (agent_template_override_version_id IS NOT NULL)::integer = 1)",
             name="ck_agent_template_pin_state",
         ),
+        sa.CheckConstraint("llm_budget_usd IS NULL OR llm_budget_usd >= 0", name="check_agent_llm_budget_non_negative"),
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
@@ -353,6 +354,8 @@ class Agent(BaseModel, table=True):
     )
     name: str = SqlField(nullable=False, max_length=255)
     litellm_key_encrypted: str = SqlField(nullable=False, default="")
+    # Only a digest is persisted; the fresh plaintext key belongs to the runtime Secret.
+    memory_key_hash: str | None = SqlField(default=None, nullable=True, max_length=64, unique=True, index=True)
     status: AgentStatus = SqlField(
         default=AgentStatus.STOPPED,
         sa_column=Column(Enum(AgentStatus), nullable=False, server_default="STOPPED"),
@@ -420,6 +423,30 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # Opt-in Agent Memory. Turning it off stops recall and retain but keeps stored memories.
+    memory_enabled: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
+    # The Agent's own spend limit (USD), enforced on its LiteLLM key. NULL follows the
+    # Organization's default Agent limit. Never above the Organization's own limit.
+    llm_budget_usd: float | None = SqlField(default=None, nullable=True)
+    # Spend snapshot and alert state, refreshed on a schedule — the same shape and
+    # reasoning as the Organization's: surfaces read this, never the proxy, and NULL
+    # spend means "not yet observed", never zero.
+    llm_spend_usd: float | None = SqlField(default=None, nullable=True)
+    llm_spend_observed_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    llm_budget_renews_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    llm_alerted_threshold: int | None = SqlField(default=None, nullable=True)
+    llm_alert_key: str | None = SqlField(default=None, nullable=True, max_length=128)
 
 
 class AgentAccess(BaseModel, table=True):
@@ -1285,6 +1312,14 @@ class AgentProvisioningErrorRead(PydanticBaseModel):
     detail: str | None = None
 
 
+class AgentCreatorRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    full_name: str | None
+    email: str
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1318,14 +1353,32 @@ class AgentRead(PydanticBaseModel):
     native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    memory_enabled: bool = False
     last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
+    creator: AgentCreatorRead | None = None
+    #: Latest recorded inbound or outbound message, withheld without activity.read.
+    last_message_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
+
+
+class PlatformAgentIdentity(NamedTuple):
+    """An Agent as the Platform view may name it: identity and lifecycle, nothing more.
+
+    A fixed column list rather than the Agent row, per the Platform oversight ADR's
+    explicit-allowlist rule.
+    """
+
+    id: UUID
+    name: str
+    status: AgentStatus
+    organization_id: UUID
+    organization_name: str
 
 
 class AgentRuntimeDiagnosticsRead(PydanticBaseModel):
@@ -1373,3 +1426,63 @@ class AgentLogHistoryRead(PydanticBaseModel):
     has_more: bool
     session_ended_at: datetime | None = None
     next_snapshot_id: UUID | None = None
+
+
+class AgentLlmBudgetState(str, enum.Enum):
+    OK = "ok"
+    WARNING = "warning"
+    EXHAUSTED = "exhausted"
+    # Spend has never been observed: we do not know it is fine, only that we have not
+    # looked yet.
+    UNKNOWN = "unknown"
+
+
+# Where an Agent's limit in force comes from: its own, the Organization's default for
+# Agents, or the Organization's own limit holding either of those down.
+AgentLlmBudgetSource = Literal["agent", "default", "organization"]
+
+
+class AgentLlmBudgetRead(PydanticBaseModel):
+    """An Agent's spend limit and what it has spent against it.
+
+    Readable by anyone who may read the Agent's costs (`cost.read` on the Agent).
+    """
+
+    # The limit in force on the Agent's key.
+    limit_usd: float
+    # The Agent's own limit, or None when it follows the Organization's default.
+    own_limit_usd: float | None = None
+    # Where `limit_usd` comes from: the Agent's own limit, or the default. A default
+    # or own limit above the Organization's is held to the Organization's instead.
+    source: AgentLlmBudgetSource
+    # What an Agent without a limit of its own gets, for "use default ($X)". Only for
+    # callers who may change the limit (`can_manage`); None otherwise.
+    default_limit_usd: float | None = None
+    # The ceiling an Agent's own limit may not exceed: the Organization's limit. Only
+    # for callers who may change the limit (`can_manage`); None otherwise.
+    organization_limit_usd: float | None = None
+    window: str
+    state: AgentLlmBudgetState
+    spend_usd: float | None = None
+    renews_at: datetime | None = None
+    can_manage: bool = False
+
+
+class AgentLlmBudgetListItem(PydanticBaseModel):
+    """One row of the Organization's Agent spend-limit overview."""
+
+    agent_id: UUID
+    agent_name: str
+    limit_usd: float
+    own_limit_usd: float | None = None
+    source: AgentLlmBudgetSource
+    state: AgentLlmBudgetState
+    spend_usd: float | None = None
+
+
+class AgentLlmBudgetUpdate(PydanticBaseModel):
+    """An Agent's own spend limit. Null follows the Organization's default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    budget_usd: float | None = Field(ge=0, allow_inf_nan=False)

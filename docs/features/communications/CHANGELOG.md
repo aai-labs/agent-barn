@@ -13,6 +13,20 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-04 — local Web Chat reload recovery
+
+- Fixed: the local Communications server has a five-second graceful shutdown
+  bound in Compose and both Make entrypoints, so active runtime control streams
+  cannot block code reloads indefinitely. Pending messages remain durable and
+  runtimes reconnect after reload. No protocol or production deployment change.
+- Verified: the real Uvicorn reload regression fails without the timeout and
+  passes for both Compose and native launch commands with an open control stream.
+  API lint, formatting, types, and Make command parsing pass. The running local
+  gateway has been recreated with the new timeout.
+### 2026-10-02 — Drop the gateway messaging policy from AGENTS.md — PR pending
+
+- Changed: The "Message Delivery" section appended to every Agent's AGENTS.md (from [PR #188](https://github.com/aai-labs/agent-barn/pull/188)) is removed. It told Agents to send through the deprecated `agentbarn-message` client and never to call the message tool from a cron run. Since OpenClaw Slack and Discord run in OpenClaw's own gateway, native Agents read it as binding and refused sends their gateway supports: a Pipedrive Sales Analyst Agent refused to post its scheduled daily update as a header message with the update in its thread. A "Scheduled runs" section keeps the runtime-neutral rule that an empty scheduled run returns a silence marker.
+
 ### 2026-09-30 — Use Agent identity in the Slack manifest — PR pending
 
 - Changed: the copied Slack manifest uses the active Agent configuration's description for `display_information.description` and the Agent's name for `display_information.name`, bounded to Slack's 140- and 35-character limits. The bot-user display name is a lowercase `a-z0-9._-` form of the Agent name, capped at 80 characters; names with no ASCII form fall back to `agent-` plus the name's hex code points. Names and descriptions are trimmed.

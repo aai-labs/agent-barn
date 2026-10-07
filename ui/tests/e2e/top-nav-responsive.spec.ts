@@ -7,8 +7,10 @@ import { DashboardPage } from "../pages/dashboard-page.po";
  * The top nav is a single flex row whose children default to `min-width: auto`,
  * so without explicit shrink rules it forces the page wider than the viewport
  * instead of adapting. Below `lg` the tabs move into a drawer; at `lg` and up
- * they stay inline. `lg` is the threshold because Platform view needs ~1079px
- * to lay its tabs out at full spacing, so every tablet width gets the drawer.
+ * they stay inline with compact spacing until `xl`. The Platform view has nine tabs,
+ * including Settings and Resources, which do not fit at either spacing boundary
+ * (73px short at 1024px, 17px short at 1280px), so it keeps them in the drawer until
+ * 1360px.
  * These specs pin the outcomes — the page never scrolls sideways and every tab
  * stays reachable — not the utilities behind them.
  */
@@ -150,23 +152,54 @@ test.describe("Top nav responsiveness", () => {
     });
   });
 
-  test.describe("at the narrowest inline width", () => {
-    test.use({ viewport: { width: 1024, height: 900 } });
+  test.describe("at the narrowest inline width of the Platform view", () => {
+    test.use({ viewport: { width: 1360, height: 900 } });
 
-    test("fits every tab without an internal scroll", async ({ page }) => {
+    test("fits every platform tab, Settings and Resources included, without an internal scroll", async ({
+      page,
+    }) => {
       await dashboardPage.gotoUsers();
 
       const nav = page.locator("header nav");
       await expect(nav).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Settings", exact: true })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Resources", exact: true })).toBeVisible();
 
-      const navCutOff = await nav.evaluate(
-        (el) => el.scrollWidth > el.clientWidth,
-      );
+      const navCutOff = await nav.evaluate((el) => el.scrollWidth > el.clientWidth);
 
       expect(navCutOff).toBe(false);
       expect(await horizontalOverflow(page)).toBe(0);
     });
   });
+
+  // Both inline spacing boundaries: where compact spacing starts and where the roomier one does.
+  for (const width of [1024, 1280]) {
+    test.describe(`at the inline spacing boundary (${width}px)`, () => {
+      test.use({ viewport: { width, height: 900 } });
+
+      test("keeps the platform tabs in the drawer rather than cutting them off", async ({ page }) => {
+        await dashboardPage.gotoUsers();
+
+        await expect(page.locator("header nav")).toBeHidden();
+        await page.getByRole("button", { name: "Open navigation" }).click();
+        const drawer = page.getByRole("dialog");
+        for (const tab of ["Resources", "Settings"]) {
+          await expect(drawer.getByRole("link", { name: tab, exact: true })).toBeVisible();
+        }
+        expect(await horizontalOverflow(page)).toBe(0);
+      });
+
+      test("keeps the organization tabs inline and uncut", async ({ page }) => {
+        await dashboardPage.goto();
+
+        const nav = page.locator("header nav");
+        await expect(nav).toBeVisible();
+        await expect(page.getByRole("button", { name: "Open navigation" })).toBeHidden();
+        expect(await nav.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(false);
+        expect(await horizontalOverflow(page)).toBe(0);
+      });
+    });
+  }
 
   test.describe("on a desktop viewport", () => {
     test.use({ viewport: { width: 1440, height: 900 } });

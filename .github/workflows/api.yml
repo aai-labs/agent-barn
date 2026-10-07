@@ -26,6 +26,10 @@ jobs:
         run: uv sync --frozen
       - run: make check-api
       - run: make check-migrations
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - run: make check-memory
 
   test:
     name: Test

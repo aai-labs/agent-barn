@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
@@ -71,8 +71,9 @@ def list_template_versions(
     template_key: str,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[TemplateService, Injected(TemplateService)],
+    include_platform: bool = False,
 ):
-    return service.list_template_versions(template_key, context)
+    return service.list_template_versions(template_key, context, include_platform=include_platform)
 
 
 @templates_router.get("/{template_key}/draft", response_model=AgentTemplateDraftRead)
@@ -92,8 +93,9 @@ def start_org_draft(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[TemplateService, Injected(TemplateService)],
     source_version: Annotated[int | None, Query(ge=1)] = None,
+    source_scope: Literal["organization", "platform"] | None = None,
 ):
-    return service.start_org_draft(template_key, source_version, context)
+    return service.start_org_draft(template_key, source_version, context, source_scope=source_scope)
 
 
 @templates_router.patch("/{template_key}/draft", response_model=AgentTemplateDraftRead)
