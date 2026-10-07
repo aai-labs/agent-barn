@@ -22,8 +22,9 @@ _IDLE_SECONDS = 5.0
 # Forwarding re-checks this often for retries that came due, and sooner when woken.
 _FORWARD_INTERVAL_SECONDS = 1.0
 # Updates are processed in chunks, renewing the lease before each, so a long
-# pass never outlives it and overlaps a replica that took over.
-_PROCESS_CHUNK = 25
+# pass never outlives it and overlaps a replica that took over. An update can
+# take about 7s (a budget wait and a send), so a chunk fits well inside 60s.
+_PROCESS_CHUNK = 5
 _BACKOFF_INITIAL_SECONDS = 1.0
 _BACKOFF_MAX_SECONDS = 60.0
 # Private chats only: messages, their edits, button presses (including runtime
@@ -69,7 +70,7 @@ class AgentBarnTelegramIngress:
         while not stop.is_set():
             if self.holds_lease:
                 try:
-                    await asyncio.to_thread(self.forwarder.forward_due)
+                    await asyncio.to_thread(self.forwarder.forward_due, leading=lambda: self.holds_lease)
                 except Exception as exc:
                     logger.warning("Agent Barn Telegram forwarding failed (%s)", type(exc).__name__)
             try:

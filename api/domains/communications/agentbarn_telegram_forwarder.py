@@ -1,6 +1,7 @@
 import enum
 import json
 import logging
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -32,6 +33,9 @@ _REQUEST_TIMEOUT_SECONDS = 10
 _CONNECT_TIMEOUT_SECONDS = 2
 _WORKERS = 8
 _BATCH = 100
+# A user with a backlog gets this many deliveries per pass, so one slow Agent's
+# queue cannot hold a pass, and every other user's turn, for long.
+_PER_USER_PER_PASS = 10
 _SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 # Settled rows only stop re-deliveries, which Telegram ends within a day; a week is ample.
 _SETTLED_RETENTION = timedelta(days=7)
@@ -87,7 +91,8 @@ class AgentBarnTelegramForwarder:
     )
     _purged_at: datetime | None = field(default=None, init=False)
 
-    def forward_due(self, *, now: datetime | None = None) -> int:
+    def forward_due(self, *, now: datetime | None = None, leading: Callable[[], bool] = lambda: True) -> int:
+        """Deliver what is due; `leading` is asked before each delivery and stops it once the lease is gone."""
         now = now or datetime.now(UTC)
         if self._purged_at is None or now - self._purged_at >= _PURGE_INTERVAL:
             self.repository.purge_settled(settled_before=now - _SETTLED_RETENTION)
@@ -98,14 +103,22 @@ class AgentBarnTelegramForwarder:
         if not heads:
             return 0
         with ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="agentbarn-telegram-forward") as pool:
-            return sum(pool.map(lambda head: self._deliver_user_queue(head, now), heads))
+            return sum(pool.map(lambda head: self._deliver_user_queue(head, now, leading), heads))
 
-    def _deliver_user_queue(self, head: AgentBarnTelegramUpdate, now: datetime) -> int:
-        """Deliver one user's updates oldest first, stopping at the first that is not accepted."""
+    def _deliver_user_queue(
+        self, head: AgentBarnTelegramUpdate, now: datetime, leading: Callable[[], bool]
+    ) -> int:
+        """Deliver some of one user's updates oldest first, stopping at the first that is not accepted."""
         forwarded = 0
         update: AgentBarnTelegramUpdate | None = head
         try:
-            while update is not None and self._due(update, now) and self._deliver(update, now):
+            while (
+                update is not None
+                and forwarded < _PER_USER_PER_PASS
+                and leading()
+                and self._due(update, now)
+                and self._deliver(update, now)
+            ):
                 forwarded += 1
                 assert update.telegram_user_id is not None
                 update = self.repository.queue_head_for_user(update.telegram_user_id)

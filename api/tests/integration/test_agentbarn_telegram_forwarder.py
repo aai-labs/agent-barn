@@ -142,10 +142,10 @@ def _queue(context, text: str, user: int = _JANE, *, received_at: datetime | Non
     return update_id
 
 
-def _forward(context, pod: Pod, now: datetime | None = None) -> None:
+def _forward(context, pod: Pod, now: datetime | None = None, *, leading=lambda: True) -> None:
     forwarder = context.injector.get(AgentBarnTelegramForwarder)
     forwarder.client = httpx.Client(transport=httpx.MockTransport(pod))
-    forwarder.forward_due(now=now or datetime.now(UTC))
+    forwarder.forward_due(now=now or datetime.now(UTC), leading=leading)
 
 
 def _row(context, update_id: int) -> AgentBarnTelegramUpdate:
@@ -422,3 +422,32 @@ def test_forwarded_messages_are_purged_a_week_later_at_most_hourly() -> None:
 def _rows(context) -> list[int]:
     with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
         return list(session.exec(select(AgentBarnTelegramUpdate.update_id)))
+
+
+def test_a_long_backlog_is_delivered_a_few_at_a_time_so_others_get_a_turn() -> None:
+    with given(_given()) as context:
+        for number in range(12):
+            _queue(context, f"message {number}")
+        pod = Pod()
+
+        with when("the forwarder runs twice"):
+            _forward(context, pod)
+            first_pass = len(pod.received)
+            _forward(context, pod)
+
+        with then("the first pass delivers a capped share, and the next one the rest, in order"):
+            assert_that(first_pass, equal_to(10))
+            assert_that(pod.texts(), equal_to([f"message {number}" for number in range(12)]))
+
+
+def test_a_replica_that_no_longer_holds_the_lease_delivers_nothing() -> None:
+    with given(_given()) as context:
+        update_id = _queue(context, "hello")
+        pod = Pod()
+
+        with when("the forwarder runs after the lease moved to another replica"):
+            _forward(context, pod, leading=lambda: False)
+
+        with then("the update stays queued for the new holder"):
+            assert_that(pod.received, equal_to([]))
+            assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))

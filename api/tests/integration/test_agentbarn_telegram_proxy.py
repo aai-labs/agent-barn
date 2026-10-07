@@ -532,7 +532,6 @@ def test_only_the_checked_values_are_forwarded() -> None:
         {"chat_id": 5550002, "message_id": 7},
         json.dumps({"chat_id": 5550002, "message_id": 7}),
         {"chat_id": "@somechannel", "message_id": 7},
-        "not json",
     ],
 )
 def test_a_reply_cannot_quote_a_chat_not_linked_to_this_agent(reply_parameters) -> None:
@@ -544,6 +543,22 @@ def test_a_reply_cannot_quote_a_chat_not_linked_to_this_agent(reply_parameters) 
 
         with then("it is refused before reaching Telegram"):
             assert_that(response.status_code, equal_to(403))
+            assert_that(context.telegram.received, equal_to([]))
+
+
+@pytest.mark.parametrize(
+    "reply_parameters",
+    ['{"chat_id": 5550002, "chat_id": %d, "message_id": 7}' % _JANE, "not json"],
+)
+def test_reply_parameters_text_that_could_be_read_two_ways_is_refused(reply_parameters: str) -> None:
+    with given(_GIVEN) as context:
+        with when("the agent sends reply parameters with a repeated key, or that are not JSON"):
+            response = _call(
+                context, "sendMessage", {"chat_id": _JANE, "text": "see this", "reply_parameters": reply_parameters}
+            )
+
+        with then("it is refused as malformed before reaching Telegram"):
+            assert_that(response.status_code, equal_to(400))
             assert_that(context.telegram.received, equal_to([]))
 
 

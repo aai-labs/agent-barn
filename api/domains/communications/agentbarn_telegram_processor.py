@@ -172,7 +172,13 @@ class AgentBarnTelegramUpdateProcessor:
     _sign_up_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def process_pending(self, *, limit: int = 100) -> int:
+        """Process up to `limit` received updates; return how many were done with.
+
+        Failed and held-back updates do not count, so a caller that keeps going
+        while a pass is full does not retry a failure straight away.
+        """
         updates = self.repository.received_updates(limit=limit)
+        done = 0
         # A user's later updates wait behind one of theirs that failed, keeping their order.
         held_back: set[int] = set()
         for update in updates:
@@ -181,13 +187,14 @@ class AgentBarnTelegramUpdateProcessor:
                 continue
             try:
                 self._process(update)
+                done += 1
             except Exception as exc:
                 # Content stays out of the log.
                 logger.warning("Agent Barn Telegram update %s failed (%s)", update.update_id, type(exc).__name__)
                 if user_id is not None:
                     held_back.add(user_id)
                 self._record_failure(update)
-        return len(updates)
+        return done
 
     def _record_failure(self, update: AgentBarnTelegramUpdate) -> None:
         try:

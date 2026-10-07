@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 _TELEGRAM = "https://api.telegram.org"
 _TIMEOUT_SECONDS = 60
-_CHAT_ID = re.compile(r"^-?\d+$")
+_CHAT_ID = re.compile(r"-?[0-9]+")
 _BLOCKED_BY_USER = "bot was blocked by the user"
 # Telegram file paths look like "photos/file_7.jpg"; nothing that could climb out
 # of the file area into the Bot API, which the real token would also unlock.
@@ -126,6 +126,19 @@ def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _strict_json(text: str | bytes) -> Any:
+    try:
+        return json.loads(text, object_pairs_hook=lambda pairs: _unique(list(pairs)))
+    except BadBotApiRequest:
+        raise
+    except ValueError as exc:
+        raise BadBotApiRequest("not valid JSON") from exc
+
+
+# Parameters the proxy reads inside of, which runtimes may send as JSON text.
+_CHECKED_JSON_TEXT = ("reply_parameters",)
+
+
 def parse_bot_api_request(
     query: list[tuple[str, str]],
     content_type: str | None,
@@ -143,12 +156,7 @@ def parse_bot_api_request(
     if not body and media_type != _MULTIPART:
         return BotApiRequest(params=params)
     if media_type == _JSON:
-        try:
-            parsed = json.loads(body, object_pairs_hook=lambda pairs: _unique(list(pairs)))
-        except BadBotApiRequest:
-            raise
-        except ValueError as exc:
-            raise BadBotApiRequest("body is not valid JSON") from exc
+        parsed = _strict_json(body)
         if not isinstance(parsed, dict):
             raise BadBotApiRequest("body must be a JSON object")
         body_params, encoding, files = parsed, "json", ()
@@ -168,7 +176,12 @@ def parse_bot_api_request(
     overlap = params.keys() & body_params.keys()
     if overlap:
         raise BadBotApiRequest(f"parameter {min(overlap)} given twice")
-    return BotApiRequest(params={**params, **body_params}, encoding=encoding, files=files)
+    merged = {**params, **body_params}
+    for name in _CHECKED_JSON_TEXT:
+        if isinstance(merged.get(name), str):
+            # Checked and forwarded as one reading, never as the text received.
+            merged[name] = json.dumps(_strict_json(merged[name]))
+    return BotApiRequest(params=merged, encoding=encoding, files=files)
 
 
 @dataclass(frozen=True)
@@ -326,7 +339,7 @@ class AgentBarnTelegramProxy:
                 values.append(reply["chat_id"])
         chats: set[int] = set()
         for value in values:
-            if isinstance(value, bool) or not _CHAT_ID.match(str(value)):
+            if isinstance(value, bool) or not _CHAT_ID.fullmatch(str(value)):
                 return None
             chats.add(int(value))
         return chats

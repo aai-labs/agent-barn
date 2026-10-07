@@ -259,7 +259,7 @@ def test_long_processing_renews_the_lease_between_chunks() -> None:
     repository.claim_ingress_lease.return_value = True
     processor = Mock()
     # Two full chunks, then a partial one that ends the pass.
-    processor.process_pending.side_effect = [25, 25, 3]
+    processor.process_pending.side_effect = [5, 5, 3]
 
     _run_cycle(_ingress(repository, processor=processor))
 
@@ -271,7 +271,7 @@ def test_processing_stops_at_the_chunk_where_the_lease_is_lost() -> None:
     repository = Mock()
     repository.claim_ingress_lease.side_effect = [True, False]
     processor = Mock()
-    processor.process_pending.return_value = 25
+    processor.process_pending.return_value = 5
 
     _run_cycle(_ingress(repository, processor=processor))
 

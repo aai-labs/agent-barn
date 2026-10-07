@@ -1,5 +1,6 @@
 import logging
 from types import SimpleNamespace
+from urllib.parse import quote
 from typing import cast
 from unittest.mock import Mock
 from uuid import uuid4
@@ -127,3 +128,33 @@ def test_a_well_formed_request_is_read_with_its_encoding() -> None:
     assert parse_bot_api_request(
         [], "multipart/form-data; boundary=x", b"", [("chat_id", "1"), ("photo", photo)]
     ) == BotApiRequest(params={"chat_id": "1"}, encoding="multipart", files=(photo,))
+
+
+_FORM = "application/x-www-form-urlencoded"
+
+
+@pytest.mark.parametrize(
+    ("content_type", "body"),
+    [
+        (_FORM, b"chat_id=1&reply_parameters=" + quote('{"chat_id": 999, "chat_id": 1, "message_id": 7}').encode()),
+        ("application/json", b'{"chat_id": 1, "reply_parameters": "{\\"chat_id\\": 999, \\"chat_id\\": 1}"}'),
+        (_FORM, b"chat_id=1&reply_parameters=" + quote("{not json").encode()),
+    ],
+)
+def test_reply_parameters_sent_as_text_are_read_as_strictly_as_the_body(content_type: str, body: bytes) -> None:
+    # A JSON string the proxy read one way could be read another way by Telegram.
+    with pytest.raises(BadBotApiRequest):
+        parse_bot_api_request([], content_type, body)
+
+
+def test_reply_parameters_sent_as_text_are_forwarded_as_read() -> None:
+    body = b"chat_id=1&reply_parameters=" + quote('{ "chat_id":1,"message_id" : 7 }').encode()
+
+    request = parse_bot_api_request([], _FORM, body)
+
+    assert request.params["reply_parameters"] == '{"chat_id": 1, "message_id": 7}'
+
+
+@pytest.mark.parametrize("chat_id", ["123\n", "\u0661\u0662\u0663", " 123", "+123"])
+def test_only_plain_ascii_chat_ids_are_accepted(chat_id: str) -> None:
+    assert AgentBarnTelegramProxy._named_chats({"chat_id": chat_id}) is None

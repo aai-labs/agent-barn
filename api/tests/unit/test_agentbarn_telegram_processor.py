@@ -29,5 +29,6 @@ def test_one_failing_update_does_not_hold_up_the_rest() -> None:
     processed = processor.process_pending()
 
     # The first stays RECEIVED for the next pass; the second is still settled.
-    assert processed == 2
+    # Only the settled one counts, so a backlog does not retry the failure at once.
+    assert processed == 1
     assert [call.args[0] for call in repository.settle_update.call_args_list] == [1, 2]
