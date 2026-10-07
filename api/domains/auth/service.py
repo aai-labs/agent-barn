@@ -277,21 +277,17 @@ class AuthService:
     ) -> User:
         validate_strong_password(reset_request.new_password)
         reset_token = self.verify_password_reset_token(reset_request.token)
-        user = self.user_repository.get(reset_token.user_id)
-        if not user:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-        user.hashed_password = hash_text(reset_request.new_password)
-        user.security_stamp = uuid7().hex
-        if mark_email_verified and user.email_verified_at is None:
-            user.email_verified_at = datetime.now(UTC)
-        # On invite acceptance the user provides their own (authoritative) name.
-        if full_name is not None:
-            user.full_name = full_name
-        self.user_repository.save(user)
-
-        reset_token.is_used = True
-        self.pwd_reset_token_repository.save(reset_token)
+        redeemed = self.pwd_reset_token_repository.redeem(
+            reset_token.id,
+            hashed_password=hash_text(reset_request.new_password),
+            security_stamp=uuid7().hex,
+            mark_email_verified=mark_email_verified,
+            full_name=full_name,
+        )
+        if redeemed is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
+        user, delivery_ids = redeemed
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         return user
 
     def reset_password(self, reset_request: PasswordResetRequest):

@@ -44,6 +44,7 @@ from api.domains.events.catalog import (
     TEMPLATE_DELETED,
     TEMPLATE_UPDATED,
     USER_LOGGED_IN,
+    USER_SIGNED_UP,
 )
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.security_audit import SecurityAuditProjection
@@ -73,6 +74,7 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
         (ORGANIZATION_UPDATED, {PRODUCT_ANALYTICS_HANDLER}),
         (ORGANIZATION_DELETED, {PRODUCT_ANALYTICS_HANDLER}),
         (USER_LOGGED_IN, {PRODUCT_ANALYTICS_HANDLER}),
+        (USER_SIGNED_UP, {PRODUCT_ANALYTICS_HANDLER}),
         (AGENT_UPDATED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (AGENT_STARTED, {AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (AGENT_STOPPED, {AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER}),

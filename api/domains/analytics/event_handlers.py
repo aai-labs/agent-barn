@@ -23,6 +23,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_UPDATED,
     PRODUCT_ANALYTICS_HANDLER,
     USER_LOGGED_IN,
+    USER_SIGNED_UP,
 )
 from api.domains.events.handlers import (
     EventDeliveryContext,
@@ -54,6 +55,7 @@ _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     ORGANIZATION_UPDATED: ("changed_fields",),
     ORGANIZATION_DELETED: (),
     USER_LOGGED_IN: ("method",),
+    USER_SIGNED_UP: (),
     ORGANIZATION_MEMBER_ADDED: ("membership_id", "role"),
     ORGANIZATION_MEMBER_REMOVED: ("membership_id", "role"),
     ORGANIZATION_ROLE_CHANGED: ("membership_id", "previous_role", "new_role"),

@@ -53,6 +53,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `organization.updated` | `changed_fields` (`name` and/or `description`; field names only, never values) |
 | `organization.deleted` | none (the Owner who deleted it is the person; sent after the Organization and its Memberships are gone) |
 | `user.logged_in` | `method` (`password`); platform-scoped, so installation group only. Failed logins, token refresh and API-key requests are not logins |
+| `user.signed_up` | none; platform-scoped. Public signup is disabled, so this is the first invite acceptance (`POST /auth/set-password` on a user whose email is not yet verified). Known gap: an invitee who first gets in through forgot-password never emits it |
 
 The common set is `source`, `installation_id`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`. When user details are enabled, `$set` (email and name) is added.
 

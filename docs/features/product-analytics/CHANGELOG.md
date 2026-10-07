@@ -35,11 +35,24 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: local end-to-end verification against a recording stub (see the 2026-10-06 entry). A one-off check against the real project from a local stack, labelled `local-dev-test` at the user's request, showed the events arriving in Live Events.
 - In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle.
 - Also delivered: the handler supports platform-scoped events (installation group only).
-- Also delivered: `organization.created`, `organization.updated`, `organization.deleted`, `user.logged_in`.
-- Next: `user.signed_up`, hourly message counts. Then the production confirmation after release.
+- Also delivered: `organization.created`, `organization.updated`, `organization.deleted`, `user.logged_in`, `user.signed_up`.
+- Next: hourly message counts. Then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-07 — AF-357 — user.signed_up
+
+- Delivered: `user.signed_up` (platform scope, User actor and subject, payload `user_id`), sent to `product_analytics.posthog` only.
+  - The new `PasswordResetTokenRepository.redeem` replaces the two separate saves in `_apply_new_password` with one locked transaction: token and user, then the password, token used, and the event when this is the first invite acceptance.
+  - That also makes a concurrent double accept impossible.
+  - Known gap: an invitee who first enrolls through forgot-password emits no `user.signed_up`.
+- Changed: `events/catalog.py`, `auth/repository.py` (`PasswordResetTokenRepository` now injects `OutboxMessageRepository`), `auth/service.py`, `analytics/event_handlers.py`, `product-analytics.md`, `domain-events.md`.
+- Verified:
+  - The new `test_user_signed_up_event.py` tests pass: the first accept, a reused token, a password reset, and an atomic rollback when the event write fails.
+  - The wiring row passes.
+  - The regression suites pass: `test_auth_flow_extended`, `test_organization_members`, `test_platform_admin_operations`, `test_set_password` (79 passed).
+- Follow-up: hourly message counts.
 
 ### 2026-10-07 — AF-357 — user.logged_in
 
