@@ -41,6 +41,19 @@ export class DashboardPage {
     return this.page.getByRole("link", { name: `View ${name}`, exact: true });
   }
 
+  hireCard(): Locator {
+    return this.page.getByRole("button", { name: "Hire a teammate", exact: true });
+  }
+
+  async openHireCard(keyboard = false) {
+    if (keyboard) {
+      await this.hireCard().focus();
+      await this.hireCard().press("Enter");
+    } else {
+      await this.hireCard().click();
+    }
+  }
+
   lastMessageTime(name: string): Locator {
     return this.agentCard(name).locator("time");
   }

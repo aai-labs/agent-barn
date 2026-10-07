@@ -69,8 +69,10 @@ The card shows relative recency alongside an exact timestamp in the reader's
 local time zone. Late ingestion uses occurrence time rather than insertion time.
 
 Team cards are whole-card links with keyboard navigation and no separate Open
-button. Hiring a teammate is a header action instead of a grid tile. Their last-message
-footer stays at the bottom even when names or pending model notes wrap. The
+button. A single “Hire a teammate” card follows the displayed teammates in the
+dashboard grid and opens the hiring dialog with a click or keyboard activation.
+It remains available when the team is empty or search has no matches. Teammate
+cards' last-message footers stay at the bottom even when names or pending model notes wrap. The
 dashboard search filters the currently loaded page, and identifies that limit
 when more Agents exist than are loaded.
 
