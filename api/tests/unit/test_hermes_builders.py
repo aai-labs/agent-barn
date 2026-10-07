@@ -31,7 +31,12 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
 def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == [
+        "telemetry-push",
+        "agentbarn-messaging",
+        "agentbarn-observer",
+        "agentbarn-slack-access",
+    ]
     assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
     assert config["platforms"]["slack"]["extra"]["markdown_blocks"] is True
     assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
@@ -54,7 +59,9 @@ def test_native_slack_env_maps_connection_policy() -> None:
     assert locked["SLACK_APP_TOKEN"] == "xapp-1"
     assert locked["SLACK_ALLOWED_CHANNELS"] == "C1,C2"
     assert locked["SLACK_DISABLE_DMS"] == "true"
-    assert locked["SLACK_ALLOW_ALL_USERS"] == "true"
+    assert "SLACK_ALLOW_ALL_USERS" not in locked
+    assert locked["AGENTBARN_SLACK_DM_POLICY"] == "off"
+    assert locked["AGENTBARN_SLACK_GROUP_POLICY"] == "allowlist"
     assert locked["SLACK_THREAD_REQUIRE_MENTION"] == "true"
 
     open_env = native_slack_env(
@@ -68,7 +75,10 @@ def test_native_slack_env_maps_connection_policy() -> None:
     )
     assert "SLACK_ALLOWED_CHANNELS" not in open_env
     assert open_env["SLACK_DISABLE_DMS"] == "false"
-    assert open_env["SLACK_ALLOWED_USERS"] == "U1"
+    assert open_env["AGENTBARN_SLACK_DM_ALLOWED_USERS"] == "U1"
+    assert "SLACK_ALLOWED_USERS" not in open_env
+    assert open_env["AGENTBARN_SLACK_DM_POLICY"] == "allowlist"
+    assert open_env["AGENTBARN_SLACK_GROUP_POLICY"] == "open"
     assert "SLACK_ALLOW_ALL_USERS" not in open_env
     assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
     assert open_env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
@@ -300,7 +310,7 @@ def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_def
     }
 
 
-def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() -> None:
+def test_config_map_contains_runtime_adapter_and_scoped_slack_access_plugin() -> None:
     config_map = build_hermes_config_map(
         _AGENT_ID,
         _ORG_ID,
@@ -320,6 +330,8 @@ def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() ->
     # Pinned Hermes ships no gateway:startup hook, so BOOT.md only runs if we drive it.
     assert "boot-run.py" in config_map.data
     assert "agentbarn_message.py" in config_map.data
+    assert "slack-access-plugin.yaml" in config_map.data
+    assert "slack-access-init.py" in config_map.data
     # OpenClaw's plugin has no business in a Hermes ConfigMap.
     assert "openclaw-messaging.js" not in config_map.data
     assert not any("allowlist" in name or "deny-dms" in name for name in config_map.data)

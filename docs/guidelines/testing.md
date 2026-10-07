@@ -232,7 +232,9 @@ hooks directly. Shared setup lives in
   and exercises its init container against a fresh root-owned Docker volume,
   verifies non-root writes to startup state and workspace, drives each native
   Telegram access policy through the pinned adapter and gateway authorization
-  chain, pins the Teams runtime listener's environment/port/path contract, and runs
+  chain, drives native Slack messages through the real adapter with independent
+  channel and DM policies (including empty allowlists), pins the Teams runtime
+  listener's environment/port/path contract, and runs
   the telemetry plugin against the real SessionStore. The workflow invokes this
   entrypoint when either the Hermes builder or base image changes.
 - The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
