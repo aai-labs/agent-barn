@@ -60,6 +60,7 @@ def test_startup_migrates_legacy_state_after_config_and_plugin_dirs_exist() -> N
     migration = START_SH.index("legacy-workspace-migration.sh")
 
     assert START_SH.index("init-openclaw.js") < migration
+    assert START_SH.index("init-openclaw.js") < START_SH.index("retire-messaging.py") < migration
     assert START_SH.index("$OBSERVER_DIR/openclaw.plugin.json") < migration
     assert migration < START_SH.index("OPENCLAW_VERSION=")
 

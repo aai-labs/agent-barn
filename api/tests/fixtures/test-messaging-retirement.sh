@@ -18,7 +18,7 @@ if kind == "hermes":
     (target / "hermes-config.yaml").write_text(yaml.safe_dump(build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")))
 else:
     config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", {
-        "telegram": native_telegram_channel({"allowed_chat_ids": ["-1009", "-1010"]}),
+        "telegram": native_telegram_channel({"allowed_chat_ids": ["-1009", "-1010"], "home_channel_id": "-1009"}),
     })
     (target / "openclaw-config-overlay.json").write_text(json.dumps(config))
 PY

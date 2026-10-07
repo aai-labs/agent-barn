@@ -14,6 +14,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-07 — Harden startup retirement audit — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Corrected: malformed jobs cannot abort startup or hide later repair warnings; managed files and symlinks are removed safely. Genuine required plugin-removal failures remain fatal.
+- Corrected: inactive jobs and OpenClaw main-session jobs without delivery are excluded. OpenClaw audits effective merged native defaults, avoiding both healthy-home warnings and stale saved-home acceptance. Jobs and historical spool remain untouched.
+- Verified: startup regression tests and fresh/upgraded/restored retirement checks in both pinned runtimes pass, including the actual OpenClaw cron delivery resolver.
+
 ### 2026-10-06 — Restore OpenClaw native message-tool access — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 
 - Corrected: bridge retirement no longer denies OpenClaw's native `message` tool. Explicit native sends and replies to an Agent's own messages can use the runtime transport; the retired gateway message endpoint remains `410`.

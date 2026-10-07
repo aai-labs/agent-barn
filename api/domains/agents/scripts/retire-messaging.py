@@ -23,7 +23,7 @@ def usable_target(value: object) -> bool:
 
 def retire(runtime: str, state: Path) -> dict:
     plugin = state / ("plugins" if runtime == "hermes" else "local-plugins") / "agentbarn-messaging"
-    if plugin.is_symlink():
+    if plugin.is_symlink() or (plugin.exists() and not plugin.is_dir()):
         plugin.unlink()
     elif plugin.exists():
         shutil.rmtree(plugin)
@@ -31,33 +31,48 @@ def retire(runtime: str, state: Path) -> dict:
     # Keep the spool as historical evidence. No SQLite read, drain, or receipt inference.
     report: dict = {"spool_present": (state / "agentbarn-messages.sqlite3").exists(), "jobs_requiring_repair": []}
     report["job_audit"] = "absent"
+    config = {}
+    if runtime == "openclaw":
+        try:
+            if (state / "openclaw.json").exists():
+                config = json.loads((state / "openclaw.json").read_text())
+                if not isinstance(config, dict) or not isinstance(config.get("channels", {}), dict):
+                    raise TypeError("Invalid native config")
+        except Exception:
+            config = {}
+            report["job_audit"] = "unreadable"
     stores = [state / "cron" / "jobs.json"]
     if runtime == "openclaw":
         stores.append(state / "state" / "openclaw.sqlite")
     for store in stores:
-        if not store.exists():
-            continue
         try:
+            if not store.exists():
+                continue
             if store.suffix == ".sqlite":
                 with closing(sqlite3.connect(f"{store.as_uri()}?mode=ro", uri=True)) as db:
                     exists = db.execute("SELECT 1 FROM sqlite_master WHERE name = 'cron_jobs'").fetchone()
-                    jobs = (
-                        [json.loads(row[0]) for row in db.execute("SELECT job_json FROM cron_jobs")] if exists else []
-                    )
+                    jobs = [row[0] for row in db.execute("SELECT job_json FROM cron_jobs")] if exists else []
             else:
                 stored = json.loads(store.read_text())
                 jobs = stored.get("jobs") if isinstance(stored, dict) else stored
-            if not isinstance(jobs, list) or any(not isinstance(job, dict) for job in jobs):
-                raise ValueError("Invalid job store")
-            for job in jobs:
-                if needs_repair(runtime, job):
-                    job_id = str(job.get("id") or job.get("jobId") or "unknown")
-                    report["jobs_requiring_repair"].append(
-                        job_id if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id) else "invalid-id"
-                    )
+            if not isinstance(jobs, list):
+                raise TypeError("Invalid job store")
+            for stored_job in jobs:
+                try:
+                    job = json.loads(stored_job) if store.suffix == ".sqlite" else stored_job
+                    if not isinstance(job, dict):
+                        raise TypeError("Invalid job")
+                    if needs_repair(runtime, job, config):
+                        job_id = str(job.get("id") or job.get("jobId") or "unknown")
+                        report["jobs_requiring_repair"].append(
+                            job_id if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", job_id) else "invalid-id"
+                        )
+                except Exception:
+                    # Advisory audit failures cannot stop startup or hide later jobs.
+                    report["job_audit"] = "unreadable"
             if report["job_audit"] != "unreadable":
                 report["job_audit"] = "read"
-        except (OSError, ValueError, sqlite3.Error):
+        except Exception:
             report["job_audit"] = "unreadable"
     try:
         state.mkdir(parents=True, exist_ok=True)
@@ -74,9 +89,15 @@ def retire(runtime: str, state: Path) -> dict:
     return report
 
 
-def needs_repair(runtime: str, job: dict) -> bool:
+def needs_repair(runtime: str, job: dict, config: dict | None = None) -> bool:
+    if job.get("enabled") is False:
+        return False
     if runtime == "hermes":
+        if job.get("state") in ("completed", "paused"):
+            return False
         origin = job.get("origin")
+        if isinstance(origin, dict) and not isinstance(origin.get("platform"), (str, type(None))):
+            raise TypeError("Invalid origin platform")
         for deliver in str(job.get("deliver", "local")).split(","):
             platform, separator, target = deliver.strip().partition(":")
             if platform in NATIVE_PLATFORMS:
@@ -97,13 +118,28 @@ def needs_repair(runtime: str, job: dict) -> bool:
                 return True
         return False
     delivery = job.get("delivery")
+    if delivery is None and job.get("sessionTarget") == "main":
+        return False
     if not isinstance(delivery, dict):
+        if delivery is not None:
+            raise TypeError("Invalid delivery")
         return True
     if delivery.get("mode") == "none":
         return False
-    return delivery.get("channel") not in {"slack", "discord", "telegram", "msteams"} or not usable_target(
-        delivery.get("to")
-    )
+    channel = delivery.get("channel")
+    if channel is None:
+        return True
+    if not isinstance(channel, str):
+        raise TypeError("Invalid delivery channel")
+    if channel not in {"slack", "discord", "telegram", "msteams"}:
+        return True
+    target = delivery.get("to")
+    if target is None or (isinstance(target, str) and not target.strip()):
+        native_channel = (config or {}).get("channels", {}).get(channel, {})
+        if not isinstance(native_channel, dict) or native_channel.get("enabled") is False:
+            return True
+        target = native_channel.get("defaultTo")
+    return not usable_target(target)
 
 
 if __name__ == "__main__":

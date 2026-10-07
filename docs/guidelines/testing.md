@@ -186,6 +186,8 @@ hooks directly. Shared setup lives in
   entrypoint when either the Hermes builder or base image changes.
 - `../../api/tests/fixtures/test-messaging-retirement.sh` exercises fresh, upgraded,
   and restored persistent state using generated configuration in both pinned images.
+  It covers malformed-job isolation, managed files, inactive/main-session jobs, effective
+  home targets, and rejection of stale saved defaults after OpenClaw configuration merge.
   Hermes image tests also drive native origin/home scheduled delivery and silence.
   `../../openclaw-base/test-native-runtime.sh` checks native one-shot scheduling,
   observer hooks, retirement, and native `message`/`cron` tool access. Its pinned-image

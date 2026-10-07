@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import {createOpenClawTools} from '/usr/local/lib/node_modules/openclaw/dist/openclaw-tools-CiSSm2Og.js';
 import {isToolAllowedByPolicyName, filterToolsByPolicy} from '/usr/local/lib/node_modules/openclaw/dist/tool-policy-match-BKTxaTvX.js';
 import {r as enforceCrossContextPolicy} from '/usr/local/lib/node_modules/openclaw/dist/outbound-policy-D8vGsf4T.js';
+import {l as resolveCronDeliveryContext} from '/usr/local/lib/node_modules/openclaw/dist/run-fallback-policy-BWPLlbqL.js';
 
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 process.env.TELEGRAM_BOT_TOKEN = '123:fixture';
@@ -23,6 +24,16 @@ function nativeMessageTool(cfg) {
 
 const message = nativeMessageTool(config);
 assert(isToolAllowedByPolicyName('cron', config.tools), 'native schedules must remain available');
+const mainDelivery = await resolveCronDeliveryContext({cfg: config, agentId: 'main', job: {
+  id: 'heartbeat-main', sessionTarget: 'main', payload: {kind: 'systemEvent'},
+}});
+assert.equal(mainDelivery.deliveryRequested, false);
+const homeDelivery = await resolveCronDeliveryContext({cfg: config, agentId: 'main', job: {
+  id: 'home', sessionTarget: 'isolated', payload: {kind: 'agentTurn'},
+  delivery: {mode: 'announce', channel: 'telegram'},
+}});
+assert.equal(homeDelivery.resolvedDelivery.ok, true, homeDelivery.resolvedDelivery.error?.message);
+assert.equal(homeDelivery.resolvedDelivery.to, '-1009');
 for (const [target, replyTo] of [['-1009', '77'], ['-1010', undefined]]) {
   const result = await message.execute('native-message-regression', {
     action: 'send', channel: 'telegram', target, replyTo,

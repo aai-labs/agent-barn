@@ -1,10 +1,10 @@
 #!/bin/sh
 set -e
+node /app/config/init-openclaw.js
 python3 /app/config/retire-messaging.py openclaw /home/node/.openclaw
 node /app/config/healthz-server.js &
 python3 /app/config/communications-runtime-adapter.py &
 python3 /app/config/agent-trigger-server.py &
-node /app/config/init-openclaw.js
 
 PLUGIN_DIR="/home/node/.openclaw/local-plugins/telemetry-push"
 mkdir -p "$PLUGIN_DIR"

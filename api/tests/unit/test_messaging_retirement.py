@@ -103,6 +103,127 @@ def test_unreadable_job_store_is_reported_without_content_or_changes(tmp_path):
     assert store.read_text() == "private corrupt job store"
 
 
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+@pytest.mark.parametrize("malformed", [[], {}])
+def test_malformed_job_does_not_abort_startup_or_hide_other_repairs(tmp_path, runtime, malformed):
+    bad = (
+        {"deliver": "origin", "origin": {"platform": malformed, "chat_id": "C1"}}
+        if runtime == "hermes"
+        else {"delivery": {"channel": malformed, "to": "C1"}}
+    )
+    jobs = tmp_path / "cron/jobs.json"
+    jobs.parent.mkdir()
+    jobs.write_text(json.dumps({"jobs": [bad, {"id": "legacy", "deliver": "origin", "delivery": {"channel": "last"}}]}))
+    before = jobs.read_bytes()
+    result = subprocess.run(
+        ["python3", str(_SCRIPTS / "retire-messaging.py"), runtime, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads((tmp_path / "retired-messaging-audit.json").read_text())
+    assert report["job_audit"] == "unreadable"
+    assert report["jobs_requiring_repair"] == ["legacy"]
+    assert jobs.read_bytes() == before
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+@pytest.mark.parametrize("kind", ["file", "symlink", "dangling-symlink"])
+def test_startup_removes_managed_non_directory_path_without_following_links(tmp_path, runtime, kind):
+    plugin = tmp_path / ("plugins" if runtime == "hermes" else "local-plugins") / "agentbarn-messaging"
+    plugin.parent.mkdir()
+    target = tmp_path / "native-package"
+    if kind == "file":
+        plugin.write_text("retired")
+    else:
+        if kind == "symlink":
+            target.write_text("preserved")
+        plugin.symlink_to(target)
+    _retirement().retire(runtime, tmp_path)
+    assert not plugin.exists() and not plugin.is_symlink()
+    if kind == "symlink":
+        assert target.read_text() == "preserved"
+
+
+def test_sqlite_malformed_row_does_not_hide_other_repairs(tmp_path):
+    store = tmp_path / "state/openclaw.sqlite"
+    store.parent.mkdir()
+    with sqlite3.connect(store) as db:
+        db.execute("CREATE TABLE cron_jobs (job_json TEXT)")
+        db.executemany("INSERT INTO cron_jobs VALUES (?)", [("private corrupt row",), (json.dumps({"id": "legacy"}),)])
+    before = store.read_bytes()
+    report = _retirement().retire("openclaw", tmp_path)
+    assert report["job_audit"] == "unreadable"
+    assert report["jobs_requiring_repair"] == ["legacy"]
+    assert store.read_bytes() == before
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_audit_skips_inactive_jobs_and_accepts_configured_native_home(tmp_path, runtime, monkeypatch):
+    monkeypatch.setenv("SLACK_HOME_CHANNEL", "C_HOME")
+    (tmp_path / "openclaw.json").write_text(json.dumps({"channels": {"slack": {"defaultTo": "channel:C_HOME"}}}))
+    jobs = tmp_path / "cron/jobs.json"
+    jobs.parent.mkdir()
+    jobs.write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {"id": "disabled", "enabled": False, "deliver": "origin", "delivery": {"channel": "last"}},
+                    {"id": "home", "deliver": "slack", "delivery": {"channel": "slack"}},
+                    *(
+                        [
+                            {"id": "completed", "state": "completed", "deliver": "origin"},
+                            {"id": "paused", "state": "paused", "deliver": "origin"},
+                        ]
+                        if runtime == "hermes"
+                        else [
+                            {"id": "heartbeat-main", "sessionTarget": "main", "payload": {"kind": "systemEvent"}},
+                            {
+                                "id": "skill-collection-review-main",
+                                "sessionTarget": "main",
+                                "payload": {"kind": "systemEvent"},
+                            },
+                        ]
+                    ),
+                    {"id": "legacy", "deliver": "origin", "delivery": {"channel": "last"}},
+                ]
+            }
+        )
+    )
+    before = jobs.read_bytes()
+    report = _retirement().retire(runtime, tmp_path)
+    assert report["job_audit"] == "read"
+    assert report["jobs_requiring_repair"] == ["legacy"]
+    assert jobs.read_bytes() == before
+
+
+@pytest.mark.parametrize("default", ["channel:__agentbarn_no_home_channel__", "connection:old:C1", "", None])
+def test_openclaw_missing_or_unusable_home_still_requires_repair(tmp_path, default):
+    config = {"channels": {"slack": {"defaultTo": default}}}
+    assert _retirement().needs_repair("openclaw", {"delivery": {"channel": "slack"}}, config)
+
+
+def test_openclaw_invalid_explicit_target_does_not_fall_back_to_home():
+    config = {"channels": {"slack": {"defaultTo": "channel:C_HOME"}}}
+    assert _retirement().needs_repair("openclaw", {"delivery": {"channel": "slack", "to": "connection:old:C1"}}, config)
+
+
+def test_required_plugin_removal_failure_remains_fatal(tmp_path, monkeypatch):
+    module = _retirement()
+    plugin = tmp_path / "plugins/agentbarn-messaging"
+    plugin.mkdir(parents=True)
+
+    def fail_removal(_path):
+        raise PermissionError("required cleanup failed")
+
+    monkeypatch.setattr(module.shutil, "rmtree", fail_removal)
+    with pytest.raises(PermissionError, match="required cleanup failed"):
+        module.retire("hermes", tmp_path)
+    assert plugin.exists()
+    assert not (tmp_path / "retired-messaging-audit.json").exists()
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="Root bypasses directory write permissions")
 @pytest.mark.parametrize("corrupt_store", [False, True])
 def test_unwritable_audit_report_does_not_block_startup(tmp_path, capsys, corrupt_store):
