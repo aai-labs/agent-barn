@@ -1,13 +1,18 @@
-import json
 import logging
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 from fastapi_injector import Injected
 
-from api.domains.communications.agentbarn_telegram_proxy import AgentBarnTelegramProxy
+from api.domains.communications.agentbarn_telegram_proxy import (
+    AgentBarnTelegramProxy,
+    BadBotApiRequest,
+    UploadedFile,
+    parse_bot_api_request,
+)
 from api.infrastructure.telegram.client import RedactBotTokens
 
 # The Telegram Bot API surface Agent runtimes on Agent Barn Telegram are pointed at.
@@ -25,25 +30,26 @@ async def telegram_bot_api(
     request: Request,
     proxy: Annotated[AgentBarnTelegramProxy, Injected(AgentBarnTelegramProxy)],
 ) -> JSONResponse:
-    body = await request.body()
     content_type = request.headers.get("content-type")
-    params: dict[str, Any] = dict(request.query_params)
-    if body and content_type and content_type.startswith("application/json"):
-        try:
-            parsed = json.loads(body)
-        except ValueError:
-            parsed = None
-        if isinstance(parsed, dict):
-            params.update(parsed)
-    elif (
-        body and content_type and content_type.startswith(("application/x-www-form-urlencoded", "multipart/form-data"))
-    ):
-        form = await request.form()
-        params.update({key: value for key, value in form.multi_items() if isinstance(value, str)})
-    if not body and params:
-        # Telegram accepts parameters in the query string; forward them as JSON.
-        body, content_type = json.dumps(params).encode(), "application/json"
-    response = proxy.handle(connection_id, token, method, params=params, body=body, content_type=content_type)
+    body = await request.body()
+    form: list[tuple[str, str | UploadedFile]] | None = None
+    if (content_type or "").split(";", 1)[0].strip().lower() == "multipart/form-data":
+        form = []
+        for key, value in (await request.form()).multi_items():
+            if isinstance(value, str):
+                form.append((key, value))
+            else:
+                upload = UploadedFile(key, value.filename or key, await value.read(), value.content_type)
+                form.append((key, upload))
+    try:
+        parsed = parse_bot_api_request(request.query_params.multi_items(), content_type, body, form)
+    except BadBotApiRequest as exc:
+        return JSONResponse(
+            status_code=400, content={"ok": False, "error_code": 400, "description": f"Bad Request: {exc}"}
+        )
+    # The proxy queries the database and waits on Telegram; off the event loop, one
+    # slow call cannot stall other Agents' calls or the shared-bot poller.
+    response = await run_in_threadpool(proxy.handle, connection_id, token, method, request=parsed)
     return JSONResponse(status_code=response.status_code, content=response.body)
 
 

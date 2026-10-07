@@ -8,7 +8,13 @@ import httpx
 import pytest
 
 from api.core.config import Config
-from api.domains.communications.agentbarn_telegram_proxy import AgentBarnTelegramProxy
+from api.domains.communications.agentbarn_telegram_proxy import (
+    AgentBarnTelegramProxy,
+    BadBotApiRequest,
+    BotApiRequest,
+    UploadedFile,
+    parse_bot_api_request,
+)
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
 from api.infrastructure.crypto import encrypt_token
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY
@@ -41,12 +47,7 @@ def _proxy(handler) -> AgentBarnTelegramProxy:
 
 def _call(proxy: AgentBarnTelegramProxy, method: str, params: dict | None = None):
     return proxy.handle(
-        uuid4(),
-        runtime_api_token(_DRIVER_KEY, _REAL_TOKEN),
-        method,
-        params=params or {},
-        body=b"{}",
-        content_type="application/json",
+        uuid4(), runtime_api_token(_DRIVER_KEY, _REAL_TOKEN), method, request=BotApiRequest(params=params or {})
     )
 
 
@@ -98,3 +99,32 @@ def test_only_plain_file_paths_are_fetched(file_path: str) -> None:
 
     assert downloaded.status_code == 404
     assert requests == []
+
+
+def test_a_multipart_field_given_twice_is_refused() -> None:
+    photo = UploadedFile("photo", "a.png", b"a", "image/png")
+    with pytest.raises(BadBotApiRequest):
+        parse_bot_api_request([], "multipart/form-data; boundary=x", b"", [("chat_id", "1"), ("chat_id", "2")])
+    with pytest.raises(BadBotApiRequest):
+        parse_bot_api_request([], "multipart/form-data; boundary=x", b"", [("photo", photo), ("photo", "file-id")])
+
+
+@pytest.mark.parametrize("body", [b"[1, 2]", b"not json", b'"text"'])
+def test_a_json_body_must_be_one_object(body: bytes) -> None:
+    with pytest.raises(BadBotApiRequest):
+        parse_bot_api_request([], "application/json", body)
+
+
+def test_a_well_formed_request_is_read_with_its_encoding() -> None:
+    photo = UploadedFile("photo", "a.png", b"png", "image/png")
+
+    assert parse_bot_api_request([("chat_id", "1")], None, b"") == BotApiRequest(params={"chat_id": "1"})
+    assert parse_bot_api_request([], "Application/Json; charset=utf-8", b'{"chat_id": 1}') == BotApiRequest(
+        params={"chat_id": 1}
+    )
+    assert parse_bot_api_request([], "application/x-www-form-urlencoded", b"chat_id=1&text=") == BotApiRequest(
+        params={"chat_id": "1", "text": ""}, encoding="form"
+    )
+    assert parse_bot_api_request(
+        [], "multipart/form-data; boundary=x", b"", [("chat_id", "1"), ("photo", photo)]
+    ) == BotApiRequest(params={"chat_id": "1"}, encoding="multipart", files=(photo,))

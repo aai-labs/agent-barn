@@ -1,5 +1,9 @@
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
+from email import policy as email_policy
+from email.parser import BytesParser
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -111,6 +115,25 @@ _GIVEN = [
 def _url(context, method: str, *, key: str = "sales", token: str | None = None) -> str:
     connection = getattr(context, key)
     return f"/communications/v1/telegram/{connection.id}/bot{token or getattr(context, f'{key}_token')}/{method}"
+
+
+def _multipart_parts(request: httpx.Request) -> dict[str, tuple[str | None, bytes]]:
+    """Each multipart field's filename (None for plain fields) and content."""
+    message = BytesParser(policy=email_policy.default).parsebytes(
+        f"Content-Type: {request.headers['Content-Type']}\r\n\r\n".encode() + request.content
+    )
+    parts: dict[str, tuple[str | None, bytes]] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        payload = part.get_payload(decode=True)
+        assert isinstance(name, str) and isinstance(payload, bytes)
+        parts[name] = (part.get_filename(), payload)
+    return parts
+
+
+def _raw(context, method: str, body: bytes | str, content_type: str | None, **kwargs) -> httpx.Response:
+    headers = {"Content-Type": content_type} if content_type else {}
+    return context.communications_client.post(_url(context, method), content=body, headers=headers, **kwargs)
 
 
 def _call(context, method: str, payload: dict | None = None, **kwargs) -> httpx.Response:
@@ -258,7 +281,7 @@ def test_a_form_encoded_typing_indicator_to_a_linked_user_is_forwarded() -> None
         assert_that(context.telegram.received[0].content.decode(), equal_to(body))
 
 
-def test_a_file_upload_to_a_linked_user_is_forwarded_byte_for_byte() -> None:
+def test_a_file_upload_to_a_linked_user_is_forwarded_with_the_same_fields_and_file() -> None:
     with given(_GIVEN) as context:
         request = httpx.Request(
             "POST",
@@ -273,11 +296,18 @@ def test_a_file_upload_to_a_linked_user_is_forwarded_byte_for_byte() -> None:
                 _url(context, "sendPhoto"), content=body, headers={"Content-Type": request.headers["Content-Type"]}
             )
 
-        with then("Telegram receives the identical upload"):
+        with then("Telegram receives the same fields and file, rebuilt from what was checked"):
             assert_that(response.status_code, equal_to(200))
-            forwarded = context.telegram.received[0]
-            assert_that(forwarded.content, equal_to(body))
-            assert_that(forwarded.headers["Content-Type"], equal_to(request.headers["Content-Type"]))
+            assert_that(
+                _multipart_parts(context.telegram.received[0]),
+                equal_to(
+                    {
+                        "chat_id": (None, str(_JANE).encode()),
+                        "caption": (None, b"chart"),
+                        "photo": ("chart.png", b"\x89PNG-bytes"),
+                    }
+                ),
+            )
 
 
 def test_a_file_upload_to_someone_not_linked_is_refused() -> None:
@@ -357,15 +387,17 @@ def _fake_telegram_files(context) -> None:
 
 
 def test_an_agent_downloads_a_file_a_user_sent_through_the_real_bot() -> None:
-    with given([*_GIVEN, _fake_telegram_files]) as context:
-        with when("the agent downloads a photo Jane sent"):
-            response = context.communications_client.get(_file_url(context, "photos/file_7.jpg"))
+    with given([*_GIVEN, _telegram_with_files]) as context:
+        with when("the agent looks up a photo Jane sent, then downloads it"):
+            _call(context, "getFile", {"file_id": "file_7"})
+            response = _file(context, "sales", "photos/file_7.jpg")
 
         with then("it gets the file, fetched with the real token"):
             assert_that(response.status_code, equal_to(200))
-            assert_that(response.content, equal_to(b"\xff\xd8jpeg-bytes"))
+            assert_that(response.content, equal_to(b"jpeg-bytes"))
             assert_that(response.headers["content-type"], equal_to("image/jpeg"))
-            assert_that(context.telegram.received[0].url.path, equal_to(f"/file/bot{_REAL_TOKEN}/photos/file_7.jpg"))
+            download = next(r for r in context.telegram.received if "/file/bot" in r.url.path)
+            assert_that(download.url.path, equal_to(f"/file/bot{_REAL_TOKEN}/photos/file_7.jpg"))
 
 
 def test_a_file_download_needs_the_connections_own_token() -> None:
@@ -434,3 +466,164 @@ def test_bot_lookups_and_button_answers_do_not_use_the_budget() -> None:
 
         with then("both go through"):
             assert_that([response.status_code for response in responses], equal_to([200, 200]))
+
+
+@pytest.mark.parametrize(
+    ("label", "query", "body", "content_type"),
+    [
+        (
+            "checked part in the query, forwarded part in a differently-cased JSON body",
+            {"chat_id": _JANE},
+            json.dumps({"chat_id": _STRANGER, "text": "hi"}),
+            "Application/JSON",
+        ),
+        (
+            "duplicate JSON keys",
+            None,
+            f'{{"chat_id": {_STRANGER}, "chat_id": {_JANE}, "text": "hi"}}',
+            "application/json",
+        ),
+        (
+            "duplicate form fields",
+            None,
+            f"chat_id={_STRANGER}&chat_id={_JANE}&text=hi",
+            "application/x-www-form-urlencoded",
+        ),
+        (
+            "the same field in the query and the body",
+            {"chat_id": _JANE},
+            json.dumps({"chat_id": _STRANGER}),
+            "application/json",
+        ),
+        ("a body in a content type the proxy does not read", {"chat_id": _JANE}, f"chat_id={_STRANGER}", "text/plain"),
+        ("a body with no content type", {"chat_id": _JANE}, f"chat_id={_STRANGER}", None),
+    ],
+)
+def test_a_request_the_proxy_cannot_read_unambiguously_is_refused(label, query, body, content_type) -> None:
+    with given(_GIVEN) as context:
+        with when(f"an agent sends {label}"):
+            response = _raw(context, "sendMessage", body, content_type, params=query)
+
+        with then("it is refused and nothing reaches Telegram"):
+            assert_that(response.status_code, equal_to(400))
+            assert_that(response.json(), has_entries(ok=False, error_code=400))
+            assert_that(context.telegram.received, equal_to([]))
+
+
+def test_only_the_checked_values_are_forwarded() -> None:
+    with given(_GIVEN) as context:
+        with when("an agent sends a well-formed form request to a linked user"):
+            _raw(
+                context,
+                "sendMessage",
+                f"chat_id={_JANE}&text=hello",
+                "application/x-www-form-urlencoded; charset=utf-8",
+            )
+
+        with then("Telegram receives a request rebuilt from exactly those values"):
+            forwarded = context.telegram.received[0]
+            assert_that(forwarded.headers["Content-Type"], equal_to("application/x-www-form-urlencoded"))
+            assert_that(forwarded.content.decode(), equal_to(f"chat_id={_JANE}&text=hello"))
+
+
+@pytest.mark.parametrize(
+    "reply_parameters",
+    [
+        {"chat_id": 5550002, "message_id": 7},
+        json.dumps({"chat_id": 5550002, "message_id": 7}),
+        {"chat_id": "@somechannel", "message_id": 7},
+        "not json",
+    ],
+)
+def test_a_reply_cannot_quote_a_chat_not_linked_to_this_agent(reply_parameters) -> None:
+    with given(_GIVEN) as context:
+        with when("the agent replies to Jane while quoting another chat's message"):
+            response = _call(
+                context, "sendMessage", {"chat_id": _JANE, "text": "see this", "reply_parameters": reply_parameters}
+            )
+
+        with then("it is refused before reaching Telegram"):
+            assert_that(response.status_code, equal_to(403))
+            assert_that(context.telegram.received, equal_to([]))
+
+
+def test_a_reply_may_quote_a_message_in_the_same_linked_chat() -> None:
+    with given(_GIVEN) as context:
+        response = _call(
+            context,
+            "sendMessage",
+            {"chat_id": _JANE, "text": "re", "reply_parameters": {"chat_id": _JANE, "message_id": 7}},
+        )
+
+        assert_that(response.status_code, equal_to(200))
+        assert_that(len(context.telegram.received), equal_to(1))
+
+
+def test_business_connections_are_refused() -> None:
+    with given(_GIVEN) as context:
+        response = _call(context, "sendMessage", {"chat_id": _JANE, "text": "hi", "business_connection_id": "b1"})
+
+        assert_that(response.status_code, equal_to(403))
+        assert_that(context.telegram.received, equal_to([]))
+
+
+class TelegramWithFiles(Telegram):
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/getFile"):
+            self.received.append(request)
+            file_id = json.loads(request.content)["file_id"]
+            return httpx.Response(
+                200, json={"ok": True, "result": {"file_id": file_id, "file_path": f"photos/{file_id}.jpg"}}
+            )
+        if "/file/bot" in request.url.path:
+            self.received.append(request)
+            return httpx.Response(200, content=b"jpeg-bytes", headers={"Content-Type": "image/jpeg"})
+        return super().__call__(request)
+
+
+def _telegram_with_files(context) -> None:
+    context.telegram = TelegramWithFiles()
+    context.injector.get(AgentBarnTelegramProxy).client = httpx.Client(transport=httpx.MockTransport(context.telegram))
+
+
+def _file(context, key: str, file_path: str) -> httpx.Response:
+    connection = getattr(context, key)
+    token = getattr(context, f"{key}_token")
+    return context.communications_client.get(f"/communications/v1/telegram/{connection.id}/file/bot{token}/{file_path}")
+
+
+def test_an_agent_downloads_only_files_it_looked_up_itself() -> None:
+    with given([*_GIVEN, _telegram_with_files]) as context:
+        with when("the sales agent looks a file up, then both agents try to download it"):
+            _call(context, "getFile", {"file_id": "file_7"})
+            own = _file(context, "sales", "photos/file_7.jpg")
+            other = _file(context, "support", "photos/file_7.jpg")
+            never_looked_up = _file(context, "sales", "photos/file_8.jpg")
+
+        with then("only the agent that looked it up gets it"):
+            assert_that((own.status_code, own.content), equal_to((200, b"jpeg-bytes")))
+            assert_that((other.status_code, never_looked_up.status_code), equal_to((404, 404)))
+            downloads = [r for r in context.telegram.received if "/file/bot" in r.url.path]
+            assert_that(len(downloads), equal_to(1))
+
+
+def test_proxy_work_runs_off_the_event_loop() -> None:
+    # Database queries and Telegram calls block; on the event loop, one slow upload
+    # would stall every other Agent's calls and the shared-bot poller.
+    with given(_GIVEN) as context:
+        seen: list[bool] = []
+        proxy = context.injector.get(AgentBarnTelegramProxy)
+        real_handle = proxy.handle
+
+        def observing_handle(*args, **kwargs):
+            try:
+                asyncio.get_running_loop()
+                seen.append(True)
+            except RuntimeError:
+                seen.append(False)
+            return real_handle(*args, **kwargs)
+
+        with patch.object(proxy, "handle", side_effect=observing_handle):
+            _call(context, "sendChatAction", {"chat_id": _JANE, "action": "typing"})
+
+        assert_that(seen, equal_to([False]))
