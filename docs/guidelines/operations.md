@@ -108,13 +108,20 @@ native memory remains available when the gateway is unavailable.
 Helmfile always deploys the backend and gateway. For an operator-run deployment,
 provide `HINDSIGHT_DB_PASSWORD`, `HINDSIGHT_API_KEY`, and
 `MEMORY_RUNTIME_SERVICE_KEY` in `.env.deploy`, using distinct values, then run
-`./deploy.sh`. The branch and public release workflows prepare these three
-credentials automatically with `api/scripts/provision_memory.py`; they remain
-stable in the namespace-local `agentbarn-memory-bootstrap` Secret. Existing
-Hindsight and database Secrets are adopted together without rotation. Missing or
-incomplete credentials beside existing storage require restoring the original
-Secret. The runner needs namespaced Secret `get`/`create`, and exports credentials
-through a temporary mode-0600 file with Actions masking.
+`./deploy.sh`. CI reads the same three credentials from GitHub Secrets:
+`STAGING_HINDSIGHT_DB_PASSWORD`, `STAGING_HINDSIGHT_API_KEY`, and
+`STAGING_MEMORY_RUNTIME_SERVICE_KEY` for staging; the unprefixed names for
+production; and `PUBLIC_`-prefixed names for public releases. Missing secrets fail
+deployment before syncing releases; they are never generated or recovered from
+Kubernetes automatically. The runner validates them with
+`api/scripts/provision_memory.py` and uses a temporary mode-0600 file.
+
+When moving an existing deployment to GitHub Secrets, preserve the current
+values from its database/backend Secrets (or the legacy
+`agentbarn-memory-bootstrap` Secret). Changing a PostgreSQL Secret does not change
+an initialized database's password. Keep the original credentials until an
+explicit rotation is performed. Legacy bootstrap Secrets are no longer read or
+written by deployment.
 
 Hindsight's `pre-install,pre-upgrade` LiteLLM key Job follows the same pattern as
 the `agentbarn-api` key Job: wait for LiteLLM, delete the previous key by alias,
@@ -126,11 +133,9 @@ The runner no longer generates LiteLLM keys or executes code inside its pod.
 
 The key is recreated on every Hindsight install or upgrade, including a repeated
 deployment of the same commit. A release-revision annotation rolls the backend
-to load the new key. It has no Organization team, never expires, and starts with
-a $5 budget renewing every 30 days; recreation resets that key's spend. Optional
-repository variable `MEMORY_STARTUP_KEY_BUDGET_USD` (with `STAGING_` or `PUBLIC_`
-counterparts) changes the generated key's budget. It is used for bankless startup
-verification; Organization processing retains its runtime-team keys.
+to load the new key. It has no Organization team, never expires, and has
+no key-level budget limit. It is used for bankless startup verification;
+Organization processing retains its runtime-team keys and budget enforcement.
 Like the application key hook, it allows the proxy's configured models; the
 Platform Memory setting selects the model Hindsight uses.
 
@@ -146,8 +151,8 @@ Optional repository variables `MEMORY_DEFAULT_MODEL` and
 `MEMORY_LITELLM_KEY_HASHES` (with `STAGING_` or `PUBLIC_` counterparts) select the
 initial model and seed retired hashes when recovering deployment state. The
 model defaults to `openrouter/openai/gpt-4.1-mini`. Database/backend/settings
-credential rotation remains an operator action: update the bootstrap Secret and
-deployed Secrets consistently. Do not delete the bootstrap Secret to rotate them.
+credential rotation remains an operator action: update GitHub Secrets and the
+underlying database/backend credentials consistently.
 
 This adds `postgres-hindsight` (pgvector/PostgreSQL 18, its own 10Gi PVC) and
 Hindsight 0.10.2. Only its API port 8888 is exposed, as ClusterIP; its control

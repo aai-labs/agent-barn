@@ -41,7 +41,6 @@ releases:
         apiKey: {{ env "HINDSIGHT_API_KEY" | required "HINDSIGHT_API_KEY is required" | quote }}
         llm:
           model: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
-          keyBudgetUsd: {{ env "MEMORY_STARTUP_KEY_BUDGET_USD" | default "5" | quote }}
           retiredKeyHashes: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
         litellmKeyServiceAccountName: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
   - name: postgres-app

@@ -9,7 +9,6 @@ llm:
   baseUrl: http://litellm:4000/v1
   keySecretName: hindsight-litellm-key
   hashesSecretName: hindsight-litellm-hashes
-  keyBudgetUsd: 5
   retiredKeyHashes: ""
   settingsUrl: http://agentbarn-api:8004/memory/runtime/v1/model
   model: openrouter/openai/gpt-4.1-mini

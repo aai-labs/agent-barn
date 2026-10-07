@@ -220,7 +220,6 @@ jobs:
     env:
       MEMORY_DEFAULT_MODEL: ${{ vars[format('{0}MEMORY_DEFAULT_MODEL', github.ref_name == 'staging' && 'STAGING_' || '')] }}
       MEMORY_LITELLM_KEY_HASHES: ${{ vars[format('{0}MEMORY_LITELLM_KEY_HASHES', github.ref_name == 'staging' && 'STAGING_' || '')] }}
-      MEMORY_STARTUP_KEY_BUDGET_USD: ${{ vars[format('{0}MEMORY_STARTUP_KEY_BUDGET_USD', github.ref_name == 'staging' && 'STAGING_' || '')] }}
 
     steps:
       - name: Checkout
@@ -301,6 +300,9 @@ jobs:
           POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.POSTGRES_FIRECRAWL_PASSWORD }}
           POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          HINDSIGHT_DB_PASSWORD: ${{ secrets[format('{0}HINDSIGHT_DB_PASSWORD', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          HINDSIGHT_API_KEY: ${{ secrets[format('{0}HINDSIGHT_API_KEY', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          MEMORY_RUNTIME_SERVICE_KEY: ${{ secrets[format('{0}MEMORY_RUNTIME_SERVICE_KEY', github.ref_name == 'staging' && 'STAGING_' || '')] }}
           LITELLM_MASTER_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_LITELLM_MASTER_KEY || secrets.LITELLM_MASTER_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
@@ -337,7 +339,7 @@ jobs:
           set -euo pipefail
           credentials_file="$(mktemp)"
           trap 'rm -f "$credentials_file"' EXIT
-          # Persist credentials before Helmfile renders the full release list.
+          # Validate required GitHub Secrets before Helmfile renders the releases.
           python3 api/scripts/provision_memory.py --env-file "$credentials_file"
           set -a
           # shellcheck disable=SC1090

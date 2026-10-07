@@ -313,6 +313,9 @@ jobs:
           POSTGRES_FIRECRAWL_USER: ${{ vars.POSTGRES_FIRECRAWL_USER }}
           POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
           POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_FIRECRAWL_PASSWORD }}
+          HINDSIGHT_DB_PASSWORD: ${{ secrets.PUBLIC_HINDSIGHT_DB_PASSWORD }}
+          HINDSIGHT_API_KEY: ${{ secrets.PUBLIC_HINDSIGHT_API_KEY }}
+          MEMORY_RUNTIME_SERVICE_KEY: ${{ secrets.PUBLIC_MEMORY_RUNTIME_SERVICE_KEY }}
           LITELLM_MASTER_KEY: ${{ secrets.PUBLIC_LITELLM_MASTER_KEY }}
           SECRET_SIGNING_KEY: ${{ secrets.PUBLIC_SECRET_SIGNING_KEY }}
           PLATFORM_ADMIN_CREDENTIALS: ${{ secrets.PUBLIC_PLATFORM_ADMIN_CREDENTIALS }}
@@ -336,12 +339,11 @@ jobs:
           COMMUNICATIONS_NATIVE_PLATFORMS: ${{ vars.COMMUNICATIONS_NATIVE_PLATFORMS }}
           MEMORY_DEFAULT_MODEL: ${{ vars.PUBLIC_MEMORY_DEFAULT_MODEL }}
           MEMORY_LITELLM_KEY_HASHES: ${{ vars.PUBLIC_MEMORY_LITELLM_KEY_HASHES }}
-          MEMORY_STARTUP_KEY_BUDGET_USD: ${{ vars.PUBLIC_MEMORY_STARTUP_KEY_BUDGET_USD }}
         run: |
           set -euo pipefail
           credentials_file="$(mktemp)"
           trap 'rm -f "$credentials_file"' EXIT
-          # Persist credentials before Helmfile renders the full release list.
+          # Validate required GitHub Secrets before Helmfile renders the releases.
           python3 api/scripts/provision_memory.py --env-file "$credentials_file"
           set -a
           # shellcheck disable=SC1090

@@ -3,7 +3,6 @@
 import base64
 import hashlib
 import json
-import math
 import os
 import ssl
 import time
@@ -22,18 +21,21 @@ def main():
     with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as token_file:
         sa_token = token_file.read().strip()
     context = ssl.create_default_context(cafile="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
-    kube_headers = {"Authorization": "Bearer " + sa_token, "Content-Type": "application/json"}
+    kube_headers = {
+        "Authorization": "Bearer " + sa_token,
+        "Content-Type": "application/json",
+    }
     secrets_url = f"https://kubernetes.default.svc/api/v1/namespaces/{namespace}/secrets"
     secret_name = os.environ["KEY_SECRET_NAME"]
     hashes_name = os.environ["HASHES_SECRET_NAME"]
     alias = "agentbarn-hindsight"
-    budget = float(os.environ["KEY_BUDGET_USD"])
-    if not math.isfinite(budget) or budget <= 0:
-        raise SystemExit("Hindsight key budget must be a positive finite USD amount.")
 
     def request(url, headers, body=None, method=None, kube=False):
         req = urllib.request.Request(
-            url, headers=headers, data=None if body is None else json.dumps(body).encode(), method=method
+            url,
+            headers=headers,
+            data=None if body is None else json.dumps(body).encode(),
+            method=method,
         )
         with urllib.request.urlopen(req, context=context if kube else None, timeout=10) as response:
             raw = response.read()
@@ -87,8 +89,6 @@ def main():
             "duration": None,
             "key_alias": alias,
             "team_id": None,
-            "max_budget": budget,
-            "budget_duration": "30d",
             "metadata": {"agentbarn_memory": True, "purpose": "bankless-startup"},
         },
     )
@@ -103,7 +103,10 @@ def main():
     save_secret(secret_name, {"LITELLM_API_KEY": key})
     save_secret(
         hashes_name,
-        {"MEMORY_LITELLM_ACTIVE_KEY_HASH": active, "MEMORY_LITELLM_KEY_HASHES": ",".join(sorted(hashes))},
+        {
+            "MEMORY_LITELLM_ACTIVE_KEY_HASH": active,
+            "MEMORY_LITELLM_KEY_HASHES": ",".join(sorted(hashes)),
+        },
     )
     print("Hindsight LiteLLM key generated successfully", flush=True)
 

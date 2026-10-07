@@ -27,7 +27,6 @@ def hook(monkeypatch):
         "LITELLM_MASTER_KEY": "test-master",
         "KEY_SECRET_NAME": "hindsight-litellm-key",
         "HASHES_SECRET_NAME": "hindsight-litellm-hashes",
-        "KEY_BUDGET_USD": "5",
         "RETIRED_KEY_HASHES": "a" * 64,
     }.items():
         monkeypatch.setenv(name, value)
@@ -100,14 +99,8 @@ def test_hook_generates_key_then_rotates_and_updates_secrets(hook, capsys):
     assert "a" * 64 in hashes["MEMORY_LITELLM_KEY_HASHES"].split(",")
     policy = next(iter(hook["keys"].values()))
     assert "models" not in policy  # Same configured-model access as the application key hook.
-    assert policy["team_id"] is None and policy["max_budget"] == 5 and policy["budget_duration"] == "30d"
+    assert policy["team_id"] is None
+    assert "max_budget" not in policy and "budget_duration" not in policy
     assert any(method == "PUT" for method, _, _ in hook["operations"])
     output = capsys.readouterr()
     assert all(key not in output.out + output.err for key in [*first.values(), *second.values(), "test-master"])
-
-
-def test_invalid_budget_never_generates_a_key(hook, monkeypatch):
-    monkeypatch.setenv("KEY_BUDGET_USD", "nan")
-    with pytest.raises(SystemExit, match="positive finite"):
-        run_hook()
-    assert hook["generated"] == 0 and not hook["secrets"]

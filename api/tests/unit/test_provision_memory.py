@@ -2,7 +2,6 @@
 
 import ast
 import base64
-import copy
 import json
 import shlex
 import stat
@@ -20,20 +19,21 @@ def setup_test_database():
 
 
 @pytest.fixture
-def cluster(monkeypatch):
-    state: dict[str, Any] = {"secrets": {}, "pvc": False}
+def supplied_credentials(monkeypatch):
+    values = {name: "test-" + name for name in bootstrap.CREDENTIAL_NAMES}
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    return values
 
-    def kubectl(namespace: str, args: list[str], payload: dict[str, Any] | None = None) -> str:
-        if args[:2] == ["get", "secret"]:
-            saved = state["secrets"].get((namespace, args[2]))
-            return json.dumps(saved) if saved else ""
-        if args[:2] == ["get", "pvc"]:
-            return "persistentvolumeclaim/data-postgres-hindsight-0" if state["pvc"] else ""
-        assert args[0] == "create" and payload is not None
-        name = (namespace, payload["metadata"]["name"])
-        assert name not in state["secrets"]
-        state["secrets"][name] = copy.deepcopy(payload)
-        return "created"
+
+@pytest.fixture
+def cluster(monkeypatch):
+    state: dict[str, Any] = {"secrets": {}}
+
+    def kubectl(namespace: str, args: list[str], payload=None) -> str:
+        assert args[:2] == ["get", "secret"]  # Credential preparation never writes cluster secrets.
+        saved = state["secrets"].get((namespace, args[2]))
+        return json.dumps(saved) if saved else ""
 
     monkeypatch.setattr(bootstrap, "kubectl", kubectl)
     return state
@@ -43,46 +43,27 @@ def encoded(values):
     return {"data": {name: base64.b64encode(value.encode()).decode() for name, value in values.items()}}
 
 
-def test_redeployment_reuses_authentication_credentials(cluster):
-    first = bootstrap.credentials("agent-farm-staging")
-    assert bootstrap.credentials("agent-farm-staging") == first
-    assert len(set(first.values())) == 3
-    assert "HINDSIGHT_LITELLM_API_KEY" not in first
-
-
-def test_environments_get_independent_authentication_credentials(cluster):
-    staging = bootstrap.credentials("agent-farm-staging")
-    production = bootstrap.credentials("agent-farm")
-    assert set(staging.values()).isdisjoint(production.values())
-
-
-def test_storage_without_credentials_requires_recovery(cluster):
-    cluster["pvc"] = True
-    with pytest.raises(bootstrap.ProvisioningError, match="storage already exists"):
-        bootstrap.credentials("agent-farm-staging")
+def test_uses_supplied_credentials_without_cluster_generation(supplied_credentials, cluster):
+    assert bootstrap.credentials() == supplied_credentials
     assert not cluster["secrets"]
 
 
-def test_existing_backend_secrets_are_adopted_without_rotation(cluster):
-    original = bootstrap.credentials("agent-farm-staging")
-    del cluster["secrets"][("agent-farm-staging", bootstrap.SECRET_NAME)]
-    cluster["secrets"].update(
-        {
-            ("agent-farm-staging", "postgres-hindsight"): encoded(
-                {"POSTGRES_PASSWORD": original["HINDSIGHT_DB_PASSWORD"]}
-            ),
-            ("agent-farm-staging", "hindsight"): encoded(
-                {
-                    "HINDSIGHT_API_TENANT_API_KEY": original["HINDSIGHT_API_KEY"],
-                    "AGENTBARN_MEMORY_SETTINGS_KEY": original["MEMORY_RUNTIME_SERVICE_KEY"],
-                }
-            ),
-        }
-    )
-    assert bootstrap.credentials("agent-farm-staging") == original
+def test_missing_secret_fails_without_generating_replacement(supplied_credentials, monkeypatch, cluster):
+    monkeypatch.delenv("HINDSIGHT_DB_PASSWORD")
+    with pytest.raises(bootstrap.ProvisioningError, match="HINDSIGHT_DB_PASSWORD"):
+        bootstrap.credentials()
+    assert not cluster["secrets"]
 
 
-def test_main_exports_only_private_credentials_and_hook_hashes(cluster, monkeypatch, tmp_path, capsys):
+def test_duplicate_credentials_fail(supplied_credentials, monkeypatch):
+    monkeypatch.setenv("MEMORY_RUNTIME_SERVICE_KEY", supplied_credentials["HINDSIGHT_API_KEY"])
+    with pytest.raises(bootstrap.ProvisioningError, match="must differ"):
+        bootstrap.credentials()
+
+
+def test_main_exports_only_private_credentials_and_hook_hashes(
+    supplied_credentials, cluster, monkeypatch, tmp_path, capsys
+):
     destination = tmp_path / "credentials"
     destination.write_text("")
     destination.chmod(0o644)
@@ -90,10 +71,9 @@ def test_main_exports_only_private_credentials_and_hook_hashes(cluster, monkeypa
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr("sys.argv", ["provision_memory.py", "--env-file", str(destination)])
     bootstrap.main()
-    values = bootstrap.credentials("agent-farm-staging")
-    # A previous provisioner may have persisted a key. Never export it to the runner.
-    cluster["secrets"][("agent-farm-staging", bootstrap.SECRET_NAME)]["data"]["HINDSIGHT_LITELLM_API_KEY"] = (
-        base64.b64encode(b"sk-obsolete-key").decode()
+    values = bootstrap.credentials()
+    cluster["secrets"][("agent-farm-staging", "agentbarn-memory-bootstrap")] = encoded(
+        {"HINDSIGHT_LITELLM_API_KEY": "sk-obsolete-key"}
     )
     hashes = {"MEMORY_LITELLM_ACTIVE_KEY_HASH": "a" * 64, "MEMORY_LITELLM_KEY_HASHES": "a" * 64 + "," + "b" * 64}
     cluster["secrets"][("agent-farm-staging", "hindsight-litellm-hashes")] = encoded(hashes)

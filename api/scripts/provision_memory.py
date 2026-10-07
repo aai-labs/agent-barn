@@ -1,17 +1,15 @@
-"""Provision persistent, namespace-local memory credentials before Helmfile sync."""
+"""Validate supplied memory credentials and load hook-generated attribution hashes."""
 
 import argparse
 import base64
 import json
 import os
 import re
-import secrets
 import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
 
-SECRET_NAME = "agentbarn-memory-bootstrap"
 CREDENTIAL_NAMES = (
     "HINDSIGHT_DB_PASSWORD",
     "HINDSIGHT_API_KEY",
@@ -47,49 +45,13 @@ def decode_secret(secret: dict[str, Any]) -> dict[str, str]:
     return {key: base64.b64decode(value, validate=True).decode() for key, value in secret.get("data", {}).items()}
 
 
-def credentials(namespace: str) -> dict[str, str]:
-    saved = read_secret(namespace, SECRET_NAME)
-    if saved is not None:
-        values = decode_secret(saved)
-        if any(not values.get(name) for name in CREDENTIAL_NAMES):
-            raise ProvisioningError(
-                "Memory bootstrap Secret is incomplete; restore it rather than rotating credentials."
-            )
-        return {name: values[name] for name in CREDENTIAL_NAMES}
-
-    # Adopt existing deployments without rotating a database or backend key.
-    database = read_secret(namespace, "postgres-hindsight")
-    backend = read_secret(namespace, "hindsight")
-    if bool(database) != bool(backend):
-        raise ProvisioningError("Existing memory Secrets are incomplete; restore them before bootstrapping.")
-    if database and backend:
-        db_values, backend_values = decode_secret(database), decode_secret(backend)
-        values = {
-            "HINDSIGHT_DB_PASSWORD": db_values["POSTGRES_PASSWORD"],
-            "HINDSIGHT_API_KEY": backend_values["HINDSIGHT_API_TENANT_API_KEY"],
-            "MEMORY_RUNTIME_SERVICE_KEY": backend_values["AGENTBARN_MEMORY_SETTINGS_KEY"],
-        }
-    else:
-        # A missing Secret must never silently rotate the password of an existing volume.
-        pvc = kubectl(namespace, ["get", "pvc", "data-postgres-hindsight-0", "--ignore-not-found", "-o", "name"])
-        if pvc.strip():
-            raise ProvisioningError("Hindsight storage already exists; restore its credentials before bootstrapping.")
-        values = {name: secrets.token_hex(32) for name in CREDENTIAL_NAMES}
-    if any(not values.get(name) for name in CREDENTIAL_NAMES):
-        raise ProvisioningError("Existing memory credentials are incomplete.")
-    if values["MEMORY_RUNTIME_SERVICE_KEY"] == values["HINDSIGHT_API_KEY"]:
-        raise ProvisioningError("Memory settings and backend authentication keys must differ.")
-    kubectl(
-        namespace,
-        ["create", "-f", "-"],
-        {
-            "apiVersion": "v1",
-            "kind": "Secret",
-            "metadata": {"name": SECRET_NAME, "namespace": namespace},
-            "type": "Opaque",
-            "data": {name: base64.b64encode(value.encode()).decode() for name, value in values.items()},
-        },
-    )
+def credentials() -> dict[str, str]:
+    values = {name: os.environ.get(name, "") for name in CREDENTIAL_NAMES}
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise ProvisioningError("Required memory secrets are missing: " + ", ".join(missing))
+    if len(set(values.values())) != len(values):
+        raise ProvisioningError("Memory database, backend, and settings credentials must differ.")
     return values
 
 
@@ -113,9 +75,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     try:
-        values = credentials(os.environ["NAMESPACE"])
-        if values["MEMORY_RUNTIME_SERVICE_KEY"] == values["HINDSIGHT_API_KEY"]:
-            raise ProvisioningError("Memory settings and backend authentication keys must differ.")
+        values = credentials()
         if args.include_key_hashes:
             values.update(key_hashes(os.environ["NAMESPACE"]))
         if os.environ.get("GITHUB_ACTIONS") == "true":
@@ -129,7 +89,7 @@ def main() -> None:
         with os.fdopen(fd, "w") as output:
             for name, value in values.items():
                 output.write(f"{name}={shlex.quote(value)}\n")
-        print("Agent Memory credentials prepared; existing authentication credentials preserved.")
+        print("Agent Memory credentials prepared; supplied authentication credentials validated.")
     except ProvisioningError as error:
         raise SystemExit(str(error)) from None
     except (KeyError, ValueError, subprocess.TimeoutExpired):

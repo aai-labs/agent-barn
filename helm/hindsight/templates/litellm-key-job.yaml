@@ -26,8 +26,6 @@ spec:
               value: {{ .Values.llm.keySecretName | quote }}
             - name: HASHES_SECRET_NAME
               value: {{ .Values.llm.hashesSecretName | quote }}
-            - name: KEY_BUDGET_USD
-              value: {{ .Values.llm.keyBudgetUsd | toString | quote }}
             - name: RETIRED_KEY_HASHES
               value: {{ .Values.llm.retiredKeyHashes | quote }}
           volumeMounts:
