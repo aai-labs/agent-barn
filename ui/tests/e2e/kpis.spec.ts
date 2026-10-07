@@ -802,13 +802,13 @@ test.describe("Organization KPIs — value settings", () => {
 
     await kpis.openValueSettings();
 
-    await expect(kpis.settingsSheet()).toBeVisible();
+    await expect(kpis.settingsDialog()).toBeVisible();
     await expect(kpis.rateInput()).toHaveValue("60");
     await expect(kpis.minutesInput("Pull request opened")).toHaveValue("20");
     await expect(kpis.outcomeRow("Pull request opened")).toContainText("Default");
     await expect(kpis.minutesInput("Message sent")).toHaveValue("8");
     await expect(kpis.outcomeRow("Message sent")).toContainText("Custom");
-    await expect(kpis.settingsSheet()).toContainText(
+    await expect(kpis.settingsDialog()).toContainText(
       "Changes recalculate every figure on this page, including past periods.",
     );
     await expect(kpis.saveSettingsButton()).toBeDisabled();
@@ -820,7 +820,7 @@ test.describe("Organization KPIs — value settings", () => {
     await kpis.openValueSettings();
 
     await kpis.rateInput().fill("12.345");
-    await expect(kpis.settingsSheet()).toContainText(
+    await expect(kpis.settingsDialog()).toContainText(
       "Enter an amount from 0 to 10,000 with at most two decimals.",
     );
     await expect(kpis.saveSettingsButton()).toBeDisabled();
@@ -865,7 +865,7 @@ test.describe("Organization KPIs — value settings", () => {
     await expect(kpis.discardDialog()).toBeVisible();
     await kpis.confirmDiscard();
 
-    await expect(kpis.settingsSheet()).toHaveCount(0);
+    await expect(kpis.settingsDialog()).toHaveCount(0);
     await kpis.openValueSettings();
     await expect(kpis.minutesInput("Pull request opened")).toHaveValue("20");
   });
@@ -878,7 +878,7 @@ test.describe("Organization KPIs — value settings", () => {
 
     await kpis.cancelSettings();
 
-    await expect(kpis.settingsSheet()).toHaveCount(0);
+    await expect(kpis.settingsDialog()).toHaveCount(0);
     await expect(kpis.discardDialog()).toHaveCount(0);
   });
 
@@ -887,7 +887,7 @@ test.describe("Organization KPIs — value settings", () => {
     await kpis.goto();
     await kpis.openValueSettings();
 
-    await expect(kpis.settingsSheet()).toContainText("Unable to load value settings");
+    await expect(kpis.settingsDialog()).toContainText("Unable to load value settings");
 
     settings.respondWith({ status: 200 });
     await kpis.retrySettings();
@@ -932,7 +932,7 @@ test.describe("Organization KPIs — saving value settings", () => {
 
     await expect.poll(() => saves.length).toBe(1);
     expect(saves[0]).toEqual({ outcome_minutes: { MESSAGE_SENT: 7 } });
-    await expect(kpis.settingsSheet()).toHaveCount(0);
+    await expect(kpis.settingsDialog()).toHaveCount(0);
     await expect(kpis.tile("kpi-hours-saved")).toContainText("2.3 h");
     await expect(kpis.tile("kpi-value")).toContainText("$140.00");
   });
@@ -952,7 +952,7 @@ test.describe("Organization KPIs — saving value settings", () => {
 
     await expect.poll(() => saves.length).toBe(1);
     expect(saves[0]).toEqual({ outcome_minutes: { MESSAGE_SENT: null } });
-    await expect(kpis.settingsSheet()).toHaveCount(0);
+    await expect(kpis.settingsDialog()).toHaveCount(0);
   });
 
   test("a changed rate is sent as a number, and a cleared rate as null", async () => {
@@ -973,7 +973,7 @@ test.describe("Organization KPIs — saving value settings", () => {
     await kpis.saveSettingsButton().click();
     await expect.poll(() => saves.length).toBe(1);
     expect(saves[0]).toEqual({ hourly_rate_usd: 75.5 });
-    await expect(kpis.settingsSheet()).toHaveCount(0);
+    await expect(kpis.settingsDialog()).toHaveCount(0);
 
     await kpis.openValueSettings();
     await expect(kpis.rateInput()).toHaveValue("75.5");
@@ -983,7 +983,7 @@ test.describe("Organization KPIs — saving value settings", () => {
     expect(saves[1]).toEqual({ hourly_rate_usd: null });
   });
 
-  test("a failed save keeps the panel open with the edits and says why", async ({ page }) => {
+  test("a failed save keeps the modal open with the edits and says why", async ({ page }) => {
     await data.kpis.interceptValue();
     await data.kpis.interceptActivity();
     await data.kpis.interceptValueSettings();
@@ -995,7 +995,7 @@ test.describe("Organization KPIs — saving value settings", () => {
     await kpis.saveSettingsButton().click();
 
     await expect(page.getByText("Unable to save value settings")).toBeVisible();
-    await expect(kpis.settingsSheet()).toBeVisible();
+    await expect(kpis.settingsDialog()).toBeVisible();
     await expect(kpis.minutesInput("Pull request opened")).toHaveValue("30");
   });
 
@@ -1014,7 +1014,7 @@ test.describe("Organization KPIs — saving value settings", () => {
     await kpis.saveSettingsButton().click();
 
     await expect.poll(() => value.requests.length).toBeGreaterThan(valueReadsBefore);
-    await expect(kpis.settingsSheet()).toHaveCount(0);
+    await expect(kpis.settingsDialog()).toHaveCount(0);
     expect(activity.requests.length).toBe(activityReadsBefore);
   });
 });

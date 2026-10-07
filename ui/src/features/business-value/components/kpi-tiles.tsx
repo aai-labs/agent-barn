@@ -15,6 +15,7 @@ import {
   missingFigure,
 } from "../format";
 import type { OrganizationActivity, OrganizationValue } from "../schemas";
+import { CalculationHint } from "./calculation-hint";
 
 const FAILED_FIGURE = "Unable to load";
 const MISSING_FIGURE = "—";
@@ -47,9 +48,15 @@ export function KpiTiles({
         source={value}
         label="Hours saved"
         testId="kpi-hours-saved"
+        calculation={
+          <>
+            <p className="m-0">Successful actions × minutes saved per outcome ÷ 60.</p>
+            <p className="m-0">An estimate of human work saved. Only successful, classified aai-cli and gog write actions count. Adjust the minutes per outcome in Value settings.</p>
+          </>
+        }
         figure={({ totals }) => ({
           value: formatHours(totals.minutesSaved),
-          hint: `${totals.successfulWrites.toLocaleString("en-US")} successful ${
+          hint: `Estimated from ${totals.successfulWrites.toLocaleString("en-US")} successful ${
             totals.successfulWrites === 1 ? "write" : "writes"
           }`,
         })}
@@ -58,6 +65,12 @@ export function KpiTiles({
         source={value}
         label="Value"
         testId="kpi-value"
+        calculation={
+          <>
+            <p className="m-0">Hours saved × hourly rate.</p>
+            <p className="m-0">Estimated human-work value in USD. Set the hourly rate in Value settings. Changing it recalculates past periods too.</p>
+          </>
+        }
         figure={({ totals }) =>
           totals.value === null || totals.hourlyRateUsd === null
             ? { missing: missingFigure(totals.hourlyRateUsd !== null) }
@@ -71,6 +84,7 @@ export function KpiTiles({
         source={value}
         label="LLM spend"
         testId="kpi-spend"
+        calculation={<p className="m-0">The sum of recorded LLM costs for this organization in the selected period. It includes all model usage, including work that produced no valued action.</p>}
         figure={({ totals }) => ({
           value: formatSpend(totals.spend),
           extra: (
@@ -88,6 +102,12 @@ export function KpiTiles({
         source={value}
         label="Value per dollar spent"
         testId="kpi-value-per-dollar"
+        calculation={
+          <>
+            <p className="m-0">Estimated value ÷ LLM spend.</p>
+            <p className="m-0">For example, $90 of value ÷ $10 of spend gives $9 per $1 spent. Requires an hourly rate and spend greater than zero.</p>
+          </>
+        }
         figure={({ totals }) =>
           totals.valueToSpendRatio === null
             ? { missing: missingFigure(totals.hourlyRateUsd !== null) }
@@ -98,12 +118,14 @@ export function KpiTiles({
         source={activity}
         label="Requests"
         testId="kpi-requests"
+        calculation={<p className="m-0">Inbound messages + accepted webhook invocations in the selected period. Requests from natively connected channels count too.</p>}
         figure={({ totals }) => ({ value: totals.requests.toLocaleString("en-US") })}
       />
       <SourceTile
         source={activity}
         label="Handled without failure"
         testId="kpi-handled"
+        calculation={<p className="m-0">Successful deliveries ÷ (successful + failed deliveries) × 100. Covers only requests routed through Agent Barn that have a final delivery outcome. The count below shows that coverage.</p>}
         figure={({ totals }) => ({
           ...(totals.handledWithoutFailureRate === null
             ? { missing: NOT_ENOUGH_DATA }
@@ -122,15 +144,23 @@ function SourceTile<T>({
   label,
   testId,
   figure,
+  calculation,
 }: {
   source: KpiSource<T>;
   label: string;
   testId: string;
   figure: (data: T) => Figure;
+  calculation: ReactNode;
 }) {
+  const tileLabel = (
+    <span className="inline-flex items-center gap-1">
+      {label}
+      <CalculationHint label={label}>{calculation}</CalculationHint>
+    </span>
+  );
   if (source.error) {
     return (
-      <StatCard label={label} value={FAILED_FIGURE} testId={testId}>
+      <StatCard label={tileLabel} value={FAILED_FIGURE} testId={testId}>
         <RetryButton onRetry={source.onRetry} />
       </StatCard>
     );
@@ -147,7 +177,7 @@ function SourceTile<T>({
   const hint = [shown.missing, shown.hint].filter(Boolean).join(" · ");
   return (
     <StatCard
-      label={label}
+      label={tileLabel}
       value={shown.missing ? MISSING_FIGURE : (shown.value ?? MISSING_FIGURE)}
       hint={hint || undefined}
       testId={testId}

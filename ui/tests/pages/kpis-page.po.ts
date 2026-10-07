@@ -35,6 +35,30 @@ export class KpisPage {
     return this.page.getByTestId(testId);
   }
 
+  async openCalculation(label: string) {
+    await this.calculationButton(label).click();
+  }
+
+  calculationButton(label: string): Locator {
+    return this.page.getByRole("button", {
+      name: `How ${label.toLowerCase()} is calculated`,
+      exact: true,
+    });
+  }
+
+  async openCalculationWithKeyboard(label: string) {
+    await this.calculationButton(label).focus();
+    await this.calculationButton(label).press("Enter");
+  }
+
+  calculation(label: string): Locator {
+    return this.page.getByRole("dialog", { name: `${label} calculation`, exact: true });
+  }
+
+  async dismissCalculation() {
+    await this.page.keyboard.press("Escape");
+  }
+
   async retryTile(testId: string) {
     await this.tile(testId).getByRole("button", { name: "Retry" }).click();
   }
@@ -119,16 +143,16 @@ export class KpisPage {
     await this.page.getByRole("button", { name: "Value settings" }).click();
   }
 
-  settingsSheet(): Locator {
+  settingsDialog(): Locator {
     return this.page.getByRole("dialog", { name: "Value settings" });
   }
 
   rateInput(): Locator {
-    return this.settingsSheet().getByLabel("Hourly rate (USD)");
+    return this.settingsDialog().getByLabel("Hourly rate (USD)");
   }
 
   outcomeRow(label: string): Locator {
-    return this.settingsSheet().getByRole("group", { name: label, exact: true });
+    return this.settingsDialog().getByRole("group", { name: label, exact: true });
   }
 
   minutesInput(label: string): Locator {
@@ -140,15 +164,15 @@ export class KpisPage {
   }
 
   saveSettingsButton(): Locator {
-    return this.settingsSheet().getByRole("button", { name: "Save", exact: true });
+    return this.settingsDialog().getByRole("button", { name: "Save", exact: true });
   }
 
   async closeSettingsWithX() {
-    await this.settingsSheet().getByRole("button", { name: "Close", exact: true }).click();
+    await this.settingsDialog().getByRole("button", { name: "Close", exact: true }).click();
   }
 
   async cancelSettings() {
-    await this.settingsSheet().getByRole("button", { name: "Cancel", exact: true }).click();
+    await this.settingsDialog().getByRole("button", { name: "Cancel", exact: true }).click();
   }
 
   async pressEscape() {
@@ -168,7 +192,7 @@ export class KpisPage {
   }
 
   async retrySettings() {
-    await this.settingsSheet().getByRole("button", { name: "Retry" }).click();
+    await this.settingsDialog().getByRole("button", { name: "Retry" }).click();
   }
 
   windowLabel(): Locator {

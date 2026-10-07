@@ -1,18 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { SlidersHorizontal } from "lucide-react";
 
 import { Badge } from "@/components/badge";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { MAX_HOURLY_RATE_USD, MAX_OUTCOME_MINUTES } from "../constants";
@@ -83,7 +84,7 @@ function minutesError(minutes: string | null): string | null {
   return null;
 }
 
-export function ValueSettingsSheet() {
+export function ValueSettingsDialog() {
   const [open, setOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
@@ -104,21 +105,25 @@ export function ValueSettingsSheet() {
 
   return (
     <>
-      <button type="button" className="af-btn flex-shrink-0" onClick={() => setOpen(true)}>
-        <SlidersHorizontal size={14} /> Value settings
-      </button>
-
-      <Sheet open={open} onOpenChange={(next) => (next ? setOpen(true) : requestClose())}>
-        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
-          <SheetHeader>
-            <SheetTitle>Value settings</SheetTitle>
-            <SheetDescription>
+      <Dialog open={open} onOpenChange={(next) => (next ? setOpen(true) : requestClose())}>
+        <DialogTrigger asChild>
+          <button type="button" className="af-btn flex-shrink-0">
+            <SlidersHorizontal size={14} /> Value settings
+          </button>
+        </DialogTrigger>
+        <DialogContent
+          className="flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-xl flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:rounded-2xl"
+          style={{ background: "var(--bg-elev)", borderColor: "var(--line)", boxShadow: "var(--shadow-pop)" }}
+        >
+          <DialogHeader className="shrink-0 gap-2 border-b px-6 py-5 pr-12" style={{ borderColor: "var(--line)" }}>
+            <DialogTitle className="text-[20px] font-semibold tracking-tight">Value settings</DialogTitle>
+            <DialogDescription className="text-[13px] leading-relaxed">
               Changes recalculate every figure on this page, including past periods.
-            </SheetDescription>
-          </SheetHeader>
+            </DialogDescription>
+          </DialogHeader>
           <SettingsBody onDirtyChange={setDirty} onCancel={requestClose} onSaved={close} />
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmationDialog
         open={confirmingDiscard}
@@ -146,18 +151,13 @@ function SettingsBody({
 }) {
   const { settings, settingsError, refetchSettings } = useValueSettings();
 
-  if (settingsError) {
-    return (
-      <p className="m-0 px-4 text-[13px] flex items-center gap-2" style={{ color: "var(--err)" }}>
-        Unable to load value settings.
-        <RetryButton onRetry={() => void refetchSettings()} />
-      </p>
-    );
+  if (settingsError && !settings) {
+    return <SettingsReadError onRetry={() => void refetchSettings()} />;
   }
 
   if (!settings) {
     return (
-      <div className="px-4">
+      <div className="overflow-y-auto p-6">
         {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
           <Skeleton key={i} className="mb-3 h-9 w-full" />
         ))}
@@ -166,12 +166,24 @@ function SettingsBody({
   }
 
   return (
-    <SettingsForm
-      settings={settings}
-      onDirtyChange={onDirtyChange}
-      onCancel={onCancel}
-      onSaved={onSaved}
-    />
+    <>
+      {settingsError && <SettingsReadError onRetry={() => void refetchSettings()} />}
+      <SettingsForm
+        settings={settings}
+        onDirtyChange={onDirtyChange}
+        onCancel={onCancel}
+        onSaved={onSaved}
+      />
+    </>
+  );
+}
+
+function SettingsReadError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <p className="m-0 shrink-0 px-6 py-3 text-[13px] flex items-center gap-2" style={{ color: "var(--err)" }}>
+      Unable to load value settings.
+      <RetryButton onRetry={onRetry} />
+    </p>
   );
 }
 
@@ -186,8 +198,10 @@ function SettingsForm({
   onCancel: () => void;
   onSaved: () => void;
 }) {
-  const original = useMemo(() => draftFrom(settings), [settings]);
-  const [draft, setDraft] = useState<Draft>(() => draftFrom(settings));
+  // Keep the editing baseline stable when the query refreshes in the background.
+  const [initialSettings] = useState(() => settings);
+  const [original] = useState(() => draftFrom(settings));
+  const [draft, setDraft] = useState<Draft>(() => original);
   const { mutate: save, isPending: isSaving } = useUpdateValueSettings();
 
   const update = (next: Draft) => {
@@ -206,7 +220,7 @@ function SettingsForm({
 
   return (
     <>
-      <div className="flex flex-col gap-5 px-4">
+      <div className="min-h-0 overflow-y-auto px-6 py-5 flex flex-col gap-5">
         <div>
           <label
             htmlFor="value-settings-rate"
@@ -224,6 +238,10 @@ function SettingsForm({
             value={draft.rate}
             onChange={(event) => update({ ...draft, rate: event.target.value })}
           />
+          <p className="m-0 mt-2 text-[12px] leading-relaxed" style={{ color: "var(--ink-4)" }}>
+            The estimated cost of one hour of human work. Hours saved × this rate gives value.
+            Leave empty to report hours without a dollar value.
+          </p>
           {currentRateError && (
             <p className="text-[12.5px] mt-1 mb-0" style={{ color: "var(--err)" }}>
               {currentRateError}
@@ -235,7 +253,11 @@ function SettingsForm({
           <p className="m-0 text-[13px] font-medium" style={{ color: "var(--ink-2)" }}>
             Minutes saved per outcome
           </p>
-          {settings.outcomeMinutes.map((row) => {
+          <p className="m-0 text-[12px] leading-relaxed" style={{ color: "var(--ink-4)" }}>
+            Estimate the human work each successful action saves. These are assumptions you can
+            adjust, rather than measured working time.
+          </p>
+          {initialSettings.outcomeMinutes.map((row) => {
             const label = outcomeTypeLabel(row.outcomeType);
             const override = draft.overrides[row.outcomeType];
             const error = minutesError(override);
@@ -285,7 +307,7 @@ function SettingsForm({
         </div>
       </div>
 
-      <SheetFooter className="flex-row justify-end">
+      <DialogFooter className="shrink-0 flex-row justify-end border-t px-6 py-4" style={{ borderColor: "var(--line)" }}>
         <button type="button" className="af-btn" onClick={onCancel}>
           Cancel
         </button>
@@ -297,7 +319,7 @@ function SettingsForm({
         >
           {isSaving ? "Saving…" : "Save"}
         </button>
-      </SheetFooter>
+      </DialogFooter>
     </>
   );
 }

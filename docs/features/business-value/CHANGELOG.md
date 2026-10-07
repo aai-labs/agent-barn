@@ -35,6 +35,15 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 
 ## Slice history
 
+### 2026-10-07 — AF-348 — Calculation hints and Value settings modal
+
+- Delivered: clickable calculation hints on all six KPI cards, with estimated-hours wording and an explanation of each Value vs spend interval. They work with keyboard and touch as well as mouse.
+- Changed: Value settings now opens a centered modal with explanatory copy, a scrollable form, and a visible action footer. Validation, reset, save, and discard confirmation keep their existing contracts.
+- Fixed: a settings query refresh no longer changes the editing baseline and sends an untouched field back to an older value. Failed background reads preserve the draft.
+- Fixed: a failed KPI refetch clears that source's stale Agent-table figures, matching the tiles and chart.
+- Verification: browser regression probes reproduced both state failures before these changes; lint, typecheck, production build, and the KPI/Costs/navigation browser checks pass. Focused coverage includes calculation guidance, desktop/mobile modal layout, reconnect, and retry behavior. Removing the failed-refetch guard makes its regression test fail at the stale-value assertion.
+- Follow-up: no API, schema, migration, or release changes.
+
 ### 2026-10-02 — AF-348 — Coverage wording for the handled rate and response time
 
 Changed:

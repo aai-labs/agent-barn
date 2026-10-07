@@ -201,7 +201,7 @@ export function AgentKpiTable({
       (row): RowFigures => ({
         row,
         rateIsSet,
-        value: value.data
+        value: value.data && !value.error
           ? (row.value ?? {
               minutesSaved: 0,
               value: rateIsSet ? 0 : null,
@@ -209,10 +209,10 @@ export function AgentKpiTable({
               valueToSpendRatio: null,
             })
           : null,
-        activity: activity.data ? (row.activity ?? IDLE_ACTIVITY) : null,
+        activity: activity.data && !activity.error ? (row.activity ?? IDLE_ACTIVITY) : null,
       }),
     );
-  }, [value.data, activity.data]);
+  }, [value.data, value.error, activity.data, activity.error]);
 
   const sorted = useMemo(() => {
     const column = COLUMNS.find((c) => c.key === sortKey)!;

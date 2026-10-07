@@ -19,6 +19,7 @@ import { formatBucket, formatBucketLong } from "@/features/platform-stats/format
 import { evenlySpacedTicks } from "@/features/platform-stats/ticks";
 
 import type { OrganizationActivity, OrganizationValue } from "../schemas";
+import { CalculationHint } from "./calculation-hint";
 import { type KpiSource, RetryButton } from "./kpi-tiles";
 
 const VALUE_CHART_CONFIG = {
@@ -48,6 +49,13 @@ export function KpiTrendChart({
           <TabsTrigger value="requests">Requests</TabsTrigger>
         </TabsList>
         <TabsContent value="value">
+          <div className="mb-2 flex items-center gap-1 text-[12px]" style={{ color: "var(--ink-4)" }}>
+            <span>Estimated value and recorded LLM spend{value.data ? ` per ${value.data.granularity}` : " over time"}.</span>
+            <CalculationHint label="Value vs spend">
+              <p className="m-0">Each point covers one time interval: value is hours saved × hourly rate; spend is the LLM costs recorded in that interval.</p>
+              <p className="m-0">Value uses the minutes per successful outcome and hourly rate in Value settings. Each point shows only that interval’s amounts. Changing Value settings recalculates past value too.</p>
+            </CalculationHint>
+          </div>
           <SourceChart source={value}>
             {(data) => <ValueChart data={data} />}
           </SourceChart>

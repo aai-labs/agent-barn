@@ -16,7 +16,7 @@ import { AgentKpiTable } from "./agent-kpi-table";
 import { KpiFootnotes } from "./kpi-footnotes";
 import { KpiTiles } from "./kpi-tiles";
 import { KpiTrendChart } from "./kpi-trend-chart";
-import { ValueSettingsSheet } from "./value-settings-sheet";
+import { ValueSettingsDialog } from "./value-settings-dialog";
 
 export function KpisPage() {
   const canManage = useRequireOrgManager();
@@ -94,7 +94,7 @@ function KpiDashboard() {
             width="16rem"
             ariaLabel="Date range"
           />
-          <ValueSettingsSheet />
+          <ValueSettingsDialog />
         </div>
       </div>
 

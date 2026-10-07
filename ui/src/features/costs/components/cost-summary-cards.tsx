@@ -97,7 +97,7 @@ export function StatCard({
   testId,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   value: string;
   hint?: string;
   testId?: string;

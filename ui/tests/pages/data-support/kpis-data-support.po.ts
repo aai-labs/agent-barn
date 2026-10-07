@@ -189,6 +189,21 @@ export type ReadMock = {
 export class KpisDataSupport {
   constructor(private page: Page) {}
 
+  async reconnect() {
+    await this.page.evaluate(() => {
+      window.dispatchEvent(new Event("offline"));
+      window.dispatchEvent(new Event("online"));
+    });
+  }
+
+  async reconnectAndWaitForSettings() {
+    const response = this.page.waitForResponse(
+      (response) => SETTINGS_PATH.test(new URL(response.url()).pathname) && response.request().method() === "GET",
+    );
+    await this.reconnect();
+    await (await response).finished();
+  }
+
   async interceptValue(options: ReadOptions = {}): Promise<ReadMock> {
     return this.interceptRead(VALUE_PATH, organizationValue(), options);
   }

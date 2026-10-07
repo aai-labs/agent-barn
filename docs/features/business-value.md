@@ -302,6 +302,8 @@ The dashboard never shows `$0` or `0%` for an unknown figure:
 - Any other null, such as the ratio when spend is zero, or the handled rate without deliveries, reads "not enough data".
 - A missing figure shows "—" with its reason on the line below, so the reason is never cut off.
 
+Each tile has a clickable information button with its calculation and scope. The hints work with a mouse, keyboard, or touch. Hours saved is labelled as an estimate: it sums successful actions × effective minutes per Outcome Type, then divides by 60. Value is hours saved × hourly rate; Value per dollar is value ÷ LLM spend, with a worked example and the missing-rate/zero-spend requirements. The other hints explain the spend, Request, and handled-rate inputs.
+
 Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Unable to load" with a Retry; the other endpoint's tiles still render.
 
 ### Trend chart
@@ -309,6 +311,7 @@ Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Un
 - One chart with two tabs, labelled by the bucket granularity each response echoes.
   - **Value vs spend** (the default) draws `/value` `series`: value and spend per bucket.
   - **Requests** draws `/value/activity` `requests_series`.
+- The Value vs spend tab labels the figures as estimated value and recorded LLM spend per interval, using the echoed granularity. Its information button explains that each point is the interval's hours saved × hourly rate and recorded LLM costs, with separate amounts per interval rather than cumulative totals.
 - With no hourly rate set, every value point is null, so the chart draws spend alone and says "Set an hourly rate to chart value".
 - Each tab belongs to one endpoint. A failed endpoint shows "Unable to load" with a Retry inside its own tab, and the other tab still renders.
 
@@ -324,7 +327,7 @@ Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Un
   - The response time reads "<1 s", "1.5 s", "2m 05s", or "1h 02m".
   - Null figures follow the same wording as the tiles.
 - Rows open sorted by hours saved, descending. Every column sorts, a second click reverses it, and unknown figures stay last in both directions.
-- A failed endpoint shows "—" in its own columns and one "Unable to load … figures" line with a Retry above the table.
+- A failed endpoint, including a failed refetch after a successful read, shows "—" in its own columns and one "Unable to load … figures" line with a Retry above the table.
 
 ### Footnotes
 
@@ -340,23 +343,24 @@ Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Un
   - a chart skeleton in a tab whose endpoint is loading;
   - a table skeleton until both endpoints have answered, so a still-loading endpoint is not shown as "—" like a failure.
 
-### Value settings panel
+### Value settings modal
 
-- A "Value settings" button opens a side Sheet over the dashboard. It reads `GET …/value-settings` only while open.
-- The Sheet states that changes recalculate every figure on the page, including past periods.
+- A "Value settings" button opens a centered modal over the dashboard, with a scrollable form and a footer that stays visible on smaller screens. It reads `GET …/value-settings` only while open.
+- The modal states that changes recalculate every figure on the page, including past periods. Inline guidance explains the hourly rate as the estimated cost of human work and minutes per outcome as adjustable assumptions, rather than measured working time.
 - **Hourly rate (USD).** Empty means no rate. Otherwise it must be from 0 to 10,000 with at most two decimals, the bounds of [Value settings](#value-settings).
 - **Minutes per Outcome Type,** in catalogue order. Each row shows a "Default" or "Custom" badge.
   - Editing a row makes it Custom.
   - "Reset to default (N min)" returns a Custom row to its default.
   - Minutes must be a whole number from 1 to 1,440.
+- The editing session captures its settings and baseline together. A background refetch never changes that baseline or clears the draft; Save sends only the fields the user changed. Reopening starts a new session from the stored settings.
 - Invalid fields show an inline error, and Save stays disabled while any field is invalid or nothing has changed.
-- Closing with unsaved edits, by Cancel, the close button, Escape, or the overlay, asks "Discard unsaved changes?" through `ConfirmationDialog`. Cancel there keeps the edits, and Discard closes the Sheet. The next open starts again from the stored settings.
-- A failed settings read shows an inline error with a Retry inside the Sheet.
+- Closing with unsaved edits, by Cancel, the close button, Escape, or the overlay, asks "Discard unsaved changes?" through `ConfirmationDialog`. Cancel there keeps the edits, and Discard closes the modal. The next open starts again from the stored settings.
+- A failed settings read shows an inline error with a Retry inside the modal.
 - **Saving.**
   - Save sends `PUT …/value-settings` with only the fields that changed: `hourly_rate_usd` (`null` for an emptied rate) and `outcome_minutes` keyed by Outcome Type (`null` for a reset row).
-  - On success the Sheet closes, and the Organization value and value settings refetch. Activity does not, because value settings never change it.
+  - On success the modal closes, and the Organization value and value settings refetch. Activity does not, because value settings never change it.
   - The dashboard then shows every figure recalculated at the new settings, past periods included.
-  - On failure the server's message shows as a toast, and the Sheet stays open with the edits.
+  - On failure the server's message shows as a toast, and the modal stays open with the edits.
 
 ## Known gaps
 
@@ -424,7 +428,7 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 | Organization activity aggregates | `../../api/domains/business_value/repository.py` (`ValueActivityRepository`: inbound messages, webhook invocations, delivery outcomes, and tool calls, all scoped through the Agent join), served by migration `45bcefcb0749` (`ix_communication_delivery_agent_direction_completed`, `ix_agent_chat_message_agent_direction_occurred`) |
 | HTTP routes | `../../api/domains/business_value/routes.py` |
 | KPI dashboard UI | `../../ui/src/features/business-value/`, route `../../ui/src/app/dashboard/[orgId]/kpis/page.tsx`, navigation entry in `../../ui/src/components/top-nav.tsx` |
-| KPI dashboard tests | `../../ui/tests/e2e/kpis.spec.ts`, `../../ui/tests/pages/kpis-page.po.ts` |
+| KPI dashboard tests | `../../ui/tests/e2e/kpis.spec.ts`, `../../ui/tests/e2e/kpis-guidance.spec.ts`, `../../ui/tests/pages/kpis-page.po.ts` |
 | Test seeding | `../../api/tests/steps/business_action.py`, `../../api/tests/steps/cost.py` (`without_agent`), `../../api/tests/steps/communication.py` (connections, deliveries, messages, webhook invocations, tool calls) |
 | Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_gog_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/unit/test_metrics.py`, `../../api/tests/unit/test_business_value_valuation.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_business_action_backfill.py`, `../../api/tests/integration/test_value_settings.py`, `../../api/tests/integration/test_organization_value.py`, `../../api/tests/integration/test_organization_activity.py`, `../../api/tests/integration/test_cross_org_isolation.py` |
 
