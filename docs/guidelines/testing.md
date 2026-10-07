@@ -211,6 +211,10 @@ hooks directly. Shared setup lives in
   `../../helm/monitoring/tests/run.sh`) scrapes the real script with basic auth on, and
   the queries are read back through the API's own client. It needs Docker to reach the
   host through `host.docker.internal`.
+- Temporary fixture directories bind-mounted into non-root runtime containers
+  must grant that user traversal access (for example, mode `0755` for generated
+  test configuration). Linux preserves host permissions; Docker Desktop can
+  mask this failure, so a local Desktop pass alone does not prove readability.
 - Fakes of runtime objects can only prove our own logic. Anything that depends
   on runtime behavior MUST also be checked inside the pinned image. The Hermes
   SessionStore, PVC, native Telegram access, Teams runtime webhook, and image smoke contracts run through

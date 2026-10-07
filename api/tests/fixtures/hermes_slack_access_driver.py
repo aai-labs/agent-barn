@@ -51,6 +51,9 @@ def host(image: str) -> None:
             data = build_hermes_config_map(UUID(int=1), UUID(int=2), "test", "", "", "", "", "", "", "", config).data
             env = native_slack_env(settings, {"bot_token": "xoxb-test", "app_token": "xapp-test"})
             with TemporaryDirectory() as directory:
+                # Linux bind mounts preserve the host's 0700 temporary-directory
+                # mode; Hermes' non-root user must be able to traverse /config.
+                Path(directory).chmod(0o755)
                 for name, content in data.items():
                     Path(directory, name).write_text(content)
                 subprocess.run(
