@@ -10,7 +10,7 @@ Use this index to load only the context required by the task. `../AGENTS.md` rem
 | UI code and frontend data flow                         | [`guidelines/webapp.md`](guidelines/webapp.md)         |
 | Tests and verification                                 | [`guidelines/testing.md`](guidelines/testing.md)       |
 | Multi-ticket or multi-PR epic coordination             | [`guidelines/epics.md`](guidelines/epics.md)           |
-| Local development, migrations, deployment, or releases | [`guidelines/operations.md`](guidelines/operations.md) |
+| Local development, migrations, deployment, releases, or automated memory credential provisioning | [`guidelines/operations.md`](guidelines/operations.md) |
 
 ## System context
 

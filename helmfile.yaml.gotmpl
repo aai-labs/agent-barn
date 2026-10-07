@@ -270,6 +270,9 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
       - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
+{{- if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}
+      - {{ env "NAMESPACE" | default "agent-farm" }}/hindsight
+{{- end }}
 
   - name: agentbarn-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
