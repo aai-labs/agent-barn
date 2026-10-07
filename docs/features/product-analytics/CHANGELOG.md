@@ -42,6 +42,31 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 
 ## Changes
 
+### 2026-10-07 — AF-357 — Local end-to-end verification of the new events and message counts
+
+- Observed on local k3d (image from this branch, migration `6c3f9a2e8b41`, chart default `ANALYTICS_ENABLED=false`).
+  - The api and worker were pointed at a recording stub with `ANALYTICS_POSTHOG_HOST=http://host.docker.internal:8765` and email was disabled. Nothing reached the real project.
+  - The overrides were removed afterwards, and analytics is off again by default.
+- **Real API flows:**
+  - `POST /platform/users` → `organization.created` (actor: admin)
+  - `/auth/set-password` → `user.signed_up`; a reused token → 400 and no event
+  - logins → `user.logged_in`; a failed login and `/auth/refresh` → no event
+  - `POST /organizations` → `organization.created`
+  - PATCH rename → `organization.updated` with `["name"]`; the same name again → no event
+  - DELETE → `organization.deleted`
+- **Deliveries:** every one of the 9 deliveries SUCCEEDED on attempt 1.
+- **Stub:** 8 captures matched the database rows by uuid, timestamp, person, groups and fields.
+  - Platform events had only the installation group.
+  - No email addresses appeared.
+  - Exactly one `$groupidentify` across all batches, which confirms once-per-process naming.
+- **Message counts:** seeded web 2 inbound, 1 outbound and telegram 1 inbound in 07:00 UTC, plus one in the next hour. `main()` ran in the worker pod twice.
+  - The counts were exact (2/1/1), and the next-hour message was excluded.
+  - Three distinct uuids, identical on the re-run, following the documented recipe.
+  - `timestamp` was the hour start, `distinct_id` was `installation:<id>`, both groups were present, and no content was sent.
+  - With `ANALYTICS_ENABLED=false` the stub received 0 requests.
+- `phc_` appeared 0 times in the api and worker logs.
+- **Finding:** `organization.updated` uses the Membership actor. Renaming an Organization and deleting it within a second skipped the update. The worker processed it after the Membership cascaded away, logged `actor_not_found`, and the delivery SUCCEEDED without sending. This is the documented skip-and-log behaviour. The fix is to give `organization.updated` a User actor, as `organization.created` and `organization.deleted` already have.
+
 ### 2026-10-07 — AF-357 — Hourly message counts
 
 - Delivered: `agent.messages.counted`, one event per Agent, platform and direction per closed hour, counts only.
