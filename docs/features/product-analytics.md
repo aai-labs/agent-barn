@@ -52,6 +52,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `organization.created` | none (the creator is the person; for `POST /platform/users`, the Platform Administrator) |
 | `organization.updated` | `changed_fields` (`name` and/or `description`; field names only, never values) |
 | `organization.deleted` | none (the Owner who deleted it is the person; sent after the Organization and its Memberships are gone) |
+| `user.logged_in` | `method` (`password`); platform-scoped, so installation group only. Failed logins, token refresh and API-key requests are not logins |
 
 The common set is `source`, `installation_id`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`. When user details are enabled, `$set` (email and name) is added.
 

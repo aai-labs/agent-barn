@@ -35,11 +35,24 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: local end-to-end verification against a recording stub (see the 2026-10-06 entry). A one-off check against the real project from a local stack, labelled `local-dev-test` at the user's request, showed the events arriving in Live Events.
 - In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle.
 - Also delivered: the handler supports platform-scoped events (installation group only).
-- Also delivered: `organization.created`, `organization.updated`, `organization.deleted`.
-- Next: `user.logged_in`, `user.signed_up`, hourly message counts. Then the production confirmation after release.
+- Also delivered: `organization.created`, `organization.updated`, `organization.deleted`, `user.logged_in`.
+- Next: `user.signed_up`, hourly message counts. Then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-07 — AF-357 — user.logged_in
+
+- Delivered: `user.logged_in` (platform scope, User actor and subject, payload `user_id` and `method: "password"`), sent to `product_analytics.posthog` only, with the installation group only.
+  - The login logic moved from the route into `AuthService.login`. It records the event after the credential check through `OutboxMessageRepository.create` and enqueues it.
+  - A recording failure is logged and the login still succeeds.
+  - Failed logins, refresh and API-key requests record nothing.
+- Changed: `events/catalog.py`, `auth/service.py` (now injects `OutboxMessageRepository` and `EventDeliveryDispatcher`), `auth/routes.py`, `analytics/event_handlers.py`, `product-analytics.md`, `domain-events.md`, `operations.md` (outbox volume note).
+- Verified:
+  - The new `test_user_logged_in_event.py` tests pass: success, wrong password and unknown email, refresh, API key, and outbox failure.
+  - The wiring row and `test_auth.py` pass.
+  - The regression suites pass: `test_auth_flow_extended`, `test_set_password`, `test_api_keys`, `test_platform_admin_operations` (51 passed).
+- Follow-up: `user.signed_up`.
 
 ### 2026-10-07 — AF-357 — organization.deleted
 

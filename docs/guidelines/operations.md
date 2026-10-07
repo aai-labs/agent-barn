@@ -164,6 +164,7 @@ Business events go to the Agent Barn PostHog project (EU) through the `product_a
 - **`ANALYTICS_INCLUDE_USER_DETAILS`** adds user email and name as PostHog person properties. It is `true` only in our production deploys (`deploy.yml` on `main`, `deploy-public.yml`) and defaults to `false` everywhere else.
 - **`INSTALLATION_NAME`** labels the install's PostHog group. Unset, it falls back to the `WEB_APP_URL` host, which is what our deploys use.
 - **`ANALYTICS_POSTHOG_HOST`** and **`ANALYTICS_POSTHOG_PROJECT_TOKEN`** default to the EU host and the Agent Barn project token committed in `api/core/config.py`. Override them only to point an install at a test receiver. The project token is write-only and public by design; never commit a personal API key (`phx_`).
+- **Outbox volume.** Every successful login writes one Outbox Message and one Event Delivery, and outbox rows are never pruned. Expect `user.logged_in` to dominate the Platform Event Delivery Monitor.
 - **Testing.** Never point a local or staging stack at the real project, because test events cannot be removed from it. For end-to-end checks, set `ANALYTICS_POSTHOG_HOST` to a local recording endpoint.
 
 ## Per-Agent email addresses

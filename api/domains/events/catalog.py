@@ -41,6 +41,7 @@ PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
+USER_LOGGED_IN = "user.logged_in"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
 COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconnect.requested"
 COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
@@ -453,6 +454,13 @@ class ApiKeyChangedPayload(BaseModel):
     subject_display: str
 
 
+class UserLoggedInPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID
+    method: str
+
+
 class CommunicationConnectionHealthChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -699,6 +707,15 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.PLATFORM,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=USER_LOGGED_IN,
+            schema_version=1,
+            payload_model=UserLoggedInPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
     for event_name, payload_model in (
         (COMMUNICATION_CONNECTION_HEALTH_CHANGED, CommunicationConnectionHealthChangedPayload),
         (COMMUNICATION_CONNECTION_RECONNECT_REQUESTED, CommunicationConnectionReconnectRequestedPayload),

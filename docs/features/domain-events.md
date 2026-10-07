@@ -320,3 +320,7 @@ Changes to the Platform Event Delivery Monitor's summary/explorer response contr
 ## Personal API Key security events
 
 Platform-scoped `api_key.created` and `api_key.revoked` events record account credential lifecycle with a User actor and User subject. Their payloads contain only the User ID, key record ID, access mode, and safe display fields. The API Key repository commits each key mutation and outbox/delivery rows in one transaction; the Security Audit projection persists the resulting record.
+
+## User login events
+
+Platform-scoped `user.logged_in` records each successful password login (`POST /auth/login`), with a User actor and User subject and the payload `user_id` and `method`. `AuthService.login` writes it through `OutboxMessageRepository.create` after the credential check and enqueues it. A failure to record it is logged and never fails the login. Its only intended handler is `product_analytics.posthog`. Failed logins, token refresh and API-key authentication emit nothing.
