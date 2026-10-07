@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -12,6 +11,7 @@ import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { AgentCard } from "@/features/agents/components/agent-card";
 import { HireDialog } from "@/features/agents/components/hire-dialog";
+import { HireTeammateCard } from "@/features/agents/components/hire-teammate-card";
 
 function LoadingCard() {
   return (
@@ -61,9 +61,6 @@ export default function DashboardPage() {
             {isLoading ? "Loading…" : `${running} working now · ${idle} idle`}
           </div>
         </div>
-        <button className="af-btn af-btn-primary" onClick={() => setHireOpen(true)}>
-          <Plus aria-hidden="true" /> Hire a teammate
-        </button>
       </div>
 
       <div className="mb-12">
@@ -98,6 +95,7 @@ export default function DashboardPage() {
                 </div>
               </div>
             )}
+            {!isLoading && <HireTeammateCard onHire={() => setHireOpen(true)} />}
           </div>
         )}
       </div>

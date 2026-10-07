@@ -72,6 +72,18 @@ test.describe("Dashboard Page", () => {
   });
 
   for (const keyboard of [false, true]) {
+    test(`hire card opens the hiring dialog with ${keyboard ? "Enter" : "a click"}`, async () => {
+      await dataSupportPage.agents.interceptGetTemplatesRequest();
+      await dataSupportPage.agents.interceptGetModelsRequest();
+      await dataSupportPage.agents.interceptNameSuggestionRequest();
+      await dashboardPage.goto();
+      await expect(dashboardPage.hireCard()).toHaveCount(1);
+      await dashboardPage.openHireCard(keyboard);
+      await expect(dashboardPage.agentNameInput()).toBeVisible();
+      await dashboardPage.closeHireDialog();
+      await expect(dashboardPage.hireCard()).toBeVisible();
+    });
+
     test(`whole-card navigation works with ${keyboard ? "Enter" : "a click"}`, async ({ page }) => {
       await dataSupportPage.agents.interceptGetAgentRequest();
       await dataSupportPage.agents.interceptGetAgentTemplateRequest();
@@ -108,6 +120,7 @@ test.describe("Dashboard Page", () => {
     await expect(dashboardPage.agentCard("Karl the Assistant with a longer name")).toBeVisible();
     await dashboardPage.searchTeammates("no-such-agent");
     await expect(dashboardPage.agentCard("Karl the Assistant with a longer name")).toHaveCount(0);
+    await expect(dashboardPage.hireCard()).toBeVisible();
     await dashboardPage.searchTeammates("");
     await expect(dashboardPage.agentCard("Maya")).toBeVisible();
   });
@@ -133,6 +146,7 @@ test.describe("Dashboard Page", () => {
     await dashboardPage.goto();
 
     await expect(page.getByText("No agents yet")).toBeVisible();
+    await expect(dashboardPage.hireCard()).toBeVisible();
   });
 
   test("shows error state when agents fail to load", async ({ page }) => {
