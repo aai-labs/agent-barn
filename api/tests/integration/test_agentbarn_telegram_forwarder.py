@@ -394,3 +394,31 @@ def test_a_pod_that_never_answers_does_not_hold_up_other_users() -> None:
 
         with then("Sam's message is delivered without waiting for it"):
             assert_that(delivered_meanwhile, equal_to(True))
+
+
+def test_forwarded_messages_are_purged_a_week_later_at_most_hourly() -> None:
+    with given(_given()) as context:
+        start = datetime.now(UTC)
+        update_id = _queue(context, "hello")
+        _forward(context, Pod(), now=start)
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            row = session.exec(
+                select(AgentBarnTelegramUpdate).where(col(AgentBarnTelegramUpdate.update_id) == update_id)
+            ).one()
+            row.updated_at = start - timedelta(days=8)
+            session.add(row)
+            session.commit()
+
+        with when("the forwarder runs again within the hour, and then after it"):
+            _forward(context, Pod(), now=start + timedelta(minutes=10))
+            within_the_hour = _rows(context)
+            _forward(context, Pod(), now=start + timedelta(hours=2))
+
+        with then("the week-old row survives the first run and is gone after the second"):
+            assert_that(within_the_hour, contains_exactly(update_id))
+            assert_that(_rows(context), equal_to([]))
+
+
+def _rows(context) -> list[int]:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        return list(session.exec(select(AgentBarnTelegramUpdate.update_id)))

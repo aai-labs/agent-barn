@@ -33,6 +33,9 @@ _CONNECT_TIMEOUT_SECONDS = 2
 _WORKERS = 8
 _BATCH = 100
 _SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+# Settled rows only stop re-deliveries, which Telegram ends within a day; a week is ample.
+_SETTLED_RETENTION = timedelta(days=7)
+_PURGE_INTERVAL = timedelta(hours=1)
 # Answers from the cluster or the pod while it is still coming up.
 _NOT_YET_SERVING = frozenset({502, 503, 504})
 
@@ -82,9 +85,13 @@ class AgentBarnTelegramForwarder:
         ),
         init=False,
     )
+    _purged_at: datetime | None = field(default=None, init=False)
 
     def forward_due(self, *, now: datetime | None = None) -> int:
         now = now or datetime.now(UTC)
+        if self._purged_at is None or now - self._purged_at >= _PURGE_INTERVAL:
+            self.repository.purge_settled(settled_before=now - _SETTLED_RETENTION)
+            self._purged_at = now
         for user_id, count in self.repository.drop_expired(received_before=now - HOLD_WINDOW).items():
             self._reply(user_id, _dropped_notice(count))
         heads = self.repository.queue_heads(now=now, limit=_BATCH)

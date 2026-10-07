@@ -115,8 +115,9 @@ class Config(BaseSettings):
     # per-Connection transport once the spike is accepted.
     communications_native_platforms: str = ""
     # Agent Barn's own Telegram bot, shared by every Agent on the agentbarn_telegram
-    # Platform. The platform is offered only when both are set; the token never
-    # leaves the Communications deployment.
+    # Platform. The platform is offered only when both are set. The API reads only
+    # the bot's id from the token; the Communications process alone calls Telegram
+    # with it, and Agents get a per-Connection stand-in.
     agentbarn_telegram_bot_token: str = ""
     agentbarn_telegram_bot_username: str = ""
     # Where the Communications process delivers a linked user's updates to their

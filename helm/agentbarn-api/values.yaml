@@ -221,6 +221,8 @@ worker:
 
 communications:
   enabled: true
+  # Keep at 1 while Agent Barn Telegram is configured: the shared bot's rate limits
+  # are kept in process, so more replicas would each allow the full budget.
   replicaCount: 1
   service:
     port: 8002

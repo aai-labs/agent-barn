@@ -182,6 +182,29 @@ test.describe("Agent Barn Telegram account linking", () => {
     expect(unlinked).toBe(true);
   });
 
+  test("keeps the account and says so when unlinking fails", async ({ page }) => {
+    const agentDetailPage = await openChannels(page);
+    await serve(page, { links: [linkedAccount] });
+    await page.route(`${LINKS}/${LINK_ID}`, (route) => route.fulfill({ status: 500, json: { detail: "boom" } }));
+    await goToChannels(page, agentDetailPage);
+
+    await page.getByRole("button", { name: "Unlink @jane_doe" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Unlink", exact: true }).click();
+
+    await expect(page.getByText("Could not unlink @jane_doe. Try again.")).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByTestId("telegram-linked-account")).toContainText("@jane_doe");
+  });
+
+  test("says when linked accounts cannot be loaded", async ({ page }) => {
+    const agentDetailPage = await openChannels(page);
+    await serve(page);
+    await page.route(LINKS, (route) => route.fulfill({ status: 500, json: { detail: "boom" } }));
+    await goToChannels(page, agentDetailPage);
+
+    await expect(page.getByText("Could not load linked Telegram accounts.")).toBeVisible({ timeout: 10_000 });
+  });
+
   test("asks for the connection to be turned on before linking", async ({ page }) => {
     const agentDetailPage = await openChannels(page);
     await serve(page, { enabled: false });

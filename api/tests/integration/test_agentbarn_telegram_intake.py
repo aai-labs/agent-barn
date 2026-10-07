@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from hamcrest import assert_that, contains_exactly, equal_to
 from sqlalchemy import text
+from sqlalchemy import update as sa_update
 from sqlmodel import Session, col, func, select
 
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
@@ -97,3 +98,26 @@ def test_a_settled_update_keeps_no_content_at_all() -> None:
                     select(func.count()).select_from(AgentBarnTelegramUpdate).where(text("payload is not null"))
                 ).one()
             assert_that(with_content, equal_to(0))
+
+
+def test_settled_updates_are_purged_once_old_while_pending_ones_stay() -> None:
+    with given(_GIVEN) as context:
+        repo = _repo(context)
+        repo.store_updates([_update(40), _update(41), _update(42), _update(43)])
+        repo.settle_update(40)
+        repo.mark_forwarded(41)
+        repo.settle_update(42)
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            session.exec(
+                sa_update(AgentBarnTelegramUpdate)
+                .where(col(AgentBarnTelegramUpdate.update_id).in_([40, 41, 43]))
+                .values(updated_at=_NOW - timedelta(days=8))
+            )  # type: ignore[call-overload]
+            session.commit()
+
+        with when("settled updates older than the cutoff are purged"):
+            purged = repo.purge_settled(settled_before=_NOW - timedelta(days=7))
+
+        with then("only old settled ones go; a recent one and an unprocessed one stay"):
+            assert_that(purged, equal_to(2))
+            assert_that([update.update_id for update in _updates(context)], contains_exactly(42, 43))

@@ -510,6 +510,30 @@ class AgentBarnTelegramRepository:
                     counts[user_id] = counts.get(user_id, 0) + 1
             return counts
 
+    def purge_settled(self, *, settled_before: datetime) -> int:
+        """Delete updates settled before the cutoff; return how many went.
+
+        A settled row only guards against Telegram re-delivering its update,
+        which Telegram stops doing within a day, so old ones serve no purpose.
+        """
+        with Session(self.delegate.engine) as session:
+            purged = session.exec(
+                sa.delete(AgentBarnTelegramUpdate)
+                .where(
+                    col(AgentBarnTelegramUpdate.status).in_(
+                        [
+                            AgentBarnTelegramUpdateStatus.HANDLED,
+                            AgentBarnTelegramUpdateStatus.FORWARDED,
+                            AgentBarnTelegramUpdateStatus.DROPPED,
+                        ]
+                    ),
+                    col(AgentBarnTelegramUpdate.updated_at) < settled_before,
+                )
+                .returning(col(AgentBarnTelegramUpdate.update_id))
+            ).all()  # type: ignore[call-overload]
+            session.commit()
+            return len(purged)
+
     def proxy_connection(self, connection_id: UUID) -> CommunicationConnection | None:
         """An Agent Barn Telegram Connection that may still use the proxy."""
         with Session(self.delegate.engine) as session:

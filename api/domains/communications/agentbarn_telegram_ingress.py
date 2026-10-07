@@ -21,6 +21,9 @@ _POLL_TIMEOUT_SECONDS = 25
 _IDLE_SECONDS = 5.0
 # Forwarding re-checks this often for retries that came due, and sooner when woken.
 _FORWARD_INTERVAL_SECONDS = 1.0
+# Updates are processed in chunks, renewing the lease before each, so a long
+# pass never outlives it and overlaps a replica that took over.
+_PROCESS_CHUNK = 25
 _BACKOFF_INITIAL_SECONDS = 1.0
 _BACKOFF_MAX_SECONDS = 60.0
 # Private chats only: messages, their edits, button presses (including runtime
@@ -91,10 +94,17 @@ class AgentBarnTelegramIngress:
             self.offset = max(update_ids) + 1
 
     async def cycle(self, client: httpx.AsyncClient) -> None:
-        """Poll once, then act on everything stored, including leftovers from before a restart."""
+        """Poll once, then act on everything stored, including leftovers from before a restart.
+
+        A batch stored after the lease was lost is left for the replica that now holds it.
+        """
         await self.poll_once(client)
-        await asyncio.to_thread(self.processor.process_pending)
-        self.wake_forwarder()
+        while await asyncio.to_thread(self.should_poll, owner=self.owner_id):
+            processed = await asyncio.to_thread(self.processor.process_pending, limit=_PROCESS_CHUNK)
+            if processed < _PROCESS_CHUNK:
+                break
+        if self.holds_lease:
+            self.wake_forwarder()
 
     async def run(self, stop: asyncio.Event) -> None:
         backoff = _BACKOFF_INITIAL_SECONDS

@@ -35,7 +35,7 @@ export function TelegramAccountLinking({
   const [error, setError] = useState<string | null>(null);
   const { linkStatus } = useTelegramLinkStatus(agentId, connectionId, pending?.id ?? null);
   const waiting = pending !== null && (linkStatus === undefined || linkStatus.status === "waiting");
-  const { linkedAccounts } = useTelegramLinkedAccounts(agentId, connectionId, { whileLinking: waiting });
+  const { linkedAccounts, error: linkedAccountsError } = useTelegramLinkedAccounts(agentId, connectionId, { whileLinking: waiting });
   const { createLink, unlink } = useTelegramAccountLinkingActions(agentId, connectionId);
 
   function startLinking() {
@@ -69,6 +69,10 @@ export function TelegramAccountLinking({
             </li>
           ))}
         </ul>
+      )}
+
+      {linkedAccountsError && (
+        <span style={{ color: "var(--err)" }}>Could not load linked Telegram accounts.</span>
       )}
 
       {canManage && !enabled && <span>Turn this connection on to link Telegram accounts.</span>}
@@ -147,7 +151,12 @@ export function TelegramAccountLinking({
         isPending={unlink.isPending}
         onConfirm={async () => {
           if (!unlinking) return;
-          await unlink.mutateAsync(unlinking.id);
+          setError(null);
+          try {
+            await unlink.mutateAsync(unlinking.id);
+          } catch {
+            setError(`Could not unlink ${accountName(unlinking)}. Try again.`);
+          }
           setUnlinking(null);
         }}
       />

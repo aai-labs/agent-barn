@@ -159,7 +159,7 @@ def test_each_cycle_processes_what_was_stored_including_leftovers() -> None:
     repository = Mock()
     repository.store_updates.side_effect = lambda updates: order.append("store")
     processor = Mock()
-    processor.process_pending.side_effect = lambda: order.append("process")
+    processor.process_pending.side_effect = lambda **_: order.append("process") or 0
     batches = [{"ok": True, "result": [{"update_id": 7}]}, {"ok": True, "result": []}]
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -230,3 +230,49 @@ def test_forwarding_runs_only_on_the_replica_that_holds_the_lease() -> None:
 
     assert without_lease == 0
     assert forwarder.forward_due.call_count >= 1
+
+
+def _run_cycle(ingress: AgentBarnTelegramIngress) -> None:
+    async def exercise() -> None:
+        async with _client(lambda request: httpx.Response(200, json={"ok": True, "result": [{"update_id": 9}]})) as c:
+            await ingress.cycle(c)
+
+    asyncio.run(exercise())
+
+
+def test_a_replica_that_lost_the_lease_while_polling_stores_the_batch_but_leaves_it_to_the_new_holder() -> None:
+    repository = Mock()
+    repository.claim_ingress_lease.return_value = False
+    processor = Mock()
+    ingress = _ingress(repository, processor=processor)
+    ingress.holds_lease = True
+
+    _run_cycle(ingress)
+
+    repository.store_updates.assert_called_once()
+    processor.process_pending.assert_not_called()
+    assert ingress.holds_lease is False
+
+
+def test_long_processing_renews_the_lease_between_chunks() -> None:
+    repository = Mock()
+    repository.claim_ingress_lease.return_value = True
+    processor = Mock()
+    # Two full chunks, then a partial one that ends the pass.
+    processor.process_pending.side_effect = [25, 25, 3]
+
+    _run_cycle(_ingress(repository, processor=processor))
+
+    assert processor.process_pending.call_count == 3
+    assert repository.claim_ingress_lease.call_count == 3
+
+
+def test_processing_stops_at_the_chunk_where_the_lease_is_lost() -> None:
+    repository = Mock()
+    repository.claim_ingress_lease.side_effect = [True, False]
+    processor = Mock()
+    processor.process_pending.return_value = 25
+
+    _run_cycle(_ingress(repository, processor=processor))
+
+    assert processor.process_pending.call_count == 1
