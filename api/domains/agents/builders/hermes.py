@@ -487,6 +487,10 @@ def build_hermes_deployment(
                                 "mkdir -p /opt/data/workspace && chown -R hermes:hermes /opt/data",
                             ],
                             security_context=client.V1SecurityContext(run_as_user=0),
+                            # A pod is charged the larger of its containers added up and its biggest
+                            # init container. With no block here the LimitRange fills one in, and it
+                            # is bigger than the agent's, so every agent would cost more than AGENT_RESOURCES.
+                            resources=AGENT_RESOURCES,
                             volume_mounts=[
                                 client.V1VolumeMount(name="data", mount_path="/opt/data"),
                             ],

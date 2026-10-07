@@ -380,6 +380,16 @@ def test_deployment_runs_one_headless_runtime_container() -> None:
     assert deployment.spec.template.spec.containers[0].name == "agent"
 
 
+def test_init_container_costs_no_more_quota_than_the_agent() -> None:
+    """Same rule as OpenClaw: the pod is charged for its biggest container, so the init
+    container must not default to the LimitRange's larger values."""
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    pod = deployment.spec.template.spec
+    init = pod.init_containers[0]
+
+    assert init.resources == pod.containers[0].resources
+
+
 def test_deployment_declares_explicit_resources_matching_openclaw() -> None:
     """Both runtimes get 1Gi so limits.memory (100Gi quota) never binds before
     requests.memory (20Gi) -- a 2Gi Hermes limit would cap an all-Hermes fleet at
