@@ -893,3 +893,81 @@ def test_member_without_access_gets_404_for_restore_points_not_403():
         response = context.client.get(_restore_points_url(context), headers=_auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+@pytest.mark.parametrize("activity_access", [False, True])
+def test_agent_message_metadata_respects_activity_permission(activity_access):
+    from datetime import UTC, datetime
+
+    from api.tests.steps.conversation import there_is_a_recorded_message
+
+    occurred_at = datetime(2026, 10, 6, 11, 28, tzinfo=UTC)
+    with given(_GIVEN) as context:
+        creator_id = context.user.id
+        there_is_an_agent(created_by_user_id=creator_id)(context)
+        there_is_a_recorded_message(occurred_at)(context)
+        _switch_to_member()(context)
+        permissions = {PermissionKey.AGENT_READ}
+        if activity_access:
+            permissions.add(PermissionKey.ACTIVITY_READ)
+        role = _insert_custom_agent_role(context, permissions)
+        there_is_agent_access(access_role_id=role.id)(context)
+        for path in (_BASE, f"{_BASE}/{context.agent.id}"):
+            response = context.client.get(path, headers=_auth(context))
+            assert_that(response.status_code, equal_to(200))
+            body = response.json()["items"][0] if path == _BASE else response.json()
+            assert_that(body["creator"]["id"], equal_to(str(creator_id)))
+            assert_that(
+                body["last_message_at"],
+                equal_to(occurred_at.isoformat().replace("+00:00", "Z") if activity_access else None),
+            )
+
+
+def test_agent_list_metadata_queries_exclude_hidden_cross_org_and_deleted_agents():
+    from datetime import UTC, datetime
+
+    from api.domains.agents.authorization import AgentAuthorization
+    from api.domains.agents.models import AgentSecret, SecretProvider
+    from api.domains.conversations.repository import ConversationRepository
+    from api.tests.steps.conversation import there_is_a_recorded_message
+
+    occurred_at = datetime(2026, 10, 6, 11, 28, tzinfo=UTC)
+    with given(_GIVEN) as context:
+        creator_id = context.user.id
+        there_is_an_agent(name="Visible", created_by_user_id=creator_id)(context)
+        visible = context.agent
+        there_is_a_recorded_message(occurred_at)(context)
+        there_is_an_agent(name="Hidden", created_by_user_id=creator_id)(context)
+        hidden = context.agent
+        there_is_a_recorded_message(occurred_at)(context)
+        other_org = Organization(name="Other organization")
+        context.postgres_delegate.save(other_org)
+        there_is_an_agent(organization_id=other_org.id, created_by_user_id=creator_id)(context)
+        cross_org = context.agent
+        there_is_a_recorded_message(occurred_at)(context)
+        there_is_an_agent(deleted=True, created_by_user_id=creator_id)(context)
+        deleted = context.agent
+        there_is_a_recorded_message(occurred_at)(context)
+        for agent in (visible, hidden, cross_org, deleted):
+            context.postgres_delegate.save(
+                AgentSecret(
+                    agent_id=agent.id, provider=SecretProvider.GITHUB, secret_name="GitHub", content="encrypted-fixture"
+                )
+            )
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=visible.id)(context)
+        ids = [visible.id, hidden.id, cross_org.id, deleted.id]
+        authorization = context.injector.get(AgentAuthorization)
+        creators = context.injector.get(AgentRepository).get_creators_for_agents(
+            ids, authorization.authorization_scope(context.current_user_context, PermissionKey.AGENT_READ)
+        )
+        messages = context.injector.get(ConversationRepository).latest_message_times_for_agents(
+            ids, authorization.authorization_scope(context.current_user_context, PermissionKey.ACTIVITY_READ)
+        )
+        secrets = context.injector.get(AgentRepository).get_secret_summaries_for_agents(
+            ids, authorization.authorization_scope(context.current_user_context, PermissionKey.AGENT_READ)
+        )
+        assert_that(set(secrets), equal_to({visible.id}))
+        assert_that(secrets[visible.id][0].secret_name, equal_to("GitHub"))
+        assert_that(set(creators), equal_to({visible.id}))
+        assert_that(messages, equal_to({visible.id: occurred_at}))

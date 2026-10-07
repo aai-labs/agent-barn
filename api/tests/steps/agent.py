@@ -10,6 +10,7 @@ from injector import Module, provider, singleton
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
+    AgentSecret,
     AgentStatus,
     AgentType,
     CommandApprovalMode,
@@ -177,6 +178,21 @@ def use_org_for_auth():
         from api.tests.core.givenpy import LambdaWith
 
         return LambdaWith(lambda: None, cleanup)
+
+    return step
+
+
+def shared_credential_is_attached_to_agent():
+    def step(context):
+        context.postgres_delegate.save(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=context.shared_credential.provider,
+                secret_name=context.shared_credential.name,
+                content=None,
+                shared_credential_id=context.shared_credential.id,
+            )
+        )
 
     return step
 
