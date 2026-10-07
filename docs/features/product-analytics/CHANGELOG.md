@@ -35,11 +35,22 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: local end-to-end verification against a recording stub (see the 2026-10-06 entry). A one-off check against the real project from a local stack, labelled `local-dev-test` at the user's request, showed the events arriving in Live Events.
 - In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle.
 - Also delivered: the handler supports platform-scoped events (installation group only).
-- Also delivered: `organization.created`, `organization.updated`.
-- Next: `organization.deleted`, `user.logged_in`, `user.signed_up`, hourly message counts. Then the production confirmation after release.
+- Also delivered: `organization.created`, `organization.updated`, `organization.deleted`.
+- Next: `user.logged_in`, `user.signed_up`, hourly message counts. Then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-07 — AF-357 — organization.deleted
+
+- Delivered: `organization.deleted` (organization scope, User Actor = the deleting Owner, payload `organization_id`), sent to `product_analytics.posthog` only.
+  - The new `OrganizationRepository.delete_with_event` locks the Organization, stages the event, deletes the row (Memberships cascade in the database) and commits in one transaction.
+  - The service enqueues the delivery ids.
+- Changed: `events/catalog.py`, `organizations/repository.py`, `organizations/service.py`, `analytics/event_handlers.py`, `product-analytics.md`, `domain-events.md`.
+- Verified:
+  - The new `test_organization_deleted_event.py` tests pass. The Organization and its Memberships are gone while the event and its delivery remain and are enqueued. Processing the delivery sends the event as the deleter with the organization group.
+  - The wiring row passes, and the existing delete and permission tests still pass (`test_organization_operations_extended`).
+- Follow-up: `user.logged_in`.
 
 ### 2026-10-07 — AF-357 — organization.updated
 

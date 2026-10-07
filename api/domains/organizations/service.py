@@ -403,4 +403,7 @@ class OrganizationService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(f"Delete this organization's agents before deleting it ({active_agents} still active)."),
             )
-        self.organization_repository.delete(organization.id)
+        delivery_ids = self.organization_repository.delete_with_event(
+            organization.id, ActorIdentity(type=ActorIdentityType.USER, id=context.user.id)
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)

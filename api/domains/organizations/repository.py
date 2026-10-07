@@ -9,7 +9,12 @@ from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
 from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
-from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_CREATED, ORGANIZATION_LLM_BUDGET_CHANGED
+from api.domains.events.catalog import (
+    EVENT_REGISTRY,
+    ORGANIZATION_CREATED,
+    ORGANIZATION_DELETED,
+    ORGANIZATION_LLM_BUDGET_CHANGED,
+)
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.exceptions import LlmBudgetAboveCeiling, OrganizationCreationLimitReached
 from api.domains.organizations.models import (
@@ -526,3 +531,30 @@ class OrganizationRepository:
 
     def delete(self, organization_id: UUID) -> bool:
         return self.delegate.delete_one(Organization, organization_id)
+
+    def delete_with_event(self, organization_id: UUID, actor: ActorIdentity) -> list[UUID]:
+        with Session(self.delegate.engine) as session:
+            organization = session.exec(
+                select(Organization).where(col(Organization.id) == organization_id).with_for_update()
+            ).first()
+            if organization is None:
+                return []
+            event = EVENT_REGISTRY.build_event(
+                event_name=ORGANIZATION_DELETED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION,
+                    id=organization_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={"organization_id": organization_id},
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = self.outbox_repository.delivery_ids_for_event(session, event.event_id)
+            session.delete(organization)
+            session.commit()
+            return delivery_ids

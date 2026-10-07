@@ -33,6 +33,7 @@ ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
 ORGANIZATION_VALUE_SETTINGS_CHANGED = "organization.value_settings.changed"
 ORGANIZATION_CREATED = "organization.created"
 ORGANIZATION_UPDATED = "organization.updated"
+ORGANIZATION_DELETED = "organization.deleted"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
@@ -390,6 +391,12 @@ class OrganizationUpdatedPayload(BaseModel):
     changed_fields: list[str]
 
 
+class OrganizationDeletedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+
+
 class OrganizationMemberChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -575,6 +582,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=ORGANIZATION_UPDATED,
             schema_version=1,
             payload_model=OrganizationUpdatedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=ORGANIZATION_DELETED,
+            schema_version=1,
+            payload_model=OrganizationDeletedPayload,
             handler_names=(PRODUCT_ANALYTICS_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )
