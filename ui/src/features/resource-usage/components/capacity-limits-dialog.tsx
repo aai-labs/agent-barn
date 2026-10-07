@@ -28,7 +28,7 @@ interface Field {
 }
 
 const FIELDS: Field[] = [
-  { key: "limitsMemory", label: "limits.memory (GiB)", placeholder: "e.g. 52.5" },
+  { key: "limitsMemory", label: "limits.memory (GiB)", placeholder: "e.g. 50" },
   { key: "limitsCpu", label: "limits.cpu (cores)", placeholder: "e.g. 30" },
   { key: "requestsMemory", label: "requests.memory (GiB)", placeholder: "e.g. 20" },
   { key: "requestsCpu", label: "requests.cpu (cores)", placeholder: "e.g. 5" },
