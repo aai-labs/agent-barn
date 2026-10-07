@@ -16,6 +16,8 @@ import {
 } from "../pages/data-support/resource-usage-data-support.po";
 import { PlatformResourceUsagePage } from "../pages/platform-resource-usage-page.po";
 
+const GIB = 1024 ** 3;
+
 test.describe("Platform resource usage (platform_admin)", () => {
   let usagePage: PlatformResourceUsagePage;
   let data: DataSupport;
@@ -265,6 +267,62 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await expect(page.getByTestId("platform-agents-need-update")).toHaveCount(0);
   });
 
+  test("shows what the pods request beside what the agents use, on each row, in the cards and by organization", async () => {
+    const base = mockPlatformUsage();
+    const requests: Record<string, { memory: number; cpu: number }> = {
+      [PLATFORM_CY_ID]: { memory: 0.5 * GIB, cpu: 0.1 },
+    };
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: {
+        ...base,
+        totals: { ...base.totals, memory_request_bytes: 1.5 * GIB, cpu_request_cores: 0.35 },
+        organizations: base.organizations.map((row) =>
+          row.organization_name === "Globex" ? { ...row, memory_request_bytes: 0.5 * GIB, cpu_request_cores: 0.1 } : row,
+        ),
+        agents: base.agents.map((agent) =>
+          requests[agent.agent_id]
+            ? { ...agent, memory_request_bytes: requests[agent.agent_id].memory, cpu_request_cores: requests[agent.agent_id].cpu }
+            : agent,
+        ),
+      },
+    });
+
+    await usagePage.goto();
+
+    await expect(usagePage.stat("memory")).toContainText("of 6 GiB in limits · 1.5 GiB requested");
+    await expect(usagePage.stat("cpu")).toContainText("of 3 cores in limits · 0.35 requested, 5-minute average");
+    // Cy asks for 512 MiB of its 2 GiB, so the tick sits a quarter of the way along the bar.
+    const cy = usagePage.agentRows().nth(0);
+    await expect(cy.getByTestId("platform-agent-memory-request")).toHaveText("requests 512 MiB");
+    await expect(cy.getByTestId("platform-agent-cpu-request")).toHaveText("requests 0.1 cores");
+    await expect(cy.getByTestId("usage-meter-request-marker")).toHaveCount(2);
+    await expect(cy.getByRole("meter").first()).toHaveAttribute("aria-label", /request at 25% of the limit/);
+    // An agent whose request was not read says nothing, and has no tick.
+    const ada = usagePage.agentRows().nth(1);
+    await expect(ada.getByTestId("platform-agent-memory-request")).toHaveCount(0);
+    await expect(ada.getByTestId("usage-meter-request-marker")).toHaveCount(0);
+    // And the organization rows, on a wide screen.
+    const globex = usagePage.organizationRows().nth(0);
+    await expect(globex.getByTestId("organization-request-memory")).toHaveText("req 512 MiB");
+    await expect(globex.getByTestId("organization-request-cpu")).toHaveText("req 0.1");
+    await expect(usagePage.organizationRows().nth(1).getByTestId("organization-request-memory")).toHaveText("—");
+    // The extra columns still keep a row on one line.
+    const box = await globex.boundingBox();
+    expect(box?.height ?? Infinity).toBeLessThan(44);
+  });
+
+  test("says nothing about requests when they could not be read", async () => {
+    await data.resourceUsage.interceptPlatformResourceUsage();
+
+    await usagePage.goto();
+
+    await expect(usagePage.stat("memory")).toContainText("of 6 GiB in limits");
+    await expect(usagePage.stat("memory")).not.toContainText("requested");
+    await expect(usagePage.stat("cpu")).not.toContainText("requested");
+    await expect(usagePage.agentRows().nth(0).getByTestId("platform-agent-memory-request")).toHaveCount(0);
+    await expect(usagePage.agentRows().nth(0).getByTestId("usage-meter-request-marker")).toHaveCount(0);
+  });
+
   test("says how many agents need an update to report, in the card and on the organization rows", async () => {
     const base = mockPlatformUsage();
     await data.resourceUsage.interceptPlatformResourceUsage({
@@ -385,7 +443,6 @@ test.describe("Platform resource usage (non platform_admin)", () => {
 });
 
 
-const GIB = 1024 ** 3;
 
 test.describe("Platform namespace quota (platform_admin)", () => {
   let usagePage: PlatformResourceUsagePage;

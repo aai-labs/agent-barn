@@ -106,8 +106,11 @@ export const PlatformUsageTotalsSchema = z.object({
   agentsRestartRequired: z.number().int().nullable().default(null),
   memoryWorkingSetBytes: z.number().nullable().default(null),
   memoryLimitBytes: z.number().nullable().default(null),
+  /** What the pods ask for, over the same reporting agents as the limits. Null when unread. */
+  memoryRequestBytes: z.number().nullable().default(null),
   cpuCores: z.number().nullable().default(null),
   cpuLimitCores: z.number().nullable().default(null),
+  cpuRequestCores: z.number().nullable().default(null),
 });
 export type PlatformUsageTotals = z.infer<typeof PlatformUsageTotalsSchema>;
 
@@ -126,8 +129,10 @@ export const PlatformAgentUsageSchema = z.object({
   organizationName: z.string().nullable().default(null),
   memoryWorkingSetBytes: z.number().nullable().default(null),
   memoryLimitBytes: z.number().nullable().default(null),
+  memoryRequestBytes: z.number().nullable().default(null),
   cpuCores: z.number().nullable().default(null),
   cpuLimitCores: z.number().nullable().default(null),
+  cpuRequestCores: z.number().nullable().default(null),
   /** Over the last hour. */
   cpuThrottledRatio: z.number().nullable().default(null),
 });

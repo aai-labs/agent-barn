@@ -1,5 +1,7 @@
 from uuid import UUID, uuid4
 
+import pytest
+
 from api.domains.agents.models import AgentStatus, PlatformAgentIdentity
 from api.domains.resource_usage.platform_service import build_platform_usage, count_with_container
 
@@ -215,3 +217,69 @@ def test_the_filter_narrows_the_update_count_with_the_rest_of_the_totals():
     assert usage.totals.agents_restart_required == 1
     # The organizations stay the whole platform, as the table beside them does.
     assert [row.agents_restart_required for row in usage.organizations] == [1, 1]
+
+
+def _with_requests(readings: dict[str, float], memory_gib: float, cpu: float) -> dict[str, float]:
+    return {**readings, "memory_request_bytes": memory_gib * _GiB, "cpu_request_cores": cpu}
+
+
+def test_requests_sit_on_each_agent_row_and_add_up_by_organization_and_overall():
+    ada, bob, cy = _agent("Ada", _ACME), _agent("Bob", _ACME), _agent("Cy", _GLOBEX)
+
+    usage = build_platform_usage(
+        [ada, bob, cy],
+        {
+            ada.id: _with_requests(_reading(0.5, 0.2), 0.25, 0.05),
+            bob.id: _with_requests(_reading(1.0, 0.1), 0.5, 0.1),
+            cy.id: _with_requests(_reading(1.5, 0.3), 0.125, 0.05),
+        },
+    )
+
+    row = {agent.agent_name: agent for agent in usage.agents}
+    assert row["Ada"].memory_request_bytes == int(0.25 * _GiB)
+    assert row["Ada"].cpu_request_cores == 0.05
+    acme = next(org for org in usage.organizations if org.organization_name == "Acme")
+    assert acme.memory_request_bytes == int(0.75 * _GiB)
+    assert acme.cpu_request_cores == pytest.approx(0.15)
+    assert usage.totals.memory_request_bytes == int(0.875 * _GiB)
+    assert usage.totals.cpu_request_cores == pytest.approx(0.2)
+
+
+def test_requests_that_could_not_be_read_are_unknown_not_zero():
+    ada = _agent("Ada", _ACME)
+
+    usage = build_platform_usage([ada], {ada.id: _reading(0.5, 0.2)})
+
+    assert usage.agents[0].memory_request_bytes is None
+    assert usage.agents[0].cpu_request_cores is None
+    assert usage.totals.memory_request_bytes is None
+    assert usage.totals.cpu_request_cores is None
+    assert usage.organizations[0].memory_request_bytes is None
+
+
+def test_one_agent_without_a_request_does_not_blank_the_rest():
+    ada, bob = _agent("Ada", _ACME), _agent("Bob", _ACME)
+
+    usage = build_platform_usage(
+        [ada, bob], {ada.id: _with_requests(_reading(0.5, 0.2), 0.25, 0.05), bob.id: _reading(1.0, 0.1)}
+    )
+
+    # Bob's pod is not up yet, say, so only Ada's request is in the sum, and Bob's row says nothing.
+    assert usage.totals.memory_request_bytes == int(0.25 * _GiB)
+    assert {a.agent_name: a.memory_request_bytes for a in usage.agents}["Bob"] is None
+
+
+def test_a_request_for_an_agent_that_does_not_report_is_not_added_to_the_totals():
+    ada, bob = _agent("Ada", _ACME), _agent("Bob", _ACME)
+
+    usage = build_platform_usage(
+        [ada, bob],
+        {
+            ada.id: _with_requests(_reading(0.5, 0.2), 0.25, 0.05),
+            # Scraped but not reporting: the limits leave it out of the totals, so the request does too.
+            bob.id: _with_requests({"up": 1.0}, 4.0, 2.0),
+        },
+    )
+
+    assert usage.totals.memory_request_bytes == int(0.25 * _GiB)
+    assert usage.totals.agents_restart_required == 1

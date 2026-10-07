@@ -7,6 +7,7 @@ import pytest
 from api.domains.resource_usage.models import ResourceUsageRange, ResourceUsageState, resolve_usage_window
 from api.domains.resource_usage.promql import (
     agent_id_from_labels,
+    group_agent_requests,
     group_instant,
     group_instant_all,
     group_namespace_commitments,
@@ -14,6 +15,7 @@ from api.domains.resource_usage.promql import (
     group_totals,
     instant_query,
     namespace_commitments_query,
+    platform_agent_requests_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -142,6 +144,33 @@ def test_the_namespace_query_charges_a_pod_what_a_quota_charges_it():
     assert query.count("on (namespace, pod) group_left ()") == 2
     # Pinned to its own job, as the Agent queries are pinned to theirs.
     assert query.count('job="kube-state-metrics"') == 2 * (2 + 1)
+
+
+def test_the_agent_requests_query_reads_only_agent_pods_by_name_and_names_the_agent_in_app():
+    query = platform_agent_requests_query()
+    agent_pod = "agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
+    # Both halves of the pod rule (containers and init container) are limited to agent pods,
+    # so a restore job or a hook never reaches the label rewrite.
+    assert (
+        f'kube_pod_container_resource_requests{{job="kube-state-metrics", resource=~"memory|cpu", pod=~"{agent_pod}-.+"}}'
+        in query
+    )
+    assert (
+        f'kube_pod_init_container_resource_requests{{job="kube-state-metrics", resource=~"memory|cpu", pod=~"{agent_pod}-.+"}}'
+        in query
+    )
+    assert "kube_pod_container_resource_limits" not in query
+    # The Deployment's name becomes `app`, as the scrape's own label is, so one parser maps both.
+    assert f'"app", "$1", "pod", "({agent_pod})-.+"' in query
+    # An Agent with a pod being replaced is counted once, by its highest, never added twice.
+    assert query.startswith("max by (app, resource) (label_replace(")
+    assert 'kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Running"} == 1' in query
+    assert "on (namespace, pod) group_left ()" in query
+
+
+def test_the_namespace_query_is_not_limited_to_agent_pods():
+    assert "agent-[0-9a-f]" not in namespace_commitments_query()
 
 
 # --- mapping results back to agents ----------------------------------------
@@ -334,3 +363,23 @@ def test_a_snapshot_of_nothing_is_all_null():
     assert snapshot.state == ResourceUsageState.NO_DATA
     assert snapshot.memory_working_set_bytes is None
     assert snapshot.cpu_cores is None
+
+
+def test_agent_requests_are_read_by_agent_and_resource():
+    other = uuid4()
+    samples = [
+        PrometheusSample({"app": f"agent-{_A}", "resource": "memory"}, 805_306_368.0),
+        PrometheusSample({"app": f"agent-{_A}", "resource": "cpu"}, 0.1),
+        PrometheusSample({"app": f"agent-{other}", "resource": "memory"}, 268_435_456.0),
+        # Not an Agent, not a resource we show, and a row with no resource at all.
+        PrometheusSample({"app": "agentbarn-api", "resource": "cpu"}, 9.0),
+        PrometheusSample({"app": f"agent-{_B}", "resource": "ephemeral-storage"}, 9.0),
+        PrometheusSample({"app": f"agent-{_B}"}, 9.0),
+        PrometheusSample({"resource": "cpu"}, 9.0),
+    ]
+
+    assert group_agent_requests(samples) == {
+        _A: {"memory_request_bytes": 805_306_368.0, "cpu_request_cores": 0.1},
+        other: {"memory_request_bytes": 268_435_456.0},
+    }
+    assert group_agent_requests([]) == {}

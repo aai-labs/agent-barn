@@ -6,6 +6,7 @@ from injector import inject, singleton
 
 from api.domains.resource_usage.models import UsageWindow
 from api.domains.resource_usage.promql import (
+    group_agent_requests,
     group_instant,
     group_instant_all,
     group_namespace_commitments,
@@ -13,6 +14,7 @@ from api.domains.resource_usage.promql import (
     group_totals,
     instant_query,
     namespace_commitments_query,
+    platform_agent_requests_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -87,3 +89,10 @@ class ResourceUsageRepository:
         Empty when kube-state-metrics has no pods to report.
         """
         return group_namespace_commitments(self.prometheus.query(namespace_commitments_query(), at))
+
+    def agent_requests(self, *, at: datetime) -> dict[UUID, dict[str, float]]:
+        """{agent id: {"memory_request_bytes": bytes, "cpu_request_cores": cores}} for live pods. One request.
+
+        An Agent with no pod yet is absent, which is not the same as a request of zero.
+        """
+        return group_agent_requests(self.prometheus.query(platform_agent_requests_query(), at))

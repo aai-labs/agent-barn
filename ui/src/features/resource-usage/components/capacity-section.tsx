@@ -113,12 +113,13 @@ export function CapacitySection({ capacity }: { capacity: PlatformCapacity }) {
   return (
     <section className="mb-6" data-testid="platform-capacity">
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-        <div className="min-w-0">
+        {/* Takes the free width, so a long sentence wraps beside the button, not pushes it down. */}
+        <div className="min-w-0 flex-1 basis-[28rem]">
           <h2 className="m-0 text-[14px] font-semibold" style={{ color: "var(--ink)" }}>
             Capacity
           </h2>
           <p className="m-0 mt-0.5 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
-            What every pod in the namespace is allowed to use and asks for, added up, against the quota you entered. A new pod is refused when any one of the four would go over.
+            Every pod's limits and requests, added up, against the quota you entered. A new pod is refused when any one of the four would go over.
           </p>
         </div>
         <button type="button" className="af-btn af-btn-sm" onClick={openDialog} data-testid="capacity-limits-open">

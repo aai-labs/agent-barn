@@ -202,7 +202,11 @@ function UsageStats({ usage }: { usage: PlatformResourceUsage }) {
         label="Memory in use"
         value={totals.memoryWorkingSetBytes !== null ? formatBytes(totals.memoryWorkingSetBytes) : unknown}
         hint={
-          totals.memoryLimitBytes !== null ? `of ${formatBytes(totals.memoryLimitBytes)} in limits` : undefined
+          totals.memoryLimitBytes !== null
+            ? `of ${formatBytes(totals.memoryLimitBytes)} in limits${
+                totals.memoryRequestBytes !== null ? ` · ${formatBytes(totals.memoryRequestBytes)} requested` : ""
+              }`
+            : undefined
         }
         testId="platform-usage-memory"
       />
@@ -211,7 +215,9 @@ function UsageStats({ usage }: { usage: PlatformResourceUsage }) {
         value={totals.cpuCores !== null ? `${formatCores(totals.cpuCores)} cores` : unknown}
         hint={
           totals.cpuLimitCores !== null
-            ? `of ${formatCores(totals.cpuLimitCores)} cores in limits, 5-minute average`
+            ? `of ${formatCores(totals.cpuLimitCores)} cores in limits${
+                totals.cpuRequestCores !== null ? ` · ${formatCores(totals.cpuRequestCores)} requested` : ""
+              }, 5-minute average`
             : undefined
         }
         testId="platform-usage-cpu"

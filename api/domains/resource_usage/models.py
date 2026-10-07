@@ -195,8 +195,12 @@ class PlatformUsageTotalsRead(PydanticBaseModel):
     # holds, so the limits add up to what the namespace quota counts, not to free room.
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    # What the pods ask for, added up over the same reporting Agents as the limits, so the two
+    # describe the same Agents. None when no Agent's request could be read.
+    memory_request_bytes: int | None = None
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
 
 
 class PlatformOrganizationUsageRead(PlatformUsageTotalsRead):
@@ -214,8 +218,10 @@ class PlatformAgentUsageRead(PydanticBaseModel):
     organization_name: str | None = None
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    memory_request_bytes: int | None = None
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
     # Over the last hour.
     cpu_throttled_ratio: float | None = None
 

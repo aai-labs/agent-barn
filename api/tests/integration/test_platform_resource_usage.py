@@ -9,7 +9,7 @@ from typing import Any
 from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, contains_exactly, equal_to, has_length, is_not, none
+from hamcrest import assert_that, close_to, contains_exactly, equal_to, has_length, is_not, none
 from kubernetes.client.exceptions import ApiException
 
 from api.domains.agents.models import AgentStatus
@@ -36,8 +36,10 @@ from api.tests.steps.organization import (
 )
 from api.tests.steps.resource_usage import (
     MockPrometheusModule,
+    prometheus_fails_agent_requests,
     prometheus_is_down,
     prometheus_is_not_configured,
+    prometheus_reports_agent_requests,
     prometheus_reports_for_agents,
     prometheus_reports_namespace_commitments,
 )
@@ -188,7 +190,7 @@ def test_every_organization_is_counted_and_named_from_the_database():
             assert_that(ids, equal_to({str(context.acme.id), str(context.globex.id)}))
 
 
-def test_one_platform_wide_query_is_made_for_the_readings_one_for_the_chart_and_one_for_the_namespace():
+def test_one_platform_wide_query_is_made_for_the_readings_the_requests_the_chart_and_the_namespace():
     with given(
         [
             *_BASE_GIVEN,
@@ -204,12 +206,16 @@ def test_one_platform_wide_query_is_made_for_the_readings_one_for_the_chart_and_
             client = _prometheus(context)
             queries = [call.args[0] for call in client.query.call_args_list]
             readings = [q for q in queries if "agent_memory_working_set_bytes" in q]
-            namespace = [q for q in queries if "kube_pod_container_resource_" in q]
-            # One instant query for the agents' readings and one for what the namespace
-            # commits (limits and requests together), and nothing else.
-            assert_that(queries, has_length(2))
+            namespace = [q for q in queries if '"kind"' in q]
+            agent_requests = [q for q in queries if '"app", "$1", "pod"' in q]
+            # One instant query for the agents' readings, one for what each agent's pod
+            # requests, and one for what the namespace commits (limits and requests
+            # together), and nothing else.
+            assert_that(queries, has_length(3))
             assert_that(readings, has_length(1))
             assert_that(namespace, has_length(1))
+            assert_that(agent_requests, has_length(1))
+            assert "org_id" not in agent_requests[0]
             assert_that(client.query_range.call_count, equal_to(1))
             assert "org_id" not in readings[0]
             assert "org_id" not in client.query_range.call_args.args[0]
@@ -400,6 +406,70 @@ def test_an_unconfigured_prometheus_is_reported_without_a_query():
         _prometheus(context).query_range.assert_not_called()
 
 
+# --- requests -------------------------------------------------------------
+
+
+def test_each_agent_row_and_the_totals_carry_what_the_pods_request():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-req-a@example.com", "owner-req-b@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2), c.cy.id: _reading(1.0, 0.1)}),
+            prometheus_reports_agent_requests(lambda c: {c.ada.id: (0.25 * _GiB, 0.05), c.cy.id: (0.5 * _GiB, 0.1)}),
+            *_platform_admin("admin-requests@example.com"),
+        ]
+    ) as context:
+        body = context.client.get(_URL, headers=_auth(context.access_token)).json()
+
+        agents = {agent["agent_name"]: agent for agent in body["agents"]}
+        assert_that(agents["Ada"]["memory_request_bytes"], equal_to(int(0.25 * _GiB)))
+        assert_that(agents["Ada"]["cpu_request_cores"], equal_to(0.05))
+        assert_that(body["totals"]["memory_request_bytes"], equal_to(int(0.75 * _GiB)))
+        assert_that(body["totals"]["cpu_request_cores"], close_to(0.15, 1e-9))
+        by_id = {row["organization_id"]: row for row in body["organizations"]}
+        assert_that(by_id[str(context.globex.id)]["memory_request_bytes"], equal_to(int(0.5 * _GiB)))
+
+
+def test_a_failed_requests_read_leaves_them_unknown_and_the_rest_of_the_page_standing():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-req-c@example.com", "owner-req-d@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
+            prometheus_fails_agent_requests(),
+            *_platform_admin("admin-requests-down@example.com"),
+        ]
+    ) as context:
+        response = context.client.get(_URL, headers=_auth(context.access_token))
+
+        body = response.json()
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        # The readings did not depend on it.
+        assert_that(body["availability"], equal_to("available"))
+        assert_that(body["agents"][0]["memory_working_set_bytes"], equal_to(int(0.5 * _GiB)))
+        # Unknown, not zero.
+        assert_that(body["agents"][0]["memory_request_bytes"], none())
+        assert_that(body["totals"]["memory_request_bytes"], none())
+        assert_that(body["totals"]["cpu_request_cores"], none())
+
+
+def test_a_request_for_an_agent_that_is_not_reporting_is_left_out_of_the_page():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-req-e@example.com", "owner-req-f@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
+            # Cy has a pod, but no readings: it is not reporting, so it has no row and no share.
+            prometheus_reports_agent_requests(lambda c: {c.ada.id: (0.25 * _GiB, 0.05), c.cy.id: (4 * _GiB, 2.0)}),
+            *_platform_admin("admin-requests-unreporting@example.com"),
+        ]
+    ) as context:
+        body = context.client.get(_URL, headers=_auth(context.access_token)).json()
+
+        assert_that([agent["agent_name"] for agent in body["agents"]], contains_exactly("Ada"))
+        assert_that(body["totals"]["memory_request_bytes"], equal_to(int(0.25 * _GiB)))
+
+
 # --- capacity limits -------------------------------------------------------
 
 
@@ -452,7 +522,7 @@ def test_the_committed_figure_is_asked_of_kube_state_metrics_for_the_whole_names
         context.client.get(_URL, headers=_auth(context.access_token))
 
         queries = [call.args[0] for call in _prometheus(context).query.call_args_list]
-        committed = [q for q in queries if "kube_pod_container_resource_" in q]
+        committed = [q for q in queries if '"kind"' in q]
         assert_that(committed, has_length(1))
         assert 'job="kube-state-metrics"' in committed[0]
         # Namespace-wide, never narrowed to an agent or an organization.

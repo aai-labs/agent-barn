@@ -45,6 +45,13 @@ _THROTTLE_WINDOW_SECONDS = 3600
 _HAS_CONTAINER = {AgentStatus.RUNNING, AgentStatus.ERROR}
 
 
+def _plus(total: float | None, value: float | None) -> float | None:
+    """Add a reading that may be missing. A total of nothing is unknown, not zero."""
+    if value is None:
+        return total
+    return value if total is None else total + value
+
+
 @dataclass
 class _Sums:
     """Running totals for one Organization, or for containers with no live Agent."""
@@ -55,8 +62,10 @@ class _Sums:
     agents_restart_required: int = 0
     memory_working_set_bytes: float = 0.0
     memory_limit_bytes: float = 0.0
+    memory_request_bytes: float | None = None
     cpu_cores: float = 0.0
     cpu_limit_cores: float = 0.0
+    cpu_request_cores: float | None = None
 
     def add(self, fields: Mapping[str, float]) -> None:
         self.agents_reporting += 1
@@ -64,6 +73,8 @@ class _Sums:
         self.memory_limit_bytes += fields.get("memory_limit_bytes", 0.0)
         self.cpu_cores += fields.get("cpu_cores", 0.0)
         self.cpu_limit_cores += fields.get("cpu_limit_cores", 0.0)
+        self.memory_request_bytes = _plus(self.memory_request_bytes, fields.get("memory_request_bytes"))
+        self.cpu_request_cores = _plus(self.cpu_request_cores, fields.get("cpu_request_cores"))
 
     def merge(self, other: _Sums) -> None:
         self.agents_with_container += other.agents_with_container
@@ -73,6 +84,8 @@ class _Sums:
         self.memory_limit_bytes += other.memory_limit_bytes
         self.cpu_cores += other.cpu_cores
         self.cpu_limit_cores += other.cpu_limit_cores
+        self.memory_request_bytes = _plus(self.memory_request_bytes, other.memory_request_bytes)
+        self.cpu_request_cores = _plus(self.cpu_request_cores, other.cpu_request_cores)
 
     def totals(self) -> PlatformUsageTotalsRead:
         return PlatformUsageTotalsRead(
@@ -81,8 +94,10 @@ class _Sums:
             agents_restart_required=self.agents_restart_required,
             memory_working_set_bytes=int(self.memory_working_set_bytes),
             memory_limit_bytes=int(self.memory_limit_bytes),
+            memory_request_bytes=_whole(self.memory_request_bytes),
             cpu_cores=self.cpu_cores,
             cpu_limit_cores=self.cpu_limit_cores,
+            cpu_request_cores=self.cpu_request_cores,
         )
 
 
@@ -145,8 +160,10 @@ def build_platform_usage(
                 organization_name=identity.organization_name if identity else None,
                 memory_working_set_bytes=_whole(readings.get("memory_working_set_bytes")),
                 memory_limit_bytes=_whole(readings.get("memory_limit_bytes")),
+                memory_request_bytes=_whole(readings.get("memory_request_bytes")),
                 cpu_cores=readings.get("cpu_cores"),
                 cpu_limit_cores=readings.get("cpu_limit_cores"),
+                cpu_request_cores=readings.get("cpu_request_cores"),
                 cpu_throttled_ratio=readings.get("cpu_throttled_ratio"),
             )
         )
@@ -270,6 +287,10 @@ class PlatformResourceUsageService:
             logger.warning("Platform resource usage is unavailable", exc_info=True)
             return unmeasured(ResourceUsageAvailability.UNAVAILABLE)
 
+        requests = self._agent_requests(now)
+        # Only the Agents that report get a request beside their readings: the figures are
+        # shown and added up together, so the two describe the same Agents.
+        fields = {agent_id: {**readings, **requests.get(agent_id, {})} for agent_id, readings in fields.items()}
         usage = build_platform_usage(identities, fields, organization_id)
         memory = series.get("memory_working_set_bytes", {})
         cpu = series.get("cpu_cores", {})
@@ -294,6 +315,18 @@ class PlatformResourceUsageService:
                 for bucket in window.timeline()
             ],
         )
+
+    def _agent_requests(self, now: datetime) -> dict[UUID, dict[str, float]]:
+        """What each live Agent's pod requests. Unknown when the source cannot say, and only that.
+
+        Everything else on the page stands without it, so a failure here leaves the requests
+        empty instead of failing the page.
+        """
+        try:
+            return self.usage_repository.agent_requests(at=now)
+        except PrometheusError:
+            logger.warning("Platform Agent requests are unavailable", exc_info=True)
+            return {}
 
     def get_agent_details(self, agent_id: UUID) -> PlatformAgentDetailsRead:
         """Status and usage for one live Agent, for a Heaviest agents row that is opened.

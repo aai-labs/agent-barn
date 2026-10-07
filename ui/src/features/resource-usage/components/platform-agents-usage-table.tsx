@@ -227,7 +227,17 @@ function AgentRow({
             {agent.memoryLimitBytes !== null && (
               <span style={{ color: "var(--ink-4)" }}> / {formatBytes(agent.memoryLimitBytes)}</span>
             )}
-            <UsageMeter ratio={memoryRatio} label={`${agentLabel(agent)} memory`} className="mt-1" />
+            <UsageMeter
+              ratio={memoryRatio}
+              markerRatio={usageRatio(agent.memoryRequestBytes, agent.memoryLimitBytes)}
+              label={`${agentLabel(agent)} memory`}
+              className="mt-1"
+            />
+            {agent.memoryRequestBytes !== null && (
+              <div className="mt-0.5 text-[0.75rem]" style={{ color: "var(--ink-4)" }} data-testid="platform-agent-memory-request">
+                requests {formatBytes(agent.memoryRequestBytes)}
+              </div>
+            )}
           </div>
         </td>
         <td className="px-3 py-2.5">
@@ -238,7 +248,17 @@ function AgentRow({
             {agent.cpuLimitCores !== null && (
               <span style={{ color: "var(--ink-4)" }}> / {formatCores(agent.cpuLimitCores)}</span>
             )}
-            <UsageMeter ratio={cpuRatio} label={`${agentLabel(agent)} CPU`} className="mt-1" />
+            <UsageMeter
+              ratio={cpuRatio}
+              markerRatio={usageRatio(agent.cpuRequestCores, agent.cpuLimitCores)}
+              label={`${agentLabel(agent)} CPU`}
+              className="mt-1"
+            />
+            {agent.cpuRequestCores !== null && (
+              <div className="mt-0.5 text-[0.75rem]" style={{ color: "var(--ink-4)" }} data-testid="platform-agent-cpu-request">
+                requests {formatCores(agent.cpuRequestCores)} cores
+              </div>
+            )}
           </div>
         </td>
         <td

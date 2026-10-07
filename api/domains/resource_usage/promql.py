@@ -109,7 +109,7 @@ _KSM = 'job="kube-state-metrics"'
 COMMITMENT_KINDS = ("limits", "requests")
 
 
-def _effective_pod(kind: str) -> str:
+def _effective_pod(kind: str, pod_matcher: str = "") -> str:
     """Per pod and resource, what a ResourceQuota charges the pod for `kind` (limits or requests).
 
     A pod is charged the larger of its containers added up and its biggest init container
@@ -122,7 +122,7 @@ def _effective_pod(kind: str) -> str:
     Restartable init containers (sidecars) are charged by adding, not by the larger of; none
     run here, so they are not told apart.
     """
-    pick = f'{{{_KSM}, resource=~"memory|cpu"}}'
+    pick = f'{{{_KSM}, resource=~"memory|cpu"{pod_matcher}}}'
     containers = f"sum by (namespace, pod, resource) (kube_pod_container_resource_{kind}{pick})"
     init = f"max by (namespace, pod, resource) (kube_pod_init_container_resource_{kind}{pick})"
     return (
@@ -151,6 +151,28 @@ def namespace_commitments_query() -> str:
         f"label_replace(sum by (resource) ({_effective_pod(kind)} * on (namespace, pod) group_left () {live}),"
         f' "{_KIND_LABEL}", "{kind}", "", "")'
         for kind in COMMITMENT_KINDS
+    )
+
+
+# A pod of an Agent is named after its Deployment, `agent-<uuid>`, then its ReplicaSet and pod
+# hashes. Restore jobs (`rp-cap-`, `rp-res-`) and hooks (`agentbarn-hook-`) never match.
+_AGENT_POD = "agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_REQUEST_FIELDS = {"memory": "memory_request_bytes", "cpu": "cpu_request_cores"}
+
+
+def platform_agent_requests_query() -> str:
+    """What each live Agent's pod is charged in requests, one row per (Agent, resource).
+
+    The healthz script cannot say this: a request is set on the pod, not read from its
+    cgroup. It comes from kube-state-metrics, with each pod's init container counted as in
+    `namespace_commitments_query`, and is matched to its Agent by the pod's name. The highest
+    wins when a rollout leaves two pods of one Agent, so an Agent is never counted twice.
+    """
+    live = f'(kube_pod_status_phase{{{_KSM}, phase=~"Pending|Running"}} == 1)'
+    pods = _effective_pod("requests", f', pod=~"{_AGENT_POD}-.+"')
+    return (
+        f"max by (app, resource) (label_replace({pods} * on (namespace, pod) group_left () {live},"
+        f' "app", "$1", "pod", "({_AGENT_POD})-.+"))'
     )
 
 
@@ -209,6 +231,17 @@ def group_namespace_commitments(samples: Iterable[PrometheusSample]) -> dict[str
         resource = sample.labels.get("resource")
         if kind in COMMITMENT_KINDS and resource in ("memory", "cpu"):
             grouped.setdefault(kind, {})[resource] = sample.value
+    return grouped
+
+
+def group_agent_requests(samples: Iterable[PrometheusSample]) -> dict[UUID, dict[str, float]]:
+    """Request results as {agent id: {"memory_request_bytes": bytes, "cpu_request_cores": cores}}."""
+    grouped: dict[UUID, dict[str, float]] = {}
+    for sample in samples:
+        agent_id = _agent_id_from_app(sample.labels)
+        field = _REQUEST_FIELDS.get(sample.labels.get("resource", ""))
+        if agent_id is not None and field:
+            grouped.setdefault(agent_id, {})[field] = sample.value
     return grouped
 
 
