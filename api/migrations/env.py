@@ -28,6 +28,7 @@ import api.domains.tool_calls.models
 import api.domains.users.models
 import api.domains.users.organization_users.models  # noqa: F401
 from api.core.config import get_config
+from api.migrations.autogenerate import include_object
 
 config = context.config
 connection_url = str(get_config().db_connection_url)
@@ -57,6 +58,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -76,6 +78,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             compare_server_default=True,
+            include_object=include_object,
         )
 
         with context.begin_transaction():

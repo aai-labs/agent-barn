@@ -1,7 +1,7 @@
 from api.domains.communications.models import OutboundCommunicationEnvelope, PlatformCapability
 from api.domains.communications.plugins.base import (
+    GatewayDeliveryPlugin,
     PlatformCredentials,
-    PlatformPlugin,
     PlatformSettings,
 )
 
@@ -14,7 +14,7 @@ class WebCredentials(PlatformCredentials):
     pass
 
 
-class WebPlatformPlugin(PlatformPlugin):
+class WebPlatformPlugin(GatewayDeliveryPlugin):
     """Built-in chat channel backed by the dashboard, not an external provider.
 
     The Web Chat Connection is lazily provisioned when a user sends the first

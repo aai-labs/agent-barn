@@ -244,8 +244,8 @@ records the refusal in the container (`/tmp/agentbarn-llm-terminal-error.json`),
 the Communications adapter in the same container reports a turn that fails after it
 as `SPEND_LIMIT_REACHED`. Communications turns that code into a terminal,
 non-retried failure whose notice reads "A model spend limit has been reached, so this
-agent cannot reply right now…": shown under the message in web chat, and posted as the
-failure notice on Slack, Telegram, Discord and Teams. The wording deliberately does not
+agent cannot reply right now…": shown under the message in Web Chat. Native Slack, Telegram, Discord and Teams
+turns and their error notices belong to the selected runtime. The wording deliberately does not
 say whose limit it was: the rejection is the same whether the Agent's or its
 Organization's ran out.
 

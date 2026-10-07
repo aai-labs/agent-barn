@@ -294,14 +294,13 @@ export function CommunicationConnectionDiagnostics({
   alwaysExpanded?: boolean;
 }) {
   const [open, setOpen] = useState(alwaysExpanded);
-  const [reconnectOpen, setReconnectOpen] = useState(false);
   const [retryDeliveryId, setRetryDeliveryId] = useState<string | null>(null);
   const [windowRange, setWindowRange] = useState<CommunicationJournalWindow | null>(null);
   const [expandedFailureKey, setExpandedFailureKey] = useState<string | null>(null);
   const diagnostics = useCommunicationConnectionDiagnostics(agentId, connection.id, open, windowRange ?? {});
-  const { reconnectConnection, retryDelivery } = useCommunicationConnectionActions();
+  const { retryDelivery } = useCommunicationConnectionActions();
   const queryClient = useQueryClient();
-  const actionError = errorMessage(reconnectConnection.error) ?? errorMessage(retryDelivery.error);
+  const actionError = errorMessage(retryDelivery.error);
   const effectiveWindow: CommunicationJournalWindow = windowRange ?? (diagnostics.data
     ? { since: diagnostics.data.windowStart, until: diagnostics.data.windowEnd }
     : {});
@@ -309,6 +308,7 @@ export function CommunicationConnectionDiagnostics({
     ? new Date(diagnostics.dataUpdatedAt).toISOString()
     : null;
   const failureGroups = diagnostics.data ? groupFailures(diagnostics.data.recentFailures) : [];
+  const recoveryConnection = diagnostics.data?.connection ?? connection;
 
   function handleWindowChange(from: string, to: string) {
     setWindowRange(from || to ? { since: from || undefined, until: to || undefined } : null);
@@ -328,7 +328,9 @@ export function CommunicationConnectionDiagnostics({
               Communication health
             </div>
             <p className="mb-0 mt-1 text-xs" style={{ color: "var(--ink-3)" }}>
-              Provider connectivity and end-to-end delivery are measured separately.
+              {recoveryConnection.transport === "native"
+                ? "Restart the Agent to recover this connection."
+                : "Provider connectivity and end-to-end delivery are measured separately."}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -341,17 +343,6 @@ export function CommunicationConnectionDiagnostics({
               >
                 <RefreshCw size={14} className={diagnostics.isFetching ? "animate-spin" : undefined} />
                 Refresh
-              </button>
-            )}
-            {canEdit && (
-              <button
-                type="button"
-                className="af-btn af-btn-sm"
-                disabled={reconnectConnection.isPending}
-                onClick={() => setReconnectOpen(true)}
-              >
-                <RefreshCw size={14} />
-                {reconnectConnection.isPending ? "Reconnecting…" : "Reconnect"}
               </button>
             )}
             {!alwaysExpanded && (
@@ -567,7 +558,7 @@ export function CommunicationConnectionDiagnostics({
                     agentId={agentId}
                     connectionId={connection.id}
                     kind="delivery"
-                    canEdit={canEdit}
+                    canEdit={canEdit && recoveryConnection.recoveryActions.includes("retry_delivery")}
                     timeRange={effectiveWindow}
                     lastCheckedAt={lastCheckedAt}
                     onRetryDelivery={setRetryDeliveryId}
@@ -580,21 +571,6 @@ export function CommunicationConnectionDiagnostics({
         )}
         {actionError && <p className="mt-2 mb-0 text-xs" style={{ color: "var(--err)" }} role="alert">{actionError}</p>}
       </div>
-
-      <ConfirmationDialog
-        open={reconnectOpen}
-        onOpenChange={setReconnectOpen}
-        title="Reconnect this connection?"
-        description="The provider session will be restarted. Existing deliveries remain queued and are not duplicated."
-        confirmLabel="Reconnect"
-        pendingLabel="Reconnecting…"
-        icon={<RefreshCw size={18} />}
-        isPending={reconnectConnection.isPending}
-        onConfirm={async () => {
-          await reconnectConnection.mutateAsync({ agentId, connectionId: connection.id });
-          setReconnectOpen(false);
-        }}
-      />
 
       <ConfirmationDialog
         open={Boolean(retryDeliveryId)}

@@ -9,6 +9,11 @@ configuration, start, and stop instructions. Its
 [development section](../../README.md#development) covers the native service
 topology.
 
+The API keeps `fastapi[standard]` for its supported server/tooling dependencies.
+`websockets` remains a transitive Uvicorn standard dependency; it is no longer an
+API-owned provider-session requirement. Use `uv sync` with the committed lockfile
+as in the README setup; native transport dependencies belong to the runtime images.
+
 ## Database migrations
 
 ```bash
@@ -24,6 +29,8 @@ before autogenerating a revision. `make merge-heads` operates on revision files
 and does not require a database.
 
 Schema changes require a migration under `../../api/migrations/versions/`.
+Alembic autogeneration excludes only reflected, unmapped `driver_key_encrypted`, `ingress_lease_owner`, and `ingress_lease_expires_at` columns on `communication_connection`, through `api/migrations/autogenerate.py`. This prevents accidental contraction while older deployed readers/writers remain. After the [native rollout cutoff](#native-runtime-gateway-rollout), remove the guard with an explicit contraction migration. Other schema differences remain visible.
+
 Review generated migrations before applying them and run the migration check
 listed in [`testing.md`](testing.md#verification-commands). Deployment runs
 Alembic through the API chart migration hook described in
@@ -426,14 +433,39 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 - **A routing rule names one specific Worker, and CI cannot repoint it.** When an environment's rule was created against a differently-named Worker — a `--env local` one used for tunnel testing, say — publishing through CI creates the correctly-named Worker but leaves the rule pointing at the old one, so mail keeps going to the stale Worker. Cut over in this order: **let CI publish first, then repoint the rule's destination, and only then delete the old Worker.** Deleting first leaves the rule aimed at nothing and bounces every message for that domain.
 - **Delete `--env local` Workers when finished.** They point at a `cloudflared` tunnel that stops existing when the laptop closes, and an account accumulating them is an account where it is easy to point a rule at the wrong one.
 - Deploys publish a **new version of one Worker per environment**, not new Workers; Cloudflare retains ~100 versions for `wrangler rollback`. That is why the deploy is path-filtered: unrelated merges would otherwise consume the rollback history.
-- **Local k3d testing**: a Worker runs on Cloudflare's edge and cannot reach a local cluster. Either expose the Communications service with a tunnel (`cloudflared tunnel`) and point `INBOUND_URL` at it, or skip the Cloudflare hop entirely and exercise the whole Agent Barn path by posting the Worker's JSON straight at `/communications/v1/webhooks/email/inbound` with the configured bearer token.
+- **Local k3d testing**: a Worker runs on Cloudflare's edge and cannot reach a local cluster. Either expose the product API with a tunnel (`cloudflared tunnel`) and point `INBOUND_URL` at it, or skip the Cloudflare hop entirely and exercise the whole Agent Barn path by posting the Worker's JSON straight at `/communications/v1/webhooks/email/inbound` with the configured bearer token.
 - **Agent mail draws on the same account-wide sending quota** as invites, password resets, and lifecycle notifications, across both environments. A chatty Agent can starve real user invites; see the quota note above.
 - Relevant limits: 200 routing rules per domain, 200 verified destination addresses per account, 30 domains per zone, 25 MiB inbound message size.
 
 ## Native runtime gateway rollout
 
-- **`COMMUNICATIONS_NATIVE_PLATFORMS`** is one shared GitHub variable containing a comma-separated native runtime Platform allowlist. Set it to **`slack,discord`** to enable the Hermes/OpenClaw native Slack and Discord gateways in every deployment workflow. It flows through `helmfile.yaml.gotmpl` into the API chart's shared Secret, so both the API and Communications processes receive the same cutoff.
-- Empty is the rollback setting: all Platforms remain on the Communications Gateway. Restart affected Agents after deploying a change so their runtime configuration is rebuilt.
+- Transport ownership is fixed by Platform under the [runtime ownership contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary). Current Config, chart values/Helmfile, deployment workflows, and deployment spec no longer expose or forward `COMMUNICATIONS_NATIVE_PLATFORMS`/`communicationsNativePlatforms`. Stale environment values are ignored and cannot restore chat gateway transport. Retire externally managed GitHub variables and deployment overrides as an operator task after older releases no longer depend on them.
+- Before replacing flag-controlled application replicas, verify their existing allowlist is `slack,discord,telegram,teams`, excluding chat gateway sessions and claims. This chart retains that hard-coded Secret key to fence older replicas restarting during its pre-upgrade hook. Roll every application replica and background worker onto fixed ownership before removing the key in a follow-up release; an older replica restarting against a Secret without the key could otherwise restore its empty-default gateway fallback. Restart affected Agents onto compatible Hermes/OpenClaw images to rebuild native configuration; application rollout alone does not restart Agent pods.
+- Before deploying the chart or running its pre-upgrade migration hook, inspect the **running processes** in every API, Communications, and worker replica of the older release. Updating a repository variable or Secret does not change an existing process environment. Use the target namespace and release below; this prints only the transport allowlist:
+
+  ```bash
+  rollout_namespace='<namespace>'
+  rollout_release='<api-helm-release>'
+  for component in api communications worker; do
+    for pod in $(kubectl -n "$rollout_namespace" get pods \
+      -l "app.kubernetes.io/name=agentbarn-api,app.kubernetes.io/instance=$rollout_release,app.kubernetes.io/component=$component" \
+      -o name); do
+      echo "$component $pod"
+      kubectl -n "$rollout_namespace" exec "$pod" -c "$component" -- \
+        python -c 'import pathlib; entries=pathlib.Path("/proc/1/environ").read_bytes().split(b"\0"); print(next((v.decode() for v in entries if v.startswith(b"COMMUNICATIONS_NATIVE_PLATFORMS=")), "COMMUNICATIONS_NATIVE_PLATFORMS=<missing>"))'
+    done
+  done
+  ```
+
+  Confirm every expected replica was inspected and every flag-controlled process includes all four `slack,discord,telegram,teams` platforms. An empty result is not success. If PID 1 is a launcher, inspect the actual application process environment instead. A missing/incomplete value blocks retirement migration: first roll the older chart/application with the complete allowlist, verify live processes and cessation of native gateway sessions/claims, then deploy this release. Keep the Secret fence until all application and worker consumers run fixed ownership.
+- Rollback requires a compatible application/runtime release. Never re-enable legacy provider sessions or replay historical chat Deliveries. Web Chat and Email still require the Communications deployment.
+- Before applying native-work retirement revision `72c4a9e1b6d8`, fence older applications from native sessions/claims using the allowlist above and stop their in-flight provider sessions. The chart migration hook runs before application rollout. This data-only revision cancels pending/processing native work atomically with content-free journal entries; it does not drop columns, change credentials/history, or touch Web/Email work. Its downgrade changes only the Alembic revision marker and never undoes cancellations or removes journal history. Physical driver/ingress-lease column removal must wait until all mapped readers/writers of those columns have exited.
+- Deploy a Hermes image built without the retired completion-capture patch together with the new runtime assembly, then restart affected Agents. Old pods keep their mounted bridge until restarted; restored volumes run the same sanitation at start. The retained history patch must remain in the Hermes image.
+- Restart affected OpenClaw Agents after deploying the native message-tool correction so their ConfigMap and saved configuration receive the [startup sanitation](../architecture/runtime-and-deployment.md#runtime-neutral-communications). This correction is delivered by the API's builder and startup script; it requires no new base image.
+- Driver-default revision `8b1d5e7f9a23` adds an empty-string database default to the existing non-null `driver_key_encrypted` column without rewriting existing rows. Apply it before deploying current code, which omits driver and ingress-lease columns from its mapping and writes. Its downgrade removes only the database default and preserves values; deploy writers that explicitly supply the driver column before downgrading. Retained legacy driver/ingress-lease values are inert and untouched by current code, including Connection retirement and Agent deletion; provider credentials and credential identities are still scrubbed. Older mapped readers/writers can coexist while fenced as above; do not drop driver or ingress-lease columns until all their deployed consumers have exited.
+- The legacy runtime `/communications/v1/agents/{agent_id}/messages` path is an authenticated `410` handler only. Remove that handler after confirming every deployed Agent pod has restarted onto bridge-free configuration (including the matching Hermes image), restored volumes run startup sanitation, and legacy submissions have ceased. Code cleanup alone does not establish that cutoff; do not restore the initiated-send service during rollout or rollback.
+- Review `[messaging-retirement]` startup counts and the Agent-volume `retired-messaging-audit.json` report (`/opt/data` on Hermes, `/home/node/.openclaw` on OpenClaw). `job_audit=unreadable` requires inspecting the native store before treating the audit as complete. `report_write=failed` means the report could not be saved (without masking `job_audit=unreadable`); startup continues after plugin removal, but repair volume permissions and inspect the native store before declaring the audit complete. Reports contain job IDs and flags, not prompts, message content, or destinations.
+- Repair listed jobs through the native scheduler only after verifying their stored Connection, allowed recipient, and thread policy. Hermes `api_server`/`connection:` origins and OpenClaw `last` destinations do not prove a usable native recipient. Missing explicit recipients are accepted only with a usable configured native home (`defaultTo` in the merged OpenClaw config or the Hermes home-channel environment); the no-home sentinel is never accepted. Disabled jobs, completed/paused Hermes jobs, and OpenClaw main-session jobs without delivery are excluded. Malformed jobs mark the audit unreadable while other jobs remain auditable. Required managed-plugin removal must succeed before runtime startup. Preserve schedules, job identity, and session history; never replay the retired spool or infer delivery from it. No automatic rerouting is performed. Startup jobs should explicitly select a configured native home platform. Web Chat and Email support ordinary replies, not scheduled pushes.
 
 ## Staging environment
 

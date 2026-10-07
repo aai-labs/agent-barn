@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent / "messaging"))
 import json
 import os
 import re
@@ -13,8 +9,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-
-from agentbarn_message import bind_execution, unbind_execution  # ty: ignore[unresolved-import]
 
 COMMUNICATIONS_URL = os.environ["COMMUNICATIONS_URL"].rstrip("/")
 COMMUNICATIONS_API_KEY = os.environ["COMMUNICATIONS_API_KEY"]
@@ -308,7 +302,6 @@ def run_delivery_chat_completions(delivery: dict) -> None:
     envelope = delivery["envelope"]
     session_key = session_key_for(delivery)
     IN_FLIGHT.begin(delivery_id, session_key)
-    bind_execution(session_key, delivery)
     _mark_turn_started(delivery_id)
     try:
         result = http_request(
@@ -345,7 +338,6 @@ def run_delivery_chat_completions(delivery: dict) -> None:
         )
     finally:
         IN_FLIGHT.clear(delivery_id)
-        unbind_execution(session_key)
 
 
 def iter_sse_events(response):
@@ -478,7 +470,6 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
         daemon=True,
     )
     heartbeat.start()
-    bind_execution(session_key, delivery)
     _mark_turn_started(delivery_id)
     try:
         started = http_request(
@@ -498,7 +489,6 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
             _PENDING_APPROVALS.pop(session_key, None)
         complete_delivery(delivery_id, succeeded=False, error=exc)
     finally:
-        unbind_execution(session_key)
         heartbeat_stopped.set()
         with _ACTIVE_RUNS_LOCK:
             active = _ACTIVE_RUNS.get(session_key)

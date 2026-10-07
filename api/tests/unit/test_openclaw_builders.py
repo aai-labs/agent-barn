@@ -60,7 +60,8 @@ def test_startup_migrates_legacy_state_after_config_and_plugin_dirs_exist() -> N
     migration = START_SH.index("legacy-workspace-migration.sh")
 
     assert START_SH.index("init-openclaw.js") < migration
-    assert START_SH.index("$MESSAGE_PLUGIN_DIR/openclaw.plugin.json") < migration
+    assert START_SH.index("init-openclaw.js") < START_SH.index("retire-messaging.py") < migration
+    assert START_SH.index("$OBSERVER_DIR/openclaw.plugin.json") < migration
     assert migration < START_SH.index("OPENCLAW_VERSION=")
 
 
@@ -346,7 +347,6 @@ def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -
 
     assert env == {
         "AGENTBARN_NATIVE_CHANNELS": "slack,discord,telegram,msteams",
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
         "SLACK_BOT_TOKEN": "xoxb",
         "SLACK_APP_TOKEN": "xapp",
         "DISCORD_BOT_TOKEN": "discord-token",
@@ -355,3 +355,9 @@ def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -
         "MSTEAMS_APP_PASSWORD": "secret",
         "MSTEAMS_TENANT_ID": "tenant-id",
     }
+
+
+def test_gateway_config_allows_native_message_tool() -> None:
+    config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert "message" not in config["tools"].get("deny", [])
