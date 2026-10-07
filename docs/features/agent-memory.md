@@ -8,7 +8,7 @@ Read before changing whether an Agent may use long-term memory, who may turn it 
 
 Agent Memory gives an Agent long-term memory backed by a self-hosted Hindsight instance. It is opt-in per Agent and adds to each Runtime's own memory (Hermes `MEMORY.md`/`USER.md`, OpenClaw `memory-core`); it never replaces it.
 
-Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md). The opt-in, Memory Grants, gateway, per-start credentials, runtime plugins, and the memory UI are implemented. Opted-in Agents automatically recall and retain through Hindsight when the optional backend and gateway are deployed.
+Delivery is staged; see [`agent-memory/CHANGELOG.md`](agent-memory/CHANGELOG.md). The opt-in, Memory Grants, gateway, per-start credentials, runtime plugins, and the memory UI are implemented. Opted-in Agents automatically recall and retain through Hindsight through the backend and gateway deployed by Helmfile.
 
 ## Memory data contract
 
@@ -247,7 +247,7 @@ and do not measure Hindsight extraction quality.
 - `api/infrastructure/hindsight/`: authenticated upstream HTTP client.
 - `api/memory_app.py`, `api/memory_main.py`: gateway composition and process entry point.
 - `api/domains/agents/service.py`: start-time memory credentials; Agent lifecycle persistence copies their hash.
-- `helm/hindsight/`, `helm/agentbarn-api/templates/memory-deployment.yaml`: backend and gateway deployments; Helmfile owns optional release ordering.
+- `helm/hindsight/`, `helm/agentbarn-api/templates/memory-deployment.yaml`: backend and gateway deployments; Helmfile always deploys the memory releases and owns their ordering.
 - `ui/src/features/agent-memory/`: the setting, access panel, and Memory tab; composed from the Agent configuration page, the Agent detail page, and Organization Settings.
 - `api/domains/rbac/catalog.py`: `agent.memory.manage`, `memory.access.manage`.
 - `api/tests/integration/test_agent_memory.py`: permission, tenancy and audit contract.
