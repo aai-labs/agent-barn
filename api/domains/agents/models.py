@@ -1312,6 +1312,14 @@ class AgentProvisioningErrorRead(PydanticBaseModel):
     detail: str | None = None
 
 
+class AgentCreatorRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    full_name: str | None
+    email: str
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1348,6 +1356,9 @@ class AgentRead(PydanticBaseModel):
     memory_enabled: bool = False
     last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
+    creator: AgentCreatorRead | None = None
+    #: Latest recorded inbound or outbound message, withheld without activity.read.
+    last_message_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

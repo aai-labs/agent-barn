@@ -313,6 +313,9 @@ jobs:
           POSTGRES_FIRECRAWL_USER: ${{ vars.POSTGRES_FIRECRAWL_USER }}
           POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
           POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_FIRECRAWL_PASSWORD }}
+          HINDSIGHT_DB_PASSWORD: ${{ secrets.PUBLIC_HINDSIGHT_DB_PASSWORD }}
+          HINDSIGHT_API_KEY: ${{ secrets.PUBLIC_HINDSIGHT_API_KEY }}
+          MEMORY_RUNTIME_SERVICE_KEY: ${{ secrets.PUBLIC_MEMORY_RUNTIME_SERVICE_KEY }}
           LITELLM_MASTER_KEY: ${{ secrets.PUBLIC_LITELLM_MASTER_KEY }}
           SECRET_SIGNING_KEY: ${{ secrets.PUBLIC_SECRET_SIGNING_KEY }}
           PLATFORM_ADMIN_CREDENTIALS: ${{ secrets.PUBLIC_PLATFORM_ADMIN_CREDENTIALS }}
@@ -337,7 +340,26 @@ jobs:
           # The public deployment's own bot; Telegram allows one consumer per bot.
           AGENTBARN_TELEGRAM_BOT_TOKEN: ${{ secrets.PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN }}
           AGENTBARN_TELEGRAM_BOT_USERNAME: ${{ vars.PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME }}
-        run: helmfile -f helmfile.yaml.gotmpl sync --wait
+          MEMORY_DEFAULT_MODEL: ${{ vars.PUBLIC_MEMORY_DEFAULT_MODEL }}
+          MEMORY_LITELLM_KEY_HASHES: ${{ vars.PUBLIC_MEMORY_LITELLM_KEY_HASHES }}
+        run: |
+          set -euo pipefail
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          # Validate required GitHub Secrets before Helmfile renders the releases.
+          python3 api/scripts/provision_memory.py --env-file "$credentials_file"
+          set -a
+          # shellcheck disable=SC1090
+          source "$credentials_file"
+          set +a
+          helmfile -f helmfile.yaml.gotmpl -l name=hindsight sync --include-transitive-needs --wait
+          python3 api/scripts/provision_memory.py --include-key-hashes --env-file "$credentials_file"
+          set -a
+          # shellcheck disable=SC1090
+          source "$credentials_file"
+          set +a
+          # Hindsight already synced: do not rotate its key again in this run.
+          helmfile -f helmfile.yaml.gotmpl -l name!=hindsight sync --wait
 
   # Runs after `deploy` on purpose: the Worker posts inbound mail into this
   # cluster's Communications service, so the cluster must already hold the

@@ -53,6 +53,8 @@ line-length = 120
 # actually runs (see openclaw-base/Dockerfile's `uv python install 3.12` and
 # hermes-base's bundled 3.13.5).
 [tool.ruff.per-file-target-version]
+# Deployment provisioning runs with the runner's Python, without API dependencies.
+"scripts/provision_memory.py" = "py310"
 "domains/agents/scripts/openclaw/**" = "py312"
 "domains/agents/scripts/hermes/**" = "py313"
 "domains/agents/scripts/communications-runtime-adapter.py" = "py312"

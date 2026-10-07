@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -64,6 +64,7 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentConfigurationVersionRead,
     AgentCreate,
+    AgentCreatorRead,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
@@ -138,6 +139,7 @@ from api.domains.communications.plugins.agentbarn_telegram import (
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.conversations.repository import ConversationRepository
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -287,6 +289,7 @@ class AgentService:
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
+    conversation_repository: ConversationRepository
     plugins: PlatformPluginRegistry
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -464,7 +467,7 @@ class AgentService:
     def _build_agent_read(
         self,
         agent: Agent,
-        secrets: list[AgentSecret] | None = None,
+        secrets: Sequence[AgentSecret | AgentSecretRead] | None = None,
         skills: list[PinnedSkill] | None = None,
         required_skill_map: Mapping[UUID, str | None | tuple[int, str | None]] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
@@ -476,19 +479,21 @@ class AgentService:
         source_update_skill_ids: set[UUID] | None = None,
         effective_default_model: str = "",
         configured_platform_keys: list[str] | None = None,
+        creator: AgentCreatorRead | None = None,
+        last_message_at: dt.datetime | None = None,
+        shared_credential_names: Mapping[UUID, str] | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
-        shared_creds_by_id = {}
-        if shared_ids:
-            shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, agent.organization_id)
-            shared_creds_by_id = {c.id: c for c in shared_creds}
+        credential_names = shared_credential_names if shared_credential_names is not None else {}
+        if shared_credential_names is None and shared_ids:
+            credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+                shared_ids, agent.organization_id
+            )
         secrets_read = []
         for secret in secrets or []:
             read = AgentSecretRead.model_validate(secret)
-            if secret.shared_credential_id and secret.shared_credential_id in shared_creds_by_id:
-                sc = shared_creds_by_id[secret.shared_credential_id]
-                read.shared_credential_id = sc.id
-                read.shared_credential_name = sc.name
+            if secret.shared_credential_id and secret.shared_credential_id in credential_names:
+                read.shared_credential_name = credential_names[secret.shared_credential_id]
             secrets_read.append(read)
         assigned_ids = {pinned.skill.id for pinned in (skills or [])}
         req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
@@ -561,6 +566,8 @@ class AgentService:
             # Agent Barn Telegram has no gateway path, so it is runtime-owned everywhere.
             native_platform_keys=sorted(self.config.native_platform_keys | {"agentbarn_telegram"}),
             allowed_actions=allowed_actions or [],
+            creator=creator,
+            last_message_at=last_message_at,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
@@ -586,6 +593,10 @@ class AgentService:
             template_key = template.template_key
         read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
+        creators = self.repository.get_creators_for_agents([agent.id], read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            [agent.id], self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
         return self._build_agent_read(
             agent,
             secrets,
@@ -594,6 +605,8 @@ class AgentService:
             allowed_actions,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(agent.organization_id),
             configured_platform_keys=configured_platform_keys.get(agent.id, []),
+            creator=creators.get(agent.id),
+            last_message_at=message_times.get(agent.id),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
@@ -875,6 +888,7 @@ class AgentService:
             template_key=template.template_key,
             template_version=template.version,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(org_id),
+            creator=AgentCreatorRead.model_validate(context.user),
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -1467,7 +1481,22 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, agents)
 
         agent_ids = [a.id for a in agents]
-        secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
+        creators = self.repository.get_creators_for_agents(agent_ids, read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            agent_ids, self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
+        secrets_by_agent = self.repository.get_secret_summaries_for_agents(agent_ids, read_scope)
+        shared_credential_ids = list(
+            {
+                secret.shared_credential_id
+                for secrets in secrets_by_agent.values()
+                for secret in secrets
+                if secret.shared_credential_id is not None
+            }
+        )
+        shared_credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+            shared_credential_ids, read_scope.organization_id
+        )
         skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
         assigned_skill_ids = list(
             {pinned.skill.id for agent_skills in skills_by_agent.values() for pinned in agent_skills}
@@ -1501,6 +1530,9 @@ class AgentService:
                 source_update_skill_ids=source_update_skill_ids,
                 effective_default_model=effective_default_model,
                 configured_platform_keys=configured_platform_keys.get(agent.id, []),
+                creator=creators.get(agent.id),
+                last_message_at=message_times.get(agent.id),
+                shared_credential_names=shared_credential_names,
             )
             for agent in agents
         ]

@@ -15,7 +15,7 @@ The active organization comes from `/dashboard/[orgId]`. Platform View lives und
 ## API and query invariants
 
 - Normal application HTTP calls use the singleton exported from `../../ui/src/shared/api`.
-- The client sends cookies, transforms request keys to snake_case and response keys to camelCase, and surfaces `ApiError`.
+- The client sends cookies, transforms request keys to snake_case and response keys to camelCase, and surfaces `ApiError`. Request keys that contain `-`, or that are already UPPER_SNAKE (`/^[A-Z0-9_]+$/`, such as enum codes used as map keys), are sent unchanged.
 - Important responses are validated with feature-local Zod schemas supplied by hooks.
 - Query keys use the centralized factory in `../../ui/src/shared/query-keys.ts` and feature-local key helpers.
 - Several organization-scoped keys do not include organization ID. `OrganizationProvider` removes the known organization-scoped query families on a genuine organization switch to prevent prior-organization data from remaining visible.
