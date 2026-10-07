@@ -13,6 +13,21 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-07 — Separate native Hermes Slack channel and DM access
+
+- Fixed: a Slack Connection with open channel access and a DM sender allowlist
+  no longer rejects channel mentions from users outside that DM list. An empty
+  DM allowlist closes DMs without closing channels; an empty channel allowlist
+  closes channels without closing permitted DMs.
+- Changed: the ConfigMap-shipped `agentbarn-slack-access` runtime plugin enforces
+  the Connection policy at Hermes' early authorization seam, before attachment
+  fetching. Native mention and thread controls continue to apply. See
+  [runtime admission](../../architecture/runtime-and-deployment.md#mention-gating).
+- Verified: the real-image regression fails on the previous projection and
+  covers open, closed, populated, and empty allowlists through Slack message intake.
+- Operations: deploy the API and restart affected Agents. No migration or
+  base-image change is required.
+
 ### 2026-10-04 — local Web Chat reload recovery
 
 - Fixed: the local Communications server has a five-second graceful shutdown

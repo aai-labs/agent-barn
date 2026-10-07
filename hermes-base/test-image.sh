@@ -15,6 +15,8 @@ docker run --rm \
     uv run --frozen python tests/fixtures/hermes_pvc_permissions_driver.py "$image"
     # Native Telegram access policy through Hermes' real adapter and auth chain.
     uv run --frozen python tests/fixtures/hermes_telegram_access_driver.py "$image"
+    # Slack channel admission must not inherit the DM sender allowlist.
+    uv run --frozen python tests/fixtures/hermes_slack_access_driver.py "$image"
 )
 
 # Run telemetry-push against Hermes' real SessionStore. Unit-test fakes cannot
