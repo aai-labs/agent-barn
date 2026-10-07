@@ -14,6 +14,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-07 — Reserve new runtime image versions — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Versioned: Hermes `0.2.7` and OpenClaw `0.7.4` give the cleanup builds fresh immutable image tags. Hermes removes the installed completion bridge patch; both runtime versions advance for the requested rollout.
+- Verified: the version files contain valid patch increments and runtime build/deployment workflows read them directly. Runtime source is unchanged from the tested staging merge; image publication remains a CI/release step.
+
 ### 2026-10-07 — Merge staging memory and dashboard compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 
 - Preserved: staging `2329f77c` Agent Memory, resource-usage, KPI, and team-card behavior alongside fixed native transport ownership and bridge retirement. Runtime startup keeps memory readiness without restoring spool drains or completion capture.
