@@ -21,3 +21,5 @@ Authentication and management: `../../api/domains/api_keys/`, `../../api/domains
 Changes to any user-authenticated route must preserve session and key access and accurately update OpenAPI and developer guides. Changes to Agent/subordinate resource access must follow the RBAC implementation brief. Incompatible v1 wire changes require a new major API version.
 
 The checked-in `api/developer_docs/operations-v1.json` records current method, path, and operation ID pairs. The API contract test detects accidental operation removal or renaming; reviewers update it intentionally for additions. Schema shape and behavioral compatibility still require API review and integration tests.
+
+The provider-session reconnect operation remains in the v1 inventory and discovery for compatibility, with OpenAPI `deprecated: true`. Authorized active-Connection requests receive terminal `409` and Agent restart guidance; existing authentication, permission, and tenant-concealment responses remain unchanged. See the [developer resource guide](../../api/developer_docs/resources.md).

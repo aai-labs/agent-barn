@@ -1,6 +1,6 @@
 """Starting an agent with SharePoint: aai-cli gets its own delegated Microsoft profile, the refresh
-token arrives as a store secret written only for a new sign-in, and the Teams app's secret never
-reaches the pod."""
+token arrives as a store secret written only for a new sign-in, and the native Teams channel
+receives its separate bot credential."""
 
 from unittest.mock import MagicMock
 
@@ -96,9 +96,11 @@ def test_start_agent_gives_aai_cli_the_delegated_microsoft_profile(
             assert_that(setup, contains_string("$AAI_SHAREPOINT_SIGN_IN_ID"))
             assert_that(setup, contains_string("secrets set microsoft.sharepoint_refresh_token"))
 
-        with then("the Teams app's secret never reaches the pod"):
-            everything = "\n".join([*config_map.data.values(), *secret.string_data.values()])
-            assert_that(everything, is_not(contains_string(TEAMS_APP_PASSWORD)))
+        with then("native Teams gets its bot credential separately from the delegated SharePoint profile"):
+            bot_secret_key = "MSTEAMS_APP_PASSWORD" if agent_type == AgentType.OPENCLAW else "TEAMS_CLIENT_SECRET"
+            assert_that(secret.string_data[bot_secret_key], equal_to(TEAMS_APP_PASSWORD))
+            assert_that("AAI_SECRET_MICROSOFT_CLIENT_SECRET" in secret.string_data, equal_to(False))
+            assert_that("\n".join(config_map.data.values()), is_not(contains_string(TEAMS_APP_PASSWORD)))
 
         with then("the agent is told it has SharePoint only, through the Microsoft skill"):
             assert_that(config_map.data["AGENTS.md"], contains_string("./skills/aai-microsoft/SKILL.md"))

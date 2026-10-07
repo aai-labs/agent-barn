@@ -4,14 +4,21 @@ from unittest.mock import patch
 import pytest
 from hamcrest import assert_that, equal_to, has_key, not_
 
-from api.domains.communications.models import OutboundTargetRequest, PlatformCapability
+from api.domains.communications.models import OutboundTargetRequest
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.slack import SlackCredentials, SlackPlatformPlugin, SlackSettings
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
 
 CONFIG = SimpleNamespace(
-    skip_slack_token_validation=True, skip_discord_token_validation=True, skip_telegram_token_validation=True
+    skip_slack_token_validation=True,
+    skip_discord_token_validation=True,
+    skip_telegram_token_validation=True,
+    skip_teams_token_validation=True,
+    teams_publisher_name="Test",
+    teams_publisher_website_url="https://example.com",
+    teams_privacy_url="https://example.com/privacy",
+    teams_terms_url="https://example.com/terms",
 )
 
 
@@ -70,6 +77,21 @@ def test_disabled_dm_is_rejected_before_opening_conversation():
         )
 
 
-@pytest.mark.parametrize("plugin", [DiscordPlatformPlugin, TelegramPlatformPlugin, TeamsPlatformPlugin])
-def test_only_slack_advertises_initiated_delivery(plugin):
-    assert_that(PlatformCapability.AGENT_INITIATED_DELIVERY in plugin.capabilities, equal_to(False))
+@pytest.mark.parametrize(
+    "plugin", [DiscordPlatformPlugin, TelegramPlatformPlugin, TeamsPlatformPlugin, SlackPlatformPlugin]
+)
+def test_chat_plugins_do_not_advertise_gateway_initiated_delivery(plugin):
+    assert_that("agent_initiated_delivery" in plugin.capabilities, equal_to(False))
+
+
+@pytest.mark.parametrize(
+    "plugin_type", [DiscordPlatformPlugin, TelegramPlatformPlugin, SlackPlatformPlugin, TeamsPlatformPlugin]
+)
+def test_native_plugins_cannot_resolve_gateway_delivery(plugin_type):
+    from api.domains.communications.plugins.registry import PlatformPluginRegistry
+    from api.domains.communications.transport import NativeTransportUnsupported
+
+    plugin = plugin_type(CONFIG)
+    registry = PlatformPluginRegistry([plugin])
+    with pytest.raises(NativeTransportUnsupported):
+        registry.require_delivery(plugin.key)

@@ -89,12 +89,30 @@ try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch {}
 if (config.tools && config.tools.exec) {
   delete config.tools.exec;
 }
+// Bridge retirement briefly denied the native message tool; preserve all other restrictions.
+if (Array.isArray(config.tools?.deny)) {
+  config.tools.deny = config.tools.deny.filter(tool => tool !== 'message');
+}
 // OpenClaw 2026.8 rejects these at startup; deep-merge would otherwise keep them.
 if (config.agents && config.agents.defaults) delete config.agents.defaults.memorySearch;
 if (config.memory) delete config.memory.backend;
 if (config.meta) delete config.meta.lastTouchedAt;
 
 const merged = deepMerge(config, overlay);
+
+// Deep merging must not resurrect the retired managed messaging plugin on a PVC.
+const plugins = merged.plugins;
+if (plugins) {
+  for (const key of ['entries', 'installs']) {
+    if (plugins[key]) delete plugins[key]['agentbarn-messaging'];
+  }
+  for (const key of ['allow', 'deny']) {
+    if (Array.isArray(plugins[key])) plugins[key] = plugins[key].filter(id => id !== 'agentbarn-messaging');
+  }
+  if (Array.isArray(plugins.load?.paths)) {
+    plugins.load.paths = plugins.load.paths.filter(p => path.basename(p.replace(/\/$/, '')) !== 'agentbarn-messaging');
+  }
+}
 
 for (const parts of REPLACE_PATHS) {
   const overlayVal = getPath(overlay, parts);
