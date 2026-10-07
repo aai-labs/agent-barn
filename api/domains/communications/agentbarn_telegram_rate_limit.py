@@ -1,6 +1,11 @@
 import threading
+import time
 from dataclasses import dataclass, field
 from uuid import UUID
+
+from injector import inject, singleton
+
+from api.core.config import Config
 
 
 @dataclass
@@ -59,3 +64,29 @@ class TelegramRateLimiter:
     def _new_bucket(per_second: float, now: float) -> _Bucket:
         # A full second's budget may be spent at once, then refills steadily.
         return _Bucket(rate=per_second, capacity=max(per_second, 1.0), tokens=max(per_second, 1.0), updated_at=now)
+
+
+# The bot's own messages (sign-up prompts, link confirmations, notices) have no
+# Organization; they draw on this bucket and on the bot-wide budget like any call.
+_PLATFORM = UUID(int=0)
+
+
+@inject
+@singleton
+class AgentBarnTelegramRateLimits:
+    """The one budget for everything sent through Agent Barn's shared bot.
+
+    Agents' proxied calls and the bot's own replies share it, so a flood of
+    strangers cannot spend the bot's Telegram allowance that every Organization
+    depends on.
+    """
+
+    def __init__(self, config: Config) -> None:
+        self._limiter = TelegramRateLimiter(
+            bot_per_second=config.agentbarn_telegram_bot_rate_per_second,
+            organization_per_second=config.agentbarn_telegram_organization_rate_per_second,
+        )
+
+    def acquire_for_organization(self, organization_id: UUID | None, *, now: float | None = None) -> float:
+        """Take one call's budget for an Organization (None for the bot itself) and return 0, or the wait."""
+        return self._limiter.acquire(organization_id or _PLATFORM, now=time.monotonic() if now is None else now)

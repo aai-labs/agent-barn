@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from hamcrest import assert_that, contains_exactly, contains_string, equal_to, has_properties, is_, none, not_none
 from sqlmodel import Session, col, select
@@ -30,10 +31,11 @@ class RecordingBot:
         self.sent: list[tuple[int, str]] = []
         self.fail = fail
 
-    def send(self, chat_id: int, text: str) -> None:
+    def send(self, chat_id: int, text: str, *, essential: bool = True) -> bool:
         if self.fail:
             raise RuntimeError("Telegram is down")
         self.sent.append((chat_id, text))
+        return True
 
 
 def _agent_with_connection(key: str, name: str):
@@ -297,3 +299,67 @@ def test_a_reply_that_cannot_be_sent_does_not_block_later_updates() -> None:
         with then("the link still stands and the update is settled"):
             assert_that([link.agent_id for link in _active_links(context)], contains_exactly(context.sales.agent_id))
             assert_that(_stored(context, update_id).status, is_(AgentBarnTelegramUpdateStatus.HANDLED))
+
+
+def test_an_update_that_keeps_failing_is_given_up_after_a_few_tries() -> None:
+    with given(_GIVEN) as context:
+        repository = context.injector.get(AgentBarnTelegramRepository)
+        with patch.object(repository, "find_routable_link", side_effect=RuntimeError("database blip")):
+            with when("the same update fails on every pass"):
+                update_id = _receive(context, _private("hello?", user=7770007))
+                for _ in range(10):
+                    context.injector.get(AgentBarnTelegramUpdateProcessor).process_pending()
+
+        with then("it is given up, without its content, instead of retrying forever"):
+            assert_that(
+                _stored(context, update_id),
+                has_properties(status=AgentBarnTelegramUpdateStatus.HANDLED, payload=none()),
+            )
+
+
+def test_a_users_later_messages_wait_behind_one_that_failed() -> None:
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-sales")
+        _receive(context, _private("/start token-sales"))
+        repository = context.injector.get(AgentBarnTelegramRepository)
+        processor = context.injector.get(AgentBarnTelegramUpdateProcessor)
+        real_find = repository.find_routable_link
+        calls = {"n": 0}
+
+        def fails_once(user_id):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("database blip")
+            return real_find(user_id)
+
+        first = next(_next_update_id)
+        second = next(_next_update_id)
+        repository.store_updates(
+            [{**_private("first"), "update_id": first}, {**_private("second"), "update_id": second}]
+        )
+
+        with patch.object(repository, "find_routable_link", side_effect=fails_once):
+            with when("Jane's first message fails once"):
+                processor.process_pending()
+                after_failure = (_stored(context, first).status, _stored(context, second).status)
+                processor.process_pending()
+
+        with then("her second message waits behind it, then both are queued in order"):
+            assert_that(
+                after_failure,
+                equal_to((AgentBarnTelegramUpdateStatus.RECEIVED, AgentBarnTelegramUpdateStatus.RECEIVED)),
+            )
+            assert_that(
+                (_stored(context, first).status, _stored(context, second).status),
+                equal_to((AgentBarnTelegramUpdateStatus.QUEUED, AgentBarnTelegramUpdateStatus.QUEUED)),
+            )
+
+
+def test_a_stranger_gets_the_sign_up_reply_once_in_a_while_not_every_time() -> None:
+    with given(_GIVEN) as context:
+        with when("someone who never linked sends three messages in a row"):
+            for text in ("hi", "hello?", "anyone?"):
+                _receive(context, _private(text, user=7770007, first_name="Sam"))
+
+        with then("they get the sign-up reply once"):
+            assert_that([chat for chat, _ in context.bot.sent], equal_to([7770007]))

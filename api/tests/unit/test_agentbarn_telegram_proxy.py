@@ -15,6 +15,7 @@ from api.domains.communications.agentbarn_telegram_proxy import (
     UploadedFile,
     parse_bot_api_request,
 )
+from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
 from api.infrastructure.crypto import encrypt_token
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY
@@ -29,18 +30,16 @@ def _proxy(handler) -> AgentBarnTelegramProxy:
         organization_id=uuid4(), driver_key_encrypted=encrypt_token(_DRIVER_KEY, TEST_ENCRYPTION_KEY)
     )
     repository.linked_user_ids.return_value = {5550001}
-    proxy = AgentBarnTelegramProxy(
-        config=cast(
-            Config,
-            SimpleNamespace(
-                agentbarn_telegram_bot_token=_REAL_TOKEN,
-                agent_token_encryption_key=TEST_ENCRYPTION_KEY,
-                agentbarn_telegram_bot_rate_per_second=25,
-                agentbarn_telegram_organization_rate_per_second=5,
-            ),
+    config = cast(
+        Config,
+        SimpleNamespace(
+            agentbarn_telegram_bot_token=_REAL_TOKEN,
+            agent_token_encryption_key=TEST_ENCRYPTION_KEY,
+            agentbarn_telegram_bot_rate_per_second=25,
+            agentbarn_telegram_organization_rate_per_second=5,
         ),
-        repository=repository,
     )
+    proxy = AgentBarnTelegramProxy(config=config, repository=repository, limits=AgentBarnTelegramRateLimits(config))
     proxy.client = httpx.Client(transport=httpx.MockTransport(handler))
     return proxy
 

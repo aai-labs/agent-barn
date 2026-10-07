@@ -15,7 +15,7 @@ import httpx
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.communications.agentbarn_telegram_rate_limit import TelegramRateLimiter
+from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
 from api.infrastructure.crypto import decrypt_token
@@ -202,20 +202,14 @@ class AgentBarnTelegramProxy:
 
     config: Config
     repository: AgentBarnTelegramRepository
+    limits: AgentBarnTelegramRateLimits
     client: httpx.Client = field(default_factory=lambda: httpx.Client(timeout=_TIMEOUT_SECONDS), init=False)
     _bot: dict[str, Any] | None = field(default=None, init=False)
-    _limiter: TelegramRateLimiter = field(init=False)
     # File paths each Connection looked up with getFile, until their links expire.
     # Every Organization shares the bot's file area, so a Connection may download
     # only files it was shown. Per process, like the rate limits.
     _files: dict[tuple[UUID, str], float] = field(default_factory=dict, init=False)
     _files_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
-
-    def __post_init__(self) -> None:
-        self._limiter = TelegramRateLimiter(
-            bot_per_second=self.config.agentbarn_telegram_bot_rate_per_second,
-            organization_per_second=self.config.agentbarn_telegram_organization_rate_per_second,
-        )
 
     def handle(self, connection_id: UUID, token: str, method: str, *, request: BotApiRequest) -> ProxyResponse:
         authenticated = self._authenticate(connection_id, token)
@@ -241,7 +235,7 @@ class AgentBarnTelegramProxy:
             chats = self._named_chats(params)
             if not chats or not chats <= self.repository.linked_user_ids(connection_id):
                 return _error(403, "Forbidden: this chat is not linked to this agent")
-            wait = self._limiter.acquire(organization_id, now=time.monotonic())
+            wait = self.limits.acquire_for_organization(organization_id)
             if wait > 0:
                 if name == "sendchataction":
                     # A typing indicator is a courtesy; skipping one beats delaying the reply.

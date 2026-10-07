@@ -306,6 +306,18 @@ class AgentBarnTelegramRepository:
             )  # type: ignore[call-overload]
             session.commit()
 
+    def record_processing_failure(self, update_id: int) -> int:
+        """Count a failed processing pass for an update and return how many it has had."""
+        with Session(self.delegate.engine) as session:
+            attempts = session.exec(
+                sa.update(AgentBarnTelegramUpdate)
+                .where(col(AgentBarnTelegramUpdate.update_id) == update_id)
+                .values(attempt_count=AgentBarnTelegramUpdate.attempt_count + 1)  # type: ignore[operator]
+                .returning(col(AgentBarnTelegramUpdate.attempt_count))
+            ).first()  # type: ignore[call-overload]
+            session.commit()
+            return attempts[0] if attempts else 0
+
     def queue_update(self, update_id: int, *, telegram_user_id: int, agent_id: UUID, connection_id: UUID) -> None:
         with Session(self.delegate.engine) as session:
             session.exec(
@@ -316,6 +328,8 @@ class AgentBarnTelegramRepository:
                     telegram_user_id=telegram_user_id,
                     agent_id=agent_id,
                     connection_id=connection_id,
+                    # Forwarding counts its own attempts from here.
+                    attempt_count=0,
                 )
             )  # type: ignore[call-overload]
             session.commit()
