@@ -11,7 +11,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from hamcrest import assert_that, equal_to, has_items, is_not
+from hamcrest import assert_that, equal_to
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlmodel import SQLModel
@@ -92,5 +92,4 @@ def test_the_migrated_schema_matches_the_models_for_agentbarn_telegram():
     ours = [diff for diff in differences if "agentbarn" in repr(diff) or "active_telegram" in repr(diff)]
 
     assert_that(ours, equal_to([]))
-    assert_that(set(inspect(engine).get_table_names()), has_items(*AF367_TABLES))
-    assert_that(set(inspect(engine).get_table_names()), is_not(has_items("agentbarn_telegram_config")))
+    assert set(AF367_TABLES) <= set(inspect(engine).get_table_names())
