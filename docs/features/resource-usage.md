@@ -68,7 +68,7 @@ UI               Resource usage tab, Agents overview, Platform Resource Usage
 - Limits are summed too. They are what the containers may use, which is what the namespace quota counts, not a pool with free room in it.
 - **Requests** sit beside them, on every surface that shows a limit (the Organization surfaces too, below). A pod's request is not in its cgroup, so the healthz script cannot report it; `agent_requests_query` reads it from kube-state-metrics and matches the pod to its Agent by name (`agent-<uuid>-<hash>-<hash>`; restore jobs and hooks are named differently and never match). Init containers count as they do for the quota (below), and two pods of one Agent in a rollout count once, by the larger. A failed read leaves them unknown (`null`) and does not fail the page.
   - Each row shows a tick on each meter where the request sits against the limit and a `requests ...` line, and organization rows show their share on wide screens.
-  - Four cards under the usage cards add up what the **agents reporting** request and are limited to: Memory requested, Memory limits, CPU requested, CPU limits. They cover the same agents as the figures above them, so each pair describes one thing. The Capacity section below them covers every pod in the namespace instead.
+  - There are no separate cards for the agents' requested and limit totals. The Capacity section already adds up every pod's limits and requests, and its text says those figures include the API, UI, database and monitoring pods as well as the agents, so they are higher than the agents alone.
 
 - The page does not show the namespace quota, volumes or events. That needs the Kubernetes API and belongs to the cluster health page (AF-266).
 

@@ -267,7 +267,7 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await expect(page.getByTestId("platform-agents-need-update")).toHaveCount(0);
   });
 
-  test("shows what the pods request beside what the agents use, on each row, in the cards and by organization", async ({
+  test("shows what the pods request beside what the agents use, on each row and by organization", async ({
     page,
   }) => {
     const base = mockPlatformUsage();
@@ -291,16 +291,8 @@ test.describe("Platform resource usage (platform_admin)", () => {
 
     await usagePage.goto();
 
-    // The aggregate cards say how much the agents reporting request and how much they may use.
-    const aggregates = page.getByTestId("platform-usage-aggregates");
-    await expect(aggregates.getByTestId("platform-usage-memory-requested")).toContainText("1.5 GiB");
-    await expect(aggregates.getByTestId("platform-usage-memory-limits")).toContainText("6 GiB");
-    await expect(aggregates.getByTestId("platform-usage-cpu-requested")).toContainText("0.35 cores");
-    await expect(aggregates.getByTestId("platform-usage-cpu-limits")).toContainText("3 cores");
-    // The same agents as the figures above: the two live agents, not the container nobody owns.
-    await expect(aggregates.getByTestId("platform-usage-memory-requested")).toContainText(
-      "across the 2 agents reporting",
-    );
+    // The totals of what the agents request are not cards of their own: Capacity covers that, for every pod.
+    await expect(page.getByTestId("platform-usage-aggregates")).toHaveCount(0);
     // Cy asks for 512 MiB of its 2 GiB, so the tick sits a quarter of the way along the bar.
     const cy = usagePage.agentRows().nth(0);
     await expect(cy.getByTestId("platform-agent-memory-request")).toHaveText("requests 512 MiB");
@@ -321,17 +313,13 @@ test.describe("Platform resource usage (platform_admin)", () => {
     expect(box?.height ?? Infinity).toBeLessThan(44);
   });
 
-  test("says nothing about requests when they could not be read", async ({ page }) => {
+  test("says nothing about requests when they could not be read", async () => {
     await data.resourceUsage.interceptPlatformResourceUsage();
 
     await usagePage.goto();
 
     await expect(usagePage.stat("memory")).toContainText("of 6 GiB in limits");
-    // The limits are known, the requests are not: unknown is a dash, not a zero.
-    const aggregates = page.getByTestId("platform-usage-aggregates");
-    await expect(aggregates.getByTestId("platform-usage-memory-limits")).toContainText("6 GiB");
-    await expect(aggregates.getByTestId("platform-usage-memory-requested")).toContainText("—");
-    await expect(aggregates.getByTestId("platform-usage-cpu-requested")).toContainText("—");
+    await expect(usagePage.organizationRows().nth(0).getByTestId("organization-request-memory")).toHaveText("—");
     await expect(usagePage.agentRows().nth(0).getByTestId("platform-agent-memory-request")).toHaveCount(0);
     await expect(usagePage.agentRows().nth(0).getByTestId("usage-meter-request-marker")).toHaveCount(0);
   });
@@ -483,7 +471,7 @@ test.describe("Platform namespace quota (platform_admin)", () => {
     return requests;
   }
 
-  test("holds what the namespace commits against the quota that was entered", async () => {
+  test("holds what the namespace commits against the quota that was entered", async ({ page }) => {
     await openWith({
       limits_memory_bytes: 70 * GIB,
       limits_cpu_cores: 24,
@@ -493,6 +481,10 @@ test.describe("Platform namespace quota (platform_admin)", () => {
 
     await expect(usagePage.capacityCard("limits-memory")).toContainText("46 GiB");
     await expect(usagePage.capacityCard("limits-memory")).toContainText("66% of the 70 GiB quota");
+    // Not just agents: the figures count every pod, which the section says before anyone asks.
+    const capacity = page.getByTestId("platform-capacity");
+    await expect(capacity).toContainText("also the API, UI, database and monitoring pods");
+    await expect(capacity).toContainText("A new pod is refused when any one of the four would go over.");
     await expect(usagePage.capacityCard("limits-memory")).toHaveAttribute("data-state", "ok");
     await expect(usagePage.capacityCard("limits-memory").getByRole("meter")).toHaveAttribute("aria-valuenow", "66");
     await expect(usagePage.capacityCard("limits-cpu")).toContainText("11.5 cores");

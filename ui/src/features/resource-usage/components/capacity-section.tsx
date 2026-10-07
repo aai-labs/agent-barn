@@ -119,7 +119,7 @@ export function CapacitySection({ capacity }: { capacity: PlatformCapacity }) {
             Capacity
           </h2>
           <p className="m-0 mt-0.5 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
-            The limits and requests of every pod, added up, against the quota you entered. A new pod is refused when any one of the four would go over.
+            The limits and requests of every pod in the namespace, added up, against the quota you entered. That is the agents and also the API, UI, database and monitoring pods, so these figures are higher than the agents alone. A new pod is refused when any one of the four would go over.
           </p>
         </div>
         <button type="button" className="af-btn af-btn-sm" onClick={openDialog} data-testid="capacity-limits-open">
