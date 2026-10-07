@@ -125,10 +125,15 @@ class AgentResourceUsageRead(PydanticBaseModel):
     observed_at: datetime
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    # What the pod asks for: the share the scheduler and the quota reserve for it. Read from
+    # the cluster, not the container, so it can be known when the rest is not, and the other
+    # way round. None when it could not be read, which is not a request of zero.
+    memory_request_bytes: int | None = None
     memory_peak_bytes: int | None = None
     # A 5-minute average, so a short spike is smoothed away.
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
     cpu_average_cores: float | None = None
     # Share of scheduling periods in which the container hit its CPU limit.
     cpu_throttled_ratio: float | None = None
@@ -140,8 +145,11 @@ class AgentUsageSnapshotRead(PydanticBaseModel):
     state: ResourceUsageState
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    # As on AgentResourceUsageRead: None when it could not be read.
+    memory_request_bytes: int | None = None
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
     # Over the last hour.
     cpu_throttled_ratio: float | None = None
 
@@ -304,9 +312,11 @@ class PlatformAgentResourceUsageRead(PydanticBaseModel):
     observed_at: datetime
     memory_working_set_bytes: int | None = None
     memory_limit_bytes: int | None = None
+    memory_request_bytes: int | None = None
     memory_peak_bytes: int | None = None
     cpu_cores: float | None = None
     cpu_limit_cores: float | None = None
+    cpu_request_cores: float | None = None
     cpu_average_cores: float | None = None
     cpu_throttled_ratio: float | None = None
     series: list[PlatformAgentUsagePoint] = []

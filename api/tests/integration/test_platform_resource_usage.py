@@ -9,7 +9,7 @@ from typing import Any
 from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, close_to, contains_exactly, equal_to, has_length, is_not, none
+from hamcrest import assert_that, close_to, contains_exactly, contains_string, equal_to, has_length, is_not, none, not_
 from kubernetes.client.exceptions import ApiException
 
 from api.domains.agents.models import AgentStatus
@@ -758,6 +758,44 @@ def test_a_running_agent_has_its_status_restarts_and_last_day_of_usage():
             assert_that(usage["memory_working_set_bytes"], equal_to(1 * _GiB))
             assert_that(usage["memory_limit_bytes"], equal_to(2 * _GiB))
             assert_that(usage["cpu_limit_cores"], equal_to(1))
+
+
+def test_an_opened_row_carries_the_agents_request_beside_its_limit():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-req-a@example.com", "owner-det-req-b@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            prometheus_reports_agent_requests(lambda c: {c.cy.id: (0.5 * _GiB, 0.1)}),
+            _cluster_says(),
+            *_platform_admin("admin-details-req@example.com"),
+        ]
+    ) as context:
+        usage = _details(context, context.cy.id).json()["resource_usage"]
+
+        assert_that(usage["memory_request_bytes"], equal_to(int(0.5 * _GiB)))
+        assert_that(usage["memory_limit_bytes"], equal_to(2 * _GiB))
+        assert_that(usage["cpu_request_cores"], close_to(0.1, 1e-9))
+        assert_that(usage["cpu_limit_cores"], equal_to(1))
+
+
+def test_an_opened_row_asks_only_about_that_agents_requests():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-req-c@example.com", "owner-det-req-d@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            _cluster_says(),
+            *_platform_admin("admin-details-req-scope@example.com"),
+        ]
+    ) as context:
+        _details(context, context.cy.id)
+
+        queries = [call.args[0] for call in _prometheus(context).query.call_args_list]
+        requests = [q for q in queries if '"app", "$1", "pod"' in q]
+        assert_that(requests, has_length(1))
+        assert_that(requests[0], contains_string(f'pod=~"agent-{context.cy.id}-.+"'))
+        assert_that(requests[0], not_(contains_string(str(context.ada.id))))
 
 
 def test_the_page_never_asks_the_cluster_for_logs_and_none_come_back():

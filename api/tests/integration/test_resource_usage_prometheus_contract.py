@@ -455,3 +455,20 @@ def test_each_agents_requests_are_found_by_its_pod_name_and_counted_once(scraped
     assert set(found) == set(_AGENT_REQUESTS)
     for agent_id, expected in _AGENT_REQUESTS.items():
         assert found[agent_id] == pytest.approx(expected)
+
+
+def test_a_query_for_given_agents_reads_only_their_pods(scraped: Scraped):
+    def asked(*agent_ids: UUID) -> dict[UUID, dict[str, float]] | None:
+        return scraped.repository.agent_requests(at=_now(), agent_ids=list(agent_ids)) or None
+
+    one = _wait_until(lambda: asked(_AGENT_ONE), "kube-state-metrics to be scraped")
+
+    # Agent two has a live pod too, and it is not in the answer: the ids asked about are the boundary.
+    assert set(one) == {_AGENT_ONE}
+    assert one[_AGENT_ONE] == pytest.approx(_AGENT_REQUESTS[_AGENT_ONE])
+    both = asked(_AGENT_ONE, _AGENT_TWO)
+    assert both is not None and set(both) == {_AGENT_ONE, _AGENT_TWO}
+    # An Agent whose only pod has finished has no live pod, so the cluster has nothing to say.
+    assert asked(_AGENT_GONE) is None
+    # Nobody asked about means nobody is read, rather than everybody.
+    assert scraped.repository.agent_requests(at=_now(), agent_ids=[]) == {}

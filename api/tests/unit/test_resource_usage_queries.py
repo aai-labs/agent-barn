@@ -7,6 +7,7 @@ import pytest
 from api.domains.resource_usage.models import ResourceUsageRange, ResourceUsageState, resolve_usage_window
 from api.domains.resource_usage.promql import (
     agent_id_from_labels,
+    agent_requests_query,
     group_agent_requests,
     group_instant,
     group_instant_all,
@@ -15,7 +16,6 @@ from api.domains.resource_usage.promql import (
     group_totals,
     instant_query,
     namespace_commitments_query,
-    platform_agent_requests_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -147,7 +147,7 @@ def test_the_namespace_query_charges_a_pod_what_a_quota_charges_it():
 
 
 def test_the_agent_requests_query_reads_only_agent_pods_by_name_and_names_the_agent_in_app():
-    query = platform_agent_requests_query()
+    query = agent_requests_query()
     agent_pod = "agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 
     # Both halves of the pod rule (containers and init container) are limited to agent pods,
@@ -167,6 +167,25 @@ def test_the_agent_requests_query_reads_only_agent_pods_by_name_and_names_the_ag
     assert query.startswith("max by (app, resource) (label_replace(")
     assert 'kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Running"} == 1' in query
     assert "on (namespace, pod) group_left ()" in query
+
+
+def test_the_agent_requests_query_can_be_limited_to_the_agents_it_is_given():
+    one = agent_requests_query([_A])
+    two = agent_requests_query([_A, _B, _A])
+
+    # Only those Agents' pods, never the pattern for every Agent, on both halves of the pod rule.
+    assert f'pod=~"agent-{_A}-.+"' in one
+    assert one.count(f'pod=~"agent-{_A}-.+"') == 2
+    assert f'pod=~"agent-({_A}|{_B})-.+"' in two
+    assert 'pod=~"agent-[0-9a-f]' not in one
+    assert 'pod=~"agent-[0-9a-f]' not in two
+    # The `app` rewrite still reads any agent name, so one parser maps both forms.
+    assert '"app", "$1", "pod", "(agent-[0-9a-f]{8}' in one
+
+
+def test_an_agent_request_query_with_no_agents_is_refused_rather_than_asking_about_everyone():
+    with pytest.raises(ValueError):
+        agent_requests_query([])
 
 
 def test_the_namespace_query_is_not_limited_to_agent_pods():
@@ -383,3 +402,13 @@ def test_agent_requests_are_read_by_agent_and_resource():
         other: {"memory_request_bytes": 268_435_456.0},
     }
     assert group_agent_requests([]) == {}
+
+
+def test_agent_requests_can_be_limited_to_the_agents_that_were_asked_about():
+    samples = [
+        PrometheusSample({"app": f"agent-{_A}", "resource": "memory"}, 100.0),
+        PrometheusSample({"app": f"agent-{_B}", "resource": "memory"}, 200.0),
+    ]
+
+    assert group_agent_requests(samples, {_A}) == {_A: {"memory_request_bytes": 100.0}}
+    assert group_agent_requests(samples, set()) == {}

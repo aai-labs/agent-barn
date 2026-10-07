@@ -160,16 +160,28 @@ _AGENT_POD = "agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 _REQUEST_FIELDS = {"memory": "memory_request_bytes", "cpu": "cpu_request_cores"}
 
 
-def platform_agent_requests_query() -> str:
+def agent_requests_query(agent_ids: Sequence[UUID] | None = None) -> str:
     """What each live Agent's pod is charged in requests, one row per (Agent, resource).
 
     The healthz script cannot say this: a request is set on the pod, not read from its
     cgroup. It comes from kube-state-metrics, with each pod's init container counted as in
     `namespace_commitments_query`, and is matched to its Agent by the pod's name. The highest
     wins when a rollout leaves two pods of one Agent, so an Agent is never counted twice.
+
+    `agent_ids` names the Agents to ask about; None asks about every Agent, for the Platform
+    view. kube-state-metrics series carry no `org_id`, so on an Organization route these ids
+    are the boundary: they come from the database, already narrowed to what the caller may
+    read, never from a request string. It must not be empty.
     """
+    if agent_ids is None:
+        pod = f"{_AGENT_POD}-.+"
+    else:
+        if not agent_ids:
+            raise ValueError("agent_requests_query needs at least one agent id, or None for all")
+        ids = [str(agent_id) for agent_id in dict.fromkeys(agent_ids)]
+        pod = f"{_APP_PREFIX}{ids[0]}-.+" if len(ids) == 1 else f"{_APP_PREFIX}({'|'.join(ids)})-.+"
     live = f'(kube_pod_status_phase{{{_KSM}, phase=~"Pending|Running"}} == 1)'
-    pods = _effective_pod("requests", f', pod=~"{_AGENT_POD}-.+"')
+    pods = _effective_pod("requests", f', pod=~"{pod}"')
     return (
         f"max by (app, resource) (label_replace({pods} * on (namespace, pod) group_left () {live},"
         f' "app", "$1", "pod", "({_AGENT_POD})-.+"))'
@@ -234,11 +246,18 @@ def group_namespace_commitments(samples: Iterable[PrometheusSample]) -> dict[str
     return grouped
 
 
-def group_agent_requests(samples: Iterable[PrometheusSample]) -> dict[UUID, dict[str, float]]:
-    """Request results as {agent id: {"memory_request_bytes": bytes, "cpu_request_cores": cores}}."""
+def group_agent_requests(
+    samples: Iterable[PrometheusSample], permitted: set[UUID] | None = None
+) -> dict[UUID, dict[str, float]]:
+    """Request results as {agent id: {"memory_request_bytes": bytes, "cpu_request_cores": cores}}.
+
+    With `permitted`, a row for any other Agent is dropped, as `group_instant` drops one.
+    """
     grouped: dict[UUID, dict[str, float]] = {}
     for sample in samples:
         agent_id = _agent_id_from_app(sample.labels)
+        if permitted is not None and agent_id not in permitted:
+            continue
         field = _REQUEST_FIELDS.get(sample.labels.get("resource", ""))
         if agent_id is not None and field:
             grouped.setdefault(agent_id, {})[field] = sample.value

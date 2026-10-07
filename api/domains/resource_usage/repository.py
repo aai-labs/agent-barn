@@ -6,6 +6,7 @@ from injector import inject, singleton
 
 from api.domains.resource_usage.models import UsageWindow
 from api.domains.resource_usage.promql import (
+    agent_requests_query,
     group_agent_requests,
     group_instant,
     group_instant_all,
@@ -14,7 +15,6 @@ from api.domains.resource_usage.promql import (
     group_totals,
     instant_query,
     namespace_commitments_query,
-    platform_agent_requests_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -90,9 +90,14 @@ class ResourceUsageRepository:
         """
         return group_namespace_commitments(self.prometheus.query(namespace_commitments_query(), at))
 
-    def agent_requests(self, *, at: datetime) -> dict[UUID, dict[str, float]]:
+    def agent_requests(self, *, at: datetime, agent_ids: list[UUID] | None = None) -> dict[UUID, dict[str, float]]:
         """{agent id: {"memory_request_bytes": bytes, "cpu_request_cores": cores}} for live pods. One request.
 
-        An Agent with no pod yet is absent, which is not the same as a request of zero.
+        Just these Agents, or every Agent on the platform when `agent_ids` is None (the
+        Platform view only). An Agent with no pod yet is absent, which is not the same as a
+        request of zero.
         """
-        return group_agent_requests(self.prometheus.query(platform_agent_requests_query(), at))
+        if agent_ids is not None and not agent_ids:
+            return {}
+        permitted = set(agent_ids) if agent_ids is not None else None
+        return group_agent_requests(self.prometheus.query(agent_requests_query(agent_ids), at), permitted)
