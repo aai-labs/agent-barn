@@ -387,22 +387,34 @@ def test_the_response_holds_the_entered_limits_beside_what_the_namespace_commits
             *_BASE_GIVEN,
             _two_organizations("owner-cap-a@example.com", "owner-cap-b@example.com"),
             _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
-            prometheus_reports_namespace_commitments(limits_memory=46 * _GiB, limits_cpu=11.5),
+            prometheus_reports_namespace_commitments(
+                limits_memory=46 * _GiB, limits_cpu=11.5, requests_memory=9 * _GiB, requests_cpu=2.5
+            ),
             *_platform_admin("admin-capacity@example.com"),
         ]
     ) as context:
-        _set_limits(context, memory_limit_bytes=70 * _GiB, cpu_limit_cores=24)
+        _set_limits(
+            context,
+            limits_memory_bytes=70 * _GiB,
+            limits_cpu_cores=24,
+            requests_memory_bytes=20 * _GiB,
+            requests_cpu_cores=5,
+        )
 
         with when("the admin opens the page"):
             body = context.client.get(_URL, headers=_auth(context.access_token)).json()
 
         with then("both halves are there: the ceiling they typed and the figure we read"):
             capacity = body["capacity"]
-            assert_that(capacity["memory_limit_bytes"], equal_to(70 * _GiB))
-            assert_that(capacity["cpu_limit_cores"], equal_to(24))
-            assert_that(capacity["limits_updated_at"], is_not(none()))
-            assert_that(capacity["memory_committed_bytes"], equal_to(46 * _GiB))
-            assert_that(capacity["cpu_committed_cores"], equal_to(11.5))
+            assert_that(capacity["limits_memory_bytes"], equal_to(70 * _GiB))
+            assert_that(capacity["limits_cpu_cores"], equal_to(24))
+            assert_that(capacity["requests_memory_bytes"], equal_to(20 * _GiB))
+            assert_that(capacity["requests_cpu_cores"], equal_to(5))
+            assert_that(capacity["ceilings_updated_at"], is_not(none()))
+            assert_that(capacity["committed_limits_memory_bytes"], equal_to(46 * _GiB))
+            assert_that(capacity["committed_limits_cpu_cores"], equal_to(11.5))
+            assert_that(capacity["committed_requests_memory_bytes"], equal_to(9 * _GiB))
+            assert_that(capacity["committed_requests_cpu_cores"], equal_to(2.5))
 
 
 def test_the_committed_figure_is_asked_of_kube_state_metrics_for_the_whole_namespace():
@@ -435,7 +447,7 @@ def test_the_organization_filter_does_not_change_the_capacity():
             *_platform_admin("admin-capacity-filter@example.com"),
         ]
     ) as context:
-        _set_limits(context, memory_limit_bytes=70 * _GiB)
+        _set_limits(context, limits_memory_bytes=70 * _GiB)
 
         everyone = context.client.get(_URL, headers=_auth(context.access_token)).json()
         one = context.client.get(
@@ -455,16 +467,16 @@ def test_the_limits_survive_an_unreachable_prometheus_and_the_committed_figure_d
             *_platform_admin("admin-capacity-down@example.com"),
         ]
     ) as context:
-        _set_limits(context, memory_limit_bytes=70 * _GiB, cpu_limit_cores=24)
+        _set_limits(context, limits_memory_bytes=70 * _GiB, limits_cpu_cores=24)
 
         body = context.client.get(_URL, headers=_auth(context.access_token)).json()
 
         assert_that(body["availability"], equal_to("unavailable"))
-        assert_that(body["capacity"]["memory_limit_bytes"], equal_to(70 * _GiB))
-        assert_that(body["capacity"]["cpu_limit_cores"], equal_to(24))
+        assert_that(body["capacity"]["limits_memory_bytes"], equal_to(70 * _GiB))
+        assert_that(body["capacity"]["limits_cpu_cores"], equal_to(24))
         # Unknown is not zero: nothing is drawn as "no memory committed".
-        assert_that(body["capacity"]["memory_committed_bytes"], none())
-        assert_that(body["capacity"]["cpu_committed_cores"], none())
+        assert_that(body["capacity"]["committed_limits_memory_bytes"], none())
+        assert_that(body["capacity"]["committed_limits_cpu_cores"], none())
 
 
 def test_the_limits_are_there_when_prometheus_is_not_configured():
@@ -476,13 +488,13 @@ def test_the_limits_are_there_when_prometheus_is_not_configured():
             *_platform_admin("admin-capacity-unconfigured@example.com"),
         ]
     ) as context:
-        _set_limits(context, cpu_limit_cores=24)
+        _set_limits(context, limits_cpu_cores=24)
 
         body = context.client.get(_URL, headers=_auth(context.access_token)).json()
 
         assert_that(body["availability"], equal_to("not_configured"))
-        assert_that(body["capacity"]["cpu_limit_cores"], equal_to(24))
-        assert_that(body["capacity"]["cpu_committed_cores"], none())
+        assert_that(body["capacity"]["limits_cpu_cores"], equal_to(24))
+        assert_that(body["capacity"]["committed_limits_cpu_cores"], none())
 
 
 def test_nothing_is_set_and_nothing_is_committed_until_someone_says_so():
@@ -495,11 +507,31 @@ def test_nothing_is_set_and_nothing_is_committed_until_someone_says_so():
     ) as context:
         capacity = context.client.get(_URL, headers=_auth(context.access_token)).json()["capacity"]
 
-        assert_that(capacity["memory_limit_bytes"], none())
-        assert_that(capacity["cpu_limit_cores"], none())
-        assert_that(capacity["limits_updated_at"], none())
+        assert_that(capacity["limits_memory_bytes"], none())
+        assert_that(capacity["limits_cpu_cores"], none())
+        assert_that(capacity["ceilings_updated_at"], none())
         # A reachable Prometheus that reports no pods leaves the figure unknown, not zero.
-        assert_that(capacity["memory_committed_bytes"], none())
+        assert_that(capacity["committed_limits_memory_bytes"], none())
+        assert_that(capacity["requests_memory_bytes"], none())
+        assert_that(capacity["committed_requests_cpu_cores"], none())
+
+
+def test_a_kind_the_source_did_not_answer_for_is_unknown_while_the_other_is_known():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-cap-m@example.com", "owner-cap-n@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
+            prometheus_reports_namespace_commitments(limits_memory=4 * _GiB, limits_cpu=1.5),
+            *_platform_admin("admin-capacity-partial@example.com"),
+        ]
+    ) as context:
+        capacity = context.client.get(_URL, headers=_auth(context.access_token)).json()["capacity"]
+
+        assert_that(capacity["committed_limits_memory_bytes"], equal_to(4 * _GiB))
+        # Not 0: no answer is not the same as nothing committed.
+        assert_that(capacity["committed_requests_memory_bytes"], none())
+        assert_that(capacity["committed_requests_cpu_cores"], none())
 
 
 # --- one Agent's details, for a row that is opened ------------------------

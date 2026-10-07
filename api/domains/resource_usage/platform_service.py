@@ -186,13 +186,19 @@ def _capacity(limits: ResourceLimitsRead, committed: Mapping[str, Mapping[str, f
     `committed` is None when the source could not be read; a kind or resource it did not
     answer for is also left None, so "unknown" is never drawn as "nothing committed".
     """
-    committed_limits = (committed or {}).get("limits", {})
+    committed = committed or {}
+    committed_limits = committed.get("limits", {})
+    committed_requests = committed.get("requests", {})
     return PlatformCapacityRead(
-        memory_limit_bytes=limits.memory_limit_bytes,
-        cpu_limit_cores=limits.cpu_limit_cores,
-        limits_updated_at=limits.updated_at,
-        memory_committed_bytes=_whole(committed_limits.get("memory")),
-        cpu_committed_cores=committed_limits.get("cpu"),
+        limits_memory_bytes=limits.limits_memory_bytes,
+        limits_cpu_cores=limits.limits_cpu_cores,
+        requests_memory_bytes=limits.requests_memory_bytes,
+        requests_cpu_cores=limits.requests_cpu_cores,
+        ceilings_updated_at=limits.updated_at,
+        committed_limits_memory_bytes=_whole(committed_limits.get("memory")),
+        committed_limits_cpu_cores=committed_limits.get("cpu"),
+        committed_requests_memory_bytes=_whole(committed_requests.get("memory")),
+        committed_requests_cpu_cores=committed_requests.get("cpu"),
     )
 
 

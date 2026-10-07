@@ -108,16 +108,20 @@ export function mockPlatformAgent(overrides: Record<string, unknown> = {}) {
 }
 
 /**
- * The namespace's ceilings and what it commits. By default nothing is entered, and the
- * namespace commits 4 GiB and 1.5 cores, as the local cluster does.
+ * The namespace's quota ceilings and what it commits. By default nothing is entered, and the
+ * namespace commits 4 GiB and 1.5 cores of limits and 1 GiB and 0.5 cores of requests.
  */
 export function mockCapacity(overrides: Record<string, unknown> = {}) {
   return {
-    memory_limit_bytes: null,
-    cpu_limit_cores: null,
-    limits_updated_at: null,
-    memory_committed_bytes: 4 * GIB,
-    cpu_committed_cores: 1.5,
+    limits_memory_bytes: null,
+    limits_cpu_cores: null,
+    requests_memory_bytes: null,
+    requests_cpu_cores: null,
+    ceilings_updated_at: null,
+    committed_limits_memory_bytes: 4 * GIB,
+    committed_limits_cpu_cores: 1.5,
+    committed_requests_memory_bytes: GIB,
+    committed_requests_cpu_cores: 0.5,
     ...overrides,
   };
 }
@@ -361,7 +365,7 @@ export class ResourceUsageDataSupport {
    */
   async interceptUpdateResourceLimits({
     status = 200,
-    detail = "Memory limit must be greater than 0",
+    detail = "limits_memory_bytes must be greater than 0",
   }: { status?: number; detail?: string } = {}): Promise<Record<string, unknown>[]> {
     const sent: Record<string, unknown>[] = [];
     await this.page.route("**/api/v1/platform/resource-limits", async (route) => {
@@ -375,8 +379,10 @@ export class ResourceUsageDataSupport {
           status >= 400
             ? { detail }
             : {
-                memory_limit_bytes: body.memory_limit_bytes ?? null,
-                cpu_limit_cores: body.cpu_limit_cores ?? null,
+                limits_memory_bytes: body.limits_memory_bytes ?? null,
+                limits_cpu_cores: body.limits_cpu_cores ?? null,
+                requests_memory_bytes: body.requests_memory_bytes ?? null,
+                requests_cpu_cores: body.requests_cpu_cores ?? null,
                 updated_at: "2026-10-01T12:00:00Z",
               },
         ),

@@ -132,30 +132,40 @@ export const PlatformAgentUsageSchema = z.object({
 export type PlatformAgentUsage = z.infer<typeof PlatformAgentUsageSchema>;
 
 /**
- * The namespace's ceilings, entered by a Platform Administrator because the quota itself
- * cannot be read, beside what its pods commit in limits. Always for the whole namespace.
+ * The namespace's quota ceilings, entered by a Platform Administrator because the quota
+ * itself cannot be read, beside what its pods commit. Always for the whole namespace.
+ * A quota caps limits and requests alike, and a new pod is refused when any one of the
+ * four would go over, so all four are here, named as the quota names them.
  */
 export const PlatformCapacitySchema = z.object({
-  memoryLimitBytes: z.number().nullable().default(null),
-  cpuLimitCores: z.number().nullable().default(null),
-  limitsUpdatedAt: z.string().nullable().default(null),
+  limitsMemoryBytes: z.number().nullable().default(null),
+  limitsCpuCores: z.number().nullable().default(null),
+  requestsMemoryBytes: z.number().nullable().default(null),
+  requestsCpuCores: z.number().nullable().default(null),
+  ceilingsUpdatedAt: z.string().nullable().default(null),
   /** Null when the source could not be read: unknown, not zero. */
-  memoryCommittedBytes: z.number().nullable().default(null),
-  cpuCommittedCores: z.number().nullable().default(null),
+  committedLimitsMemoryBytes: z.number().nullable().default(null),
+  committedLimitsCpuCores: z.number().nullable().default(null),
+  committedRequestsMemoryBytes: z.number().nullable().default(null),
+  committedRequestsCpuCores: z.number().nullable().default(null),
 });
 export type PlatformCapacity = z.infer<typeof PlatformCapacitySchema>;
 
 export const ResourceLimitsSchema = z.object({
-  memoryLimitBytes: z.number().nullable().default(null),
-  cpuLimitCores: z.number().nullable().default(null),
+  limitsMemoryBytes: z.number().nullable().default(null),
+  limitsCpuCores: z.number().nullable().default(null),
+  requestsMemoryBytes: z.number().nullable().default(null),
+  requestsCpuCores: z.number().nullable().default(null),
   updatedAt: z.string().nullable().default(null),
 });
 export type ResourceLimits = z.infer<typeof ResourceLimitsSchema>;
 
-/** A null clears a limit. Both are always sent: an unchanged one is not a change. */
+/** A null clears a ceiling. All four are always sent: an unchanged one is not a change. */
 export interface ResourceLimitsUpdate {
-  memoryLimitBytes: number | null;
-  cpuLimitCores: number | null;
+  limitsMemoryBytes: number | null;
+  limitsCpuCores: number | null;
+  requestsMemoryBytes: number | null;
+  requestsCpuCores: number | null;
 }
 
 export const PlatformResourceUsageSchema = z.object({

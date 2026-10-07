@@ -41,7 +41,7 @@ export class PlatformResourceUsagePage {
     return this.page.locator("header nav").getByRole("link", { name, exact: true });
   }
 
-  capacityCard(kind: "memory" | "cpu"): Locator {
+  capacityCard(kind: "limits-memory" | "limits-cpu" | "requests-memory" | "requests-cpu"): Locator {
     return this.page.getByTestId(`capacity-${kind}`);
   }
 
@@ -57,12 +57,21 @@ export class PlatformResourceUsagePage {
     return this.page.getByTestId("capacity-limits-dialog");
   }
 
-  memoryInput(): Locator {
-    return this.page.getByLabel("Memory (GiB)");
+  /** A quota line's text box, named as `kubectl describe quota` names the line. */
+  limitsMemoryInput(): Locator {
+    return this.page.getByLabel("limits.memory (GiB)");
   }
 
-  cpuInput(): Locator {
-    return this.page.getByLabel("CPU (cores)");
+  limitsCpuInput(): Locator {
+    return this.page.getByLabel("limits.cpu (cores)");
+  }
+
+  requestsMemoryInput(): Locator {
+    return this.page.getByLabel("requests.memory (GiB)");
+  }
+
+  requestsCpuInput(): Locator {
+    return this.page.getByLabel("requests.cpu (cores)");
   }
 
   saveButton(): Locator {

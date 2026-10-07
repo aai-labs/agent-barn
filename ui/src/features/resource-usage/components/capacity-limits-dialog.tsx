@@ -18,12 +18,28 @@ import type { PlatformCapacity } from "../schemas";
 const BYTES_PER_GIB = 1024 ** 3;
 const NUMBER_PATTERN = /^\d+(\.\d+)?$/;
 
-/** A limit as the text box shows it: whole when it is whole, else up to three decimals. */
+type FieldKey = "limitsMemory" | "limitsCpu" | "requestsMemory" | "requestsCpu";
+
+interface Field {
+  key: FieldKey;
+  /** Named as the quota names it, so it reads the same as `kubectl describe quota`. */
+  label: string;
+  placeholder: string;
+}
+
+const FIELDS: Field[] = [
+  { key: "limitsMemory", label: "limits.memory (GiB)", placeholder: "e.g. 52.5" },
+  { key: "limitsCpu", label: "limits.cpu (cores)", placeholder: "e.g. 30" },
+  { key: "requestsMemory", label: "requests.memory (GiB)", placeholder: "e.g. 20" },
+  { key: "requestsCpu", label: "requests.cpu (cores)", placeholder: "e.g. 5" },
+];
+
+/** A ceiling as the text box shows it: whole when it is whole, else up to three decimals. */
 function toText(value: number | null): string {
   return value === null ? "" : String(Number(value.toFixed(3)));
 }
 
-/** Blank clears the limit (null). Anything else must be a number above zero. */
+/** Blank clears the ceiling (null). Anything else must be a number above zero. */
 function parseLimit(text: string): { value: number | null; invalid: boolean } {
   const trimmed = text.trim();
   if (trimmed === "") return { value: null, invalid: false };
@@ -41,6 +57,16 @@ function formatChanged(iso: string): string {
   });
 }
 
+function savedText(capacity: PlatformCapacity): Record<FieldKey, string> {
+  const gib = (bytes: number | null) => (bytes === null ? null : bytes / BYTES_PER_GIB);
+  return {
+    limitsMemory: toText(gib(capacity.limitsMemoryBytes)),
+    limitsCpu: toText(capacity.limitsCpuCores),
+    requestsMemory: toText(gib(capacity.requestsMemoryBytes)),
+    requestsCpu: toText(capacity.requestsCpuCores),
+  };
+}
+
 interface CapacityLimitsDialogProps {
   capacity: PlatformCapacity;
   open: boolean;
@@ -55,23 +81,26 @@ interface CapacityLimitsDialogProps {
  */
 export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityLimitsDialogProps) {
   // Keyed on `open` by the parent, so each opening starts from what is saved.
-  const [memory, setMemory] = useState(() =>
-    toText(capacity.memoryLimitBytes === null ? null : capacity.memoryLimitBytes / BYTES_PER_GIB),
-  );
-  const [cpu, setCpu] = useState(() => toText(capacity.cpuLimitCores));
+  const [values, setValues] = useState(() => savedText(capacity));
   const [showErrors, setShowErrors] = useState(false);
   const update = useUpdateResourceLimits();
 
-  const parsedMemory = parseLimit(memory);
-  const parsedCpu = parseLimit(cpu);
+  const parsed = Object.fromEntries(FIELDS.map((field) => [field.key, parseLimit(values[field.key])])) as Record<
+    FieldKey,
+    ReturnType<typeof parseLimit>
+  >;
+  const anyInvalid = FIELDS.some((field) => parsed[field.key].invalid);
 
   function save() {
     setShowErrors(true);
-    if (parsedMemory.invalid || parsedCpu.invalid) return;
+    if (anyInvalid) return;
+    const bytes = (value: number | null) => (value === null ? null : Math.round(value * BYTES_PER_GIB));
     update.mutate(
       {
-        memoryLimitBytes: parsedMemory.value === null ? null : Math.round(parsedMemory.value * BYTES_PER_GIB),
-        cpuLimitCores: parsedCpu.value,
+        limitsMemoryBytes: bytes(parsed.limitsMemory.value),
+        limitsCpuCores: parsed.limitsCpu.value,
+        requestsMemoryBytes: bytes(parsed.requestsMemory.value),
+        requestsCpuCores: parsed.requestsCpu.value,
       },
       { onSuccess: () => onOpenChange(false) },
     );
@@ -83,12 +112,12 @@ export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityL
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md" data-testid="capacity-limits-dialog">
         <DialogHeader>
-          <DialogTitle>Capacity limits</DialogTitle>
+          <DialogTitle>Namespace quota</DialogTitle>
           <DialogDescription>
-            Enter the namespace ResourceQuota values for <code>limits.memory</code> and{" "}
-            <code>limits.cpu</code>, the Hard column of <code>kubectl describe quota</code>. We can&apos;t
-            read them ourselves, so the page compares what you enter with what the namespace has
-            committed. Leave a field blank for no limit.
+            Enter the namespace ResourceQuota values, the Hard column of{" "}
+            <code>kubectl describe quota</code>. A new pod is refused when any one of the four would go
+            over, so enter all of them. We can&apos;t read them ourselves, so the page compares what you
+            enter with what the namespace has committed. Leave a field blank for no quota.
           </DialogDescription>
         </DialogHeader>
 
@@ -99,56 +128,34 @@ export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityL
             save();
           }}
         >
-          <div className="flex flex-col gap-1.5">
-            <label
-              className="text-[0.8rem] font-medium"
-              style={{ color: "var(--ink-2)" }}
-              htmlFor="capacity-memory"
-            >
-              Memory (GiB)
-            </label>
-            <input
-              id="capacity-memory"
-              type="text"
-              inputMode="decimal"
-              className="af-input w-full"
-              value={memory}
-              onChange={(event) => setMemory(event.target.value)}
-              placeholder="e.g. 70"
-              autoComplete="off"
-              aria-invalid={showErrors && parsedMemory.invalid}
-            />
-            {showErrors && parsedMemory.invalid && (
-              <p className="m-0 text-[0.78rem]" style={{ color: "var(--err)" }} role="alert">
-                Enter a number above 0, or leave it blank.
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label
-              className="text-[0.8rem] font-medium"
-              style={{ color: "var(--ink-2)" }}
-              htmlFor="capacity-cpu"
-            >
-              CPU (cores)
-            </label>
-            <input
-              id="capacity-cpu"
-              type="text"
-              inputMode="decimal"
-              className="af-input w-full"
-              value={cpu}
-              onChange={(event) => setCpu(event.target.value)}
-              placeholder="e.g. 24"
-              autoComplete="off"
-              aria-invalid={showErrors && parsedCpu.invalid}
-            />
-            {showErrors && parsedCpu.invalid && (
-              <p className="m-0 text-[0.78rem]" style={{ color: "var(--err)" }} role="alert">
-                Enter a number above 0, or leave it blank.
-              </p>
-            )}
+          <div className="grid gap-4 sm:grid-cols-2">
+            {FIELDS.map((field) => (
+              <div key={field.key} className="flex flex-col gap-1.5">
+                <label
+                  className="text-[0.8rem] font-medium"
+                  style={{ color: "var(--ink-2)" }}
+                  htmlFor={`capacity-input-${field.key}`}
+                >
+                  {field.label}
+                </label>
+                <input
+                  id={`capacity-input-${field.key}`}
+                  type="text"
+                  inputMode="decimal"
+                  className="af-input w-full"
+                  value={values[field.key]}
+                  onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}
+                  placeholder={field.placeholder}
+                  autoComplete="off"
+                  aria-invalid={showErrors && parsed[field.key].invalid}
+                />
+                {showErrors && parsed[field.key].invalid && (
+                  <p className="m-0 text-[0.78rem]" style={{ color: "var(--err)" }} role="alert">
+                    Enter a number above 0, or leave it blank.
+                  </p>
+                )}
+              </div>
+            ))}
           </div>
 
           {failure && (
@@ -162,9 +169,9 @@ export function CapacityLimitsDialog({ capacity, open, onOpenChange }: CapacityL
             </p>
           )}
 
-          {capacity.limitsUpdatedAt && (
+          {capacity.ceilingsUpdatedAt && (
             <p className="m-0 text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
-              Last changed {formatChanged(capacity.limitsUpdatedAt)}
+              Last changed {formatChanged(capacity.ceilingsUpdatedAt)}
             </p>
           )}
 

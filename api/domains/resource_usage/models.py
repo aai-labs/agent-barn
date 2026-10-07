@@ -230,16 +230,23 @@ class PlatformCapacityRead(PydanticBaseModel):
 
     The ceilings are entered by a Platform Administrator, because the quota itself cannot
     be read; the committed figures come from kube-state-metrics. They are always for the
-    whole namespace, whatever Organization the page is narrowed to.
+    whole namespace, whatever Organization the page is narrowed to. A quota caps limits and
+    requests alike, and a new pod is refused when any of the four would go over, so all four
+    are here, named as the quota names them.
     """
 
-    memory_limit_bytes: int | None = None
-    cpu_limit_cores: float | None = None
+    limits_memory_bytes: int | None = None
+    limits_cpu_cores: float | None = None
+    requests_memory_bytes: int | None = None
+    requests_cpu_cores: float | None = None
     # None until the first save.
-    limits_updated_at: datetime | None = None
-    # What every Pending or Running pod commits in limits. None when it could not be read.
-    memory_committed_bytes: int | None = None
-    cpu_committed_cores: float | None = None
+    ceilings_updated_at: datetime | None = None
+    # What every Pending or Running pod commits, each charged the larger of its containers
+    # and its biggest init container, as the quota does. None when it could not be read.
+    committed_limits_memory_bytes: int | None = None
+    committed_limits_cpu_cores: float | None = None
+    committed_requests_memory_bytes: int | None = None
+    committed_requests_cpu_cores: float | None = None
 
 
 class PlatformResourceUsageRead(PydanticBaseModel):
