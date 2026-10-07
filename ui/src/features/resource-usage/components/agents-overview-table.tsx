@@ -19,6 +19,7 @@ import {
   type OverviewPeriod,
 } from "../utils";
 import { AgentOverviewDetails } from "./agent-overview-details";
+import { LimitLabel } from "./limit-label";
 import { UsageMeter } from "./usage-meter";
 
 type SortKey = "name" | "spend" | "cpu" | "memory";
@@ -328,9 +329,12 @@ function CpuCell({ item }: { item: AgentOverviewItem }) {
   return (
     <div className="min-w-[8rem]" data-testid="agents-overview-cpu">
       <div className="flex items-center gap-1.5 tabular-nums" style={{ color: "var(--ink-2)" }}>
-        {usage.cpuCores !== null
-          ? `${formatCores(usage.cpuCores)}${usage.cpuLimitCores !== null ? ` / ${formatCores(usage.cpuLimitCores)}` : ""} cores`
-          : "—"}
+        <span>
+          {usage.cpuCores !== null
+            ? `${formatCores(usage.cpuCores)}${usage.cpuLimitCores !== null ? ` / ${formatCores(usage.cpuLimitCores)}` : ""} cores`
+            : "—"}
+          {usage.cpuCores !== null && usage.cpuLimitCores !== null && <LimitLabel />}
+        </span>
         {throttled !== null && throttled >= THROTTLING_WARN_RATIO && (
           <span
             title={`Held back at its CPU limit ${formatPercent(throttled)} of the last hour`}
@@ -368,6 +372,7 @@ function MemoryCell({ item }: { item: AgentOverviewItem }) {
         {usage.memoryWorkingSetBytes !== null
           ? `${formatBytes(usage.memoryWorkingSetBytes)}${usage.memoryLimitBytes !== null ? ` / ${formatBytes(usage.memoryLimitBytes)}` : ""}`
           : "—"}
+        {usage.memoryWorkingSetBytes !== null && usage.memoryLimitBytes !== null && <LimitLabel />}
       </div>
       <UsageMeter
         ratio={usageRatio(usage.memoryWorkingSetBytes, usage.memoryLimitBytes)}

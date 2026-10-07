@@ -229,7 +229,7 @@ function UsageStats({ usage, rangeLabel }: { usage: AgentResourceUsage; rangeLab
           usage.cpuRequestCores !== null && usage.cpuLimitCores !== null
             ? `of ${formatCores(usage.cpuRequestCores)} cores request, ${formatCores(usage.cpuLimitCores)} cores limit, 5-minute average`
             : usage.cpuLimitCores !== null
-              ? `of ${formatCores(usage.cpuLimitCores)} cores, 5-minute average`
+              ? `of ${formatCores(usage.cpuLimitCores)} cores limit, 5-minute average`
               : "5-minute average"
         }
         tone={meterTone(cpuRatio)}

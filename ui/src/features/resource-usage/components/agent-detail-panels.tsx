@@ -12,6 +12,7 @@ import { formatPercent } from "@/features/costs/format";
 import { formatBytes, formatCores } from "../format";
 import type { AgentResourceUsage } from "../schemas";
 import { THROTTLING_WARN_RATIO, usageRatio } from "../utils";
+import { LimitLabel } from "./limit-label";
 import { MemoryChart } from "./resource-usage-charts";
 import { noticeFor } from "./resource-usage-notice";
 import { UsageMeter } from "./usage-meter";
@@ -183,11 +184,19 @@ export function UsageFacts({ canRead, stopped, isLoading, failed, usage }: Usage
       <MeterFact
         label="Memory"
         text={
-          usage.memoryWorkingSetBytes !== null
-            ? `${formatBytes(usage.memoryWorkingSetBytes)}${
-                usage.memoryLimitBytes !== null ? ` of ${formatBytes(usage.memoryLimitBytes)}` : ""
-              }`
-            : "—"
+          usage.memoryWorkingSetBytes !== null ? (
+            <>
+              {formatBytes(usage.memoryWorkingSetBytes)}
+              {usage.memoryLimitBytes !== null && (
+                <>
+                  {` of ${formatBytes(usage.memoryLimitBytes)}`}
+                  <LimitLabel />
+                </>
+              )}
+            </>
+          ) : (
+            "—"
+          )
         }
         ratio={memoryRatio}
         markerRatio={usageRatio(usage.memoryRequestBytes, usage.memoryLimitBytes)}
@@ -197,11 +206,16 @@ export function UsageFacts({ canRead, stopped, isLoading, failed, usage }: Usage
       <MeterFact
         label="CPU"
         text={
-          usage.cpuCores !== null
-            ? `${formatCores(usage.cpuCores)}${
+          usage.cpuCores !== null ? (
+            <>
+              {`${formatCores(usage.cpuCores)}${
                 usage.cpuLimitCores !== null ? ` of ${formatCores(usage.cpuLimitCores)}` : ""
-              } cores`
-            : "—"
+              } cores`}
+              {usage.cpuLimitCores !== null && <LimitLabel />}
+            </>
+          ) : (
+            "—"
+          )
         }
         ratio={cpuRatio}
         markerRatio={usageRatio(usage.cpuRequestCores, usage.cpuLimitCores)}
@@ -239,7 +253,7 @@ function MeterFact({
   testId,
 }: {
   label: string;
-  text: string;
+  text: ReactNode;
   ratio: number | null;
   /** Where the request sits on the same scale as the limit. */
   markerRatio: number | null;

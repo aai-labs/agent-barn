@@ -9,6 +9,7 @@ import { formatPercent } from "@/features/costs/format";
 import { formatBytes, formatCores } from "../format";
 import type { PlatformAgentUsage } from "../schemas";
 import { THROTTLING_WARN_RATIO, usageRatio } from "../utils";
+import { LimitLabel } from "./limit-label";
 import { PlatformAgentDetails } from "./platform-agent-details";
 import { UsageMeter } from "./usage-meter";
 
@@ -225,7 +226,11 @@ function AgentRow({
               {agent.memoryWorkingSetBytes !== null ? formatBytes(agent.memoryWorkingSetBytes) : "—"}
             </span>
             {agent.memoryLimitBytes !== null && (
-              <span style={{ color: "var(--ink-4)" }}> / {formatBytes(agent.memoryLimitBytes)}</span>
+              <span style={{ color: "var(--ink-4)" }}>
+                {" / "}
+                {formatBytes(agent.memoryLimitBytes)}
+                <LimitLabel />
+              </span>
             )}
             <UsageMeter
               ratio={memoryRatio}
@@ -243,10 +248,15 @@ function AgentRow({
         <td className="px-3 py-2.5">
           <div className="min-w-[8rem]">
             <span style={{ color: "var(--ink)" }}>
-              {agent.cpuCores !== null ? `${formatCores(agent.cpuCores)} cores` : "—"}
+              {agent.cpuCores !== null ? formatCores(agent.cpuCores) : "—"}
+              {agent.cpuLimitCores === null && agent.cpuCores !== null ? " cores" : ""}
             </span>
             {agent.cpuLimitCores !== null && (
-              <span style={{ color: "var(--ink-4)" }}> / {formatCores(agent.cpuLimitCores)}</span>
+              <span style={{ color: "var(--ink-4)" }}>
+                {" / "}
+                {formatCores(agent.cpuLimitCores)} cores
+                <LimitLabel />
+              </span>
             )}
             <UsageMeter
               ratio={cpuRatio}
