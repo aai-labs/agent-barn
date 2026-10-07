@@ -180,19 +180,19 @@ def _whole(value: float | None) -> int | None:
     return None if value is None else int(value)
 
 
-def _capacity(limits: ResourceLimitsRead, committed: Mapping[str, float] | None) -> PlatformCapacityRead:
+def _capacity(limits: ResourceLimitsRead, committed: Mapping[str, Mapping[str, float]] | None) -> PlatformCapacityRead:
     """The ceilings an administrator entered, beside what the namespace commits.
 
-    `committed` is None when the source could not be read; a resource it did not answer
-    for is also left None, so "unknown" is never drawn as "nothing committed".
+    `committed` is None when the source could not be read; a kind or resource it did not
+    answer for is also left None, so "unknown" is never drawn as "nothing committed".
     """
-    committed = committed or {}
+    committed_limits = (committed or {}).get("limits", {})
     return PlatformCapacityRead(
         memory_limit_bytes=limits.memory_limit_bytes,
         cpu_limit_cores=limits.cpu_limit_cores,
         limits_updated_at=limits.updated_at,
-        memory_committed_bytes=_whole(committed.get("memory")),
-        cpu_committed_cores=committed.get("cpu"),
+        memory_committed_bytes=_whole(committed_limits.get("memory")),
+        cpu_committed_cores=committed_limits.get("cpu"),
     )
 
 
@@ -249,7 +249,7 @@ class PlatformResourceUsageService:
                 throttle_window_seconds=_THROTTLE_WINDOW_SECONDS,
             )
             series = self._combined_series(window, identities, organization_id)
-            committed = self.usage_repository.committed_limits(at=now)
+            committed = self.usage_repository.committed(at=now)
         except PrometheusError:
             logger.warning("Platform resource usage is unavailable", exc_info=True)
             return unmeasured(ResourceUsageAvailability.UNAVAILABLE)

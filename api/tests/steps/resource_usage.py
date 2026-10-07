@@ -103,8 +103,14 @@ def prometheus_is_not_configured():
     return step
 
 
-def prometheus_reports_namespace_limits(*, memory: float | None = None, cpu: float | None = None):
-    """Answer the namespace-limits query with these totals, and leave the rest as they are.
+def prometheus_reports_namespace_commitments(
+    *,
+    limits_memory: float | None = None,
+    limits_cpu: float | None = None,
+    requests_memory: float | None = None,
+    requests_cpu: float | None = None,
+):
+    """Answer the namespace-commitments query with these totals, and leave the rest as they are.
 
     The mock answers every instant query with one list, so this wraps whatever answer is
     already set: the kube-state-metrics query gets its own rows, any other query gets the
@@ -115,13 +121,18 @@ def prometheus_reports_namespace_limits(*, memory: float | None = None, cpu: flo
         client = _client(context)
         agent_rows = client.query.return_value
         namespace_rows = [
-            PrometheusSample(labels={"resource": resource}, value=value)
-            for resource, value in (("memory", memory), ("cpu", cpu))
+            PrometheusSample(labels={"kind": kind, "resource": resource}, value=value)
+            for kind, resource, value in (
+                ("limits", "memory", limits_memory),
+                ("limits", "cpu", limits_cpu),
+                ("requests", "memory", requests_memory),
+                ("requests", "cpu", requests_cpu),
+            )
             if value is not None
         ]
 
         def answer(promql: str, at: datetime):
-            return namespace_rows if "kube_pod_container_resource_limits" in promql else agent_rows
+            return namespace_rows if '"kind"' in promql else agent_rows
 
         client.query.side_effect = answer
 

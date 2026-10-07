@@ -39,7 +39,7 @@ from api.tests.steps.resource_usage import (
     prometheus_is_down,
     prometheus_is_not_configured,
     prometheus_reports_for_agents,
-    prometheus_reports_namespace_limits,
+    prometheus_reports_namespace_commitments,
 )
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -204,9 +204,9 @@ def test_one_platform_wide_query_is_made_for_the_readings_one_for_the_chart_and_
             client = _prometheus(context)
             queries = [call.args[0] for call in client.query.call_args_list]
             readings = [q for q in queries if "agent_memory_working_set_bytes" in q]
-            namespace = [q for q in queries if "kube_pod_container_resource_limits" in q]
-            # One instant query for the agents' readings and one for the namespace's
-            # committed limits, and nothing else.
+            namespace = [q for q in queries if "kube_pod_container_resource_" in q]
+            # One instant query for the agents' readings and one for what the namespace
+            # commits (limits and requests together), and nothing else.
             assert_that(queries, has_length(2))
             assert_that(readings, has_length(1))
             assert_that(namespace, has_length(1))
@@ -387,7 +387,7 @@ def test_the_response_holds_the_entered_limits_beside_what_the_namespace_commits
             *_BASE_GIVEN,
             _two_organizations("owner-cap-a@example.com", "owner-cap-b@example.com"),
             _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
-            prometheus_reports_namespace_limits(memory=46 * _GiB, cpu=11.5),
+            prometheus_reports_namespace_commitments(limits_memory=46 * _GiB, limits_cpu=11.5),
             *_platform_admin("admin-capacity@example.com"),
         ]
     ) as context:
@@ -411,14 +411,14 @@ def test_the_committed_figure_is_asked_of_kube_state_metrics_for_the_whole_names
             *_BASE_GIVEN,
             _two_organizations("owner-cap-c@example.com", "owner-cap-d@example.com"),
             _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
-            prometheus_reports_namespace_limits(memory=4 * _GiB, cpu=1.5),
+            prometheus_reports_namespace_commitments(limits_memory=4 * _GiB, limits_cpu=1.5),
             *_platform_admin("admin-capacity-query@example.com"),
         ]
     ) as context:
         context.client.get(_URL, headers=_auth(context.access_token))
 
         queries = [call.args[0] for call in _prometheus(context).query.call_args_list]
-        committed = [q for q in queries if "kube_pod_container_resource_limits" in q]
+        committed = [q for q in queries if "kube_pod_container_resource_" in q]
         assert_that(committed, has_length(1))
         assert 'job="kube-state-metrics"' in committed[0]
         # Namespace-wide, never narrowed to an agent or an organization.
@@ -431,7 +431,7 @@ def test_the_organization_filter_does_not_change_the_capacity():
             *_BASE_GIVEN,
             _two_organizations("owner-cap-e@example.com", "owner-cap-f@example.com"),
             _reports(lambda c: {c.ada.id: _reading(0.5, 0.2), c.cy.id: _reading(1.0, 0.1)}),
-            prometheus_reports_namespace_limits(memory=46 * _GiB, cpu=11.5),
+            prometheus_reports_namespace_commitments(limits_memory=46 * _GiB, limits_cpu=11.5),
             *_platform_admin("admin-capacity-filter@example.com"),
         ]
     ) as context:

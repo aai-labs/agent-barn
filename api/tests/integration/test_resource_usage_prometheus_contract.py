@@ -52,8 +52,12 @@ _STATIC_CGROUP = {
 
 _GiB = 1024**3
 # What kube-state-metrics says about a namespace's pods, in the shape it says it. Worked out
-# so the sums below are not a coincidence: two Agents' worth of limits, one pod with two
-# containers, one pod still Pending, and one that Succeeded and must not count.
+# so the sums below are not a coincidence. A quota charges a pod the larger of its containers
+# added up and its biggest init container, so the pods are chosen to show each way it goes:
+#   agent-a  init container is bigger for memory limits and for CPU requests, smaller for the others
+#   two      two containers that add up, and an init container that is smaller
+#   waiting  Pending, so it counts
+#   done     Succeeded, so it does not, whatever it asks for
 _KSM_METRICS = f"""\
 # TYPE kube_pod_container_resource_limits gauge
 kube_pod_container_resource_limits{{namespace="ns",pod="agent-a",container="agent",resource="memory",unit="byte"}} {2 * _GiB}
@@ -66,6 +70,25 @@ kube_pod_container_resource_limits{{namespace="ns",pod="waiting",container="agen
 kube_pod_container_resource_limits{{namespace="ns",pod="done",container="job",resource="memory",unit="byte"}} {4 * _GiB}
 kube_pod_container_resource_limits{{namespace="ns",pod="done",container="job",resource="cpu",unit="core"}} 8
 kube_pod_container_resource_limits{{namespace="ns",pod="agent-a",container="agent",resource="ephemeral-storage",unit="byte"}} 99
+# TYPE kube_pod_init_container_resource_limits gauge
+kube_pod_init_container_resource_limits{{namespace="ns",pod="agent-a",container="fix",resource="memory",unit="byte"}} {3 * _GiB}
+kube_pod_init_container_resource_limits{{namespace="ns",pod="agent-a",container="fix",resource="cpu",unit="core"}} 0.25
+kube_pod_init_container_resource_limits{{namespace="ns",pod="two",container="setup",resource="memory",unit="byte"}} {_GiB}
+kube_pod_init_container_resource_limits{{namespace="ns",pod="two",container="setup2",resource="memory",unit="byte"}} {_GiB // 4}
+kube_pod_init_container_resource_limits{{namespace="ns",pod="agent-a",container="fix",resource="ephemeral-storage",unit="byte"}} 99999
+# TYPE kube_pod_container_resource_requests gauge
+kube_pod_container_resource_requests{{namespace="ns",pod="agent-a",container="agent",resource="memory",unit="byte"}} {_GiB // 2}
+kube_pod_container_resource_requests{{namespace="ns",pod="agent-a",container="agent",resource="cpu",unit="core"}} 0.1
+kube_pod_container_resource_requests{{namespace="ns",pod="two",container="main",resource="memory",unit="byte"}} {_GiB // 4}
+kube_pod_container_resource_requests{{namespace="ns",pod="two",container="sidecar",resource="memory",unit="byte"}} {_GiB // 4}
+kube_pod_container_resource_requests{{namespace="ns",pod="two",container="main",resource="cpu",unit="core"}} 0.05
+kube_pod_container_resource_requests{{namespace="ns",pod="two",container="sidecar",resource="cpu",unit="core"}} 0.05
+kube_pod_container_resource_requests{{namespace="ns",pod="waiting",container="agent",resource="memory",unit="byte"}} {_GiB // 8}
+kube_pod_container_resource_requests{{namespace="ns",pod="done",container="job",resource="memory",unit="byte"}} {2 * _GiB}
+kube_pod_container_resource_requests{{namespace="ns",pod="done",container="job",resource="cpu",unit="core"}} 4
+# TYPE kube_pod_init_container_resource_requests gauge
+kube_pod_init_container_resource_requests{{namespace="ns",pod="agent-a",container="fix",resource="memory",unit="byte"}} {_GiB // 4}
+kube_pod_init_container_resource_requests{{namespace="ns",pod="agent-a",container="fix",resource="cpu",unit="core"}} 0.4
 # TYPE kube_pod_status_phase gauge
 kube_pod_status_phase{{namespace="ns",pod="agent-a",phase="Running"}} 1
 kube_pod_status_phase{{namespace="ns",pod="agent-a",phase="Pending"}} 0
@@ -76,9 +99,13 @@ kube_pod_status_phase{{namespace="ns",pod="waiting",phase="Running"}} 0
 kube_pod_status_phase{{namespace="ns",pod="done",phase="Succeeded"}} 1
 kube_pod_status_phase{{namespace="ns",pod="done",phase="Running"}} 0
 """
-# Live pods only: agent-a (2 GiB, 0.5), two (1.5 GiB, 0.5) and waiting (1 GiB). `done` is out.
-_COMMITTED_MEMORY = 2 * _GiB + _GiB + _GiB // 2 + _GiB
-_COMMITTED_CPU = 1.0
+# Live pods only, each charged the larger of its containers and its init container:
+#   limits   agent-a 3 GiB (init) + two 1.5 GiB + waiting 1 GiB;  agent-a 0.5 (containers) + two 0.5 cores
+#   requests agent-a 0.5 GiB (containers) + two 0.5 GiB + waiting 0.125 GiB;  agent-a 0.4 (init) + two 0.1 cores
+_COMMITTED = {
+    "limits": {"memory": float(3 * _GiB + _GiB + _GiB // 2 + _GiB), "cpu": 1.0},
+    "requests": {"memory": float(_GiB // 2 + _GiB // 2 + _GiB // 8), "cpu": 0.5},
+}
 
 
 class _KsmHandler(BaseHTTPRequestHandler):
@@ -365,12 +392,13 @@ def test_the_platform_chart_adds_the_agents_up_into_one_series_per_field(scraped
     assert "cpu_throttled_ratio" not in everyone
 
 
-def test_the_namespace_commitment_counts_live_pods_and_sums_their_containers(scraped: Scraped):
-    def committed() -> dict[str, float] | None:
-        return scraped.repository.committed_limits(at=_now()) or None
+def test_the_namespace_commitment_charges_each_live_pod_as_a_quota_does(scraped: Scraped):
+    def committed() -> dict[str, dict[str, float]] | None:
+        return scraped.repository.committed(at=_now()) or None
 
     figures = _wait_until(committed, "kube-state-metrics to be scraped")
 
     # Running and Pending pods are counted, a Succeeded one is not, a pod with two containers
-    # adds both up, and a resource other than memory and CPU is left out.
-    assert figures == {"memory": float(_COMMITTED_MEMORY), "cpu": _COMMITTED_CPU}
+    # adds both up, a bigger init container wins over the containers (and a smaller one does
+    # not add to them), and a resource other than memory and CPU is left out.
+    assert figures == _COMMITTED

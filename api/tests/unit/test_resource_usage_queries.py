@@ -9,11 +9,11 @@ from api.domains.resource_usage.promql import (
     agent_id_from_labels,
     group_instant,
     group_instant_all,
-    group_namespace_limits,
+    group_namespace_commitments,
     group_range,
     group_totals,
     instant_query,
-    namespace_limits_query,
+    namespace_commitments_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -125,16 +125,23 @@ def test_the_platform_range_query_keeps_a_rate_window_long_enough_for_scrapes():
     assert "[120s]" in platform_range_query(platform_selector(), 60)
 
 
-def test_the_namespace_limits_query_adds_up_live_pods_from_kube_state_metrics_only():
-    query = namespace_limits_query()
+def test_the_namespace_query_charges_a_pod_what_a_quota_charges_it():
+    query = namespace_commitments_query()
 
+    for kind in ("limits", "requests"):
+        containers = f'sum by (namespace, pod, resource) (kube_pod_container_resource_{kind}{{job="kube-state-metrics", resource=~"memory|cpu"}})'
+        init = f'max by (namespace, pod, resource) (kube_pod_init_container_resource_{kind}{{job="kube-state-metrics", resource=~"memory|cpu"}})'
+        # The containers added up, and the biggest init container, joined by `or` on labels
+        # that differ (`part`), then the larger of the two for each pod.
+        assert f'label_replace({containers}, "part", "containers", "", "")' in query
+        assert f'label_replace({init}, "part", "init", "", "")' in query
+        assert f'"kind", "{kind}"' in query
+    assert query.count("max by (namespace, pod, resource) (label_replace(") == 2
+    # Only pods that are Pending or Running count, as with the quota.
+    assert query.count('kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Running"} == 1') == 2
+    assert query.count("on (namespace, pod) group_left ()") == 2
     # Pinned to its own job, as the Agent queries are pinned to theirs.
-    assert query.count('job="kube-state-metrics"') == 2
-    assert 'kube_pod_container_resource_limits{job="kube-state-metrics", resource=~"memory|cpu"}' in query
-    # Only pods that are Pending or Running count, as with the quota; one row per resource.
-    assert 'kube_pod_status_phase{job="kube-state-metrics", phase=~"Pending|Running"} == 1' in query
-    assert query.startswith("sum by (resource) (")
-    assert "on (namespace, pod) group_left ()" in query
+    assert query.count('job="kube-state-metrics"') == 2 * (2 + 1)
 
 
 # --- mapping results back to agents ----------------------------------------
@@ -192,20 +199,29 @@ def test_the_platform_view_keeps_every_agent_that_reported():
     assert group_instant_all(samples) == {_A: {"cpu_cores": 0.1}, stranger: {"up": 1.0}}
 
 
-def test_namespace_limits_are_read_by_resource():
+def test_namespace_commitments_are_read_by_kind_and_resource():
     samples = [
-        PrometheusSample({"resource": "memory"}, 4_294_967_296.0),
-        PrometheusSample({"resource": "cpu"}, 1.5),
-        PrometheusSample({"resource": "ephemeral-storage"}, 9.0),
+        PrometheusSample({"kind": "limits", "resource": "memory"}, 4_294_967_296.0),
+        PrometheusSample({"kind": "limits", "resource": "cpu"}, 1.5),
+        PrometheusSample({"kind": "requests", "resource": "memory"}, 1_073_741_824.0),
+        PrometheusSample({"kind": "requests", "resource": "cpu"}, 0.25),
+        PrometheusSample({"kind": "limits", "resource": "ephemeral-storage"}, 9.0),
+        PrometheusSample({"kind": "other", "resource": "cpu"}, 3.0),
+        PrometheusSample({"resource": "cpu"}, 7.0),
         PrometheusSample({}, 7.0),
     ]
 
-    assert group_namespace_limits(samples) == {"memory": 4_294_967_296.0, "cpu": 1.5}
+    assert group_namespace_commitments(samples) == {
+        "limits": {"memory": 4_294_967_296.0, "cpu": 1.5},
+        "requests": {"memory": 1_073_741_824.0, "cpu": 0.25},
+    }
 
 
-def test_a_resource_the_source_did_not_answer_for_is_absent_not_zero():
-    assert group_namespace_limits([]) == {}
-    assert group_namespace_limits([PrometheusSample({"resource": "cpu"}, 2.0)]) == {"cpu": 2.0}
+def test_a_kind_or_resource_the_source_did_not_answer_for_is_absent_not_zero():
+    assert group_namespace_commitments([]) == {}
+    assert group_namespace_commitments([PrometheusSample({"kind": "requests", "resource": "cpu"}, 2.0)]) == {
+        "requests": {"cpu": 2.0}
+    }
 
 
 def test_combined_points_are_keyed_by_field_and_epoch_second():

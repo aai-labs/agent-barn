@@ -8,11 +8,11 @@ from api.domains.resource_usage.models import UsageWindow
 from api.domains.resource_usage.promql import (
     group_instant,
     group_instant_all,
-    group_namespace_limits,
+    group_namespace_commitments,
     group_range,
     group_totals,
     instant_query,
-    namespace_limits_query,
+    namespace_commitments_query,
     platform_range_query,
     platform_selector,
     range_query,
@@ -81,9 +81,9 @@ class ResourceUsageRepository:
         query = platform_range_query(sel, window.step_seconds)
         return group_totals(self.prometheus.query_range(query, window.start, window.end, window.step_seconds))
 
-    def committed_limits(self, *, at: datetime) -> dict[str, float]:
-        """{"memory": bytes, "cpu": cores} the namespace's pods commit in limits. One request.
+    def committed(self, *, at: datetime) -> dict[str, dict[str, float]]:
+        """{"limits": {"memory": bytes, "cpu": cores}, "requests": {...}} the namespace's pods commit. One request.
 
         Empty when kube-state-metrics has no pods to report.
         """
-        return group_namespace_limits(self.prometheus.query(namespace_limits_query(), at))
+        return group_namespace_commitments(self.prometheus.query(namespace_commitments_query(), at))

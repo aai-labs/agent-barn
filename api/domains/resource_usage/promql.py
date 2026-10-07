@@ -103,23 +103,54 @@ def platform_range_query(sel: str, step_seconds: int) -> str:
     )
 
 
-def namespace_limits_query() -> str:
-    """What every Pending or Running pod in the namespace commits in limits, by resource.
+_KIND_LABEL = "kind"
+_KSM = 'job="kube-state-metrics"'
+# What a ResourceQuota can hold a ceiling for, and what the page can draw: both of these.
+COMMITMENT_KINDS = ("limits", "requests")
 
-    This is what a ResourceQuota counts for `limits.memory` and `limits.cpu`, so it is the
-    figure to hold against the ceiling an administrator enters. It comes from
-    kube-state-metrics, which already runs in the namespace under the tenant account, so
-    reading it needs no new permission. It covers every pod (API, UI, database, Agents),
-    including Agents that do not report through their own healthz server yet.
+
+def _effective_pod(kind: str) -> str:
+    """Per pod and resource, what a ResourceQuota charges the pod for `kind` (limits or requests).
+
+    A pod is charged the larger of its containers added up and its biggest init container
+    (https://kubernetes.io/docs/concepts/workloads/pods/init-containers/#resource-sharing-within-containers).
+    An init container runs once and exits, but it still reserves its share for the pod's whole life.
+    Reading only the containers under-counts any pod whose init container is the bigger one.
+
+    The two halves get a `part` label before they are joined with `or`. Without it, a pod's
+    init series and container series carry the same labels and `or` would drop the init one.
+    Restartable init containers (sidecars) are charged by adding, not by the larger of; none
+    run here, so they are not told apart.
+    """
+    pick = f'{{{_KSM}, resource=~"memory|cpu"}}'
+    containers = f"sum by (namespace, pod, resource) (kube_pod_container_resource_{kind}{pick})"
+    init = f"max by (namespace, pod, resource) (kube_pod_init_container_resource_{kind}{pick})"
+    return (
+        "max by (namespace, pod, resource) ("
+        f'label_replace({containers}, "part", "containers", "", "")'
+        " or "
+        f'label_replace({init}, "part", "init", "", "")'
+        ")"
+    )
+
+
+def namespace_commitments_query() -> str:
+    """What every Pending or Running pod in the namespace commits, by resource and kind.
+
+    This is what a ResourceQuota counts for `limits.memory`, `limits.cpu`, `requests.memory`
+    and `requests.cpu`, so it is the figure to hold against the ceilings an administrator
+    enters. It comes from kube-state-metrics, which already runs in the namespace under the
+    tenant account, so reading it needs no new permission. It covers every pod (API, UI,
+    database, Agents), including Agents that do not report through their own healthz server yet.
 
     Pinned to the `kube-state-metrics` job, as the Agent queries are pinned to `agent`.
     A pod that finished (Succeeded or Failed) no longer counts, as with the quota.
     """
-    ksm = 'job="kube-state-metrics"'
-    return (
-        f'sum by (resource) (kube_pod_container_resource_limits{{{ksm}, resource=~"memory|cpu"}}'
-        f" * on (namespace, pod) group_left ()"
-        f' (kube_pod_status_phase{{{ksm}, phase=~"Pending|Running"}} == 1))'
+    live = f'(kube_pod_status_phase{{{_KSM}, phase=~"Pending|Running"}} == 1)'
+    return " or ".join(
+        f"label_replace(sum by (resource) ({_effective_pod(kind)} * on (namespace, pod) group_left () {live}),"
+        f' "{_KIND_LABEL}", "{kind}", "", "")'
+        for kind in COMMITMENT_KINDS
     )
 
 
@@ -166,15 +197,19 @@ def group_instant_all(samples: Iterable[PrometheusSample]) -> dict[UUID, dict[st
     return grouped
 
 
-def group_namespace_limits(samples: Iterable[PrometheusSample]) -> dict[str, float]:
-    """The namespace's committed limits as {"memory": bytes, "cpu": cores}.
+def group_namespace_commitments(samples: Iterable[PrometheusSample]) -> dict[str, dict[str, float]]:
+    """The namespace's commitments as {"limits": {"memory": bytes, "cpu": cores}, "requests": {...}}.
 
-    A resource the source did not answer for is absent, not zero: no figure is not the same
-    as nothing committed.
+    A kind or resource the source did not answer for is absent, not zero: no figure is not
+    the same as nothing committed.
     """
-    return {
-        resource: sample.value for sample in samples if (resource := sample.labels.get("resource")) in ("memory", "cpu")
-    }
+    grouped: dict[str, dict[str, float]] = {}
+    for sample in samples:
+        kind = sample.labels.get(_KIND_LABEL)
+        resource = sample.labels.get("resource")
+        if kind in COMMITMENT_KINDS and resource in ("memory", "cpu"):
+            grouped.setdefault(kind, {})[resource] = sample.value
+    return grouped
 
 
 def group_totals(series: Iterable[PrometheusSeries]) -> dict[str, dict[int, float]]:
