@@ -25,6 +25,7 @@ from api.domains.events import (
 from api.domains.events.catalog import (
     EVENT_REGISTRY,
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+    ORGANIZATION_UPDATED,
 )
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
@@ -42,6 +43,8 @@ from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
+
+_TRACKED_ORGANIZATION_FIELDS = ("name", "description")
 
 
 def _and_list(items: list[str]) -> str:
@@ -309,12 +312,15 @@ class OrganizationService:
                     allowlist_changed = bool(added_models or removed_models)
                     flag_modified(organization, "allowed_models")
 
+            changed_fields = sorted(
+                key for key in _TRACKED_ORGANIZATION_FIELDS if key in dump and dump[key] != getattr(organization, key)
+            )
             for key, value in dump.items():
                 setattr(organization, key, value)
             session.flush()
+            actor = resolve_actor_identity(context, organization_id)
 
             if allowlist_changed:
-                actor = resolve_actor_identity(context, organization_id)
                 event = EVENT_REGISTRY.build_event(
                     event_name=ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
                     schema_version=1,
@@ -338,8 +344,29 @@ class OrganizationService:
                 self.organization_repository.outbox_repository.stage(
                     session=session, registry=EVENT_REGISTRY, event=event
                 )
-                delivery_ids = self.organization_repository.outbox_repository.delivery_ids_for_event(
+                delivery_ids += self.organization_repository.outbox_repository.delivery_ids_for_event(
                     session, event.event_id
+                )
+            if changed_fields:
+                updated = EVENT_REGISTRY.build_event(
+                    event_name=ORGANIZATION_UPDATED,
+                    schema_version=1,
+                    occurred_at=datetime.now(UTC),
+                    organization_id=organization_id,
+                    actor=actor,
+                    subject=SubjectIdentity(
+                        type=SubjectIdentityType.ORGANIZATION,
+                        id=organization_id,
+                        organization_id=organization_id,
+                    ),
+                    correlation_id=uuid4(),
+                    payload={"organization_id": organization_id, "changed_fields": changed_fields},
+                )
+                self.organization_repository.outbox_repository.stage(
+                    session=session, registry=EVENT_REGISTRY, event=updated
+                )
+                delivery_ids += self.organization_repository.outbox_repository.delivery_ids_for_event(
+                    session, updated.event_id
                 )
 
             session.commit()

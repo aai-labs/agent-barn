@@ -19,6 +19,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_OWNERSHIP_TRANSFERRED,
     ORGANIZATION_ROLE_CHANGED,
+    ORGANIZATION_UPDATED,
     PRODUCT_ANALYTICS_HANDLER,
 )
 from api.domains.events.handlers import (
@@ -48,6 +49,7 @@ _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     AGENT_STOPPED: _AGENT_LIFECYCLE_FIELDS,
     AGENT_DELETED: ("agent_id", "runtime"),
     ORGANIZATION_CREATED: (),
+    ORGANIZATION_UPDATED: ("changed_fields",),
     ORGANIZATION_MEMBER_ADDED: ("membership_id", "role"),
     ORGANIZATION_MEMBER_REMOVED: ("membership_id", "role"),
     ORGANIZATION_ROLE_CHANGED: ("membership_id", "previous_role", "new_role"),

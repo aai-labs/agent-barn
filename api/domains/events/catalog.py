@@ -32,6 +32,7 @@ ORGANIZATION_MODEL_ALLOWLIST_CHANGED = "organization.model_allowlist.changed"
 ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
 ORGANIZATION_VALUE_SETTINGS_CHANGED = "organization.value_settings.changed"
 ORGANIZATION_CREATED = "organization.created"
+ORGANIZATION_UPDATED = "organization.updated"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
@@ -382,6 +383,13 @@ class OrganizationCreatedPayload(BaseModel):
     created_by_user_id: UUID | None
 
 
+class OrganizationUpdatedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    changed_fields: list[str]
+
+
 class OrganizationMemberChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -558,6 +566,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=ORGANIZATION_CREATED,
             schema_version=1,
             payload_model=OrganizationCreatedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=ORGANIZATION_UPDATED,
+            schema_version=1,
+            payload_model=OrganizationUpdatedPayload,
             handler_names=(PRODUCT_ANALYTICS_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )

@@ -35,11 +35,23 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: local end-to-end verification against a recording stub (see the 2026-10-06 entry). A one-off check against the real project from a local stack, labelled `local-dev-test` at the user's request, showed the events arriving in Live Events.
 - In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle.
 - Also delivered: the handler supports platform-scoped events (installation group only).
-- Also delivered: `organization.created`.
-- Next: `organization.updated`, `organization.deleted`, `user.logged_in`, `user.signed_up`, hourly message counts. Then the production confirmation after release.
+- Also delivered: `organization.created`, `organization.updated`.
+- Next: `organization.deleted`, `user.logged_in`, `user.signed_up`, hourly message counts. Then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-07 — AF-357 — organization.updated
+
+- Delivered: `organization.updated` (organization scope, the actor from `resolve_actor_identity`, payload `organization_id` and `changed_fields`), sent to `product_analytics.posthog` only.
+  - It is staged in the `update_organization` session only when the name or description differs from the stored value. The comparison runs before the values are applied.
+  - Delivery ids from it and from `organization.model_allowlist.changed` are collected and enqueued together.
+- Changed: `events/catalog.py`, `organizations/service.py`, `analytics/event_handlers.py`, `product-analytics.md`, `domain-events.md`.
+- Verified:
+  - The new `test_organization_updated_event.py` tests pass: a rename records the changed names, resending the same values records nothing, and a rename with an allowlist change enqueues both events' deliveries.
+  - The wiring row passes.
+  - The existing suites still pass: `test_organization_update_models`, `test_organizations`, `test_organization_operations_extended`.
+- Follow-up: `organization.deleted`.
 
 ### 2026-10-07 — AF-357 — organization.created
 
