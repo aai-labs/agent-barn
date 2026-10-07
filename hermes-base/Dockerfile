@@ -24,6 +24,9 @@ ARG APT_MIRROR
 
 ENV HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace
 
+# The gateway contract captures this client; memory must not install dependencies at boot.
+RUN uv pip install --python /opt/hermes/.venv/bin/python 'hindsight-client==0.6.1'
+
 # Keep /v1/runs approvals while explicitly resuming durable DM/thread history.
 COPY patch-run-session-history.py /tmp/patch-run-session-history.py
 RUN python3 /tmp/patch-run-session-history.py && rm /tmp/patch-run-session-history.py

@@ -14,6 +14,14 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-07 — Merge staging memory and dashboard compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
+
+- Preserved: staging `2329f77c` Agent Memory, resource-usage, KPI, and team-card behavior alongside fixed native transport ownership and bridge retirement. Runtime startup keeps memory readiness without restoring spool drains or completion capture.
+- Reconciled: CI selects both memory and retirement runtime contracts; public deployment preserves staged memory credential provisioning without the removed transport configuration input. Routed documentation retains both contracts.
+- Migration: no-op revision `fa6ffd5fe1f2` joins staging and retirement histories without changing schema or data.
+- Verified: API/UI static checks, a single Alembic head, chart lint/render, memory isolation, monitoring, 104 focused API tests, and all 652 browser tests pass. Both rebuilt runtime images pass their startup/native/retirement/metrics contracts and all six pinned-image runtime tests.
+- Full API run: 3,817 passed and one memory purge contract returned `401` after the cold backend download exceeded the login token lifetime. The unchanged contract passed on a cached-image rerun (25 seconds). The separate Kubernetes mutation test remains excluded under the read-only infrastructure restriction.
+
 ### 2026-10-07 — Verify review follow-up slices — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 
 - Verified: all 3,335 API tests and 460 browser tests pass after the three review slices. API lint/format/type checks, a single Alembic head, OpenClaw startup and native scheduler/observer contracts, and both runtimes’ fresh/upgraded/restored retirement checks pass.
@@ -50,6 +58,17 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 - Preserved: staging `f07f4c05` Personal API Key, discovery, and permission contracts alongside the retired gateway boundary. The API documentation conflict retains both contracts; the merge leaves runtime source unchanged.
 - Migration: revision `a309cd8a0ccc` merges the gateway-retirement and staging API-key histories without schema or data changes.
 - Verified after merge: all 3,314 API tests and 460 browser tests pass, along with API/UI static checks, a single Alembic head, CI YAML parsing, and selection of the OpenClaw workflow for message-tool fixture changes. The separate Kubernetes mutation test remains excluded under the read-only infrastructure restriction.
+
+### 2026-10-04 — local Web Chat reload recovery
+
+- Fixed: the local Communications server has a five-second graceful shutdown
+  bound in Compose and both Make entrypoints, so active runtime control streams
+  cannot block code reloads indefinitely. Pending messages remain durable and
+  runtimes reconnect after reload. No protocol or production deployment change.
+- Verified: the real Uvicorn reload regression fails without the timeout and
+  passes for both Compose and native launch commands with an open control stream.
+  API lint, formatting, types, and Make command parsing pass. The running local
+  gateway has been recreated with the new timeout.
 
 ### 2026-10-03 — Merge staging compatibility — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 

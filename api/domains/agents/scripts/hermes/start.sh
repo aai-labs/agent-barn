@@ -21,6 +21,12 @@ python3 /app/config/config-merge.py /app/config/hermes-config.yaml /opt/data/con
 # values (e.g. old home channel) to survive pod restarts.
 rm -f /opt/data/.env
 
+python3 /app/config/memory-setup.py
+if [ -n "${MEMORY_API_KEY:-}" ]; then
+  export HINDSIGHT_API_KEY="$MEMORY_API_KEY"
+  python3 /app/config/memory-gateway-ready.py || true
+fi
+
 cp /app/config/telemetry-push-plugin.yaml /opt/data/plugins/telemetry-push/plugin.yaml
 cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.py
 # Enabled only for native gateway Connections via plugins.enabled.

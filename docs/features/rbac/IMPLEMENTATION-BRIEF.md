@@ -26,6 +26,12 @@ Authorization combines three independent sources:
 
 Permissions are allow-only and missing capabilities deny by default. Organization authorization resolves the Membership's current persisted Organization Role against an immutable code-owned Permission mapping. Agent authorization resolves current database-backed explicit Agent Access, Agent General Access, and Agent Access Role grants. Grants are not embedded in tokens.
 
+### Platform Agent Memory settings
+
+See [Agent Memory](../agent-memory.md#platform-memory-processing-model) for the
+Platform Admin settings and separate backend-service credential contract.
+Organization roles confer no authority on these Platform routes.
+
 ### Organization Roles
 
 | Role                | Authority                                                                                                                          |
@@ -44,11 +50,13 @@ Every Organization can use these locked defaults:
 | ------------ | ------------------------------------------------------------------------------------------------- |
 | Agent Viewer | Read Agent metadata, conversations, tool calls, activity, logs, and Agent-specific costs.         |
 | Agent Editor | Viewer capabilities plus configuration, lifecycle, Skill assignment, and Agent Secret management. |
-| Agent Owner  | Editor capabilities plus Agent deletion and access management.                                    |
+| Agent Owner  | Editor capabilities plus Agent deletion, access management, and Agent Memory management.          |
 
 AF-216 adds Organization-defined custom Agent Access Roles using the same Agent Permission catalogue. AF-150 seeds only the locked defaults and implements role-bearing assignments.
 
-An Agent operation is allowed when the actor has the corresponding Permission through implicit Agent Owner authority, explicit Agent Access, or Agent General Access, and the Agent lifecycle permits the operation. Start and stop use one `agent.lifecycle.manage` Permission; current Agent state selects the valid transition. Capturing, restoring, and deleting an Agent Restore Point reuse that same Permission, because each is a lifecycle operation on a stopped Agent; reading restore points uses `activity.read`, alongside conversations, tool calls, logs, and health. No restore-point-specific Permission exists — an Agent Editor who may stop an Agent and repin its template may also roll its volume back, and gating restore behind Agent Owner would let an Editor break an Agent without being able to fix it. Agent role names are not authorization checks.
+An Agent operation is allowed when the actor has the corresponding Permission through implicit Agent Owner authority, explicit Agent Access, or Agent General Access, and the Agent lifecycle permits the operation. Start and stop use one `agent.lifecycle.manage` Permission; current Agent state selects the valid transition. Capturing, restoring, and deleting an Agent Restore Point reuse that same Permission, because each is a lifecycle operation on a stopped Agent; reading restore points uses `activity.read`, alongside conversations, tool calls, logs, health, and container CPU and memory (Resource usage). The Agents overview lists the Agents the caller can read and judges each figure per Agent: spend needs `cost.read` on that Agent and usage needs `activity.read`, and a withheld figure is null while the row stays. No restore-point-specific Permission exists — an Agent Editor who may stop an Agent and repin its template may also roll its volume back, and gating restore behind Agent Owner would let an Editor break an Agent without being able to fix it. Agent role names are not authorization checks.
+
+Agent Memory adds `agent.memory.manage` to the locked Agent Owner role, allowing the creator through their explicit access and Organization Owners/Admins through implicit Agent Owner authority to toggle memory. Editors and Viewers do not receive it. The separate Organization Permission `memory.access.manage` is held only by Organization Owners and Admins; it governs listing, creating, and revoking Memory Grants and viewing shared Organization Memory across that Organization. Owning an Agent does not confer this Organization capability. See [`Agent Memory`](../agent-memory.md) for grant semantics and API contracts.
 
 ## Agent Access
 
@@ -75,6 +83,8 @@ Visibility belongs in repository queries rather than post-fetch filtering. Membe
 
 Subordinate repositories must join or use an accessible-Agent query so alternate endpoints cannot reveal conversations, tool calls, costs, logs, Skills, configuration, or credential metadata.
 
+Agent-authenticated gateway traffic has no user Membership. The memory gateway instead resolves the hash of a per-start Agent credential to one undeleted, running, memory-enabled Agent and its existing Organization, then reads only that Agent's same-Organization Memory Grants. Client bank names and tags cannot choose a different tenant or identity. Organization Memory grants permit either read only or read and write; both add a strict `scope:team` scope to recall, and other-Agent grants add exact private scopes only. Shared authorship grants no private read access. The Agent Memory tab requires human `activity.read` and includes Organization records only with the viewed Agent's current Organization grant; revocation hides its own shared contributions too. The explicit writer endpoint requires a live write grant. User-facing memory settings and grants retain the Organization and Agent Permission checks above. See [`Agent Memory`](../agent-memory.md#use-the-memory-gateway) for the machine-request contract.
+
 Background work is the one exception, and it is narrow. It covers scheduled work and operator-run one-shot commands. A CronJob or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, the Communications maintenance scan's `CommunicationConnectionRepository.list_enabled_email_page`, and the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified` run unscoped. The exception holds only while all three of these do:
 
 - the method is never reachable from a router
@@ -82,6 +92,12 @@ Background work is the one exception, and it is narrow. It covers scheduled work
 - the work is driven by a schedule or by an operator with cluster access, never by anything a product user can trigger
 
 A background method that acquires a user-facing caller stops qualifying and needs the accessible-Agent join like any other.
+
+The operator-only Agent Memory purge worker uses this background exception to consume
+durable deletion tombstones. It derives the bank and document namespace from persisted
+Agent/Organization IDs, refuses live or mismatched targets, and exposes no router.
+Only the authorized Agent deletion transaction stages new tombstones. See
+[Deletion cleanup](../agent-memory.md#deletion-cleanup).
 
 HTTP semantics remain deliberate:
 

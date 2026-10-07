@@ -105,8 +105,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fi
 
 RUN mkdir -p /opt/openclaw-preinstalled/npm && \
-    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.8.2 && \
+    npm install --prefix /opt/openclaw-preinstalled/npm \
+      @openclaw/msteams@2026.8.2 \
+      @vectorize-io/hindsight-openclaw@0.13.0 \
+      @vectorize-io/hindsight-client@0.8.6 && \
     chown -R node:node /opt/openclaw-preinstalled
+
+COPY patch-hindsight-manifest.mjs /tmp/patch-hindsight-manifest.mjs
+RUN node /tmp/patch-hindsight-manifest.mjs \
+      /opt/openclaw-preinstalled/npm/node_modules/@vectorize-io/hindsight-openclaw/openclaw.plugin.json && \
+    rm /tmp/patch-hindsight-manifest.mjs
 
 USER node
 

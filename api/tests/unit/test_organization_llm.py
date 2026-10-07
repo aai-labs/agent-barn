@@ -205,6 +205,8 @@ def organization_service(**overrides):
         "litellm": MagicMock(),
         "permission_policy": MagicMock(),
         "event_delivery_dispatcher": MagicMock(),
+        "memory_accounting": MagicMock(legacy_spend=MagicMock(return_value=0)),
+        "memory_keys": MagicMock(),
     }
     deps.update(overrides)
     return OrganizationLlmBudgetService(**deps)
@@ -217,6 +219,11 @@ def configured():
 def test_reconcile_applies_each_organizations_stored_budget():
     repo = MagicMock()
     repo.list_budget_policies.return_value = [("a", 50.0, "30d"), ("b", 5.0, "7d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     with configured():
         service.reconcile_llm_budgets()
@@ -240,6 +247,11 @@ def test_reconcile_lowers_a_default_agent_limit_left_above_its_organizations():
     Agent limits."""
     repo = MagicMock()
     repo.list_budget_policies.return_value = [("a", 50.0, "30d"), ("b", 5.0, "7d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     with configured():
         service.reconcile_llm_budgets()
@@ -252,6 +264,11 @@ def test_reconcile_lowers_a_default_agent_limit_left_above_its_organizations():
 def test_reconcile_lowers_the_default_even_when_the_team_push_fails():
     repo = MagicMock()
     repo.list_budget_policies.return_value = [("a", 50.0, "30d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     service.litellm.apply_team_budget.side_effect = LiteLLMError("down")
     with configured():
@@ -263,6 +280,11 @@ def test_one_failing_organization_does_not_abort_the_sweep():
     """Drift repair is best effort: budgets are applied when set, not here."""
     repo = MagicMock()
     repo.list_budget_policies.return_value = [("a", 1.0, "30d"), ("b", 2.0, "30d")]
+    repo.get.side_effect = lambda org_id: MagicMock(
+        effective_llm_budget_usd=next(
+            budget for identity, budget, _ in repo.list_budget_policies.return_value if identity == org_id
+        )
+    )
     service = organization_service(organization_repository=repo)
     service.litellm.apply_team_budget.side_effect = [LiteLLMError("down"), None]
     with configured():
@@ -1272,3 +1294,24 @@ def test_a_key_is_looked_up_by_hash_so_it_never_enters_a_query_string():
     sent = get.call_args.kwargs["params"]["key"]
     assert_that(sent, equal_to(hashlib.sha256(SECRET_KEY.encode()).hexdigest()))
     assert_that(SECRET_KEY in str(get.call_args), equal_to(False))
+
+
+def test_local_budget_watch_refreshes_immediately_and_retries_failures(monkeypatch):
+    from api.domains.organizations import llm_budget_alerts, llm_budget_cron
+
+    service = MagicMock()
+    service.check_llm_budget_thresholds.side_effect = [RuntimeError("temporary outage"), None]
+    monkeypatch.setattr(llm_budget_cron, "build_service", lambda: service)
+    monkeypatch.setattr("sys.argv", ["llm-budget-alerts", "--watch"])
+    waits = []
+
+    def wait(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(llm_budget_cron.time, "sleep", wait)
+    with pytest.raises(KeyboardInterrupt):
+        llm_budget_alerts.main()
+    assert service.check_llm_budget_thresholds.call_count == 2
+    assert all(0 < seconds <= 300 for seconds in waits)

@@ -1,5 +1,6 @@
 import json
 import threading
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid7
@@ -12,6 +13,7 @@ from hamcrest import (
     contains_string,
     equal_to,
     greater_than,
+    has_entries,
     has_item,
     has_key,
     has_length,
@@ -36,6 +38,7 @@ from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.communications.models import CommunicationConnection
+from api.domains.conversations.models import MessageDirection
 from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
@@ -82,6 +85,7 @@ from api.tests.steps.agent import (
     there_is_an_agent,
     use_org_for_auth,
 )
+from api.tests.steps.conversation import there_is_a_recorded_message
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization,
@@ -5860,3 +5864,148 @@ def test_a_template_switch_is_not_blocked_by_a_credential_added_to_a_newer_skill
 
         with then("the switch is allowed"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
+@pytest.mark.parametrize("direction", list(MessageDirection))
+def test_agent_list_metadata_uses_latest_message_occurrence_across_connections(direction):
+    latest = datetime(2026, 10, 6, 11, 28, tzinfo=UTC)
+    with given(_GIVEN) as context:
+        response = context.client.post(
+            _BASE, json=_VALID_CREATE, headers={"Authorization": f"Bearer {context.access_token}"}
+        )
+        assert_that(response.status_code, equal_to(201))
+        assert_that(
+            response.json(),
+            has_entries(
+                creator=has_entries(
+                    id=str(context.user.id), full_name=context.user.full_name, email=context.user.email
+                ),
+                last_message_at=None,
+            ),
+        )
+        agent_id = UUID(response.json()["id"])
+        context.agent = context.injector.get(AgentRepository).get_by_id(agent_id)
+        there_is_a_recorded_message(latest, direction, "web")(context)
+        # A later-ingested older message must not move the timestamp backwards.
+        there_is_a_recorded_message(latest - timedelta(days=1))(context)
+        for path in (_BASE, f"{_BASE}/{agent_id}"):
+            with when("the Agent metadata is read"):
+                result = context.client.get(path, headers={"Authorization": f"Bearer {context.access_token}"})
+                body = result.json()["items"][0] if path == _BASE else result.json()
+            with then("creator provenance and the latest inbound or outbound occurrence are returned"):
+                assert_that(result.status_code, equal_to(200))
+                assert_that(
+                    body,
+                    has_entries(
+                        creator=has_entries(
+                            id=str(context.user.id), full_name=context.user.full_name, email=context.user.email
+                        ),
+                        last_message_at=latest.isoformat().replace("+00:00", "Z"),
+                    ),
+                )
+
+
+def test_legacy_agent_list_metadata_does_not_guess_creator_or_message_time():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        response = context.client.get(_BASE, headers={"Authorization": f"Bearer {context.access_token}"})
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["items"][0], has_entries(creator=None, last_message_at=None))
+
+
+@pytest.mark.parametrize("agent_count", [1, 20])
+def test_agent_list_batches_shared_credential_labels(agent_count):
+    from api.domains.shared_credentials.repository import SharedCredentialRepository
+    from api.tests.steps.agent import shared_credential_is_attached_to_agent, there_is_a_shared_credential
+
+    with given([*_GIVEN, there_is_a_shared_credential()]) as context:
+        for index in range(agent_count):
+            there_is_an_agent(name=f"Teammate {index}")(context)
+            shared_credential_is_attached_to_agent()(context)
+        repository = context.injector.get(SharedCredentialRepository)
+        with patch.object(repository, "get_names_by_ids_and_org", wraps=repository.get_names_by_ids_and_org) as lookup:
+            response = context.client.get(
+                _BASE,
+                params={"page": 1, "page_size": 50},
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["items"], has_length(agent_count))
+        for agent in response.json()["items"]:
+            assert_that(
+                agent["secrets"],
+                equal_to(
+                    [
+                        {
+                            "provider": context.shared_credential.provider,
+                            "secret_name": context.shared_credential.name,
+                            "shared_credential_id": str(context.shared_credential.id),
+                            "shared_credential_name": context.shared_credential.name,
+                        }
+                    ]
+                ),
+            )
+        assert_that(lookup.call_count, equal_to(1))
+        assert_that(lookup.call_args.args, equal_to(([context.shared_credential.id], context.organization.id)))
+
+
+@pytest.mark.parametrize("pin_type", ["organization", "platform", "override"])
+def test_agent_list_projects_pin_metadata_without_loading_template_documents(pin_type):
+    from api.tests.helpers.sql_queries import capture_sql_statements
+    from api.tests.steps.template import agent_uses_template_pin
+
+    with given([*_GIVEN, there_is_an_agent(), agent_uses_template_pin(pin_type)]) as context:
+        with capture_sql_statements(context.postgres_delegate.engine) as statements:
+            response = context.client.get(_BASE, headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        body = response.json()["items"][0]
+        key, version, kind, override_version = context.expected_template_pin
+        assert_that(
+            body,
+            has_entries(
+                template_key=key, template_version=version, template_pin_type=kind, override_version=override_version
+            ),
+        )
+        for column in (
+            "soul_md",
+            "identity_md",
+            "user_md",
+            "tools_md",
+            "agents_md",
+            "boot_md",
+            "bootstrap_md",
+            "heartbeat_md",
+        ):
+            assert_that("\n".join(statements), is_not(contains_string(f".{column}")))
+
+
+def test_agent_list_credential_projections_do_not_load_encrypted_contents():
+    from api.tests.helpers.sql_queries import capture_sql_statements
+    from api.tests.steps.agent import shared_credential_is_attached_to_agent, there_is_a_shared_credential
+
+    with given(
+        [*_GIVEN, there_is_an_agent(), there_is_a_shared_credential(), shared_credential_is_attached_to_agent()]
+    ) as context:
+        context.postgres_delegate.save(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=SecretProvider.FIRECRAWL,
+                secret_name="Manual Firecrawl",
+                content="encrypted-fixture",
+            )
+        )
+        with capture_sql_statements(context.postgres_delegate.engine) as statements:
+            response = context.client.get(_BASE, headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        assert_that(
+            response.json()["items"][0]["secrets"],
+            has_item(
+                has_entries(
+                    provider="firecrawl",
+                    secret_name="Manual Firecrawl",
+                    shared_credential_id=None,
+                    shared_credential_name=None,
+                )
+            ),
+        )
+        assert_that("\n".join(statements), is_not(contains_string("agent_secret.content")))
+        assert_that("\n".join(statements), is_not(contains_string("shared_credential.content")))

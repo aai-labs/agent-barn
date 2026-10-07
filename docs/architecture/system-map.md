@@ -10,12 +10,12 @@ Agent Barn is a monorepo with four operational areas:
 
 | Area           | Responsibility                                                                                         | Authoritative sources                                                        |
 | -------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| API            | Product, telemetry, and communications HTTP contracts; authorization; orchestration; persistence; runtime control | `../../api/api_app.py`, `../../api/ingest_app.py`, `../../api/communications_app.py`, `../../api/domains/`, `../../api/infrastructure/` |
+| API            | Product, telemetry, communications, and Agent Memory HTTP contracts; authorization; orchestration; persistence; runtime control | `../../api/api_app.py`, `../../api/ingest_app.py`, `../../api/communications_app.py`, `../../api/memory_app.py`, `../../api/domains/`, `../../api/infrastructure/` |
 | UI             | Authenticated organization-scoped product interface                                                    | `../../ui/src/app/`, `../../ui/src/features/`, `../../ui/src/shared/`                          |
 | Agent runtimes | Execute rendered agent configuration, own native chat transport, and report activity                                               | `../../api/domains/agents/builders/`, `../../hermes-base/`, `../../openclaw-base/`             |
-| Deployment     | Build and deploy databases, LiteLLM, API, UI, and runtime images                                       | `../../helm/`, `../../helmfile.yaml.gotmpl`, `../../.github/workflows/`                        |
+| Deployment     | Build and deploy databases, LiteLLM, API, UI, Hindsight, and runtime images                                       | `../../helm/`, `../../helmfile.yaml.gotmpl`, `../../.github/workflows/`                        |
 
-Product routes are registered in `../../api/api_app.py` beneath `/api/v1`. Runtime telemetry is isolated in `../../api/ingest_app.py` beneath `/ingest/v1`. Public Teams relay and Email ingress belong to the product API. Web Chat/Email delivery and the runtime-neutral delivery protocol are isolated in `../../api/communications_app.py` beneath `/communications/v1`, alongside the retained Email ingress compatibility route. The UI normally reaches only product routes through `../../ui/src/shared/api`.
+Product routes are registered in `../../api/api_app.py` beneath `/api/v1`. Runtime telemetry is isolated in `../../api/ingest_app.py` beneath `/ingest/v1`. Public Teams relay and Email ingress belong to the product API. Web Chat/Email delivery and the runtime-neutral delivery protocol are isolated in `../../api/communications_app.py` beneath `/communications/v1`, alongside the retained Email ingress compatibility route. Agent-authenticated memory requests are isolated in `../../api/memory_app.py` beneath `/memory/v1`. The UI normally reaches only product routes through `../../ui/src/shared/api`.
 
 ## Domain relationships
 
@@ -28,6 +28,7 @@ Organization
     ├── pinned Template version
     ├── assigned Skills
     ├── Agent Secrets ── Integrations
+    ├── Agent Memory opt-in ── Memory Grants
     ├── Communication Connections ── Platform Plugins
     │   ├── Web Chat/Email Deliveries ── Communications Gateway
     │   └── Native chat transport ── Agent runtime
@@ -35,10 +36,13 @@ Organization
     ├── Runtime resources ── Kubernetes
     ├── Conversation Messages ← Communications Gateway / native Ingest
     ├── Tool Calls ← Ingest
+    ├── Resource usage ← Prometheus ← healthz /metrics
     └── LiteLLM key ── Costs
 ```
 
 The Agent domain owns lifecycle, templates, skills, runtime builders, Kubernetes resources, LiteLLM keys, and runtime credentials. The Communications domain independently owns provider credentials, Platform Plugins, Communication Connections, canonical gateway messages, and durable Web Chat/Email delivery. Native provider sessions and sends belong to the Agent runtime; authenticated Ingest mirrors native transcripts. See the [transport contract](runtime-and-deployment.md#platform-plugin-boundary). The Agent Webhooks domain owns signed machine ingress and durable Webhook Invocations; an Agent Webhook is not a Platform or Communication Connection. Cross-domain orchestration belongs in services rather than routes or repositories.
+
+The Agent Memory domain owns the persisted opt-in and Organization-managed Memory Grants, with atomic audit events. These product APIs are registered in `api_app.py`; the separate memory process enforces runtime credentials and proxies to Hindsight, and opted-in runtimes recall and retain through their pinned Hindsight plugins alongside native memory. See [`Agent Memory`](../features/agent-memory.md) and its [delivery log](../features/agent-memory/CHANGELOG.md).
 
 ## Dependency direction
 
@@ -47,10 +51,12 @@ The Agent domain owns lifecycle, templates, skills, runtime builders, Kubernetes
 - UI routes compose feature components; feature hooks use the shared API client and centralized query-key patterns.
 - Agent startup renders a pinned template, combines skills and integration context, builds runtime resources, and applies them through the Kubernetes client.
 - Runtime telemetry flows through Ingest into Tool Call persistence.
+- Memory requests flow through the memory gateway into the authenticated Hindsight backend, with banks and tags derived from Agent identity and current grants.
 - Web Chat/Email ingress flows through a Connection's shipped Platform Plugin into durable inbound delivery; runtime replies return through the same Connection and plugin. Native chat ingress and replies stay in the runtime, with Teams entering through the authenticated product API relay and observers reporting through Ingest.
 - Signed Agent Webhook ingress creates a Webhook Invocation and immediately submits a native one-shot Agent Trigger Job. The runtime delivers its result through the selected runtime-owned Connection without creating a Communication Delivery or passing through the Communications Gateway.
 - Domain-specific repository operations that produce Domain Events own one explicit SQLModel transaction for business state, the event Outbox Message, and intended Event Deliveries.
 - Costs are queried from LiteLLM and joined to agents by LiteLLM key identity; they are not derived from conversation or tool-call records.
+- Agent Resource Usage is read from Prometheus, not stored. Each Agent reports its own container's CPU and memory, and the `resource_usage` domain queries them by `app` and `org_id`; see [`../features/resource-usage.md`](../features/resource-usage.md).
 
 ## Cross-cutting invariants
 

@@ -65,4 +65,7 @@ fi
 if [ -f /app/config/gog-setup.sh ]; then
   sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
 fi
+if [ -n "${MEMORY_API_KEY:-}" ]; then
+  python3 /app/config/memory-gateway-ready.py || true
+fi
 exec openclaw gateway --allow-unconfigured

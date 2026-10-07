@@ -27,7 +27,7 @@ export function SettingsSidebar({
   onSelect: (key: string) => void;
 }) {
   return (
-    <aside className="w-full flex-shrink-0 lg:sticky lg:top-[77px] lg:w-56">
+    <aside className="min-w-0 w-full flex-shrink-0 lg:sticky lg:top-[77px] lg:w-56">
       <div
         className="mb-3 px-3 text-[0.7rem] font-semibold uppercase tracking-[0.1em]"
         style={{ color: "var(--ink-4)" }}

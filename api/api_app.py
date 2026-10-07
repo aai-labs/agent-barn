@@ -22,6 +22,8 @@ from api.core.metrics import (
 )
 from api.core.utils import create_injector
 from api.domains.activity.routes import activity_router
+from api.domains.agent_memory.platform_routes import platform_memory_router
+from api.domains.agent_memory.routes import agent_memory_router, memory_grants_router, organization_memory_router
 from api.domains.agent_settings.routes import agent_settings_router
 from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agent_webhooks_router
 from api.domains.agents.routes import agents_router
@@ -43,6 +45,9 @@ from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_r
 from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.rbac.seeder import RbacSeeder
+from api.domains.resource_limits.routes import platform_resource_limits_router
+from api.domains.resource_usage.platform_routes import platform_resource_usage_router
+from api.domains.resource_usage.routes import agent_overview_router, resource_usage_router
 from api.domains.restore_points.routes import restore_points_router
 from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
@@ -123,6 +128,10 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agents_router)
     subapi.include_router(agent_webhooks_router)
     subapi.include_router(agent_settings_router)
+    subapi.include_router(platform_memory_router)
+    subapi.include_router(agent_memory_router)
+    subapi.include_router(memory_grants_router)
+    subapi.include_router(organization_memory_router)
     subapi.include_router(auth_router)
     subapi.include_router(api_keys_router)
     subapi.include_router(business_value_router)
@@ -149,6 +158,10 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)
     subapi.include_router(activity_router)
+    subapi.include_router(resource_usage_router)
+    subapi.include_router(agent_overview_router)
+    subapi.include_router(platform_resource_usage_router)
+    subapi.include_router(platform_resource_limits_router)
     subapi.include_router(restore_points_router)
     subapi.include_router(users_router)
     # This remains outside /api/v1 because Azure has the historical public

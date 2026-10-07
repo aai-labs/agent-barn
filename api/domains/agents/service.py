@@ -1,9 +1,10 @@
 import datetime as dt
 import fnmatch
+import hashlib
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -60,6 +61,7 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentConfigurationVersionRead,
     AgentCreate,
+    AgentCreatorRead,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
@@ -130,6 +132,7 @@ from api.domains.communications.models import ConversationLocation, OutboundTarg
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
+from api.domains.conversations.repository import ConversationRepository
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -279,6 +282,7 @@ class AgentService:
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
+    conversation_repository: ConversationRepository
     plugins: PlatformPluginRegistry
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -456,7 +460,7 @@ class AgentService:
     def _build_agent_read(
         self,
         agent: Agent,
-        secrets: list[AgentSecret] | None = None,
+        secrets: Sequence[AgentSecret | AgentSecretRead] | None = None,
         skills: list[PinnedSkill] | None = None,
         required_skill_map: Mapping[UUID, str | None | tuple[int, str | None]] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
@@ -468,19 +472,21 @@ class AgentService:
         source_update_skill_ids: set[UUID] | None = None,
         effective_default_model: str = "",
         configured_platform_keys: list[str] | None = None,
+        creator: AgentCreatorRead | None = None,
+        last_message_at: dt.datetime | None = None,
+        shared_credential_names: Mapping[UUID, str] | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
-        shared_creds_by_id = {}
-        if shared_ids:
-            shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, agent.organization_id)
-            shared_creds_by_id = {c.id: c for c in shared_creds}
+        credential_names = shared_credential_names if shared_credential_names is not None else {}
+        if shared_credential_names is None and shared_ids:
+            credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+                shared_ids, agent.organization_id
+            )
         secrets_read = []
         for secret in secrets or []:
             read = AgentSecretRead.model_validate(secret)
-            if secret.shared_credential_id and secret.shared_credential_id in shared_creds_by_id:
-                sc = shared_creds_by_id[secret.shared_credential_id]
-                read.shared_credential_id = sc.id
-                read.shared_credential_name = sc.name
+            if secret.shared_credential_id and secret.shared_credential_id in credential_names:
+                read.shared_credential_name = credential_names[secret.shared_credential_id]
             secrets_read.append(read)
         assigned_ids = {pinned.skill.id for pinned in (skills or [])}
         req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
@@ -545,12 +551,15 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            memory_enabled=agent.memory_enabled,
             last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
             native_platform_keys=sorted(NATIVE_PLATFORM_KEYS),
             allowed_actions=allowed_actions or [],
+            creator=creator,
+            last_message_at=last_message_at,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
@@ -576,6 +585,10 @@ class AgentService:
             template_key = template.template_key
         read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
+        creators = self.repository.get_creators_for_agents([agent.id], read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            [agent.id], self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
         return self._build_agent_read(
             agent,
             secrets,
@@ -584,6 +597,8 @@ class AgentService:
             allowed_actions,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(agent.organization_id),
             configured_platform_keys=configured_platform_keys.get(agent.id, []),
+            creator=creators.get(agent.id),
+            last_message_at=message_times.get(agent.id),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
@@ -865,6 +880,7 @@ class AgentService:
             template_key=template.template_key,
             template_version=template.version,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(org_id),
+            creator=AgentCreatorRead.model_validate(context.user),
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -1457,7 +1473,22 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, agents)
 
         agent_ids = [a.id for a in agents]
-        secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
+        creators = self.repository.get_creators_for_agents(agent_ids, read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            agent_ids, self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
+        secrets_by_agent = self.repository.get_secret_summaries_for_agents(agent_ids, read_scope)
+        shared_credential_ids = list(
+            {
+                secret.shared_credential_id
+                for secrets in secrets_by_agent.values()
+                for secret in secrets
+                if secret.shared_credential_id is not None
+            }
+        )
+        shared_credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+            shared_credential_ids, read_scope.organization_id
+        )
         skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
         assigned_skill_ids = list(
             {pinned.skill.id for agent_skills in skills_by_agent.values() for pinned in agent_skills}
@@ -1491,6 +1522,9 @@ class AgentService:
                 source_update_skill_ids=source_update_skill_ids,
                 effective_default_model=effective_default_model,
                 configured_platform_keys=configured_platform_keys.get(agent.id, []),
+                creator=creators.get(agent.id),
+                last_message_at=message_times.get(agent.id),
+                shared_credential_names=shared_credential_names,
             )
             for agent in agents
         ]
@@ -1933,6 +1967,7 @@ class AgentService:
                 telegram_settings=native_telegram.settings if native_telegram else None,
                 runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,
+                memory_enabled=agent.memory_enabled,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1975,7 +2010,9 @@ class AgentService:
             if runtime_teams is not None:
                 native_credentials["msteams"] = runtime_teams.credentials
                 native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
-            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
+            overlay = build_openclaw_gateway_config(
+                effective_model, llm_proxy_url, native_channels, memory_enabled=agent.memory_enabled
+            )
             hermes_cfg = None
             secret = build_secret_runtime(
                 agent.id,
@@ -2115,6 +2152,9 @@ class AgentService:
 
         ingest_key = secrets.token_urlsafe(32)
         communication_key = secrets.token_urlsafe(32)
+        memory_key = secrets.token_urlsafe(32) if agent.memory_enabled else None
+        if memory_key:
+            secret.string_data.update({"MEMORY_URL": self.config.memory_base_url, "MEMORY_API_KEY": memory_key})
         secret.string_data.update(
             {
                 "AGENT_ID": str(agent.id),
@@ -2201,6 +2241,7 @@ class AgentService:
                 user_md=rendered.user_md,
                 tools_md=tools_md,
                 agents_md=agents_md,
+                memory_enabled=agent.memory_enabled,
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
@@ -2219,6 +2260,7 @@ class AgentService:
                 user_md=rendered.user_md,
                 tools_md=tools_md,
                 agents_md=agents_md,
+                memory_enabled=agent.memory_enabled,
                 boot_md=rendered.boot_md,
                 bootstrap_md=rendered.bootstrap_md,
                 heartbeat_md=rendered.heartbeat_md,
@@ -2255,6 +2297,7 @@ class AgentService:
             self.config.hermes_image,
         )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
+        agent.memory_key_hash = hashlib.sha256(memory_key.encode()).hexdigest() if memory_key else None
         agent.communication_key_encrypted = encrypt_token(
             communication_key,
             self.config.agent_token_encryption_key,
@@ -2666,17 +2709,33 @@ class AgentService:
     def get_agent_health(self, agent_id: UUID, context: CurrentUserContext) -> AgentHealthRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
 
-        if agent.status == AgentStatus.ERROR:
-            stored = _stored_provisioning_error(agent)
-            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
-
-        if agent.status != AgentStatus.RUNNING:
+        if agent.status not in (AgentStatus.ERROR, AgentStatus.RUNNING):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is not running",
             )
 
-        name = f"agent-{agent_id}"
+        health = self.agent_health(agent)
+        if health is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"status": "error", "reason": "unreachable"},
+            )
+        return health
+
+    def agent_health(self, agent: Agent) -> AgentHealthRead | None:
+        """What the pod and the Agent's own healthz say, for an Agent already authorized.
+
+        The callers authorize: the Organization route requires `activity.read` on the Agent,
+        and the Platform resource usage page sits behind `require_platform_admin`. None means
+        the healthz server could not be reached, which the Organization route answers with a
+        503. A stopped Agent has no health and is not asked about.
+        """
+        if agent.status == AgentStatus.ERROR:
+            stored = _stored_provisioning_error(agent)
+            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
+
+        name = f"agent-{agent.id}"
         ns = self.config.k8s_namespace
 
         pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)
@@ -2689,7 +2748,21 @@ class AgentService:
             data = self.k8s.fetch_agent_healthz(name, ns)
             return AgentHealthRead.model_validate(data)
         except RuntimeError:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"status": "error", "reason": "unreachable"},
+            return None
+
+    def runtime_restarts(self, agent: Agent) -> AgentRuntimeDiagnosticsRead | None:
+        """Restarts and why the last one ended, without any log text.
+
+        For an Agent already authorized by a caller outside the activity log boundary (the
+        Platform view), so it never asks the cluster for logs. None when the cluster could
+        not be asked.
+        """
+        if agent.status != AgentStatus.RUNNING:
+            return AgentRuntimeDiagnosticsRead(observed_at=dt.datetime.now(dt.UTC))
+        try:
+            return AgentRuntimeDiagnosticsRead.model_validate(
+                self.k8s.get_runtime_diagnostics(f"agent-{agent.id}", self.config.k8s_namespace, include_logs=False)
             )
+        except Exception:
+            logger.exception("Runtime diagnostics unavailable for agent %s", agent.id)
+            return None
