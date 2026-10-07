@@ -50,6 +50,11 @@ analyticsEnabled: false
 analyticsIncludeUserDetails: false
 installationName: ""
 
+# Hourly message counts per Agent, platform and direction (no content), sent for the
+# previous closed hour. The CronJob exists only while analyticsEnabled is "true".
+analyticsMessageCounts:
+  schedule: "15 * * * *"
+
 # Per-Agent email addresses. Blank leaves the Email platform disabled — Agent Barn
 # refuses new Email Communication Connections and nothing else changes. Both are needed
 # on top of the three values above. agentEmailDomain must be onboarded for BOTH Email

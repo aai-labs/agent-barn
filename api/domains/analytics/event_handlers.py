@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 
 SOURCE = "agentbarn-api"
 MAX_DELIVERY_ATTEMPTS = 3
-_INSTALLATION_GROUP = "installation"
-_ORGANIZATION_GROUP = "organization"
+INSTALLATION_GROUP = "installation"
+ORGANIZATION_GROUP = "organization"
 _AGENT_LIFECYCLE_FIELDS = ("agent_id", "runtime", "previous_status", "new_status")
 _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     AGENT_CREATED: ("agent_id", "runtime"),
@@ -140,10 +140,10 @@ class ProductAnalyticsHandler:
     ) -> list[dict[str, Any]]:
         installation_id = str(self.installation_repository.get_id())
         common = {"source": SOURCE, "$geoip_disable": True, "$lib": SOURCE}
-        groups = {_INSTALLATION_GROUP: installation_id}
+        groups = {INSTALLATION_GROUP: installation_id}
         properties: dict[str, Any] = {**self._event_fields(event), **common, "installation_id": installation_id}
         if organization_id is not None:
-            groups[_ORGANIZATION_GROUP] = str(organization_id)
+            groups[ORGANIZATION_GROUP] = str(organization_id)
             properties["organization_id"] = str(organization_id)
         properties["$groups"] = groups
         if self.config.analytics_include_user_details:
@@ -157,10 +157,10 @@ class ProductAnalyticsHandler:
             {
                 **envelope,
                 "event": "$groupidentify",
-                "uuid": str(uuid5(event.event_id, _INSTALLATION_GROUP)),
+                "uuid": str(uuid5(event.event_id, INSTALLATION_GROUP)),
                 "properties": {
                     **common,
-                    "$group_type": _INSTALLATION_GROUP,
+                    "$group_type": INSTALLATION_GROUP,
                     "$group_key": installation_id,
                     "$group_set": {"name": self.config.installation_display_name},
                 },

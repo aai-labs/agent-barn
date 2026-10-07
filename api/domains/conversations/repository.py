@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import NamedTuple
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -22,11 +23,44 @@ from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
+class MessageCount(NamedTuple):
+    agent_id: UUID
+    organization_id: UUID
+    platform: str
+    direction: MessageDirection
+    count: int
+
+
 @inject
 @singleton
 @dataclass
 class ConversationRepository:
     delegate: PostgresRepositoryDelegate
+
+    def hourly_message_counts(self, hour_start: datetime) -> list[MessageCount]:
+        query = (
+            sa.select(
+                col(AgentChatMessage.agent_id),
+                col(Agent.organization_id),
+                col(CommunicationConnection.platform_key),
+                col(AgentChatMessage.direction),
+                sa.func.count(),
+            )
+            .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+            .join(CommunicationConnection, col(CommunicationConnection.id) == col(AgentChatMessage.connection_id))
+            .where(
+                col(AgentChatMessage.created_at) >= hour_start,
+                col(AgentChatMessage.created_at) < hour_start + timedelta(hours=1),
+            )
+            .group_by(
+                col(AgentChatMessage.agent_id),
+                col(Agent.organization_id),
+                col(CommunicationConnection.platform_key),
+                col(AgentChatMessage.direction),
+            )
+        )
+        with self.delegate.engine.connect() as connection:
+            return [MessageCount(*row) for row in connection.execute(query).all()]
 
     def upsert_messages(self, messages: list[AgentChatMessage]) -> None:
         if not messages:

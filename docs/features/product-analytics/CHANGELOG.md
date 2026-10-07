@@ -36,10 +36,32 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle.
 - Also delivered: the handler supports platform-scoped events (installation group only).
 - Also delivered: `organization.created`, `organization.updated`, `organization.deleted`, `user.logged_in`, `user.signed_up`.
-- Next: hourly message counts. Then the production confirmation after release.
+- Also delivered: hourly message counts (CronJob).
+- Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-07 — AF-357 — Hourly message counts
+
+- Delivered: `agent.messages.counted`, one event per Agent, platform and direction per closed hour, counts only.
+  - It is sent by `MessageCountReporter` (`api/domains/analytics/message_counts.py`) from a new hourly CronJob.
+  - It buckets by `created_at` (migration `6c3f9a2e8b41` adds the index).
+  - The `uuid5(installation, agent:platform:direction:hour)` ids keep two platforms on one Agent distinct, and stay stable across re-runs.
+  - `distinct_id` is the `installation:<id>` pseudo-person. Batches are capped at 500.
+- Changed: `conversations/repository.py` (`hourly_message_counts`, `MessageCount`), `conversations/models.py` (index), migration, `analytics/message_counts.py`, `analytics/event_handlers.py` (group constants made public), Helm CronJob template and `analyticsMessageCounts.schedule`, Make target `report-message-counts`, `product-analytics.md`, `operations.md`, `README.md`, `INDEX.md`.
+- Verified:
+  - The new `test_message_counts.py` tests pass:
+    - counts across two platforms and both directions, bucketed by arrival time
+    - exact payload and ids
+    - re-run ids
+    - batch splitting
+    - nothing sent while disabled
+    - the previous-hour calculation
+  - `test_message_created_at_index_migration.py` passes, and there is a single Alembic head.
+  - Render check: the CronJob is absent by default and for `"false"`, present for `true` and `"true"`, with the right schedule and command. Helmfile gives unset → absent, true → present, false → absent. `helm lint` is clean.
+  - A local `main()` run reached `Config` but stopped on missing budget settings in the developer `.env`, so the entrypoint is verified in the cluster E2E instead.
+- Follow-up: local E2E of all new events and the CronJob, then the production confirmation.
 
 ### 2026-10-07 — AF-357 — user.signed_up
 

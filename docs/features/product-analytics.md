@@ -12,7 +12,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 - **On switch.** Analytics is off unless `ANALYTICS_ENABLED` is true and a project token is set. A blank `ANALYTICS_ENABLED` counts as off. When it is off, the handler completes every delivery without sending anything. Helm installs default it to off; release bundles and AAI Labs production deploys turn it on. Per-deployment defaults and the opt-out are in [`../guidelines/operations.md`](../guidelines/operations.md#product-analytics).
 - **Who an event is attributed to.**
-  - Only events with a human actor (Membership or User) are sent. System and Runtime actors are skipped.
+  - Only events with a human actor (Membership or User) are sent. System and Runtime actors are skipped. The one exception is hourly message counts (see [Message counts](#message-counts)), which have no person and are attributed to the Installation.
   - `distinct_id` is the acting user's UUID.
   - A Membership actor is resolved only within the event's Organization.
   - A member who removed themselves is attributed through the event's `user_id`.
@@ -56,6 +56,17 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `user.signed_up` | none; platform-scoped. Public signup is disabled, so this is the first invite acceptance (`POST /auth/set-password` on a user whose email is not yet verified). Known gap: an invitee who first gets in through forgot-password never emits it |
 
 The common set is `source`, `installation_id`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`. When user details are enabled, `$set` (email and name) is added.
+
+## Message counts
+
+An hourly CronJob (`analytics-message-counts`, at minute 15) sends one `agent.messages.counted` event for each Agent, platform and direction that had messages in the previous closed hour. It sends counts only and never content.
+
+- **Source:** `ConversationRepository.hourly_message_counts`. It buckets by `agent_chat_message.created_at`, which is when Agent Barn stored the message. That time is never changed later, so a closed hour's count is final, including late native-runtime transcripts. Messages of soft-deleted Agents are included.
+- **Properties:** `agent_id`, `platform` (the Connection's platform key), `direction` (`INBOUND` from people, `OUTBOUND` from the Agent), `count`, `organization_id`, `installation_id`, both groups, `source`, `$geoip_disable` and `$lib`.
+- **Person:** `distinct_id` is `installation:<Installation id>`, a pseudo-person marked `$set: {kind: "installation"}`. Exclude it from "unique users" insights by filtering on that property.
+- **Ids:** `uuid` is `uuid5(Installation id, "<agent>:<platform>:<direction>:<hour>")` and `timestamp` is the hour start. A re-run of the same hour resends identical ids, which PostHog de-duplicates eventually.
+- **Gating:** the CronJob exists only when the chart's `analyticsEnabled` is `"true"`. The code also sends nothing unless analytics is enabled.
+- **Known gap:** a missed run loses that hour. There is no backfill.
 
 ## Installation
 

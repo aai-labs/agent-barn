@@ -611,10 +611,12 @@ and [`docs/guidelines/operations.md`](docs/guidelines/operations.md).
 Installs from an Agent Barn release bundle send business events to Agent Barn's
 PostHog project (EU), because the bundle's `.env.deploy` sets
 `ANALYTICS_ENABLED=true`. A plain Helm or Helmfile install sends nothing unless you
-set it. These are events such as an agent being created, started, or deleted, or a
-member joining an organisation. Each event carries random IDs (user,
-organisation, agent) and a name for your install, which defaults to your web app's
-host. It never carries agent or organisation names, prompts, conversations,
+set it. These are events such as an agent being created, started, or deleted, an
+organisation being created, updated, or deleted, a member joining an organisation,
+a user signing in or accepting an invite, and an hourly count of messages each
+agent received and sent. Each event carries random IDs (user, organisation, agent)
+and a name for your install, which defaults to your web app's host. It never
+carries agent or organisation names, prompts, message content, conversations,
 credentials, or changed values. User email and name are sent only if you set
 `ANALYTICS_INCLUDE_USER_DETAILS=true`.
 
