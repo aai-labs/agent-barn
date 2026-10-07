@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 from itertools import count
 
@@ -6,15 +7,18 @@ import httpx
 from hamcrest import assert_that, contains_exactly, equal_to, has_properties, none
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import AgentStatus
+from api.domains.agents.models import Agent, AgentStatus
 from api.domains.communications.agentbarn_telegram_forwarder import AgentBarnTelegramForwarder
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
+from api.domains.communications.agentbarn_telegram_service import hash_link_token
 from api.domains.communications.models import (
     AgentBarnTelegramUpdate,
     AgentBarnTelegramUpdateStatus,
     CommunicationConnection,
 )
 from api.domains.communications.plugins.agentbarn_telegram import runtime_webhook_secret
+from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -92,7 +96,26 @@ def _given(status: AgentStatus = AgentStatus.RUNNING) -> list:
 _update_ids = count(20_000)
 
 
+def _link(context, user: int) -> None:
+    repository = context.injector.get(AgentBarnTelegramRepository)
+    if user in repository.linked_user_ids(context.connection.id):
+        return
+    raw = f"link-{user}-{next(_update_ids)}"
+    repository.create_link_token(
+        organization_id=context.connection.organization_id,
+        agent_id=context.agent.id,
+        connection_id=context.connection.id,
+        requested_by_membership_id=context.organization_user.id,
+        token_hash=hash_link_token(raw),
+        expires_at=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    repository.consume_link_token(
+        hash_link_token(raw), telegram_user_id=user, telegram_username=None, now=datetime.now(UTC)
+    )
+
+
 def _queue(context, text: str, user: int = _JANE, *, received_at: datetime | None = None) -> int:
+    _link(context, user)
     update_id = next(_update_ids)
     update = {
         "update_id": update_id,
@@ -293,3 +316,81 @@ def test_a_running_agent_that_rejects_messages_is_not_described_as_waking_up() -
         with then("the message keeps waiting for a retry, but the user is not told the agent is starting"):
             assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))
             assert_that(context.bot.sent, equal_to([]))
+
+
+def test_messages_held_for_someone_since_unlinked_are_not_delivered() -> None:
+    with given(_given(AgentStatus.STOPPED)) as context:
+        update_id = _queue(context, "private note")
+        repository = context.injector.get(AgentBarnTelegramRepository)
+        repository.end_active_link(_JANE, now=datetime.now(UTC))
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            session.exec(select(Agent).where(col(Agent.id) == context.agent.id)).one().status = AgentStatus.RUNNING
+            session.commit()
+        pod = Pod()
+
+        with when("the agent comes back while Jane is no longer linked"):
+            _forward(context, pod)
+
+        with then("her held message is dropped, not delivered"):
+            assert_that(pod.received, equal_to([]))
+            assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.DROPPED))
+
+
+def test_messages_are_not_delivered_once_the_linking_member_lost_access() -> None:
+    with given(_given()) as context:
+        update_id = _queue(context, "hello")
+        context.organization_user.role = OrganizationRole.MEMBER
+        context.injector.get(OrganizationUserRepository).save(context.organization_user)
+        pod = Pod()
+
+        with when("the forwarder runs after the member who linked Jane lost access"):
+            _forward(context, pod)
+
+        with then("nothing is delivered and Jane's link ends"):
+            assert_that(pod.received, equal_to([]))
+            assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.DROPPED))
+            repository = context.injector.get(AgentBarnTelegramRepository)
+            assert_that(_JANE in repository.linked_user_ids(context.connection.id), equal_to(False))
+
+
+def test_users_waiting_on_a_retry_do_not_crowd_out_users_who_are_due() -> None:
+    with given(_given()) as context:
+        repository = context.injector.get(AgentBarnTelegramRepository)
+        not_due = _queue(context, "waiting", user=1000)
+        due = _queue(context, "ready", user=9_000_000)
+        repository.schedule_retry(not_due, at=datetime.now(UTC) + timedelta(minutes=5))
+
+        with when("the queue is read one head at a time"):
+            heads = repository.queue_heads(now=datetime.now(UTC), limit=1)
+
+        with then("the due user is picked, not the lower-numbered one still waiting"):
+            assert_that([head.update_id for head in heads], equal_to([due]))
+
+
+def test_a_pod_that_never_answers_does_not_hold_up_other_users() -> None:
+    with given(_given()) as context:
+        _queue(context, "from jane")
+        _queue(context, "from sam", user=_SAM)
+        release = threading.Event()
+        sam_delivered = threading.Event()
+
+        def pod(request: httpx.Request) -> httpx.Response:
+            sender = json.loads(request.content)["message"]["from"]["id"]
+            if sender == _JANE:
+                release.wait(timeout=10)
+            else:
+                sam_delivered.set()
+            return httpx.Response(200)
+
+        forwarder = context.injector.get(AgentBarnTelegramForwarder)
+        forwarder.client = httpx.Client(transport=httpx.MockTransport(pod))
+        run = threading.Thread(target=forwarder.forward_due)
+        run.start()
+
+        with when("Jane's delivery hangs"):
+            delivered_meanwhile = sam_delivered.wait(timeout=3)
+        release.set()
+        run.join(timeout=15)
+
+        with then("Sam's message is delivered without waiting for it"):
+            assert_that(delivered_meanwhile, equal_to(True))

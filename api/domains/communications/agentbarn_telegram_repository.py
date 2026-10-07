@@ -53,6 +53,8 @@ class ForwardTarget:
     # False once the Connection is retired, disabled, or its Agent deleted.
     in_use: bool
     driver_key_encrypted: str
+    # The sender's active link to this Connection; None once they were unlinked or switched.
+    link: AgentBarnTelegramLink | None
 
 
 @inject
@@ -356,15 +358,35 @@ class AgentBarnTelegramRepository:
             rows = session.exec(select(Agent.id, Agent.name).where(col(Agent.id).in_(agent_ids))).all()
             return {agent_id: name for agent_id, name in rows}
 
-    def queue_heads(self, *, limit: int) -> list[AgentBarnTelegramUpdate]:
-        """Each Telegram user's oldest queued update; later ones wait behind it."""
+    def queue_heads(self, *, now: datetime, limit: int) -> list[AgentBarnTelegramUpdate]:
+        """Each Telegram user's oldest queued update that is due now, longest-waiting first.
+
+        Later updates wait behind their user's head. Filtering for due heads before
+        the limit keeps users whose head is waiting on a retry from crowding out
+        users who are ready.
+        """
+        heads = (
+            select(AgentBarnTelegramUpdate.id)
+            .where(col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.QUEUED)
+            .distinct(col(AgentBarnTelegramUpdate.telegram_user_id))
+            .order_by(col(AgentBarnTelegramUpdate.telegram_user_id), col(AgentBarnTelegramUpdate.update_id))
+        )
         with Session(self.delegate.engine) as session:
             return list(
                 session.exec(
                     select(AgentBarnTelegramUpdate)
-                    .where(col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.QUEUED)
-                    .distinct(col(AgentBarnTelegramUpdate.telegram_user_id))
-                    .order_by(col(AgentBarnTelegramUpdate.telegram_user_id), col(AgentBarnTelegramUpdate.update_id))
+                    .where(
+                        col(AgentBarnTelegramUpdate.id).in_(heads),
+                        sa.or_(
+                            col(AgentBarnTelegramUpdate.next_attempt_at).is_(None),
+                            col(AgentBarnTelegramUpdate.next_attempt_at) <= now,
+                        ),
+                    )
+                    .order_by(
+                        sa.func.coalesce(
+                            col(AgentBarnTelegramUpdate.next_attempt_at), col(AgentBarnTelegramUpdate.created_at)
+                        )
+                    )
                     .limit(limit)
                 )
             )
@@ -381,7 +403,7 @@ class AgentBarnTelegramRepository:
                 .limit(1)
             ).first()
 
-    def forward_target(self, agent_id: UUID, connection_id: UUID) -> ForwardTarget | None:
+    def forward_target(self, agent_id: UUID, connection_id: UUID, telegram_user_id: int) -> ForwardTarget | None:
         with Session(self.delegate.engine) as session:
             row = session.exec(
                 select(Agent.status, Agent.deleted_at, CommunicationConnection)
@@ -391,10 +413,18 @@ class AgentBarnTelegramRepository:
             if row is None:
                 return None
             status, deleted_at, connection = row
+            link = session.exec(
+                select(AgentBarnTelegramLink).where(
+                    col(AgentBarnTelegramLink.connection_id) == connection_id,
+                    col(AgentBarnTelegramLink.telegram_user_id) == telegram_user_id,
+                    col(AgentBarnTelegramLink.unlinked_at).is_(None),
+                )
+            ).one_or_none()
             return ForwardTarget(
                 agent_status=status,
                 in_use=deleted_at is None and connection.enabled and connection.retired_at is None,
                 driver_key_encrypted=connection.driver_key_encrypted,
+                link=link,
             )
 
     def mark_forwarded(self, update_id: int) -> None:
