@@ -1,8 +1,8 @@
 import logging
 from types import SimpleNamespace
-from urllib.parse import quote
 from typing import cast
 from unittest.mock import Mock
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx

@@ -105,9 +105,7 @@ class AgentBarnTelegramForwarder:
         with ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="agentbarn-telegram-forward") as pool:
             return sum(pool.map(lambda head: self._deliver_user_queue(head, now, leading), heads))
 
-    def _deliver_user_queue(
-        self, head: AgentBarnTelegramUpdate, now: datetime, leading: Callable[[], bool]
-    ) -> int:
+    def _deliver_user_queue(self, head: AgentBarnTelegramUpdate, now: datetime, leading: Callable[[], bool]) -> int:
         """Deliver some of one user's updates oldest first, stopping at the first that is not accepted."""
         forwarded = 0
         update: AgentBarnTelegramUpdate | None = head

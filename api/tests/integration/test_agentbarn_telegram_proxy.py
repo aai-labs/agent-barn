@@ -548,7 +548,7 @@ def test_a_reply_cannot_quote_a_chat_not_linked_to_this_agent(reply_parameters) 
 
 @pytest.mark.parametrize(
     "reply_parameters",
-    ['{"chat_id": 5550002, "chat_id": %d, "message_id": 7}' % _JANE, "not json"],
+    [f'{{"chat_id": 5550002, "chat_id": {_JANE}, "message_id": 7}}', "not json"],
 )
 def test_reply_parameters_text_that_could_be_read_two_ways_is_refused(reply_parameters: str) -> None:
     with given(_GIVEN) as context:
