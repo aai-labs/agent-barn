@@ -38,6 +38,9 @@ interface UsageAreaChartProps {
   testId?: string;
 }
 
+/** Request over limit above which their two labels would sit on each other. */
+const CROWDED_RATIO = 0.85;
+
 const CHART_CONFIG = {
   value: { label: "Usage", color: "var(--ink-3)" },
 } satisfies ChartConfig;
@@ -71,6 +74,8 @@ const UsageAreaChart = memo(function UsageAreaChart({
   // neighbour. Without one, a little headroom keeps the line off the top edge.
   const wanted = limit ? Math.max(limit, request ?? 0, highest) : Math.max(request ?? 0, highest) * 1.1;
   const top = Math.min(Math.max(wanted, minTop ?? 0), maxTop ?? Number.POSITIVE_INFINITY) || 1;
+  // A label is about 12px tall. Within this share of the limit the two lines are closer than that.
+  const crowded = !!limit && !!request && request / limit > CROWDED_RATIO;
 
   return (
     <div data-testid={testId} aria-label={label} role="img">
@@ -112,7 +117,14 @@ const UsageAreaChart = memo(function UsageAreaChart({
               y={limit}
               stroke="var(--err)"
               strokeDasharray="4 4"
-              label={{ value: "Limit", position: "insideTopRight", fontSize: 11, fill: "var(--ink-4)" }}
+              label={{
+                value: "Limit",
+                // Under its line at the left, like "Request". Too close to the request for two
+                // labels to stack, it goes to the right instead, where nothing else is.
+                position: crowded ? "insideTopRight" : "insideTopLeft",
+                fontSize: 11,
+                fill: "var(--ink-4)",
+              }}
             />
           ) : null}
           {request ? (
@@ -120,9 +132,7 @@ const UsageAreaChart = memo(function UsageAreaChart({
               y={request}
               stroke="var(--ink-3)"
               strokeDasharray="2 4"
-              // Below its line and at the far side from "Limit", so the two labels never meet,
-              // however close the two values are.
-              label={{ value: "Request", position: "insideBottomLeft", fontSize: 11, fill: "var(--ink-4)" }}
+              label={{ value: "Request", position: "insideTopLeft", fontSize: 11, fill: "var(--ink-4)" }}
             />
           ) : null}
           <Area
