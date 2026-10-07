@@ -52,6 +52,7 @@ class _Sums:
     name: str | None
     agents_with_container: int = 0
     agents_reporting: int = 0
+    agents_restart_required: int = 0
     memory_working_set_bytes: float = 0.0
     memory_limit_bytes: float = 0.0
     cpu_cores: float = 0.0
@@ -67,6 +68,7 @@ class _Sums:
     def merge(self, other: _Sums) -> None:
         self.agents_with_container += other.agents_with_container
         self.agents_reporting += other.agents_reporting
+        self.agents_restart_required += other.agents_restart_required
         self.memory_working_set_bytes += other.memory_working_set_bytes
         self.memory_limit_bytes += other.memory_limit_bytes
         self.cpu_cores += other.cpu_cores
@@ -76,6 +78,7 @@ class _Sums:
         return PlatformUsageTotalsRead(
             agents_with_container=self.agents_with_container,
             agents_reporting=self.agents_reporting,
+            agents_restart_required=self.agents_restart_required,
             memory_working_set_bytes=int(self.memory_working_set_bytes),
             memory_limit_bytes=int(self.memory_limit_bytes),
             cpu_cores=self.cpu_cores,
@@ -117,9 +120,16 @@ def build_platform_usage(
 
     agents: list[PlatformAgentUsageRead] = []
     for agent_id, readings in fields.items():
-        if usage_state(readings, has_series=False) != ResourceUsageState.REPORTING:
-            continue
+        state = usage_state(readings, has_series=False)
         identity = by_id.get(agent_id)
+        if state == ResourceUsageState.RESTART_REQUIRED:
+            # Scraped, but on a healthz script from before it reported usage. Only a live
+            # Agent with a container is counted: it is the one whose owner can update it.
+            if identity is not None and identity.status in _HAS_CONTAINER:
+                sums[identity.organization_id].agents_restart_required += 1
+            continue
+        if state != ResourceUsageState.REPORTING:
+            continue
         if identity is not None and identity.status not in _HAS_CONTAINER:
             continue
         key = identity.organization_id if identity else None

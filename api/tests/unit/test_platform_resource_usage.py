@@ -149,3 +149,69 @@ def test_containers_are_counted_from_the_database_with_or_without_a_filter():
     assert count_with_container(agents, None) == 3
     assert count_with_container(agents, _ACME) == 2
     assert count_with_container(agents, _GLOBEX) == 1
+
+
+def _scraped_before_usage_existed() -> dict[str, float]:
+    """What an Agent on an older healthz script shows: scraped, with no usage gauge at all."""
+    return {"up": 1.0}
+
+
+def test_an_agent_on_an_older_healthz_script_is_counted_as_needing_an_update():
+    ada, bob, cy = _agent("Ada", _ACME), _agent("Bob", _ACME), _agent("Cy", _GLOBEX)
+
+    usage = build_platform_usage(
+        [ada, bob, cy],
+        {ada.id: _reading(0.5, 0.2), bob.id: _scraped_before_usage_existed(), cy.id: _scraped_before_usage_existed()},
+    )
+
+    assert usage.totals.agents_reporting == 1
+    assert usage.totals.agents_restart_required == 2
+    by_name = {row.organization_name: row for row in usage.organizations}
+    assert by_name["Acme"].agents_restart_required == 1
+    assert by_name["Globex"].agents_restart_required == 1
+    # It has nothing to show, so it is not a row of the table.
+    assert [row.agent_name for row in usage.agents] == ["Ada"]
+
+
+def test_only_a_live_agent_with_a_container_can_need_an_update():
+    ada = _agent("Ada", _ACME)
+    stopped = _agent("Stopped", _ACME, AgentStatus.STOPPED)
+    unknown = uuid4()
+
+    usage = build_platform_usage(
+        [ada, stopped],
+        {
+            ada.id: _scraped_before_usage_existed(),
+            # A late scrape of a stopped agent, and a container no live agent owns: neither
+            # has an owner who could update it.
+            stopped.id: _scraped_before_usage_existed(),
+            unknown: _scraped_before_usage_existed(),
+        },
+    )
+
+    assert usage.totals.agents_restart_required == 1
+
+
+def test_a_reporting_or_unsupported_agent_does_not_need_an_update():
+    ada, bob = _agent("Ada", _ACME), _agent("Bob", _ACME)
+
+    usage = build_platform_usage(
+        [ada, bob],
+        {ada.id: _reading(0.5, 0.2), bob.id: {"up": 1.0, "cgroup_metrics_available": 0.0}},
+    )
+
+    assert usage.totals.agents_restart_required == 0
+
+
+def test_the_filter_narrows_the_update_count_with_the_rest_of_the_totals():
+    ada, cy = _agent("Ada", _ACME), _agent("Cy", _GLOBEX)
+
+    usage = build_platform_usage(
+        [ada, cy],
+        {ada.id: _scraped_before_usage_existed(), cy.id: _scraped_before_usage_existed()},
+        organization_id=_ACME,
+    )
+
+    assert usage.totals.agents_restart_required == 1
+    # The organizations stay the whole platform, as the table beside them does.
+    assert [row.agents_restart_required for row in usage.organizations] == [1, 1]

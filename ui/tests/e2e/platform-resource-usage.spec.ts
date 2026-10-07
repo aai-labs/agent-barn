@@ -261,6 +261,62 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await usagePage.goto();
 
     await expect(page.getByTestId("platform-agents-empty")).toBeVisible();
+    // Nobody is waiting on an update, so it does not say they are.
+    await expect(page.getByTestId("platform-agents-need-update")).toHaveCount(0);
+  });
+
+  test("says how many agents need an update to report, in the card and on the organization rows", async () => {
+    const base = mockPlatformUsage();
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: {
+        ...base,
+        totals: { ...base.totals, agents_with_container: 4, agents_reporting: 3, agents_restart_required: 2 },
+        organizations: base.organizations.map((row) =>
+          row.organization_name === "Globex" ? { ...row, agents_with_container: 3, agents_restart_required: 2 } : row,
+        ),
+      },
+    });
+
+    await usagePage.goto();
+
+    await expect(usagePage.stat("reporting")).toContainText("of 4 running or in error · 2 need an update");
+    await expect(usagePage.organizationRows().nth(0)).toContainText("1 of 3 reporting · 2 to update");
+    // The longer count still fits on one line.
+    const box = await usagePage.organizationRows().nth(0).boundingBox();
+    expect(box?.height ?? Infinity).toBeLessThan(44);
+    // An organization with nothing to update says nothing about it.
+    await expect(usagePage.organizationRows().nth(1)).toContainText("1 of 1 reporting");
+    await expect(usagePage.organizationRows().nth(1)).not.toContainText("to update");
+  });
+
+  test("tells an empty table why: the agents are on an older version", async ({ page }) => {
+    const base = mockPlatformUsage();
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: {
+        ...base,
+        totals: { ...base.totals, agents_reporting: 0, agents_restart_required: 3 },
+        agents: [],
+        organizations: [],
+      },
+    });
+
+    await usagePage.goto();
+
+    await expect(page.getByTestId("platform-agents-empty")).toContainText("No agent is reporting CPU or memory right now.");
+    await expect(page.getByTestId("platform-agents-need-update")).toContainText(
+      "3 agents are running an older version. Their owners can update them from the agent page to start reporting.",
+    );
+  });
+
+  test("says it in the singular for one agent", async ({ page }) => {
+    const base = mockPlatformUsage();
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: { ...base, totals: { ...base.totals, agents_reporting: 0, agents_restart_required: 1 }, agents: [] },
+    });
+
+    await usagePage.goto();
+
+    await expect(page.getByTestId("platform-agents-need-update")).toContainText("1 agent is running an older version.");
   });
 
   test("explains an unreachable source and still shows the database's count", async ({ page }) => {

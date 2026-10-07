@@ -35,7 +35,7 @@ const COLUMN_COUNT = COLUMNS.length + 1;
 
 const STATE_HINT: Record<AgentUsageSnapshot["state"], string> = {
   reporting: "",
-  restart_required: "Restart to report",
+  restart_required: "Update to report",
   unsupported: "Not supported",
   no_data: "No data yet",
 };

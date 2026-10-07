@@ -189,7 +189,7 @@ test.describe("Agents overview", () => {
     await dataSupportPage.resourceUsage.interceptAgentOverview({ body: mockAgentOverview([stale]) });
     await overview.goto();
 
-    await expect(overview.row("Maya").getByText("Restart to report")).toHaveCount(2);
+    await expect(overview.row("Maya").getByText("Update to report")).toHaveCount(2);
   });
 
   test("keeps spend and status when the usage source cannot be reached", async ({ page }) => {

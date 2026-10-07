@@ -102,6 +102,8 @@ export const PlatformUsageTotalsSchema = z.object({
   agentsWithContainer: z.number().int(),
   /** The rest are null when the source could not be read. */
   agentsReporting: z.number().int().nullable().default(null),
+  /** Scraped, but still on a helper from before usage was reported: reports once updated. */
+  agentsRestartRequired: z.number().int().nullable().default(null),
   memoryWorkingSetBytes: z.number().nullable().default(null),
   memoryLimitBytes: z.number().nullable().default(null),
   cpuCores: z.number().nullable().default(null),

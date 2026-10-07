@@ -124,7 +124,7 @@ test.describe("Agent Detail Page — Resource usage tab", () => {
       {
         name: "an agent still on an older helper",
         body: mockResourceUsage({ state: "restart_required", ...NOTHING }),
-        text: "Restart this agent to start reporting CPU and memory",
+        text: "Update this agent to start reporting CPU and memory",
       },
       {
         name: "an environment that cannot report usage",

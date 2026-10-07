@@ -130,6 +130,7 @@ function platformTotals(overrides: Record<string, unknown> = {}) {
   return {
     agents_with_container: 2,
     agents_reporting: 3,
+    agents_restart_required: 0,
     memory_working_set_bytes: GIB + 1_950_000_000 + 268_435_456,
     memory_limit_bytes: 6 * GIB,
     cpu_cores: 0.55,

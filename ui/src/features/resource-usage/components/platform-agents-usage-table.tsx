@@ -36,7 +36,14 @@ function amount(agent: PlatformAgentUsage, key: SortKey): number {
  * Platform page. A row opens to the same Status and Resource usage panels the
  * Organization Usage page shows, without the Cost panel and without links.
  */
-export function PlatformAgentsUsageTable({ agents }: { agents: PlatformAgentUsage[] }) {
+export function PlatformAgentsUsageTable({
+  agents,
+  needUpdate,
+}: {
+  agents: PlatformAgentUsage[];
+  /** Agents that cannot report until they are updated, for the empty state to say so. */
+  needUpdate: number;
+}) {
   const [sortKey, setSortKey] = useState<SortKey>("memory");
   const [showAll, setShowAll] = useState(false);
   // Kept here, by Agent id, so a row stays open when the table is sorted or trimmed.
@@ -64,7 +71,13 @@ export function PlatformAgentsUsageTable({ agents }: { agents: PlatformAgentUsag
         style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-3)" }}
         data-testid="platform-agents-empty"
       >
-        No agent is reporting CPU or memory right now.
+        <p className="m-0">No agent is reporting CPU or memory right now.</p>
+        {needUpdate > 0 && (
+          <p className="m-0 mt-1.5" data-testid="platform-agents-need-update">
+            {needUpdate === 1 ? "1 agent is" : `${needUpdate} agents are`} running an older version. Their owners can
+            update them from the agent page to start reporting.
+          </p>
+        )}
       </div>
     );
   }

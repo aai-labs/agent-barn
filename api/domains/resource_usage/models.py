@@ -188,6 +188,9 @@ class PlatformUsageTotalsRead(PydanticBaseModel):
     # The rest are None when the source could not be read.
     # Agents whose container reported CPU or memory.
     agents_reporting: int | None = None
+    # Agents the source scrapes that still run a healthz script from before it reported usage.
+    # Their owners report by updating them, which the Platform view says in so many words.
+    agents_restart_required: int | None = None
     # Sums over the reporting Agents. A limit is what a container may use, not what it
     # holds, so the limits add up to what the namespace quota counts, not to free room.
     memory_working_set_bytes: int | None = None

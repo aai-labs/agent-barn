@@ -16,7 +16,7 @@ const NO_LIVE_AGENT_HINT =
 // below, so Tailwind finds both classes. The reporting count is the first thing to go on
 // a phone: name, memory and CPU are what the row is for.
 const ROW_COLUMNS =
-  "grid-cols-[minmax(0,1fr)_72px_84px] sm:grid-cols-[minmax(140px,1fr)_140px_90px_90px]";
+  "grid-cols-[minmax(0,1fr)_72px_84px] sm:grid-cols-[minmax(140px,1fr)_210px_90px_90px]";
 
 /** Organizations listed when the page is not narrowed to one. */
 const TOP_COUNT = 5;
@@ -104,7 +104,11 @@ export function OrganizationsByUsage({
                   ? `${organization.agentsReporting ?? 0} ${
                       organization.agentsReporting === 1 ? "container" : "containers"
                     }`
-                  : `${organization.agentsReporting ?? 0} of ${organization.agentsWithContainer} reporting`}
+                  : `${organization.agentsReporting ?? 0} of ${organization.agentsWithContainer} reporting${
+                      (organization.agentsRestartRequired ?? 0) > 0
+                        ? ` · ${organization.agentsRestartRequired} to update`
+                        : ""
+                    }`}
               </span>
               <span className="relative text-right font-medium" style={{ color: "var(--ink)" }}>
                 {formatBytes(memory)}

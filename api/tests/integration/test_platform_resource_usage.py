@@ -358,8 +358,30 @@ def test_an_unreachable_prometheus_still_returns_the_database_counts():
         assert_that(body["availability"], equal_to("unavailable"))
         assert_that(body["totals"]["agents_with_container"], equal_to(2))
         assert_that(body["totals"]["agents_reporting"], none())
+        # Unknown, not zero: with no source nobody can say which agents still need an update.
+        assert_that(body["totals"]["agents_restart_required"], none())
         assert_that(body["totals"]["memory_working_set_bytes"], none())
         assert_that(body["organizations"], has_length(0))
+
+
+def test_agents_still_on_an_older_healthz_script_are_counted_per_organization():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-old-a@example.com", "owner-old-b@example.com"),
+            # Ada reports; Cy is scraped but has not been updated since usage was added.
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2), c.cy.id: {"up": 1.0}}),
+            *_platform_admin("admin-old-script@example.com"),
+        ]
+    ) as context:
+        body = context.client.get(_URL, headers=_auth(context.access_token)).json()
+
+        assert_that(body["totals"]["agents_with_container"], equal_to(2))
+        assert_that(body["totals"]["agents_reporting"], equal_to(1))
+        assert_that(body["totals"]["agents_restart_required"], equal_to(1))
+        by_id = {row["organization_id"]: row for row in body["organizations"]}
+        assert_that(by_id[str(context.globex.id)]["agents_restart_required"], equal_to(1))
+        assert_that(by_id[str(context.acme.id)]["agents_restart_required"], equal_to(0))
 
 
 def test_an_unconfigured_prometheus_is_reported_without_a_query():
