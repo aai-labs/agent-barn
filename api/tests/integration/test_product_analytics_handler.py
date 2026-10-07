@@ -9,6 +9,7 @@ from api.domains.analytics.repository import InstallationRepository
 from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_UPDATED,
+    API_KEY_CREATED,
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_ROLE_CHANGED,
     PRODUCT_ANALYTICS_HANDLER,
@@ -104,6 +105,32 @@ def _delivery(event: DomainEventEnvelope, attempt_count: int = 1) -> EventDelive
 
 def _handle(context, event: DomainEventEnvelope, attempt_count: int = 1) -> None:
     context.injector.get(ProductAnalyticsHandler).handle(event, _delivery(event, attempt_count))
+
+
+def _platform_event(context) -> DomainEventEnvelope:
+    return DomainEventEnvelope(
+        event_name=API_KEY_CREATED,
+        schema_version=1,
+        occurred_at=OCCURRED_AT,
+        event_scope=EventScope.PLATFORM,
+        organization_id=None,
+        actor=ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
+        subject=SubjectIdentity(type=SubjectIdentityType.USER, id=context.user.id),
+        correlation_id=uuid4(),
+        payload={"user_id": str(context.user.id)},
+    )
+
+
+def test_a_platform_event_is_sent_with_only_the_installation_group():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        _handle(context, _platform_event(context))
+
+        installation_id = str(context.injector.get(InstallationRepository).get_id())
+        capture = posthog.batches[0][0]
+        assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
+        assert_that(capture["properties"]["$groups"], equal_to({"installation": installation_id}))
+        assert_that(capture["properties"], is_not(has_key("organization_id")))
 
 
 def test_is_registered_in_the_application_handler_registry():

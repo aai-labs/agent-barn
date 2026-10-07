@@ -21,9 +21,9 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
   - Only allowlisted identifiers and safe fields (see [Events](#events)).
   - Names, display snapshots, and changed values are never sent.
   - User email and name are sent as person properties only when `ANALYTICS_INCLUDE_USER_DETAILS` is true.
-- **Groups.** Every event belongs to two PostHog groups:
-  - `installation`, keyed by the Installation id. It is named from `INSTALLATION_NAME`, or the `WEB_APP_URL` host when that is unset.
-  - `organization`, keyed by the Organization id.
+- **Groups.** Every event belongs to the `installation` group, keyed by the Installation id. It is named from `INSTALLATION_NAME`, or the `WEB_APP_URL` host when that is unset.
+  - Organization-scoped events also belong to the `organization` group, keyed by the Organization id, and carry `organization_id`.
+  - Platform-scoped events (`organization_id` is null) carry neither. They are sent only for a User Actor, because a Membership Actor cannot be resolved without an Organization.
 - **Labels and privacy flags.** Every event carries `source: agentbarn-api` and `$lib: agentbarn-api`, so app events can be separated from website events. It also carries `$geoip_disable: true`.
 - **Redelivery.** A redelivered event sends the same capture ids: the capture's `uuid` is the `event_id` and its timestamp is `occurred_at`. PostHog de-duplicates matching events eventually, not immediately.
 - **Installation naming.** Each worker process names the Installation group once, with a `$groupidentify` in the first batch it sends successfully. It names it again only if the name changes. A failed or dropped send does not count, so the next batch retries the naming.
@@ -50,7 +50,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `organization.role.changed` | `membership_id`, `previous_role`, `new_role` |
 | `organization.ownership_transferred` | `previous_owner_membership_id`, `new_owner_membership_id` |
 
-The common set is `source`, `organization_id`, `installation_id`, `$groups`, `$geoip_disable`, and `$lib`, plus `$set` (email and name) when user details are enabled.
+The common set is `source`, `installation_id`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`. When user details are enabled, `$set` (email and name) is added.
 
 ## Installation
 

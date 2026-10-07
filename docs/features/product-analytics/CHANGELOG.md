@@ -34,10 +34,17 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - The opt-out is documented in `operations.md` and the README.
 - Also delivered: local end-to-end verification against a recording stub (see the 2026-10-06 entry). A one-off check against the real project from a local stack, labelled `local-dev-test` at the user's request, showed the events arriving in Live Events.
 - In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle.
-- Next: the production confirmation after release. Then the follow-up slices: Domain Events for organization created, signup/login, and Conversation Messages.
+- Also delivered: the handler supports platform-scoped events (installation group only).
+- Next: `organization.created`, `organization.updated`, `organization.deleted`, `user.logged_in`, `user.signed_up`, hourly message counts. Then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-07 — AF-357 — Platform-scoped analytics
+
+- Delivered: `ProductAnalyticsHandler` accepts platform-scoped events (`organization_id` null) with a User Actor. They are sent with only the `installation` group and no `organization_id`. A Membership Actor without an Organization is still skipped. No platform event subscribes the handler yet; `user.logged_in` and `user.signed_up` will.
+- Changed: `api/domains/analytics/event_handlers.py`, `product-analytics.md` (Groups invariant, common property set).
+- Follow-up: `organization.created`.
 
 ### 2026-10-06 — AF-357 — Analytics off by default in Helm; installation named once per process
 

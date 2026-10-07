@@ -80,7 +80,7 @@ class ProductAnalyticsHandler:
     def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:
         if not self.config.is_analytics_enabled:
             return
-        if event.actor.type not in _HUMAN_ACTORS or event.organization_id is None:
+        if event.actor.type not in _HUMAN_ACTORS:
             return
         user = self._resolve_user(event, event.organization_id)
         if user is None:
@@ -111,7 +111,7 @@ class ProductAnalyticsHandler:
             if identify:
                 self._identified_installation_name = installation_name
 
-    def _resolve_user(self, event: DomainEventEnvelope, organization_id: UUID) -> User | None:
+    def _resolve_user(self, event: DomainEventEnvelope, organization_id: UUID | None) -> User | None:
         actor_id = _as_uuid(event.actor.id)
         if actor_id is None:
             return None
@@ -120,21 +120,22 @@ class ProductAnalyticsHandler:
         if event.event_name == ORGANIZATION_MEMBER_REMOVED and actor_id == _as_uuid(event.payload.get("membership_id")):
             leaver_id = _as_uuid(event.payload.get("user_id"))
             return self.user_repository.get(leaver_id) if leaver_id is not None else None
+        if organization_id is None:
+            return None
         member = self.organization_user_repository.get_member_with_user_by_membership_id(actor_id, organization_id)
         return member[1] if member is not None else None
 
     def _messages(
-        self, event: DomainEventEnvelope, organization_id: UUID, user: User, identify: bool
+        self, event: DomainEventEnvelope, organization_id: UUID | None, user: User, identify: bool
     ) -> list[dict[str, Any]]:
         installation_id = str(self.installation_repository.get_id())
         common = {"source": SOURCE, "$geoip_disable": True, "$lib": SOURCE}
-        properties: dict[str, Any] = {
-            **self._event_fields(event),
-            **common,
-            "organization_id": str(organization_id),
-            "installation_id": installation_id,
-            "$groups": {_INSTALLATION_GROUP: installation_id, _ORGANIZATION_GROUP: str(organization_id)},
-        }
+        groups = {_INSTALLATION_GROUP: installation_id}
+        properties: dict[str, Any] = {**self._event_fields(event), **common, "installation_id": installation_id}
+        if organization_id is not None:
+            groups[_ORGANIZATION_GROUP] = str(organization_id)
+            properties["organization_id"] = str(organization_id)
+        properties["$groups"] = groups
         if self.config.analytics_include_user_details:
             properties["$set"] = {"email": user.email, "name": user.full_name}
         envelope = {"distinct_id": str(user.id), "timestamp": event.occurred_at.isoformat()}
