@@ -22,6 +22,7 @@ _BUNDLED_ROOT = Path(__file__).parent / "bundled" / "skills"
 # Display names remain friendly in the organization UI while the immutable slug and
 # runtime directory match aai-cli's published bundle names.
 _DISPLAY_NAMES = {
+    "aai-apollo": "Apollo",
     "aai-bitbucket": "Bitbucket",
     "aai-confluence": "Confluence",
     "aai-excel": "Excel",
@@ -37,6 +38,7 @@ _DISPLAY_NAMES = {
 }
 
 _COMMANDS = {
+    "aai-apollo": "apollo",
     "aai-bitbucket": "bitbucket",
     "aai-confluence": "confluence",
     "aai-excel": "excel",
@@ -55,6 +57,7 @@ _COMMANDS = {
 # Agent Farm. The remaining bundled docs are still available as explicit Platform
 # Skills, but are not auto-attached until their credentials are modeled here.
 _REQUIRED_PROVIDERS = {
+    "aai-apollo": [SecretProvider.APOLLO],
     "aai-bitbucket": [SecretProvider.BITBUCKET],
     "aai-confluence": [SecretProvider.CONFLUENCE],
     "aai-excel": [],

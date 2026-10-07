@@ -8,6 +8,7 @@ from unittest.mock import patch
 import httpx
 
 from api.domains.agents.models import (
+    ApolloContent,
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
@@ -16,6 +17,7 @@ from api.domains.agents.models import (
     PipedriveContent,
     SlackContent,
 )
+from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
@@ -57,6 +59,7 @@ _BB = BitbucketContent(workspace="acme", repos=["backend"], email="alice@acme.co
 _SLACK = SlackContent(token="xoxb-test-token")
 _PD = PipedriveContent(api_token="pd-tok")
 _PD_WITH_DOMAIN = PipedriveContent(api_token="pd-tok", domain="aai-labs")
+_APOLLO = ApolloContent(api_token="apollo-key")
 
 # ── IntegrationValidationResult ───────────────────────────────────────────────
 
@@ -841,6 +844,66 @@ def test_pipedrive_network_error_returns_error():
     assert result.valid is False
     assert result.error is not None
     assert "pipedrive" in result.error.lower()
+
+
+# ── Apollo ────────────────────────────────────────────────────────────────────
+
+_APOLLO_MOD = "api.infrastructure.integration_validators.apollo.httpx.get"
+_APOLLO_HEALTHY = {"healthy": True, "is_logged_in": True}
+
+
+def test_apollo_valid_key_is_valid():
+    with patch(_APOLLO_MOD, return_value=_resp(_APOLLO_HEALTHY)) as mock_get:
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is True
+    assert result.missing_scopes == []
+    assert result.error is None
+    mock_get.assert_called_once()
+    assert mock_get.call_args.args == ("https://api.apollo.io/v1/auth/health",)
+    assert mock_get.call_args.kwargs["headers"] == {"x-api-key": "apollo-key"}
+
+
+def test_apollo_health_not_logged_in_is_invalid():
+    # Apollo answers its health check with 200 for any key and reports validity in the body.
+    with patch(_APOLLO_MOD, return_value=_resp({"healthy": True, "is_logged_in": False})) as mock_get:
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+    assert "invalid" in (result.error or "").lower()
+    mock_get.assert_called_once()
+
+
+def test_apollo_health_401_is_invalid():
+    unauthorized = httpx.Response(401, text="Invalid access credentials.", request=_REQUEST)
+    with patch(_APOLLO_MOD, return_value=unauthorized):
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+    assert "invalid" in (result.error or "").lower()
+
+
+def test_apollo_health_non_json_body_is_invalid():
+    with patch(_APOLLO_MOD, return_value=httpx.Response(200, text="ok", request=_REQUEST)):
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+
+
+def test_apollo_unexpected_status_returns_error():
+    with patch(_APOLLO_MOD, return_value=_resp({}, status=500)):
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+    assert "500" in (result.error or "")
+
+
+def test_apollo_network_error_returns_error():
+    with patch(_APOLLO_MOD, side_effect=_connect_error()):
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+    assert "apollo" in (result.error or "").lower()
 
 
 # ── Google Workspace (gog) ────────────────────────────────────────────────────

@@ -245,8 +245,8 @@ Each template has a guided setup at
 
 Skills are what agents can actually do:
 
-Bitbucket · Confluence · Excel · GitHub · Google Drive · HubSpot · Jira ·
-OpenPanel · Pipedrive · PostHog · Zoho Mail
+Apollo · Bitbucket · Confluence · Excel · GitHub · Google Drive · HubSpot ·
+Jira · OpenPanel · Pipedrive · PostHog · Zoho Mail
 
 Each mounts documentation into the agent's workspace and is gated on the
 credential its provider needs, so an agent only gets a skill once the matching
