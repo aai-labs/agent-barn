@@ -342,7 +342,17 @@ function CpuCell({ item }: { item: AgentOverviewItem }) {
           </span>
         )}
       </div>
-      <UsageMeter ratio={usageRatio(usage.cpuCores, usage.cpuLimitCores)} label="CPU use against its limit" className="mt-1.5" />
+      <UsageMeter
+        ratio={usageRatio(usage.cpuCores, usage.cpuLimitCores)}
+        markerRatio={usageRatio(usage.cpuRequestCores, usage.cpuLimitCores)}
+        label="CPU use against its limit"
+        className="mt-1.5"
+      />
+      {usage.cpuRequestCores !== null && (
+        <div className="mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }} data-testid="agents-overview-cpu-request">
+          requests {formatCores(usage.cpuRequestCores)} cores
+        </div>
+      )}
     </div>
   );
 }
@@ -361,9 +371,15 @@ function MemoryCell({ item }: { item: AgentOverviewItem }) {
       </div>
       <UsageMeter
         ratio={usageRatio(usage.memoryWorkingSetBytes, usage.memoryLimitBytes)}
+        markerRatio={usageRatio(usage.memoryRequestBytes, usage.memoryLimitBytes)}
         label="Memory use against its limit"
         className="mt-1.5"
       />
+      {usage.memoryRequestBytes !== null && (
+        <div className="mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }} data-testid="agents-overview-memory-request">
+          requests {formatBytes(usage.memoryRequestBytes)}
+        </div>
+      )}
     </div>
   );
 }

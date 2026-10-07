@@ -27,6 +27,8 @@ interface UsageAreaChartProps {
   format: (value: number) => string;
   /** Drawn as a dashed line, and the top of the axis, so the gap to it is the headroom. */
   limit?: number | null;
+  /** What the pod asks for, drawn as a second dashed line, in grey so it is not read as a limit. */
+  request?: number | null;
   /** The axis never tops out below this, so a share of time that peaks at 2% is not
    *  stretched to fill the chart and made to look like a spike. */
   minTop?: number;
@@ -50,6 +52,7 @@ const UsageAreaChart = memo(function UsageAreaChart({
   label,
   format,
   limit,
+  request,
   minTop,
   maxTop,
   compact,
@@ -66,7 +69,7 @@ const UsageAreaChart = memo(function UsageAreaChart({
 
   // With a limit, the axis ends on it, so its label is the limit and not a rounded-up
   // neighbour. Without one, a little headroom keeps the line off the top edge.
-  const wanted = limit ? Math.max(limit, highest) : highest * 1.1;
+  const wanted = limit ? Math.max(limit, request ?? 0, highest) : Math.max(request ?? 0, highest) * 1.1;
   const top = Math.min(Math.max(wanted, minTop ?? 0), maxTop ?? Number.POSITIVE_INFINITY) || 1;
 
   return (
@@ -112,6 +115,16 @@ const UsageAreaChart = memo(function UsageAreaChart({
               label={{ value: "Limit", position: "insideTopRight", fontSize: 11, fill: "var(--ink-4)" }}
             />
           ) : null}
+          {request ? (
+            <ReferenceLine
+              y={request}
+              stroke="var(--ink-3)"
+              strokeDasharray="2 4"
+              // Below its line and at the far side from "Limit", so the two labels never meet,
+              // however close the two values are.
+              label={{ value: "Request", position: "insideBottomLeft", fontSize: 11, fill: "var(--ink-4)" }}
+            />
+          ) : null}
           <Area
             dataKey="value"
             type="monotone"
@@ -139,9 +152,10 @@ export const MemoryChart = memo(function MemoryChart({
   series,
   range,
   limitBytes,
+  requestBytes = null,
   compact,
   testId,
-}: SeriesChartProps & { limitBytes: number | null }) {
+}: SeriesChartProps & { limitBytes: number | null; requestBytes?: number | null }) {
   const points = useMemo(
     () => series.map((point) => ({ bucket: point.bucket, value: point.memoryWorkingSetBytes })),
     [series],
@@ -153,6 +167,7 @@ export const MemoryChart = memo(function MemoryChart({
       label="Memory over time"
       format={formatBytes}
       limit={limitBytes}
+      request={requestBytes}
       compact={compact}
       testId={testId}
     />
@@ -163,9 +178,10 @@ export const CpuChart = memo(function CpuChart({
   series,
   range,
   limitCores,
+  requestCores = null,
   compact,
   testId,
-}: SeriesChartProps & { limitCores: number | null }) {
+}: SeriesChartProps & { limitCores: number | null; requestCores?: number | null }) {
   const points = useMemo(
     () => series.map((point) => ({ bucket: point.bucket, value: point.cpuCores })),
     [series],
@@ -177,6 +193,7 @@ export const CpuChart = memo(function CpuChart({
       label="CPU over time"
       format={formatCores}
       limit={limitCores}
+      request={requestCores}
       compact={compact}
       testId={testId}
     />

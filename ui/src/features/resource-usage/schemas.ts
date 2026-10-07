@@ -42,9 +42,12 @@ export const AgentResourceUsageSchema = z.object({
   observedAt: z.string(),
   memoryWorkingSetBytes: z.number().nullable().default(null),
   memoryLimitBytes: z.number().nullable().default(null),
+  /** What the pod asks for, read from the cluster. Null when it could not be read. */
+  memoryRequestBytes: z.number().nullable().default(null),
   memoryPeakBytes: z.number().nullable().default(null),
   cpuCores: z.number().nullable().default(null),
   cpuLimitCores: z.number().nullable().default(null),
+  cpuRequestCores: z.number().nullable().default(null),
   cpuAverageCores: z.number().nullable().default(null),
   /** Share (0 to 1) of scheduling periods in which the container hit its CPU limit. */
   cpuThrottledRatio: z.number().nullable().default(null),
@@ -57,8 +60,10 @@ export const AgentUsageSnapshotSchema = z.object({
   state: ResourceUsageStateSchema,
   memoryWorkingSetBytes: z.number().nullable().default(null),
   memoryLimitBytes: z.number().nullable().default(null),
+  memoryRequestBytes: z.number().nullable().default(null),
   cpuCores: z.number().nullable().default(null),
   cpuLimitCores: z.number().nullable().default(null),
+  cpuRequestCores: z.number().nullable().default(null),
   cpuThrottledRatio: z.number().nullable().default(null),
 });
 export type AgentUsageSnapshot = z.infer<typeof AgentUsageSnapshotSchema>;

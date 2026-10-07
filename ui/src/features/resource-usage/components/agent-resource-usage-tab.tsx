@@ -135,32 +135,34 @@ export function AgentResourceUsageTab({ agent, onOpenActivity }: AgentResourceUs
               <div className="grid gap-3" style={CHART_GRID_STYLE}>
                 <ChartCard
                   title="Memory"
-                  subtitle={
-                    usage.memoryLimitBytes !== null
-                      ? `In use, excluding cache. Limit ${formatBytes(usage.memoryLimitBytes)}.`
-                      : "In use, excluding cache."
-                  }
+                  subtitle={`In use, excluding cache.${requestAndLimit(
+                    usage.memoryRequestBytes,
+                    usage.memoryLimitBytes,
+                    formatBytes,
+                  )}`}
                   testId="resource-usage-memory-chart"
                 >
                   <MemoryChart
                     series={usage.series}
                     range={usage.range}
                     limitBytes={usage.memoryLimitBytes}
+                    requestBytes={usage.memoryRequestBytes}
                   />
                 </ChartCard>
                 <ChartCard
                   title="CPU"
-                  subtitle={
+                  subtitle={`${
                     usage.cpuAverageCores !== null
                       ? `Cores in use. Average ${formatCores(usage.cpuAverageCores)} over ${rangeLabel}.`
                       : "Cores in use."
-                  }
+                  }${requestAndLimit(usage.cpuRequestCores, usage.cpuLimitCores, formatCores)}`}
                   testId="resource-usage-cpu-chart"
                 >
                   <CpuChart
                     series={usage.series}
                     range={usage.range}
                     limitCores={usage.cpuLimitCores}
+                    requestCores={usage.cpuRequestCores}
                   />
                 </ChartCard>
                 <ChartCard
@@ -179,6 +181,15 @@ export function AgentResourceUsageTab({ agent, onOpenActivity }: AgentResourceUs
   );
 }
 
+/** " Request X, limit Y." for a chart subtitle: what is known, in that order, or nothing. */
+function requestAndLimit(request: number | null, limit: number | null, format: (value: number) => string): string {
+  const parts = [
+    request !== null ? `Request ${format(request)}` : null,
+    limit !== null ? `${request !== null ? "limit" : "Limit"} ${format(limit)}` : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? ` ${parts.join(", ")}.` : "";
+}
+
 function UsageStats({ usage, rangeLabel }: { usage: AgentResourceUsage; rangeLabel: string }) {
   const memoryRatio = usageRatio(usage.memoryWorkingSetBytes, usage.memoryLimitBytes);
   const peakRatio = usageRatio(usage.memoryPeakBytes, usage.memoryLimitBytes);
@@ -191,9 +202,11 @@ function UsageStats({ usage, rangeLabel }: { usage: AgentResourceUsage; rangeLab
         label="Memory now"
         value={usage.memoryWorkingSetBytes !== null ? formatBytes(usage.memoryWorkingSetBytes) : "—"}
         hint={
-          usage.memoryLimitBytes !== null && memoryRatio !== null
-            ? `${formatPercent(memoryRatio)} of ${formatBytes(usage.memoryLimitBytes)} limit`
-            : "no limit set"
+          usage.memoryRequestBytes !== null && usage.memoryLimitBytes !== null
+            ? `of ${formatBytes(usage.memoryRequestBytes)} request, ${formatBytes(usage.memoryLimitBytes)} limit`
+            : usage.memoryLimitBytes !== null && memoryRatio !== null
+              ? `${formatPercent(memoryRatio)} of ${formatBytes(usage.memoryLimitBytes)} limit`
+              : "no limit set"
         }
         tone={meterTone(memoryRatio)}
         testId="resource-usage-memory-now"
@@ -213,9 +226,11 @@ function UsageStats({ usage, rangeLabel }: { usage: AgentResourceUsage; rangeLab
         label="CPU now"
         value={usage.cpuCores !== null ? `${formatCores(usage.cpuCores)} cores` : "—"}
         hint={
-          usage.cpuLimitCores !== null
-            ? `of ${formatCores(usage.cpuLimitCores)} cores, 5-minute average`
-            : "5-minute average"
+          usage.cpuRequestCores !== null && usage.cpuLimitCores !== null
+            ? `of ${formatCores(usage.cpuRequestCores)} cores request, ${formatCores(usage.cpuLimitCores)} cores limit, 5-minute average`
+            : usage.cpuLimitCores !== null
+              ? `of ${formatCores(usage.cpuLimitCores)} cores, 5-minute average`
+              : "5-minute average"
         }
         tone={meterTone(cpuRatio)}
         testId="resource-usage-cpu-now"

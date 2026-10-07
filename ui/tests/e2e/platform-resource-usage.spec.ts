@@ -267,7 +267,9 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await expect(page.getByTestId("platform-agents-need-update")).toHaveCount(0);
   });
 
-  test("shows what the pods request beside what the agents use, on each row, in the cards and by organization", async () => {
+  test("shows what the pods request beside what the agents use, on each row, in the cards and by organization", async ({
+    page,
+  }) => {
     const base = mockPlatformUsage();
     const requests: Record<string, { memory: number; cpu: number }> = {
       [PLATFORM_CY_ID]: { memory: 0.5 * GIB, cpu: 0.1 },
@@ -289,8 +291,16 @@ test.describe("Platform resource usage (platform_admin)", () => {
 
     await usagePage.goto();
 
-    await expect(usagePage.stat("memory")).toContainText("of 6 GiB in limits · 1.5 GiB requested");
-    await expect(usagePage.stat("cpu")).toContainText("of 3 cores in limits · 0.35 requested, 5-minute average");
+    // The aggregate cards say how much the agents reporting request and how much they may use.
+    const aggregates = page.getByTestId("platform-usage-aggregates");
+    await expect(aggregates.getByTestId("platform-usage-memory-requested")).toContainText("1.5 GiB");
+    await expect(aggregates.getByTestId("platform-usage-memory-limits")).toContainText("6 GiB");
+    await expect(aggregates.getByTestId("platform-usage-cpu-requested")).toContainText("0.35 cores");
+    await expect(aggregates.getByTestId("platform-usage-cpu-limits")).toContainText("3 cores");
+    // The same agents as the figures above: the two live agents, not the container nobody owns.
+    await expect(aggregates.getByTestId("platform-usage-memory-requested")).toContainText(
+      "across the 2 agents reporting",
+    );
     // Cy asks for 512 MiB of its 2 GiB, so the tick sits a quarter of the way along the bar.
     const cy = usagePage.agentRows().nth(0);
     await expect(cy.getByTestId("platform-agent-memory-request")).toHaveText("requests 512 MiB");
@@ -311,14 +321,17 @@ test.describe("Platform resource usage (platform_admin)", () => {
     expect(box?.height ?? Infinity).toBeLessThan(44);
   });
 
-  test("says nothing about requests when they could not be read", async () => {
+  test("says nothing about requests when they could not be read", async ({ page }) => {
     await data.resourceUsage.interceptPlatformResourceUsage();
 
     await usagePage.goto();
 
     await expect(usagePage.stat("memory")).toContainText("of 6 GiB in limits");
-    await expect(usagePage.stat("memory")).not.toContainText("requested");
-    await expect(usagePage.stat("cpu")).not.toContainText("requested");
+    // The limits are known, the requests are not: unknown is a dash, not a zero.
+    const aggregates = page.getByTestId("platform-usage-aggregates");
+    await expect(aggregates.getByTestId("platform-usage-memory-limits")).toContainText("6 GiB");
+    await expect(aggregates.getByTestId("platform-usage-memory-requested")).toContainText("—");
+    await expect(aggregates.getByTestId("platform-usage-cpu-requested")).toContainText("—");
     await expect(usagePage.agentRows().nth(0).getByTestId("platform-agent-memory-request")).toHaveCount(0);
     await expect(usagePage.agentRows().nth(0).getByTestId("usage-meter-request-marker")).toHaveCount(0);
   });

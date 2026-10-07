@@ -196,64 +196,97 @@ function UsageStats({ usage }: { usage: PlatformResourceUsage }) {
   ).length;
 
   const unknown = "—";
+  // What the agents reporting are set to use, added up: the same agents as the figures
+  // above, so each pair describes one thing. Namespace-wide figures are under Capacity.
+  const across = reporting !== null ? `across the ${reporting} ${reporting === 1 ? "agent" : "agents"} reporting` : undefined;
   return (
-    <div className="mb-6 grid gap-3" style={STAT_GRID_STYLE}>
-      <UsageStatCard
-        label="Memory in use"
-        value={totals.memoryWorkingSetBytes !== null ? formatBytes(totals.memoryWorkingSetBytes) : unknown}
-        hint={
-          totals.memoryLimitBytes !== null
-            ? `of ${formatBytes(totals.memoryLimitBytes)} in limits${
-                totals.memoryRequestBytes !== null ? ` · ${formatBytes(totals.memoryRequestBytes)} requested` : ""
-              }`
-            : undefined
-        }
-        testId="platform-usage-memory"
-      />
-      <UsageStatCard
-        label="CPU in use"
-        value={totals.cpuCores !== null ? `${formatCores(totals.cpuCores)} cores` : unknown}
-        hint={
-          totals.cpuLimitCores !== null
-            ? `of ${formatCores(totals.cpuLimitCores)} cores in limits${
-                totals.cpuRequestCores !== null ? ` · ${formatCores(totals.cpuRequestCores)} requested` : ""
-              }, 5-minute average`
-            : undefined
-        }
-        testId="platform-usage-cpu"
-      />
-      <UsageStatCard
-        label="Agents reporting"
-        value={reporting !== null ? String(reporting) : unknown}
-        hint={`of ${totals.agentsWithContainer} running or in error${
-          needUpdate > 0 ? ` · ${needUpdate} need an update` : ""
-        }`}
-        tone={reporting !== null && reporting < totals.agentsWithContainer ? "warn" : "ok"}
-        testId="platform-usage-reporting"
-      />
-      <UsageStatCard
-        label="Near memory limit"
-        value={measured ? String(nearMemoryLimit) : unknown}
-        hint="at 90% or more of their limit"
-        tone={nearMemoryLimit > 0 ? "err" : "ok"}
-        testId="platform-usage-near-limit"
-      />
-      <UsageStatCard
-        label="Held back by CPU"
-        value={measured ? String(heldBack) : unknown}
-        hint="at their CPU limit often, last hour"
-        tone={heldBack > 0 ? "warn" : "ok"}
-        testId="platform-usage-throttled"
-      />
-    </div>
+    <>
+      <div className="mb-3 grid gap-3" style={STAT_GRID_STYLE}>
+        <UsageStatCard
+          label="Memory in use"
+          value={totals.memoryWorkingSetBytes !== null ? formatBytes(totals.memoryWorkingSetBytes) : unknown}
+          hint={
+            totals.memoryLimitBytes !== null ? `of ${formatBytes(totals.memoryLimitBytes)} in limits` : undefined
+          }
+          testId="platform-usage-memory"
+        />
+        <UsageStatCard
+          label="CPU in use"
+          value={totals.cpuCores !== null ? `${formatCores(totals.cpuCores)} cores` : unknown}
+          hint={
+            totals.cpuLimitCores !== null
+              ? `of ${formatCores(totals.cpuLimitCores)} cores in limits, 5-minute average`
+              : undefined
+          }
+          testId="platform-usage-cpu"
+        />
+        <UsageStatCard
+          label="Agents reporting"
+          value={reporting !== null ? String(reporting) : unknown}
+          hint={`of ${totals.agentsWithContainer} running or in error${
+            needUpdate > 0 ? ` · ${needUpdate} need an update` : ""
+          }`}
+          tone={reporting !== null && reporting < totals.agentsWithContainer ? "warn" : "ok"}
+          testId="platform-usage-reporting"
+        />
+        <UsageStatCard
+          label="Near memory limit"
+          value={measured ? String(nearMemoryLimit) : unknown}
+          hint="at 90% or more of their limit"
+          tone={nearMemoryLimit > 0 ? "err" : "ok"}
+          testId="platform-usage-near-limit"
+        />
+        <UsageStatCard
+          label="Held back by CPU"
+          value={measured ? String(heldBack) : unknown}
+          hint="at their CPU limit often, last hour"
+          tone={heldBack > 0 ? "warn" : "ok"}
+          testId="platform-usage-throttled"
+        />
+      </div>
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="platform-usage-aggregates">
+        <UsageStatCard
+          label="Memory requested"
+          value={totals.memoryRequestBytes !== null ? formatBytes(totals.memoryRequestBytes) : unknown}
+          hint={across}
+          testId="platform-usage-memory-requested"
+        />
+        <UsageStatCard
+          label="Memory limits"
+          value={totals.memoryLimitBytes !== null ? formatBytes(totals.memoryLimitBytes) : unknown}
+          hint={across}
+          testId="platform-usage-memory-limits"
+        />
+        <UsageStatCard
+          label="CPU requested"
+          value={totals.cpuRequestCores !== null ? `${formatCores(totals.cpuRequestCores)} cores` : unknown}
+          hint={across}
+          testId="platform-usage-cpu-requested"
+        />
+        <UsageStatCard
+          label="CPU limits"
+          value={totals.cpuLimitCores !== null ? `${formatCores(totals.cpuLimitCores)} cores` : unknown}
+          hint={across}
+          testId="platform-usage-cpu-limits"
+        />
+      </div>
+    </>
   );
 }
 
 function UsageSkeleton() {
   return (
     <div data-testid="platform-usage-skeleton">
-      <div className="mb-6 grid gap-3" style={STAT_GRID_STYLE}>
+      <div className="mb-3 grid gap-3" style={STAT_GRID_STYLE}>
         {Array.from({ length: 5 }).map((_, index) => (
+          <div key={index} className="af-card px-4 py-3.5">
+            <Skeleton className="mb-2 h-3 w-16" />
+            <Skeleton className="h-6 w-20" />
+          </div>
+        ))}
+      </div>
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => (
           <div key={index} className="af-card px-4 py-3.5">
             <Skeleton className="mb-2 h-3 w-16" />
             <Skeleton className="h-6 w-20" />

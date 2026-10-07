@@ -60,6 +60,38 @@ test.describe("Agent Detail Page — Resource usage tab", () => {
     await expect(page.getByTestId("resource-usage-cpu-throttled")).toContainText("2%");
   });
 
+  test("shows what the pod requests beside its limit, in the cards, the subtitles and on both charts", async ({
+    page,
+  }) => {
+    await dataSupportPage.resourceUsage.interceptAgentResourceUsage(MOCK_AGENT_ID, {
+      body: mockResourceUsage({ memory_request_bytes: 805_306_368, cpu_request_cores: 0.05 }),
+    });
+    await agentDetailPage.gotoResourceUsage();
+
+    await expect(page.getByTestId("resource-usage-memory-now")).toContainText("of 768 MiB request, 1 GiB limit");
+    await expect(page.getByTestId("resource-usage-cpu-now")).toContainText(
+      "of 0.05 cores request, 0.5 cores limit, 5-minute average",
+    );
+    const memoryChart = page.getByTestId("resource-usage-memory-chart");
+    await expect(memoryChart).toContainText("Request 768 MiB, limit 1 GiB.");
+    // Both dashed lines are labelled on the chart itself.
+    await expect(memoryChart.getByText("Request", { exact: true })).toBeVisible();
+    await expect(memoryChart.getByText("Limit", { exact: true })).toBeVisible();
+    const cpuChart = page.getByTestId("resource-usage-cpu-chart");
+    await expect(cpuChart).toContainText("Request 0.05, limit 0.5.");
+    await expect(cpuChart.getByText("Request", { exact: true })).toBeVisible();
+    await expect(cpuChart.getByText("Limit", { exact: true })).toBeVisible();
+  });
+
+  test("falls back to the limit alone when the request could not be read", async ({ page }) => {
+    await agentDetailPage.gotoResourceUsage();
+
+    await expect(page.getByTestId("resource-usage-memory-now")).toContainText("33% of 1 GiB limit");
+    await expect(page.getByTestId("resource-usage-memory-now")).not.toContainText("request");
+    await expect(page.getByTestId("resource-usage-memory-chart")).toContainText("Limit 1 GiB.");
+    await expect(page.getByTestId("resource-usage-memory-chart").getByText("Request", { exact: true })).toHaveCount(0);
+  });
+
   test("draws memory, CPU and throttling over time", async ({ page }) => {
     await agentDetailPage.gotoResourceUsage();
 
