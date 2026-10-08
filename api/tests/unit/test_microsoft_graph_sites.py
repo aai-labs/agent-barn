@@ -7,7 +7,9 @@ from hamcrest import assert_that, equal_to
 from api.domains.agents.microsoft_graph_sites import (
     MicrosoftGraphSites,
     SiteAccessRefused,
+    SiteChangeRejected,
     SiteNotFound,
+    SitesThrottled,
     SitesUnavailable,
 )
 
@@ -121,3 +123,33 @@ def test_an_unreachable_graph_is_reported_as_unavailable(graph, failure):
 
     with pytest.raises(SitesUnavailable):
         MicrosoftGraphSites().resolve_site_id("t", "https://contoso.sharepoint.com/sites/finance")
+
+
+@pytest.mark.parametrize("status_code", [400, 409])
+def test_a_change_microsoft_rejects_is_reported_as_rejected(graph, status_code):
+    graph(httpx.Response(status_code, json={"error": {"code": "invalidRequest"}}))
+
+    with pytest.raises(SiteChangeRejected):
+        MicrosoftGraphSites().grant_site("t", site_id="site-1", app_id=_APP_ID, display_name="x", role="read")
+
+
+def test_an_address_microsoft_cant_use_is_reported_as_not_found(graph):
+    graph(httpx.Response(400, json={"error": {"code": "invalidRequest"}}))
+
+    with pytest.raises(SiteNotFound) as exc:
+        MicrosoftGraphSites().resolve_site_id("t", "https://contoso.sharepoint.com/sites/finance")
+
+    assert_that(str(exc.value), equal_to("https://contoso.sharepoint.com/sites/finance"))
+
+
+def test_throttling_is_reported_as_throttled(graph):
+    graph(httpx.Response(429, headers={"Retry-After": "30"}, json={}))
+
+    with pytest.raises(SitesThrottled):
+        MicrosoftGraphSites().update_site_role("t", site_id="site-1", permission_id="perm-1", role="read")
+
+
+def test_rejected_and_throttled_still_count_as_unavailable_for_rollback(graph):
+    # Callers that undo an attempt on any Graph failure keep catching SitesUnavailable.
+    assert_that(issubclass(SiteChangeRejected, SitesUnavailable), equal_to(True))
+    assert_that(issubclass(SitesThrottled, SitesUnavailable), equal_to(True))

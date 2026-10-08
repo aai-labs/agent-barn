@@ -45,7 +45,9 @@ from api.domains.agents.microsoft_graph_scopes import (
 from api.domains.agents.microsoft_graph_sites import (
     MicrosoftGraphSites,
     SiteAccessRefused,
+    SiteChangeRejected,
     SiteNotFound,
+    SitesThrottled,
     SitesUnavailable,
 )
 from api.domains.agents.microsoft_identity import (
@@ -121,6 +123,12 @@ _NOT_AN_ADMINISTRATOR = (
     "Microsoft didn't let this account manage SharePoint site permissions. Sign in as a SharePoint "
     "or Microsoft 365 administrator."
 )
+_THROTTLED = "Microsoft is limiting requests right now. Wait a few minutes, then sign in again."
+_ANOTHER_SIGN_IN = "Another SharePoint sign-in for this agent is finishing. Try again in a moment."
+SITES_STILL_GRANTED = (
+    "SharePoint sites are still granted to this agent's Microsoft Teams app. Remove all sites under "
+    "SharePoint in the agent's Integrations first; an administrator signs in to do it."
+)
 
 
 def _same_tenant(configured: str, token_tid: str) -> bool:
@@ -159,6 +167,8 @@ class SignInState:
     # Selected-sites mode: every site the agent should reach once the sign-in completes,
     # already reduced to site roots. Sites granted before and missing here are revoked.
     sites: tuple[str, ...] = ()
+    # Selected-sites mode: revoke every granted site and disconnect SharePoint.
+    remove_all: bool = False
 
 
 def encode_sign_in_state(config: Config, state: SignInState, *, ttl_seconds: int = _STATE_TTL_SECONDS) -> str:
@@ -173,6 +183,7 @@ def encode_sign_in_state(config: Config, state: SignInState, *, ttl_seconds: int
         "verifier": encrypt_token(state.code_verifier, config.agent_token_encryption_key),
         "mode": state.mode,
         "sites": list(state.sites),
+        "remove_all": state.remove_all,
         "exp": int(time.time()) + ttl_seconds,
     }
     return jwt.encode(payload, config.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM)
@@ -192,6 +203,7 @@ def decode_sign_in_state(token: str, config: Config) -> SignInState | None:
             code_verifier=decrypt_token(payload["verifier"], config.agent_token_encryption_key),
             mode="selected_sites" if payload.get("mode") == "selected_sites" else "delegated",
             sites=tuple(str(site) for site in payload.get("sites", [])),
+            remove_all=payload.get("remove_all") is True,
         )
     except Exception:
         return None
@@ -340,15 +352,28 @@ class SharePointService:
         *,
         mode: SharePointMode = "delegated",
         sites: list[str] | None = None,
+        remove_all: bool = False,
     ) -> str:
         """Where to send the browser to sign in.
 
         In selected-sites mode the person must be an administrator: the sign-in asks for
         ``Sites.FullControl.All`` to grant the Teams app each site in ``sites``, which are
-        the complete set the agent should reach afterwards.
+        the complete set the agent should reach afterwards. With ``remove_all`` it revokes
+        every granted site instead, and SharePoint is disconnected.
         """
         self._require_manage(agent_id, context)
-        site_roots = _site_roots(sites or []) if mode == "selected_sites" else ()
+        if remove_all:
+            current = self._stored_content(agent_id)
+            if current is None or current.mode != "selected_sites":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="No SharePoint sites are granted to this agent."
+                )
+            mode, site_roots = "selected_sites", ()
+        elif mode == "selected_sites":
+            site_roots = _site_roots(sites or [])
+        else:
+            self._refuse_while_sites_granted(agent_id)
+            site_roots = ()
         app = self.communications.get_teams_app_identity(agent_id, connection_id)
         verifier, challenge = pkce_pair()
         state = SignInState(
@@ -359,6 +384,7 @@ class SharePointService:
             code_verifier=verifier,
             mode=mode,
             sites=site_roots,
+            remove_all=remove_all,
         )
         return build_authorize_url(
             tenant_id=app.tenant_id,
@@ -392,7 +418,8 @@ class SharePointService:
 
     def complete_sign_in(
         self, agent_id: UUID, code: str, state_token: str, context: CurrentUserContext
-    ) -> SharePointSignInRead:
+    ) -> SharePointSignInRead | None:
+        """Finish a sign-in. None when it removed every site, which disconnects SharePoint."""
         state = decode_sign_in_state(state_token, self.config)
         if state is None or state.agent_id != agent_id or state.user_id != context.user.id:
             raise HTTPException(
@@ -400,6 +427,20 @@ class SharePointService:
                 detail="This sign-in has expired or wasn't started by you. Please try again.",
             )
         agent = self._require_manage(agent_id, context)
+        # Held through the save: a second sign-in finishing meanwhile would read the same granted
+        # sites and overwrite this one's result.
+        with self.repository.sharepoint_sign_in_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_ANOTHER_SIGN_IN)
+            return self._complete_sign_in(agent, code, state, context)
+
+    def _complete_sign_in(
+        self, agent: Agent, code: str, state: SignInState, context: CurrentUserContext
+    ) -> SharePointSignInRead | None:
+        agent_id = agent.id
+        if state.mode == "delegated":
+            # Started before the sites were granted; a personal sign-in would lose track of them.
+            self._refuse_while_sites_granted(agent_id)
         app = self.communications.get_teams_app_identity(agent_id, state.connection_id)
 
         try:
@@ -469,7 +510,7 @@ class SharePointService:
         tenant_id: str,
         claims: dict,
         context: CurrentUserContext,
-    ) -> SharePointSignInRead:
+    ) -> SharePointSignInRead | None:
         """Reconcile the Teams app's site grants with ``state.sites``, using the administrator's token.
 
         New sites are granted, removed ones revoked, and kept ones left alone unless the access
@@ -490,8 +531,10 @@ class SharePointService:
                 ),
             )
         token = tokens.access_token
-        role = "read" if state.read_only else "write"
         previous = self._stored_content(agent.id)
+        if state.remove_all:
+            return self._remove_all_sites(agent, token, previous, context)
+        role = "read" if state.read_only else "write"
         recorded = previous.sites if previous is not None and previous.mode == "selected_sites" else []
         same_app = previous is not None and previous.client_id == app_id
         existing = {site.url: site for site in recorded} if same_app else {}
@@ -512,6 +555,8 @@ class SharePointService:
                             )
                         except SiteNotFound:
                             raise SiteNotFound(site.url) from None
+                        except SiteChangeRejected:
+                            raise SiteChangeRejected(site.url) from None
                         updated.append(site)
                 for url, site_id in site_ids.items():
                     try:
@@ -520,6 +565,8 @@ class SharePointService:
                         )
                     except SiteNotFound:
                         raise SiteNotFound(url) from None
+                    except SiteChangeRejected:
+                        raise SiteChangeRejected(url) from None
                     granted[url] = GrantedSite(url=url, site_id=site_id, permission_id=permission_id)
             except SiteAccessRefused, SiteNotFound, SitesUnavailable:
                 for site in granted.values():
@@ -539,17 +586,17 @@ class SharePointService:
             ) from exc
         except SiteAccessRefused as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_NOT_AN_ADMINISTRATOR) from exc
+        except SitesThrottled as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_THROTTLED) from exc
+        except SiteChangeRejected as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Microsoft wouldn't change access to {exc}. Check the site in SharePoint, then sign in again.",
+            ) from exc
         except SitesUnavailable as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from exc
 
-        still_granted: list[GrantedSite] = []
-        for site in removed:
-            try:
-                self.graph_sites.revoke_site(token, site_id=site.site_id, permission_id=site.permission_id)
-            except SiteAccessRefused, SitesUnavailable:
-                logger.warning("SharePoint site grant could not be removed for agent %s", agent.id)
-                still_granted.append(site)
-
+        still_granted = self._revoke_each(token, removed, agent.id)
         content = SharePointContent(
             mode="selected_sites",
             connection_id=str(state.connection_id),
@@ -571,6 +618,82 @@ class SharePointService:
                 ),
             )
         return SharePointSignInRead.of(content)
+
+    def _remove_all_sites(
+        self, agent: Agent, token: str, previous: SharePointContent | None, context: CurrentUserContext
+    ) -> None:
+        """Revoke every recorded grant, then forget SharePoint. Grants that couldn't be revoked
+        stay on record, so the agent keeps only those and the next removal sign-in retries."""
+        recorded = previous.sites if previous is not None and previous.mode == "selected_sites" else []
+        still_granted = self._revoke_each(token, recorded, agent.id)
+        if still_granted:
+            assert previous is not None
+            self._save_secret(agent, previous.model_copy(update={"sites": still_granted}), context)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    "Access to "
+                    + ", ".join(site.url for site in still_granted)
+                    + " couldn't be removed. Sign in again to retry."
+                ),
+            )
+        delivery_ids = self.repository.delete_secret_with_event(
+            agent.id,
+            SecretProvider.SHAREPOINT,
+            organization_id=agent.organization_id,
+            agent_name=agent.name,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+
+    def _revoke_each(self, token: str, sites: list[GrantedSite], agent_id: UUID) -> list[GrantedSite]:
+        """Revoke each site's grant; returns the ones Microsoft didn't remove."""
+        still_granted: list[GrantedSite] = []
+        for site in sites:
+            try:
+                self.graph_sites.revoke_site(token, site_id=site.site_id, permission_id=site.permission_id)
+            except SiteAccessRefused, SitesUnavailable:
+                logger.warning("SharePoint site grant could not be removed for agent %s", agent_id)
+                still_granted.append(site)
+        return still_granted
+
+    def refuse_retiring_teams_app(self, agent_id: UUID, connection_id: UUID, context: CurrentUserContext) -> None:
+        """409 when removing the Teams connection would leave granted sites behind.
+
+        A released app can be connected to another agent, whose app-only tokens would reach the
+        sites still granted to it.
+        """
+        if self._holds_sites_on(agent_id, connection_id) is not None:
+            self._require_manage(agent_id, context)
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SITES_STILL_GRANTED)
+
+    def refuse_swapping_teams_app(
+        self, agent_id: UUID, connection_id: UUID, credentials: dict | None, context: CurrentUserContext
+    ) -> None:
+        """409 when a connection update points it at another Teams app while sites are granted to
+        this one, which would release it like removing the connection does. Keeping the app (a
+        rotated secret, say) is fine."""
+        content = self._holds_sites_on(agent_id, connection_id)
+        if content is None or credentials is None:
+            return
+        same_app = str(credentials.get("app_id") or "").lower() == content.client_id.lower()
+        if same_app and _same_tenant(str(credentials.get("tenant_id") or ""), content.tenant_id):
+            return
+        self._require_manage(agent_id, context)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SITES_STILL_GRANTED)
+
+    def _holds_sites_on(self, agent_id: UUID, connection_id: UUID) -> SharePointContent | None:
+        """The agent's selected-sites credential, if its sites are granted to this connection's app."""
+        content = self._stored_content(agent_id)
+        if content is None or content.mode != "selected_sites" or content.connection_id != str(connection_id):
+            return None
+        return content
+
+    def _refuse_while_sites_granted(self, agent_id: UUID) -> None:
+        content = self._stored_content(agent_id)
+        if content is not None and content.mode == "selected_sites":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SITES_STILL_GRANTED)
 
     def access_token(self, agent_id: UUID) -> SharePointAccessTokenRead:
         """A short-lived app-only token for an agent in selected-sites mode.

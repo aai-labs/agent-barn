@@ -247,11 +247,6 @@ function TeamsAppSetupGuide({
 }
 
 /**
- * Connects SharePoint by signing in with Microsoft on the agent's Microsoft Teams app. The
- * sign-in saves the credential itself, so on success the draft is only marked as signed in;
- * nothing from here is submitted with the rest of the form.
- */
-/**
  * The sites an administrator's next sign-in leaves the agent with. Sites not yet granted, and
  * granted ones taken off the list, are marked until that sign-in happens.
  */
@@ -360,6 +355,11 @@ function SiteList({
   );
 }
 
+/**
+ * Connects SharePoint by signing in with Microsoft on the agent's Microsoft Teams app. The
+ * sign-in saves the credential itself, so on success the draft is only marked as signed in;
+ * nothing from here is submitted with the rest of the form.
+ */
 export function SharePointSignIn({
   agentId,
   provider,
@@ -403,6 +403,9 @@ export function SharePointSignIn({
     grantedOverride ??
     (current?.mode === "selected_sites" ? { email: current.email, sites: current.sites } : { email: "", sites: [] });
   const wantedSites = chosenSites ?? granted.sites;
+  // Granted sites stay on the Teams app until an administrator removes them, so the agent keeps
+  // track of them until then: no switching to a person's sign-in, and no removing SharePoint.
+  const holdsSites = granted.sites.length > 0;
   const accessReadOnly = current ? (current.readOnly ? "true" : "false") : undefined;
 
   // Start from the agent's current access level, so a grant can be changed without re-picking it.
@@ -441,6 +444,7 @@ export function SharePointSignIn({
         mode,
         sites: selectedSites ? wantedSites : [],
       });
+      if (!result) return;
       if (result.mode === "selected_sites") {
         setGrantedOverride({ email: result.email, sites: result.sites });
         setChosenSites(null);
@@ -451,6 +455,18 @@ export function SharePointSignIn({
         readOnly: result.readOnly ? "true" : "false",
         connectionId,
       });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign-in failed.");
+    }
+  }
+
+  async function handleRemoveAll() {
+    setError(null);
+    try {
+      await signIn({ connectionId, readOnly: readOnly === "true", removeAll: true });
+      setGrantedOverride({ email: "", sites: [] });
+      setChosenSites(null);
+      onSignedIn({ signedIn: "", email: "" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed.");
     }
@@ -483,7 +499,7 @@ export function SharePointSignIn({
               value={value}
               checked={mode === value}
               onChange={() => setChosenMode(value)}
-              disabled={disabled || isSigningIn}
+              disabled={disabled || isSigningIn || (value === "delegated" && holdsSites)}
               className="accent-[var(--blue-9)]"
             />
             <span className="text-[13px]" style={{ color: "var(--ink-1)" }}>
@@ -498,12 +514,10 @@ export function SharePointSignIn({
             download and upload them.
           </Note>
         )}
-        {granted.sites.length > 0 && (
+        {holdsSites && (
           <Note>
-            {selectedSites
-              ? "Removing SharePoint from the agent stops it using these sites, but they stay granted to its Microsoft Teams app "
-              : "Switching to a person's sign-in stops the agent using its selected sites, but they stay granted to its Microsoft Teams app "}
-            until an administrator removes them in SharePoint.
+            To switch to a person&apos;s sign-in or remove SharePoint, remove all sites first, so none stay
+            granted to the agent&apos;s Microsoft Teams app.
           </Note>
         )}
       </fieldset>
@@ -539,7 +553,8 @@ export function SharePointSignIn({
       <Note>
         Signing in saves SharePoint access for this agent straight away, even if you don&apos;t apply
         your other changes. It takes effect when the agent restarts, which Apply does for you. To take
-        it away later, remove SharePoint from the agent&apos;s Integrations.
+        it away later,{" "}
+        {selectedSites ? "remove all sites." : <>remove SharePoint from the agent&apos;s Integrations.</>}
       </Note>
 
       <button
@@ -551,6 +566,16 @@ export function SharePointSignIn({
         <MicrosoftGlyph size={15} />
         {isSigningIn ? "Waiting for Microsoft…" : signInLabel}
       </button>
+      {selectedSites && holdsSites && (
+        <button
+          type="button"
+          className="af-btn af-btn-sm af-btn-ghost self-start"
+          onClick={() => void handleRemoveAll()}
+          disabled={disabled || isSigningIn}
+        >
+          Remove all sites
+        </button>
+      )}
       {selectedSites && granted.email && !isSigningIn && (
         <span className="text-[0.75rem] font-medium" style={{ color: "var(--ok, #2f855a)" }}>
           ✓ Sites granted by {granted.email}

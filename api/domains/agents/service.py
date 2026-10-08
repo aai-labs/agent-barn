@@ -126,6 +126,7 @@ from api.domains.agents.selection import (
     ensure_verbose_mode_supported,
     is_model_allowed,
 )
+from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
@@ -1515,6 +1516,9 @@ class AgentService:
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
 
+        if SecretProvider.SHAREPOINT in (data.removed_secret_providers or []):
+            self._refuse_forgetting_granted_sites(agent.id)
+
         if "approval_mode" in updated:
             self._ensure_approval_mode_supported(agent.agent_type, updated["approval_mode"])
 
@@ -2594,6 +2598,16 @@ class AgentService:
                 content.client_id = self.config.google_cloud_client_id
             if not content.client_secret:
                 content.client_secret = self.config.google_cloud_client_secret
+
+    def _refuse_forgetting_granted_sites(self, agent_id: UUID) -> None:
+        """Removing SharePoint would forget sites still granted to the Teams app, which its next
+        agent could reach; an administrator's removal sign-in revokes them and disconnects it."""
+        secret = self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT)
+        if secret is None or secret.content is None:
+            return
+        content = decrypt_content(SecretProvider.SHAREPOINT, secret.content, self.config.agent_token_encryption_key)
+        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SITES_STILL_GRANTED)
 
     def _validate_live_integration(self, provider: SecretProvider, content: Any) -> None:
         """Validate submitted credentials with the provider before they are persisted.

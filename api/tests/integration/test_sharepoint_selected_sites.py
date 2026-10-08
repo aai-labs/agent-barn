@@ -4,11 +4,18 @@ each chosen site under Sites.Selected, and each later sign-in reconciles the gra
 import urllib.parse
 
 from fastapi import status
-from hamcrest import assert_that, contains_string, empty, equal_to, has_entries, is_not, none, not_
+from hamcrest import assert_that, contains_string, empty, equal_to, has_entries, has_length, is_not, none, not_
 
 from api.core.config import Config
-from api.domains.agents.microsoft_graph_sites import SiteAccessRefused, SiteNotFound, SitesUnavailable
+from api.domains.agents.microsoft_graph_sites import (
+    SiteAccessRefused,
+    SiteChangeRejected,
+    SiteNotFound,
+    SitesThrottled,
+    SitesUnavailable,
+)
 from api.domains.agents.models import SecretProvider, SharePointContent, decrypt_content
+from api.domains.agents.repository import AgentRepository
 from api.domains.agents.sharepoint_service import decode_sign_in_state
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -408,3 +415,244 @@ def test_reading_without_sharepoint_says_not_connected() -> None:
 
         with then("it is not found"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+# --- removing every site ----------------------------------------------------------------
+
+
+def _admin_removes_all(context):
+    fake_identity(context).exchange_result = admin_tokens()
+    return sign_in(context, remove_all=True)
+
+
+def test_authorize_url_for_removing_every_site_asks_for_site_administration() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        with when("I start the administrator's sign-in to remove every site"):
+            response = _sharepoint(context, "/authorize-url", mode="selected_sites", remove_all="true")
+
+        with then("it is the same administrator sign-in, carrying no sites and the intent to remove them"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(response.json()["authorize_url"]).query)
+            assert_that(query["scope"][0], contains_string("Sites.FullControl.All"))
+            state = decode_sign_in_state(query["state"][0], context.injector.get(Config))
+            assert state is not None
+            assert_that(state.remove_all, equal_to(True))
+            assert_that(state.sites, equal_to(()))
+
+
+def test_there_is_nothing_to_remove_without_granted_sites() -> None:
+    with given([*_GIVEN, sharepoint_is_signed_in()]) as context:
+        with when("I start the removal sign-in for an agent on a personal sign-in"):
+            response = _sharepoint(context, "/authorize-url", mode="selected_sites", remove_all="true")
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_removing_every_site_revokes_each_grant_and_disconnects_sharepoint() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE, _LEGAL)]) as context:
+        with when("an administrator signs in to remove every site"):
+            response = _admin_removes_all(context)
+
+        with then("each grant is revoked with the administrator's token"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            revokes = fake_graph_sites(context).revokes
+            assert_that(
+                [(r["site_id"], r["token"]) for r in revokes],
+                equal_to([(site_id_for(_FINANCE), "admin-access-token"), (site_id_for(_LEGAL), "admin-access-token")]),
+            )
+
+        with then("SharePoint is no longer connected"):
+            assert_that(response.json(), none())
+            assert_that(sharepoint_secret(context), none())
+
+
+def test_a_site_that_could_not_be_removed_keeps_sharepoint_connected_to_retry() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE, _LEGAL)]) as context:
+        fake_graph_sites(context).revoke_failures[site_id_for(_LEGAL)] = SitesUnavailable("HTTP 503")
+
+        with when("Microsoft fails to remove one site's grant"):
+            response = _admin_removes_all(context)
+
+        with then("the sign-in names it"):
+            assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+            assert_that(response.json()["detail"], contains_string(_LEGAL))
+
+        with then("only that site stays on record, so signing in again finishes the job"):
+            assert_that([s.url for s in _stored(context).sites], equal_to([_LEGAL]))
+
+
+def test_a_removal_sign_in_without_site_administration_changes_nothing() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        fake_identity(context).exchange_result = admin_tokens(scope="openid profile email")
+
+        with when("the removal sign-in comes back without site administration"):
+            response = sign_in(context, remove_all=True)
+
+        with then("it is refused and the sites stay"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(fake_graph_sites(context).revokes, empty())
+            assert_that([s.url for s in _stored(context).sites], equal_to([_FINANCE]))
+
+
+# --- nothing forgets granted sites --------------------------------------------------------
+
+
+def test_a_personal_sign_in_cannot_start_while_sites_are_granted() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        with when("I start a personal sign-in"):
+            response = _sharepoint(context, "/authorize-url", mode="delegated")
+
+        with then("it is refused until the sites are removed"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("Remove"))
+
+
+def test_a_personal_sign_in_cannot_replace_granted_sites() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        with when("a personal sign-in started earlier completes"):
+            response = sign_in(context)
+
+        with then("it is refused and the sites stay on record"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            content = _stored(context)
+            assert_that(content.mode, equal_to("selected_sites"))
+            assert_that([s.url for s in content.sites], equal_to([_FINANCE]))
+
+
+def test_sharepoint_cannot_be_removed_while_sites_are_granted() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        with when("SharePoint is removed from the agent"):
+            response = context.client.patch(
+                agent_base(context), json={"removed_secret_providers": ["sharepoint"]}, headers=auth(context)
+            )
+
+        with then("it is refused until an administrator removes the sites"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("Remove"))
+            assert_that(sharepoint_secret(context), is_not(none()))
+
+
+def test_the_teams_connection_cannot_be_removed_while_sites_are_granted() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        connection = context.teams_connection
+
+        with when("the agent's Teams connection is removed"):
+            response = context.client.delete(
+                f"{agent_base(context)}/connections/{connection['id']}",
+                params={"revision": connection["revision"]},
+                headers=auth(context),
+            )
+
+        with then("it is refused, since another agent could take over the app and its sites"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("SharePoint"))
+
+
+def test_the_teams_app_cannot_be_swapped_while_sites_are_granted() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        connection = context.teams_connection
+
+        with when("the connection is pointed at another Teams app"):
+            response = context.client.patch(
+                f"{agent_base(context)}/connections/{connection['id']}",
+                json={
+                    "revision": connection["revision"],
+                    "credentials": {
+                        "app_id": "99999999-9999-4999-8999-999999999999",
+                        "app_password": "other-secret",
+                        "tenant_id": TEAMS_TENANT_ID,
+                    },
+                },
+                headers=auth(context),
+            )
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("SharePoint"))
+
+
+def test_the_teams_connection_can_still_be_renamed_or_its_secret_rotated() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        connection = context.teams_connection
+
+        with when("the same app gets a new client secret"):
+            response = context.client.patch(
+                f"{agent_base(context)}/connections/{connection['id']}",
+                json={
+                    "revision": connection["revision"],
+                    "display_name": "Teams",
+                    "credentials": {"app_id": TEAMS_APP_ID, "app_password": "rotated", "tenant_id": TEAMS_TENANT_ID},
+                },
+                headers=auth(context),
+            )
+
+        with then("it is saved"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+
+
+def test_once_every_site_is_removed_the_teams_connection_can_go() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        assert _admin_removes_all(context).status_code == status.HTTP_200_OK
+        connection = context.teams_connection
+
+        with when("the agent's Teams connection is removed"):
+            response = context.client.delete(
+                f"{agent_base(context)}/connections/{connection['id']}",
+                params={"revision": connection["revision"]},
+                headers=auth(context),
+            )
+
+        with then("it goes"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT), response.text)
+
+
+# --- Graph errors and concurrent sign-ins --------------------------------------------------
+
+
+def test_a_grant_microsoft_rejects_names_the_site_and_undoes_the_attempt() -> None:
+    with given(_GIVEN) as context:
+        graph = fake_graph_sites(context)
+        graph.grant_failures[site_id_for(_LEGAL)] = SiteChangeRejected("HTTP 409")
+
+        with when("Microsoft rejects the grant of one site"):
+            response = _admin_signs_in(context, _FINANCE, _LEGAL)
+
+        with then("the sign-in names that site rather than calling Microsoft unreachable"):
+            assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+            assert_that(response.json()["detail"], contains_string(_LEGAL))
+            assert_that(response.json()["detail"], not_(contains_string("couldn't be reached")))
+
+        with then("the grant made for finance is taken back"):
+            assert_that([r["site_id"] for r in graph.revokes], equal_to([site_id_for(_FINANCE)]))
+            assert_that(sharepoint_secret(context), none())
+
+
+def test_microsoft_throttling_says_to_wait() -> None:
+    with given(_GIVEN) as context:
+        fake_graph_sites(context).grant_failures[site_id_for(_FINANCE)] = SitesThrottled("HTTP 429")
+
+        with when("Microsoft is limiting requests"):
+            response = _admin_signs_in(context, _FINANCE)
+
+        with then("the administrator is told to wait and try again"):
+            assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
+            assert_that(response.json()["detail"], contains_string("few minutes"))
+
+
+def test_a_sign_in_finishing_while_another_is_in_progress_is_refused() -> None:
+    with given([*_GIVEN, sites_are_granted(_FINANCE)]) as context:
+        repository: AgentRepository = context.injector.get(AgentRepository)
+
+        with when("an administrator's sign-in completes while another one for the agent is still running"):
+            with repository.sharepoint_sign_in_lock(context.agent.id) as acquired:
+                assert acquired
+                response = _admin_signs_in(context, _LEGAL)
+
+        with then("it is refused without touching any site, so neither overwrites the other"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string("Another"))
+            graph = fake_graph_sites(context)
+            assert_that([g["site_id"] for g in graph.grants], equal_to([site_id_for(_FINANCE)]))
+            assert_that(graph.revokes, empty())
+            assert_that(fake_identity(context).exchanges, has_length(1))

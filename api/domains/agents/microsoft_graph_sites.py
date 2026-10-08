@@ -26,13 +26,23 @@ class SitesUnavailable(Exception):
     """Graph could not be reached, or answered with something unexpected."""
 
 
+class SiteChangeRejected(SitesUnavailable):
+    """Graph rejected the request itself (400 or 409). Still a ``SitesUnavailable``, so callers
+    that undo an attempt on any Graph failure keep doing so."""
+
+
+class SitesThrottled(SitesUnavailable):
+    """Graph is limiting requests (429); waiting and trying again works."""
+
+
 @singleton
 class MicrosoftGraphSites:
     def resolve_site_id(self, token: str, site_url: str) -> str:
         """Graph's id for the site at a normalised site URL. Not found names the URL, not Graph's path."""
         try:
             payload = self._call("GET", f"/sites/{site_graph_path(site_url)}", token)
-        except SiteNotFound:
+        except SiteNotFound, SiteChangeRejected:
+            # A lookup Graph rejects is an address it can't use.
             raise SiteNotFound(site_url) from None
         site_id = payload.get("id") if isinstance(payload, dict) else None
         if not site_id:
@@ -78,6 +88,10 @@ class MicrosoftGraphSites:
             raise SiteNotFound(path)
         if response.status_code in (401, 403):
             raise SiteAccessRefused(f"HTTP {response.status_code}")
+        if response.status_code == 429:
+            raise SitesThrottled("HTTP 429")
+        if response.status_code in (400, 409):
+            raise SiteChangeRejected(f"HTTP {response.status_code}")
         if response.status_code >= 300:
             raise SitesUnavailable(f"HTTP {response.status_code}")
         if response.status_code == 204 or not response.content:

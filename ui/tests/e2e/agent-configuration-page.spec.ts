@@ -1282,7 +1282,7 @@ test.describe("Agent configuration page", () => {
       expect(authorizeQuery?.get("read_only")).toBe("false");
     });
 
-    test("says granted sites keep their grant when switching to a person's sign-in", async ({ page }) => {
+    test("can't switch to a person's sign-in until every site is removed", async ({ page }) => {
       const section = await openSkillsWithSharePoint(
         page,
         [teamsConnection],
@@ -1290,12 +1290,112 @@ test.describe("Agent configuration page", () => {
         { email: "admin@contoso.com", read_only: false, mode: "selected_sites", sites: [FINANCE] },
       );
 
-      await expect(section.getByText("until an administrator removes them in SharePoint", { exact: false })).toBeVisible();
-      await expect(section.getByText("Switching to a person's sign-in", { exact: false })).toHaveCount(0);
+      await expect(section.getByLabel("Everything the person signing in can open")).toBeDisabled();
+      await expect(section.getByText("To switch to a person's sign-in or remove SharePoint", { exact: false })).toBeVisible();
+      await expect(section.getByRole("button", { name: "Remove all sites" })).toBeVisible();
+    });
 
-      await section.getByLabel("Everything the person signing in can open").check();
+    test("removes every site with an administrator's sign-in", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(
+        page,
+        [teamsConnection],
+        [{ ...mockAgent, status: "STOPPED", skills: [] }],
+        { email: "admin@contoso.com", read_only: false, mode: "selected_sites", sites: [FINANCE, LEGAL] },
+      );
+      let authorizeQuery: URLSearchParams | undefined;
+      await page.route(
+        `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/authorize-url*`,
+        async (route) => {
+          const url = new URL(route.request().url());
+          authorizeQuery = url.searchParams;
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              authorize_url: `${url.origin}/api/v1/integrations/microsoft/callback?code=the-code&state=the-state`,
+            }),
+          });
+        },
+      );
+      await page.context().route("**/api/v1/integrations/microsoft/callback*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: `<script>window.opener.postMessage({type: "microsoft-oauth", code: "the-code", state: "the-state"}, window.location.origin); window.close();</script>`,
+        });
+      });
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/sign-in`, async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      });
 
-      await expect(section.getByText("Switching to a person's sign-in", { exact: false })).toBeVisible();
+      await section.getByRole("button", { name: "Remove all sites" }).click();
+
+      await expect(section.getByText("Sites granted by admin@contoso.com")).toHaveCount(0);
+      await expect(section.getByText(FINANCE, { exact: true })).toHaveCount(0);
+      await expect(section.getByText(LEGAL, { exact: true })).toHaveCount(0);
+      await expect(section.getByLabel("Everything the person signing in can open")).toBeEnabled();
+      expect(authorizeQuery?.get("remove_all")).toBe("true");
+      expect(authorizeQuery?.get("mode")).toBe("selected_sites");
+      expect(authorizeQuery?.getAll("sites")).toEqual([]);
+    });
+
+    test("keeps SharePoint in the Integrations list until its sites are removed", async ({ page }) => {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({
+        body: {
+          ...mockAgent,
+          status: "STOPPED",
+          secrets: [{ provider: "sharepoint", secret_name: "SharePoint credential", shared_credential_id: null }],
+        },
+      });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      await mockTeamsAndSetup(page, [teamsConnection], {
+        email: "admin@contoso.com",
+        read_only: false,
+        mode: "selected_sites",
+        sites: [FINANCE],
+      });
+
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionButton("Integrations").click();
+      const section = page.locator('section[aria-label="Integrations"]');
+      await section.getByRole("button", { name: "Edit", exact: true }).click();
+
+      await expect(section.getByRole("button", { name: "Remove", exact: true })).toBeDisabled();
+      await expect(section.getByText("Remove all its sites first", { exact: false })).toBeVisible();
+    });
+
+    test("warns that sites stay granted when an agent with selected sites is retired", async ({ page }) => {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({
+        body: {
+          ...mockAgent,
+          status: "STOPPED",
+          secrets: [{ provider: "sharepoint", secret_name: "SharePoint credential", shared_credential_id: null }],
+        },
+      });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      await mockTeamsAndSetup(page, [teamsConnection], {
+        email: "admin@contoso.com",
+        read_only: false,
+        mode: "selected_sites",
+        sites: [FINANCE],
+      });
+
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionButton("Danger zone").click();
+      await page.getByRole("button", { name: "Retire Agent" }).click();
+
+      const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
+      await expect(dialog.getByText("stay granted to its Microsoft Teams app", { exact: false })).toBeVisible();
     });
 
     test("refuses an address that isn't a SharePoint site", async ({ page }) => {

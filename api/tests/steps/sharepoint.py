@@ -194,6 +194,7 @@ def sign_in_state(
     read_only: bool = False,
     user_id: UUID | None = None,
     sites: tuple[str, ...] | None = None,
+    remove_all: bool = False,
 ) -> str:
     config = context.injector.get(Config)
     return encode_sign_in_state(
@@ -204,17 +205,27 @@ def sign_in_state(
             user_id=user_id or context.user.id,
             read_only=read_only,
             code_verifier=CODE_VERIFIER,
-            mode="delegated" if sites is None else "selected_sites",
+            mode="selected_sites" if sites is not None or remove_all else "delegated",
             sites=sites or (),
+            remove_all=remove_all,
         ),
     )
 
 
-def sign_in(context, *, read_only: bool = False, user_id: UUID | None = None, sites: tuple[str, ...] | None = None):
-    """Complete a sign-in; passing ``sites`` makes it the administrator's selected-sites grant."""
+def sign_in(
+    context,
+    *,
+    read_only: bool = False,
+    user_id: UUID | None = None,
+    sites: tuple[str, ...] | None = None,
+    remove_all: bool = False,
+):
+    """Complete a sign-in; passing ``sites`` makes it the administrator's selected-sites grant, and
+    ``remove_all`` the administrator's sign-in that takes every site away."""
+    state = sign_in_state(context, read_only=read_only, user_id=user_id, sites=sites, remove_all=remove_all)
     return context.client.post(
         f"{agent_base(context)}/integrations/sharepoint/sign-in",
-        json={"code": "the-code", "state": sign_in_state(context, read_only=read_only, user_id=user_id, sites=sites)},
+        json={"code": "the-code", "state": state},
         headers=auth(context),
     )
 

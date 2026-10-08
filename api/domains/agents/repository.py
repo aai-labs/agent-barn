@@ -927,7 +927,19 @@ class AgentRepository:
         their own writes have committed, or a losing request could still observe
         stale state once it acquires the lock.
         """
-        lock_key = f"agent-lifecycle:{agent_id}"
+        with self._try_advisory_lock(f"agent-lifecycle:{agent_id}") as acquired:
+            yield acquired
+
+    @contextmanager
+    def sharepoint_sign_in_lock(self, agent_id: UUID) -> Iterator[bool]:
+        """Serialize finishing SharePoint sign-ins for one Agent, so two administrators'
+        sign-ins can't each read the granted sites and overwrite the other's result. Same
+        non-blocking, session-scoped advisory lock as ``lifecycle_lock``."""
+        with self._try_advisory_lock(f"agent-sharepoint-sign-in:{agent_id}") as acquired:
+            yield acquired
+
+    @contextmanager
+    def _try_advisory_lock(self, lock_key: str) -> Iterator[bool]:
         with Session(self.delegate.engine) as session:
             acquired = bool(
                 session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})

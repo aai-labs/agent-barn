@@ -66,9 +66,10 @@ export function useSharePointSetup(agentId: string, connectionId: string | undef
 }
 
 /** The agent's current SharePoint access, or null when it has none. Nothing secret. */
-export function useSharePointAccess(agentId: string) {
+export function useSharePointAccess(agentId: string, { enabled = true }: { enabled?: boolean } = {}) {
   const orgApiBase = useOrganizationApiBase();
   return useQuery({
+    enabled,
     queryKey: [...agentsKey.detail(agentId), "sharepoint-access"],
     queryFn: async () => {
       try {
@@ -88,7 +89,8 @@ export function useSharePointAccess(agentId: string) {
  * Signs SharePoint in for an agent, with Microsoft, on the agent's Teams app.
  *
  * The API redeems the code and stores the credential itself, returning only who signed
- * in; the agent is refetched afterwards so the new credential shows up.
+ * in; the agent is refetched afterwards so the new credential shows up. A sign-in that
+ * removes every site returns null: SharePoint is disconnected.
  */
 export function useSharePointSignIn(agentId: string) {
   const orgApiBase = useOrganizationApiBase();
@@ -101,13 +103,16 @@ export function useSharePointSignIn(agentId: string) {
       readOnly,
       mode = "delegated",
       sites = [],
+      removeAll = false,
     }: {
       connectionId: string;
       readOnly: boolean;
       // "selected_sites": an administrator grants exactly `sites`, removing any others.
       mode?: SharePointMode;
       sites?: string[];
-    }) => {
+      // An administrator removes every granted site, which disconnects SharePoint.
+      removeAll?: boolean;
+    }): Promise<SharePointSignInResult | null> => {
       const popup = openOAuthPopup("microsoft-sign-in");
       setIsSigningIn(true);
       const base = sharepointBase(orgApiBase, agentId);
@@ -118,8 +123,9 @@ export function useSharePointSignIn(agentId: string) {
           const params = new URLSearchParams({
             connection_id: connectionId,
             read_only: readOnly ? "true" : "false",
-            mode,
+            mode: removeAll ? "selected_sites" : mode,
           });
+          if (removeAll) params.set("remove_all", "true");
           for (const site of sites) params.append("sites", site);
           const { data } = await api.get<{ authorizeUrl: string }>(`${base}/authorize-url`, {
             schema: AuthorizeUrlSchema,
@@ -132,10 +138,10 @@ export function useSharePointSignIn(agentId: string) {
         }
 
         const { code, state } = await waitForOAuthPopupMessage(popup, MESSAGE_TYPE, "Microsoft", CLOSED_MESSAGE);
-        const { data } = await api.post<SharePointSignInResult>(
+        const { data } = await api.post<SharePointSignInResult | null>(
           `${base}/sign-in`,
           { code, state },
-          { schema: SignInSchema },
+          { schema: SignInSchema.nullable() },
         );
         void queryClient.invalidateQueries({ queryKey: agentsKey.detail(agentId) });
         return data;

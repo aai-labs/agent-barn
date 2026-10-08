@@ -65,13 +65,17 @@ def sharepoint_authorize_url(
     read_only: bool = False,
     mode: Literal["delegated", "selected_sites"] = "delegated",
     sites: Annotated[list[str] | None, Query()] = None,
+    remove_all: bool = False,
 ):
     return SharePointAuthorizeUrlRead(
-        authorize_url=service.authorize_url(agent_id, connection_id, read_only, context, mode=mode, sites=sites or [])
+        authorize_url=service.authorize_url(
+            agent_id, connection_id, read_only, context, mode=mode, sites=sites or [], remove_all=remove_all
+        )
     )
 
 
-@sharepoint_sign_in_router.post("/sign-in", response_model=SharePointSignInRead)
+# None after a sign-in that removed every site, which disconnects SharePoint.
+@sharepoint_sign_in_router.post("/sign-in", response_model=SharePointSignInRead | None)
 def complete_sharepoint_sign_in(
     agent_id: UUID,
     data: SharePointSignInComplete,
