@@ -51,9 +51,24 @@ _STATIC_CGROUP = {
 
 
 _GiB = 1024**3
+_AGENT_ONE = UUID("01a00000-0000-7000-8000-000000000001")
+_AGENT_TWO = UUID("01a00000-0000-7000-8000-000000000002")
+_AGENT_GONE = UUID("01a00000-0000-7000-8000-000000000003")
+# An Agent's pods are named after its Deployment, then a ReplicaSet and a pod hash. Agent one
+# has two, as in a rollout: the old one still Running and the new one Pending.
+_POD_ONE = f"agent-{_AGENT_ONE}-6d9c7b8f5-abcde"
+_POD_ONE_NEW = f"agent-{_AGENT_ONE}-7f6d5c4b3-fghij"
+_POD_TWO = f"agent-{_AGENT_TWO}-5c8b9d7f4-klmno"
+_POD_GONE = f"agent-{_AGENT_GONE}-5c8b9d7f4-pqrst"
+# A restore job's pod is not an Agent's, whatever it asks for.
+_POD_JOB = f"rp-cap-{_AGENT_ONE}-xyz12"
 # What kube-state-metrics says about a namespace's pods, in the shape it says it. Worked out
-# so the sums below are not a coincidence: two Agents' worth of limits, one pod with two
-# containers, one pod still Pending, and one that Succeeded and must not count.
+# so the sums below are not a coincidence. A quota charges a pod the larger of its containers
+# added up and its biggest init container, so the pods are chosen to show each way it goes:
+#   agent-a  init container is bigger for memory limits and for CPU requests, smaller for the others
+#   two      two containers that add up, and an init container that is smaller
+#   waiting  Pending, so it counts
+#   done     Succeeded, so it does not, whatever it asks for
 _KSM_METRICS = f"""\
 # TYPE kube_pod_container_resource_limits gauge
 kube_pod_container_resource_limits{{namespace="ns",pod="agent-a",container="agent",resource="memory",unit="byte"}} {2 * _GiB}
@@ -66,6 +81,37 @@ kube_pod_container_resource_limits{{namespace="ns",pod="waiting",container="agen
 kube_pod_container_resource_limits{{namespace="ns",pod="done",container="job",resource="memory",unit="byte"}} {4 * _GiB}
 kube_pod_container_resource_limits{{namespace="ns",pod="done",container="job",resource="cpu",unit="core"}} 8
 kube_pod_container_resource_limits{{namespace="ns",pod="agent-a",container="agent",resource="ephemeral-storage",unit="byte"}} 99
+# TYPE kube_pod_init_container_resource_limits gauge
+kube_pod_init_container_resource_limits{{namespace="ns",pod="agent-a",container="fix",resource="memory",unit="byte"}} {3 * _GiB}
+kube_pod_init_container_resource_limits{{namespace="ns",pod="agent-a",container="fix",resource="cpu",unit="core"}} 0.25
+kube_pod_init_container_resource_limits{{namespace="ns",pod="two",container="setup",resource="memory",unit="byte"}} {_GiB}
+kube_pod_init_container_resource_limits{{namespace="ns",pod="two",container="setup2",resource="memory",unit="byte"}} {_GiB // 4}
+kube_pod_init_container_resource_limits{{namespace="ns",pod="agent-a",container="fix",resource="ephemeral-storage",unit="byte"}} 99999
+# TYPE kube_pod_container_resource_requests gauge
+kube_pod_container_resource_requests{{namespace="ns",pod="agent-a",container="agent",resource="memory",unit="byte"}} {_GiB // 2}
+kube_pod_container_resource_requests{{namespace="ns",pod="agent-a",container="agent",resource="cpu",unit="core"}} 0.1
+kube_pod_container_resource_requests{{namespace="ns",pod="two",container="main",resource="memory",unit="byte"}} {_GiB // 4}
+kube_pod_container_resource_requests{{namespace="ns",pod="two",container="sidecar",resource="memory",unit="byte"}} {_GiB // 4}
+kube_pod_container_resource_requests{{namespace="ns",pod="two",container="main",resource="cpu",unit="core"}} 0.05
+kube_pod_container_resource_requests{{namespace="ns",pod="two",container="sidecar",resource="cpu",unit="core"}} 0.05
+kube_pod_container_resource_requests{{namespace="ns",pod="waiting",container="agent",resource="memory",unit="byte"}} {_GiB // 8}
+kube_pod_container_resource_requests{{namespace="ns",pod="done",container="job",resource="memory",unit="byte"}} {2 * _GiB}
+kube_pod_container_resource_requests{{namespace="ns",pod="done",container="job",resource="cpu",unit="core"}} 4
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_ONE}",container="agent",resource="memory",unit="byte"}} {_GiB // 2}
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_ONE}",container="agent",resource="cpu",unit="core"}} 0.1
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_ONE_NEW}",container="agent",resource="memory",unit="byte"}} {_GiB // 2}
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_ONE_NEW}",container="agent",resource="cpu",unit="core"}} 0.1
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_TWO}",container="agent",resource="memory",unit="byte"}} {_GiB // 4}
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_TWO}",container="agent",resource="cpu",unit="core"}} 0.2
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_GONE}",container="agent",resource="memory",unit="byte"}} {8 * _GiB}
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_GONE}",container="agent",resource="cpu",unit="core"}} 8
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_JOB}",container="archive",resource="memory",unit="byte"}} {_GiB}
+kube_pod_container_resource_requests{{namespace="ns",pod="{_POD_JOB}",container="archive",resource="cpu",unit="core"}} 0.3
+# TYPE kube_pod_init_container_resource_requests gauge
+kube_pod_init_container_resource_requests{{namespace="ns",pod="agent-a",container="fix",resource="memory",unit="byte"}} {_GiB // 4}
+kube_pod_init_container_resource_requests{{namespace="ns",pod="agent-a",container="fix",resource="cpu",unit="core"}} 0.4
+kube_pod_init_container_resource_requests{{namespace="ns",pod="{_POD_ONE}",container="fix",resource="memory",unit="byte"}} {3 * _GiB // 4}
+kube_pod_init_container_resource_requests{{namespace="ns",pod="{_POD_ONE}",container="fix",resource="cpu",unit="core"}} 0.05
 # TYPE kube_pod_status_phase gauge
 kube_pod_status_phase{{namespace="ns",pod="agent-a",phase="Running"}} 1
 kube_pod_status_phase{{namespace="ns",pod="agent-a",phase="Pending"}} 0
@@ -75,10 +121,30 @@ kube_pod_status_phase{{namespace="ns",pod="waiting",phase="Pending"}} 1
 kube_pod_status_phase{{namespace="ns",pod="waiting",phase="Running"}} 0
 kube_pod_status_phase{{namespace="ns",pod="done",phase="Succeeded"}} 1
 kube_pod_status_phase{{namespace="ns",pod="done",phase="Running"}} 0
+kube_pod_status_phase{{namespace="ns",pod="{_POD_ONE}",phase="Running"}} 1
+kube_pod_status_phase{{namespace="ns",pod="{_POD_ONE_NEW}",phase="Pending"}} 1
+kube_pod_status_phase{{namespace="ns",pod="{_POD_TWO}",phase="Running"}} 1
+kube_pod_status_phase{{namespace="ns",pod="{_POD_GONE}",phase="Succeeded"}} 1
+kube_pod_status_phase{{namespace="ns",pod="{_POD_JOB}",phase="Running"}} 1
 """
-# Live pods only: agent-a (2 GiB, 0.5), two (1.5 GiB, 0.5) and waiting (1 GiB). `done` is out.
-_COMMITTED_MEMORY = 2 * _GiB + _GiB + _GiB // 2 + _GiB
-_COMMITTED_CPU = 1.0
+# Live pods only, each charged the larger of its containers and its init container:
+#   limits   agent-a 3 GiB (init) + two 1.5 GiB + waiting 1 GiB;  agent-a 0.5 (containers) + two 0.5 cores
+#   requests the earlier pods 1.125 GiB and 0.5 cores, plus the Agent pods and the restore job:
+#            agent one's old pod 0.75 GiB (init) and 0.1, its new pod 0.5 GiB and 0.1, agent two 0.25 GiB
+#            and 0.2, and the restore job 1 GiB and 0.3. The Succeeded Agent pod is out.
+_COMMITTED = {
+    "limits": {"memory": float(3 * _GiB + _GiB + _GiB // 2 + _GiB), "cpu": 1.0},
+    "requests": {
+        "memory": float(_GiB // 2 + _GiB // 2 + _GiB // 8 + 3 * _GiB // 4 + _GiB // 2 + _GiB // 4 + _GiB),
+        "cpu": 1.2,
+    },
+}
+# What each Agent's pods request, by the Agent: pods are matched to Agents by name, a rollout's two
+# pods count once by the larger, and the job and the finished pod are not Agents' requests.
+_AGENT_REQUESTS = {
+    _AGENT_ONE: {"memory_request_bytes": float(3 * _GiB // 4), "cpu_request_cores": 0.1},
+    _AGENT_TWO: {"memory_request_bytes": float(_GiB // 4), "cpu_request_cores": 0.2},
+}
 
 
 class _KsmHandler(BaseHTTPRequestHandler):
@@ -365,12 +431,44 @@ def test_the_platform_chart_adds_the_agents_up_into_one_series_per_field(scraped
     assert "cpu_throttled_ratio" not in everyone
 
 
-def test_the_namespace_commitment_counts_live_pods_and_sums_their_containers(scraped: Scraped):
-    def committed() -> dict[str, float] | None:
-        return scraped.repository.committed_limits(at=_now()) or None
+def test_the_namespace_commitment_charges_each_live_pod_as_a_quota_does(scraped: Scraped):
+    def committed() -> dict[str, dict[str, float]] | None:
+        return scraped.repository.committed(at=_now()) or None
 
     figures = _wait_until(committed, "kube-state-metrics to be scraped")
 
     # Running and Pending pods are counted, a Succeeded one is not, a pod with two containers
-    # adds both up, and a resource other than memory and CPU is left out.
-    assert figures == {"memory": float(_COMMITTED_MEMORY), "cpu": _COMMITTED_CPU}
+    # adds both up, a bigger init container wins over the containers (and a smaller one does
+    # not add to them), and a resource other than memory and CPU is left out.
+    assert figures["limits"] == pytest.approx(_COMMITTED["limits"])
+    assert figures["requests"] == pytest.approx(_COMMITTED["requests"])
+
+
+def test_each_agents_requests_are_found_by_its_pod_name_and_counted_once(scraped: Scraped):
+    def requests() -> dict[UUID, dict[str, float]] | None:
+        return scraped.repository.agent_requests(at=_now()) or None
+
+    found = _wait_until(requests, "kube-state-metrics to be scraped")
+
+    # Both of agent one's pods are live, and it counts once, by the larger of the two. Agent two
+    # is there. The Succeeded Agent pod is not, and neither is the restore job's pod.
+    assert set(found) == set(_AGENT_REQUESTS)
+    for agent_id, expected in _AGENT_REQUESTS.items():
+        assert found[agent_id] == pytest.approx(expected)
+
+
+def test_a_query_for_given_agents_reads_only_their_pods(scraped: Scraped):
+    def asked(*agent_ids: UUID) -> dict[UUID, dict[str, float]] | None:
+        return scraped.repository.agent_requests(at=_now(), agent_ids=list(agent_ids)) or None
+
+    one = _wait_until(lambda: asked(_AGENT_ONE), "kube-state-metrics to be scraped")
+
+    # Agent two has a live pod too, and it is not in the answer: the ids asked about are the boundary.
+    assert set(one) == {_AGENT_ONE}
+    assert one[_AGENT_ONE] == pytest.approx(_AGENT_REQUESTS[_AGENT_ONE])
+    both = asked(_AGENT_ONE, _AGENT_TWO)
+    assert both is not None and set(both) == {_AGENT_ONE, _AGENT_TWO}
+    # An Agent whose only pod has finished has no live pod, so the cluster has nothing to say.
+    assert asked(_AGENT_GONE) is None
+    # Nobody asked about means nobody is read, rather than everybody.
+    assert scraped.repository.agent_requests(at=_now(), agent_ids=[]) == {}

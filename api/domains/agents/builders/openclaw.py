@@ -446,6 +446,8 @@ def build_deployment(
                             security_context=client.V1SecurityContext(
                                 run_as_user=0,
                             ),
+                            # See the same line in hermes.py: the pod is charged for its biggest container.
+                            resources=AGENT_RESOURCES,
                             volume_mounts=[
                                 client.V1VolumeMount(
                                     name="data",

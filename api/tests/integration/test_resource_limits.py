@@ -93,7 +93,7 @@ def _limit_events(context) -> list[OutboxMessage]:
 
 def test_setting_limits_requires_authentication():
     with given(_BASE_GIVEN) as context:
-        response = context.client.put(_URL, json={"memory_limit_bytes": 70 * _GiB})
+        response = context.client.put(_URL, json={"limits_memory_bytes": 70 * _GiB})
 
         assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
@@ -103,7 +103,7 @@ def test_an_organization_owner_cannot_set_the_platform_limits():
         [*_BASE_GIVEN, there_is_an_organization_with_user_and_access_token(email="owner-limits@example.com")]
     ) as context:
         with when("an owner without Platform Privilege tries to set a limit"):
-            response = _put(context, {"memory_limit_bytes": 70 * _GiB})
+            response = _put(context, {"limits_memory_bytes": 70 * _GiB})
 
         with then("it is refused and nothing is recorded"):
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
@@ -116,33 +116,54 @@ def test_an_organization_owner_cannot_set_the_platform_limits():
 def test_the_first_save_creates_the_limits_and_returns_them():
     with given([*_BASE_GIVEN, *_platform_admin("admin-first@example.com")]) as context:
         with when("the admin enters both limits"):
-            response = _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24.5})
+            response = _put(context, {"limits_memory_bytes": 70 * _GiB, "limits_cpu_cores": 24.5})
 
         with then("they come back with a timestamp"):
             body = response.json()
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(body["memory_limit_bytes"], equal_to(70 * _GiB))
-            assert_that(body["cpu_limit_cores"], equal_to(24.5))
+            assert_that(body["limits_memory_bytes"], equal_to(70 * _GiB))
+            assert_that(body["limits_cpu_cores"], equal_to(24.5))
             assert_that(body["updated_at"], is_not(none()))
 
 
 def test_omitting_a_limit_leaves_it_and_null_clears_it():
     with given([*_BASE_GIVEN, *_platform_admin("admin-partial@example.com")]) as context:
-        _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24})
+        _put(context, {"limits_memory_bytes": 70 * _GiB, "limits_cpu_cores": 24})
 
         with when("only the CPU limit is sent"):
-            changed = _put(context, {"cpu_limit_cores": 32}).json()
+            changed = _put(context, {"limits_cpu_cores": 32}).json()
 
         with then("the memory limit is untouched"):
-            assert_that(changed["memory_limit_bytes"], equal_to(70 * _GiB))
-            assert_that(changed["cpu_limit_cores"], equal_to(32))
+            assert_that(changed["limits_memory_bytes"], equal_to(70 * _GiB))
+            assert_that(changed["limits_cpu_cores"], equal_to(32))
 
         with when("the memory limit is explicitly cleared"):
-            cleared = _put(context, {"memory_limit_bytes": None}).json()
+            cleared = _put(context, {"limits_memory_bytes": None}).json()
 
         with then("it is gone and the CPU limit stays"):
-            assert_that(cleared["memory_limit_bytes"], none())
-            assert_that(cleared["cpu_limit_cores"], equal_to(32))
+            assert_that(cleared["limits_memory_bytes"], none())
+            assert_that(cleared["limits_cpu_cores"], equal_to(32))
+
+
+def test_the_requests_ceilings_are_saved_and_returned_beside_the_limits():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-requests@example.com")]) as context:
+        with when("the admin enters all four quota lines"):
+            response = _put(
+                context,
+                {
+                    "limits_memory_bytes": 52 * _GiB,
+                    "limits_cpu_cores": 30,
+                    "requests_memory_bytes": 20 * _GiB,
+                    "requests_cpu_cores": 5,
+                },
+            )
+
+        with then("each comes back under the quota's own name"):
+            body = response.json()
+            assert_that(body["limits_memory_bytes"], equal_to(52 * _GiB))
+            assert_that(body["limits_cpu_cores"], equal_to(30))
+            assert_that(body["requests_memory_bytes"], equal_to(20 * _GiB))
+            assert_that(body["requests_cpu_cores"], equal_to(5))
 
 
 def test_an_empty_save_changes_nothing_and_records_nothing():
@@ -150,7 +171,7 @@ def test_an_empty_save_changes_nothing_and_records_nothing():
         response = _put(context, {})
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["memory_limit_bytes"], none())
+        assert_that(response.json()["limits_memory_bytes"], none())
         assert_that(_limit_events(context), empty())
 
 
@@ -160,12 +181,16 @@ def test_an_empty_save_changes_nothing_and_records_nothing():
 def test_a_limit_that_cannot_be_real_is_refused():
     with given([*_BASE_GIVEN, *_platform_admin("admin-invalid@example.com")]) as context:
         bad_bodies = [
-            {"memory_limit_bytes": 0},
-            {"memory_limit_bytes": -1},
-            {"memory_limit_bytes": 2**50 + 1},
-            {"cpu_limit_cores": 0},
-            {"cpu_limit_cores": -2},
-            {"cpu_limit_cores": 100_001},
+            {"limits_memory_bytes": 0},
+            {"limits_memory_bytes": -1},
+            {"limits_memory_bytes": 2**50 + 1},
+            {"limits_cpu_cores": 0},
+            {"limits_cpu_cores": -2},
+            {"limits_cpu_cores": 100_001},
+            {"requests_memory_bytes": 0},
+            {"requests_memory_bytes": 2**50 + 1},
+            {"requests_cpu_cores": 0},
+            {"requests_cpu_cores": -1},
             # Not a limit at all: a setting that does not exist.
             {"pod_limit": 110},
         ]
@@ -178,7 +203,7 @@ def test_a_limit_that_cannot_be_real_is_refused():
 
 def test_a_limit_that_is_not_a_number_is_refused():
     with given([*_BASE_GIVEN, *_platform_admin("admin-text@example.com")]) as context:
-        response = _put(context, raw='{"memory_limit_bytes": "lots"}')
+        response = _put(context, raw='{"limits_memory_bytes": "lots"}')
 
         assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
 
@@ -189,7 +214,9 @@ def test_the_update_model_rejects_nan_and_infinity():
     # UI never sends one, since it sends numbers it parsed from a text box.
     for value in (float("nan"), float("inf"), float("-inf")):
         with pytest.raises(ValidationError):
-            ResourceLimitsUpdate(cpu_limit_cores=value)
+            ResourceLimitsUpdate(limits_cpu_cores=value)
+        with pytest.raises(ValidationError):
+            ResourceLimitsUpdate(requests_cpu_cores=value)
 
 
 # --- the audit trail -------------------------------------------------------
@@ -198,8 +225,8 @@ def test_the_update_model_rejects_nan_and_infinity():
 def test_each_changed_limit_leaves_one_platform_event_with_its_before_and_after():
     with given([*_BASE_GIVEN, *_platform_admin("admin-audit@example.com")]) as context:
         with when("the admin sets memory, then raises it and sets CPU in one save"):
-            _put(context, {"memory_limit_bytes": 50 * _GiB})
-            _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24})
+            _put(context, {"limits_memory_bytes": 50 * _GiB})
+            _put(context, {"limits_memory_bytes": 70 * _GiB, "limits_cpu_cores": 24})
 
         with then("three events exist: one per limit that moved"):
             events = _limit_events(context)
@@ -208,9 +235,9 @@ def test_each_changed_limit_leaves_one_platform_event_with_its_before_and_after(
             assert_that(
                 moves,
                 contains_inanyorder(
-                    ("memory_limit_bytes", None, float(50 * _GiB)),
-                    ("memory_limit_bytes", float(50 * _GiB), float(70 * _GiB)),
-                    ("cpu_limit_cores", None, 24.0),
+                    ("limits_memory_bytes", None, float(50 * _GiB)),
+                    ("limits_memory_bytes", float(50 * _GiB), float(70 * _GiB)),
+                    ("limits_cpu_cores", None, 24.0),
                 ),
             )
 
@@ -223,13 +250,27 @@ def test_each_changed_limit_leaves_one_platform_event_with_its_before_and_after(
                 assert_that(event.payload["actor_display"], is_not(empty()))
 
 
+def test_a_changed_requests_ceiling_leaves_its_own_event_named_as_the_quota_names_it():
+    with given([*_BASE_GIVEN, *_platform_admin("admin-audit-requests@example.com")]) as context:
+        _put(context, {"requests_memory_bytes": 20 * _GiB, "requests_cpu_cores": 5})
+
+        moves = [(e.payload["setting"], e.payload["previous"], e.payload["current"]) for e in _limit_events(context)]
+        assert_that(
+            moves,
+            contains_inanyorder(
+                ("requests_memory_bytes", None, float(20 * _GiB)),
+                ("requests_cpu_cores", None, 5.0),
+            ),
+        )
+
+
 def test_saving_the_same_values_again_records_nothing():
     with given([*_BASE_GIVEN, *_platform_admin("admin-same@example.com")]) as context:
-        _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24})
+        _put(context, {"limits_memory_bytes": 70 * _GiB, "limits_cpu_cores": 24})
         before = len(_limit_events(context))
 
         with when("the admin saves the same limits again"):
-            response = _put(context, {"memory_limit_bytes": 70 * _GiB, "cpu_limit_cores": 24})
+            response = _put(context, {"limits_memory_bytes": 70 * _GiB, "limits_cpu_cores": 24})
 
         with then("no Event is staged: an audit trail of unchanged values is noise"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
@@ -238,12 +279,12 @@ def test_saving_the_same_values_again_records_nothing():
 
 def test_clearing_a_limit_is_recorded_as_a_change_to_none():
     with given([*_BASE_GIVEN, *_platform_admin("admin-clear@example.com")]) as context:
-        _put(context, {"cpu_limit_cores": 24})
+        _put(context, {"limits_cpu_cores": 24})
 
-        _put(context, {"cpu_limit_cores": None})
+        _put(context, {"limits_cpu_cores": None})
 
         last = max(_limit_events(context), key=lambda e: e.occurred_at)
-        assert_that(last.payload["setting"], equal_to("cpu_limit_cores"))
+        assert_that(last.payload["setting"], equal_to("limits_cpu_cores"))
         assert_that(last.payload["previous"], equal_to(24.0))
         assert_that(last.payload["current"], none())
 
@@ -254,7 +295,7 @@ def test_clearing_a_limit_is_recorded_as_a_change_to_none():
 def _save_when_released(repository: ResourceLimitsRepository, barrier: threading.Barrier, gib: int):
     barrier.wait()  # both are past their setup and about to write
     return repository.set_with_events(
-        {"memory_limit_bytes": gib * _GiB}, actor_user_id=uuid7(), actor_display=f"admin-{gib}"
+        {"limits_memory_bytes": gib * _GiB}, actor_user_id=uuid7(), actor_display=f"admin-{gib}"
     )
 
 
@@ -286,17 +327,17 @@ def test_two_administrators_saving_for_the_first_time_at_once_both_succeed():
             assert_that(second[0], equal_to(first[1]))
             stored = repository.get()
             assert stored is not None
-            assert_that(float(stored.memory_limit_bytes or 0), equal_to(second[1]))
+            assert_that(float(stored.limits_memory_bytes or 0), equal_to(second[1]))
 
 
 def test_a_first_save_that_changes_nothing_leaves_no_row_and_reports_none():
     with given([*_BASE_GIVEN, *_platform_admin("admin-first-noop@example.com")]) as context:
         with when("the admin saves a blank limit when none was ever set"):
-            response = _put(context, {"memory_limit_bytes": None})
+            response = _put(context, {"limits_memory_bytes": None})
 
         with then("nothing is stored, and the answer says so rather than inventing a time"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["updated_at"], none())
-            assert_that(response.json()["memory_limit_bytes"], none())
+            assert_that(response.json()["limits_memory_bytes"], none())
             assert_that(context.injector.get(ResourceLimitsRepository).get(), none())
             assert_that(_limit_events(context), empty())

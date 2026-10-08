@@ -12,13 +12,18 @@ import { CapacityLimitsDialog } from "./capacity-limits-dialog";
 import { UsageMeter } from "./usage-meter";
 
 interface Measure {
-  key: "memory" | "cpu";
+  /** The quota's own line, which also names the card's test id. */
+  key: "limits-memory" | "limits-cpu" | "requests-memory" | "requests-cpu";
   label: string;
   /** What the quota calls it, for the warning text. */
   noun: string;
   committed: number | null;
   limit: number | null;
   format: (value: number) => string;
+}
+
+function formatCpu(value: number): string {
+  return `${formatCores(value)} cores`;
 }
 
 const WARNING_STATES: CapacityState[] = ["warn", "critical", "over"];
@@ -38,20 +43,22 @@ function warningText(measure: Measure, status: CapacityStatus): string {
   const limit = measure.format(measure.limit ?? 0);
   switch (status.state) {
     case "over":
-      return `${measure.noun} committed (${committed}) are above the ${limit} limit you entered, so the limit is probably out of date. Check the namespace quota.`;
+      return `${measure.noun} committed (${committed}) are above the ${limit} quota you entered, so what you entered is probably out of date. Check the namespace quota.`;
     case "critical":
-      return `${measure.noun} committed are ${formatPercent(status.ratio ?? 1)} of the ${limit} limit (${committed}). New agents may fail to start.`;
+      return `${measure.noun} committed are ${formatPercent(status.ratio ?? 1)} of the ${limit} quota (${committed}). New agents may fail to start.`;
     default:
-      return `${measure.noun} committed are ${formatPercent(status.ratio ?? 0)} of the ${limit} limit (${committed}). Room for new agents is running low.`;
+      return `${measure.noun} committed are ${formatPercent(status.ratio ?? 0)} of the ${limit} quota (${committed}). Room for new agents is running low.`;
   }
 }
 
 /**
- * What the namespace has committed in limits against the ceilings an administrator entered.
+ * What the namespace has committed, in limits and in requests, against the quota ceilings
+ * an administrator entered.
  *
- * The quota counts what containers are allowed to use, not what they use, so this is
- * about room for new agents, not about the CPU and memory in use above. It always renders,
- * even when the usage source is down: the limits come from the database and stay editable.
+ * The quota counts what containers are allowed to use and what they ask for, not what they
+ * use, so this is about room for new agents, not about the CPU and memory in use above. A
+ * new pod is refused when any one of the four would go over. It always renders, even when
+ * the usage source is down: the ceilings come from the database and stay editable.
  */
 export function CapacitySection({ capacity }: { capacity: PlatformCapacity }) {
   const [open, setOpen] = useState(false);
@@ -60,20 +67,36 @@ export function CapacitySection({ capacity }: { capacity: PlatformCapacity }) {
 
   const measures: Measure[] = [
     {
-      key: "memory",
+      key: "limits-memory",
       label: "Memory limits committed",
       noun: "Memory limits",
-      committed: capacity.memoryCommittedBytes,
-      limit: capacity.memoryLimitBytes,
+      committed: capacity.committedLimitsMemoryBytes,
+      limit: capacity.limitsMemoryBytes,
       format: formatBytes,
     },
     {
-      key: "cpu",
+      key: "limits-cpu",
       label: "CPU limits committed",
       noun: "CPU limits",
-      committed: capacity.cpuCommittedCores,
-      limit: capacity.cpuLimitCores,
-      format: (value) => `${formatCores(value)} cores`,
+      committed: capacity.committedLimitsCpuCores,
+      limit: capacity.limitsCpuCores,
+      format: formatCpu,
+    },
+    {
+      key: "requests-memory",
+      label: "Memory requests committed",
+      noun: "Memory requests",
+      committed: capacity.committedRequestsMemoryBytes,
+      limit: capacity.requestsMemoryBytes,
+      format: formatBytes,
+    },
+    {
+      key: "requests-cpu",
+      label: "CPU requests committed",
+      noun: "CPU requests",
+      committed: capacity.committedRequestsCpuCores,
+      limit: capacity.requestsCpuCores,
+      format: formatCpu,
     },
   ];
   const statuses = measures.map((measure) => capacityStatus(measure.committed, measure.limit));
@@ -90,16 +113,17 @@ export function CapacitySection({ capacity }: { capacity: PlatformCapacity }) {
   return (
     <section className="mb-6" data-testid="platform-capacity">
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-        <div className="min-w-0">
+        {/* Takes the free width, so a long sentence wraps beside the button, not pushes it down. */}
+        <div className="min-w-0 flex-1 basis-[28rem]">
           <h2 className="m-0 text-[14px] font-semibold" style={{ color: "var(--ink)" }}>
             Capacity
           </h2>
           <p className="m-0 mt-0.5 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
-            What every pod in the namespace is allowed to use, added up, against the limits you entered.
+            The limits and requests of every pod in the namespace, added up, against the quota you entered. That is the agents and also the API, UI, database and monitoring pods, so these figures are higher than the agents alone. A new pod is refused when any one of the four would go over.
           </p>
         </div>
         <button type="button" className="af-btn af-btn-sm" onClick={openDialog} data-testid="capacity-limits-open">
-          <Settings2 size={14} /> Capacity limits
+          <Settings2 size={14} /> Namespace quota
         </button>
       </div>
 
@@ -134,7 +158,7 @@ export function CapacitySection({ capacity }: { capacity: PlatformCapacity }) {
         </div>
       )}
 
-      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(280px, 100%), 1fr))" }}>
+      <div className="grid gap-3 sm:grid-cols-2">
         {measures.map((measure, index) => {
           const status = statuses[index];
           return (
@@ -154,11 +178,11 @@ export function CapacitySection({ capacity }: { capacity: PlatformCapacity }) {
                 {measure.committed !== null ? measure.format(measure.committed) : "—"}
               </p>
               <p className="m-0 mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }}>
-                {status.state === "unset" && "No limit set"}
+                {status.state === "unset" && "No quota entered"}
                 {status.state === "unknown" &&
-                  `Committed figure not available · limit ${measure.format(measure.limit ?? 0)}`}
+                  `Committed figure not available · quota ${measure.format(measure.limit ?? 0)}`}
                 {status.ratio !== null &&
-                  `${formatPercent(status.ratio)} of the ${measure.format(measure.limit ?? 0)} limit`}
+                  `${formatPercent(status.ratio)} of the ${measure.format(measure.limit ?? 0)} quota`}
               </p>
               {status.state === "unset" && (
                 <button
@@ -167,11 +191,11 @@ export function CapacitySection({ capacity }: { capacity: PlatformCapacity }) {
                   style={{ color: "var(--ink-3)" }}
                   onClick={openDialog}
                 >
-                  Set limit
+                  Enter quota
                 </button>
               )}
               {status.ratio !== null && (
-                <UsageMeter ratio={status.ratio} label={`${measure.label} against the limit`} className="mt-2" />
+                <UsageMeter ratio={status.ratio} label={`${measure.label} against the quota`} className="mt-2" />
               )}
             </div>
           );

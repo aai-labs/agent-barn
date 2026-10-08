@@ -16,6 +16,8 @@ import {
 } from "../pages/data-support/resource-usage-data-support.po";
 import { PlatformResourceUsagePage } from "../pages/platform-resource-usage-page.po";
 
+const GIB = 1024 ** 3;
+
 test.describe("Platform resource usage (platform_admin)", () => {
   let usagePage: PlatformResourceUsagePage;
   let data: DataSupport;
@@ -261,6 +263,119 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await usagePage.goto();
 
     await expect(page.getByTestId("platform-agents-empty")).toBeVisible();
+    // Nobody is waiting on an update, so it does not say they are.
+    await expect(page.getByTestId("platform-agents-need-update")).toHaveCount(0);
+  });
+
+  test("shows what the pods request beside what the agents use, on each row and by organization", async ({
+    page,
+  }) => {
+    const base = mockPlatformUsage();
+    const requests: Record<string, { memory: number; cpu: number }> = {
+      [PLATFORM_CY_ID]: { memory: 0.5 * GIB, cpu: 0.1 },
+    };
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: {
+        ...base,
+        totals: { ...base.totals, memory_request_bytes: 1.5 * GIB, cpu_request_cores: 0.35 },
+        organizations: base.organizations.map((row) =>
+          row.organization_name === "Globex" ? { ...row, memory_request_bytes: 0.5 * GIB, cpu_request_cores: 0.1 } : row,
+        ),
+        agents: base.agents.map((agent) =>
+          requests[agent.agent_id]
+            ? { ...agent, memory_request_bytes: requests[agent.agent_id].memory, cpu_request_cores: requests[agent.agent_id].cpu }
+            : agent,
+        ),
+      },
+    });
+
+    await usagePage.goto();
+
+    // The totals of what the agents request are not cards of their own: Capacity covers that, for every pod.
+    await expect(page.getByTestId("platform-usage-aggregates")).toHaveCount(0);
+    // Cy asks for 512 MiB of its 2 GiB, so the tick sits a quarter of the way along the bar.
+    const cy = usagePage.agentRows().nth(0);
+    await expect(cy.getByTestId("platform-agent-memory-request")).toHaveText("requests 512 MiB");
+    await expect(cy.getByTestId("platform-agent-cpu-request")).toHaveText("requests 0.1 cores");
+    await expect(cy.getByTestId("usage-meter-request-marker")).toHaveCount(2);
+    await expect(cy.getByRole("meter").first()).toHaveAttribute("aria-label", /request at 25% of the limit/);
+    // An agent whose request was not read says nothing, and has no tick.
+    const ada = usagePage.agentRows().nth(1);
+    await expect(ada.getByTestId("platform-agent-memory-request")).toHaveCount(0);
+    await expect(ada.getByTestId("usage-meter-request-marker")).toHaveCount(0);
+    // And the organization rows, on a wide screen.
+    const globex = usagePage.organizationRows().nth(0);
+    await expect(globex.getByTestId("organization-request-memory")).toHaveText("req 512 MiB");
+    await expect(globex.getByTestId("organization-request-cpu")).toHaveText("req 0.1");
+    await expect(usagePage.organizationRows().nth(1).getByTestId("organization-request-memory")).toHaveText("—");
+    // The extra columns still keep a row on one line.
+    const box = await globex.boundingBox();
+    expect(box?.height ?? Infinity).toBeLessThan(44);
+  });
+
+  test("says nothing about requests when they could not be read", async () => {
+    await data.resourceUsage.interceptPlatformResourceUsage();
+
+    await usagePage.goto();
+
+    await expect(usagePage.stat("memory")).toContainText("of 6 GiB in limits");
+    await expect(usagePage.organizationRows().nth(0).getByTestId("organization-request-memory")).toHaveText("—");
+    await expect(usagePage.agentRows().nth(0).getByTestId("platform-agent-memory-request")).toHaveCount(0);
+    await expect(usagePage.agentRows().nth(0).getByTestId("usage-meter-request-marker")).toHaveCount(0);
+  });
+
+  test("says how many agents need an update to report, in the card and on the organization rows", async () => {
+    const base = mockPlatformUsage();
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: {
+        ...base,
+        totals: { ...base.totals, agents_with_container: 4, agents_reporting: 3, agents_restart_required: 2 },
+        organizations: base.organizations.map((row) =>
+          row.organization_name === "Globex" ? { ...row, agents_with_container: 3, agents_restart_required: 2 } : row,
+        ),
+      },
+    });
+
+    await usagePage.goto();
+
+    await expect(usagePage.stat("reporting")).toContainText("of 4 running or in error · 2 need an update");
+    await expect(usagePage.organizationRows().nth(0)).toContainText("1 of 3 reporting · 2 to update");
+    // The longer count still fits on one line.
+    const box = await usagePage.organizationRows().nth(0).boundingBox();
+    expect(box?.height ?? Infinity).toBeLessThan(44);
+    // An organization with nothing to update says nothing about it.
+    await expect(usagePage.organizationRows().nth(1)).toContainText("1 of 1 reporting");
+    await expect(usagePage.organizationRows().nth(1)).not.toContainText("to update");
+  });
+
+  test("tells an empty table why: the agents are on an older version", async ({ page }) => {
+    const base = mockPlatformUsage();
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: {
+        ...base,
+        totals: { ...base.totals, agents_reporting: 0, agents_restart_required: 3 },
+        agents: [],
+        organizations: [],
+      },
+    });
+
+    await usagePage.goto();
+
+    await expect(page.getByTestId("platform-agents-empty")).toContainText("No agent is reporting CPU or memory right now.");
+    await expect(page.getByTestId("platform-agents-need-update")).toContainText(
+      "3 agents are running an older version. Their owners can update them from the agent page to start reporting.",
+    );
+  });
+
+  test("says it in the singular for one agent", async ({ page }) => {
+    const base = mockPlatformUsage();
+    await data.resourceUsage.interceptPlatformResourceUsage({
+      body: { ...base, totals: { ...base.totals, agents_reporting: 0, agents_restart_required: 1 }, agents: [] },
+    });
+
+    await usagePage.goto();
+
+    await expect(page.getByTestId("platform-agents-need-update")).toContainText("1 agent is running an older version.");
   });
 
   test("explains an unreachable source and still shows the database's count", async ({ page }) => {
@@ -329,9 +444,8 @@ test.describe("Platform resource usage (non platform_admin)", () => {
 });
 
 
-const GIB = 1024 ** 3;
 
-test.describe("Platform capacity limits (platform_admin)", () => {
+test.describe("Platform namespace quota (platform_admin)", () => {
   let usagePage: PlatformResourceUsagePage;
   let data: DataSupport;
 
@@ -357,146 +471,217 @@ test.describe("Platform capacity limits (platform_admin)", () => {
     return requests;
   }
 
-  test("holds what the namespace commits against the limits that were entered", async () => {
+  test("holds what the namespace commits against the quota that was entered", async ({ page }) => {
     await openWith({
-      memory_limit_bytes: 70 * GIB,
-      cpu_limit_cores: 24,
-      memory_committed_bytes: 46 * GIB,
-      cpu_committed_cores: 11.5,
+      limits_memory_bytes: 70 * GIB,
+      limits_cpu_cores: 24,
+      committed_limits_memory_bytes: 46 * GIB,
+      committed_limits_cpu_cores: 11.5,
     });
 
-    await expect(usagePage.capacityCard("memory")).toContainText("46 GiB");
-    await expect(usagePage.capacityCard("memory")).toContainText("66% of the 70 GiB limit");
-    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "ok");
-    await expect(usagePage.capacityCard("memory").getByRole("meter")).toHaveAttribute("aria-valuenow", "66");
-    await expect(usagePage.capacityCard("cpu")).toContainText("11.5 cores");
-    await expect(usagePage.capacityCard("cpu")).toContainText("48% of the 24 cores limit");
+    await expect(usagePage.capacityCard("limits-memory")).toContainText("46 GiB");
+    await expect(usagePage.capacityCard("limits-memory")).toContainText("66% of the 70 GiB quota");
+    // Not just agents: the figures count every pod, which the section says before anyone asks.
+    const capacity = page.getByTestId("platform-capacity");
+    await expect(capacity).toContainText("also the API, UI, database and monitoring pods");
+    await expect(capacity).toContainText("A new pod is refused when any one of the four would go over.");
+    await expect(usagePage.capacityCard("limits-memory")).toHaveAttribute("data-state", "ok");
+    await expect(usagePage.capacityCard("limits-memory").getByRole("meter")).toHaveAttribute("aria-valuenow", "66");
+    await expect(usagePage.capacityCard("limits-cpu")).toContainText("11.5 cores");
+    await expect(usagePage.capacityCard("limits-cpu")).toContainText("48% of the 24 cores quota");
     // Well under the limits, so there is nothing to warn about.
     await expect(usagePage.capacityWarning()).toHaveCount(0);
   });
 
-  test("warns in amber when the namespace is filling up", async () => {
-    await openWith({ memory_limit_bytes: 70 * GIB, memory_committed_bytes: 56 * GIB });
+  test("holds the requests beside the limits, because either can stop a new pod", async () => {
+    await openWith({
+      limits_memory_bytes: 52.5 * GIB,
+      limits_cpu_cores: 30,
+      requests_memory_bytes: 20 * GIB,
+      requests_cpu_cores: 5,
+      committed_limits_memory_bytes: 42.5 * GIB,
+      committed_limits_cpu_cores: 24.1,
+      committed_requests_memory_bytes: 12.25 * GIB,
+      committed_requests_cpu_cores: 2.5,
+    });
 
-    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "warn");
+    await expect(usagePage.capacityCard("limits-memory")).toContainText("81% of the 52.5 GiB quota");
+    await expect(usagePage.capacityCard("limits-memory")).toHaveAttribute("data-state", "warn");
+    await expect(usagePage.capacityCard("requests-memory")).toContainText("12.25 GiB");
+    await expect(usagePage.capacityCard("requests-memory")).toContainText("61% of the 20 GiB quota");
+    await expect(usagePage.capacityCard("requests-memory")).toHaveAttribute("data-state", "ok");
+    await expect(usagePage.capacityCard("requests-cpu")).toContainText("50% of the 5 cores quota");
+    await expect(usagePage.capacityCard("requests-cpu").getByRole("meter")).toHaveAttribute("aria-valuenow", "50");
+  });
+
+  test("warns about the requests alone when they are the line about to run out", async () => {
+    await openWith({
+      limits_memory_bytes: 52.5 * GIB,
+      limits_cpu_cores: 30,
+      requests_memory_bytes: 20 * GIB,
+      requests_cpu_cores: 5,
+      committed_limits_memory_bytes: 10 * GIB,
+      committed_limits_cpu_cores: 5,
+      committed_requests_memory_bytes: 5 * GIB,
+      committed_requests_cpu_cores: 4.8,
+    });
+
+    await expect(usagePage.capacityWarning()).toHaveAttribute("data-tone", "err");
+    await expect(usagePage.capacityWarning().getByTestId("capacity-warning-requests-cpu")).toContainText(
+      "CPU requests committed are 96% of the 5 cores quota (4.8 cores). New agents may fail to start.",
+    );
+    await expect(usagePage.capacityWarning().getByTestId("capacity-warning-limits-cpu")).toHaveCount(0);
+    await expect(usagePage.capacityWarning().getByTestId("capacity-warning-requests-memory")).toHaveCount(0);
+  });
+
+  test("the dialog has a box for each quota line and sends all four", async () => {
+    await openWith({ limits_memory_bytes: 52.5 * GIB, limits_cpu_cores: 30 });
+    const sent = await data.resourceUsage.interceptUpdateResourceLimits();
+    await usagePage.openCapacityDialog();
+
+    await expect(usagePage.limitsMemoryInput()).toHaveValue("52.5");
+    await expect(usagePage.requestsMemoryInput()).toHaveValue("");
+    await usagePage.requestsMemoryInput().fill("20");
+    await usagePage.requestsCpuInput().fill("5");
+    await usagePage.saveButton().click();
+
+    await expect(usagePage.dialog()).toBeHidden();
+    expect(sent).toEqual([
+      {
+        limits_memory_bytes: 56_371_445_760,
+        limits_cpu_cores: 30,
+        requests_memory_bytes: 21_474_836_480,
+        requests_cpu_cores: 5,
+      },
+    ]);
+  });
+
+  test("warns in amber when the namespace is filling up", async () => {
+    await openWith({ limits_memory_bytes: 70 * GIB, committed_limits_memory_bytes: 56 * GIB });
+
+    await expect(usagePage.capacityCard("limits-memory")).toHaveAttribute("data-state", "warn");
     await expect(usagePage.capacityWarning()).toHaveAttribute("data-tone", "warn");
     await expect(usagePage.capacityWarning()).toContainText(
-      "Memory limits committed are 80% of the 70 GiB limit (56 GiB). Room for new agents is running low.",
+      "Memory limits committed are 80% of the 70 GiB quota (56 GiB). Room for new agents is running low.",
     );
   });
 
   test("warns in red when new agents may fail to start", async () => {
-    await openWith({ memory_limit_bytes: 70 * GIB, memory_committed_bytes: 66.5 * GIB });
+    await openWith({ limits_memory_bytes: 70 * GIB, committed_limits_memory_bytes: 66.5 * GIB });
 
-    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "critical");
+    await expect(usagePage.capacityCard("limits-memory")).toHaveAttribute("data-state", "critical");
     await expect(usagePage.capacityWarning()).toHaveAttribute("data-tone", "err");
-    await expect(usagePage.capacityWarning()).toContainText("95% of the 70 GiB limit");
+    await expect(usagePage.capacityWarning()).toContainText("95% of the 70 GiB quota");
     await expect(usagePage.capacityWarning()).toContainText("New agents may fail to start.");
   });
 
-  test("says the limit is probably out of date when the namespace is past it", async () => {
-    await openWith({ memory_limit_bytes: 70 * GIB, memory_committed_bytes: 72 * GIB });
+  test("says the quota is probably out of date when the namespace is past it", async () => {
+    await openWith({ limits_memory_bytes: 70 * GIB, committed_limits_memory_bytes: 72 * GIB });
 
-    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "over");
+    await expect(usagePage.capacityCard("limits-memory")).toHaveAttribute("data-state", "over");
     await expect(usagePage.capacityWarning()).toContainText(
-      "Memory limits committed (72 GiB) are above the 70 GiB limit you entered, so the limit is probably out of date.",
+      "Memory limits committed (72 GiB) are above the 70 GiB quota you entered, so what you entered is probably out of date.",
     );
   });
 
   test("one banner follows the worst of the two, with a line for each that needs it", async () => {
     await openWith({
-      memory_limit_bytes: 70 * GIB,
-      memory_committed_bytes: 56 * GIB,
-      cpu_limit_cores: 24,
-      cpu_committed_cores: 23,
+      limits_memory_bytes: 70 * GIB,
+      committed_limits_memory_bytes: 56 * GIB,
+      limits_cpu_cores: 24,
+      committed_limits_cpu_cores: 23,
     });
 
     await expect(usagePage.capacityWarning()).toHaveAttribute("data-tone", "err");
-    await expect(usagePage.capacityWarning().getByTestId("capacity-warning-memory")).toBeVisible();
-    await expect(usagePage.capacityWarning().getByTestId("capacity-warning-cpu")).toBeVisible();
+    await expect(usagePage.capacityWarning().getByTestId("capacity-warning-limits-memory")).toBeVisible();
+    await expect(usagePage.capacityWarning().getByTestId("capacity-warning-limits-cpu")).toBeVisible();
   });
 
-  test("a limit that was never entered asks for one instead of guessing", async ({ page }) => {
+  test("a quota line that was never entered asks for one instead of guessing", async ({ page }) => {
     await openWith({});
 
-    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "unset");
-    await expect(usagePage.capacityCard("memory")).toContainText("No limit set");
+    await expect(usagePage.capacityCard("limits-memory")).toHaveAttribute("data-state", "unset");
+    await expect(usagePage.capacityCard("limits-memory")).toContainText("No quota entered");
     // The committed figure is still shown, since it needs no limit to be read.
-    await expect(usagePage.capacityCard("memory")).toContainText("4 GiB");
+    await expect(usagePage.capacityCard("limits-memory")).toContainText("4 GiB");
     await expect(usagePage.capacityWarning()).toHaveCount(0);
 
-    await usagePage.capacityCard("memory").getByRole("button", { name: "Set limit" }).click();
+    await usagePage.capacityCard("limits-memory").getByRole("button", { name: "Enter quota" }).click();
 
     await expect(usagePage.dialog()).toBeVisible();
-    await expect(usagePage.memoryInput()).toHaveValue("");
+    await expect(usagePage.limitsMemoryInput()).toHaveValue("");
     await expect(page.getByText("Last changed")).toHaveCount(0);
   });
 
-  test("keeps the limits, and says the committed figure is missing, when the source is down", async () => {
+  test("keeps the ceilings, and says the committed figure is missing, when the source is down", async () => {
     await data.resourceUsage.interceptPlatformResourceUsage({
       body: {
         ...mockPlatformUsageUnavailable(),
         capacity: mockCapacity({
-          memory_limit_bytes: 70 * GIB,
-          memory_committed_bytes: null,
-          cpu_committed_cores: null,
+          limits_memory_bytes: 70 * GIB,
+          committed_limits_memory_bytes: null,
+          committed_limits_cpu_cores: null,
         }),
       },
     });
     await usagePage.goto();
 
-    await expect(usagePage.capacityCard("memory")).toHaveAttribute("data-state", "unknown");
-    await expect(usagePage.capacityCard("memory")).toContainText("Committed figure not available");
-    await expect(usagePage.capacityCard("memory")).toContainText("70 GiB");
+    await expect(usagePage.capacityCard("limits-memory")).toHaveAttribute("data-state", "unknown");
+    await expect(usagePage.capacityCard("limits-memory")).toContainText("Committed figure not available");
+    await expect(usagePage.capacityCard("limits-memory")).toContainText("70 GiB");
     // Editable even now: the limits are in the database, not in Prometheus.
     await usagePage.openCapacityDialog();
-    await expect(usagePage.memoryInput()).toHaveValue("70");
+    await expect(usagePage.limitsMemoryInput()).toHaveValue("70");
   });
 
   test("the dialog opens on what is saved, in GiB and cores, with when it last changed", async ({ page }) => {
     await openWith({
-      memory_limit_bytes: 70 * GIB,
-      cpu_limit_cores: 24,
-      limits_updated_at: "2026-09-30T08:30:00Z",
+      limits_memory_bytes: 70 * GIB,
+      limits_cpu_cores: 24,
+      ceilings_updated_at: "2026-09-30T08:30:00Z",
     });
 
     await usagePage.openCapacityDialog();
 
     await expect(usagePage.dialog()).toBeVisible();
-    await expect(usagePage.memoryInput()).toHaveValue("70");
-    await expect(usagePage.cpuInput()).toHaveValue("24");
+    await expect(usagePage.limitsMemoryInput()).toHaveValue("70");
+    await expect(usagePage.limitsCpuInput()).toHaveValue("24");
     await expect(page.getByText("Last changed")).toBeVisible();
     await expect(usagePage.dialog()).toContainText("limits.memory");
   });
 
   test("saving sends whole bytes and refreshes the page", async ({ page }) => {
-    const requests = await openWith({ memory_limit_bytes: 70 * GIB, cpu_limit_cores: 24 });
+    const requests = await openWith({ limits_memory_bytes: 70 * GIB, limits_cpu_cores: 24 });
     const sent = await data.resourceUsage.interceptUpdateResourceLimits();
     await usagePage.openCapacityDialog();
     const before = requests.length;
 
-    await usagePage.memoryInput().fill("62.5");
-    await usagePage.cpuInput().fill("16");
+    await usagePage.limitsMemoryInput().fill("62.5");
+    await usagePage.limitsCpuInput().fill("16");
     await usagePage.saveButton().click();
 
     await expect(usagePage.dialog()).toBeHidden();
     // 62.5 GiB, as a whole number of bytes.
-    expect(sent).toEqual([{ memory_limit_bytes: 67_108_864_000, cpu_limit_cores: 16 }]);
+    expect(sent).toEqual([
+      { limits_memory_bytes: 67_108_864_000, limits_cpu_cores: 16, requests_memory_bytes: null, requests_cpu_cores: null },
+    ]);
     await expect.poll(() => requests.length).toBeGreaterThan(before);
-    await expect(page.getByText("Capacity limits saved")).toBeVisible();
+    await expect(page.getByText("Namespace quota saved")).toBeVisible();
   });
 
   test("a blank field clears that limit", async () => {
-    await openWith({ memory_limit_bytes: 70 * GIB, cpu_limit_cores: 24 });
+    await openWith({ limits_memory_bytes: 70 * GIB, limits_cpu_cores: 24 });
     const sent = await data.resourceUsage.interceptUpdateResourceLimits();
     await usagePage.openCapacityDialog();
 
-    await usagePage.memoryInput().fill("");
-    await usagePage.cpuInput().fill("");
+    await usagePage.limitsMemoryInput().fill("");
+    await usagePage.limitsCpuInput().fill("");
     await usagePage.saveButton().click();
 
     await expect(usagePage.dialog()).toBeHidden();
-    expect(sent).toEqual([{ memory_limit_bytes: null, cpu_limit_cores: null }]);
+    expect(sent).toEqual([
+      { limits_memory_bytes: null, limits_cpu_cores: null, requests_memory_bytes: null, requests_cpu_cores: null },
+    ]);
   });
 
   test("text that is not a positive number is caught before anything is sent", async ({ page }) => {
@@ -504,8 +689,8 @@ test.describe("Platform capacity limits (platform_admin)", () => {
     const sent = await data.resourceUsage.interceptUpdateResourceLimits();
     await usagePage.openCapacityDialog();
 
-    await usagePage.memoryInput().fill("lots");
-    await usagePage.cpuInput().fill("0");
+    await usagePage.limitsMemoryInput().fill("lots");
+    await usagePage.limitsCpuInput().fill("0");
     await usagePage.saveButton().click();
 
     await expect(page.getByText("Enter a number above 0, or leave it blank.")).toHaveCount(2);
@@ -517,11 +702,11 @@ test.describe("Platform capacity limits (platform_admin)", () => {
     await openWith({});
     await data.resourceUsage.interceptUpdateResourceLimits({
       status: 422,
-      detail: "memory_limit_bytes must be at most 1125899906842624",
+      detail: "limits_memory_bytes must be at most 1125899906842624",
     });
     await usagePage.openCapacityDialog();
 
-    await usagePage.memoryInput().fill("70");
+    await usagePage.limitsMemoryInput().fill("70");
     await usagePage.saveButton().click();
 
     await expect(usagePage.dialog().getByTestId("capacity-limits-error")).toBeVisible();
@@ -529,15 +714,15 @@ test.describe("Platform capacity limits (platform_admin)", () => {
   });
 
   test("cancelling throws the edit away, so the next opening starts from what is saved", async () => {
-    await openWith({ memory_limit_bytes: 70 * GIB });
+    await openWith({ limits_memory_bytes: 70 * GIB });
     await usagePage.openCapacityDialog();
-    await usagePage.memoryInput().fill("5");
+    await usagePage.limitsMemoryInput().fill("5");
 
     await usagePage.dialog().getByRole("button", { name: "Cancel" }).click();
     await expect(usagePage.dialog()).toBeHidden();
     await usagePage.openCapacityDialog();
 
-    await expect(usagePage.memoryInput()).toHaveValue("70");
+    await expect(usagePage.limitsMemoryInput()).toHaveValue("70");
   });
 });
 
