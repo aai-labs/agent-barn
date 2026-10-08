@@ -172,10 +172,18 @@ recovery, expired leases and stale completions, unsafe targets, and late retaine
 documents. The pinned-image purge test verifies private/shared removal without
 changing another Agent or bank. Test queue migrations against already deleted Agents.
 Explicit Organization Memory write tests cover read-only and combined read/write grants, immediate revocation, cross-Agent write rejection, runtime credential use, content-only payloads, and refusal handling. The shared writer targets Python 3.12 in Ruff, matching the oldest runtime. Both pinned-runtime startup contracts execute the mounted writer command; Hermes
-executes the command from its generated instructions through the real terminal
-tool, covering short-name discovery after shell PATH changes and explicit 403
+proves the shared-save instructions appear in its first model system prompt without
+reading `TOOLS.md`, then executes the command from its generated `AGENTS.md`
+through the real terminal tool, covering short-name discovery after shell PATH changes and explicit 403
 refusals. Runtime fixtures mount the same executable ConfigMap command into the
-standard binary directory. Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
+standard binary directory. Both pinned-runtime contracts also execute explicit
+recall, distinguishing an empty search, a successful focused retry, and backend
+unavailability while checking `mid`/4,096 and `high`/8,192 request budgets. OpenClaw
+uses its real bootstrap loader and system-prompt renderer to verify the shared
+save and recall instructions are present and disappear when memory is disabled.
+The pinned Hindsight contract retains a source Agent's private fact and verifies
+recall before granting access, while granted, and immediately after revocation.
+Gateway spend tests exercise real HTTP requests with persisted runtime snapshots,
 memory charges, and successful-sync heartbeats. Cover exhausted/zero/uncapped
 limits, precise combined totals, missing/stale data, renewal, immediate limit
 changes, and recall availability when changing this policy. Failed and truncated
@@ -217,8 +225,8 @@ hooks directly. Shared setup lives in
   `../../hermes-base/test-image.sh`, invoked by
   `../../.github/workflows/hermes-base.yml`. Both that workflow and
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
-  selects the matching workflow when base-image, builder, startup, or
-  telemetry-plugin paths change.
+  selects the matching workflow when base-image, builder, startup,
+  telemetry-plugin, or matching runtime-fixture paths change.
 - `../../hermes-base/test-image.sh` and `../../openclaw-base/test-healthz-metrics.sh`
   run each healthz script in its pinned image under `--memory 1g --cpus 0.5`, as the
   image's own user, and check the CPU and memory it reports. Whether the cgroup files
@@ -235,6 +243,19 @@ hooks directly. Shared setup lives in
   chain, pins the Teams runtime listener's environment/port/path contract, and runs
   the telemetry plugin against the real SessionStore. The workflow invokes this
   entrypoint when either the Hermes builder or base image changes.
+- `../../api/tests/fixtures/test-messaging-retirement.sh` exercises fresh, upgraded,
+  and restored persistent state using generated configuration in both pinned images.
+  It covers malformed-job isolation, managed files, inactive/main-session jobs, effective
+  home targets, and rejection of stale saved defaults after OpenClaw configuration merge.
+  Hermes image tests also drive native origin/home scheduled delivery and silence.
+  `../../openclaw-base/test-native-runtime.sh` checks native one-shot scheduling,
+  observer hooks, retirement, and native `message`/`cron` tool access. Its pinned-image
+  message fixture uses the real tool factory/filter and dry-run sends for replies
+  to an existing message and other channels, and verifies native context restrictions.
+  Upgraded/restored state retains unrelated tool denies and message policy while
+  removing the stale `message` deny. Hermes checks that its send engine is absent
+  from the agent tool registry. Scheduler fixtures simulate model/provider execution;
+  message fixtures use dry runs. These checks send no live provider messages.
 - The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
   generated runtime configuration in the real image and proves materialized
   Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The

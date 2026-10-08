@@ -1,7 +1,9 @@
 # Agent Barn owns communication platform delivery
 
-Status: Accepted
+Status: Partially superseded by [native runtime gateways](2026-09-16-native-runtime-gateways-for-chat-platforms.md)
 Date: 2026-08-22
+
+The original decision below records gateway ownership before native chat adoption. The later decision supersedes transport ownership for Slack, Discord, Telegram, and Teams. Agent-owned Connection configuration, shipped Platform Plugins, and Agent-scoped authorization remain; Web Chat and Email retain durable gateway delivery. Current behavior belongs in the [runtime architecture](../architecture/runtime-and-deployment.md#platform-plugin-boundary).
 
 An Agent may communicate through zero or many Agent-owned Communication Connections, including several connections for one Communication Platform. Agent Barn ships trusted Platform Plugins and owns provider ingress, durable delivery, canonical Conversation Messages, and outbound replies through a Communications Gateway; runtimes consume one versioned internal communication protocol instead of owning Slack, Telegram, Discord, or future platform transports.
 

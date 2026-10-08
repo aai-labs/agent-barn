@@ -163,7 +163,7 @@ export function PlatformResourceUsagePage() {
                 <h2 className="m-0 mb-3 text-[14px] font-semibold" style={{ color: "var(--ink)" }}>
                   Heaviest agents
                 </h2>
-                <PlatformAgentsUsageTable agents={usage.agents} />
+                <PlatformAgentsUsageTable agents={usage.agents} needUpdate={usage.totals.agentsRestartRequired ?? 0} />
                 <p className="m-0 mt-3 text-[12.5px]" style={{ color: "var(--ink-4)" }}>
                   Readings are current, refreshed every minute. Charts cover the {rangeLabel}.
                 </p>
@@ -186,6 +186,7 @@ function UsageStats({ usage }: { usage: PlatformResourceUsage }) {
     ? 0
     : (organizations.find((row) => row.organizationId === null)?.agentsReporting ?? 0);
   const reporting = measured && totals.agentsReporting !== null ? totals.agentsReporting - noLiveAgent : null;
+  const needUpdate = totals.agentsRestartRequired ?? 0;
 
   const nearMemoryLimit = agents.filter(
     (agent) => (usageRatio(agent.memoryWorkingSetBytes, agent.memoryLimitBytes) ?? 0) >= METER_CRITICAL_RATIO,
@@ -218,7 +219,9 @@ function UsageStats({ usage }: { usage: PlatformResourceUsage }) {
       <UsageStatCard
         label="Agents reporting"
         value={reporting !== null ? String(reporting) : unknown}
-        hint={`of ${totals.agentsWithContainer} running or in error`}
+        hint={`of ${totals.agentsWithContainer} running or in error${
+          needUpdate > 0 ? ` · ${needUpdate} need an update` : ""
+        }`}
         tone={reporting !== null && reporting < totals.agentsWithContainer ? "warn" : "ok"}
         testId="platform-usage-reporting"
       />

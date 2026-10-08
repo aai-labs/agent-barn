@@ -97,12 +97,12 @@ export class CommunicationConnectionDetailPage {
     return this.page.getByRole("button", { name: "Reconnect", exact: true }).first();
   }
 
-  reconnectDialog(): Locator {
-    return this.page.getByRole("dialog", { name: "Reconnect this connection?" });
+  retryDeliveryButton(): Locator {
+    return this.activityPanel("delivery").getByRole("button", { name: "Retry delivery", exact: true });
   }
 
-  confirmReconnectButton(): Locator {
-    return this.reconnectDialog().getByRole("button", { name: "Reconnect", exact: true });
+  nativeRecoveryGuidance(): Locator {
+    return this.page.getByText("Restart the Agent to recover this connection.", { exact: true });
   }
 
   waitForJournalRequest(kind: "delivery" | "connection"): Promise<Request> {
@@ -126,12 +126,6 @@ export class CommunicationConnectionDetailPage {
       (request) => request.url().includes(`delivery_id=${deliveryId}`)
         && request.url().includes("order=asc")
         && request.url().includes(`page=${page}`),
-    );
-  }
-
-  waitForReconnectRequest(): Promise<Request> {
-    return this.page.waitForRequest(
-      (request) => request.method() === "POST" && request.url().endsWith("/reconnect"),
     );
   }
 

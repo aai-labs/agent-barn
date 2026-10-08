@@ -9,7 +9,7 @@ from typing import Any
 from uuid import UUID, uuid4, uuid7
 
 from fastapi import status
-from hamcrest import assert_that, contains_exactly, equal_to, has_length, is_not, none
+from hamcrest import assert_that, close_to, contains_exactly, contains_string, equal_to, has_length, is_not, none, not_
 from kubernetes.client.exceptions import ApiException
 
 from api.domains.agents.models import AgentStatus
@@ -36,10 +36,12 @@ from api.tests.steps.organization import (
 )
 from api.tests.steps.resource_usage import (
     MockPrometheusModule,
+    prometheus_fails_agent_requests,
     prometheus_is_down,
     prometheus_is_not_configured,
+    prometheus_reports_agent_requests,
     prometheus_reports_for_agents,
-    prometheus_reports_namespace_limits,
+    prometheus_reports_namespace_commitments,
 )
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -188,7 +190,7 @@ def test_every_organization_is_counted_and_named_from_the_database():
             assert_that(ids, equal_to({str(context.acme.id), str(context.globex.id)}))
 
 
-def test_one_platform_wide_query_is_made_for_the_readings_one_for_the_chart_and_one_for_the_namespace():
+def test_one_platform_wide_query_is_made_for_the_readings_the_requests_the_chart_and_the_namespace():
     with given(
         [
             *_BASE_GIVEN,
@@ -204,12 +206,16 @@ def test_one_platform_wide_query_is_made_for_the_readings_one_for_the_chart_and_
             client = _prometheus(context)
             queries = [call.args[0] for call in client.query.call_args_list]
             readings = [q for q in queries if "agent_memory_working_set_bytes" in q]
-            namespace = [q for q in queries if "kube_pod_container_resource_limits" in q]
-            # One instant query for the agents' readings and one for the namespace's
-            # committed limits, and nothing else.
-            assert_that(queries, has_length(2))
+            namespace = [q for q in queries if '"kind"' in q]
+            agent_requests = [q for q in queries if '"app", "$1", "pod"' in q]
+            # One instant query for the agents' readings, one for what each agent's pod
+            # requests, and one for what the namespace commits (limits and requests
+            # together), and nothing else.
+            assert_that(queries, has_length(3))
             assert_that(readings, has_length(1))
             assert_that(namespace, has_length(1))
+            assert_that(agent_requests, has_length(1))
+            assert "org_id" not in agent_requests[0]
             assert_that(client.query_range.call_count, equal_to(1))
             assert "org_id" not in readings[0]
             assert "org_id" not in client.query_range.call_args.args[0]
@@ -358,8 +364,30 @@ def test_an_unreachable_prometheus_still_returns_the_database_counts():
         assert_that(body["availability"], equal_to("unavailable"))
         assert_that(body["totals"]["agents_with_container"], equal_to(2))
         assert_that(body["totals"]["agents_reporting"], none())
+        # Unknown, not zero: with no source nobody can say which agents still need an update.
+        assert_that(body["totals"]["agents_restart_required"], none())
         assert_that(body["totals"]["memory_working_set_bytes"], none())
         assert_that(body["organizations"], has_length(0))
+
+
+def test_agents_still_on_an_older_healthz_script_are_counted_per_organization():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-old-a@example.com", "owner-old-b@example.com"),
+            # Ada reports; Cy is scraped but has not been updated since usage was added.
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2), c.cy.id: {"up": 1.0}}),
+            *_platform_admin("admin-old-script@example.com"),
+        ]
+    ) as context:
+        body = context.client.get(_URL, headers=_auth(context.access_token)).json()
+
+        assert_that(body["totals"]["agents_with_container"], equal_to(2))
+        assert_that(body["totals"]["agents_reporting"], equal_to(1))
+        assert_that(body["totals"]["agents_restart_required"], equal_to(1))
+        by_id = {row["organization_id"]: row for row in body["organizations"]}
+        assert_that(by_id[str(context.globex.id)]["agents_restart_required"], equal_to(1))
+        assert_that(by_id[str(context.acme.id)]["agents_restart_required"], equal_to(0))
 
 
 def test_an_unconfigured_prometheus_is_reported_without_a_query():
@@ -378,6 +406,70 @@ def test_an_unconfigured_prometheus_is_reported_without_a_query():
         _prometheus(context).query_range.assert_not_called()
 
 
+# --- requests -------------------------------------------------------------
+
+
+def test_each_agent_row_and_the_totals_carry_what_the_pods_request():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-req-a@example.com", "owner-req-b@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2), c.cy.id: _reading(1.0, 0.1)}),
+            prometheus_reports_agent_requests(lambda c: {c.ada.id: (0.25 * _GiB, 0.05), c.cy.id: (0.5 * _GiB, 0.1)}),
+            *_platform_admin("admin-requests@example.com"),
+        ]
+    ) as context:
+        body = context.client.get(_URL, headers=_auth(context.access_token)).json()
+
+        agents = {agent["agent_name"]: agent for agent in body["agents"]}
+        assert_that(agents["Ada"]["memory_request_bytes"], equal_to(int(0.25 * _GiB)))
+        assert_that(agents["Ada"]["cpu_request_cores"], equal_to(0.05))
+        assert_that(body["totals"]["memory_request_bytes"], equal_to(int(0.75 * _GiB)))
+        assert_that(body["totals"]["cpu_request_cores"], close_to(0.15, 1e-9))
+        by_id = {row["organization_id"]: row for row in body["organizations"]}
+        assert_that(by_id[str(context.globex.id)]["memory_request_bytes"], equal_to(int(0.5 * _GiB)))
+
+
+def test_a_failed_requests_read_leaves_them_unknown_and_the_rest_of_the_page_standing():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-req-c@example.com", "owner-req-d@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
+            prometheus_fails_agent_requests(),
+            *_platform_admin("admin-requests-down@example.com"),
+        ]
+    ) as context:
+        response = context.client.get(_URL, headers=_auth(context.access_token))
+
+        body = response.json()
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        # The readings did not depend on it.
+        assert_that(body["availability"], equal_to("available"))
+        assert_that(body["agents"][0]["memory_working_set_bytes"], equal_to(int(0.5 * _GiB)))
+        # Unknown, not zero.
+        assert_that(body["agents"][0]["memory_request_bytes"], none())
+        assert_that(body["totals"]["memory_request_bytes"], none())
+        assert_that(body["totals"]["cpu_request_cores"], none())
+
+
+def test_a_request_for_an_agent_that_is_not_reporting_is_left_out_of_the_page():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-req-e@example.com", "owner-req-f@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
+            # Cy has a pod, but no readings: it is not reporting, so it has no row and no share.
+            prometheus_reports_agent_requests(lambda c: {c.ada.id: (0.25 * _GiB, 0.05), c.cy.id: (4 * _GiB, 2.0)}),
+            *_platform_admin("admin-requests-unreporting@example.com"),
+        ]
+    ) as context:
+        body = context.client.get(_URL, headers=_auth(context.access_token)).json()
+
+        assert_that([agent["agent_name"] for agent in body["agents"]], contains_exactly("Ada"))
+        assert_that(body["totals"]["memory_request_bytes"], equal_to(int(0.25 * _GiB)))
+
+
 # --- capacity limits -------------------------------------------------------
 
 
@@ -387,22 +479,34 @@ def test_the_response_holds_the_entered_limits_beside_what_the_namespace_commits
             *_BASE_GIVEN,
             _two_organizations("owner-cap-a@example.com", "owner-cap-b@example.com"),
             _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
-            prometheus_reports_namespace_limits(memory=46 * _GiB, cpu=11.5),
+            prometheus_reports_namespace_commitments(
+                limits_memory=46 * _GiB, limits_cpu=11.5, requests_memory=9 * _GiB, requests_cpu=2.5
+            ),
             *_platform_admin("admin-capacity@example.com"),
         ]
     ) as context:
-        _set_limits(context, memory_limit_bytes=70 * _GiB, cpu_limit_cores=24)
+        _set_limits(
+            context,
+            limits_memory_bytes=70 * _GiB,
+            limits_cpu_cores=24,
+            requests_memory_bytes=20 * _GiB,
+            requests_cpu_cores=5,
+        )
 
         with when("the admin opens the page"):
             body = context.client.get(_URL, headers=_auth(context.access_token)).json()
 
         with then("both halves are there: the ceiling they typed and the figure we read"):
             capacity = body["capacity"]
-            assert_that(capacity["memory_limit_bytes"], equal_to(70 * _GiB))
-            assert_that(capacity["cpu_limit_cores"], equal_to(24))
-            assert_that(capacity["limits_updated_at"], is_not(none()))
-            assert_that(capacity["memory_committed_bytes"], equal_to(46 * _GiB))
-            assert_that(capacity["cpu_committed_cores"], equal_to(11.5))
+            assert_that(capacity["limits_memory_bytes"], equal_to(70 * _GiB))
+            assert_that(capacity["limits_cpu_cores"], equal_to(24))
+            assert_that(capacity["requests_memory_bytes"], equal_to(20 * _GiB))
+            assert_that(capacity["requests_cpu_cores"], equal_to(5))
+            assert_that(capacity["ceilings_updated_at"], is_not(none()))
+            assert_that(capacity["committed_limits_memory_bytes"], equal_to(46 * _GiB))
+            assert_that(capacity["committed_limits_cpu_cores"], equal_to(11.5))
+            assert_that(capacity["committed_requests_memory_bytes"], equal_to(9 * _GiB))
+            assert_that(capacity["committed_requests_cpu_cores"], equal_to(2.5))
 
 
 def test_the_committed_figure_is_asked_of_kube_state_metrics_for_the_whole_namespace():
@@ -411,14 +515,14 @@ def test_the_committed_figure_is_asked_of_kube_state_metrics_for_the_whole_names
             *_BASE_GIVEN,
             _two_organizations("owner-cap-c@example.com", "owner-cap-d@example.com"),
             _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
-            prometheus_reports_namespace_limits(memory=4 * _GiB, cpu=1.5),
+            prometheus_reports_namespace_commitments(limits_memory=4 * _GiB, limits_cpu=1.5),
             *_platform_admin("admin-capacity-query@example.com"),
         ]
     ) as context:
         context.client.get(_URL, headers=_auth(context.access_token))
 
         queries = [call.args[0] for call in _prometheus(context).query.call_args_list]
-        committed = [q for q in queries if "kube_pod_container_resource_limits" in q]
+        committed = [q for q in queries if '"kind"' in q]
         assert_that(committed, has_length(1))
         assert 'job="kube-state-metrics"' in committed[0]
         # Namespace-wide, never narrowed to an agent or an organization.
@@ -431,11 +535,11 @@ def test_the_organization_filter_does_not_change_the_capacity():
             *_BASE_GIVEN,
             _two_organizations("owner-cap-e@example.com", "owner-cap-f@example.com"),
             _reports(lambda c: {c.ada.id: _reading(0.5, 0.2), c.cy.id: _reading(1.0, 0.1)}),
-            prometheus_reports_namespace_limits(memory=46 * _GiB, cpu=11.5),
+            prometheus_reports_namespace_commitments(limits_memory=46 * _GiB, limits_cpu=11.5),
             *_platform_admin("admin-capacity-filter@example.com"),
         ]
     ) as context:
-        _set_limits(context, memory_limit_bytes=70 * _GiB)
+        _set_limits(context, limits_memory_bytes=70 * _GiB)
 
         everyone = context.client.get(_URL, headers=_auth(context.access_token)).json()
         one = context.client.get(
@@ -455,16 +559,16 @@ def test_the_limits_survive_an_unreachable_prometheus_and_the_committed_figure_d
             *_platform_admin("admin-capacity-down@example.com"),
         ]
     ) as context:
-        _set_limits(context, memory_limit_bytes=70 * _GiB, cpu_limit_cores=24)
+        _set_limits(context, limits_memory_bytes=70 * _GiB, limits_cpu_cores=24)
 
         body = context.client.get(_URL, headers=_auth(context.access_token)).json()
 
         assert_that(body["availability"], equal_to("unavailable"))
-        assert_that(body["capacity"]["memory_limit_bytes"], equal_to(70 * _GiB))
-        assert_that(body["capacity"]["cpu_limit_cores"], equal_to(24))
+        assert_that(body["capacity"]["limits_memory_bytes"], equal_to(70 * _GiB))
+        assert_that(body["capacity"]["limits_cpu_cores"], equal_to(24))
         # Unknown is not zero: nothing is drawn as "no memory committed".
-        assert_that(body["capacity"]["memory_committed_bytes"], none())
-        assert_that(body["capacity"]["cpu_committed_cores"], none())
+        assert_that(body["capacity"]["committed_limits_memory_bytes"], none())
+        assert_that(body["capacity"]["committed_limits_cpu_cores"], none())
 
 
 def test_the_limits_are_there_when_prometheus_is_not_configured():
@@ -476,13 +580,13 @@ def test_the_limits_are_there_when_prometheus_is_not_configured():
             *_platform_admin("admin-capacity-unconfigured@example.com"),
         ]
     ) as context:
-        _set_limits(context, cpu_limit_cores=24)
+        _set_limits(context, limits_cpu_cores=24)
 
         body = context.client.get(_URL, headers=_auth(context.access_token)).json()
 
         assert_that(body["availability"], equal_to("not_configured"))
-        assert_that(body["capacity"]["cpu_limit_cores"], equal_to(24))
-        assert_that(body["capacity"]["cpu_committed_cores"], none())
+        assert_that(body["capacity"]["limits_cpu_cores"], equal_to(24))
+        assert_that(body["capacity"]["committed_limits_cpu_cores"], none())
 
 
 def test_nothing_is_set_and_nothing_is_committed_until_someone_says_so():
@@ -495,11 +599,31 @@ def test_nothing_is_set_and_nothing_is_committed_until_someone_says_so():
     ) as context:
         capacity = context.client.get(_URL, headers=_auth(context.access_token)).json()["capacity"]
 
-        assert_that(capacity["memory_limit_bytes"], none())
-        assert_that(capacity["cpu_limit_cores"], none())
-        assert_that(capacity["limits_updated_at"], none())
+        assert_that(capacity["limits_memory_bytes"], none())
+        assert_that(capacity["limits_cpu_cores"], none())
+        assert_that(capacity["ceilings_updated_at"], none())
         # A reachable Prometheus that reports no pods leaves the figure unknown, not zero.
-        assert_that(capacity["memory_committed_bytes"], none())
+        assert_that(capacity["committed_limits_memory_bytes"], none())
+        assert_that(capacity["requests_memory_bytes"], none())
+        assert_that(capacity["committed_requests_cpu_cores"], none())
+
+
+def test_a_kind_the_source_did_not_answer_for_is_unknown_while_the_other_is_known():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-cap-m@example.com", "owner-cap-n@example.com"),
+            _reports(lambda c: {c.ada.id: _reading(0.5, 0.2)}),
+            prometheus_reports_namespace_commitments(limits_memory=4 * _GiB, limits_cpu=1.5),
+            *_platform_admin("admin-capacity-partial@example.com"),
+        ]
+    ) as context:
+        capacity = context.client.get(_URL, headers=_auth(context.access_token)).json()["capacity"]
+
+        assert_that(capacity["committed_limits_memory_bytes"], equal_to(4 * _GiB))
+        # Not 0: no answer is not the same as nothing committed.
+        assert_that(capacity["committed_requests_memory_bytes"], none())
+        assert_that(capacity["committed_requests_cpu_cores"], none())
 
 
 # --- one Agent's details, for a row that is opened ------------------------
@@ -634,6 +758,44 @@ def test_a_running_agent_has_its_status_restarts_and_last_day_of_usage():
             assert_that(usage["memory_working_set_bytes"], equal_to(1 * _GiB))
             assert_that(usage["memory_limit_bytes"], equal_to(2 * _GiB))
             assert_that(usage["cpu_limit_cores"], equal_to(1))
+
+
+def test_an_opened_row_carries_the_agents_request_beside_its_limit():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-req-a@example.com", "owner-det-req-b@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            prometheus_reports_agent_requests(lambda c: {c.cy.id: (0.5 * _GiB, 0.1)}),
+            _cluster_says(),
+            *_platform_admin("admin-details-req@example.com"),
+        ]
+    ) as context:
+        usage = _details(context, context.cy.id).json()["resource_usage"]
+
+        assert_that(usage["memory_request_bytes"], equal_to(int(0.5 * _GiB)))
+        assert_that(usage["memory_limit_bytes"], equal_to(2 * _GiB))
+        assert_that(usage["cpu_request_cores"], close_to(0.1, 1e-9))
+        assert_that(usage["cpu_limit_cores"], equal_to(1))
+
+
+def test_an_opened_row_asks_only_about_that_agents_requests():
+    with given(
+        [
+            *_BASE_GIVEN,
+            _two_organizations("owner-det-req-c@example.com", "owner-det-req-d@example.com"),
+            _reports(lambda c: {c.cy.id: _reading(1.0, 0.1)}),
+            _cluster_says(),
+            *_platform_admin("admin-details-req-scope@example.com"),
+        ]
+    ) as context:
+        _details(context, context.cy.id)
+
+        queries = [call.args[0] for call in _prometheus(context).query.call_args_list]
+        requests = [q for q in queries if '"app", "$1", "pod"' in q]
+        assert_that(requests, has_length(1))
+        assert_that(requests[0], contains_string(f'pod=~"agent-{context.cy.id}-.+"'))
+        assert_that(requests[0], not_(contains_string(str(context.ada.id))))
 
 
 def test_the_page_never_asks_the_cluster_for_logs_and_none_come_back():

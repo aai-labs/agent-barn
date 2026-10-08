@@ -1,7 +1,7 @@
 """Add apollo to the agent_secret provider constraint.
 
 Revision ID: f6c2a8d41b73
-Revises: 69011ec264e7
+Revises: aaf767b06036
 
 _OLD is copied verbatim from e2b7c4d19a58 (add_sharepoint_to_secret_provider), the most
 recent revision to recreate the provider constraint — not reconstructed from an older one.
@@ -12,7 +12,7 @@ silently dropped a provider that was already in use.
 from alembic import op
 
 revision: str = "f6c2a8d41b73"
-down_revision: str | None = "69011ec264e7"
+down_revision: str | None = "aaf767b06036"
 branch_labels: str | None = None
 depends_on: str | None = None
 

@@ -63,7 +63,7 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `agent.stopped` — emitted after an Agent transitions to `STOPPED`.
 - `platform.user_privilege.granted` — emitted atomically when Platform Privilege is granted.
 - `platform.user_privilege.revoked` — emitted atomically when Platform Privilege is revoked.
-- `platform.resource_limits.changed` — emitted atomically when a Platform Administrator changes a capacity limit, one event per limit that moved, naming the setting with its previous and current value. The subject is the `SYSTEM` limits row. Not emitted when a save leaves the value unchanged.
+- `platform.resource_limits.changed` — emitted atomically when a Platform Administrator changes a namespace quota ceiling, one event per ceiling that moved, naming the setting (`limits_memory_bytes`, `limits_cpu_cores`, `requests_memory_bytes` or `requests_cpu_cores`) with its previous and current value. The subject is the `SYSTEM` limits row. Not emitted when a save leaves the value unchanged.
 
 AF-167 broadens Security Audit Record coverage to additional mutations:
 

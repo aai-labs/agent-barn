@@ -19,6 +19,7 @@ import {
   type OverviewPeriod,
 } from "../utils";
 import { AgentOverviewDetails } from "./agent-overview-details";
+import { LimitLabel } from "./limit-label";
 import { UsageMeter } from "./usage-meter";
 
 type SortKey = "name" | "spend" | "cpu" | "memory";
@@ -35,7 +36,7 @@ const COLUMN_COUNT = COLUMNS.length + 1;
 
 const STATE_HINT: Record<AgentUsageSnapshot["state"], string> = {
   reporting: "",
-  restart_required: "Restart to report",
+  restart_required: "Update to report",
   unsupported: "Not supported",
   no_data: "No data yet",
 };
@@ -328,9 +329,12 @@ function CpuCell({ item }: { item: AgentOverviewItem }) {
   return (
     <div className="min-w-[8rem]" data-testid="agents-overview-cpu">
       <div className="flex items-center gap-1.5 tabular-nums" style={{ color: "var(--ink-2)" }}>
-        {usage.cpuCores !== null
-          ? `${formatCores(usage.cpuCores)}${usage.cpuLimitCores !== null ? ` / ${formatCores(usage.cpuLimitCores)}` : ""} cores`
-          : "—"}
+        <span>
+          {usage.cpuCores !== null
+            ? `${formatCores(usage.cpuCores)}${usage.cpuLimitCores !== null ? ` / ${formatCores(usage.cpuLimitCores)}` : ""} cores`
+            : "—"}
+          {usage.cpuCores !== null && usage.cpuLimitCores !== null && <LimitLabel />}
+        </span>
         {throttled !== null && throttled >= THROTTLING_WARN_RATIO && (
           <span
             title={`Held back at its CPU limit ${formatPercent(throttled)} of the last hour`}
@@ -342,7 +346,17 @@ function CpuCell({ item }: { item: AgentOverviewItem }) {
           </span>
         )}
       </div>
-      <UsageMeter ratio={usageRatio(usage.cpuCores, usage.cpuLimitCores)} label="CPU use against its limit" className="mt-1.5" />
+      <UsageMeter
+        ratio={usageRatio(usage.cpuCores, usage.cpuLimitCores)}
+        markerRatio={usageRatio(usage.cpuRequestCores, usage.cpuLimitCores)}
+        label="CPU use against its limit"
+        className="mt-1.5"
+      />
+      {usage.cpuRequestCores !== null && (
+        <div className="mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }} data-testid="agents-overview-cpu-request">
+          requests {formatCores(usage.cpuRequestCores)} cores
+        </div>
+      )}
     </div>
   );
 }
@@ -358,12 +372,19 @@ function MemoryCell({ item }: { item: AgentOverviewItem }) {
         {usage.memoryWorkingSetBytes !== null
           ? `${formatBytes(usage.memoryWorkingSetBytes)}${usage.memoryLimitBytes !== null ? ` / ${formatBytes(usage.memoryLimitBytes)}` : ""}`
           : "—"}
+        {usage.memoryWorkingSetBytes !== null && usage.memoryLimitBytes !== null && <LimitLabel />}
       </div>
       <UsageMeter
         ratio={usageRatio(usage.memoryWorkingSetBytes, usage.memoryLimitBytes)}
+        markerRatio={usageRatio(usage.memoryRequestBytes, usage.memoryLimitBytes)}
         label="Memory use against its limit"
         className="mt-1.5"
       />
+      {usage.memoryRequestBytes !== null && (
+        <div className="mt-0.5 text-[12px]" style={{ color: "var(--ink-4)" }} data-testid="agents-overview-memory-request">
+          requests {formatBytes(usage.memoryRequestBytes)}
+        </div>
+      )}
     </div>
   );
 }
