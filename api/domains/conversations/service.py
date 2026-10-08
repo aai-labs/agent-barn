@@ -105,7 +105,7 @@ def _group_into_threads(
         try:
             tid_f = float(tid)
         except ValueError, TypeError:
-            continue
+            tid_f = None
 
         msgs_sorted = sorted(msgs, key=lambda m: (m.occurred_at, m.id))
 
@@ -113,7 +113,7 @@ def _group_into_threads(
         for nm in null_msgs:
             if nm.id in used_null_ids:
                 continue
-            if abs(nm.occurred_at.timestamp() - tid_f) <= 5.0:
+            if tid_f is not None and abs(nm.occurred_at.timestamp() - tid_f) <= 5.0:
                 root = nm
                 used_null_ids.add(nm.id)
                 break

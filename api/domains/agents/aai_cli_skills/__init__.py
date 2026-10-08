@@ -33,6 +33,7 @@ _DISPLAY_NAMES = {
     "aai-openpanel": "OpenPanel",
     "aai-pipedrive": "Pipedrive",
     "aai-posthog": "PostHog",
+    "aai-microsoft": "SharePoint",
 }
 
 _COMMANDS = {
@@ -46,6 +47,7 @@ _COMMANDS = {
     "aai-openpanel": "openpanel",
     "aai-pipedrive": "pipedrive",
     "aai-posthog": "posthog",
+    "aai-microsoft": "microsoft",
 }
 
 # Which providers a bundled skill needs before it is auto-attached. Derived from each

@@ -1,6 +1,5 @@
 import hashlib
 import json
-import logging
 from collections.abc import Iterator
 
 from api.infrastructure.slack.cache import cached, clear_directory_cache
@@ -11,17 +10,12 @@ from api.infrastructure.slack.errors import (
 )
 from api.infrastructure.slack.transport import request_json
 
-logger = logging.getLogger(__name__)
-
 # Re-exported so callers can depend on the client module alone for the public
 # surface, regardless of how the internals are split across modules.
 __all__ = ["SlackClient", "SlackFetchError", "clear_directory_cache"]
 
 _BASE = "https://slack.com/api"
 _PAGE_SIZE = 200
-
-_ALREADY_IN_CHANNEL = {"already_in_channel"}
-_PRIVATE_CHANNEL_ERRORS = {"method_not_supported_for_channel_type", "is_private"}
 
 
 class SlackClient:
@@ -125,85 +119,18 @@ class SlackClient:
         except Exception:
             return {}
 
-    # --- channel actions ---------------------------------------------------
+    def get_conversation(self, channel_id: str) -> dict:
+        body = self._get("conversations.info", {"channel": channel_id})
+        if not body.get("ok") or not body.get("channel"):
+            raise SlackFetchError(f"conversations.info error: {body.get('error', 'unknown_error')}")
+        return body["channel"]
 
-    def join_channel(self, channel_id: str) -> bool:
-        """Best-effort join for public channels. Returns True if joined or already a member.
-        Returns False for private channels (requires manual invite). Never raises.
-        """
-        try:
-            body = self._post("conversations.join", {"channel": channel_id.strip()})
-        except Exception as e:
-            logger.warning("conversations.join request failed for %s: %s", channel_id, e)
-            return False
-
-        if body.get("ok"):
-            return True
-        error = str(body.get("error") or "unknown_error")
-        if error in _ALREADY_IN_CHANNEL:
-            return True
-        if error in _PRIVATE_CHANNEL_ERRORS:
-            logger.info("Cannot auto-join private channel %s: %s", channel_id, error)
-            return False
-        logger.warning("conversations.join failed for %s: %s", channel_id, error)
-        return False
-
-    def send_message(
-        self,
-        channel_id: str,
-        text: str,
-        *,
-        thread_id: str | None = None,
-        idempotency_key: str | None = None,
-    ) -> str:
-        payload = {"channel": channel_id, "text": text}
-        if thread_id:
-            payload["thread_ts"] = thread_id
-        if idempotency_key:
-            # Slack echoes client_msg_id in the message object and uses it to
-            # recognize a retried client submission.
-            payload["client_msg_id"] = idempotency_key
-        body = self._post("chat.postMessage", payload)
-        if not body.get("ok"):
-            raise SlackFetchError(f"chat.postMessage error: {body.get('error', 'unknown_error')}")
-        message_id = str(body.get("ts") or "")
-        if not message_id:
-            raise SlackFetchError("chat.postMessage returned no message id")
-        return message_id
-
-    def add_reaction(self, channel_id: str, timestamp: str, name: str) -> None:
-        """Add a reaction, treating Slack's duplicate response as success."""
-        body = self._post(
-            "reactions.add",
-            {"channel": channel_id, "timestamp": timestamp, "name": name},
-        )
-        if body.get("ok") or body.get("error") == "already_reacted":
-            return
-        raise SlackFetchError(f"reactions.add error: {body.get('error', 'unknown_error')}")
-
-    def remove_reaction(self, channel_id: str, timestamp: str, name: str) -> None:
-        """Remove a reaction, treating an already-removed reaction as success."""
-        body = self._post(
-            "reactions.remove",
-            {"channel": channel_id, "timestamp": timestamp, "name": name},
-        )
-        if body.get("ok") or body.get("error") == "no_reaction":
-            return
-        raise SlackFetchError(f"reactions.remove error: {body.get('error', 'unknown_error')}")
-
-    def set_thread_status(self, channel_id: str, thread_id: str, status: str) -> None:
-        """Set an assistant loading status for a Slack thread."""
-        body = self._post(
-            "assistant.threads.setStatus",
-            {"channel_id": channel_id, "thread_ts": thread_id, "status": status},
-        )
-        if body.get("ok"):
-            return
-        raise SlackFetchError(f"assistant.threads.setStatus error: {body.get('error', 'unknown_error')}")
-
-    def clear_thread_status(self, channel_id: str, thread_id: str) -> None:
-        """Clear an assistant loading status without sending another message."""
-        self.set_thread_status(channel_id, thread_id, "")
+    def open_dm(self, user_id: str) -> str:
+        body = self._post("conversations.open", {"users": user_id})
+        channel_id = (body.get("channel") or {}).get("id")
+        if not body.get("ok") or not channel_id:
+            raise SlackFetchError(f"conversations.open error: {body.get('error', 'unknown_error')}")
+        return str(channel_id)
 
     # --- cached directory listings -----------------------------------------
 
@@ -235,25 +162,6 @@ class SlackClient:
                     }
                 )
         return result
-
-    def _fetch_dm_channels(self) -> list[dict]:
-        """Paginates conversations.list(types=im). Returns [{id, user}] for each DM channel."""
-        result: list[dict] = []
-        for channels in self._iter_pages(
-            "conversations.list",
-            {"limit": _PAGE_SIZE, "types": "im"},
-            "channels",
-        ):
-            for ch in channels:
-                cid = ch.get("id", "")
-                user = ch.get("user", "")
-                if cid and user:
-                    result.append({"id": cid, "user": user})
-        return result
-
-    def list_dm_channels(self) -> list[dict]:
-        """Returns all DM channels (cached). Each entry has {id, user}."""
-        return cached(self._token_key("dm_channels"), self._fetch_dm_channels)
 
     def _fetch_all_users(self) -> list[dict]:
         """Paginates users.list to the end. Returns the full membership.
@@ -328,39 +236,3 @@ class SlackClient:
         return result
 
     # --- name resolution -----------------------------------------------
-
-    def get_user_display_name(self, user_id: str) -> str | None:
-        """Resolve a Slack user ID to a human name via the cached directory sweep.
-
-        Preference order is display name, then real name, then Slack
-        username, falling back to the raw ID only when the user was found but
-        has none of those set. Returns None when the user isn't in the
-        directory (deleted/inaccessible) or a lookup is not possible.
-        """
-        if not user_id:
-            return None
-        users = cached(self._token_key("users"), self._fetch_all_users)
-        for u in users:
-            if u["id"] == user_id:
-                return u["display_name"] or u["real_name"] or u["name"] or user_id
-        return None
-
-    def get_channel_name(self, channel_id: str) -> str | None:
-        """Resolve a Slack channel ID to its name via the cached directory sweep."""
-        if not channel_id:
-            return None
-        channels = cached(self._token_key("channels"), self._fetch_all_channels)
-        for ch in channels:
-            if ch["id"] == channel_id:
-                return ch["name"] or None
-        return None
-
-    def get_dm_participant_name(self, dm_channel_id: str) -> str | None:
-        """Resolve a Slack DM channel ID to its counterpart user's display name."""
-        if not dm_channel_id:
-            return None
-        dm_channels = cached(self._token_key("dm_channels"), self._fetch_dm_channels)
-        for dm in dm_channels:
-            if dm["id"] == dm_channel_id:
-                return self.get_user_display_name(dm["user"])
-        return None

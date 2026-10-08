@@ -8,9 +8,11 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-PROXY_PORT = 8090
+PROXY_PORT = int(os.environ.get("LLM_PROXY_PORT", "8090"))
 PORT = int(os.environ.get("HEALTHZ_PORT", "8081"))
-HERMES_URL = "http://localhost:8642/v1/models"
+# Test-only override; the builders never set it.
+CGROUP_ROOT = os.environ.get("HEALTHZ_CGROUP_ROOT", "/sys/fs/cgroup")
+HERMES_URL = "http://127.0.0.1:8642/v1/models"
 POLL_INTERVAL = 10
 
 LITELLM_PROXY_TARGET = os.environ.get("LITELLM_PROXY_TARGET", "")
@@ -22,6 +24,53 @@ _TERMINAL_LLM_ERRORS: dict[int, str] = {
     402: "OpenRouter credits exhausted. Add credits at https://openrouter.ai/credits.",
     403: "LLM API access denied. Check your account permissions.",
 }
+
+# Neutral about whose limit ran out: the Agent's own and its Organization's come back
+# as the same error type, and telling them apart would mean parsing upstream text.
+_BUDGET_EXHAUSTED = (
+    "A model spend limit has been reached, so this agent cannot reply right now. "
+    "Contact your administrator to raise it or wait for the limit to renew."
+)
+
+
+# An exhausted limit has been seen as a 400, is documented as a 429, and is a 422 by
+# default on LiteLLM releases after the pinned one, depending on which budget was hit
+# and which proxy version answered. All are buffered and matched on the error body, so
+# a version difference cannot leak the upstream text.
+_BUDGET_STATUSES = (400, 422, 429)
+# Terminal for both runtimes, like the credits-exhausted 402 above.
+_BUDGET_EXHAUSTED_STATUS = 402
+
+# Where the Communications adapter in this container learns why a turn failed. The
+# runtime does not carry the reason out reliably (it can replace this proxy's
+# message with its own), so the refusal is recorded here and read there.
+_LLM_ERROR_MARKER = os.environ.get("AGENTBARN_LLM_ERROR_MARKER", "/tmp/agentbarn-llm-terminal-error.json")
+
+
+def _record_terminal_llm_error(code: str) -> None:
+    """Best effort: a failed write costs the person chatting a precise reason, never
+    the response itself."""
+    try:
+        tmp = f"{_LLM_ERROR_MARKER}.tmp"
+        with open(tmp, "w") as handle:
+            json.dump({"code": code, "at": time.time()}, handle)
+        os.replace(tmp, _LLM_ERROR_MARKER)
+    except OSError:
+        pass
+
+
+def _budget_message(body: bytes) -> str | None:
+    """Matched on the body rather than the status: these statuses also carry malformed
+    requests, unknown models and rate limits, which must keep their own errors. The
+    upstream text names an internal team id, so it is replaced, never passed through.
+    """
+    try:
+        error = json.loads(body).get("error") or {}
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(error, dict) or error.get("type") != "budget_exceeded":
+        return None
+    return _BUDGET_EXHAUSTED
 
 
 def _poll() -> None:
@@ -67,6 +116,103 @@ def _metrics_text(ok, ever) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _parse_uint(text: str) -> int | None:
+    text = text.strip()
+    return int(text) if text.isascii() and text.isdigit() else None
+
+
+def _cgroup_text(name: str) -> str | None:
+    try:
+        with open(os.path.join(CGROUP_ROOT, name), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _cgroup_int(name: str) -> int | None:
+    """A single-number cgroup file; `max` (no limit) and unreadable both give None."""
+    text = _cgroup_text(name)
+    return None if text is None else _parse_uint(text)
+
+
+def _cgroup_keyed(name: str) -> dict[str, int]:
+    """A flat `key value` cgroup file. Unknown and malformed lines are skipped."""
+    values: dict[str, int] = {}
+    for line in (_cgroup_text(name) or "").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and (value := _parse_uint(parts[1])) is not None:
+            values[parts[0]] = value
+    return values
+
+
+def _cpu_limit_cores() -> float | None:
+    parts = (_cgroup_text("cpu.max") or "").split()
+    if len(parts) != 2:
+        return None
+    quota, period = _parse_uint(parts[0]), _parse_uint(parts[1])
+    return quota / period if quota and period else None
+
+
+def _resource_metrics_text() -> str:
+    """Container CPU and memory from the cgroup v2 files. Every series is
+    independent: one that cannot be read is left out, never guessed. The order and
+    help text must match openclaw/healthz-server.js (a test compares them)."""
+    current = _cgroup_int("memory.current")
+    inactive = _cgroup_keyed("memory.stat").get("inactive_file")
+    cpu_stat = _cgroup_keyed("cpu.stat")
+    usage_usec = cpu_stat.get("usage_usec")
+    working_set = max(current - inactive, 0) if current is not None and inactive is not None else None
+    series = [
+        (
+            "agent_cgroup_metrics_available",
+            "gauge",
+            "1 if the container's cgroup v2 CPU and memory files were readable at this scrape, 0 otherwise",
+            1 if working_set is not None and usage_usec is not None else 0,
+        ),
+        (
+            "agent_memory_working_set_bytes",
+            "gauge",
+            "Container memory in use excluding reclaimable page cache (memory.current minus inactive_file)",
+            working_set,
+        ),
+        (
+            "agent_memory_limit_bytes",
+            "gauge",
+            "Container memory limit (memory.max); absent when unlimited",
+            _cgroup_int("memory.max"),
+        ),
+        (
+            "agent_cpu_usage_seconds_total",
+            "counter",
+            "CPU time consumed by the container (cpu.stat usage_usec)",
+            None if usage_usec is None else usage_usec / 1e6,
+        ),
+        (
+            "agent_cpu_limit_cores",
+            "gauge",
+            "Container CPU limit in cores (cpu.max quota / period); absent when unlimited",
+            _cpu_limit_cores(),
+        ),
+        (
+            "agent_cpu_periods_total",
+            "counter",
+            "CFS enforcement periods elapsed (cpu.stat nr_periods)",
+            cpu_stat.get("nr_periods"),
+        ),
+        (
+            "agent_cpu_throttled_periods_total",
+            "counter",
+            "CFS periods in which the container was throttled (cpu.stat nr_throttled)",
+            cpu_stat.get("nr_throttled"),
+        ),
+    ]
+    lines: list[str] = []
+    for name, kind, help_text, value in series:
+        if value is not None:
+            lines += [f"# HELP {name} {help_text}", f"# TYPE {name} {kind}", f"{name} {value}"]
+    return "\n".join(lines) + "\n"
+
+
 def _healthz_result(ok, ever, reason) -> tuple[int, dict]:
     if ok is None:
         return 503, {"status": "starting"}
@@ -78,7 +224,7 @@ def _healthz_result(ok, ever, reason) -> tuple[int, dict]:
 
 
 def _liveness_result() -> tuple[int, dict]:
-    """The sidecar process is live; provider sessions run in Communications."""
+    """Report sidecar liveness independently of native provider-session health."""
     return 200, {"live": True}
 
 
@@ -93,7 +239,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(*_liveness_result())
         elif self.path == "/metrics":
             ok, ever, _ = _snapshot()
-            self._send_text(200, _metrics_text(ok, ever))
+            self._send_text(200, _metrics_text(ok, ever) + _resource_metrics_text())
         elif self.path == "/healthz":
             code, body = _healthz_result(*_snapshot())
             self._send(code, body)
@@ -172,12 +318,27 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             upstream = conn.getresponse()
 
             clean_msg = _TERMINAL_LLM_ERRORS.get(upstream.status)
+            status = upstream.status
+            buffered: bytes | None = None
+            if clean_msg is None and upstream.status in _BUDGET_STATUSES:
+                # Only these are buffered. Everything else is either already mapped or
+                # must keep streaming, which reading it here would break.
+                buffered = upstream.read()
+                clean_msg = _budget_message(buffered)
+                if clean_msg:
+                    # A spent limit is answered as 402 whatever the proxy said: it
+                    # usually says 429, which the runtime retries as a rate limit
+                    # indefinitely, so the person chatting would never hear back.
+                    status = _BUDGET_EXHAUSTED_STATUS
+                    _record_terminal_llm_error("SPEND_LIMIT_REACHED")
+
             if clean_msg:
-                upstream.read()
+                if buffered is None:
+                    upstream.read()
                 clean_body = json.dumps(
-                    {"error": {"message": clean_msg, "type": None, "param": None, "code": str(upstream.status)}}
+                    {"error": {"message": clean_msg, "type": None, "param": None, "code": str(status)}}
                 ).encode()
-                self.send_response(upstream.status)
+                self.send_response(status)
                 for key, val in upstream.getheaders():
                     if key.lower() in ("content-type",):
                         self.send_header(key, val)
@@ -192,11 +353,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         self.send_header(key, val)
                 self.end_headers()
                 headers_sent = True
-                while True:
-                    chunk = upstream.read(8192)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+                if buffered is not None:
+                    # Already consumed while checking for a budget rejection.
+                    self.wfile.write(buffered)
+                else:
+                    while True:
+                        chunk = upstream.read(8192)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
         except Exception:
             if not headers_sent:
                 self.send_response(502)

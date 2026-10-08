@@ -6,12 +6,21 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ## Current state
 
-- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path for every shipped aai-cli provider without changing aai-cli; `TOKEN_BROKER` for Google Workspace; `GATEWAY_PROXY` for Firecrawl; and a durable audit trail for every resolution and lifecycle event. **No shipped plugin is `EgressMode.DIRECT` any more — no provider materializes a real credential into an agent pod.** The gateway is unconditional — `CREDENTIAL_GATEWAY_ENABLED` is gone, and each plugin's `egress_mode` is the sole, permanent routing decision.
+- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path for every shipped aai-cli provider without changing aai-cli; `TOKEN_BROKER` for Google Workspace; `GATEWAY_PROXY` for Firecrawl; and a durable audit trail for every resolution and lifecycle event. **SharePoint retains staging's `EgressMode.DIRECT` delegated-token lifecycle; the previously gateway-routed tool providers remain isolated.** Native communication credentials also reach the runtimes as described in [`../communications/CHANGELOG.md`](../communications/CHANGELOG.md). The gateway is unconditional — `CREDENTIAL_GATEWAY_ENABLED` is gone, and each plugin's `egress_mode` is the sole, permanent routing decision.
 - **In transition:** `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
-- **Next:** none open.
+- **Next:** reassess credential isolation for SharePoint and native communication transports.
 - **Blockers:** none.
 
 ## Changes
+
+### 2026-10-08 — Merge staging and preserve native runtime credentials
+
+- Preserved staging's native Slack, Telegram, Discord, and Teams transport configuration. Communication credentials remain runtime-owned; the credential gateway covers tool Integrations.
+- Added SharePoint to the Integration Plugin catalogue in `DIRECT` mode, preserving staging's delegated Microsoft profile, persistent refresh-token rotation, reconnect marker, and removal cleanup. Moving this credential behind the gateway remains future work.
+- Removed the retired Zoho Mail read commands from staging's Business Action catalogue to keep it aligned with the shipped skill bundle.
+- Added a merge migration joining the credential-gateway and staging schema histories into one Alembic head.
+- Preserved the memory gateway on local port `8003`; the credential gateway now publishes local port `8004` (its separate container and Kubernetes Service still use `8003`).
+
 
 ### 2026-09-05 — Durable audit trail for gateway resolution and lifecycle events
 

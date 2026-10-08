@@ -1,11 +1,15 @@
 import {
+  Brain,
   FileCode2,
+  History,
   KeyRound,
   MessageSquare,
   ShieldAlert,
   SlidersHorizontal,
   Sparkles,
   UserRound,
+  Wallet,
+  Webhook,
 } from "lucide-react";
 
 import {
@@ -18,18 +22,24 @@ const ICONS = {
   template: FileCode2,
   profile: UserRound,
   channels: MessageSquare,
+  webhooks: Webhook,
   skills: Sparkles,
+  memory: Brain,
   keys: KeyRound,
   override: SlidersHorizontal,
+  restore: History,
+  spend: Wallet,
   danger: ShieldAlert,
 } as const;
 
 export function AgentConfigurationSidebar({
   activeSection,
   onSectionChange,
+  sections = AGENT_CONFIGURATION_SECTIONS,
 }: {
   activeSection: AgentConfigurationSectionKey;
   onSectionChange: (section: AgentConfigurationSectionKey) => void;
+  sections?: typeof AGENT_CONFIGURATION_SECTIONS;
 }) {
   return (
     <aside className="w-full flex-shrink-0 lg:sticky lg:top-[77px] lg:w-56">
@@ -37,7 +47,7 @@ export function AgentConfigurationSidebar({
         Agent settings
       </div>
       <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible">
-        {AGENT_CONFIGURATION_SECTIONS.map((section) => {
+        {sections.map((section) => {
           const Icon = ICONS[section.key];
           const isActive = activeSection === section.key;
           return (

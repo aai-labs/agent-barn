@@ -22,10 +22,10 @@ export const mockCommunicationPlatforms = [
     settings_schema: {
       type: "object",
       properties: {
-        guild_ids: { title: "Guild IDs", type: "array", items: { type: "string" } },
         allowed_channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
         allowed_user_ids: { title: "Allowed users", type: "array", items: { type: "string" } },
         allowed_role_ids: { title: "Allowed roles", type: "array", items: { type: "string" } },
+        allow_all_users: { title: "Allow all users", type: "boolean" },
       },
     },
     credentials_schema: {
@@ -44,6 +44,7 @@ export const mockCommunicationPlatforms = [
     settings_schema: {
       type: "object",
       properties: {
+        default_delivery_target: { title: "Default delivery target", type: "object" },
         channel_ids: { title: "Allowed channels", type: "array", items: { type: "string" } },
         dm_user_ids: { title: "Allowed DM senders", type: "array", items: { type: "string" } },
       },
@@ -79,8 +80,10 @@ export const mockCommunicationConnection = {
   platform_key: "discord",
   display_name: "Customer Discord",
   enabled: true,
-  schema_version: 1,
-  settings: { guild_ids: ["guild-one"] },
+  transport: "native",
+  recovery_actions: [] as string[],
+  schema_version: 2,
+  settings: { allowed_channel_ids: ["channel-one"] },
   external_identity: "validation-skipped",
   observed_status: "CONNECTED",
   last_health_at: "2026-01-01T00:00:00Z",
@@ -96,7 +99,7 @@ export const mockCommunicationConnection = {
 export const mockUpdatedCommunicationConnection = {
   ...mockCommunicationConnection,
   display_name: "Renamed Discord",
-  settings: { guild_ids: ["guild-updated"] },
+  settings: { allowed_channel_ids: ["channel-updated"] },
   observed_status: "PENDING",
   last_health_at: null,
   last_error_code: null,
@@ -110,8 +113,10 @@ export const mockCreatedCommunicationConnection = {
   platform_key: "discord",
   display_name: "Partner Discord",
   enabled: true,
-  schema_version: 1,
-  settings: { guild_ids: ["guild-two"] },
+  transport: "native",
+  recovery_actions: [] as string[],
+  schema_version: 2,
+  settings: { allowed_channel_ids: ["channel-two"] },
   external_identity: "validation-skipped",
   observed_status: "PENDING",
   last_health_at: null,
@@ -141,6 +146,7 @@ export const mockCommunicationConnectionSummary = {
     agent_claimed: 2,
     model_completed: 2,
     reply_queued: 2,
+    initiated_queued: 1,
     provider_delivered: 2,
     dead_lettered: 0,
   },
@@ -336,6 +342,11 @@ export const mockCommunicationDeliveryJournalPage = {
   ],
 };
 
+export const mockDeadLetteredCommunicationDeliveryJournalPage = {
+  ...mockCommunicationDeliveryJournalPage,
+  items: [{ ...mockCommunicationDeliveryJournalPage.items[0], stage: "dead_lettered" }],
+};
+
 export const mockCommunicationDeliveryLifecyclePage = {
   page: 1,
   page_size: 100,
@@ -427,13 +438,4 @@ export const mockCommunicationConnectionJournalPage = {
       next_retry_at: null,
     },
   ],
-};
-
-export const mockCommunicationReconnectResponse = {
-  connection: {
-    ...summaryConnection,
-    observed_status: "CONNECTING",
-    revision: 4,
-  },
-  requested_at: "2026-01-01T00:00:00Z",
 };

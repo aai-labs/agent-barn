@@ -28,7 +28,7 @@ import {
 import { ConfigurationArtifactSurface } from "./configuration-artifact-surface";
 import { ConfigurationRequiredSkills } from "./configuration-required-skills";
 import { ConfigurationSnapshotMeta } from "./configuration-snapshot-meta";
-import { canAgent, splitRequiredSkills } from "../utils";
+import { canAgent, templateRequirementDelta } from "../utils";
 import {
   templateSelectionValue,
   type TemplateSelectionOption,
@@ -51,6 +51,7 @@ export function AgentTemplateSelectionSettings({
   const [open, setOpen] = useState(false);
   const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
   const [selectedValue, setSelectedValue] = useState<string | null>(null);
+  const [groupChoices, setGroupChoices] = useState<Record<string, string>>({});
   const selectTemplate = useSelectAgentTemplate();
   const { applyAndRestart, isPending: isRestartPending } = useAgentApplyAndRestart(agent);
   const {
@@ -80,22 +81,52 @@ export function AgentTemplateSelectionSettings({
     options.find((option) => option.value === activeValue) ??
     options[0];
   const isNoop = selectedOption?.value === activeValue;
-  const missingRequirements = useMemo(() => {
-    if (!selectedOption) return [];
-    const assignedIds = new Set(agent.skills.map((skill) => skill.id));
-    const { standalone, groups } = splitRequiredSkills(
-      selectedOption.snapshot.requiredSkills,
-    );
-    const missing = standalone
-      .filter((skill) => !assignedIds.has(skill.id))
-      .map((skill) => skill.name);
-    for (const group of groups) {
-      if (!group.members.some((skill) => assignedIds.has(skill.id))) {
-        missing.push(`one of ${group.members.map((skill) => skill.name).join(" / ")}`);
-      }
-    }
-    return missing;
-  }, [agent.skills, selectedOption]);
+  const requirements = useMemo(
+    () =>
+      templateRequirementDelta(
+        selectedOption?.snapshot.requiredSkills ?? [],
+        agent.skills,
+      ),
+    [agent.skills, selectedOption],
+  );
+  const chosenGroupMembers = requirements.pendingGroups.flatMap((group) => {
+    const member = group.members.find((candidate) => candidate.id === groupChoices[group.key]);
+    return member
+      ? [{ skillId: member.id, name: member.name, version: member.version }]
+      : [];
+  });
+  const awaitingGroupChoice =
+    chosenGroupMembers.length < requirements.pendingGroups.length;
+  const requiredAdditions = [...requirements.additions, ...chosenGroupMembers];
+  const requiredPinChanges = requirements.pinChanges;
+  const confirmedChanges = [
+    ...requiredPinChanges.map(({ skillId, name, from, version }) => ({
+      skillId,
+      name,
+      detail: `v${from} → v${version}`,
+    })),
+    ...requiredAdditions.map(({ skillId, name, version }) => ({
+      skillId,
+      name,
+      detail: `added at v${version}`,
+    })),
+  ];
+  const configuredProviders = new Set(
+    (agent.secrets ?? []).map((secret) => secret.provider),
+  );
+  const requiredSkillsById = new Map(
+    (selectedOption?.snapshot.requiredSkills ?? []).map((skill) => [skill.id, skill]),
+  );
+  const missingProviders = [
+    ...new Set(
+      [...requiredPinChanges, ...requiredAdditions].flatMap(
+        (pin) =>
+          requiredSkillsById
+            .get(pin.skillId)
+            ?.requiredProviders.filter((provider) => !configuredProviders.has(provider)) ?? [],
+      ),
+    ),
+  ];
   const isRunning = agent.status === "RUNNING";
   const canApply = canEdit && (!isRunning || canAgent(agent, "agent.lifecycle.manage"));
   const isPending = selectTemplate.isPending || isRestartPending;
@@ -107,7 +138,8 @@ export function AgentTemplateSelectionSettings({
       !selectedOption ||
       !canApply ||
       isNoop ||
-      missingRequirements.length > 0 ||
+      awaitingGroupChoice ||
+      missingProviders.length > 0 ||
       isPending
     ) {
       return;
@@ -122,6 +154,16 @@ export function AgentTemplateSelectionSettings({
           templateVersion: selectedOption.templateVersion,
           overrideVersion: selectedOption.overrideVersion,
           expectedAgentUpdatedAt: stoppedAgent.updatedAt,
+          ...(requiredAdditions.length > 0
+            ? { skillIds: requiredAdditions.map(({ skillId }) => skillId) }
+            : {}),
+          ...(requiredPinChanges.length > 0 || requiredAdditions.length > 0
+            ? {
+                skillVersions: [...requiredPinChanges, ...requiredAdditions].map(
+                  ({ skillId, version }) => ({ skillId, version }),
+                ),
+              }
+            : {}),
         });
       });
       setApplyConfirmOpen(false);
@@ -135,7 +177,8 @@ export function AgentTemplateSelectionSettings({
       !selectedOption ||
       !canApply ||
       isNoop ||
-      missingRequirements.length > 0 ||
+      awaitingGroupChoice ||
+      missingProviders.length > 0 ||
       isPending
     ) {
       return;
@@ -159,7 +202,8 @@ export function AgentTemplateSelectionSettings({
             !selectedOption ||
             !canApply ||
             isNoop ||
-            missingRequirements.length > 0 ||
+            awaitingGroupChoice ||
+            missingProviders.length > 0 ||
             catalogLoading ||
             isPending
           }
@@ -245,6 +289,7 @@ export function AgentTemplateSelectionSettings({
                             value={option.searchText}
                             onSelect={() => {
                               setSelectedValue(option.value);
+                              setGroupChoices({});
                               setOpen(false);
                             }}
                             className="items-start py-2.5"
@@ -375,9 +420,51 @@ export function AgentTemplateSelectionSettings({
             </div>
             <ConfigurationArtifactSurface snapshot={selectedOption.snapshot} />
             <ConfigurationRequiredSkills snapshot={selectedOption.snapshot} />
-            {missingRequirements.length > 0 && (
-              <p className="mb-0 mt-4 text-xs text-destructive">
-                Apply requires these Agent skill assignments: {missingRequirements.join(", ")}.
+            {requirements.pendingGroups.map((group) => (
+              <div key={group.key} className="mt-4">
+                <div
+                  className="mb-2 text-[0.75rem] font-semibold uppercase tracking-[0.08em]"
+                  style={{ color: "var(--ink-4)" }}
+                >
+                  Choose one of {group.key}
+                </div>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={`Choose one of ${group.key}`}>
+                  {group.members.map((member) => {
+                    const chosen = groupChoices[group.key] === member.id;
+                    return (
+                      <button
+                        key={member.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={chosen}
+                        className={cn("af-btn af-btn-sm", chosen ? "af-btn-primary" : "af-btn-ghost")}
+                        onClick={() =>
+                          setGroupChoices((previous) => ({
+                            ...previous,
+                            [group.key]: member.id,
+                          }))
+                        }
+                      >
+                        {member.name} v{member.version}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {requiredAdditions.length > 0 && (
+              <p className="mb-0 mt-4 text-xs text-muted-foreground">
+                Applying adds{" "}
+                {requiredAdditions
+                  .map((addition) => `${addition.name} v${addition.version}`)
+                  .join(", ")}{" "}
+                to this Agent.
+              </p>
+            )}
+            {missingProviders.length > 0 && (
+              <p className="mb-0 mt-2 text-xs text-destructive">
+                These skills need credentials that are not configured:{" "}
+                {missingProviders.join(", ")}. Add them in the Keys section first.
               </p>
             )}
           </div>
@@ -401,7 +488,26 @@ export function AgentTemplateSelectionSettings({
         onConfirm={() => void applySelection()}
         isPending={isPending}
         icon={<RefreshCw size={18} />}
-      />
+      >
+        {confirmedChanges.length > 0 && (
+          <div className="rounded-lg border p-3">
+            <p className="mb-2 mt-0 text-xs font-semibold">
+              This will also update the skills required by this template:
+            </p>
+            <ul className="m-0 flex list-none flex-col gap-1 p-0">
+              {confirmedChanges.map((change) => (
+                <li
+                  key={change.skillId}
+                  className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <span>{change.name}</span>
+                  <span className="font-mono text-muted-foreground">{change.detail}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </ConfirmationDialog>
     </AgentConfigurationSection>
   );
 }

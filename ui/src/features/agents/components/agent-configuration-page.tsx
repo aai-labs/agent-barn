@@ -7,6 +7,8 @@ import { ArrowLeft, CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AgentMemorySettings } from "@/features/agent-memory/components/agent-memory-settings";
+import { AgentWebhookSettings } from "@/features/agent-webhooks/components/agent-webhook-settings";
 
 import { useAgent } from "../hooks/use-agent";
 import { useAgentConfiguration } from "../hooks/use-agent-configuration";
@@ -21,11 +23,14 @@ import {
   type AgentConfigurationSectionKey,
 } from "./agent-configuration-utils";
 import { AgentDangerZoneSettings } from "./agent-danger-zone-settings";
+import { AgentErrorBanner } from "./agent-error-banner";
 import { AgentKeysSettings } from "./agent-keys-settings";
 import { AgentMetaBadges } from "./agent-meta-badges";
 import { AgentOverrideSettings } from "./agent-override-settings";
 import { AgentProfileSettings } from "./agent-profile-settings";
+import { AgentRestorePointsSettings } from "./agent-restore-points-settings";
 import { AgentSkillsSettings } from "./agent-skills-settings";
+import { AgentSpendLimitSettings } from "./agent-spend-limit-settings";
 import { AgentTemplateSelectionSettings } from "./agent-template-selection-settings";
 
 export function AgentConfigurationPage({ agentId }: { agentId: string }) {
@@ -46,14 +51,23 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
     agentId,
     canReadActivity && agent?.status === "ERROR",
   );
-  const [activeSection, setActiveSection] = useQueryState(
+  // Restore points read from the activity surface and the spend limit from the cost
+  // surface, so an Agent the viewer can see without that access does not offer them.
+  const canReadCosts = canAgent(agent, "cost.read");
+  const sections = AGENT_CONFIGURATION_SECTIONS.filter(
+    (item) =>
+      (item.key !== "restore" || canReadActivity) && (item.key !== "spend" || canReadCosts),
+  );
+  // Parsed against every section, and narrowed to the visible ones below: the visible
+  // list depends on the Agent, which has not loaded on first render, and parsing
+  // against it then would discard a deep link like ?section=spend.
+  const [requestedSection, setActiveSection] = useQueryState(
     "section",
-    parseAsStringEnum<AgentConfigurationSectionKey>(
-      AGENT_CONFIGURATION_SECTIONS.map((item) => item.key),
-    )
+    parseAsStringEnum<AgentConfigurationSectionKey>(AGENT_CONFIGURATION_SECTIONS.map((item) => item.key))
       .withDefault("profile")
       .withOptions({ scroll: false, history: "replace" }),
   );
+  const activeSection = sections.some((item) => item.key === requestedSection) ? requestedSection : "profile";
   const [connect] = useQueryState("connect", parseAsBoolean.withDefault(false));
   const [editingSection, setEditingSection] = useState<AgentConfigurationSectionKey | null>(null);
 
@@ -96,7 +110,9 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   const canEdit = canAgent(agent, "agent.update");
   const canManageSecrets = canAgent(agent, "agent.secret.manage");
   const canDelete = canAgent(agent, "agent.delete");
-  const section = AGENT_CONFIGURATION_SECTIONS.find((item) => item.key === activeSection) ?? AGENT_CONFIGURATION_SECTIONS[0];
+  const canManageMemory = canAgent(agent, "agent.memory.manage");
+  const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
+  const section = sections.find((item) => item.key === activeSection) ?? sections[0];
 
   function selectSection(nextSection: AgentConfigurationSectionKey) {
     void setActiveSection(nextSection);
@@ -140,38 +156,50 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
           </div>
         </div>
 
-        {agent.status === "ERROR" && (
-          <Alert
-            variant="destructive"
-            className="mb-8 items-start border-destructive/30 bg-destructive/5 px-4 py-3"
-          >
-            <CircleAlert aria-hidden />
-            <AlertTitle>Agent needs attention</AlertTitle>
-            <AlertDescription>
-              <span className="block">
-                The Agent could not start with its current configuration.
-              </span>
-              <span className="mt-1 block">
-                {health?.reason
-                  ? `Runtime reported: ${health.reason}`
-                  : "Review the Agent logs, resolve the underlying issue, and start the Agent again."}
-              </span>
+        {agent.status === "ERROR" &&
+          (agent.lastError ? (
+            <AgentErrorBanner failure={agent.lastError} className="mb-8">
               {canReadActivity && (
                 <Link
                   href={`${homeHref}/agents/${agent.id}?tab=logs`}
-                  className="mt-1 inline-block font-medium text-destructive underline underline-offset-3"
+                  className="mt-2 inline-block font-medium underline underline-offset-3"
                 >
                   View Agent logs
                 </Link>
               )}
-            </AlertDescription>
-          </Alert>
-        )}
+            </AgentErrorBanner>
+          ) : (
+            <Alert
+              variant="destructive"
+              className="mb-8 items-start border-destructive/30 bg-destructive/5 px-4 py-3"
+            >
+              <CircleAlert aria-hidden />
+              <AlertTitle>Agent needs attention</AlertTitle>
+              <AlertDescription>
+                <span className="block">
+                  The Agent could not start with its current configuration.
+                </span>
+                <span className="mt-1 block">
+                  {health?.reason ??
+                    "Review the Agent logs, resolve the underlying issue, and start the Agent again."}
+                </span>
+                {canReadActivity && (
+                  <Link
+                    href={`${homeHref}/agents/${agent.id}?tab=logs`}
+                    className="mt-1 inline-block font-medium text-destructive underline underline-offset-3"
+                  >
+                    View Agent logs
+                  </Link>
+                )}
+              </AlertDescription>
+            </Alert>
+          ))}
 
         <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
           <AgentConfigurationSidebar
             activeSection={activeSection}
             onSectionChange={selectSection}
+            sections={sections}
           />
 
           <div className="min-w-0">
@@ -202,14 +230,30 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
             {activeSection === "channels" && (
               <AgentChannelSettings
                 agent={agent}
+                agentDescription={configuration.active.description}
                 canEdit={canEdit}
                 autoOpen={connect}
+              />
+            )}
+            {activeSection === "webhooks" && (
+              <AgentWebhookSettings
+                agent={agent}
+                canEdit={canEdit}
+                canManageSecrets={canManageSecrets}
               />
             )}
             {activeSection === "skills" && (
               <AgentSkillsSettings
                 agent={agent}
                 canEdit={canEdit}
+              />
+            )}
+            {activeSection === "memory" && (
+              <AgentMemorySettings
+                agent={agent}
+                canEdit={canManageMemory}
+                editing={editingSection === "memory"}
+                onEdit={() => toggleEditing("memory")}
               />
             )}
             {activeSection === "keys" && (
@@ -228,6 +272,22 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
                 editing={editingSection === "override"}
                 onEdit={() => toggleEditing("override")}
                 onPublished={handleOverridePublished}
+              />
+            )}
+            {activeSection === "spend" && canReadCosts && (
+              <AgentSpendLimitSettings
+                agentId={agent.id}
+                organizationId={agent.organizationId}
+                editing={editingSection === "spend"}
+                onEdit={() => toggleEditing("spend")}
+              />
+            )}
+            {activeSection === "restore" && canReadActivity && (
+              <AgentRestorePointsSettings
+                agent={agent}
+                active={configuration.active}
+                canManage={canManageLifecycle}
+                canEditConfiguration={canEdit}
               />
             )}
             {activeSection === "danger" && (

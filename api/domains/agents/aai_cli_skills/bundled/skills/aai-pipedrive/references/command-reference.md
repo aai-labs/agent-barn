@@ -49,8 +49,10 @@ Successful command output is JSON on stdout, always wrapped with an `_aai` pagin
 **Get / single-record commands** (`get`, `create`, `update`, `delete`) return the raw Pipedrive response, typically `{ "success": true, "data": {...} }`.
 
 **List commands** aggregate Pipedrive pages up to `--limit` and return the raw provider list shape, `{ "success": true, "data": [...], "additional_data": {...} }`. Internally this CLI uses two pagination styles depending on Pipedrive API version:
-- v1 endpoints (`leads`, `notes`, `mailbox`, `deals flow`) paginate via `start`/`limit`, surfaced in `additional_data.pagination`.
-- v2 endpoints (`persons`, `organizations`, `deals`, `activities` list/search) paginate via cursor, surfaced in `additional_data.next_cursor`.
+- v1 endpoints (`leads`, `notes`, `files`, `mailbox`, `deals flow`) paginate via `start`/`limit`, surfaced in `additional_data.pagination`.
+- v2 endpoints (`persons`, `organizations`, `deals`, `activities`, `fields`, `pipelines`, `stages` list/search) paginate via cursor, surfaced in `additional_data.next_cursor`; `null` marks the last page.
+
+Most lists default to `--limit 50`. Check `_aai.pagination.status`: `complete` means every record was returned; `more_available` means the limit cut the list short — rerun with a larger `--limit` (or `next_command`) before drawing conclusions from the data. To work only with recent records, list newest-first (`--sort-by add_time --sort-direction desc`) and stop once `add_time` passes the cutoff.
 
 **Search commands** return Pipedrive's search-result envelope: `{ "success": true, "data": { "items": [{ "item": {...}, "result_score": N }] } }`.
 
@@ -85,12 +87,15 @@ Exit code is non-zero on any error.
 ## Resources
 
 - [Leads](#leads) — `leads list`, `search`, `get`, `create`, `update`, `delete`, `convert`
-- [Persons](#persons) — `persons list`, `search`, `get`, `view`, `activities`, `notes`, `mail-messages`, `create`, `update`, `delete`
+- [Persons](#persons) — `persons list`, `search`, `get`, `view`, `activities`, `notes`, `mail-messages`, `create`, `update`, `delete`, `merge`
 - [Organizations](#organizations) — same shape as persons
-- [Deals](#deals) — `deals list`, `search`, `get`, `view`, `activities`, `notes`, `mail-messages`, `flow`, `create`, `update`, `delete`
+- [Deals](#deals) — `deals list`, `search`, `get`, `view`, `activities`, `notes`, `mail-messages`, `flow`, `create`, `update`, `delete`, `merge`
 - [Labels](#labels) — `labels leads list/create/update/delete`, `labels deals|persons|organizations list`
-- [Activities](#activities) — `activities list`, `get` (cross-record)
-- [Notes](#notes) — `notes list`, `get` (cross-record)
+- [Activities](#activities) — `activities list`, `get`, `create`, `update`, `delete` (cross-record)
+- [Notes](#notes) — `notes list`, `get`, `create`, `update`, `delete` (cross-record)
+- [Files](#files) — `files list`, `get`, `download` (attachments such as meeting transcripts)
+- [Fields](#fields) — `fields deals|persons|organizations|activities list/get` (custom-field keys and option labels)
+- [Users, pipelines, stages](#users-pipelines-and-stages) — `users list/get/me/find`, `pipelines list/get`, `stages list/get`
 - [Mailbox](#mailbox) — `mailbox messages get`, `mailbox threads list/get/messages`
 - [Request](#request) — `pipedrive request` for uncommon endpoints
 
@@ -169,9 +174,12 @@ aai-cli pipedrive leads get <lead-id>
 aai-cli pipedrive leads create [--json JSON_OR_PATH] --title TEXT
                                 [--person-id ID] [--organization-id ID] [--label-ids CSV]
 aai-cli pipedrive leads update <lead-id> [--json JSON_OR_PATH] [--title TEXT]
-                                [--person-id ID] [--organization-id ID] [--label-ids CSV]
+                                [--person-id ID] [--organization-id ID]
+                                [--label-ids CSV | --add-label-ids CSV --remove-label-ids CSV]
 aai-cli pipedrive leads delete <lead-id>
 ```
+
+**Labels on update.** `--label-ids` replaces the record's whole label set. To change one label without dropping the others, use `--add-label-ids` / `--remove-label-ids`: the CLI reads the current labels, applies the change, and writes the result. The same flags exist on `deals`, `persons`, and `organizations update`. The read and the write are separate requests, so a label change someone else makes in between is overwritten; if the record comes back without `label_ids`, the CLI refuses rather than writing an empty set.
 
 `get`/`create`/`update` return the same single-record shape as `leads list` items (unwrapped, not the search `item` wrapper). `delete` returns `{ "data": { "id": "<lead-id>" }, "success": true }`.
 
@@ -257,9 +265,13 @@ aai-cli pipedrive persons mail-messages <person-id> [--limit N]
 aai-cli pipedrive persons create [--json JSON_OR_PATH] --name TEXT
                                   [--org-id ID] [--email TEXT] [--phone TEXT] [--label-ids CSV]
 aai-cli pipedrive persons update <person-id> [--json JSON_OR_PATH] [--name TEXT]
-                                  [--org-id ID] [--email TEXT] [--phone TEXT] [--label-ids CSV]
+                                  [--org-id ID] [--email TEXT] [--phone TEXT]
+                                  [--label-ids CSV | --add-label-ids CSV --remove-label-ids CSV]
 aai-cli pipedrive persons delete <person-id>
+aai-cli pipedrive persons merge <person-id> --merge-with-id ID
 ```
+
+`merge` folds `<person-id>` into `--merge-with-id`: the `--merge-with-id` person remains, keeps its data where the two conflict, and gains the other's emails, phones, deals, and history; `<person-id>` is deactivated. `organizations merge` and `deals merge` behave the same way. Merging cannot be undone.
 
 **Example** (`persons create --name "Skill Doc Test Person" --email skilldoc@example.com --phone 555-0100`)
 
@@ -296,8 +308,10 @@ aai-cli pipedrive organizations activities <org-id> [--limit N]
 aai-cli pipedrive organizations notes <org-id> [--limit N]
 aai-cli pipedrive organizations mail-messages <org-id> [--limit N]
 aai-cli pipedrive organizations create [--json JSON_OR_PATH] --name TEXT [--address TEXT] [--label-ids CSV]
-aai-cli pipedrive organizations update <org-id> [--json JSON_OR_PATH] [--name TEXT] [--address TEXT] [--label-ids CSV]
+aai-cli pipedrive organizations update <org-id> [--json JSON_OR_PATH] [--name TEXT] [--address TEXT]
+                                        [--label-ids CSV | --add-label-ids CSV --remove-label-ids CSV]
 aai-cli pipedrive organizations delete <org-id>
+aai-cli pipedrive organizations merge <org-id> --merge-with-id ID
 ```
 
 **Example** (`organizations get`)
@@ -447,8 +461,9 @@ aai-cli pipedrive deals create [--json JSON_OR_PATH] --title TEXT [--person-id I
                                 [--value NUM] [--currency CODE] [--pipeline-id ID] [--stage-id ID] [--label-ids CSV]
 aai-cli pipedrive deals update <deal-id> [--json JSON_OR_PATH] [--title TEXT] [--person-id ID]
                                 [--org-id ID] [--value NUM] [--currency CODE] [--pipeline-id ID]
-                                [--stage-id ID] [--label-ids CSV]
+                                [--stage-id ID] [--label-ids CSV | --add-label-ids CSV --remove-label-ids CSV]
 aai-cli pipedrive deals delete <deal-id>
+aai-cli pipedrive deals merge <deal-id> --merge-with-id ID
 ```
 
 **Example** (`deals create --title "Skill Doc Test Deal" --person-id 3 --org-id 3 --value 5000 --currency USD`)
@@ -510,7 +525,7 @@ Reads the label options from the corresponding field definition (e.g. `/api/v2/d
 
 ## Activities
 
-Commands under `aai-cli pipedrive activities`. Cross-record — use `--deal-id`/`--person-id`/`--org-id`/`--lead-id` to scope. There is no `create`/`update`/`delete`; activities are read-only from this CLI's current slice.
+Commands under `aai-cli pipedrive activities`. Cross-record — use `--deal-id`/`--person-id`/`--org-id`/`--lead-id` to scope. Activities are Pipedrive's scheduled calls, meetings, tasks, and deadlines; an open activity with a due date is how Pipedrive reminds its owner.
 
 ```
 aai-cli pipedrive activities list [--limit N] [--filter-id ID] [--ids CSV] [--owner-id ID]
@@ -518,6 +533,12 @@ aai-cli pipedrive activities list [--limit N] [--filter-id ID] [--ids CSV] [--ow
                                    [--done true|false] [--updated-since TS] [--updated-until TS]
                                    [--sort-by FIELD] [--sort-direction asc|desc] [--include-attendees]
 aai-cli pipedrive activities get <activity-id>
+aai-cli pipedrive activities create [--json JSON_OR_PATH] --subject TEXT [--type KEY]
+                                     [--due-date YYYY-MM-DD] [--due-time HH:MM] [--duration HH:MM]
+                                     [--deal-id ID] [--lead-id ID] [--person-id ID] [--org-id ID]
+                                     [--owner-id ID] [--note TEXT] [--done true|false]
+aai-cli pipedrive activities update <activity-id> [--json JSON_OR_PATH] [--subject TEXT] [same flags as create]
+aai-cli pipedrive activities delete <activity-id>
 ```
 
 **Example** (`activities get`)
@@ -539,13 +560,18 @@ aai-cli pipedrive activities get <activity-id>
 
 ## Notes
 
-Commands under `aai-cli pipedrive notes`. Cross-record — use `--deal-id`/`--person-id`/`--org-id`/`--lead-id` to scope. There is no `create`/`update`/`delete` at this level (use record-scoped associations, or `pipedrive request` for the raw v1 note-write endpoints if needed).
+Commands under `aai-cli pipedrive notes`. Cross-record — use `--deal-id`/`--person-id`/`--org-id`/`--lead-id` to scope. A note must be linked to at least one deal, person, organization, or lead.
 
 ```
 aai-cli pipedrive notes list [--limit N] [--user-id ID] [--lead-id ID] [--deal-id ID]
                               [--person-id ID] [--org-id ID] [--sort FIELD]
                               [--start-date DATE] [--end-date DATE] [--updated-since TS]
 aai-cli pipedrive notes get <note-id>
+aai-cli pipedrive notes create [--json JSON_OR_PATH] --content TEXT
+                                [--deal-id ID] [--person-id ID] [--org-id ID] [--lead-id UUID]
+aai-cli pipedrive notes update <note-id> [--json JSON_OR_PATH] [--content TEXT]
+                                [--deal-id ID] [--person-id ID] [--org-id ID] [--lead-id UUID]
+aai-cli pipedrive notes delete <note-id>
 ```
 
 **Example** (`notes get`)
@@ -563,6 +589,51 @@ aai-cli pipedrive notes get <note-id>
   "success": true
 }
 ```
+
+## Files
+
+Commands under `aai-cli pipedrive files`. Files are attachments on deals, persons, organizations, and leads — meeting transcripts, proposals, and signed documents usually live here rather than in notes.
+
+```
+aai-cli pipedrive files list [--limit N] [--deal-id ID | --person-id ID | --org-id ID] [--sort FIELD]
+aai-cli pipedrive files get <file-id>
+aai-cli pipedrive files download <file-id> --output PATH
+```
+
+`files list` without a record flag lists every file in the account (`/v1/files`); with one it lists that record's files (`/v1/deals/{id}/files` and so on). At most one record flag is accepted. Each file object carries `name`, `file_name`, `file_size`, `add_time`, `remote_location`, and the linked `deal_id`/`person_id`/`org_id`/`lead_id` (plus `mail_message_id` for email attachments).
+
+`files download` writes the raw bytes to `--output` and never to stdout; the command itself returns `{ "output": ..., "bytes": ..., "file_id": ... }`. Convert the saved file to text before reading it (for example `pdftotext` for PDFs).
+
+## Fields
+
+Commands under `aai-cli pipedrive fields`. Record payloads identify custom fields by a hash `field_code` and option fields (such as an organization's Industry) by numeric option IDs. The field definitions map both back to names:
+
+```
+aai-cli pipedrive fields deals list [--limit N]
+aai-cli pipedrive fields persons list [--limit N]
+aai-cli pipedrive fields organizations list [--limit N]
+aai-cli pipedrive fields activities list [--limit N]
+aai-cli pipedrive fields <deals|persons|organizations|activities> get <field-code>
+```
+
+Each field has `field_code`, `field_name`, `field_type`, `is_custom_field`, and `options` (`[{ "id": 41, "label": "Manufacturing" }]` for enum/set fields, `null` otherwise). `--limit` defaults to 500 so the whole field map comes back; a partial map silently leaves keys unresolved. Leads have no field endpoint of their own; their custom fields use the deal field definitions.
+
+To find records by a field value, resolve the label to its option ID or the field name to its `field_code` here first, then match on those in the record payloads.
+
+## Users, pipelines, and stages
+
+```
+aai-cli pipedrive users list
+aai-cli pipedrive users get <user-id>
+aai-cli pipedrive users me
+aai-cli pipedrive users find --term TEXT [--search-by-email]
+aai-cli pipedrive pipelines list [--limit N] [--sort-by FIELD] [--sort-direction asc|desc]
+aai-cli pipedrive pipelines get <pipeline-id>
+aai-cli pipedrive stages list [--pipeline-id ID] [--limit N] [--sort-by FIELD] [--sort-direction asc|desc]
+aai-cli pipedrive stages get <stage-id>
+```
+
+Use these to turn `owner_id`, `user_id`, `pipeline_id`, and `stage_id` values in records into names. `users list` returns every user in one response (Pipedrive does not paginate it) and reports `_aai.pagination.status: complete`. `users me` is the user the API token belongs to — notes and activities written through the CLI are attributed to them.
 
 ## Mailbox
 
@@ -587,7 +658,7 @@ aai-cli pipedrive mailbox threads messages <thread-id>
 
 ## Request
 
-For uncommon Pipedrive REST endpoints not covered by typed commands (e.g. pipelines, stages, custom fields metadata, filters):
+For uncommon Pipedrive REST endpoints not covered by typed commands (e.g. filters, pipeline conversion statistics, product data):
 
 ```
 aai-cli pipedrive request get /api/v2/pipelines

@@ -22,8 +22,13 @@ export type ConversationsFiltersKey = {
 
 export const agentsKey = {
   ..._agentsKeyBase,
+  nameSuggestion: (orgApiBase: string, openingId: string) =>
+    [..._agentsKeyBase.all, "name-suggestion", orgApiBase, openingId] as const,
+  diagnostics: (org: string, id: string) => [..._agentsKeyBase.detail(id), "diagnostics", org] as const,
   health: (id: string) => [..._agentsKeyBase.detail(id), "health"] as const,
   configuration: (id: string) => [..._agentsKeyBase.detail(id), "configuration"] as const,
+  llmBudget: (id: string) => [..._agentsKeyBase.detail(id), "llm-budget"] as const,
+  llmBudgets: (organizationId: string) => [..._agentsKeyBase.all, "llm-budgets", organizationId] as const,
   shareSettings: (id: string) => [..._agentsKeyBase.detail(id), "share"] as const,
   shareRoles: () => [..._agentsKeyBase.all, "share-roles"] as const,
   conversationChannels: (agentId: string) =>
@@ -41,10 +46,17 @@ export const agentsKey = {
       channelId,
       filters,
     ] as const,
+  webChatMessages: (agentId: string, threadId: string) =>
+    [..._agentsKeyBase.detail(agentId), "web-chat-messages", threadId] as const,
+  webChatThreads: (agentId: string) =>
+    [..._agentsKeyBase.detail(agentId), "web-chat-threads"] as const,
   logs: (id: string) => [..._agentsKeyBase.detail(id), "logs"] as const,
+  restorePoints: (id: string) => [..._agentsKeyBase.detail(id), "restore-points"] as const,
   slackChannels: (id: string) => [..._agentsKeyBase.detail(id), "slack-channels"] as const,
   slackUsers: (id: string) => [..._agentsKeyBase.detail(id), "slack-users"] as const,
   models: () => [..._agentsKeyBase.all, "models"] as const,
+  activity: (id: string, part: string, params: Record<string, unknown>) =>
+    [..._agentsKeyBase.detail(id), "activity", part, params] as const,
 };
 
 export const toolCallsKey = createQueryKeyStructure("tool-calls");
@@ -121,6 +133,57 @@ export function splitRequiredSkills(skills: TemplateRequiredSkill[]): {
     }
   }
   return { standalone, groups };
+}
+
+export type RequiredPinChange = {
+  skillId: string;
+  name: string;
+  from: number;
+  version: number;
+};
+
+export type RequiredAddition = { skillId: string; name: string; version: number };
+
+export type TemplateRequirementDelta = {
+  pinChanges: RequiredPinChange[];
+  additions: RequiredAddition[];
+  pendingGroups: RequiredSkillGroup[];
+};
+
+export function templateRequirementDelta(
+  requiredSkills: TemplateRequiredSkill[],
+  assignedSkills: { id: string; version: number }[],
+): TemplateRequirementDelta {
+  const pinChanges: RequiredPinChange[] = [];
+  const additions: RequiredAddition[] = [];
+  const pendingGroups: RequiredSkillGroup[] = [];
+  const assigned = new Map(assignedSkills.map((skill) => [skill.id, skill.version]));
+  const { standalone, groups } = splitRequiredSkills(requiredSkills);
+
+  for (const skill of standalone) {
+    const from = assigned.get(skill.id);
+    if (from === undefined) {
+      additions.push({ skillId: skill.id, name: skill.name, version: skill.version });
+    } else if (from !== skill.version) {
+      pinChanges.push({ skillId: skill.id, name: skill.name, from, version: skill.version });
+    }
+  }
+
+  for (const group of groups) {
+    const assignedMembers = group.members.flatMap((member) => {
+      const from = assigned.get(member.id);
+      return from === undefined ? [] : [{ member, from }];
+    });
+    if (assignedMembers.length === 0) {
+      pendingGroups.push(group);
+      continue;
+    }
+    if (assignedMembers.some(({ member, from }) => from === member.version)) continue;
+    const { member, from } = assignedMembers[0];
+    pinChanges.push({ skillId: member.id, name: member.name, from, version: member.version });
+  }
+
+  return { pinChanges, additions, pendingGroups };
 }
 
 // Derives a stable, human-legible group_key from member names for a

@@ -20,9 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN --mount=type=secret,id=gh_token \
-    git clone --depth 1 \
-      "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/aai-cli.git" repo && \
+RUN git clone --depth 1 https://github.com/aai-labs/aai-cli.git repo && \
     cargo install --path repo --root /out --locked
 
 FROM node:22-bookworm-slim
@@ -40,7 +38,7 @@ RUN set -eu; \
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
-    apt-get install -y --no-install-recommends git curl jq ripgrep ca-certificates tini
+    apt-get install -y --no-install-recommends git curl jq ripgrep ca-certificates tini poppler-utils
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -57,7 +55,7 @@ RUN uv python install 3.12 && \
 # measured 573MiB in-pod, which a 1Gi cap cannot absorb alongside V8's heap.
 # Removing it drops ~1.47GB from the image.
 
-RUN npm install -g openclaw@2026.6.11
+RUN npm install -g openclaw@2026.8.2
 
 # gog (gogcli) — Google Workspace CLI used by the google_workspace integration. Pinned:
 # the OAuth scopes the API requests mirror this version's service map, and auth-state
@@ -107,8 +105,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fi
 
 RUN mkdir -p /opt/openclaw-preinstalled/npm && \
-    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.5.27 && \
+    npm install --prefix /opt/openclaw-preinstalled/npm \
+      @openclaw/msteams@2026.8.2 \
+      @vectorize-io/hindsight-openclaw@0.13.0 \
+      @vectorize-io/hindsight-client@0.8.6 && \
     chown -R node:node /opt/openclaw-preinstalled
+
+COPY patch-hindsight-manifest.mjs /tmp/patch-hindsight-manifest.mjs
+RUN node /tmp/patch-hindsight-manifest.mjs \
+      /opt/openclaw-preinstalled/npm/node_modules/@vectorize-io/hindsight-openclaw/openclaw.plugin.json && \
+    rm /tmp/patch-hindsight-manifest.mjs
 
 USER node
 

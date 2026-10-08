@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
 from api.domains.agents.access_service import AgentAccessService
+from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     AgentAccessRoleRead,
     AgentAccessSettingsRead,
@@ -14,9 +15,14 @@ from api.domains.agents.models import (
     AgentCreate,
     AgentFilter,
     AgentHealthRead,
+    AgentLlmBudgetListItem,
+    AgentLlmBudgetRead,
+    AgentLlmBudgetUpdate,
     AgentLogHistoryRead,
     AgentLogsRead,
+    AgentNameSuggestionRead,
     AgentRead,
+    AgentRuntimeDiagnosticsRead,
     AgentTemplateOverrideDraftRead,
     AgentTemplateOverrideDraftUpdate,
     AgentTemplateOverridePublish,
@@ -59,6 +65,14 @@ def list_agents(
     )
 
 
+@agents_router.get("/name-suggestion", response_model=AgentNameSuggestionRead)
+def suggest_agent_name(
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+) -> AgentNameSuggestionRead:
+    return service.suggest_agent_name(context)
+
+
 @agents_router.get("/models")
 def list_models(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
@@ -66,6 +80,17 @@ def list_models(
     catalog: Annotated[bool, Query()] = False,
 ):
     return service.list_models(context, catalog=catalog)
+
+
+@agents_router.get("/llm-budgets", response_model=list[AgentLlmBudgetListItem])
+def list_agent_llm_budgets(
+    organization_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentLlmBudgetService, Injected(AgentLlmBudgetService)],
+):
+    """Every Agent's spend limit and where it comes from. Declared before the
+    `/{agent_id}` routes so the path is never read as an Agent id."""
+    return service.list_llm_budgets(organization_id, context)
 
 
 @agents_router.get("/share-roles", response_model=list[AgentAccessRoleRead])
@@ -146,6 +171,27 @@ def get_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.get_agent(agent_id, context)
+
+
+@agents_router.get("/{agent_id}/llm-budget", response_model=AgentLlmBudgetRead)
+def get_agent_llm_budget(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentLlmBudgetService, Injected(AgentLlmBudgetService)],
+):
+    """The Agent's spend limit and its spend against it."""
+    return service.get_llm_budget(agent_id, context)
+
+
+@agents_router.put("/{agent_id}/llm-budget", response_model=AgentLlmBudgetRead)
+def set_agent_llm_budget(
+    agent_id: UUID,
+    budget: AgentLlmBudgetUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentLlmBudgetService, Injected(AgentLlmBudgetService)],
+):
+    """Set the Agent's own spend limit, or clear it to follow the default."""
+    return service.set_llm_budget(agent_id, budget.budget_usd, context)
 
 
 @agents_router.get("/{agent_id}/configuration", response_model=AgentConfigurationRead)
@@ -253,6 +299,15 @@ def stop_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.stop_agent(agent_id, context)
+
+
+@agents_router.get("/{agent_id}/diagnostics", response_model=AgentRuntimeDiagnosticsRead)
+def get_runtime_diagnostics(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.get_runtime_diagnostics(agent_id, context)
 
 
 @agents_router.get("/{agent_id}/healthz", response_model=AgentHealthRead)

@@ -27,7 +27,28 @@ export function agentSettings(overrides: Record<string, unknown> = {}) {
     default_model_source: "platform",
     inheriting_agent_count: 2,
     override_agent_count: 1,
+    default_agent_llm_budget_usd: null,
+    effective_default_agent_llm_budget_usd: 25,
+    // Distinct from the model counts above, so each can be asserted unambiguously.
+    budget_inheriting_agent_count: 4,
+    budget_override_agent_count: 0,
+    can_manage_llm_budget: true,
     updated_at: null,
+    ...overrides,
+  };
+}
+
+/** The organization's own view of its spend limit, as GET /llm-budget returns it. */
+export function organizationLlmBudget(overrides: Record<string, unknown> = {}) {
+  return {
+    state: "ok",
+    limit_usd: 100,
+    ceiling_usd: 100,
+    own_limit_usd: null,
+    window: "30d",
+    spend_usd: 12.5,
+    renews_at: "2026-10-01T00:00:00Z",
+    can_manage: true,
     ...overrides,
   };
 }
@@ -142,6 +163,141 @@ export class OrganizationDataSupport {
     });
   }
 
+  async interceptGetOrganizationLlmBudget({
+    organizationId = ORG_A_ID,
+    budget,
+    status = 200,
+  }: {
+    organizationId?: string;
+    budget?: unknown;
+    status?: number;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/${organizationId}/llm-budget`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail: "Forbidden" } : (budget ?? organizationLlmBudget())),
+        });
+      },
+    );
+  }
+
+  /** Captures what the organization's own-limit PUT sent, answering with `budget`. */
+  async interceptSetOrganizationOwnLlmBudget({
+    organizationId = ORG_A_ID,
+    budget,
+    status = 200,
+    detail = "Unable to save the spend limit",
+  }: {
+    organizationId?: string;
+    budget?: unknown;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    const requests: unknown[] = [];
+    await this.page.route(`**/api/v1/organizations/${organizationId}/llm-budget`, async (route) => {
+      if (route.request().method() !== "PUT") {
+        await route.fallback();
+        return;
+      }
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail } : (budget ?? organizationLlmBudget())),
+      });
+    });
+    return requests;
+  }
+
+  async interceptGetOrganizationLlmCoverage({
+    organizationId = ORG_A_ID,
+    coverage,
+    status = 200,
+  }: {
+    organizationId?: string;
+    coverage?: unknown;
+    status?: number;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/platform/organizations/${organizationId}/llm-budget/coverage`,
+      async (route) => {
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400
+              ? { detail: "Coverage unavailable" }
+              : (coverage ?? { total_agents: 0, enrolled_agents: 0, uncovered: [], newly_enrolled: 0 }),
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptEnrollOrganizationLlmKeys({
+    organizationId = ORG_A_ID,
+    coverage,
+    status = 200,
+  }: {
+    organizationId?: string;
+    coverage?: unknown;
+    status?: number;
+  } = {}) {
+    const calls: string[] = [];
+    await this.page.route(
+      `**/api/v1/platform/organizations/${organizationId}/llm-budget/enroll`,
+      async (route) => {
+        calls.push(route.request().method());
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400
+              ? { detail: "LiteLLM is not configured for this deployment" }
+              : (coverage ?? { total_agents: 2, enrolled_agents: 2, uncovered: [], newly_enrolled: 2 }),
+          ),
+        });
+      },
+    );
+    return calls;
+  }
+
+  /** Captures the PUT body so a test can assert what the card actually sent. */
+  async interceptSetPlatformOrganizationLlmBudget({
+    organizationId = ORG_A_ID,
+    organization,
+    status = 200,
+  }: {
+    organizationId?: string;
+    organization?: unknown;
+    status?: number;
+  } = {}) {
+    const requests: unknown[] = [];
+    await this.page.route(
+      `**/api/v1/platform/organizations/${organizationId}/llm-budget`,
+      async (route) => {
+        if (route.request().method() !== "PUT") {
+          await route.fallback();
+          return;
+        }
+        requests.push(route.request().postDataJSON());
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail: "Proxy unavailable" } : organization),
+        });
+      },
+    );
+    return requests;
+  }
+
   async interceptGetPlatformOrganizationMembers({
     organizationId = ORG_A_ID,
     members,
@@ -238,6 +394,23 @@ export class OrganizationDataSupport {
     });
   }
 
+  async interceptRenameOrganization({ status = 200 }: { status?: number } = {}) {
+    const state = { name: "AAI Labs", payload: undefined as unknown };
+    await this.page.route(`**/api/v1/organizations/${ORG_A_ID}`, async (route) => {
+      const method = route.request().method();
+      if (method === "PATCH") {
+        state.payload = route.request().postDataJSON();
+        if (status < 400) state.name = (state.payload as { name: string }).name;
+        await route.fulfill({ status, json: status >= 400 ? { detail: "Unable to rename organization" } : org({ name: state.name }) });
+      } else if (method === "GET") {
+        await route.fulfill({ json: org({ name: state.name }) });
+      } else {
+        await route.fallback();
+      }
+    });
+    return state;
+  }
+
   async interceptAgentSettings({
     settings,
     status = 200,
@@ -259,15 +432,26 @@ export class OrganizationDataSupport {
         return;
       }
       if (method === "PUT") {
-        // Mirror the server: a saved default becomes the organization's own choice.
+        // Mirror the server: each setting sent becomes the organization's own choice,
+        // and one left out of the body is left alone.
         const body = JSON.parse(route.request().postData() ?? "{}");
-        const chosen = body.default_model ?? null;
-        current = {
-          ...current,
-          default_model: chosen,
-          default_model_source: chosen ? "organization" : "platform",
-          effective_default_model: chosen ?? current.effective_default_model,
-        };
+        if ("default_model" in body) {
+          const chosen = body.default_model ?? null;
+          current = {
+            ...current,
+            default_model: chosen,
+            default_model_source: chosen ? "organization" : "platform",
+            effective_default_model: chosen ?? current.effective_default_model,
+          };
+        }
+        if ("default_agent_llm_budget_usd" in body) {
+          const amount = body.default_agent_llm_budget_usd;
+          current = {
+            ...current,
+            default_agent_llm_budget_usd: amount,
+            effective_default_agent_llm_budget_usd: amount ?? 25,
+          };
+        }
       }
       await route.fulfill({
         status: 200,

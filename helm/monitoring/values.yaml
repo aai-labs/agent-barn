@@ -13,6 +13,29 @@
 # Alertmanager (slack_api_url_file) so it never lands in a ConfigMap.
 slackWebhookUrl: ""
 
+# LiteLLM serves /metrics only to proxy admins (its metrics carry every
+# Organization's key aliases and spend, so it must stay authenticated).
+# A pre-install/pre-upgrade Job (templates/litellm-metrics-key-job.yaml)
+# provisions a read-only proxy_admin_viewer key into secretName, which the
+# Prometheus server mounts for the litellm scrape job.
+litellmMetricsKey:
+  image: python:3.12-alpine
+  # Holds LITELLM_MASTER_KEY; created by the litellm release.
+  litellmSecretName: litellm
+  secretName: litellm-metrics-key
+  # Tenant SA with namespaced Secret write (helmfile sets <ns>-user).
+  serviceAccountName: agent-farm-user
+
+# Basic auth on the Prometheus server and Alertmanager web endpoints
+# (templates/web-auth-secret.yaml): agent pods share this namespace and can
+# reach every pod in it. helmfile sets password from MONITORING_WEB_PASSWORD
+# (alphanumeric, 12+ chars) plus the derived probe headers and reloader URL,
+# which the Secret template validates against it.
+webAuth:
+  username: monitoring
+  password: ""
+  secretName: monitoring-web-auth
+
 prometheus:
   # No Role/RoleBinding/ClusterRole rendered anywhere (tenant SA can't create
   # them); see serviceAccounts below.
@@ -51,6 +74,14 @@ prometheus:
     alertmanagers:
       - static_configs:
           - targets: ["monitoring-alertmanager:9093"]
+        basic_auth:
+          username: monitoring
+          password_file: /etc/monitoring-web-auth/password
+
+    # Basic auth on the web endpoint (see webAuth). probeHeaders and
+    # configmapReload.reloadUrl carry the same credentials; helmfile sets them.
+    extraArgs:
+      web.config.file: /etc/monitoring-web-auth/web-config.yml
 
     persistentVolume:
       enabled: true
@@ -65,12 +96,30 @@ prometheus:
       limits:
         memory: 1Gi
 
+    # Read-only LiteLLM key for the litellm scrape job (see litellmMetricsKey).
+    # optional: a missing Secret fails the scrape (LiteLLMDown) instead of
+    # blocking the Prometheus pod from starting.
+    extraSecretMounts:
+      - name: litellm-metrics-key
+        mountPath: /etc/prometheus-secrets/litellm
+        secretName: litellm-metrics-key
+        readOnly: true
+        optional: true
+      - name: web-auth
+        mountPath: /etc/monitoring-web-auth
+        secretName: monitoring-web-auth
+        readOnly: true
+
   # The chart's default jobs (kubelet/cAdvisor/apiserver/annotation-based
   # discovery) need node- and cluster-level read we don't have on a shared
   # cluster; consequence: no container CPU/memory metrics, dashboards stick
   # to app-level and kube-state-metrics series. Only the localhost
   # self-scrape stays on.
   scrapeConfigs:
+    prometheus:
+      basic_auth:
+        username: monitoring
+        password_file: /etc/monitoring-web-auth/password
     kubernetes-api-servers:
       enabled: false
     kubernetes-nodes:
@@ -115,6 +164,9 @@ prometheus:
               target_label: endpoint
 
         - job_name: litellm
+          authorization:
+            type: Bearer
+            credentials_file: /etc/prometheus-secrets/litellm/LITELLM_METRICS_KEY
           kubernetes_sd_configs:
             - role: endpoints
               namespaces:
@@ -267,6 +319,10 @@ prometheus:
             - alert: AgentTargetDown
               expr: up{job="agent"} == 0
               for: 2m
+              # A crash-looping agent's healthz answers for a few seconds on
+              # each restart; without this, every restart resolves the alert
+              # and the next backoff re-fires it.
+              keep_firing_for: 15m
               labels:
                 severity: critical
               annotations:
@@ -372,6 +428,14 @@ prometheus:
         mountPath: /etc/alertmanager-secrets
         secretName: alertmanager-slack-webhook
         readOnly: true
+      - name: web-auth
+        mountPath: /etc/monitoring-web-auth
+        secretName: monitoring-web-auth
+        readOnly: true
+    # Basic auth on the web endpoint (see webAuth); helmfile adds the
+    # Authorization header to the liveness/readiness probes.
+    extraArgs:
+      web.config.file: /etc/monitoring-web-auth/web-config.yml
 
   kube-state-metrics:
     enabled: true
@@ -403,6 +467,14 @@ grafana:
   replicas: 1
   # adminPassword is injected by helmfile from GRAFANA_ADMIN_PASSWORD.
   adminPassword: ""
+  # Prometheus requires basic auth (webAuth); the datasource reads it from here.
+  # Read only at startup, so helmfile also sets podAnnotations
+  # checksum/web-auth (sha256 of the password) to roll Grafana on rotation.
+  envValueFrom:
+    MONITORING_WEB_PASSWORD:
+      secretKeyRef:
+        name: monitoring-web-auth
+        key: password
   # The only ingress-exposed pod in the stack, so it gets the opposite
   # treatment of prometheus/ksm: no RBAC, no sidecar, and no ServiceAccount
   # token mounted — dashboards are mounted from the ConfigMap below instead
@@ -439,6 +511,11 @@ grafana:
           access: proxy
           url: http://monitoring-prometheus-server
           isDefault: true
+          basicAuth: true
+          basicAuthUser: monitoring
+          secureJsonData:
+            # Expanded by Grafana from its env (envValueFrom below).
+            basicAuthPassword: $MONITORING_WEB_PASSWORD
   ingress:
     enabled: true
     ingressClassName: traefik

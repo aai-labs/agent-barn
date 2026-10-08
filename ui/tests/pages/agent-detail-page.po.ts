@@ -9,6 +9,21 @@ export class AgentDetailPage {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}`);
   }
 
+  async openFocusedActivity(agentId: string) {
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=activity` +
+      "&from=2026-09-10T00:00:00Z&to=2026-09-13T00:00:00Z" +
+      "&focusFrom=2026-09-12T11:29:00Z&focusTo=2026-09-12T11:30:00Z");
+  }
+
+  async clearActivityDates() {
+    await this.page.getByRole("button", { name: "Date range", exact: true }).click();
+    await this.page.getByRole("button", { name: "Clear dates", exact: true }).click();
+  }
+
+  runtimeDiagnostics(): Locator {
+    return this.page.getByTestId("agent-runtime-diagnostics");
+  }
+
   agentName(name: string): Locator {
     return this.page.getByRole("heading", { name });
   }
@@ -27,6 +42,28 @@ export class AgentDetailPage {
 
   hireButton(): Locator {
     return this.page.getByRole("button", { name: /hire agent/i });
+  }
+
+  costsTab(): Locator {
+    return this.page.getByRole("button", { name: "Costs", exact: true });
+  }
+
+  async openCostsTab() {
+    await this.costsTab().click();
+  }
+
+  resourceUsageTab(): Locator {
+    return this.page.getByRole("button", { name: "Resource usage", exact: true });
+  }
+
+  async gotoResourceUsage(agentId = "33333333-3333-4333-8333-333333333333", range?: string) {
+    const query = range ? `&range=${range}` : "";
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=resource-usage${query}`);
+  }
+
+  /** The labels of the tab bar, in the order they are drawn. */
+  tabLabels(): Promise<string[]> {
+    return this.page.locator("button.ap-tab").allTextContents();
   }
 
   toolCallsTab(): Locator {
@@ -51,6 +88,34 @@ export class AgentDetailPage {
 
   connectionProviderStatus(status: string): Locator {
     return this.page.getByText(status, { exact: true });
+  }
+
+  lifecycleMenu(): Locator {
+    return this.page.getByTestId("agent-lifecycle-menu");
+  }
+
+  updateBanner(): Locator {
+    return this.page.getByTestId("agent-update-banner");
+  }
+
+  updateButton(): Locator {
+    return this.page.getByTestId("agent-update-button");
+  }
+
+  updateReleasesLink(): Locator {
+    return this.page.getByTestId("agent-update-releases-link");
+  }
+
+  lifecycleMenuTrigger(): Locator {
+    return this.page.getByRole("button", { name: "More lifecycle actions" });
+  }
+
+  provisioningErrorBanner(): Locator {
+    return this.page.getByTestId("agent-error-banner");
+  }
+
+  provisioningErrorDetail(): Locator {
+    return this.page.getByTestId("agent-error-detail");
   }
 
   providerErrorAlert(): Locator {
@@ -115,6 +180,27 @@ export class AgentDetailPage {
 
   browseDirectoryButton(fieldLabel: string): Locator {
     return this.page.getByRole("button", { name: `Browse ${fieldLabel}`, exact: true });
+  }
+
+  defaultDeliveryToggle(): Locator {
+    return this.page.getByRole("checkbox", { name: "Send scheduled results through this Connection" });
+  }
+
+  defaultDestinationBrowse(): Locator {
+    return this.page.getByRole("button", { name: "Browse Default channel or recipient" });
+  }
+
+  defaultDestinationInput(): Locator {
+    return this.page.getByLabel("Default channel or recipient", { exact: true });
+  }
+
+  /** The chosen destination renders as a removable chip, replacing the input. */
+  defaultDestinationChip(name: string | RegExp): Locator {
+    return this.page.getByRole("button", { name: new RegExp(`^Remove ${name}$`) });
+  }
+
+  defaultDestinationTypeOptions(): Locator {
+    return this.page.getByRole("option");
   }
 
   directoryPicker(): Locator {

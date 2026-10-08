@@ -1,0 +1,7 @@
+{
+  "id": "agentbarn-observer",
+  "name": "Agent Barn observer",
+  "description": "Report native channel Connection Journal stages to the ingest API",
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false }
+}

@@ -1,6 +1,7 @@
 import base64
+import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 from injector import inject, singleton
@@ -15,6 +16,10 @@ class LiteLLMError(Exception):
     pass
 
 
+class LiteLLMKeyNotFound(LiteLLMError):
+    """LiteLLM has no record of the key — not the same as a key with no team."""
+
+
 @inject
 @dataclass
 @singleton
@@ -22,16 +27,37 @@ class LiteLLMClient:
     k8s: KubernetesClient
     config: Config
 
+    # init=False keeps it out of the constructor. Annotated without it, injector
+    # treats it as a dependency and supplies "", which is not None — so the cache
+    # hit on an empty key, the Kubernetes Secret was never read, and every call
+    # went out as `Authorization: Bearer `, failing agent creation.
+    _cached_master_key: str | None = field(default=None, init=False)
+
     def _master_key(self) -> str:
-        secret = self.k8s.get_secret(self.config.litellm_secret_name, self.config.k8s_namespace)
+        """Resolved once per process. It used to be fetched from the Kubernetes API on
+        every call, which a per-Agent sweep paid for on top of each proxy call. The
+        client is a singleton, so a rotated Secret needs a restart — the same as every
+        other value read at startup."""
+        # Truthiness, not `is not None`: an empty string is never a usable key, so the
+        # question is whether we have one, not whether the field was ever assigned.
+        # Most values in this codebase are amounts, where falsy is meaningful and
+        # `is not None` is right — a credential is the opposite case.
+        if self._cached_master_key:
+            return self._cached_master_key
+        try:
+            secret = self.k8s.get_secret(self.config.litellm_secret_name, self.config.k8s_namespace)
+        except Exception as exc:
+            # The Kubernetes client raises its own transport errors (urllib3, ssl,
+            # kubernetes.client). Every caller here handles LiteLLMError and nothing
+            # else, so letting those through turns a degraded proxy into a 500.
+            raise LiteLLMError("Could not read the LiteLLM master key") from exc
         if not secret or not secret.data:
             raise LiteLLMError(f"Secret '{self.config.litellm_secret_name}' not found or empty")
         raw = secret.data.get("LITELLM_MASTER_KEY", "")
         if not raw:
             raise LiteLLMError("LITELLM_MASTER_KEY not found in litellm secret")
-        if isinstance(raw, bytes):
-            return raw.decode()
-        return base64.b64decode(raw).decode()
+        self._cached_master_key = raw.decode() if isinstance(raw, bytes) else base64.b64decode(raw).decode()
+        return self._cached_master_key
 
     def _headers(self, master_key: str) -> dict[str, str]:
         return {
@@ -39,19 +65,309 @@ class LiteLLMClient:
             "Content-Type": "application/json",
         }
 
-    def generate_key(self, agent_id: str, agent_name: str, org_id: str) -> str:
-        """Returns a new plaintext LiteLLM key for the agent."""
+    _TIMEOUT = 10
+
+    def _team_info(self, org_id: str, headers: dict[str, str]) -> dict | None:
+        """The Organization's team, or None when it does not exist yet."""
+        url = f"{self.config.litellm_base_url}/team/info"
+        response = httpx.get(url, params={"team_id": org_id}, headers=headers, timeout=self._TIMEOUT)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        info = response.json()["team_info"]
+        if info["team_id"] != org_id:
+            raise ValueError("Unexpected team identity")
+        return info
+
+    def _create_team(self, org_id: str, headers: dict[str, str], policy: dict) -> dict:
+        created = httpx.post(
+            f"{self.config.litellm_base_url}/team/new",
+            json={"team_id": org_id, "team_alias": f"agentbarn-{org_id}", **policy},
+            headers=headers,
+            timeout=self._TIMEOUT,
+        )
+        # A concurrent process may have created the team first. Verify by re-reading;
+        # an arbitrary 400 response is not evidence of success.
+        if created.status_code not in (400, 409):
+            created.raise_for_status()
+        info = self._team_info(org_id, headers)
+        if info is None:
+            raise ValueError("Team absent after creation")
+        return info
+
+    def ensure_team_exists(
+        self, org_id: str, max_budget: float | None = None, budget_duration: str | None = None
+    ) -> None:
+        """Provision the Organization's team if it is missing, leaving an existing
+        team's policy alone.
+
+        An existing team is never written: this runs on the key-generation path, whose
+        caller has no business re-asserting a spend policy over the stored one. A
+        missing team is created with the policy passed in, so it is never uncapped
+        between its creation and the next reconciliation.
+        """
+        policy = {"max_budget": max_budget, "budget_duration": budget_duration} if max_budget is not None else {}
+        try:
+            headers = self._headers(self._master_key())
+            if self._team_info(org_id, headers) is None:
+                self._create_team(org_id, headers, policy)
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise LiteLLMError("Failed to provision Organization LiteLLM team") from exc
+
+    def apply_team_budget(self, org_id: str, max_budget: float | None, budget_duration: str | None) -> str | None:
+        """Reconcile the team's spend policy, without disturbing spend or reset dates.
+
+        Only changed fields are written: an update reschedules the renewal date, so
+        re-sending an unchanged policy would silently move every Organization's window.
+
+        Returns when the team's window renews (ISO-8601, or None if LiteLLM has not
+        scheduled one), read from the team as it stands afterwards — the team is read
+        here anyway, so callers get the date without waiting for the next refresh.
+        """
+        desired = {
+            "max_budget": max_budget,
+            "budget_duration": budget_duration if max_budget is not None else None,
+        }
+        try:
+            headers = self._headers(self._master_key())
+            current = self._team_info(org_id, headers)
+            if current is None:
+                return self._create_team(org_id, headers, desired).get("budget_reset_at")
+            changed = {name: value for name, value in desired.items() if current.get(name) != value}
+            if not changed:
+                return current.get("budget_reset_at")
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/team/update",
+                json={"team_id": org_id, **changed},
+                headers=headers,
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+            # Verified by re-reading, like team creation and key enrollment: some
+            # versions accept an update and drop fields they do not recognise, and
+            # a silently ignored clear would leave the cap enforced while the row
+            # and the UI both report no limit.
+            applied = self._team_info(org_id, headers) or {}
+            unapplied = [name for name, value in changed.items() if applied.get(name) != value]
+            if unapplied:
+                raise ValueError(f"LiteLLM did not apply {', '.join(sorted(unapplied))}")
+            return applied.get("budget_reset_at")
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise LiteLLMError("Failed to reconcile Organization LiteLLM team budget") from exc
+
+    def get_team_budget_status(self, org_id: str) -> dict | None:
+        """Spend accrued against the team's limit, or None when there is no team.
+
+        This is the figure LiteLLM enforces on — deliberately not `cost_record`,
+        which carries corrections LiteLLM has never seen.
+        """
+        try:
+            info = self._team_info(org_id, self._headers(self._master_key()))
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise LiteLLMError("Failed to read Organization team spend") from exc
+        if info is None:
+            return None
+        return {"spend": info.get("spend"), "renews_at": info.get("budget_reset_at")}
+
+    def _key_info(self, key: str, failure: str, *, hashed: bool = False) -> dict:
+        """The key's /key/info record.
+
+        Every failure path here deliberately drops the exception chain: the key
+        travels in /key/info's query string, so an httpx error would carry it into
+        any traceback or log line built from the cause.
+        """
+        try:
+            response = httpx.get(
+                f"{self.config.litellm_base_url}/key/info",
+                # The hash, not the key: LiteLLM resolves either, and a query string
+                # reaches its access log, any intermediate proxy and log aggregation.
+                params={"key": key if hashed else hashlib.sha256(key.encode()).hexdigest()},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            if response.status_code == 404:
+                raise LiteLLMKeyNotFound("LiteLLM does not recognise this Agent key")
+            response.raise_for_status()
+            info = response.json()["info"]
+            if not isinstance(info, dict):
+                raise TypeError("Unexpected key info shape")
+            return info
+        except LiteLLMKeyNotFound:
+            raise
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            raise LiteLLMError(failure) from None
+
+    def get_memory_key_info(self, key: str) -> dict:
+        return self._key_info(key, "Failed to validate memory processing credential")
+
+    def revoke_memory_key(self, key_hash: str) -> bool:
+        # LiteLLM accepts hashes for deletion and blocking; no plaintext is needed.
+        if self.delete_key(key_hash):
+            return True
+        try:
+            self._key_info(key_hash, "Failed to inspect cleanup credential", hashed=True)
+        except LiteLLMKeyNotFound:
+            return True  # Already absent: repeated cleanup is successful.
+        except LiteLLMError:
+            pass
+        self.block_key(key_hash)
+        return False
+
+    def get_key_team(self, key: str) -> str | None:
+        """The team this key belongs to, or None when it belongs to none."""
+        return self._key_info(key, "Failed to read Agent key team membership").get("team_id") or None
+
+    def apply_key_budget(self, key: str, max_budget: float, budget_duration: str) -> None:
+        """Reconcile an Agent key's own spend policy, alongside its team's.
+
+        Same rules as apply_team_budget: only changed fields are written, because
+        re-sending budget_duration reschedules the key's renewal date, and the write
+        is verified by re-reading. The key shares its Organization's window, and
+        LiteLLM snaps 1d/7d/30d windows to calendar boundaries, so the key renews at
+        the same moment as the team.
+        """
+        failure = "Failed to reconcile Agent key budget"
+        desired = {"max_budget": max_budget, "budget_duration": budget_duration}
+        current = self._key_info(key, failure)
+        changed = {name: value for name, value in desired.items() if current.get(name) != value}
+        if not changed:
+            return
+        if current.get("budget_duration") is None and current.get("spend"):
+            self._reset_key_spend(key, failure)
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/update",
+                json={"key": key, **changed},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            # The request body carries the plaintext key; keep it out of any chain.
+            raise LiteLLMError(failure) from None
+        applied = self._key_info(key, failure)
+        unapplied = [name for name, value in changed.items() if applied.get(name) != value]
+        if unapplied:
+            raise LiteLLMError(f"LiteLLM did not apply {', '.join(sorted(unapplied))}")
+
+    def _reset_key_spend(self, key: str, failure: str) -> None:
+        """Zero a key's spend before its first window.
+
+        LiteLLM only zeroes spend when a window renews, so a key that never had one
+        carries everything it has ever spent — and its first cap would be measured
+        against that until the first renewal. Keys created before AF-337 have none.
+        Done before the cap is written, and only then: a key with a window keeps its
+        spend, which is that window's. Spend logs, and so cost records, are untouched.
+        """
+        try:
+            response = httpx.post(
+                # The hash, not the key, as for /key/info: the path reaches access logs.
+                f"{self.config.litellm_base_url}/key/{hashlib.sha256(key.encode()).hexdigest()}/reset_spend",
+                json={"reset_to": 0},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            raise LiteLLMError(failure) from None
+
+    def get_key_budget_status(self, key: str) -> dict:
+        """Spend accrued against the key's own limit in its current window."""
+        info = self._key_info(key, "Failed to read Agent key spend")
+        return {"spend": info.get("spend"), "renews_at": info.get("budget_reset_at")}
+
+    _UNREAD = object()
+
+    def attach_key_to_team(self, key: str, org_id: str, current_team: str | None | object = _UNREAD) -> None:
+        """Enroll an existing Agent key into its Organization's team.
+
+        Preserves key identity, spend and blocked state. A key already in a
+        different team is refused rather than moved: someone may have arranged that
+        deliberately, and reassigning it silently would be worse than leaving the
+        Organization partially covered.
+
+        `current_team` lets a caller that has just read the membership hand it over
+        rather than pay for the same lookup twice; omitted, it is read here.
+        """
+        if current_team is self._UNREAD:
+            current_team = self.get_key_team(key)
+        if current_team == org_id:
+            return
+        if current_team:
+            raise LiteLLMError("Agent key already belongs to a different LiteLLM team")
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/update",
+                json={"key": key, "team_id": org_id},
+                headers=self._headers(self._master_key()),
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError, ValueError, KeyError, TypeError:
+            raise LiteLLMError("Failed to attach Agent key to Organization team") from None
+        # Verified by re-reading rather than trusting the response: some LiteLLM
+        # versions accept an update and drop fields they do not recognise, which
+        # would otherwise report an unenrolled key as covered.
+        if self.get_key_team(key) != org_id:
+            raise LiteLLMError("LiteLLM did not apply the team assignment")
+
+    def generate_memory_key(self, org_id: str) -> str:
+        """A backend-only key sharing the runtime team's combined spend limit."""
+        key = None
+        try:
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/generate",
+                headers=self._headers(self._master_key()),
+                json={
+                    "key_alias": f"agentbarn-memory-{org_id}",
+                    "team_id": org_id,
+                    "models": [],
+                    "metadata": {"organization_id": org_id, "agentbarn_memory": True},
+                },
+                timeout=self._TIMEOUT,
+            )
+            response.raise_for_status()
+            key = response.json()["key"]
+            if not isinstance(key, str) or not key:
+                raise ValueError()
+            if self.get_key_team(key) != org_id:
+                raise LiteLLMError("Memory key is not enrolled in its Organization team")
+            return key
+        except httpx.HTTPError, KeyError, ValueError, TypeError, LiteLLMError:
+            if key and not self.delete_key(key):
+                self.block_key(key)
+            raise LiteLLMError("Could not provision memory processing key") from None
+
+    def generate_key(
+        self,
+        agent_id: str,
+        agent_name: str,
+        org_id: str,
+        max_budget: float | None = None,
+        budget_duration: str | None = None,
+        team_budget: float | None = None,
+    ) -> str:
+        """Returns a new plaintext LiteLLM key for the agent.
+
+        `max_budget` is the Agent's own limit, so it binds from the first call rather
+        than from the next reconciliation pass. `team_budget` is used only if the
+        Organization's team has to be created here.
+        """
+        self.ensure_team_exists(org_id, team_budget, budget_duration)
         master_key = self._master_key()
         url = f"{self.config.litellm_base_url}/key/generate"
+        policy = {"max_budget": max_budget, "budget_duration": budget_duration} if max_budget is not None else {}
         try:
             resp = httpx.post(
                 url,
                 json={
                     "key_alias": f"{agent_name}-{agent_id}",
+                    "team_id": org_id,
                     "metadata": {
                         "agent_id": agent_id,
                         "organization_id": org_id,
                     },
+                    **policy,
                 },
                 headers=self._headers(master_key),
                 timeout=10,
@@ -118,6 +434,32 @@ class LiteLLMClient:
             return info
         except Exception as exc:
             raise LiteLLMError(f"Failed to fetch key info: {exc}") from exc
+
+    def allow_memory_models(self, key_hash: str, models: list[str]) -> None:
+        """Expand only the memory key's model allowlist; preserve budgets and spend.
+
+        Keeping previous models permits in-flight calls and startup fallback.
+        Empty existing restrictions already permit every configured proxy model.
+        """
+        try:
+            info = self.get_key_info(key_hash)
+            if info.get("team_id"):
+                raise LiteLLMError("Memory processing requires a dedicated platform key")
+            allowed = info.get("models", [])
+            if not isinstance(allowed, list) or not all(isinstance(item, str) for item in allowed):
+                raise LiteLLMError("Unexpected memory key model restrictions")
+            allowed = [str(item) for item in allowed]
+            if not allowed or set(models).issubset(allowed):
+                return
+            response = httpx.post(
+                f"{self.config.litellm_base_url}/key/update",
+                headers=self._headers(self._master_key()),
+                json={"key": key_hash, "models": sorted(set(allowed + models))},
+                timeout=10,
+            )
+            response.raise_for_status()
+        except Exception:
+            raise LiteLLMError("Could not enable the memory model") from None
 
     def get_key_spend(self, key: str) -> float:
         """Return the total spend (USD) accumulated by this virtual key."""
@@ -186,78 +528,50 @@ class LiteLLMClient:
         except Exception as exc:
             raise LiteLLMError(f"Failed to fetch spend logs: {exc}") from exc
 
-    def get_global_spend_report(self, start_date: str, end_date: str) -> dict[str, dict]:
-        """
-        Fetch aggregated spend+token data per API key hash using /user/daily/activity/aggregated.
-        Returns: {
-            "key_hash": {
-                "spend": 0.0, "total_input_tokens": 0, "total_output_tokens": 0, "total_tokens": 0,
-                "daily_spend": {"2026-06-23": 0.01},
-                "models": {
-                    "openrouter/z-ai/glm-5.2": {"spend": 0.0, "prompt_tokens": 0, "completion_tokens": 0}
-                }
-            }
-        }
+    def get_spend_logs_v2(
+        self,
+        start_date: str,
+        end_date: str,
+        page: int = 1,
+        page_size: int = 1000,
+    ) -> dict:
+        """Return one page of per-request spend logs.
+
+        This is LiteLLM's paginated public spend API. `/spend/logs` is deprecated and
+        aggregates rather than listing rows; `/spend/logs/ui` is internal and absent
+        from the OpenAPI schema, so neither is safe to depend on in client-deployed
+        installs. `/spend/logs/v2` is present in v1.83 and v1.96 alike.
+
+        Dates must be `YYYY-MM-DD HH:MM:SS` — a bare date returns HTTP 400.
+
+        Rows come back oldest-first. That is deliberate and load-bearing: the sync
+        watermark is `max(occurred_at)` of what we have stored, so ascending order
+        makes the watermark double as a resume cursor. Under LiteLLM's default
+        `desc`, a run that stopped partway would land only the newest rows, push the
+        watermark to ~now, and skip everything older for good.
+
+        Returns the raw envelope: {data, total, page, page_size, total_pages,
+        total_is_capped}.
         """
         master_key = self._master_key()
-        aggregated: dict[str, dict] = {}
         try:
             resp = httpx.get(
-                f"{self.config.litellm_base_url}/user/daily/activity/aggregated",
-                params={"start_date": start_date, "end_date": end_date},
+                f"{self.config.litellm_base_url}/spend/logs/v2",
+                params={
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "page": page,
+                    "page_size": page_size,
+                    "sort_by": "startTime",
+                    "sort_order": "asc",
+                },
                 headers=self._headers(master_key),
-                timeout=30,
+                timeout=60,
             )
             resp.raise_for_status()
-            data = resp.json()
-            results = data.get("results", [])
-            for day in results:
-                date_str = day.get("date")
-                api_keys = day.get("breakdown", {}).get("api_keys", {})
-                for key_hash, key_data in api_keys.items():
-                    if key_hash == "no-key-required":
-                        continue
-                    metrics = key_data.get("metrics", {})
-                    if key_hash not in aggregated:
-                        aggregated[key_hash] = {
-                            "spend": 0.0,
-                            "total_input_tokens": 0,
-                            "total_output_tokens": 0,
-                            "total_tokens": 0,
-                            "daily_spend": {},
-                            "models": {},  # <-- THIS WAS MISSING
-                        }
-                    day_spend = float(metrics.get("spend") or 0.0)
-                    aggregated[key_hash]["spend"] += day_spend
-                    aggregated[key_hash]["total_input_tokens"] += int(metrics.get("prompt_tokens") or 0)
-                    aggregated[key_hash]["total_output_tokens"] += int(metrics.get("completion_tokens") or 0)
-                    aggregated[key_hash]["total_tokens"] += int(metrics.get("total_tokens") or 0)
-                    if date_str:
-                        existing = aggregated[key_hash]["daily_spend"].get(date_str, 0.0)
-                        aggregated[key_hash]["daily_spend"][date_str] = existing + day_spend
-
-                    # Per-model breakdown for this key  <-- THIS BLOCK WAS MISSING
-                    models_in_day = day.get("breakdown", {}).get("models", {})
-                    for model_name, model_data in models_in_day.items():
-                        model_api_keys = model_data.get("api_key_breakdown", {})
-                        if key_hash not in model_api_keys:
-                            continue
-                        m_metrics = model_api_keys[key_hash].get("metrics", {})
-                        if model_name not in aggregated[key_hash]["models"]:
-                            aggregated[key_hash]["models"][model_name] = {
-                                "spend": 0.0,
-                                "prompt_tokens": 0,
-                                "completion_tokens": 0,
-                            }
-                        aggregated[key_hash]["models"][model_name]["spend"] += float(m_metrics.get("spend") or 0.0)
-                        aggregated[key_hash]["models"][model_name]["prompt_tokens"] += int(
-                            m_metrics.get("prompt_tokens") or 0
-                        )
-                        aggregated[key_hash]["models"][model_name]["completion_tokens"] += int(
-                            m_metrics.get("completion_tokens") or 0
-                        )
-
-            return aggregated
-        except Exception as exc:
-            logger.warning("Failed to fetch aggregated daily activity: %s", exc)
-            return {}
+        except httpx.HTTPError as exc:
+            raise LiteLLMError(f"Failed to fetch spend logs page {page}: {exc}") from exc
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            raise LiteLLMError(f"Unexpected /spend/logs/v2 response type: {type(payload).__name__}")
+        return payload

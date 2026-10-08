@@ -83,9 +83,9 @@ def test_plugin_bundled_skill_slugs_exist_in_the_seeded_bundle(plugin: Integrati
         assert_that(slug in seeded, is_(True), f"{plugin.key} names unseeded skill {slug!r}")
 
 
-def test_every_aai_cli_provider_supports_gateway_egress():
+def test_aai_cli_gateway_egress_preserves_native_sharepoint_sign_in():
     supported = [p.key for p in AAI_CLI_PLUGINS if p.egress_mode is EgressMode.GATEWAY_PROXY]
-    assert_that(supported, is_(equal_to([p.key for p in AAI_CLI_PLUGINS])))
+    assert_that(supported, is_(equal_to([p.key for p in AAI_CLI_PLUGINS if p.provider != SecretProvider.SHAREPOINT])))
 
 
 @pytest.mark.parametrize("plugin", AAI_CLI_PLUGINS, ids=_ids(AAI_CLI_PLUGINS))
@@ -118,9 +118,7 @@ def test_non_aai_cli_providers_do_not_carry_a_profile():
 
 # --- egress seams are unimplemented until a provider's slice flips it ---
 #
-# Every shipped plugin now has a gateway-served mode, so this list — and the
-# parametrized test below it — is currently empty (0 collected, not a failure). It
-# exists for whichever provider ships next without one.
+# SharePoint retains staging's direct delegated-token lifecycle.
 
 _DIRECT_ONLY = [p for p in ALL_PLUGINS if p.egress_mode is EgressMode.DIRECT]
 

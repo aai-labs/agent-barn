@@ -10,6 +10,8 @@ from sqlmodel import Session, col, delete, select
 
 from api.domains.agents.models import (
     Agent,
+    AgentRestorePoint,
+    AgentSkill,
     AgentTemplateOverrideDraft,
     AgentTemplateOverrideDraftSkill,
     AgentTemplateOverrideSourceType,
@@ -21,6 +23,7 @@ from api.domains.events.catalog import (
     AGENT_TEMPLATE_OVERRIDE_DRAFT_SAVED,
     AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
     AGENT_TEMPLATE_OVERRIDE_SELECTED,
+    AGENT_UPDATED,
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
@@ -497,16 +500,95 @@ class AgentOverrideRepository:
         template_key: str | None = None,
         selected_version: int | None = None,
         correlation_id: UUID | None = None,
+        skill_pins: Collection[tuple[UUID, int]] = (),
+        removed_skill_ids: Collection[UUID] = (),
+        scalar_updates: Mapping[str, Any] | None = None,
+        restored_configuration_id: UUID | None = None,
     ) -> Agent:
+        """Move the template pin, and any skill pins and settings that go with it,
+        in one transaction: a commit between them would leave the Agent pinned to a
+        template its skills do not satisfy."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             agent = self._lock_agent(session, agent_id, organization_id)
             if agent is None:
                 raise ValueError("Agent not found")
             self._check_timestamp(agent.updated_at, expected_agent_updated_at)
+            if restored_configuration_id is not None:
+                restore_point = session.exec(
+                    select(AgentRestorePoint)
+                    .where(
+                        col(AgentRestorePoint.id) == restored_configuration_id,
+                        col(AgentRestorePoint.agent_id) == agent_id,
+                    )
+                    .with_for_update()
+                ).first()
+                if restore_point is None:
+                    raise AgentOverrideConcurrencyError("Restore point no longer exists")
+                # Persist completion with the pins and their audit events. An
+                # interrupted transaction leaves the replay discoverable.
+                restore_point.reapply_configuration = False
+                restore_point.configuration_error = None
+                session.add(restore_point)
             agent.platform_template_id = selected_id if selection_type == "platform" else None
             agent.agent_template_id = selected_id if selection_type == "organization" else None
             agent.agent_template_override_version_id = selected_id if selection_type == "override" else None
+
+            field_changes: dict[str, dict[str, Any]] = {}
+            for field, new_value in (scalar_updates or {}).items():
+                previous_value = getattr(agent, field)
+                if previous_value != new_value:
+                    field_changes[field] = {"previous": previous_value, "new": new_value}
+                    setattr(agent, field, new_value)
             session.add(agent)
+
+            if removed_skill_ids:
+                session.exec(
+                    delete(AgentSkill)
+                    .where(col(AgentSkill.agent_id) == agent_id)
+                    .where(col(AgentSkill.skill_id).in_(list(removed_skill_ids)))
+                )
+            for skill_id, pinned_version in skill_pins:
+                row = session.exec(
+                    select(AgentSkill)
+                    .where(col(AgentSkill.agent_id) == agent_id)
+                    .where(col(AgentSkill.skill_id) == skill_id)
+                ).first()
+                if row is None:
+                    session.add(AgentSkill(agent_id=agent_id, skill_id=skill_id, pinned_version=pinned_version))
+                else:
+                    row.pinned_version = pinned_version
+                    session.add(row)
+
+            # Explicit because `onupdate` fires only when the Agent row is dirty: a
+            # skill-only selection would otherwise keep a stale
+            # `expected_agent_updated_at` acceptable, and that check — above, under
+            # the row lock — is what serializes concurrent selections.
+            agent.updated_at = datetime.now(UTC)
+
+            if field_changes:
+                # The pin change has its own event below.
+                self.outbox_repository.stage(
+                    session=session,
+                    registry=EVENT_REGISTRY,
+                    event=EVENT_REGISTRY.build_event(
+                        event_name=AGENT_UPDATED,
+                        schema_version=1,
+                        occurred_at=datetime.now(UTC),
+                        organization_id=organization_id,
+                        actor=actor,
+                        subject=SubjectIdentity(
+                            type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id
+                        ),
+                        correlation_id=correlation_id or uuid4(),
+                        payload={
+                            "organization_id": organization_id,
+                            "agent_id": agent_id,
+                            "field_changes": field_changes,
+                            "actor_display": actor_display or actor.type.value,
+                            "subject_display": agent.name,
+                        },
+                    ),
+                )
             self.outbox_repository.stage(
                 session=session,
                 registry=EVENT_REGISTRY,

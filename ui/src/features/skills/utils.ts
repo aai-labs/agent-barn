@@ -24,6 +24,7 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   confluence: "Confluence",
   bitbucket: "Bitbucket",
   google_workspace: "Google Workspace",
+  sharepoint: "SharePoint",
   pipedrive: "Pipedrive",
 };
 

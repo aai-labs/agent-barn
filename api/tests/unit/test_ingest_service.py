@@ -28,10 +28,33 @@ def _make_agent(ingest_key_encrypted: str | None = "encrypted-key") -> Agent:
     )
 
 
-def _make_service(agent_repo=None, tc_repo=None) -> IngestService:
+def _make_service(agent_repo=None, tc_repo=None, ba_repo=None) -> IngestService:
     return IngestService(
         agent_repository=agent_repo or MagicMock(),
         tool_call_repository=tc_repo or MagicMock(),
+        business_action_repository=ba_repo or _business_action_repo(),
+        connection_repository=MagicMock(),
+        operational_repository=MagicMock(),
+        conversation_repository=MagicMock(),
+    )
+
+
+def _business_action_repo() -> MagicMock:
+    repo = MagicMock()
+    repo.record_in_session.return_value = []
+    return repo
+
+
+def _result_batch(now: datetime) -> IngestBatchRequest:
+    return IngestBatchRequest(
+        tool_results=[
+            IngestToolResultEvent(
+                external_id="tc-1",
+                result="file contents",
+                is_error=False,
+                completed_at=now,
+            )
+        ]
     )
 
 
@@ -187,3 +210,38 @@ def test_process_tool_results_calls_complete():
                 False,
                 now,
             )
+
+
+def test_process_tool_results_records_business_actions_for_a_completed_row():
+    with given():
+        tc_repo = MagicMock()
+        session = MagicMock()
+        tc_repo.get_session.return_value.__enter__ = MagicMock(return_value=session)
+        tc_repo.get_session.return_value.__exit__ = MagicMock(return_value=False)
+        completed = MagicMock(tool_name="terminal")
+        completed.status.value = "SUCCESS"
+        tc_repo.complete.return_value = completed
+        ba_repo = _business_action_repo()
+        service = _make_service(tc_repo=tc_repo, ba_repo=ba_repo)
+
+        with when("a result completes a pending Tool Call"):
+            service.process(_make_agent(), _result_batch(datetime.now(UTC)))
+
+        with then("its Business Actions are recorded in the same session"):
+            ba_repo.record_in_session.assert_called_once_with(session, completed)
+
+
+def test_process_tool_results_records_no_business_actions_for_an_orphaned_result():
+    with given():
+        tc_repo = MagicMock()
+        tc_repo.get_session.return_value.__enter__ = MagicMock(return_value=MagicMock())
+        tc_repo.get_session.return_value.__exit__ = MagicMock(return_value=False)
+        tc_repo.complete.return_value = None
+        ba_repo = _business_action_repo()
+        service = _make_service(tc_repo=tc_repo, ba_repo=ba_repo)
+
+        with when("a result matches no Tool Call"):
+            service.process(_make_agent(), _result_batch(datetime.now(UTC)))
+
+        with then("nothing is recorded"):
+            ba_repo.record_in_session.assert_not_called()

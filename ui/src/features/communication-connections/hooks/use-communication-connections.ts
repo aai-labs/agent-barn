@@ -15,7 +15,6 @@ import {
   CommunicationDirectoryPreviewSchema,
   CommunicationDiagnosticsSchema,
   PaginatedCommunicationJournalEntriesSchema,
-  CommunicationReconnectSchema,
   CommunicationRetrySchema,
   CommunicationPlatformSchema,
   CommunicationInstallLinkSchema,
@@ -29,7 +28,6 @@ import {
   type CommunicationJournalKind,
   type CommunicationJournalWindow,
   type PaginatedCommunicationJournalEntries,
-  type CommunicationReconnect,
   type CommunicationRetry,
   type CreateCommunicationConnection,
   type UpdateCommunicationConnection,
@@ -286,10 +284,19 @@ export function useCommunicationConnectionActions() {
   }
 
   const previewConnectionDirectory = useMutation({
-    mutationFn: async ({ agentId, platformKey, settings, credentials }: { agentId: string; platformKey: string; settings: Record<string, unknown>; credentials: Record<string, unknown> }) => {
+    mutationFn: async (
+      { agentId, platformKey, kind, settings, credentials, guildId }: {
+        agentId: string;
+        platformKey: string;
+        kind: string;
+        settings: Record<string, unknown>;
+        credentials: Record<string, unknown>;
+        guildId?: string;
+      },
+    ) => {
       const response = await api.post<CommunicationDirectoryPreview>(
         `${orgApiBase}/agents/${agentId}/connection-directory-preview`,
-        { platformKey, settings, credentials },
+        { platformKey, kind, settings, credentials, guildId },
         { schema: CommunicationDirectoryPreviewSchema },
       );
       return response.data;
@@ -330,18 +337,6 @@ export function useCommunicationConnectionActions() {
     onSuccess: invalidate,
   });
 
-  const reconnectConnection = useMutation({
-    mutationFn: async ({ agentId, connectionId }: { agentId: string; connectionId: string }) => {
-      const response = await api.post<CommunicationReconnect>(
-        `${orgApiBase}/agents/${agentId}/connections/${connectionId}/reconnect`,
-        undefined,
-        { schema: CommunicationReconnectSchema },
-      );
-      return response.data;
-    },
-    onSuccess: (data) => invalidateDiagnostics(data.connection.agentId),
-  });
-
   const retryDelivery = useMutation({
     mutationFn: async ({ agentId, connectionId, deliveryId }: { agentId: string; connectionId: string; deliveryId: string }) => {
       const response = await api.post<CommunicationRetry>(
@@ -354,5 +349,11 @@ export function useCommunicationConnectionActions() {
     onSuccess: (_data, variables) => invalidateDiagnostics(variables.agentId),
   });
 
-  return { previewConnectionDirectory, createConnection, updateConnection, retireConnection, reconnectConnection, retryDelivery };
+  return {
+    previewConnectionDirectory,
+    createConnection,
+    updateConnection,
+    retireConnection,
+    retryDelivery,
+  };
 }

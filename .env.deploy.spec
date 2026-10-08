@@ -46,6 +46,19 @@ POSTGRES_LITELLM_USER=litellm
 POSTGRES_LITELLM_PASSWORD=
 POSTGRES_LITELLM_DB=litellm
 
+# Hindsight is always deployed. Supply distinct database/auth secrets and an
+# internal settings key for operator-run syncs; CI reads these from GitHub Secrets.
+HINDSIGHT_DB_PASSWORD=
+HINDSIGHT_API_KEY=
+# Internal model/key settings credential; generate separately from Hindsight API auth.
+MEMORY_RUNTIME_SERVICE_KEY=
+# Retired backend LiteLLM key SHA-256 hashes, comma separated (current hash is derived).
+MEMORY_LITELLM_KEY_HASHES=
+# Optional initial model; shared by the API default and Hindsight startup.
+# MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini
+# Active key SHA-256 hash when several attribution hashes are retained.
+# Compose infers it for one hash; deployment loads it from the hook-generated hash Secret.
+
 # ── LiteLLM + OpenRouter ─────────────────────────────────────────────────────
 # Any strong secret prefixed with sk-; LiteLLM uses it to mint agent-scoped
 # virtual keys. Pick once and keep it stable. Generate with:
@@ -106,6 +119,15 @@ INGRESS_CLUSTER_ISSUER=letsencrypt-http01
 # Empty falls through to the cluster's default StorageClass. k3s default is
 # local-path. Set to a network-replicated class for node-loss durability.
 STORAGE_CLASS=local-path
+
+# ── Restore points ───────────────────────────────────────────────────────────
+# Each restore point gets its own PVC of this size. Must be at least the agent
+# PVC size (1Gi). On local-path these volumes are node-local and unreplicated:
+# a restore point does not survive loss of the node holding the agent's volume.
+RESTORE_POINT_SIZE=1Gi
+# Manual restore points retained per Agent. The Job image is not configured here
+# — the chart derives it from the API image so both are always the same build.
+RESTORE_POINT_MAX_PER_AGENT=5
 
 # ── Firecrawl ────────────────────────────────────────────────────────────────
 # API key used by the Firecrawl server (TEST_API_KEY) and agents (FIRECRAWL_API_KEY).

@@ -6,29 +6,30 @@ Read before changing conversation history, Connection/channel/thread grouping, C
 
 ## Role in the system
 
-Conversation Messages and Tool Calls share the Agent Activity UI but have different write boundaries. The Communications Gateway persists canonical Conversation Messages from provider ingress and runtime replies. The separately served Ingest API persists authenticated runtime Tool Call telemetry. Neither path writes Domain Events to the Domain Event outbox.
+Conversation Messages and Tool Calls share the Agent Activity UI but have different write boundaries. The Communications Gateway persists canonical Conversation Messages for Web Chat and Email ingress/replies. Native chat observers mirror runtime-owned conversation history through Ingest without creating claimable Communication Deliveries, following the [fixed ownership contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary). The separately served Ingest API persists authenticated runtime Tool Call telemetry and, in the same transaction, the Business Actions derived from completed shell Tool Calls (see [`business-value.md`](business-value.md)). Neither path writes Domain Events to the Domain Event outbox.
 
 ## Invariants
 
 - Ingest authenticates with agent ID plus the stored per-agent ingest key generated at start. Authentication checks identity and key, not AgentStatus; stop does not currently clear the key.
 - Message identity is unique per `(connection_id, provider_message_id)`; the legacy `openclaw_msg_id` column stores that provider identity for all Platforms.
 - Conversation location identity is `(connection_id, channel_id)`. Read DTOs, repository filters, API paths, UI query keys, and URL selection preserve both values so same-platform Connections may safely reuse provider channel identifiers.
-- Conversation Messages record their source Connection, direction, channel/direct-message type, session, location, optional thread, names, content, and occurrence time.
-- Runtime replies are bound to their source Communication Delivery, which supplies the originating Connection and location; the runtime cannot redirect a reply to another Connection.
+- Conversation Messages record their source Connection, direction, channel/direct-message type, session, location, optional thread, names, content, and occurrence time. The Agent Conversations read API excludes the dashboard's built-in Web Chat Connection; its history is available through the dedicated Chat tab.
+- Gateway runtime replies are bound to their source Communication Delivery, which supplies the originating Connection and location; the runtime cannot redirect a reply to another Connection.
 - Tool results are paired to their call by the runtime's per-invocation call id, so concurrent calls to one tool within a task stay distinct.
 - Tool calls are unique per `(agent_id, external_id)` and use `PENDING`, `SUCCESS`, or `ERROR` status.
 - Duplicate message and pending tool-call identities are handled idempotently. Tool results update any matching row regardless of its current status; a result arriving before its pending event is currently dropped.
 - Product API conversation and tool-call reads require `activity.read` and are scoped through an accessible, organization-owned, non-deleted Agent. Assigned Members cannot bypass Agent Access through activity endpoints.
 - Runtime Ingest Tool Call writes use Agent identity plus ingest-key authentication rather than a human Membership or Agent Access check. Runtime communication claims/replies use a separate versioned Communications protocol credential.
 - Telemetry Events are runtime-originated operational facts. They are not Domain Events, Outbox Messages, Event Deliveries, or Security Audit Records.
-- Platform Plugins normalize provider-specific identities into the canonical envelope. Missing sender/location display names are resolved by an optional, best-effort `enrich_inbound` plugin seam that the Communications Gateway invokes centrally — for supervised ingress, driver events, and webhook events alike — after admission and before persistence. Enrichment lookups are cached, credential-scoped, and never delay or reject durable message acceptance on failure.
+- Email normalizes sender/location identities and applies policy directly before durable Communication Delivery acceptance; the shared provider enrichment and driver-ingress hooks are removed. Teams authenticates and applies admission policy at the product API relay, passing the raw activity to its native runtime without creating a gateway Delivery. Native runtime observers continue mirroring conversation identities and names through Ingest.
 
 ## Data flow
 
 ```text
-Platform provider → Platform Plugin → Communication Delivery/Conversation repository
+Email Worker → API Email normalization → Communication Delivery/Conversation repository
 Agent runtime ─────→ Communications protocol ────────┘
-Agent runtime ─────→ Ingest API → Tool Call repository
+Native chat observer → Ingest API → Conversation repository
+Agent runtime ─────→ Ingest API → Tool Call repository → Business Action repository
                                       ↓
                          Conversation and Tool Call APIs
                                       ↓
@@ -39,7 +40,7 @@ Conversation reads list channels and return cursor-paginated messages or grouped
 
 ## Boundaries
 
-Platform Plugins own translation from provider payloads into the normalized communication envelope. Communications owns durable message/reply orchestration. Ingest owns Tool Call telemetry authentication and writes. Conversation and Tool Call domains own read models and query behavior. Costs do not derive from these activity records.
+Platform Plugins own translation from provider payloads into the normalized communication envelope. Communications owns Web Chat/Email durable message/reply orchestration; native gateways own chat delivery and Ingest mirrors their transcripts. Ingest owns Tool Call telemetry authentication and writes, and calls the Business Value domain to record Business Actions for each completed Tool Call. Conversation and Tool Call domains own read models and query behavior. Costs do not derive from these activity records; the Agent Activity tab reads Conversation Message direction and occurrence time to say whether a person triggered a piece of billed work, and never its content (see [`agent-activity.md`](agent-activity.md)). Business Value's Organization activity read counts inbound Conversation Messages by occurrence time and Tool Calls by occurrence time, alongside Communication Delivery outcomes and Webhook Invocations. It writes nothing here and never reads content (see [`business-value.md`](business-value.md#organization-activity)).
 
 ## Source map
 
@@ -63,4 +64,4 @@ Platform Plugins own translation from provider payloads into the normalized comm
 
 ## Change impact
 
-Conversation contract changes require normalized envelopes, Communication Delivery persistence, read API schemas, UI Zod schemas/hooks, and Connection-isolation tests. Tool Call telemetry changes require both runtime producers, Ingest services, repositories, and Activity UI coverage. Identity or idempotency changes require migration and duplicate-delivery coverage.
+Conversation contract changes require normalized envelopes, Communication Delivery persistence, read API schemas, UI Zod schemas/hooks, and Connection-isolation tests. Tool Call telemetry changes require both runtime producers, Ingest services, repositories, and Activity UI coverage. Changes to shell Tool Call arguments or result shapes also require the Business Action classifier and its recorded fixtures. Identity or idempotency changes require migration and duplicate-delivery coverage.

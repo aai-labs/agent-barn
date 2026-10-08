@@ -14,6 +14,7 @@ from api.domains.agents.models import (
     JiraContent,
     PipedriveContent,
     SecretProvider,
+    SharePointContent,
     decrypt_content,
     encrypt_content,
     validate_content,
@@ -59,6 +60,54 @@ def test_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "secret-token" not in blob  # whole payload is ciphertext, not plaintext
     assert decrypt_content(SecretProvider.JIRA, blob, _KEY) == original
+
+
+_SHAREPOINT = {
+    "connection_id": "0199c2a4-7b1e-7c3d-9f00-1234567890ab",
+    "tenant_id": "b6f28f4f-97fe-41e6-903a-ff6cc7633ae3",
+    "client_id": "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9",
+    "email": "alice@contoso.com",
+    "scopes": ["Sites.ReadWrite.All"],
+    "refresh_token": "rt-from-sign-in",
+    "sign_in_id": "0199c2a4-7b1e-7c3d-9f00-000000000001",
+}
+
+
+def test_sharepoint_content_round_trips():
+    content = validate_content(SecretProvider.SHAREPOINT, _SHAREPOINT)
+    assert isinstance(content, SharePointContent)
+    assert content.connection_id == "0199c2a4-7b1e-7c3d-9f00-1234567890ab"
+    assert content.client_id == "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9"
+    assert content.refresh_token == "rt-from-sign-in"
+    assert content.read_only is False
+
+
+def test_sharepoint_content_survives_encryption():
+    # encrypt_content JSON-serialises model_dump(), so every field must be JSON-native.
+    original = validate_content(SecretProvider.SHAREPOINT, _SHAREPOINT)
+    blob = encrypt_content(original, _KEY)
+    assert decrypt_content(SecretProvider.SHAREPOINT, blob, _KEY) == original
+
+
+def test_sharepoint_content_never_holds_the_teams_app_secret():
+    # The sign-in is a public client (PKCE); the Teams app's secret has no business here,
+    # where it would reach the agent's pod and let it act as its bot.
+    for field in ("client_secret", "app_password", "access_token"):
+        with pytest.raises(ValidationError):
+            validate_content(SecretProvider.SHAREPOINT, {**_SHAREPOINT, field: "x"})
+
+
+@pytest.mark.parametrize("field", ["connection_id", "sign_in_id"])
+def test_sharepoint_content_requires_valid_uuids(field):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, {**_SHAREPOINT, field: "not-a-uuid"})
+
+
+@pytest.mark.parametrize("field", ["connection_id", "tenant_id", "client_id", "email", "refresh_token", "sign_in_id"])
+def test_sharepoint_content_requires_its_fields(field):
+    payload = {k: v for k, v in _SHAREPOINT.items() if k != field}
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, payload)
 
 
 def test_display_names_cover_every_provider():
@@ -254,6 +303,35 @@ def test_pipedrive_encrypt_decrypt_round_trip_with_domain():
     assert decrypted == original
     assert isinstance(decrypted, PipedriveContent)
     assert decrypted.domain == "aai-labs"
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        # Each would otherwise move the host out of *.pipedrive.com, sending the API
+        # server's validation request (and the token) wherever the caller points it.
+        "evil.example#",
+        "10.0.0.5/x?",
+        "user@evil.example/",
+        "evil.example:443/",
+        "aai labs",
+        "-aai-labs",
+        "a" * 64,
+    ],
+)
+def test_pipedrive_content_rejects_domain_that_is_not_a_subdomain_label(domain):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "domain": domain})
+
+
+@pytest.mark.parametrize(
+    "domain",
+    ["AAI-Labs", " aai-labs ", "aai-labs.pipedrive.com", "https://aai-labs.pipedrive.com/"],
+)
+def test_pipedrive_content_normalizes_domain_to_its_subdomain_label(domain):
+    content = validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "domain": domain})
+    assert isinstance(content, PipedriveContent)
+    assert content.domain == "aai-labs"
 
 
 def test_retired_google_providers_are_gone():

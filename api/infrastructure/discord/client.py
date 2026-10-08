@@ -1,5 +1,4 @@
 import hashlib
-import json
 from typing import Any
 
 from api.infrastructure.http import resilient_request
@@ -8,12 +7,12 @@ from api.infrastructure.shared.cache import cached
 _BASE = "https://discord.com/api/v10"
 _TIMEOUT_SECONDS = 15
 _DIRECTORY_CACHE_TTL_SECONDS = 600
+_USER_AGENT = "AgentBarn/1.0"
 _MESSAGE_CHANNEL_TYPES = {0, 5, 10, 11, 12, 15}
-_MAX_NONCE_LENGTH = 25
 
 
 class DiscordClient:
-    """Discord API client for Connection delivery and credential-scoped directories."""
+    """Discord API client for credential validation and credential-scoped directories."""
 
     def __init__(self, bot_token: str) -> None:
         self._bot_token = bot_token
@@ -24,7 +23,7 @@ class DiscordClient:
             response = resilient_request(
                 "GET",
                 f"{_BASE}{path}",
-                headers={"Authorization": f"Bot {self._bot_token}"},
+                headers={"Authorization": f"Bot {self._bot_token}", "User-Agent": _USER_AGENT},
                 params=params,
                 timeout=_TIMEOUT_SECONDS,
                 label=label,
@@ -42,7 +41,22 @@ class DiscordClient:
         return body if isinstance(body, dict) else None
 
     def _get_list(self, path: str, *, label: str, params: dict[str, str] | None = None) -> list[dict]:
-        body = self._request(path, label=label, params=params)
+        # Unlike _get, this must not swallow errors into an empty list: it backs the
+        # guild/channel/member/role directory, which is cache.py-cached for 10 minutes
+        # and has no other way to distinguish "genuinely empty" from "call failed"
+        # (e.g. missing Server Members Intent) — a caller needs the raised error to
+        # surface it to the UI instead of caching a false empty result.
+        response = resilient_request(
+            "GET",
+            f"{_BASE}{path}",
+            headers={"Authorization": f"Bot {self._bot_token}", "User-Agent": _USER_AGENT},
+            params=params,
+            timeout=_TIMEOUT_SECONDS,
+            label=label,
+            retry_server_errors=True,
+        )
+        response.raise_for_status()
+        body = response.json()
         return [item for item in body if isinstance(item, dict)] if isinstance(body, list) else []
 
     def get_current_bot(self) -> dict[str, Any]:
@@ -56,43 +70,6 @@ class DiscordClient:
         if not body or not body.get("id"):
             raise ValueError("Discord application lookup failed")
         return body
-
-    def get_gateway_url(self) -> str:
-        body = self._get("/gateway/bot", label="Discord get gateway")
-        if not body or not body.get("url"):
-            raise ValueError("Discord bot cannot open a Gateway session")
-        return str(body["url"])
-
-    def send_message(
-        self, channel_id: str, text: str, *, reply_to_id: str | None = None, idempotency_key: str | None = None
-    ) -> str:
-        payload: dict[str, Any] = {"content": text, "allowed_mentions": {"parse": []}}
-        if idempotency_key:
-            # Discord rejects a nonce longer than 25 characters with 400/50035, and the
-            # provider key is a 64-character digest. The prefix stays deterministic per
-            # Delivery, so retries still de-duplicate.
-            payload["nonce"] = idempotency_key[:_MAX_NONCE_LENGTH]
-            payload["enforce_nonce"] = True
-        if reply_to_id:
-            payload["message_reference"] = {
-                "message_id": reply_to_id,
-                "channel_id": channel_id,
-                "fail_if_not_exists": False,
-            }
-        response = resilient_request(
-            "POST",
-            f"{_BASE}/channels/{channel_id}/messages",
-            headers={"Authorization": f"Bot {self._bot_token}", "Content-Type": "application/json"},
-            content=json.dumps(payload).encode("utf-8"),
-            timeout=_TIMEOUT_SECONDS,
-            label="Discord create message",
-            retry_server_errors=True,
-        )
-        response.raise_for_status()
-        message_id = response.json().get("id")
-        if not message_id:
-            raise RuntimeError("Discord create message returned no message id")
-        return str(message_id)
 
     def list_guilds(self) -> list[dict[str, str]]:
         def fetch() -> list[dict[str, str]]:
@@ -156,21 +133,3 @@ class DiscordClient:
             ]
 
         return cached(f"discord_guild_roles:{self._token_key}:{guild_id}", fetch, ttl=_DIRECTORY_CACHE_TTL_SECONDS)
-
-    def get_user_display_name(self, user_id: str) -> str | None:
-        return cached(
-            f"discord_user:{self._token_key}:{user_id}",
-            lambda: self._display_name(self._get(f"/users/{user_id}", label="Discord get user")),
-            ttl=_DIRECTORY_CACHE_TTL_SECONDS,
-        )
-
-    @staticmethod
-    def _display_name(body: dict | None) -> str | None:
-        return (body or {}).get("global_name") or (body or {}).get("username")
-
-    def get_channel_display_name(self, channel_id: str) -> str | None:
-        return cached(
-            f"discord_channel:{self._token_key}:{channel_id}",
-            lambda: (self._get(f"/channels/{channel_id}", label="Discord get channel") or {}).get("name"),
-            ttl=_DIRECTORY_CACHE_TTL_SECONDS,
-        )

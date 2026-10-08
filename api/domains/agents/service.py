@@ -1,14 +1,17 @@
 import datetime as dt
 import fnmatch
+import hashlib
+import json
 import logging
 import secrets
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
@@ -25,6 +28,8 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
+    HERMES_WORKSPACE_DIR,
+    OPENCLAW_WORKSPACE_DIR,
     build_config_map,
     build_deployment,
     build_hermes_config_map,
@@ -35,14 +40,25 @@ from api.domains.agents.builders import (
     build_secret_hermes_runtime,
     build_secret_runtime,
     build_service,
+    native_channel_env,
+    native_discord_channel,
+    native_discord_env,
+    native_slack_channel,
+    native_slack_env,
+    native_telegram_channel,
+    native_telegram_env,
+    runtime_teams_channel,
+    runtime_teams_env,
 )
-from api.domains.agents.error_messages import friendly_k8s_error, friendly_pod_reason
+from api.domains.agents.error_messages import friendly_pod_reason
+from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import (
     build_gog_env,
     build_gog_policy_md,
     build_gog_shim_install_sh,
     build_gog_shim_sh,
 )
+from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -50,13 +66,17 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentConfigurationVersionRead,
     AgentCreate,
+    AgentCreatorRead,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogSnapshot,
     AgentLogsRead,
+    AgentNameSuggestionRead,
     AgentOverrideAuthorRead,
+    AgentProvisioningErrorRead,
     AgentRead,
+    AgentRuntimeDiagnosticsRead,
     AgentSecret,
     AgentSecretCreate,
     AgentSecretRead,
@@ -85,14 +105,38 @@ from api.domains.agents.models import (
     encrypt_content,
     validate_content,
 )
+from api.domains.agents.naming import choose_first_name
 from api.domains.agents.override_repository import (
     AgentOverrideConcurrencyError,
     AgentOverrideRepository,
     AgentOverrideSnapshot,
 )
+from api.domains.agents.provisioning_errors import (
+    AgentProvisioningErrorCategory,
+    NormalizedAgentProvisioningError,
+    normalize_agent_provisioning_error,
+    persisted_provisioning_error,
+)
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.runtime_policy import build_chat_commands_policy_md, build_role_scope_policy_md
+from api.domains.agents.runtime_digest import agent_runtime_config_digest
+from api.domains.agents.runtime_policy import (
+    build_chat_commands_policy_md,
+    build_file_delivery_policy_md,
+    build_role_scope_policy_md,
+    build_scheduled_runs_policy_md,
+)
+from api.domains.agents.selection import (
+    SelectionValidator,
+    ensure_approval_mode_supported,
+    ensure_verbose_mode_supported,
+    is_model_allowed,
+)
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
+from api.domains.communications.plugins.registry import PlatformPluginRegistry
+from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
+from api.domains.conversations.repository import ConversationRepository
 from api.domains.credential_gateway.models import gateway_token_env_var
 from api.domains.credential_gateway.service import CredentialGatewayService
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
@@ -104,6 +148,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.restore_points.service import RestorePointService
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
@@ -127,6 +172,10 @@ from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
 
+# Port of the in-pod LLM proxy. Shared by the URL the runtime dials and the
+# LLM_PROXY_PORT the healthz servers listen on — see the runtime scripts.
+AGENT_LLM_PROXY_PORT = 8090
+
 _CREDENTIAL_FIELDS = frozenset(
     {
         "secrets",
@@ -138,7 +187,45 @@ _CREDENTIAL_FIELDS = frozenset(
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
 
-_OPENROUTER_MODEL_PREFIX = "litellm/openrouter/"
+RESTORE_POINT_IN_FLIGHT_DETAIL = (
+    "A restore point capture or restore is still running for this Agent. Wait for it to finish."
+)
+
+_PROVISIONING_FAILURE_STATUS: dict[AgentProvisioningErrorCategory, int] = {
+    AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: status.HTTP_503_SERVICE_UNAVAILABLE,
+    AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED: status.HTTP_503_SERVICE_UNAVAILABLE,
+    AgentProvisioningErrorCategory.CLUSTER_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
+    AgentProvisioningErrorCategory.RESOURCE_REJECTED: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    AgentProvisioningErrorCategory.UNKNOWN: status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+def _provisioning_error_dto(normalized: NormalizedAgentProvisioningError) -> AgentProvisioningErrorRead:
+    return AgentProvisioningErrorRead(
+        code=normalized.code,
+        category=normalized.category,
+        summary=normalized.summary,
+        detail=normalized.detail,
+    )
+
+
+def _stored_provisioning_error(agent: Agent) -> NormalizedAgentProvisioningError | None:
+    return persisted_provisioning_error(
+        code=agent.last_error_code,
+        detail=agent.last_error_detail,
+        legacy_message=agent.last_error,
+    )
+
+
+def _provisioning_error_read(agent: Agent) -> AgentProvisioningErrorRead | None:
+    normalized = _stored_provisioning_error(agent)
+    return _provisioning_error_dto(normalized) if normalized is not None else None
+
+
+@dataclass(frozen=True)
+class _NativeConnectionConfiguration:
+    settings: dict[str, Any]
+    credentials: dict[str, Any]
 
 
 def _enrich_atlassian_content(content: Any) -> Any:
@@ -163,6 +250,11 @@ def _enrich_atlassian_content(content: Any) -> Any:
     return content
 
 
+def _validation_problems(exc: ValidationError) -> str:
+    """Field paths and messages of a validation failure, without the rejected values."""
+    return "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors(include_input=False))
+
+
 def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> list[dict]:
     """Keeps catalogue entries whose id matches any glob pattern in the allowlist.
     An empty allowlist blocks everything. Matching is case-insensitive.
@@ -173,20 +265,6 @@ def filter_models_by_allowlist(catalog: list[dict], allowlist: list[str]) -> lis
     if not patterns:
         return []
     return [model for model in catalog if any(fnmatch.fnmatch(model["id"].lower(), pattern) for pattern in patterns)]
-
-
-def is_model_allowed(model: str, allowlist: list[str]) -> bool:
-    """Whether a stored model string (litellm/openrouter/<slug>) is permitted by
-    the allowlist globs. An empty allowlist blocks everything. The litellm/
-    gateway prefix is stripped so patterns match the OpenRouter slug.
-    """
-    if not allowlist:
-        return False
-    patterns = [p.strip().lower() for p in allowlist if p.strip()]
-    if not patterns:
-        return False
-    slug = model.removeprefix(_OPENROUTER_MODEL_PREFIX).lower()
-    return any(fnmatch.fnmatch(slug, pattern) for pattern in patterns)
 
 
 @inject
@@ -205,8 +283,14 @@ class AgentService:
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
     credential_gateway: CredentialGatewayService
+    agent_budgets: AgentLlmBudgetService
+    selection: SelectionValidator
+    connection_repository: CommunicationConnectionRepository
+    conversation_repository: ConversationRepository
+    plugins: PlatformPluginRegistry
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -238,54 +322,15 @@ class AgentService:
         return self.repository.agent_inventory_since(window_start, window_end, **kwargs)
 
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
-        """Rejects models outside the allowlist. litellm is cluster-internal, so
-        create/update are the only paths that can set an agent's model; enforcing
-        here is sufficient. An empty/None model defers to the resolved default.
-
-        The resolved default is admitted whatever the allowlist says. When the
-        Organization set its own default that is already true by invariant; the case
-        this covers is an Organization following a platform default its allowlist
-        does not cover, where the model picker offers that default and rejecting it
-        would make the one pre-selected option unsavable.
-        """
-        if model:
-            allowed_models = self.organization_lookup.get_allowed_models(org_id)
-            if allowed_models is None:
-                raise HTTPException(status_code=404, detail="Organization not found")
-            if is_model_allowed(model, allowed_models):
-                return
-            if model == self.agent_settings_lookup.resolve_default_model(org_id):
-                return
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model '{model}' is not in the allowed model list",
-            )
+        self.selection.ensure_model_allowed(model, org_id)
 
     @staticmethod
     def _ensure_approval_mode_supported(agent_type: AgentType, approval_mode: CommandApprovalMode | None) -> None:
-        """OpenClaw has no user-configurable command-approval control; only Hermes
-        maps approval_mode onto a runtime policy (see builders/hermes.py). An
-        omitted value defers to the AgentCreate/AgentUpdate default of AUTO, which
-        is a no-op for OpenClaw, but an explicit non-AUTO value would silently
-        have no effect, so it is rejected rather than accepted and ignored.
-        """
-        if agent_type == AgentType.OPENCLAW and approval_mode is not None and approval_mode != CommandApprovalMode.AUTO:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OpenClaw does not support command approval; approval_mode is Hermes-only.",
-            )
+        ensure_approval_mode_supported(agent_type, approval_mode)
 
     @staticmethod
     def _ensure_verbose_mode_supported(agent_type: AgentType, verbose_mode: bool | None) -> None:
-        """OpenClaw has no progress-message channel wired up yet; only Hermes
-        reads verbose_mode (see builders/hermes.py). An explicit True would
-        silently have no effect, so it is rejected rather than accepted and ignored.
-        """
-        if agent_type == AgentType.OPENCLAW and verbose_mode:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="OpenClaw does not support verbose progress messages; verbose_mode is Hermes-only.",
-            )
+        ensure_verbose_mode_supported(agent_type, verbose_mode)
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -360,110 +405,23 @@ class AgentService:
 
     def _resolve_skill_pins(
         self,
-        skill_ids: list[UUID],
+        added_skill_ids: list[UUID],
         pins: list[SkillVersionPin],
         current_skill_ids: set[UUID],
         removed_skill_ids: list[UUID],
         org_id: UUID,
         agent_id: UUID | None = None,
     ) -> list[SkillVersionPin]:
-        """Resolve every agent assignment to an explicit pinned version.
-
-        Added skills pin to a requested version when given, else to the skill's
-        latest at apply time. Existing skills can be re-pinned through the same
-        ``pins`` list. Every pin must reference a skill the agent ends up with,
-        and the requested version must exist (it can later be deleted only after
-        no agent pins it, so a valid pin never dangles from version deletion).
-        """
-        overlap = set(skill_ids) & set(removed_skill_ids)
-        if overlap:
-            ids = ", ".join(str(skill_id) for skill_id in sorted(overlap, key=str))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Skill ID(s) cannot be both added and removed: {ids}",
-            )
-
-        pin_map: dict[UUID, SkillVersionPin] = {}
-        for pin in pins:
-            if pin.skill_id in pin_map:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Duplicate skill version pin for skill {pin.skill_id}",
-                )
-            pin_map[pin.skill_id] = pin
-        remaining_ids = current_skill_ids - set(removed_skill_ids)
-        allowed_ids = remaining_ids | set(skill_ids)
-        extras = set(pin_map) - allowed_ids
-        if extras:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Skill version pins must reference a skill the agent ends up with",
-            )
-
-        requested_ids = set(skill_ids) | set(pin_map)
-        if requested_ids:
-            visible_skills = (
-                self.skill_repository.find_visible_for_agent(agent_id, org_id)
-                if agent_id is not None
-                else self.skill_repository.find_accessible_for_org(org_id)
-            )
-            accessible_ids = {skill.id for skill in visible_skills}
-            inaccessible_ids = requested_ids - accessible_ids
-            if inaccessible_ids:
-                skill_id = min(inaccessible_ids, key=str)
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Skill {skill_id} not found",
-                )
-
-        resolved: list[SkillVersionPin] = []
-        resolved_ids: set[UUID] = set()
-        for skill_id in dict.fromkeys(skill_ids):
-            pin = pin_map.get(skill_id)
-            if pin is None:
-                latest = self.skill_repository.get_latest_version(skill_id)
-                pin = SkillVersionPin(skill_id=skill_id, version=latest.version if latest else 1)
-            else:
-                if self.skill_repository.get_version(skill_id, pin.version) is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Version {pin.version} not found for skill {skill_id}",
-                    )
-            resolved.append(pin)
-            resolved_ids.add(skill_id)
-        for pin in pins:
-            if pin.skill_id in current_skill_ids and pin.skill_id not in resolved_ids:
-                if self.skill_repository.get_version(pin.skill_id, pin.version) is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Version {pin.version} not found for skill {pin.skill_id}",
-                    )
-                resolved.append(pin)
-                resolved_ids.add(pin.skill_id)
-        return resolved
+        return self.selection.resolve_skill_pins(
+            added_skill_ids, pins, current_skill_ids, removed_skill_ids, org_id, agent_id
+        )
 
     def _validate_required_skill_versions(
         self,
         required_map: Mapping[UUID, tuple[int, str | None]],
         pinned_versions: Mapping[UUID, int],
     ) -> None:
-        """Require Template Skills to be present at the Template's exact pin."""
-        standalone_ids, required_groups = split_requirements(required_map)
-        for skill_id in standalone_ids:
-            required_version, _ = required_map[skill_id]
-            if pinned_versions.get(skill_id) != required_version:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Required template Skill {skill_id} must be pinned to version {required_version}",
-                )
-        for member_ids in required_groups.values():
-            if any(pinned_versions.get(skill_id) == required_map[skill_id][0] for skill_id in member_ids):
-                continue
-            names = sorted(s.name for s in self.skill_repository.get_many_by_ids(list(member_ids)))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"One of these template Skills must be pinned to its required version: {', '.join(names)}",
-            )
+        self.selection.validate_required_skill_versions(required_map, pinned_versions)
 
     def _validate_skill_update(
         self,
@@ -509,7 +467,7 @@ class AgentService:
     def _build_agent_read(
         self,
         agent: Agent,
-        secrets: list[AgentSecret] | None = None,
+        secrets: Sequence[AgentSecret | AgentSecretRead] | None = None,
         skills: list[PinnedSkill] | None = None,
         required_skill_map: Mapping[UUID, str | None | tuple[int, str | None]] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
@@ -521,19 +479,21 @@ class AgentService:
         source_update_skill_ids: set[UUID] | None = None,
         effective_default_model: str = "",
         configured_platform_keys: list[str] | None = None,
+        creator: AgentCreatorRead | None = None,
+        last_message_at: dt.datetime | None = None,
+        shared_credential_names: Mapping[UUID, str] | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
-        shared_creds_by_id = {}
-        if shared_ids:
-            shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, agent.organization_id)
-            shared_creds_by_id = {c.id: c for c in shared_creds}
+        credential_names = shared_credential_names if shared_credential_names is not None else {}
+        if shared_credential_names is None and shared_ids:
+            credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+                shared_ids, agent.organization_id
+            )
         secrets_read = []
         for secret in secrets or []:
             read = AgentSecretRead.model_validate(secret)
-            if secret.shared_credential_id and secret.shared_credential_id in shared_creds_by_id:
-                sc = shared_creds_by_id[secret.shared_credential_id]
-                read.shared_credential_id = sc.id
-                read.shared_credential_name = sc.name
+            if secret.shared_credential_id and secret.shared_credential_id in credential_names:
+                read.shared_credential_name = credential_names[secret.shared_credential_id]
             secrets_read.append(read)
         assigned_ids = {pinned.skill.id for pinned in (skills or [])}
         req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
@@ -586,6 +546,11 @@ class AgentService:
             # A running pod that started on something else is the only case a surface
             # must not report the resolved value as current.
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
+            update_available=(
+                agent.status == AgentStatus.RUNNING
+                and agent.running_config_digest
+                != agent_runtime_config_digest(self.config.openclaw_image, self.config.hermes_image)
+            ),
             # OpenClaw ignores approval_mode; report the effective AUTO default
             # instead of a stored value from before this became enforced, so
             # reads stay truthful even for agents persisted prior to this check.
@@ -593,10 +558,15 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            memory_enabled=agent.memory_enabled,
+            last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
+            native_platform_keys=sorted(NATIVE_PLATFORM_KEYS),
             allowed_actions=allowed_actions or [],
+            creator=creator,
+            last_message_at=last_message_at,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
@@ -622,6 +592,10 @@ class AgentService:
             template_key = template.template_key
         read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
+        creators = self.repository.get_creators_for_agents([agent.id], read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            [agent.id], self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
         return self._build_agent_read(
             agent,
             secrets,
@@ -630,6 +604,8 @@ class AgentService:
             allowed_actions,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(agent.organization_id),
             configured_platform_keys=configured_platform_keys.get(agent.id, []),
+            creator=creators.get(agent.id),
+            last_message_at=message_times.get(agent.id),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
@@ -706,6 +682,11 @@ class AgentService:
             safe_message(delete_error),
         )
 
+    def suggest_agent_name(self, context: CurrentUserContext) -> AgentNameSuggestionRead:
+        org_id = self._org_id(context)
+        self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
+        return AgentNameSuggestionRead(first_name=choose_first_name(self.repository.count_all_by_org(org_id)))
+
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
@@ -749,7 +730,9 @@ class AgentService:
         )
 
         # Prepare Agent Secrets in memory without persisting them yet.
-        # Integration credentials are separate from Communication Connections.
+        # Integration credentials are separate from Communication Connections. SharePoint only
+        # borrows the Teams app's public id and tenant (CommunicationsService.get_teams_app_identity)
+        # to sign in on that app; the app's secret is never read for it.
         prepared_secrets: list[AgentSecret] = []
         live_validation_contents: list[tuple[SecretProvider, Any]] = []
         for item in data.secrets:
@@ -781,11 +764,21 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Provider {shared_cred.provider} already has a credential in this request",
                 )
-            shared_content = decrypt_content(
-                shared_cred.provider,
-                shared_cred.content,
-                self.config.agent_token_encryption_key,
-            )
+            try:
+                shared_content = decrypt_content(
+                    shared_cred.provider,
+                    shared_cred.content,
+                    self.config.agent_token_encryption_key,
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Shared credential {shared_cred.name!r} has stored "
+                        f"{PROVIDER_DISPLAY_NAMES[shared_cred.provider]} settings that are no longer valid "
+                        f"({_validation_problems(exc)}). Edit the shared credential and save it again."
+                    ),
+                ) from exc
             live_validation_contents.append((shared_cred.provider, shared_content))
             prepared_secrets.append(
                 AgentSecret(
@@ -842,9 +835,17 @@ class AgentService:
         allocated_litellm_key: str | None = None
         try:
             if self.config.litellm_base_url and self.config.litellm_secret_name:
+                # A new Agent follows the default, so its key is capped from the first
+                # call — and a team created here carries the Organization's limit.
+                key_budget = self.agent_budgets.key_budget_for_new_agent(agent.organization_id)
                 try:
                     allocated_litellm_key = self.litellm.generate_key(
-                        str(agent.id), agent.name, str(agent.organization_id)
+                        str(agent.id),
+                        agent.name,
+                        str(agent.organization_id),
+                        max_budget=key_budget.agent_limit_usd,
+                        budget_duration=key_budget.window,
+                        team_budget=key_budget.organization_limit_usd,
                     )
                 except LiteLLMError as exc:
                     raise HTTPException(
@@ -886,6 +887,7 @@ class AgentService:
             template_key=template.template_key,
             template_version=template.version,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(org_id),
+            creator=AgentCreatorRead.model_validate(context.user),
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -1121,7 +1123,7 @@ class AgentService:
                 data.required_skill_groups,
                 org_id,
             )
-            self._validate_override_requirements(agent, skill_map, org_id)
+            self._validate_override_requirements(agent, skill_map, org_id, check_versions=False)
         try:
             saved = self.override_repository.update_draft(
                 agent.id,
@@ -1157,6 +1159,7 @@ class AgentService:
             agent,
             self.override_repository.get_draft_skill_map(draft.id),
             org_id,
+            check_versions=False,
         )
         try:
             published = self.override_repository.publish_draft(
@@ -1191,66 +1194,22 @@ class AgentService:
                 detail=f"Agent {agent_id} must be stopped before selecting a Template Version",
             )
 
-        selected_id: UUID
-        selected_template_key: str | None
-        selected_version: int | None
-        required_map: Mapping[UUID, tuple[int, str | None]]
-        if data.selection_type == "platform":
-            assert data.template_key is not None and data.template_version is not None
-            selected = self.template_repository.get_platform_template_by_key_version(
-                data.template_key,
-                data.template_version,
-            )
-            if selected is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Platform Template Version not found")
-            selected_id = selected.id
-            selected_template_key = selected.template_key
-            selected_version = selected.version
-            required_map = self.template_repository.get_required_skill_map_for(selected)
-        elif data.selection_type == "organization":
-            assert data.template_key is not None and data.template_version is not None
-            selected = self.template_repository.get_org_template_by_key_version(
-                org_id,
-                data.template_key,
-                data.template_version,
-            )
-            if selected is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organization Template Version not found",
-                )
-            selected_id = selected.id
-            selected_template_key = selected.template_key
-            selected_version = selected.version
-            required_map = self.template_repository.get_required_skill_map_for(selected)
-        else:
-            assert data.override_version is not None
-            selected_override = self.override_repository.get_version(
-                agent.id,
-                org_id,
-                data.override_version,
-            )
-            if selected_override is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Agent Template Override Version not found",
-                )
-            selected_id = selected_override.id
-            selected_template_key = None
-            selected_version = selected_override.version
-            required_map = self.override_repository.get_version_skill_map(selected_override.id)
-        self._validate_override_requirements(agent, required_map, org_id)
+        resolved = self.selection.resolve(agent, data, org_id)
+
         try:
             selected_agent = self.override_repository.select_pin(
                 agent.id,
                 org_id,
                 selection_type=data.selection_type,
-                selected_id=selected_id,
+                selected_id=resolved.selected_id,
                 expected_agent_updated_at=data.expected_agent_updated_at,
                 actor=resolve_actor_identity(context, org_id),
                 actor_display=context.user.full_name or context.user.email,
-                template_key=selected_template_key,
-                selected_version=selected_version,
+                template_key=resolved.template_key,
+                selected_version=resolved.version,
+                skill_pins=[(pin.skill_id, pin.version) for pin in resolved.skill_pins],
+                removed_skill_ids=resolved.removed_skill_ids,
+                scalar_updates=resolved.scalar_updates,
             )
         except AgentOverrideConcurrencyError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -1258,58 +1217,28 @@ class AgentService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         return self._get_agent_read(selected_agent, context)
 
+    def _validate_incoming_skill_providers(
+        self,
+        agent: Agent,
+        incoming_skill_ids: Collection[UUID],
+    ) -> None:
+        self.selection.validate_incoming_skill_providers(agent, incoming_skill_ids)
+
     def _validate_override_requirements(
         self,
         agent: Agent,
         required_map: Mapping[UUID, tuple[int, str | None]],
         org_id: UUID,
+        prospective_pins: Mapping[UUID, int] | None = None,
+        check_versions: bool = True,
     ) -> None:
-        if not required_map:
-            return
-        accessible = {skill.id: skill for skill in self.skill_repository.find_visible_for_agent(agent.id, org_id)}
-        missing_ids = set(required_map) - accessible.keys()
-        if missing_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Override requires a Skill that is no longer available to this Organization",
-            )
-        assigned_rows = self.skill_repository.get_agent_skills_with_details(agent.id)
-        assigned_versions = {skill.id: row.pinned_version for row, skill in assigned_rows}
-        assigned_ids = set(assigned_versions)
-        wrong_versions = {
-            skill_id
-            for skill_id, (required_version, _) in required_map.items()
-            if assigned_versions.get(skill_id) != required_version
-        }
-        if wrong_versions:
-            names = ", ".join(sorted(accessible[skill_id].name for skill_id in wrong_versions))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Required template skills must use the pinned versions: {names}",
-            )
-        standalone_ids, groups = split_requirements(required_map)
-        if standalone_ids - assigned_ids:
-            missing = ", ".join(sorted(accessible[skill_id].name for skill_id in standalone_ids - assigned_ids))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Required template skills must be assigned to the Agent: {missing}",
-            )
-        for group_key, member_ids in sorted(groups.items()):
-            if not member_ids & assigned_ids:
-                names = ", ".join(sorted(accessible[skill_id].name for skill_id in member_ids))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"At least one of these template skills must be assigned to the Agent: {names}",
-                )
-        providers = {secret.provider for secret in self.repository.get_secrets_for_agent(agent.id)}
-        for skill_id in required_map:
-            missing_providers = set(accessible[skill_id].required_providers) - providers
-            if missing_providers:
-                names = ", ".join(sorted(provider.value for provider in missing_providers))
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Required Skill '{accessible[skill_id].name}' needs configured providers: {names}",
-                )
+        self.selection.validate_override_requirements(
+            agent,
+            required_map,
+            org_id,
+            prospective_pins,
+            check_versions=check_versions,
+        )
 
     def _resolve_override_skill_map(
         self,
@@ -1551,7 +1480,22 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, agents)
 
         agent_ids = [a.id for a in agents]
-        secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
+        creators = self.repository.get_creators_for_agents(agent_ids, read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            agent_ids, self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
+        secrets_by_agent = self.repository.get_secret_summaries_for_agents(agent_ids, read_scope)
+        shared_credential_ids = list(
+            {
+                secret.shared_credential_id
+                for secrets in secrets_by_agent.values()
+                for secret in secrets
+                if secret.shared_credential_id is not None
+            }
+        )
+        shared_credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+            shared_credential_ids, read_scope.organization_id
+        )
         skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
         assigned_skill_ids = list(
             {pinned.skill.id for agent_skills in skills_by_agent.values() for pinned in agent_skills}
@@ -1585,6 +1529,9 @@ class AgentService:
                 source_update_skill_ids=source_update_skill_ids,
                 effective_default_model=effective_default_model,
                 configured_platform_keys=configured_platform_keys.get(agent.id, []),
+                creator=creators.get(agent.id),
+                last_message_at=message_times.get(agent.id),
+                shared_credential_names=shared_credential_names,
             )
             for agent in agents
         ]
@@ -1850,18 +1797,111 @@ class AgentService:
 
     def start_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-        started = self._start_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        actor = resolve_actor_identity(context, agent.organization_id)
+        # Complete deferred replay before taking the lock it also needs. The
+        # check under the lock still catches any newly started restore.
+        self.restore_points.reconcile_agent(agent.id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            # Re-read status now that we hold the lock: it may have changed since
+            # the caller's copy was loaded above.
+            current = self.repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
+                )
+            started = self._start_agent_unchecked(current, actor)
         return self._get_agent_read(started, context)
+
+    def _native_connection_configuration(
+        self,
+        agent_id: UUID,
+        platform_key: str,
+    ) -> _NativeConnectionConfiguration | None:
+        """Load an enabled Connection configured for native runtime transport."""
+        if platform_key not in NATIVE_PLATFORM_KEYS:
+            return None
+        connection = self.connection_repository.get_active_by_platform_key(agent_id, platform_key)
+        if connection is None or not connection.enabled:
+            return None
+        credentials = json.loads(
+            decrypt_token(connection.credentials_encrypted, self.config.agent_token_encryption_key)
+        )
+        return _NativeConnectionConfiguration(settings=connection.settings, credentials=credentials)
+
+    def _native_slack_connection(self, agent_id: UUID) -> tuple[dict, dict, ConversationLocation | None] | None:
+        """The settings, credentials, and resolved home channel of a native Slack Connection."""
+        connection = self._native_connection_configuration(agent_id, "slack")
+        if connection is None:
+            return None
+        home_channel = None
+        target = connection.settings.get("default_delivery_target")
+        if target:
+            plugin = self.plugins.require("slack")
+            try:
+                # Resolve the native home target through the Connection recipient policy.
+                home_channel = plugin.resolve_outbound_target(
+                    plugin.settings_model.model_validate(connection.settings),
+                    plugin.credentials_model.model_validate(connection.credentials),
+                    OutboundTargetRequest.model_validate(target),
+                ).location
+            except Exception as exc:
+                # A stale target must not block the Agent from starting.
+                logger.warning("Slack default delivery target for agent %s not resolved (%s)", agent_id, exc)
+        return connection.settings, connection.credentials, home_channel
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
+        try:
+            previous_status = self._provision_and_start(agent)
+        except AgentProvisioningPrecondition:
+            raise
+        except Exception as exc:
+            logger.exception("Failed to start agent %s", agent.id)
+            raise self._record_provisioning_failure(agent, exc) from exc
+        return self._persist_started(agent, actor, previous_status)
+
+    def _record_provisioning_failure(self, agent: Agent, exc: Exception) -> HTTPException:
+        """Persist a sanitized failure on the Agent and build the error to raise.
+
+        The full exception is already in the logs; only the normalized form is
+        persisted or returned, so no cluster text reaches a client.
+        """
+        normalized = normalize_agent_provisioning_error(exc)
+        agent.status = AgentStatus.ERROR
+        agent.last_error = normalized.display_message
+        agent.last_error_code = normalized.code
+        agent.last_error_detail = normalized.detail
+        try:
+            self.repository.save(agent)
+        except Exception:
+            # A database fault is one of the things that lands here, and it would
+            # raise again on this write. The caller still gets the classified cause.
+            logger.exception("Could not record the provisioning failure for agent %s", agent.id)
+        return HTTPException(
+            status_code=_PROVISIONING_FAILURE_STATUS.get(
+                normalized.category,
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ),
+            detail=_provisioning_error_dto(normalized).model_dump(mode="json"),
+        )
+
+    def _provision_and_start(self, agent: Agent) -> str:
+        """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
         org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
         # route) so every start path labels agents consistently.
         org_name = self.organization_lookup.get_name(org_id)
         if agent.status == AgentStatus.RUNNING:
-            raise HTTPException(
+            raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is already running",
             )
@@ -1869,7 +1909,7 @@ class AgentService:
         previous_status = agent.status.value
         template = self.template_repository.get_pinned_template(agent)
         if template is None:
-            raise HTTPException(
+            raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent {agent_id} has no pinned template",
             )
@@ -1884,7 +1924,10 @@ class AgentService:
             else ""
         )
         effective_model = agent.model or self.agent_settings_lookup.resolve_default_model(org_id)
-        llm_proxy_url = "http://localhost:8090"
+        # The runtime dials this and the in-pod proxy listens on it. Both come from
+        # AGENT_LLM_PROXY_PORT below so they cannot drift apart: setting the port
+        # without moving the URL would fail every model call with connection refused.
+        llm_proxy_url = f"http://localhost:{AGENT_LLM_PROXY_PORT}"
 
         # Re-check the allowlist at start time, not just create/update: the org's
         # allowlist can change after the agent was created, and a model that was
@@ -1899,19 +1942,39 @@ class AgentService:
         if agent.model:
             allowed_models = self.organization_lookup.get_allowed_models(org_id)
             if allowed_models is None or not is_model_allowed(agent.model, allowed_models):
-                raise HTTPException(
+                raise AgentProvisioningPrecondition(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Model '{agent.model}' is no longer in the organization's allowed model list",
                 )
 
         runtime_api_key = secrets.token_urlsafe(32)
-        service = build_service(agent.id, org_id, ns, org_name=org_name, agent_name=agent.name)
+        runtime_teams = self._native_connection_configuration(agent.id, "teams")
+        service = build_service(
+            agent.id,
+            org_id,
+            ns,
+            include_webhook_port=runtime_teams is not None,
+            org_name=org_name,
+            agent_name=agent.name,
+        )
         if agent.agent_type == AgentType.HERMES:
             overlay = None
+            native_slack = self._native_slack_connection(agent.id)
+            native_discord = self._native_connection_configuration(agent.id, "discord")
+            native_telegram = self._native_connection_configuration(agent.id, "telegram")
             hermes_cfg = build_hermes_gateway_config(
                 effective_model,
                 llm_proxy_url,
-                approval_mode=str(agent.approval_mode),
+                approval_mode=CommandApprovalMode(agent.approval_mode).value,
+                native_slack=native_slack is not None,
+                native_discord=native_discord is not None,
+                discord_require_mention=(
+                    native_discord.settings.get("require_mention", True) if native_discord else True
+                ),
+                telegram_settings=native_telegram.settings if native_telegram else None,
+                runtime_teams=runtime_teams is not None,
+                verbose_mode=agent.verbose_mode,
+                memory_enabled=agent.memory_enabled,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1922,7 +1985,16 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
                 verbose_mode=agent.verbose_mode,
+                approval_mode=CommandApprovalMode(agent.approval_mode).value,
             )
+            if native_slack is not None:
+                secret.string_data.update(native_slack_env(*native_slack))
+            if native_discord is not None:
+                secret.string_data.update(native_discord_env(native_discord.settings, native_discord.credentials))
+            if native_telegram is not None:
+                secret.string_data.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
+            if runtime_teams is not None:
+                secret.string_data.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -1931,7 +2003,23 @@ class AgentService:
                 self.config.agent_image_pull_secret,
             )
         else:
-            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url)
+            native_channels: dict[str, dict] = {}
+            native_credentials: dict[str, dict] = {}
+            if native_slack := self._native_slack_connection(agent.id):
+                slack_settings, native_credentials["slack"], home_channel = native_slack
+                native_channels["slack"] = native_slack_channel(slack_settings, home_channel)
+            if native_discord := self._native_connection_configuration(agent.id, "discord"):
+                native_credentials["discord"] = native_discord.credentials
+                native_channels["discord"] = native_discord_channel(native_discord.settings)
+            if native_telegram := self._native_connection_configuration(agent.id, "telegram"):
+                native_credentials["telegram"] = native_telegram.credentials
+                native_channels["telegram"] = native_telegram_channel(native_telegram.settings)
+            if runtime_teams is not None:
+                native_credentials["msteams"] = runtime_teams.credentials
+                native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
+            overlay = build_openclaw_gateway_config(
+                effective_model, llm_proxy_url, native_channels, memory_enabled=agent.memory_enabled
+            )
             hermes_cfg = None
             secret = build_secret_runtime(
                 agent.id,
@@ -1941,6 +2029,8 @@ class AgentService:
                 litellm_api_key=litellm_key,
                 litellm_base_url=llm_proxy_url,
             )
+            if native_credentials:
+                secret.string_data.update(native_channel_env(native_credentials))
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -1965,7 +2055,20 @@ class AgentService:
             else:
                 ciphertext = s.content
             assert ciphertext is not None
-            decrypted[provider] = decrypt_content(provider, ciphertext, key)
+            try:
+                decrypted[provider] = decrypt_content(provider, ciphertext, key)
+            except ValidationError as exc:
+                # Stored content is re-validated on every start, so a schema that tightened
+                # after the secret was saved (e.g. the Pipedrive domain rule) stops here with
+                # a fixable message rather than an unhandled error. Re-saving the
+                # integration replaces the stored content.
+                raise AgentProvisioningPrecondition(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"The stored {PROVIDER_DISPLAY_NAMES[provider]} integration settings are no longer valid "
+                        f"({_validation_problems(exc)}). Edit the integration and save it again."
+                    ),
+                ) from exc
         self._backfill_google_client_credentials(decrypted)
         # Only google_workspace is materialized. The retired per-service Google providers
         # and their rows were deleted by migration; affected agents must reconnect through
@@ -1974,7 +2077,7 @@ class AgentService:
         if isinstance(gws_content, GoogleWorkspaceContent) and (
             not gws_content.client_id or not gws_content.client_secret
         ):
-            raise HTTPException(
+            raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
@@ -1992,6 +2095,9 @@ class AgentService:
         # keeps its real credential out of the pod Secret and aai-secrets.enc.json.
         store = store_providers_for(decrypted)
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
+        # The store must survive restarts: aai-cli rotates delegated Microsoft tokens in it.
+        # Hermes' home is its volume; OpenClaw's volume is only ~/.openclaw.
+        aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
         # Gated on providers that actually get an aai-cli profile: an agent whose only
         # integrations are profile-less (google_workspace, firecrawl) would otherwise get
         # a config.toml holding nothing but the store header.
@@ -2000,12 +2106,16 @@ class AgentService:
             build_config_toml(
                 decrypted,
                 home_dir=aai_home,
+                store_dir=aai_store_dir,
                 gateway_base_url=self.config.credential_gateway_base_url,
             )
             if has_aai_profiles
             else None
         )
-        aai_setup_sh = build_setup_sh(list(store), home_dir=aai_home) if has_aai_profiles else None
+        # Always mounted, even without profiles, so a removed SharePoint sign-in is cleaned up.
+        aai_setup_sh = build_setup_sh(
+            list(store), home_dir=aai_home, store_dir=aai_store_dir, install_config=has_aai_profiles
+        )
         if store:
             secret.string_data.update(build_env(store))
 
@@ -2075,6 +2185,9 @@ class AgentService:
             secret.string_data[gateway_token_env_var(issued.provider)] = issued.value
         if gateway_tokens:
             secret.string_data["AF_GATEWAY_URL"] = self.config.credential_gateway_base_url
+        memory_key = secrets.token_urlsafe(32) if agent.memory_enabled else None
+        if memory_key:
+            secret.string_data.update({"MEMORY_URL": self.config.memory_base_url, "MEMORY_API_KEY": memory_key})
         secret.string_data.update(
             {
                 "AGENT_ID": str(agent.id),
@@ -2082,8 +2195,11 @@ class AgentService:
                 "INGEST_API_KEY": ingest_key,
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
-                "COMMUNICATIONS_PROTOCOL_VERSION": "1",
+                "COMMUNICATIONS_PROTOCOL_VERSION": "2",
+                "AGENT_TRIGGER_KEY": communication_key,
+                "AGENT_TRIGGER_PORT": "8082",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
+                "LLM_PROXY_PORT": str(AGENT_LLM_PROXY_PORT),
             }
         )
 
@@ -2132,13 +2248,19 @@ class AgentService:
         # in the auto-loaded prompt no matter that its skill is mounted.
         # gog gets its own block: the aai-cli one insists on --profile and on aai-cli
         # being the only route to its integrations, neither of which is true of gog.
+        workspace_dir = HERMES_WORKSPACE_DIR if agent.agent_type == AgentType.HERMES else OPENCLAW_WORKSPACE_DIR
         agents_md = (
             rendered.agents_md
             + build_integrations_policy_md(decrypted)
             + build_gog_policy_md(gws_content if isinstance(gws_content, GoogleWorkspaceContent) else None)
             + build_local_tools_policy_md(s.name for s in mounted_skills)
+            + build_file_delivery_policy_md(
+                # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
+                workspace_dir if any(c is not None for c in (native_slack, native_discord, native_telegram)) else None
+            )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
+            + build_scheduled_runs_policy_md()
         )
 
         if agent.agent_type == AgentType.HERMES:
@@ -2152,6 +2274,7 @@ class AgentService:
                 user_md=rendered.user_md,
                 tools_md=tools_md,
                 agents_md=agents_md,
+                memory_enabled=agent.memory_enabled,
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
@@ -2171,6 +2294,7 @@ class AgentService:
                 user_md=rendered.user_md,
                 tools_md=tools_md,
                 agents_md=agents_md,
+                memory_enabled=agent.memory_enabled,
                 boot_md=rendered.boot_md,
                 bootstrap_md=rendered.bootstrap_md,
                 heartbeat_md=rendered.heartbeat_md,
@@ -2182,38 +2306,46 @@ class AgentService:
                 skills_json=skills_json,
             )
 
-        try:
-            self.k8s.delete_config_map(name, ns)
-            self.k8s.delete_secret(name, ns)
-            self.k8s.create_config_map(ns, config_map)
-            self.k8s.create_secret(ns, secret)
-            self.k8s.create_pvc(
-                ns,
-                build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
-            )
-            self.k8s.create_service(ns, service)
-            self.k8s.create_deployment(ns, deployment)
-        except Exception as exc:
-            logger.exception("Failed to start agent %s", agent_id)
-            agent.status = AgentStatus.ERROR
-            agent.last_error = friendly_k8s_error(exc)
-            self.repository.save(agent)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to start agent {agent_id}",
-            )
+        # Failures here are recorded and normalized by _start_agent_unchecked, which
+        # wraps this whole method rather than only the cluster calls.
+        self.k8s.delete_config_map(name, ns)
+        self.k8s.delete_secret(name, ns)
+        self.k8s.create_config_map(ns, config_map)
+        self.k8s.create_secret(ns, secret)
+        self.k8s.create_pvc(
+            ns,
+            build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
+        )
+        self.k8s.create_service(ns, service)
+        self.k8s.create_deployment(ns, deployment)
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
+        agent.last_error_code = None
+        agent.last_error_detail = None
         # Pin what this pod was started on. The runtime reads its config once, so this
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
+        agent.running_config_digest = agent_runtime_config_digest(
+            self.config.openclaw_image,
+            self.config.hermes_image,
+        )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
+        agent.memory_key_hash = hashlib.sha256(memory_key.encode()).hexdigest() if memory_key else None
         agent.communication_key_encrypted = encrypt_token(
             communication_key,
             self.config.agent_token_encryption_key,
         )
+        return previous_status
+
+    def _persist_started(self, agent: Agent, actor: ActorIdentity, previous_status: str) -> Agent:
+        """Record a start whose Kubernetes resources already exist.
+
+        Deliberately outside the failure handler. The workload is running by now, so
+        marking the Agent ERROR because this write failed would describe a state the
+        cluster is not in.
+        """
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STARTED,
@@ -2335,7 +2467,17 @@ class AgentService:
 
     def stop_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
-        stopped = self._stop_agent_unchecked(agent, resolve_actor_identity(context, agent.organization_id))
+        actor = resolve_actor_identity(context, agent.organization_id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            stopped = self._stop_agent_unchecked(current, actor)
         return self._get_agent_read(stopped, context)
 
     def _stop_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
@@ -2360,6 +2502,7 @@ class AgentService:
 
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""
+        agent.running_config_digest = ""
         result = self.repository.save_with_lifecycle_event(
             agent,
             event_name=AGENT_STOPPED,
@@ -2386,8 +2529,14 @@ class AgentService:
         failures: list[tuple[Agent, Exception]] = []
         for agent in agents:
             try:
-                stopped = self._stop_agent_unchecked(agent, actor)
-                started = self._start_agent_unchecked(stopped, actor)
+                with self.repository.lifecycle_lock(agent.id) as acquired:
+                    if not acquired:
+                        raise RuntimeError(f"Agent {agent.id} has a lifecycle operation already in progress")
+                    current = self.repository.get_by_id(agent.id)
+                    if current is None:
+                        raise RuntimeError(f"Agent {agent.id} not found")
+                    stopped = self._stop_agent_unchecked(current, actor)
+                    started = self._start_agent_unchecked(stopped, actor)
                 if started.status != AgentStatus.RUNNING:
                     failures.append((agent, RuntimeError(f"restart completed with status {started.status.value}")))
                     continue
@@ -2407,17 +2556,34 @@ class AgentService:
         ns = self.config.k8s_namespace
         name = f"agent-{agent.id}"
 
-        self.k8s.delete_deployment(name, ns)
-        self.k8s.delete_service(name, ns)
-        self.k8s.delete_pvc(name, ns)
-        self.k8s.delete_secret(name, ns)
-        self.k8s.delete_config_map(name, ns)
+        self.restore_points.reconcile_agent(agent.id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=RESTORE_POINT_IN_FLIGHT_DETAIL,
+                )
 
-        delete_result = self.repository.soft_delete_with_event(
-            agent,
-            actor=resolve_actor_identity(context, agent.organization_id),
-            actor_display=context.user.full_name or context.user.email,
-        )
+            self.k8s.delete_deployment(name, ns)
+            self.k8s.delete_service(name, ns)
+            self.k8s.delete_pvc(name, ns)
+            self.k8s.delete_secret(name, ns)
+            self.k8s.delete_config_map(name, ns)
+            self.restore_points.purge_agent(current.id)
+
+            delete_result = self.repository.soft_delete_with_event(
+                current,
+                actor=resolve_actor_identity(context, agent.organization_id),
+                actor_display=context.user.full_name or context.user.email,
+            )
         self.event_delivery_dispatcher.enqueue_immediate(delete_result.delivery_ids)
 
         if agent.litellm_key_encrypted:
@@ -2566,19 +2732,48 @@ class AgentService:
         result = validator(content)  # type: ignore[arg-type]
         return format_validation_result(result)
 
+    def get_runtime_diagnostics(self, agent_id: UUID, context: CurrentUserContext) -> AgentRuntimeDiagnosticsRead:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        if agent.status != AgentStatus.RUNNING:
+            return AgentRuntimeDiagnosticsRead(observed_at=dt.datetime.now(dt.UTC))
+        try:
+            return AgentRuntimeDiagnosticsRead.model_validate(
+                self.k8s.get_runtime_diagnostics(f"agent-{agent.id}", self.config.k8s_namespace)
+            )
+        except Exception:
+            logger.exception("Runtime diagnostics unavailable for agent %s", agent.id)
+            raise HTTPException(status_code=503, detail="Runtime diagnostics are temporarily unavailable") from None
+
     def get_agent_health(self, agent_id: UUID, context: CurrentUserContext) -> AgentHealthRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
 
-        if agent.status == AgentStatus.ERROR:
-            return AgentHealthRead(status="error", reason=agent.last_error)
-
-        if agent.status != AgentStatus.RUNNING:
+        if agent.status not in (AgentStatus.ERROR, AgentStatus.RUNNING):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is not running",
             )
 
-        name = f"agent-{agent_id}"
+        health = self.agent_health(agent)
+        if health is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"status": "error", "reason": "unreachable"},
+            )
+        return health
+
+    def agent_health(self, agent: Agent) -> AgentHealthRead | None:
+        """What the pod and the Agent's own healthz say, for an Agent already authorized.
+
+        The callers authorize: the Organization route requires `activity.read` on the Agent,
+        and the Platform resource usage page sits behind `require_platform_admin`. None means
+        the healthz server could not be reached, which the Organization route answers with a
+        503. A stopped Agent has no health and is not asked about.
+        """
+        if agent.status == AgentStatus.ERROR:
+            stored = _stored_provisioning_error(agent)
+            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
+
+        name = f"agent-{agent.id}"
         ns = self.config.k8s_namespace
 
         pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)
@@ -2591,7 +2786,21 @@ class AgentService:
             data = self.k8s.fetch_agent_healthz(name, ns)
             return AgentHealthRead.model_validate(data)
         except RuntimeError:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"status": "error", "reason": "unreachable"},
+            return None
+
+    def runtime_restarts(self, agent: Agent) -> AgentRuntimeDiagnosticsRead | None:
+        """Restarts and why the last one ended, without any log text.
+
+        For an Agent already authorized by a caller outside the activity log boundary (the
+        Platform view), so it never asks the cluster for logs. None when the cluster could
+        not be asked.
+        """
+        if agent.status != AgentStatus.RUNNING:
+            return AgentRuntimeDiagnosticsRead(observed_at=dt.datetime.now(dt.UTC))
+        try:
+            return AgentRuntimeDiagnosticsRead.model_validate(
+                self.k8s.get_runtime_diagnostics(f"agent-{agent.id}", self.config.k8s_namespace, include_logs=False)
             )
+        except Exception:
+            logger.exception("Runtime diagnostics unavailable for agent %s", agent.id)
+            return None

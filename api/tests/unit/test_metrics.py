@@ -16,6 +16,8 @@ from api.core.metrics import (
     render_metrics,
 )
 from api.domains.agents.models import Agent, AgentStatus, AgentType
+from api.domains.business_value.classifier import BusinessActionStatus
+from api.domains.business_value.models import BusinessAction
 from api.domains.ingest.models import IngestBatchRequest, IngestToolResultEvent
 from api.domains.ingest.service import IngestService
 from api.domains.tool_calls.models import ToolCall, ToolCallStatus
@@ -57,11 +59,39 @@ def _make_tool_call(agent: Agent, tool_name: str, status: ToolCallStatus) -> Too
     )
 
 
-def _make_service(tc_repo) -> IngestService:
+def _make_service(tc_repo, recorded: list[BusinessAction] | None = None) -> IngestService:
+    ba_repo = MagicMock()
+    ba_repo.record_in_session.return_value = recorded or []
     return IngestService(
         agent_repository=MagicMock(),
         tool_call_repository=tc_repo,
+        business_action_repository=ba_repo,
+        connection_repository=MagicMock(),
+        operational_repository=MagicMock(),
+        conversation_repository=MagicMock(),
     )
+
+
+def _business_action(integration: str, is_write: bool | None, status: BusinessActionStatus) -> BusinessAction:
+    now = datetime.now(UTC)
+    return BusinessAction(
+        organization_id=uuid4(),
+        agent_id=uuid4(),
+        tool_call_id=uuid4(),
+        ordinal=0,
+        integration=integration,
+        resource="",
+        verb="",
+        is_write=is_write,
+        status=status,
+        occurred_at=now,
+        completed_at=now,
+    )
+
+
+def _business_actions_total(integration: str, is_write: str, status: str) -> float:
+    labels = {"integration": integration, "is_write": is_write, "status": status}
+    return REGISTRY.get_sample_value("agentbarn_business_actions_total", labels) or 0.0
 
 
 def _tool_calls_total(tool_name: str, status: str) -> float | None:
@@ -134,6 +164,86 @@ def test_tool_call_counter_not_incremented_when_no_row_matched():
 
         with then("no counter series is created for it"):
             assert_that(_tool_calls_total("nonexistent-tool", "error"), none())
+
+
+# --- business action counter ---
+
+
+def test_business_action_counter_increments_per_recorded_action():
+    with given():
+        agent = _make_agent()
+        row = _make_tool_call(agent, "terminal", ToolCallStatus.SUCCESS)
+        recorded = [
+            _business_action("jira", True, BusinessActionStatus.SUCCESS),
+            _business_action("jira", True, BusinessActionStatus.SUCCESS),
+            _business_action("excel", False, BusinessActionStatus.ERROR),
+        ]
+        service = _make_service(_mock_tc_repo(completed=row), recorded)
+        jira_before = _business_actions_total("jira", "true", "success")
+        excel_before = _business_actions_total("excel", "false", "error")
+
+        with when("a result records three Business Actions"):
+            service.process(agent, _result_batch())
+
+        with then("each action increments its label set once"):
+            assert_that(_business_actions_total("jira", "true", "success"), equal_to(jira_before + 2.0))
+            assert_that(_business_actions_total("excel", "false", "error"), equal_to(excel_before + 1.0))
+
+
+def test_business_action_counter_clamps_unknown_integrations_and_write_flags():
+    with given():
+        agent = _make_agent()
+        row = _make_tool_call(agent, "exec", ToolCallStatus.SUCCESS)
+        recorded = [_business_action("slack", None, BusinessActionStatus.UNKNOWN)]
+        service = _make_service(_mock_tc_repo(completed=row), recorded)
+        before = _business_actions_total("other", "unknown", "unknown")
+
+        with when("an action from a group outside the bundled command groups is recorded"):
+            service.process(agent, _result_batch())
+
+        with then("it is counted under integration=other and is_write=unknown"):
+            assert_that(_business_actions_total("other", "unknown", "unknown"), equal_to(before + 1.0))
+            assert_that(
+                REGISTRY.get_sample_value(
+                    "agentbarn_business_actions_total",
+                    {"integration": "slack", "is_write": "unknown", "status": "unknown"},
+                ),
+                none(),
+            )
+
+
+def test_business_action_counter_labels_granted_gog_services_by_name():
+    with given():
+        agent = _make_agent()
+        row = _make_tool_call(agent, "terminal", ToolCallStatus.SUCCESS)
+        recorded = [
+            _business_action("google-gmail", True, BusinessActionStatus.SUCCESS),
+            _business_action("google-docs", None, BusinessActionStatus.SUCCESS),
+        ]
+        service = _make_service(_mock_tc_repo(completed=row), recorded)
+        gmail_before = _business_actions_total("google-gmail", "true", "success")
+        other_before = _business_actions_total("other", "unknown", "success")
+
+        with when("a gog action for a granted service and one for an ungranted service are recorded"):
+            service.process(agent, _result_batch())
+
+        with then("the granted service keeps its name and the ungranted one is clamped to other"):
+            assert_that(_business_actions_total("google-gmail", "true", "success"), equal_to(gmail_before + 1.0))
+            assert_that(_business_actions_total("other", "unknown", "success"), equal_to(other_before + 1.0))
+
+
+def test_business_action_counter_not_incremented_when_nothing_is_recorded():
+    with given():
+        agent = _make_agent()
+        row = _make_tool_call(agent, "terminal", ToolCallStatus.SUCCESS)
+        service = _make_service(_mock_tc_repo(completed=row), [])
+        before = _business_actions_total("github", "true", "success")
+
+        with when("a duplicate result records nothing"):
+            service.process(agent, _result_batch())
+
+        with then("the counter does not move"):
+            assert_that(_business_actions_total("github", "true", "success"), equal_to(before))
 
 
 # --- database probe ---

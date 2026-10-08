@@ -15,6 +15,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from api.domains.agents.microsoft_graph_scopes import GRAPH_SCOPE_PREFIX, sharepoint_permission
 from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
@@ -24,6 +25,7 @@ from api.domains.agents.models import (
     JiraContent,
     PipedriveContent,
     SecretProvider,
+    SharePointContent,
 )
 from api.domains.integrations.plugins.aai_cli_support import (
     AaiCliPlugin,
@@ -516,6 +518,45 @@ class FirecrawlPlugin(IntegrationPlugin[FirecrawlContent]):
         return request.with_headers({"Authorization": f"Bearer {content.api_key}"}, sensitive=True)
 
 
+class SharePointPlugin(AaiCliPlugin[SharePointContent]):
+    """Preserve the native delegated sign-in and token rotation shipped on staging."""
+
+    key = "sharepoint"
+    provider = SecretProvider.SHAREPOINT
+    display_name = "SharePoint credential"
+    credentials_model = SharePointContent
+    egress_mode = EgressMode.DIRECT
+    bundled_skill_slugs = ("aai-microsoft",)
+    aai_cli_slug = "sharepoint-work"
+    aai_cli_label = "SharePoint"
+    aai_cli_secret_entries = (("microsoft.sharepoint_refresh_token", "refresh_token"),)
+    aai_cli_capability = (
+        "SharePoint only, as the signed-in account: files in document libraries "
+        "(`microsoft sharepoint files` upload/download/delete), lists and list items; find sites, "
+        "libraries and folders with `microsoft request get` — read `./skills/aai-microsoft/SKILL.md`"
+    )
+
+    def aai_cli_profile_block(self, content: SharePointContent) -> str:
+        scope = f"{GRAPH_SCOPE_PREFIX}{sharepoint_permission(content.read_only)} offline_access"
+        return (
+            f"[profiles.{self.aai_cli_slug}]\n"
+            'provider = "microsoft"\n'
+            'auth_type = "microsoft_delegated"\n'
+            f"tenant_id = {quote(content.tenant_id)}\n"
+            f"client_id = {quote(content.client_id)}\n"
+            f"scope = {quote(scope)}\n"
+            'refresh_token_secret = "microsoft.sharepoint_refresh_token"\n'
+        )
+
+    def aai_cli_context_line(self, content: SharePointContent) -> str:
+        access = "read-only" if content.read_only else "read and write"
+        return (
+            f"- **SharePoint** (`{self.aai_cli_slug}`): signed in as {content.email} ({access}) — SharePoint only: "
+            "the sites, libraries and files that account can open; Outlook, Teams messages, To Do and "
+            "Planner aren't authorised"
+        )
+
+
 SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
     GithubPlugin(),
     JiraPlugin(),
@@ -524,4 +565,5 @@ SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
     FirecrawlPlugin(),
     PipedrivePlugin(),
     GoogleWorkspacePlugin(),
+    SharePointPlugin(),
 )

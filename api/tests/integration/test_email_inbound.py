@@ -6,12 +6,16 @@ from hamcrest import assert_that, empty, equal_to, has_length, is_, not_
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import AgentStatus
+from api.domains.agents.repository import AgentRepository
 from api.domains.communications.models import (
+    CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationDirection,
 )
+from api.domains.communications.plugins.email import INBOUND_FRAMING
 from api.domains.conversations.models import AgentChatMessage
+from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
@@ -102,7 +106,7 @@ def _payload(to: str, **overrides) -> dict[str, Any]:
 
 
 def _post(context, payload: dict[str, Any], secret: str = INBOUND_SECRET):
-    return context.communications_client.post(
+    return context.client.post(
         INBOUND_PATH,
         json=payload,
         headers={"Authorization": f"Bearer {secret}"},
@@ -119,6 +123,17 @@ def _deliveries(context) -> list[CommunicationDelivery]:
                 )
             ).all()
         )
+
+
+def _runtime_auth(context) -> dict[str, str]:
+    runtime_key = "runtime-communications-key"
+    agent_repository: AgentRepository = context.injector.get(AgentRepository)
+    context.agent.communication_key_encrypted = encrypt_token(runtime_key, TEST_ENCRYPTION_KEY)
+    agent_repository.save(context.agent)
+    return {
+        "Authorization": f"Bearer {runtime_key}",
+        "X-AgentBarn-Communications-Version": "1",
+    }
 
 
 def test_mail_to_an_agent_address_becomes_a_pending_delivery() -> None:
@@ -142,14 +157,43 @@ def test_the_stored_message_is_located_on_the_sender_and_carries_the_subject() -
         with when("the inbound worker posts a parsed message"):
             _post(context, _payload(address))
 
-        with then("the conversation is the correspondent, and the agent can see who wrote and why"):
+        with then("the conversation is the correspondent, and the stored message is only what they wrote"):
             delegate = context.injector.get(PostgresRepositoryDelegate)
             with Session(delegate.engine) as session:
                 [message] = session.exec(select(AgentChatMessage)).all()
+                [delivery] = _deliveries(context)
             assert_that(message.channel_id, equal_to(CUSTOMER))
             assert_that(message.sender_id, equal_to(CUSTOMER))
-            assert_that("Question about pricing" in message.content, is_(True))
-            assert_that("Jane Customer" in message.content, is_(True))
+            assert_that(message.sender_name, equal_to("Jane Customer"))
+            assert_that(message.content, equal_to("What does the team plan cost?"))
+            assert_that(
+                delivery.envelope["provider_metadata"]["subject"],
+                equal_to("Question about pricing"),
+            )
+
+
+def test_an_email_claim_disables_progress_updates_and_frames_the_runtime_prompt() -> None:
+    with given(_GIVEN) as context:
+        address = _create_email_connection(context)
+        _post(context, _payload(address))
+
+        with when("the email agent claims its pending delivery"):
+            response = context.communications_client.post(
+                f"/communications/v1/agents/{context.agent.id}/deliveries/claim",
+                headers=_runtime_auth(context),
+            )
+
+        with then("the runtime receives the email-safe delivery contract"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            delivery = response.json()
+            assert_that(delivery["progress_updates"], is_(False))
+            assert_that(
+                delivery["envelope"]["text"],
+                equal_to(
+                    f"{INBOUND_FRAMING}\n\nFrom: Jane Customer <{CUSTOMER}>\n"
+                    "Subject: Question about pricing\n\nWhat does the team plan cost?"
+                ),
+            )
 
 
 def test_a_wrong_shared_secret_is_rejected() -> None:
@@ -169,7 +213,7 @@ def test_a_missing_authorization_header_is_rejected() -> None:
         _create_email_connection(context)
 
         with when("the request carries no credential at all"):
-            response = context.communications_client.post(INBOUND_PATH, json=_payload("whatever@x.test"))
+            response = context.client.post(INBOUND_PATH, json=_payload("whatever@x.test"))
 
         with then("the route refuses it"):
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
@@ -293,3 +337,46 @@ def test_a_delivery_is_bound_to_the_connection_that_owns_the_address() -> None:
             assert_that(delivery.agent_id, equal_to(context.agent.id))
             assert_that(delivery.organization_id, equal_to(context.organization.id))
             assert_that(delivery.envelope, is_(not_(equal_to({}))))
+
+
+def test_email_compatibility_ingress_shares_authentication_and_idempotency_with_product_api() -> None:
+    with given(_GIVEN) as context:
+        address = _create_email_connection(context)
+        compat = context.communications_client.post(
+            INBOUND_PATH,
+            json=_payload(address),
+            headers={"Authorization": f"Bearer {INBOUND_SECRET}"},
+        )
+        public = _post(context, _payload(address))
+        unauthorized = context.communications_client.post(
+            INBOUND_PATH,
+            json=_payload(address),
+            headers={"Authorization": "Bearer wrong"},
+        )
+        assert compat.status_code == status.HTTP_202_ACCEPTED
+        assert public.status_code == status.HTTP_202_ACCEPTED
+        assert unauthorized.status_code == status.HTTP_401_UNAUTHORIZED
+        assert len(_deliveries(context)) == 1
+
+
+def test_email_address_cannot_admit_work_to_a_native_connection() -> None:
+    with given(_GIVEN) as context:
+        address = _create_email_connection(context)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            connection = session.exec(
+                select(CommunicationConnection).where(
+                    col(CommunicationConnection.agent_id) == context.agent.id,
+                    col(CommunicationConnection.platform_key) == "email",
+                )
+            ).one()
+            connection.platform_key = "slack"
+            session.add(connection)
+            session.commit()
+        for client in (context.client, context.communications_client):
+            response = client.post(
+                INBOUND_PATH, json=_payload(address), headers={"Authorization": f"Bearer {INBOUND_SECRET}"}
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            assert response.json() == {"accepted": []}
+        assert _deliveries(context) == []

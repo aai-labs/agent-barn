@@ -48,8 +48,9 @@ JWT_ENCODING_ALGORITHM = "HS256"
 @dataclass
 class PreparedInvite:
     """An invite whose DB writes are staged in a caller's transaction but whose email
-    has not been sent. ``invite_link`` is ``None`` when the user is already active, so no
-    invite is needed. Callers commit, then call ``send_prepared_invite``."""
+    has not been sent. ``invite_link`` is ``None`` whenever the user already existed — a
+    link belongs to the account and is minted once, at user creation. Callers commit, then
+    call ``send_prepared_invite``."""
 
     user: User
     invite_link: str | None
@@ -178,13 +179,20 @@ class AuthService:
     def _hash_reset_token(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _reset_token_expires_at() -> datetime:
+        return datetime.now(UTC) + timedelta(minutes=DEFAULT_PWD_RESET_TOKEN_EXPIRE_MINUTES)
+
+    def _invite_link(self, raw_token: str) -> str:
+        return f"{self.config.web_app_url}/set-password?token={raw_token}"
+
     def generate_password_reset_token(self, user_id: UUID) -> str:
         # A fresh link supersedes any outstanding one for this user (invite resend /
         # repeated forgot-password), so only the latest link is ever valid.
         self.pwd_reset_token_repository.invalidate_unused_for_user(user_id)
 
         raw_token = secrets.token_urlsafe(32)
-        expires_at = datetime.now(UTC) + timedelta(minutes=DEFAULT_PWD_RESET_TOKEN_EXPIRE_MINUTES)
+        expires_at = self._reset_token_expires_at()
         self.pwd_reset_token_repository.save(
             PasswordResetToken(
                 user_id=user_id,
@@ -248,42 +256,44 @@ class AuthService:
         self._apply_new_password(request, mark_email_verified=True, full_name=request.full_name)
 
     def prepare_invite(self, session: Session, email: str, full_name: str | None = None) -> PreparedInvite:
-        """Stage an invite's DB writes (find/create pending user + fresh token) inside
+        """Stage an invite's DB writes (create the pending user + their one token) inside
         the caller's ``session`` — no commit, no email. Lets org/membership creation and
-        the invite share one transaction so a failure can't half-create either. When the
-        user already exists and is active, no token is issued (``invite_link`` is None).
+        the invite share one transaction so a failure can't half-create either. Only a
+        brand-new user gets a link; for anyone who already exists ``invite_link`` is None.
         """
         existing = self.user_repository.get_by_email_with_session(email, session)
-        if existing is not None and existing.email_verified_at is not None:
+        if existing is not None:
+            # An invite link belongs to the account, not to a membership. Someone who
+            # already exists either holds a link or has already enrolled, so adding them
+            # somewhere new never mints a second link and never kills the first — it only
+            # buys the outstanding one more time, so a stale invite can't lock a freshly
+            # added member out.
+            if existing.email_verified_at is None:
+                self.pwd_reset_token_repository.refresh_unused_expiry_for_user_with_session(
+                    existing.id, self._reset_token_expires_at(), session
+                )
             return PreparedInvite(user=existing, invite_link=None)
 
-        if existing is not None:
-            user = existing
-        else:
-            user = User(
-                email=email,
-                full_name=full_name,
-                # Unusable-but-valid hash: login fails until the invite is accepted.
-                hashed_password=hash_text(uuid7().hex),
-                email_verified_at=None,
-            )
-            self.user_repository.save_with_session(user, session)
+        user = User(
+            email=email,
+            full_name=full_name,
+            # Unusable-but-valid hash: login fails until the invite is accepted.
+            hashed_password=hash_text(uuid7().hex),
+            email_verified_at=None,
+        )
+        self.user_repository.save_with_session(user, session)
 
-        # A fresh link supersedes any outstanding one, within this transaction.
-        self.pwd_reset_token_repository.invalidate_unused_for_user_with_session(user.id, session)
         raw_token = secrets.token_urlsafe(32)
-        expires_at = datetime.now(UTC) + timedelta(minutes=DEFAULT_PWD_RESET_TOKEN_EXPIRE_MINUTES)
         self.pwd_reset_token_repository.save_with_session(
             PasswordResetToken(
                 user_id=user.id,
                 is_used=False,
                 token_hash=self._hash_reset_token(raw_token),
-                expires_at=expires_at,
+                expires_at=self._reset_token_expires_at(),
             ),
             session,
         )
-        invite_link = f"{self.config.web_app_url}/set-password?token={raw_token}"
-        return PreparedInvite(user=user, invite_link=invite_link)
+        return PreparedInvite(user=user, invite_link=self._invite_link(raw_token))
 
     def send_prepared_invite(self, prepared: PreparedInvite) -> None:
         """Send the invite email for a committed ``PreparedInvite``. Call only after the
@@ -296,15 +306,18 @@ class AuthService:
             receiver_name=prepared.user.full_name,
         )
 
-    def invite_user(self, email: str, full_name: str | None = None) -> tuple[User, str | None]:
-        """Single-shot invite (its own transaction): stage, commit, then email. Used
-        where there's no larger transaction to join (e.g. resending an invite).
-        """
-        with Session(self.user_repository.delegate.engine, expire_on_commit=False) as session:
-            prepared = self.prepare_invite(session, email, full_name)
-            session.commit()
-        self.send_prepared_invite(prepared)
-        return prepared.user, prepared.invite_link
+    def resend_invite(self, user: User) -> str:
+        """Mint a replacement invite link for someone who never enrolled, and email it.
+        This is the only path that supersedes a user's outstanding token — membership
+        changes never do. Returns the new link."""
+        raw_token = self.generate_password_reset_token(user.id)
+        invite_link = self._invite_link(raw_token)
+        self.email_service.send_user_invite_email(
+            receiver_email=user.email,
+            set_password_link=invite_link,
+            receiver_name=user.full_name,
+        )
+        return invite_link
 
     def forgot_password(self, request: ForgotPasswordRequest):
         user = self.user_repository.get_by_email(str(request.email))

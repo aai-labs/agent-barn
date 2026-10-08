@@ -1,5 +1,4 @@
 version = 1
-revision = 1
 requires-python = ">=3.14"
 
 [[package]]
@@ -153,6 +152,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jinja2" },
     { name = "kubernetes" },
+    { name = "markdown-it-py" },
     { name = "mjml" },
     { name = "prometheus-fastapi-instrumentator" },
     { name = "psycopg2-binary" },
@@ -167,7 +167,6 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "sqlmodel" },
     { name = "testcontainers" },
-    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -188,6 +187,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "kubernetes", specifier = ">=36.0.3" },
+    { name = "markdown-it-py", specifier = ">=4.2.0" },
     { name = "mjml", specifier = ">=0.12.0" },
     { name = "prometheus-fastapi-instrumentator", specifier = ">=8.1.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.12" },
@@ -202,7 +202,6 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.51" },
     { name = "sqlmodel", specifier = ">=0.0.39" },
     { name = "testcontainers", extras = ["postgres"], specifier = ">=4.15.0" },
-    { name = "websockets", specifier = ">=17.0" },
 ]
 
 [package.metadata.requires-dev]

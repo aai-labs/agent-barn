@@ -20,6 +20,7 @@ _EXPECTED_PROVIDER_NAMES = {
     "OpenPanel",
     "Pipedrive",
     "PostHog",
+    "SharePoint",
 }
 
 # Excel intentionally needs no credential. The other four entries currently have

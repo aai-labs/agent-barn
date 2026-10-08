@@ -69,6 +69,7 @@ jobs:
           PUBLIC_PLATFORM_ADMIN_CREDENTIALS: ${{ secrets.PUBLIC_PLATFORM_ADMIN_CREDENTIALS }}
           PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY: ${{ secrets.PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY }}
           PUBLIC_GRAFANA_ADMIN_PASSWORD: ${{ secrets.PUBLIC_GRAFANA_ADMIN_PASSWORD }}
+          PUBLIC_MONITORING_WEB_PASSWORD: ${{ secrets.PUBLIC_MONITORING_WEB_PASSWORD }}
           PUBLIC_FIRECRAWL_API_KEY: ${{ secrets.PUBLIC_FIRECRAWL_API_KEY }}
           PUBLIC_OPENROUTER_API_KEY: ${{ secrets.PUBLIC_OPENROUTER_API_KEY }}
           PUBLIC_SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.PUBLIC_SLACK_ALERTS_WEBHOOK_URL }}
@@ -95,6 +96,7 @@ jobs:
             PUBLIC_POSTGRES_FIRECRAWL_PASSWORD PUBLIC_LITELLM_MASTER_KEY \
             PUBLIC_SECRET_SIGNING_KEY PUBLIC_PLATFORM_ADMIN_CREDENTIALS \
             PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY PUBLIC_GRAFANA_ADMIN_PASSWORD \
+            PUBLIC_MONITORING_WEB_PASSWORD \
             PUBLIC_FIRECRAWL_API_KEY PUBLIC_OPENROUTER_API_KEY \
             PUBLIC_SLACK_ALERTS_WEBHOOK_URL; do
             if [ -z "${!name:-}" ]; then
@@ -166,7 +168,7 @@ jobs:
             context: hermes-base
             file: hermes-base/Dockerfile
             tag: ${{ needs.resolve.outputs.hermes_image_tag }}
-            needs_token: true
+            rust_build: true
             smoke: hermes-base/smoke-test.sh
             free_disk: true
           - image: agentbarn-openclaw-base
@@ -174,7 +176,7 @@ jobs:
             context: openclaw-base
             file: openclaw-base/Dockerfile
             tag: ${{ needs.resolve.outputs.openclaw_image_tag }}
-            needs_token: true
+            rust_build: true
             smoke: openclaw-base/smoke-test.sh
             free_disk: true
     steps:
@@ -215,10 +217,9 @@ jobs:
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL=https://{0}', needs.resolve.outputs.api_host) || '' }}
-          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
           cache-from: type=gha,scope=public-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=public-${{ matrix.name }}
-          no-cache-filters: ${{ matrix.needs_token && 'rust-build' || '' }}
+          no-cache-filters: ${{ matrix.rust_build && 'rust-build' || '' }}
 
       - name: Smoke test
         if: matrix.smoke
@@ -236,9 +237,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           build-args: ${{ matrix.name == 'ui' && format('NEXT_PUBLIC_BACKEND_URL=https://{0}', needs.resolve.outputs.api_host) || '' }}
-          secrets: ${{ matrix.needs_token && format('gh_token={0}', secrets.AAI_CLI_REPO_ACCESS_TOKEN) || '' }}
           cache-from: type=gha,scope=public-${{ matrix.name }}
-          no-cache-filters: ${{ matrix.needs_token && 'rust-build' || '' }}
+          no-cache-filters: ${{ matrix.rust_build && 'rust-build' || '' }}
 
   deploy:
     name: Helmfile sync
@@ -302,6 +302,8 @@ jobs:
           GRAFANA_HOST: ${{ vars.PUBLIC_GRAFANA_HOST }}
           STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
           SENDER_EMAIL: ${{ vars.PUBLIC_SENDER_EMAIL }}
+          AGENT_EMAIL_DOMAIN: ${{ vars.PUBLIC_AGENT_EMAIL_DOMAIN }}
+          EMAIL_INBOUND_SECRET: ${{ secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
           POSTGRES_APP_USER: ${{ vars.POSTGRES_APP_USER }}
           POSTGRES_APP_DB: ${{ vars.POSTGRES_APP_DB }}
           POSTGRES_APP_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_APP_PASSWORD }}
@@ -311,11 +313,15 @@ jobs:
           POSTGRES_FIRECRAWL_USER: ${{ vars.POSTGRES_FIRECRAWL_USER }}
           POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
           POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.PUBLIC_POSTGRES_FIRECRAWL_PASSWORD }}
+          HINDSIGHT_DB_PASSWORD: ${{ secrets.PUBLIC_HINDSIGHT_DB_PASSWORD }}
+          HINDSIGHT_API_KEY: ${{ secrets.PUBLIC_HINDSIGHT_API_KEY }}
+          MEMORY_RUNTIME_SERVICE_KEY: ${{ secrets.PUBLIC_MEMORY_RUNTIME_SERVICE_KEY }}
           LITELLM_MASTER_KEY: ${{ secrets.PUBLIC_LITELLM_MASTER_KEY }}
           SECRET_SIGNING_KEY: ${{ secrets.PUBLIC_SECRET_SIGNING_KEY }}
           PLATFORM_ADMIN_CREDENTIALS: ${{ secrets.PUBLIC_PLATFORM_ADMIN_CREDENTIALS }}
           AGENT_TOKEN_ENCRYPTION_KEY: ${{ secrets.PUBLIC_AGENT_TOKEN_ENCRYPTION_KEY }}
           GRAFANA_ADMIN_PASSWORD: ${{ secrets.PUBLIC_GRAFANA_ADMIN_PASSWORD }}
+          MONITORING_WEB_PASSWORD: ${{ secrets.PUBLIC_MONITORING_WEB_PASSWORD }}
           FIRECRAWL_API_KEY: ${{ secrets.PUBLIC_FIRECRAWL_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.PUBLIC_OPENROUTER_API_KEY }}
           SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.PUBLIC_SLACK_ALERTS_WEBHOOK_URL }}
@@ -326,4 +332,49 @@ jobs:
           GOOGLE_CLOUD_CLIENT_SECRET: ${{ secrets.GOOGLE_CLOUD_CLIENT_SECRET }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
           AGENT_MODEL_ALLOWLIST: ${{ vars.AGENT_MODEL_ALLOWLIST }}
-        run: helmfile -f helmfile.yaml.gotmpl sync --wait
+          ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS: ${{ vars.ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS }}
+          # The public deployment's own defaults, like its other PUBLIC_ settings.
+          ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_ORGANIZATION_DEFAULT_LLM_BUDGET_USD }}
+          AGENT_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_AGENT_DEFAULT_LLM_BUDGET_USD }}
+          MEMORY_DEFAULT_MODEL: ${{ vars.PUBLIC_MEMORY_DEFAULT_MODEL }}
+          MEMORY_LITELLM_KEY_HASHES: ${{ vars.PUBLIC_MEMORY_LITELLM_KEY_HASHES }}
+        run: |
+          set -euo pipefail
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          # Validate required GitHub Secrets before Helmfile renders the releases.
+          python3 api/scripts/provision_memory.py --env-file "$credentials_file"
+          set -a
+          # shellcheck disable=SC1090
+          source "$credentials_file"
+          set +a
+          helmfile -f helmfile.yaml.gotmpl -l name=hindsight sync --include-transitive-needs --wait
+          python3 api/scripts/provision_memory.py --include-key-hashes --env-file "$credentials_file"
+          set -a
+          # shellcheck disable=SC1090
+          source "$credentials_file"
+          set +a
+          # Hindsight already synced: do not rotate its key again in this run.
+          helmfile -f helmfile.yaml.gotmpl -l name!=hindsight sync --wait
+
+  # Runs after `deploy` on purpose: the Worker posts inbound mail into this
+  # cluster's Communications service, so the cluster must already hold the
+  # matching EMAIL_INBOUND_SECRET before the Worker starts presenting it.
+  # Published here rather than from deploy.yml because this is the workflow
+  # that deploys api.agentbarn.dev, the host the production Worker posts to.
+  # Gated on the domain variable, not the secret: an environment that has not
+  # onboarded an agent email domain leaves the platform inert by design, and
+  # must not start failing its deploy on a Worker it never wanted. With the
+  # domain set, a missing secret does fail the publish, which is the point.
+  deploy-worker:
+    needs: [resolve, deploy]
+    if: ${{ needs.deploy.result == 'success' && vars.PUBLIC_AGENT_EMAIL_DOMAIN != '' }}
+    uses: ./.github/workflows/worker.yml
+    secrets: inherit
+    with:
+      deploy: true
+      environment: cloud
+      # Pinned like every other job here: a workflow_dispatch of an existing tag
+      # runs from the dispatch ref, so an unpinned checkout would publish a
+      # Worker built from a different commit than the release being deployed.
+      ref: ${{ needs.resolve.outputs.sha }}

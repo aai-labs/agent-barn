@@ -29,12 +29,12 @@ export const CommunicationDirectoryEntrySchema = z.object({
 });
 
 export const CommunicationDirectoryPreviewSchema = z.object({
-  channels: z.array(CommunicationDirectoryEntrySchema),
-  users: z.array(CommunicationDirectoryEntrySchema),
+  entries: z.array(CommunicationDirectoryEntrySchema),
 });
 
 export const CommunicationPlatformSchema = z.object({
   key: z.string(),
+  transport: z.enum(["gateway", "native"]).optional(),
   displayName: z.string(),
   schemaVersion: z.number().int().positive(),
   capabilities: z.array(z.string()),
@@ -50,6 +50,8 @@ export const CommunicationConnectionSchema = z.object({
   platformKey: z.string(),
   displayName: z.string(),
   enabled: z.boolean(),
+  transport: z.enum(["gateway", "native"]).optional(),
+  recoveryActions: z.array(z.enum(["retry_delivery"])).default([]),
   schemaVersion: z.number().int().positive(),
   settings: z.record(z.string(), z.unknown()),
   externalIdentity: z.string().nullable(),
@@ -60,6 +62,9 @@ export const CommunicationConnectionSchema = z.object({
   lastErrorDetails: CommunicationErrorDetailsSchema.nullable().optional(),
   webhookUrl: z.string().url().nullable(),
   managedAddress: z.string().nullable(),
+  // Only present right after create or a credential rotation -- the one moment a
+  // generated secret's plaintext exists to show. Never present on a list or a plain
+  // read; there is no path back to a stored secret.
   revision: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -102,6 +107,7 @@ export const CommunicationDiagnosticsSchema = z.object({
     agentClaimed: z.number().int().nonnegative(),
     modelCompleted: z.number().int().nonnegative(),
     replyQueued: z.number().int().nonnegative(),
+    initiatedQueued: z.number().int().nonnegative(),
     providerDelivered: z.number().int().nonnegative(),
     deadLettered: z.number().int().nonnegative(),
   }),
@@ -169,11 +175,6 @@ export const CommunicationDiagnosticsSchema = z.object({
   windowEnd: z.string(),
 });
 
-export const CommunicationReconnectSchema = z.object({
-  connection: CommunicationConnectionSchema,
-  requestedAt: z.string(),
-});
-
 export const CommunicationRetrySchema = z.object({
   deliveryId: z.string().uuid(),
   status: z.enum(["PENDING", "PROCESSING", "SUCCEEDED", "DEAD_LETTERED", "CANCELLED", "UNAVAILABLE"]),
@@ -201,6 +202,7 @@ export const DELIVERY_JOURNAL_STAGES = [
   "agent_claimed",
   "model_completed",
   "reply_queued",
+  "initiated_queued",
   "provider_delivery_attempted",
   "provider_delivered",
   "retry_requested",
@@ -229,7 +231,6 @@ export type CommunicationJournalFilters = {
   deliveryId?: string;
   order?: "asc" | "desc";
 };
-export type CommunicationReconnect = z.infer<typeof CommunicationReconnectSchema>;
 export type CommunicationRetry = z.infer<typeof CommunicationRetrySchema>;
 
 export type CreateCommunicationConnection = {
@@ -249,4 +250,10 @@ export type UpdateCommunicationConnection = {
   enabled?: boolean;
   settings?: Record<string, unknown>;
   credentials?: Record<string, unknown>;
+};
+
+export type RotateCommunicationConnectionCredentials = {
+  agentId: string;
+  connectionId: string;
+  revision: number;
 };

@@ -217,6 +217,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      MEMORY_DEFAULT_MODEL: ${{ vars[format('{0}MEMORY_DEFAULT_MODEL', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+      MEMORY_LITELLM_KEY_HASHES: ${{ vars[format('{0}MEMORY_LITELLM_KEY_HASHES', github.ref_name == 'staging' && 'STAGING_' || '')] }}
 
     steps:
       - name: Checkout
@@ -257,6 +260,26 @@ jobs:
           printf '%s' '${{ github.ref_name == 'staging' && secrets.STAGING_KUBECONFIG_B64 || secrets.KUBECONFIG_B64 }}' | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
+      # The `A && B || C` idiom below yields C whenever B is empty, so an unset
+      # STAGING_EMAIL_INBOUND_SECRET would hand the staging cluster the main
+      # branch's credential while the Worker published its own — every message
+      # would then 401. Checked here rather than reworking the idiom, which is
+      # used for every secret in this job. Silent when the domain is unset,
+      # because email is inert then and unrelated deploys must not start failing.
+      - name: Require a matching inbound secret when agent email is configured
+        env:
+          AGENT_EMAIL_DOMAIN: ${{ github.ref_name == 'staging' && vars.STAGING_AGENT_EMAIL_DOMAIN || vars.AGENT_EMAIL_DOMAIN }}
+          STAGING_SECRET: ${{ secrets.STAGING_EMAIL_INBOUND_SECRET }}
+          MAIN_SECRET: ${{ secrets.EMAIL_INBOUND_SECRET }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          [ -n "$AGENT_EMAIL_DOMAIN" ] || exit 0
+          case "$BRANCH" in
+            staging) secret="$STAGING_SECRET"; name="STAGING_EMAIL_INBOUND_SECRET" ;;
+            *)       secret="$MAIN_SECRET";    name="EMAIL_INBOUND_SECRET" ;;
+          esac
+          [ -n "$secret" ] || { echo "::error::$name is unset while its agent email domain is configured; inbound email would 401."; exit 1; }
+
       - name: Helmfile sync
         env:
           KUBECONFIG: /home/runner/.kube/config
@@ -277,10 +300,16 @@ jobs:
           POSTGRES_FIRECRAWL_PASSWORD: ${{ secrets.POSTGRES_FIRECRAWL_PASSWORD }}
           POSTGRES_FIRECRAWL_DB: ${{ vars.POSTGRES_FIRECRAWL_DB }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          HINDSIGHT_DB_PASSWORD: ${{ secrets[format('{0}HINDSIGHT_DB_PASSWORD', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          HINDSIGHT_API_KEY: ${{ secrets[format('{0}HINDSIGHT_API_KEY', github.ref_name == 'staging' && 'STAGING_' || '')] }}
+          MEMORY_RUNTIME_SERVICE_KEY: ${{ secrets[format('{0}MEMORY_RUNTIME_SERVICE_KEY', github.ref_name == 'staging' && 'STAGING_' || '')] }}
           LITELLM_MASTER_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_LITELLM_MASTER_KEY || secrets.LITELLM_MASTER_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
           AGENT_MODEL_ALLOWLIST: ${{ vars.AGENT_MODEL_ALLOWLIST }}
+          ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS: ${{ vars.ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS }}
+          ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${{ github.ref_name == 'staging' && vars.STAGING_ORGANIZATION_DEFAULT_LLM_BUDGET_USD || vars.ORGANIZATION_DEFAULT_LLM_BUDGET_USD }}
+          AGENT_DEFAULT_LLM_BUDGET_USD: ${{ github.ref_name == 'staging' && vars.STAGING_AGENT_DEFAULT_LLM_BUDGET_USD || vars.AGENT_DEFAULT_LLM_BUDGET_USD }}
           STORAGE_CLASS: ${{ vars.STORAGE_CLASS }}
           SECRET_SIGNING_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_SECRET_SIGNING_KEY || secrets.SECRET_SIGNING_KEY }}
           PLATFORM_ADMIN_CREDENTIALS: ${{ github.ref_name == 'staging' && secrets.STAGING_PLATFORM_ADMIN_CREDENTIALS || secrets.PLATFORM_ADMIN_CREDENTIALS }}
@@ -303,16 +332,38 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           SLACK_ALERTS_WEBHOOK_URL: ${{ secrets.SLACK_ALERTS_WEBHOOK_URL }}
           GRAFANA_ADMIN_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_GRAFANA_ADMIN_PASSWORD || secrets.GRAFANA_ADMIN_PASSWORD }}
+          MONITORING_WEB_PASSWORD: ${{ github.ref_name == 'staging' && secrets.STAGING_MONITORING_WEB_PASSWORD || secrets.MONITORING_WEB_PASSWORD }}
           GRAFANA_HOST: ${{ github.ref_name == 'staging' && vars.STAGING_GRAFANA_HOST || vars.GRAFANA_HOST }}
-        run: helmfile -f helmfile.yaml.gotmpl sync --wait
+        run: |
+          set -euo pipefail
+          credentials_file="$(mktemp)"
+          trap 'rm -f "$credentials_file"' EXIT
+          # Validate required GitHub Secrets before Helmfile renders the releases.
+          python3 api/scripts/provision_memory.py --env-file "$credentials_file"
+          set -a
+          # shellcheck disable=SC1090
+          source "$credentials_file"
+          set +a
+          helmfile -f helmfile.yaml.gotmpl -l name=hindsight sync --include-transitive-needs --wait
+          python3 api/scripts/provision_memory.py --include-key-hashes --env-file "$credentials_file"
+          set -a
+          # shellcheck disable=SC1090
+          source "$credentials_file"
+          set +a
+          # Hindsight already synced: do not rotate its key again in this run.
+          helmfile -f helmfile.yaml.gotmpl -l name!=hindsight sync --wait
 
   # ═══════════════════════════════════════════════════════════════
   # Phase 5: Publish the Cloudflare Email Worker
   # ═══════════════════════════════════════════════════════════════
 
-  # Runs after `deploy` on purpose: the Worker posts inbound mail into the
-  # Communications service, so the cluster must already hold the matching
+  # Runs after `deploy` on purpose: the Worker posts inbound mail into the API,
+  # so the cluster must already hold the matching
   # EMAIL_INBOUND_SECRET before the Worker starts presenting it.
+  #
+  # Publishes the Worker for whichever k3s cluster this workflow deploys: the
+  # `staging` and `prod` environments. The hosted Talos cluster's Worker (`cloud`)
+  # is published by deploy-public.yml, which is what deploys api.agentbarn.dev.
   deploy-worker:
     needs: [detect-changes, resolve-env, deploy]
     if: ${{ needs.detect-changes.outputs.worker == 'true' && needs.deploy.result == 'success' }}
@@ -320,4 +371,8 @@ jobs:
     secrets: inherit
     with:
       deploy: true
-      environment: ${{ needs.resolve-env.outputs.environment }}
+      # Mapped from the branch, not from resolve-env, which calls this workflow's
+      # main deployment "production" -- the name the hosted Talos cluster's Worker
+      # uses. Passing it here published a Worker aimed at api.agentbarn.dev while
+      # handing it this cluster's secret. The Worker environment names a cluster.
+      environment: ${{ github.ref_name == 'staging' && 'staging' || 'prod' }}

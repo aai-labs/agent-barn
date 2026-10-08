@@ -20,6 +20,7 @@ from api.domains.agents.models import (
     JiraContent,
     PipedriveContent,
     SecretProvider,
+    SharePointContent,
     validate_content,
 )
 from api.domains.integrations.plugins.providers import ConfluencePlugin, JiraPlugin, PipedrivePlugin
@@ -62,9 +63,27 @@ _PIPEDRIVE_WITH_DOMAIN = cast(
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
 )
 
+_SHAREPOINT = cast(
+    SharePointContent,
+    validate_content(
+        SecretProvider.SHAREPOINT,
+        {
+            "connection_id": "33333333-3333-4333-8333-333333333333",
+            "tenant_id": "22222222-2222-4222-8222-222222222222",
+            "client_id": "11111111-1111-4111-8111-111111111111",
+            "email": "someone@contoso.com",
+            "scopes": ["Sites.Read.All"],
+            "read_only": True,
+            "refresh_token": "sp_refresh_tok",
+            "sign_in_id": "44444444-4444-4444-8444-444444444444",
+        },
+    ),
+)
+_SHAREPOINT_READ_WRITE = _SHAREPOINT.model_copy(update={"read_only": False, "scopes": ["Sites.ReadWrite.All"]})
 
-# Every shipped aai-cli plugin is permanently EgressMode.GATEWAY_PROXY (see
-# providers.py), so build_config_toml never takes the direct-profile branch for them.
+
+# The existing gateway-routed aai-cli plugins use EgressMode.GATEWAY_PROXY (see
+# providers.py); SharePoint preserves staging's direct delegated-token profile.
 # aai_cli_profile_block still exists as the seam a future non-gateway provider would
 # use, and is exercised directly here rather than through build_config_toml.
 
@@ -494,31 +513,12 @@ def test_local_tools_block_is_empty_when_the_skill_is_not_mounted():
     assert build_local_tools_policy_md([]) == ""
 
 
-def test_local_tools_block_tells_hermes_agents_how_to_attach_a_file():
-    """Producing a file is only half the job: Hermes attaches on an explicit MEDIA: token,
-    so naming the file in prose silently sends text and no attachment."""
+def test_local_tools_block_leaves_file_location_and_attaching_to_the_delivery_block():
+    """Where to write a shared file and how to attach it depend on the agent's Connections,
+    not on which tool produced it, so both live in the file-delivery block only."""
     md = build_local_tools_policy_md(["Excel"])
-    assert "MEDIA:<absolute path>" in md
-    assert "/workspace" in md
-    # The failure mode is silent, so the instruction has to be explicit about it.
-    assert "does **not** attach" in md
-
-
-def test_attaching_a_produced_file_is_the_default_not_a_request():
-    """Explaining the mechanism was not enough — agents described where they saved the file
-    and waited to be asked for it. Attaching has to read as standing behaviour."""
-    md = build_local_tools_policy_md(["Excel"])
-    assert "Always send back a file you produced" in md
-    assert "do not wait to be asked" in md
-
-
-def test_attach_token_is_documented_on_its_own_line_for_both_runtimes():
-    """Both runtimes parse MEDIA:, but OpenClaw also has a line-start-only extractor, so a
-    token buried mid-sentence would be dropped there while working on Hermes."""
-    md = build_local_tools_policy_md(["Excel"])
-    assert "on its own line" in md
-    # The worked example must itself put the token at the start of a line.
-    assert "\nMEDIA:/workspace/q1-report.xlsx\n" in md
+    assert "MEDIA:" not in md
+    assert "/workspace" not in md
 
 
 def test_local_tools_block_forbids_the_python_fallback():
@@ -582,3 +582,139 @@ def test_integrations_policy_md_never_leaks_tokens():
     assert "ghp_tok" not in md
     assert "jira_tok" not in md
     assert "pd_tok" not in md
+
+
+def test_config_toml_sharepoint_uses_aai_clis_delegated_microsoft_profile():
+    toml = build_config_toml({SecretProvider.SHAREPOINT: _SHAREPOINT})
+    assert "[profiles.sharepoint-work]" in toml
+    assert 'provider = "microsoft"' in toml
+    assert 'auth_type = "microsoft_delegated"' in toml
+    assert 'tenant_id = "22222222-2222-4222-8222-222222222222"' in toml
+    assert 'client_id = "11111111-1111-4111-8111-111111111111"' in toml
+    assert 'scope = "https://graph.microsoft.com/Sites.Read.All offline_access"' in toml
+    assert 'refresh_token_secret = "microsoft.sharepoint_refresh_token"' in toml
+    # the token itself goes through the secret store, never the config
+    assert "sp_refresh_tok" not in toml
+
+
+def test_config_toml_sharepoint_read_write_scope():
+    toml = build_config_toml({SecretProvider.SHAREPOINT: _SHAREPOINT_READ_WRITE})
+    assert 'scope = "https://graph.microsoft.com/Sites.ReadWrite.All offline_access"' in toml
+
+
+def test_build_env_carries_the_sharepoint_refresh_token_and_sign_in_marker():
+    env = build_env({SecretProvider.SHAREPOINT: _SHAREPOINT})
+    assert env["AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN"] == "sp_refresh_tok"
+    assert env["AAI_SHAREPOINT_SIGN_IN_ID"] == "44444444-4444-4444-8444-444444444444"
+
+
+def test_setup_sh_writes_the_sharepoint_token_only_for_a_new_sign_in():
+    # aai-cli rotates the refresh token in its store; rewriting the original on every boot
+    # would throw the rotation away and end access 90 days after sign-in.
+    script = build_setup_sh([SecretProvider.SHAREPOINT])
+    marker = "/home/node/.config/aai-cli/microsoft.sharepoint_refresh_token.sign-in"
+    assert f'if [ "$(cat {marker} 2>/dev/null)" != "$AAI_SHAREPOINT_SIGN_IN_ID" ]; then' in script
+    assert (
+        "printf '%s' \"$AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN\" | aai-cli --config "
+        "/home/node/.config/aai-cli/config.toml secrets set microsoft.sharepoint_refresh_token"
+    ) in script
+    assert f"printf '%s' \"$AAI_SHAREPOINT_SIGN_IN_ID\" > {marker}" in script
+    assert script.rstrip().endswith("fi")
+
+
+def test_setup_sh_new_sign_in_check_actually_gates_the_write(tmp_path):
+    import subprocess
+
+    store = tmp_path / "store"
+    calls = tmp_path / "calls"
+    fake_cli = tmp_path / "aai-cli"
+    fake_cli.write_text(f'#!/bin/sh\necho "$@" >> {calls}\ncat > /dev/null\n')
+    fake_cli.chmod(0o755)
+    script = build_setup_sh([SecretProvider.SHAREPOINT], home_dir=str(tmp_path / "home"), store_dir=str(store)).replace(
+        "cp /app/config/aai-cli-config.toml", "true"
+    )
+    env = {
+        "PATH": f"{tmp_path}:/usr/bin:/bin",
+        "AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN": "rt",
+        "AAI_SHAREPOINT_SIGN_IN_ID": "sign-in-1",
+    }
+
+    def boot(sign_in_id: str) -> int:
+        subprocess.run(["sh", "-c", script], env={**env, "AAI_SHAREPOINT_SIGN_IN_ID": sign_in_id}, check=True)
+        return calls.read_text().count("microsoft.sharepoint_refresh_token") if calls.exists() else 0
+
+    assert boot("sign-in-1") == 1  # first boot writes it
+    assert boot("sign-in-1") == 1  # a restart keeps aai-cli's rotated token
+    assert boot("sign-in-2") == 2  # a reconnect replaces it
+
+
+def test_setup_sh_removes_a_left_over_sharepoint_token_when_sharepoint_is_gone():
+    script = build_setup_sh([SecretProvider.GITHUB])
+    marker = "/home/node/.config/aai-cli/microsoft.sharepoint_refresh_token.sign-in"
+    assert f"if [ -f {marker} ]; then" in script
+    assert (
+        "aai-cli --secrets-file /home/node/.config/aai-cli/aai-secrets.enc.json "
+        "--key-file /home/node/.config/aai-cli/key secrets remove microsoft.sharepoint_refresh_token || true"
+    ) in script
+    assert f"rm -f {marker}" in script
+
+
+def test_setup_sh_without_profiles_skips_the_config_but_still_cleans_up():
+    script = build_setup_sh([], install_config=False)
+    assert "cp /app/config/aai-cli-config.toml" not in script
+    assert "secrets remove microsoft.sharepoint_refresh_token" in script
+
+
+def test_setup_sh_cleanup_actually_removes_the_token_after_sharepoint_is_removed(tmp_path):
+    import subprocess
+
+    store = tmp_path / "store"
+    calls = tmp_path / "calls"
+    fake_cli = tmp_path / "aai-cli"
+    fake_cli.write_text(f'#!/bin/sh\necho "$@" >> {calls}\ncat > /dev/null\n')
+    fake_cli.chmod(0o755)
+    env = {
+        "PATH": f"{tmp_path}:/usr/bin:/bin",
+        "AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN": "rt",
+        "AAI_SHAREPOINT_SIGN_IN_ID": "sign-in-1",
+    }
+    home = str(tmp_path / "home")
+
+    def boot(providers: list[SecretProvider]) -> None:
+        script = build_setup_sh(providers, home_dir=home, store_dir=str(store), install_config=False)
+        subprocess.run(["sh", "-c", script], env=env, check=True, stdin=subprocess.DEVNULL)
+
+    boot([SecretProvider.SHAREPOINT])
+    marker = store / "microsoft.sharepoint_refresh_token.sign-in"
+    assert marker.exists()
+
+    boot([])  # SharePoint was removed from the agent
+
+    assert "secrets remove microsoft.sharepoint_refresh_token" in calls.read_text()
+    assert not marker.exists()
+    boot([])  # and nothing more to do on the next boot
+    assert calls.read_text().count("secrets remove") == 1
+
+
+def test_store_dir_moves_the_secret_store_but_not_the_config():
+    toml = build_config_toml({SecretProvider.JIRA: _JIRA}, store_dir="/home/node/.openclaw/aai-cli")
+    assert 'secrets_file = "/home/node/.openclaw/aai-cli/aai-secrets.enc.json"' in toml
+    assert 'key_file = "/home/node/.openclaw/aai-cli/key"' in toml
+    setup = build_setup_sh([SecretProvider.JIRA], store_dir="/home/node/.openclaw/aai-cli")
+    assert "mkdir -p /home/node/.config/aai-cli /home/node/.openclaw/aai-cli" in setup
+    assert "cp /app/config/aai-cli-config.toml /home/node/.config/aai-cli/config.toml" in setup
+
+
+def test_tool_context_md_says_sharepoint_only_and_who_signed_in():
+    md = build_tool_context_md({SecretProvider.SHAREPOINT: _SHAREPOINT})
+    assert "sharepoint-work" in md
+    assert "someone@contoso.com" in md
+    assert "read-only" in md
+    assert "SharePoint only" in md
+
+
+def test_integrations_policy_points_sharepoint_at_the_microsoft_skill():
+    md = build_integrations_policy_md({SecretProvider.SHAREPOINT: _SHAREPOINT})
+    assert "`--profile sharepoint-work`" in md
+    assert "./skills/aai-microsoft/SKILL.md" in md
+    assert "microsoft sharepoint files" in md

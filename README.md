@@ -37,7 +37,7 @@ Credentials are encrypted at rest in your own PostgreSQL.
 - [What ships in the box](#what-ships-in-the-box) — [agents](#agents), [skills](#skills), [runtimes](#runtimes)
 - [Capabilities](#capabilities)
 - [Development](#development) — [native](#native-non-docker-development), [k3d](#local-kubernetes-k3d), [migrations](#database-migrations), [tests](#tests-and-checks), [troubleshooting](#troubleshooting)
-- [Deploying to Kubernetes](#deploying-to-kubernetes)
+- [Deploying to Kubernetes](#deploying-to-kubernetes) — [connecting agent email](#connecting-agent-email-manual-step)
 - [Repository layout](#repository-layout)
 - [Getting help and contributing](#getting-help-and-contributing)
 
@@ -65,10 +65,6 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 **Required credentials**
 
 1. An **[OpenRouter](https://openrouter.ai) API key** — every agent's model calls route through it.
-2. A **GitHub token** — the current agent base-image Dockerfiles use it for an
-   authenticated clone of the public
-   [`aai-labs/aai-cli`](https://github.com/aai-labs/aai-cli) repository. It does
-   not need private-repository access.
 
 **Local ports** — these must be free:
 
@@ -80,6 +76,8 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 | `8000`  | API                        |
 | `8001`  | Ingest (runtime telemetry) |
 | `8002`  | Communications gateway     |
+| `8003`  | Agent Memory gateway       |
+| `8004`  | Credential gateway         |
 | `16443` | k3d Kubernetes API         |
 
 Make sure these ports are free before starting the full stack. The configurable
@@ -101,19 +99,18 @@ cp .env.spec .env
 Now fill in these values. Every option in `.env.spec` is commented, and
 anything not listed here has a working local default:
 
-| Variable                                                             | What to put in it                                                                                                       |
-| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`                  | local credentials and a database name; the database is created on first run                                             |
-| `POSTGRES_PORT`                                                     | a free host port; keep the default `5432` when available                                                                |
-| `SECRET_SIGNING_KEY`                                                 | any random string                                                                                                       |
-| `PLATFORM_ADMIN_CREDENTIALS`                                         | `email:password` for the admin account created at startup — the password needs 8+ characters, upper, lower, and a digit |
-| `ENVIRONMENT`, `UI_APP_URL`, `API_PORT`                              | leave the `.env.spec` defaults                                                                                          |
-| `AGENT_TOKEN_ENCRYPTION_KEY`                                         | a Fernet key — generate it below                                                                                        |
-| `OPENROUTER_API_KEY`                                                 | your OpenRouter key; passed to LiteLLM and used for the model picker                                                    |
-| `LITELLM_MASTER_KEY`                                                 | a **stable** admin key — generate it below                                                                              |
-| `AGENT_LITELLM_BASE_URL`                                             | `http://host.docker.internal:7070` so agent pods can reach LiteLLM through the host                                    |
-| `OPENCLAW_IMAGE`, `HERMES_IMAGE`                                     | full `name:tag`; each tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                       |
-| `GH_TOKEN`                                                           | the GitHub token from above; no private-repository access is required                                                   |
+| Variable                                            | What to put in it                                                                                                       |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | local credentials and a database name; the database is created on first run                                             |
+| `POSTGRES_PORT`                                     | a free host port; keep the default `5432` when available                                                                |
+| `SECRET_SIGNING_KEY`                                | any random string                                                                                                       |
+| `PLATFORM_ADMIN_CREDENTIALS`                        | `email:password` for the admin account created at startup — the password needs 8+ characters, upper, lower, and a digit |
+| `ENVIRONMENT`, `WEB_APP_URL`, `API_PORT`            | leave the `.env.spec` defaults                                                                                          |
+| `AGENT_TOKEN_ENCRYPTION_KEY`                        | a Fernet key — generate it below                                                                                        |
+| `OPENROUTER_API_KEY`                                | your OpenRouter key; passed to LiteLLM and used for the model picker                                                    |
+| `LITELLM_MASTER_KEY`                                | a **stable** admin key — generate it below                                                                              |
+| `AGENT_LITELLM_BASE_URL`                            | `http://host.docker.internal:7070` so agent pods can reach LiteLLM through the host                                     |
+| `OPENCLAW_IMAGE`, `HERMES_IMAGE`                    | full `name:tag`; each tag must equal the matching `openclaw-base/VERSION` / `hermes-base/VERSION`                       |
 
 Generate the two keys:
 
@@ -141,9 +138,13 @@ the cluster is up.
 
 This validates `.env`, brings up the k3d cluster and LiteLLM, builds and loads
 the agent base images, starts `db` and `redis`, runs database migrations, then
-starts `api`, `worker`, `communications`, and `ui` with hot reload and follows
+starts `api`, `worker`, `communications`, `memory`, and `ui` with hot reload and follows
 the logs. `Ctrl-C` detaches without stopping anything; use `./run.sh --detach`
 to skip the logs entirely.
+
+The memory gateway needs a running Hindsight backend to list or save memories.
+The optional `local-hindsight` Compose profile provides one; see
+[Agent Memory deployment](docs/guidelines/operations.md#agent-memory-deployment).
 
 If a startup value checked by `run.sh` is missing, the script fails immediately
 and lists it.
@@ -307,11 +308,13 @@ separate terminals, alongside `make db-up`:
 make setup         # uv sync + pnpm install; creates .env from .env.spec if absent
 make db-up         # Postgres only
 make migrate       # apply migrations
-make dev-api       # API on :8000; also starts Ingest :8001 and Communications :8002
+make dev-api       # API :8000, Ingest :8001, Communications :8002, Memory :8003, Credentials :8004
 make dev-ui        # UI on :3000, hot reload
 make dev-worker    # Dramatiq worker, hot reload
 make dev-ingest    # Ingest only (normally started by dev-api)
 make dev-communications  # Communications only (normally started by dev-api)
+make dev-gateway   # Credential gateway only (normally started by dev-api)
+make dev-memory    # Memory gateway only (normally started by dev-api)
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 ```
 
@@ -319,7 +322,7 @@ make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 The worker and reconciliation command also need a Redis server reachable at the
 `REDIS_URL` in `.env`. The Compose Redis service does not publish a host port,
 so `make redis-up` alone cannot serve those host-run processes. This path uses
-host ports `3000`, `8000`, `8001`, and `8002`, so don't run it alongside
+host ports `3000`, `8000`, `8001`, `8002`, `8003`, and `8004`, so don't run it alongside
 `./run.sh`'s containers.
 
 Two gotchas specific to this path:
@@ -348,7 +351,8 @@ export K8S_KUBECONFIG_PATH="$PWD/.k3d/kubeconfig-host.yaml"
 Agents run as Kubernetes resources, so `./run.sh` brings up a cluster
 automatically. We use [k3d](https://k3d.io) (k3s in Docker) from a helper
 container, so no host `k3d` or `helm` install is needed — only Docker and
-`kubectl`. The Kubernetes integration job provisions its own k3d cluster with
+`kubectl` (the optional [local Prometheus](#resource-usage-local-prometheus) also
+needs `helm`). The Kubernetes integration job provisions its own k3d cluster with
 [`AbsaOSS/k3d-action`](https://github.com/AbsaOSS/k3d-action).
 
 `./run.sh` drives `docker/k3d/k3d-up.sh` (cluster + LiteLLM) and
@@ -417,12 +421,15 @@ firewall allows the k3d bridge network to reach port 8001.
 <details>
 <summary><b>Communication connections</b></summary>
 
-Slack, Microsoft Teams, Telegram, and Discord sessions run in the separately
-served Communications gateway on port `8002`. Agent pods claim and complete
-deliveries through `http://host.docker.internal:8002/communications/v1`, because
-the Compose service name isn't resolvable from k3d. `./run.sh` and `make dev-api`
-start the gateway automatically. Override `COMMUNICATIONS_PORT` when the host
-port is already in use.
+Slack, Microsoft Teams, Telegram, and Discord sessions run in each Agent's native
+Hermes or OpenClaw runtime. Web Chat and Email use the separately served
+Communications gateway on port `8002`. For those gateway-owned Connections, Agent
+pods claim and complete deliveries through
+`http://host.docker.internal:8002/communications/v1`, because the Compose service
+name isn't resolvable from k3d. `./run.sh` and `make dev-api` start the gateway
+automatically. Override `COMMUNICATIONS_PORT` when the host port is already in use.
+See the [transport contract](docs/architecture/runtime-and-deployment.md#platform-plugin-boundary)
+and [rollout runbook](docs/guidelines/operations.md#native-runtime-gateway-rollout).
 
 </details>
 
@@ -436,6 +443,43 @@ side by side. Share one full stack, or run only the required native services
 against separately named dependencies.
 
 </details>
+
+#### Resource usage (local Prometheus)
+
+The Resource usage tab and the Agents overview read each Agent's CPU and memory
+from Prometheus. Compose has none, so until you install one those views say
+resource usage is not configured; status and cost are unaffected.
+
+To see real numbers locally, install the monitoring chart into the k3d cluster. This
+is the one step that needs `helm` and `kubectl` on the host:
+
+```bash
+make dev-monitoring
+```
+
+Keep the port-forward running in its own terminal. The API in Docker reaches
+Prometheus through it:
+
+```bash
+make forward-prometheus
+```
+
+Recreate the API container so it picks up the new `PROMETHEUS_PASSWORD`:
+
+```bash
+docker compose up -d api
+```
+
+Then stop and start an Agent. The script that reports usage ships with the Agent's
+configuration, so a running Agent reports only after a restart.
+
+`make dev-monitoring` installs the same `helm/monitoring` chart a deploy uses, with
+the LiteLLM metrics-key hook skipped because LiteLLM runs in Compose. It writes a
+`PROMETHEUS_PASSWORD` to `.env` if there is none, creates the `agent-farm-user`
+ServiceAccount Prometheus runs as, and is safe to run again. Set `PROMETHEUS_PORT` to
+change the host port (default `9090`). Running the API natively (`make dev-api`)? Add
+`PROMETHEUS_URL=http://localhost:9090` to `.env`. To remove it:
+`helm uninstall monitoring -n agent-farm`.
 
 ### Windows
 
@@ -591,8 +635,11 @@ cp .env.deploy.spec .env.deploy
 ```
 
 Helmfile brings up PostgreSQL (one instance each for the app, LiteLLM, and
-Firecrawl), Redis, the LiteLLM proxy, Firecrawl, the API with its worker and
-communications gateway, the UI, and a namespace-scoped Prometheus and Grafana.
+Firecrawl, and Hindsight), Redis, the LiteLLM proxy, Firecrawl, Hindsight, the API
+with its worker, communications gateway, memory gateway, and credential gateway, the UI, and a
+namespace-scoped Prometheus and Grafana. Hindsight's Helm hook generates its
+LiteLLM key automatically, using the same pattern as the application key; see
+[Agent Memory deployment](docs/guidelines/operations.md#agent-memory-deployment).
 Ordering, values, and secrets live in
 [`helmfile.yaml.gotmpl`](helmfile.yaml.gotmpl); the charts are in
 [`helm/`](helm/). Every option in `.env.deploy.spec` is commented.
@@ -608,6 +655,30 @@ reuses the explicitly tagged images already in the registry.
 Background:
 [`docs/architecture/runtime-and-deployment.md`](docs/architecture/runtime-and-deployment.md)
 and [`docs/guidelines/operations.md`](docs/guidelines/operations.md).
+
+### Connecting agent email (manual step)
+
+Agents reachable by email receive mail through a Cloudflare Email Worker. CI
+deploys the Worker, but **it cannot connect the routing rule** — Email Routing
+rules are Cloudflare dashboard state with no Terraform or API step in this
+repository, so mail bounces until someone points the rule at the Worker by hand.
+Do this once per environment, in this order:
+
+1. Merge to `staging`/`main`. The `deploy-worker` job publishes
+   `agentbarn-email-inbound-<environment>`. The Worker must exist first — the
+   routing rule's destination picker only lists deployed Workers.
+2. In Cloudflare, go to **Email → Email Routing → Routing rules** and point the
+   custom address `agent@<AGENT_EMAIL_DOMAIN>` at that Worker. One rule serves
+   every agent, provided **subaddressing is enabled** under Email Routing →
+   Settings — it is off by default, and while it is off every agent address
+   bounces `550 5.1.1` with nothing in the activity log.
+3. Only now delete any Worker you deployed with `wrangler --env local`. Deleting
+   it while a rule still points at it bounces all inbound mail for that
+   environment.
+
+Full setup — the two separate Cloudflare onboardings, the environment variables
+and secrets, quota limits, and secret rotation — is in
+[`docs/guidelines/operations.md`](docs/guidelines/operations.md#per-agent-email-addresses).
 
 ## Repository layout
 
@@ -630,6 +701,14 @@ deploy the published base images without rebuilding them. The current local
 builder requires a GitHub token only to authenticate that public clone; it does
 not require private-source permission. Third-party components keep their own
 licences.
+
+## Programmatic API
+
+Create a Personal API Key in Account settings to use the existing user-authenticated
+`/api/v1` routes. The deployed API serves an interactive reference at
+`/api/v1/docs`, an OpenAPI schema at `/api/v1/openapi.json`, and agent guidance
+at `/llms.txt`. See the [API quickstart](api/developer_docs/quickstart.md) for
+a Bearer-token example.
 
 ## Getting help and contributing
 

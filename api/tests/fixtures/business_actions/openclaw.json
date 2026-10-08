@@ -1,0 +1,629 @@
+[
+  {
+    "name": "write_success",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel workbook create /tmp/bv-N.xlsx"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"created\": true,\n  \"file\": \"/tmp/bv-N.xlsx\",\n  \"sheets\": [\n    \"Sheet1\"\n  ],\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"created\": true,\n  \"file\": \"/tmp/bv-N.xlsx\",\n  \"sheets\": [\n    \"Sheet1\"\n  ],\n  \"truncated\": false\n}",
+        "durationMs": 510,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "workbook",
+        "verb": "create",
+        "is_write": true,
+        "outcome_type": "DOCUMENT_AUTHORED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "read_config_error",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli jira issues get X-1"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\"code\":\"config_error\",\"details\":null,\"message\":\"jira.issues.get requires profile.site_url or profile.base_url\",\"operation\":\"issues.get\",\"service\":\"jira\",\"status\":null}\n\n(Command exited with code 3)",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 3,
+        "aggregated": "{\"code\":\"config_error\",\"details\":null,\"message\":\"jira.issues.get requires profile.site_url or profile.base_url\",\"operation\":\"issues.get\",\"service\":\"jira\",\"status\":null}\n\n(Command exited with code 3)",
+        "durationMs": 18,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "jira",
+        "resource": "issues",
+        "verb": "get",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "and_chain_success",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel workbook create /tmp/bv-chain.xlsx && aai-cli excel sheets list /tmp/bv-chain.xlsx"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"created\": true,\n  \"file\": \"/tmp/bv-chain.xlsx\",\n  \"sheets\": [\n    \"Sheet1\"\n  ],\n  \"truncated\": false\n}\n{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-chain.xlsx\",\n  \"sheets\": [\n    {\n      \"columnCount\": 0,\n      \"index\": 0,\n      \"rowCount\": 0,\n      \"title\": \"Sheet1\",\n      \"usedRange\": \"'Sheet1'!A1:A1\"\n    }\n  ],\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"created\": true,\n  \"file\": \"/tmp/bv-chain.xlsx\",\n  \"sheets\": [\n    \"Sheet1\"\n  ],\n  \"truncated\": false\n}\n{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-chain.xlsx\",\n  \"sheets\": [\n    {\n      \"columnCount\": 0,\n      \"index\": 0,\n      \"rowCount\": 0,\n      \"title\": \"Sheet1\",\n      \"usedRange\": \"'Sheet1'!A1:A1\"\n    }\n  ],\n  \"truncated\": false\n}",
+        "durationMs": 59,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "workbook",
+        "verb": "create",
+        "is_write": true,
+        "outcome_type": "DOCUMENT_AUTHORED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      },
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "SUCCESS",
+        "ordinal": 1
+      }
+    ]
+  },
+  {
+    "name": "pipe_masks_failure",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-1.xlsx | head -5"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\"code\":\"not_found\",\"details\":null,\"message\":\"no such file: /tmp/bv-1.xlsx\",\"operation\":\"sheets.list\",\"service\":\"excel\",\"status\":null}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\"code\":\"not_found\",\"details\":null,\"message\":\"no such file: /tmp/bv-1.xlsx\",\"operation\":\"sheets.list\",\"service\":\"excel\",\"status\":null}",
+        "durationMs": 31,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "agentbarn_message_chain_failure",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-1.xlsx && agentbarn-message --help"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\"code\":\"not_found\",\"details\":null,\"message\":\"no such file: /tmp/bv-1.xlsx\",\"operation\":\"sheets.list\",\"service\":\"excel\",\"status\":null}\n\n(Command exited with code 5)",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 5,
+        "aggregated": "{\"code\":\"not_found\",\"details\":null,\"message\":\"no such file: /tmp/bv-1.xlsx\",\"operation\":\"sheets.list\",\"service\":\"excel\",\"status\":null}\n\n(Command exited with code 5)",
+        "durationMs": 202,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "write_success_second",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel workbook create /tmp/bv-2.xlsx"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"created\": true,\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    \"Sheet1\"\n  ],\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"created\": true,\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    \"Sheet1\"\n  ],\n  \"truncated\": false\n}",
+        "durationMs": 109,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "workbook",
+        "verb": "create",
+        "is_write": true,
+        "outcome_type": "DOCUMENT_AUTHORED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "sheets_add_success",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets add /tmp/bv-2.xlsx Extra"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"added\": \"Extra\",\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    \"Sheet1\",\n    \"Extra\"\n  ],\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"added\": \"Extra\",\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    \"Sheet1\",\n    \"Extra\"\n  ],\n  \"truncated\": false\n}",
+        "durationMs": 99,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "add",
+        "is_write": true,
+        "outcome_type": "SPREADSHEET_UPDATED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "values_update_success",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel values update /tmp/bv-2.xlsx \"'Sheet1'!A1\" --values '[[\"x\"]]'"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"truncated\": false,\n  \"updatedCells\": 1,\n  \"updatedColumns\": 1,\n  \"updatedRange\": \"'Sheet1'!A1:A1\",\n  \"updatedRows\": 1\n}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"truncated\": false,\n  \"updatedCells\": 1,\n  \"updatedColumns\": 1,\n  \"updatedRange\": \"'Sheet1'!A1:A1\",\n  \"updatedRows\": 1\n}",
+        "durationMs": 101,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "values",
+        "verb": "update",
+        "is_write": true,
+        "outcome_type": "SPREADSHEET_UPDATED",
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "global_flag_before_group",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli --profile none excel values get /tmp/bv-2.xlsx \"'Sheet1'!A1:A1\""
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": 1,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"majorDimension\": \"ROWS\",\n  \"range\": \"'Sheet1'!A1:A1\",\n  \"truncated\": false,\n  \"values\": [\n    [\n      \"x\"\n    ]\n  ]\n}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": 1,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"majorDimension\": \"ROWS\",\n  \"range\": \"'Sheet1'!A1:A1\",\n  \"truncated\": false,\n  \"values\": [\n    [\n      \"x\"\n    ]\n  ]\n}",
+        "durationMs": 20,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "values",
+        "verb": "get",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "global_flag_equals_form_at_end",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-2.xlsx --profile=none"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    {\n      \"columnCount\": 1,\n      \"index\": 0,\n      \"rowCount\": 1,\n      \"title\": \"Sheet1\",\n      \"usedRange\": \"'Sheet1'!A1:A1\"\n    },\n    {\n      \"columnCount\": 0,\n      \"index\": 1,\n      \"rowCount\": 0,\n      \"title\": \"Extra\",\n      \"usedRange\": \"'Extra'!A1:A1\"\n    }\n  ],\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    {\n      \"columnCount\": 1,\n      \"index\": 0,\n      \"rowCount\": 1,\n      \"title\": \"Sheet1\",\n      \"usedRange\": \"'Sheet1'!A1:A1\"\n    },\n    {\n      \"columnCount\": 0,\n      \"index\": 1,\n      \"rowCount\": 0,\n      \"title\": \"Extra\",\n      \"usedRange\": \"'Extra'!A1:A1\"\n    }\n  ],\n  \"truncated\": false\n}",
+        "durationMs": 20,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "env_prefix_and_full_path",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "AAI_PROFILE=none /usr/local/bin/aai-cli excel sheets list /tmp/bv-2.xlsx"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    {\n      \"columnCount\": 1,\n      \"index\": 0,\n      \"rowCount\": 1,\n      \"title\": \"Sheet1\",\n      \"usedRange\": \"'Sheet1'!A1:A1\"\n    },\n    {\n      \"columnCount\": 0,\n      \"index\": 1,\n      \"rowCount\": 0,\n      \"title\": \"Extra\",\n      \"usedRange\": \"'Extra'!A1:A1\"\n    }\n  ],\n  \"truncated\": false\n}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    {\n      \"columnCount\": 1,\n      \"index\": 0,\n      \"rowCount\": 1,\n      \"title\": \"Sheet1\",\n      \"usedRange\": \"'Sheet1'!A1:A1\"\n    },\n    {\n      \"columnCount\": 0,\n      \"index\": 1,\n      \"rowCount\": 0,\n      \"title\": \"Extra\",\n      \"usedRange\": \"'Extra'!A1:A1\"\n    }\n  ],\n  \"truncated\": false\n}",
+        "durationMs": 50,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "SUCCESS",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "write_config_error",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli github prs create --title t"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\"code\":\"config_error\",\"details\":null,\"message\":\"github.prs.create requires --owner or profile.owner\",\"operation\":\"prs.create\",\"service\":\"github\",\"status\":null}\n\n(Command exited with code 3)",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 3,
+        "aggregated": "{\"code\":\"config_error\",\"details\":null,\"message\":\"github.prs.create requires --owner or profile.owner\",\"operation\":\"prs.create\",\"service\":\"github\",\"status\":null}\n\n(Command exited with code 3)",
+        "durationMs": 17,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "github",
+        "resource": "prs",
+        "verb": "create",
+        "is_write": true,
+        "outcome_type": "PULL_REQUEST_OPENED",
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "usage_error_without_envelope",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel nonsense-command"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "error: unrecognized subcommand 'nonsense-command'\n\nUsage: aai-cli excel [OPTIONS] <COMMAND>\n\nFor more information, try '--help'.\n\n(Command exited with code 2)",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 2,
+        "aggregated": "error: unrecognized subcommand 'nonsense-command'\n\nUsage: aai-cli excel [OPTIONS] <COMMAND>\n\nFor more information, try '--help'.\n\n(Command exited with code 2)",
+        "durationMs": 75,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "",
+        "verb": "nonsense-command",
+        "is_write": null,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "or_chain_masks_failure",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli jira issues get X-2 || true"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\"code\":\"config_error\",\"details\":null,\"message\":\"jira.issues.get requires profile.site_url or profile.base_url\",\"operation\":\"issues.get\",\"service\":\"jira\",\"status\":null}",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\"code\":\"config_error\",\"details\":null,\"message\":\"jira.issues.get requires profile.site_url or profile.base_url\",\"operation\":\"issues.get\",\"service\":\"jira\",\"status\":null}",
+        "durationMs": 22,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "jira",
+        "resource": "issues",
+        "verb": "get",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "ERROR",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "semicolon_chain_not_last_segment",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-2.xlsx; echo done"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    {\n      \"columnCount\": 1,\n      \"index\": 0,\n      \"rowCount\": 1,\n      \"title\": \"Sheet1\",\n      \"usedRange\": \"'Sheet1'!A1:A1\"\n    },\n    {\n      \"columnCount\": 0,\n      \"index\": 1,\n      \"rowCount\": 0,\n      \"title\": \"Extra\",\n      \"usedRange\": \"'Extra'!A1:A1\"\n    }\n  ],\n  \"truncated\": false\n}\ndone",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "{\n  \"_aai\": {\n    \"pagination\": {\n      \"continuation\": null,\n      \"has_more\": false,\n      \"instruction\": \"The provider indicates there are no more results.\",\n      \"next_command\": null,\n      \"returned_count\": null,\n      \"status\": \"complete\"\n    }\n  },\n  \"file\": \"/tmp/bv-2.xlsx\",\n  \"sheets\": [\n    {\n      \"columnCount\": 1,\n      \"index\": 0,\n      \"rowCount\": 1,\n      \"title\": \"Sheet1\",\n      \"usedRange\": \"'Sheet1'!A1:A1\"\n    },\n    {\n      \"columnCount\": 0,\n      \"index\": 1,\n      \"rowCount\": 0,\n      \"title\": \"Extra\",\n      \"usedRange\": \"'Extra'!A1:A1\"\n    }\n  ],\n  \"truncated\": false\n}\ndone",
+        "durationMs": 17,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "UNKNOWN",
+        "ordinal": 0
+      }
+    ]
+  },
+  {
+    "name": "help_ignored",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel --help"
+    },
+    "result": {
+      "content": [
+        {
+          "text": "Read and write local spreadsheets: .xlsx/.xlsm and .csv/.tsv, plus read-only .xls/.xlsb/.ods. Needs no profile or credentials\n\nUsage: aai-cli excel [OPTIONS] <COMMAND>\n\nCommands:\n  workbook  Create a new spreadsheet file (.xlsx or .csv/.tsv)\n  sheets    Inspect, add, delete, or rename the sheet tabs in a workbook\n  values    Read, write, or clear cell values in a workbook range\n  help      Print this message or the help of the given subcommand(s)\n\nOptions:\n      --profile <PROFILE>            [env: AAI_PROFILE=]\n      --config <CONFIG>              [env: AAI_CONFIG=]\n      --secrets-file <SECRETS_FILE>  [env: AAI_SECRETS_FILE=]\n      --key-file <KEY_FILE>          [env: AAI_SECRET_KEY_FILE=]\n  -h, --help                         Print help",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "status": "completed",
+        "exitCode": 0,
+        "aggregated": "Read and write local spreadsheets: .xlsx/.xlsm and .csv/.tsv, plus read-only .xls/.xlsb/.ods. Needs no profile or credentials\n\nUsage: aai-cli excel [OPTIONS] <COMMAND>\n\nCommands:\n  workbook  Create a new spreadsheet file (.xlsx or .csv/.tsv)\n  sheets    Inspect, add, delete, or rename the sheet tabs in a workbook\n  values    Read, write, or clear cell values in a workbook range\n  help      Print this message or the help of the given subcommand(s)\n\nOptions:\n      --profile <PROFILE>            [env: AAI_PROFILE=]\n      --config <CONFIG>              [env: AAI_CONFIG=]\n      --secrets-file <SECRETS_FILE>  [env: AAI_SECRETS_FILE=]\n      --key-file <KEY_FILE>          [env: AAI_SECRET_KEY_FILE=]\n  -h, --help                         Print help",
+        "durationMs": 43,
+        "exitReason": "exit",
+        "exitSignal": null,
+        "noOutputTimedOut": false
+      }
+    },
+    "expected_actions": []
+  },
+  {
+    "name": "background_run",
+    "tool_name": "exec",
+    "stored_status": "SUCCESS",
+    "arguments": {
+      "command": "aai-cli excel sheets list /tmp/bv-2.xlsx",
+      "background": true
+    },
+    "result": {
+      "content": [
+        {
+          "text": "Command still running (session fresh-atlas, pid 1208). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+          "type": "text"
+        }
+      ],
+      "details": {
+        "cwd": "/home/node/.openclaw/workspace",
+        "pid": 1208,
+        "tail": "",
+        "status": "running",
+        "sessionId": "fresh-atlas",
+        "startedAt": 1790525690315
+      }
+    },
+    "expected_actions": [
+      {
+        "integration": "excel",
+        "resource": "sheets",
+        "verb": "list",
+        "is_write": false,
+        "outcome_type": null,
+        "status": "UNKNOWN",
+        "ordinal": 0
+      }
+    ]
+  }
+]

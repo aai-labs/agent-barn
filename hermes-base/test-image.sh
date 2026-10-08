@@ -13,6 +13,8 @@ docker run --rm \
 (
     cd "$repo_root/api"
     uv run --frozen python tests/fixtures/hermes_pvc_permissions_driver.py "$image"
+    # Native Telegram access policy through Hermes' real adapter and auth chain.
+    uv run --frozen python tests/fixtures/hermes_telegram_access_driver.py "$image"
 )
 
 # Run telemetry-push against Hermes' real SessionStore. Unit-test fakes cannot
@@ -26,5 +28,32 @@ docker run --rm \
     --entrypoint python3 \
     "$image" \
     /driver.py
+
+# Native gateway journal stages against Hermes' real ledger, status file, and hooks.
+docker run --rm --network none \
+    -e AGENT_ID=00000000-0000-0000-0000-000000000000 \
+    -e INGEST_URL=http://127.0.0.1:9/ingest/v1 \
+    -e INGEST_API_KEY=ci \
+    -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-observer:/plugin:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_observer_driver.py:/driver.py:ro" \
+    --entrypoint python3 \
+    "$image" \
+    /driver.py
+
+# Native scheduler delivery remains active without the retired completion capture patch.
+docker run --rm --network none \
+    -v "$repo_root/api/tests/fixtures/hermes_native_delivery_driver.py:/native-driver.py:ro" \
+    --entrypoint python3 "$image" /native-driver.py
+
+sh "$repo_root/api/tests/fixtures/test-messaging-retirement.sh" "$image" hermes
+
+# The healthz server reports the container's own CPU and memory from its cgroup v2
+# files. Run the real script under known limits, as the image's own user: a fake
+# directory cannot prove the files are there or readable to this user. The same check
+# for OpenClaw lives in openclaw-base/test-healthz-metrics.sh.
+docker run --rm --network none --memory 1g --cpus 0.5 \
+    -v "$repo_root/api/domains/agents/scripts/hermes/healthz-server.py:/healthz-server.py:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_healthz_metrics_driver.py:/healthz-driver.py:ro" \
+    --entrypoint python3 "$image" /healthz-driver.py /healthz-server.py
 
 echo 'All Hermes image tests passed'

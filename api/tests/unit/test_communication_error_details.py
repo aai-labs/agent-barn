@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 from hamcrest import assert_that, contains_string, equal_to, has_properties, is_, none, not_
 
-from api.domains.communications.error_details import normalize_communication_error
+from api.domains.communications.error_details import normalize_communication_error, safe_error_summary
 from api.domains.communications.models import CommunicationErrorCategory
 
 
@@ -58,3 +59,79 @@ def test_timeout_failure_is_actionable_and_retryable() -> None:
         ),
     )
     assert_that(str(normalized.details), not_(contains_string("bot-secret")))
+
+
+def test_runtime_credit_exhaustion_names_the_billing_problem() -> None:
+    normalized = normalize_communication_error(
+        error_code="RuntimeError",
+        error_message=(
+            "Error code: 402 - {'error': {'message': 'OpenRouter credits exhausted. "
+            "Add credits at https://openrouter.ai/credits.', 'code': '402'}}"
+        ),
+        operation="runtime_processing",
+    )
+
+    assert_that(normalized.code, equal_to("RuntimeError"))
+    assert_that(
+        normalized.summary,
+        equal_to(
+            "The provider reports exhausted credits or billing; "
+            "add credits to the provider account, then retry (HTTP 402)"
+        ),
+    )
+    assert_that(
+        normalized.details,
+        has_properties(
+            category=equal_to(CommunicationErrorCategory.PROVIDER_REJECTED),
+            operation=equal_to("runtime_processing"),
+            http_status=equal_to(402),
+            retryable=is_(False),
+        ),
+    )
+
+
+def test_summary_without_a_status_in_the_message_is_unchanged() -> None:
+    normalized = normalize_communication_error(
+        error_code="RuntimeError",
+        error_message="the agent gave up",
+        operation="runtime_processing",
+    )
+
+    assert_that(normalized.summary, equal_to("The provider reported an error"))
+    assert_that(normalized.details, has_properties(http_status=none()))
+
+
+@pytest.mark.parametrize(
+    ("provider_code", "category"),
+    [
+        ("4004", CommunicationErrorCategory.AUTHENTICATION),
+        ("4013", CommunicationErrorCategory.CONFIGURATION),
+        ("4014", CommunicationErrorCategory.CONFIGURATION),
+    ],
+)
+def test_historical_gateway_close_diagnostics_remain_readable(provider_code, category) -> None:
+    summary = safe_error_summary(
+        "historical free-form provider reason",
+        details={
+            "category": category.value,
+            "operation": "connect",
+            "provider_code": provider_code,
+            "retryable": False,
+        },
+    )
+
+    assert summary is not None
+    assert_that(summary, contains_string("Discord rejected"))
+    assert_that(summary, contains_string(provider_code))
+    assert_that(summary, not_(contains_string("free-form provider reason")))
+
+
+def test_http_transport_failure_remains_retryable_without_retaining_exception_text() -> None:
+    normalized = normalize_communication_error(
+        httpx.ConnectError("connection refused with fixture-secret"), operation="send_message"
+    )
+
+    assert_that(normalized.code, equal_to("NETWORK_ERROR"))
+    assert_that(normalized.details, has_properties(category=CommunicationErrorCategory.NETWORK, retryable=is_(True)))
+    assert_that(normalized.summary, not_(contains_string("fixture-secret")))
+    assert_that(str(normalized.details), not_(contains_string("fixture-secret")))

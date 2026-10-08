@@ -10,8 +10,10 @@ from injector import Module, provider, singleton
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
+    AgentSecret,
     AgentStatus,
     AgentType,
+    CommandApprovalMode,
 )
 from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
@@ -44,6 +46,9 @@ class MockK8sModule(Module):
     @singleton
     def provide_k8s(self) -> KubernetesClient:
         mock: Any = MagicMock(spec=KubernetesClient)
+        # Every attribute is truthy by default, which would read as "a pod is still
+        # terminating" and block every restore point operation in the suite.
+        mock.has_pods_for_deployment.return_value = False
         return mock
 
 
@@ -54,6 +59,14 @@ class MockLiteLLMModule(Module):
         mock: Any = MagicMock(spec=LiteLLMClient)
         mock.generate_key.return_value = FAKE_LITELLM_KEY
         mock.delete_key.return_value = True
+        mock.revoke_memory_key.side_effect = lambda key_hash: LiteLLMClient.revoke_memory_key(mock, key_hash)
+        mock.get_memory_key_info.side_effect = lambda key: LiteLLMClient.get_memory_key_info(mock, key)
+        # Explicit defaults for the reads that feed response models: a bare MagicMock
+        # return value fails validation rather than behaving like "no data".
+        mock.get_team_budget_status.return_value = None
+        mock.get_key_team.return_value = None
+        mock.get_key_budget_status.return_value = {"spend": None, "renews_at": None}
+        mock.apply_team_budget.return_value = None
         return mock
 
 
@@ -70,6 +83,7 @@ def there_is_an_agent(
     bot_token: str | None = None,
     created_by_user_id: UUID | None = None,
     creator_membership_id: UUID | None = None,
+    approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO,
 ):
     def step(context):
         org_id = organization_id or context.organization.id
@@ -102,6 +116,7 @@ def there_is_an_agent(
             status=status,
             agent_type=agent_type,
             agent_template_id=template.id,
+            approval_mode=approval_mode,
         )
 
         if deleted:
@@ -160,6 +175,21 @@ def use_org_for_auth():
         from api.tests.core.givenpy import LambdaWith
 
         return LambdaWith(lambda: None, cleanup)
+
+    return step
+
+
+def shared_credential_is_attached_to_agent():
+    def step(context):
+        context.postgres_delegate.save(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=context.shared_credential.provider,
+                secret_name=context.shared_credential.name,
+                content=None,
+                shared_credential_id=context.shared_credential.id,
+            )
+        )
 
     return step
 

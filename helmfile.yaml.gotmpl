@@ -14,6 +14,35 @@ helmDefaults:
   timeout: 600
 
 releases:
+  - name: postgres-hindsight
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/postgres
+    values:
+      - secretName: postgres-hindsight
+        image:
+          repository: pgvector/pgvector
+          tag: pg18
+        storage:
+          size: 10Gi
+          storageClass: {{ env "STORAGE_CLASS" | default "" | quote }}
+        db:
+          user: hindsight
+          name: hindsight
+          password: {{ env "HINDSIGHT_DB_PASSWORD" | required "HINDSIGHT_DB_PASSWORD is required" | quote }}
+  - name: hindsight
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/hindsight
+    labels:
+      name: hindsight
+    needs: ["{{ env "NAMESPACE" | default "agent-farm" }}/postgres-hindsight", "{{ env "NAMESPACE" | default "agent-farm" }}/litellm"]
+    values:
+      - databaseUrl: {{ printf "postgresql://hindsight:%s@postgres-hindsight:5432/hindsight" (env "HINDSIGHT_DB_PASSWORD" | urlquery | replace "+" "%20") | quote }}
+        runtimeServiceKey: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | required "MEMORY_RUNTIME_SERVICE_KEY is required" | quote }}
+        apiKey: {{ env "HINDSIGHT_API_KEY" | required "HINDSIGHT_API_KEY is required" | quote }}
+        llm:
+          model: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
+          retiredKeyHashes: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
+        litellmKeyServiceAccountName: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
   - name: postgres-app
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -140,6 +169,13 @@ releases:
         value: {{ env "API_IMAGE_TAG" | default "" | quote }}
       - name: buildSha
         value: {{ env "GIT_SHA" | default "" | quote }}
+      - name: organizationLlmBudgets.alertThresholds
+        value: {{ env "ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS" | default "80,100" | quote }}
+      # No defaults on purpose: the chart refuses to render without both.
+      - name: organizationLlmBudgets.defaultOrganizationUsd
+        value: {{ env "ORGANIZATION_DEFAULT_LLM_BUDGET_USD" | quote }}
+      - name: organizationLlmBudgets.defaultAgentUsd
+        value: {{ env "AGENT_DEFAULT_LLM_BUDGET_USD" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
@@ -152,6 +188,18 @@ releases:
         value: {{ env "HERMES_IMAGE_TAG" | default "latest" | quote }}
       - name: dbConnectionUrl
         value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") | quote }}
+      - name: memory.defaultModel
+        value: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
+      - name: memory.enabled
+        value: true
+      - name: memory.litellmKeyHashes
+        value: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
+      - name: memory.litellmActiveKeyHash
+        value: {{ env "MEMORY_LITELLM_ACTIVE_KEY_HASH" | default "" | quote }}
+      - name: memory.settingsKeyChecksum
+        value: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | sha256sum | quote }}
+      - name: memory.authChecksum
+        value: {{ env "HINDSIGHT_API_KEY" | sha256sum | quote }}
       - name: secretSigningKey
         value: {{ env "SECRET_SIGNING_KEY" | required "SECRET_SIGNING_KEY is required" | quote }}
       - name: platformAdminCredentials
@@ -191,6 +239,10 @@ releases:
         value: "agentbarn-api-registry-pull-secret"
       - name: storageClass
         value: {{ env "STORAGE_CLASS" | default "" | quote }}
+      - name: restorePoints.size
+        value: {{ env "RESTORE_POINT_SIZE" | default "1Gi" | quote }}
+      - name: restorePoints.maxPerAgent
+        value: {{ env "RESTORE_POINT_MAX_PER_AGENT" | default "5" | quote }}
       - name: agentDefaultModel
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist
@@ -207,11 +259,17 @@ releases:
       # with it for the remaining-credit-limit metric.
       - name: openrouterApiKey
         value: {{ env "OPENROUTER_API_KEY" | default "" | quote }}
+      # The API queries the monitoring release's Prometheus, which requires this
+      # password. Passed here rather than read from that release's Secret: monitoring
+      # needs this release, so on a fresh install the Secret does not exist yet.
+      - name: prometheus.password
+        value: {{ env "MONITORING_WEB_PASSWORD" | required "MONITORING_WEB_PASSWORD is required" | quote }}
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
       - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
+      - {{ env "NAMESPACE" | default "agent-farm" }}/hindsight
 
   - name: agentbarn-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
@@ -255,6 +313,8 @@ releases:
         value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
       - name: prometheus.kube-state-metrics.serviceAccount.name
         value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
+      - name: litellmMetricsKey.serviceAccountName
+        value: {{ printf "%s-user" (env "NAMESPACE" | default "agent-farm") | quote }}
       # Stamped on every alert so a shared Slack channel can tell staging
       # and production incidents apart.
       - name: prometheus.server.global.external_labels.environment
@@ -263,6 +323,28 @@ releases:
         value: {{ env "SLACK_ALERTS_WEBHOOK_URL" | required "SLACK_ALERTS_WEBHOOK_URL is required" | quote }}
       - name: grafana.adminPassword
         value: {{ env "GRAFANA_ADMIN_PASSWORD" | required "GRAFANA_ADMIN_PASSWORD is required" | quote }}
+      # Basic auth on Prometheus/Alertmanager (agents share the namespace).
+      # The probes and Prometheus's config reloader only take literal values,
+      # so derive them here; the chart checks they match webAuth.password.
+      {{- $webPassword := env "MONITORING_WEB_PASSWORD" | required "MONITORING_WEB_PASSWORD is required" }}
+      {{- $webBasic := printf "Basic %s" (printf "monitoring:%s" $webPassword | b64enc) }}
+      - name: webAuth.password
+        value: {{ $webPassword | quote }}
+      - name: prometheus.server.probeHeaders[0].name
+        value: Authorization
+      - name: prometheus.server.probeHeaders[0].value
+        value: {{ $webBasic | quote }}
+      - name: prometheus.configmapReload.reloadUrl
+        value: {{ printf "http://monitoring:%s@127.0.0.1:9090/-/reload" $webPassword | quote }}
+      # Grafana reads the password only at startup; roll it when it changes.
+      - name: grafana.podAnnotations.checksum/web-auth
+        value: {{ $webPassword | sha256sum | quote }}
+{{- range $probe := list "livenessProbe" "readinessProbe" }}
+      - name: prometheus.alertmanager.{{ $probe }}.httpGet.httpHeaders[0].name
+        value: Authorization
+      - name: prometheus.alertmanager.{{ $probe }}.httpGet.httpHeaders[0].value
+        value: {{ $webBasic | quote }}
+{{- end }}
       - name: grafana.ingress.hosts[0]
         value: {{ env "GRAFANA_HOST" | required "GRAFANA_HOST is required" | quote }}
       - name: grafana.ingress.tls[0].secretName

@@ -42,9 +42,9 @@ import {
   type CommunicationJournalWindow,
 } from "@/features/communication-connections/schemas";
 
-const DELIVERY_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_110px_130px_110px_130px_70px]";
+const DELIVERY_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_110px_110px_130px_70px]";
 const CONNECTION_ROW_GRID = "grid-cols-[28px_minmax(160px,1fr)_130px_110px_160px]";
-const DELIVERY_HEADINGS = ["Stage", "Direction", "Current status", "Elapsed", "Occurred", "Attempt"];
+const DELIVERY_HEADINGS = ["Stage", "Direction", "Elapsed", "Occurred", "Attempt"];
 const CONNECTION_HEADINGS = ["Stage", "Status", "Since previous", "Occurred"];
 
 const CONNECTION_STAGE_STATUS: Record<string, { label: string; color: string }> = {
@@ -256,9 +256,7 @@ function JournalRow({ entry, expanded, onToggle, canEdit, onRetryDelivery, agent
       </span>
       <span className="truncate capitalize" style={{ color: "var(--ink)" }}>{label(entry.stage)}</span>
       {showDeliveryColumns && <span>{entry.direction && <DirectionBadge direction={entry.direction} />}</span>}
-      <span>
-        {entry.deliveryStatus ? <StatusBadge status={entry.deliveryStatus} /> : <ConnectionStatusBadge stage={entry.stage} />}
-      </span>
+      {!showDeliveryColumns && <span><ConnectionStatusBadge stage={entry.stage} /></span>}
       <span style={{ color: "var(--ink-3)" }}>{formatDuration(entry.durationMs)}</span>
       <span style={{ color: "var(--ink-3)" }}>{formatTimestamp(entry.occurredAt)}</span>
       {showDeliveryColumns && <span style={{ color: "var(--ink-3)" }}>{entry.attemptNumber}</span>}
@@ -344,7 +342,6 @@ function JournalDetail({
         <DetailRow label="Stage" value={label(entry.stage)} />
         {entry.disposition && <DetailRow label="Admission outcome" value={label(entry.disposition)} />}
         {entry.direction && <DetailRow label="Direction" value={label(entry.direction)} />}
-        {entry.deliveryStatus && <DetailRow label="Current status" value={label(entry.deliveryStatus)} />}
         {entry.deliveryId && (
           <CopyableDetailRow
             label="Delivery ID"

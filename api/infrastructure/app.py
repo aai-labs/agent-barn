@@ -1,13 +1,18 @@
 from injector import Module, provider, singleton
 
 from api.core.config import Config, get_config
-from api.domains.agents.event_handlers import AgentLifecycleEmailHandler
+from api.domains.agent_memory.key_repository import MemoryKeyRepository
+from api.domains.agents.event_handlers import AgentBudgetEmailHandler, AgentLifecycleEmailHandler
+from api.domains.agents.repository import AgentRepository
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.email import EmailPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.plugins.slack import SlackPlatformPlugin
 from api.domains.communications.plugins.teams import TeamsPlatformPlugin
 from api.domains.communications.plugins.telegram import TelegramPlatformPlugin
+from api.domains.communications.plugins.web import WebPlatformPlugin
+from api.domains.costs.repository import CostRepository
+from api.domains.costs.sync import CostSynchronizer
 from api.domains.events.constants import EVENT_DELIVERY_PROCESSING_STALE_SECONDS
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.processor import EventDeliveryProcessor
@@ -15,9 +20,16 @@ from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
+from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
+from api.domains.restore_points.reconciliation import RestorePointReconciler
+from api.domains.restore_points.repository import RestorePointRepository
+from api.domains.restore_points.service import RestorePointService
 from api.infrastructure.clock import Clock
+from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.email.client import EmailClient
 from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.litellm.client import LiteLLMClient
+from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -39,6 +51,11 @@ class AppModule(Module):
 
     @provider
     @singleton
+    def provide_communication_signal_bus(self, config: Config) -> CommunicationSignalBus:
+        return CommunicationSignalBus(config)
+
+    @provider
+    @singleton
     def provide_platform_plugin_registry(
         self,
         config: Config,
@@ -51,6 +68,7 @@ class AppModule(Module):
                 SlackPlatformPlugin(config),
                 TeamsPlatformPlugin(config),
                 TelegramPlatformPlugin(config),
+                WebPlatformPlugin(),
             ]
         )
 
@@ -59,9 +77,18 @@ class AppModule(Module):
     def provide_event_handler_registry(
         self,
         agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
+        organization_budget_email_handler: OrganizationBudgetEmailHandler,
+        agent_budget_email_handler: AgentBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
     ) -> EventHandlerRegistry:
-        return EventHandlerRegistry([agent_lifecycle_email_handler, security_audit_projection])
+        return EventHandlerRegistry(
+            [
+                agent_lifecycle_email_handler,
+                organization_budget_email_handler,
+                agent_budget_email_handler,
+                security_audit_projection,
+            ]
+        )
 
     @provider
     @singleton
@@ -75,6 +102,41 @@ class AppModule(Module):
         transport: EventDeliveryTransport,
     ) -> EventDeliveryReconciler:
         return EventDeliveryReconciler(repository=repository, transport=transport)
+
+    @provider
+    def provide_restore_point_reconciler(
+        self,
+        config: Config,
+        repository: RestorePointRepository,
+        service: RestorePointService,
+        k8s: KubernetesClient,
+    ) -> RestorePointReconciler:
+        return RestorePointReconciler(
+            repository=repository,
+            service=service,
+            k8s=k8s,
+            namespace=config.k8s_namespace,
+        )
+
+    @provider
+    def provide_cost_synchronizer(
+        self,
+        config: Config,
+        repository: CostRepository,
+        agent_repository: AgentRepository,
+        litellm: LiteLLMClient,
+        openrouter: OpenRouterClient,
+        memory_keys: MemoryKeyRepository,
+    ) -> CostSynchronizer:
+        return CostSynchronizer(
+            repository=repository,
+            agent_repository=agent_repository,
+            spend_logs=litellm,
+            generations=openrouter,
+            encryption_key=config.agent_token_encryption_key,
+            memory_key_hashes=config.memory_cost_key_hashes,
+            memory_key_source=memory_keys.hashes,
+        )
 
     @provider
     def provide_event_delivery_processor(

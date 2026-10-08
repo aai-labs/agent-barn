@@ -6,11 +6,20 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
 import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
-import { FileText, Sparkles } from "lucide-react";
+import { Activity, FileText, Menu, Receipt, Settings, Sparkles } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
+
+const PLATFORM_BASE = "/dashboard/platform";
 
 interface TopNavProps {
   onHire: () => void;
@@ -25,27 +34,49 @@ export function TopNav({ onHire }: TopNavProps) {
 
   const orgId = selectedOrganization?.id;
   const orgBase = orgId ? `/dashboard/${orgId}` : "/dashboard";
-  const isPlatformView = pathname?.startsWith("/dashboard/platform") ?? false;
+  const isPlatformView = pathname?.startsWith(PLATFORM_BASE) ?? false;
 
   // Owners/admins (and platform admins) manage members and see org spend; plain members can't.
   const { canManage: canManageMembers } = useActiveOrgRole();
 
   const navTabs = isPlatformView
     ? [
-        { href: "/dashboard/platform", label: "Overview" },
+        { href: PLATFORM_BASE, label: "Overview" },
         { href: "/dashboard/platform/users", label: "Users" },
         { href: "/dashboard/platform/organizations", label: "Organizations" },
         { href: "/dashboard/platform/event-deliveries", label: "Event Deliveries" },
+        { href: "/dashboard/platform/costs", label: "Costs" },
+        { href: "/dashboard/platform/resource-usage", label: "Resources" },
         { href: "/dashboard/platform/templates", label: "Templates" },
         { href: "/dashboard/platform/skills", label: "Skills" },
+        { href: "/dashboard/platform/settings", label: "Settings" },
       ]
     : [
         { href: orgBase, label: "Home" },
-        // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
-        ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
+        // Every member: the page lists the agents they can read, with what each costs and
+        // uses, and shows each figure only where they hold the permission for it.
+        { href: `${orgBase}/agents`, label: "Usage" },
+        // Costs and KPIs are owner/admin-only (their endpoints are gated too); hide them from members.
+        ...(canManageMembers
+          ? [
+              { href: `${orgBase}/costs`, label: "Costs" },
+              { href: `${orgBase}/kpis`, label: "KPIs" },
+            ]
+          : []),
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
+  // Platform view has nine tabs, and they do not fit inline until about 1300px: with the
+  // compact spacing they are 73px short at 1024px, and when the roomier spacing starts at
+  // 1280px they are 17px short, so no `lg` or `xl` breakpoint works. It keeps them in the
+  // drawer until 1360px, which leaves room to spare. The class names are written out whole
+  // so Tailwind can find them.
+  const drawerTrigger = isPlatformView ? "min-[1360px]:hidden" : "lg:hidden";
+  const inlineTabs = isPlatformView ? "min-[1360px]:flex" : "lg:flex";
   const [menuOpen, setMenuOpen] = useState(false);
+  const routeKey = pathname ?? "";
+  const [navOpenedOn, setNavOpenedOn] = useState<string | null>(null);
+  const navOpen = navOpenedOn !== null && navOpenedOn === routeKey;
+  const setNavOpen = (open: boolean) => setNavOpenedOn(open ? routeKey : null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -66,36 +97,90 @@ export function TopNav({ onHire }: TopNavProps) {
     .toUpperCase();
 
   const isActive = (href: string) => {
-    // Home matches the org root and its agent pages; other tabs match their subtree.
+    // Home and Overview are prefixes of every tab beside them, so a prefix test would
+    // report them active on every page in their section. Both match exactly instead —
+    // Home additionally claims the agent pages, which have no tab of their own (their
+    // back link says "Your team" and leads Home).
     if (href === orgBase) {
-      return pathname === orgBase || pathname.startsWith(`${orgBase}/agents`);
+      return pathname === orgBase || pathname.startsWith(`${orgBase}/agents/`);
+    }
+    // Usage lives at /agents, the parent of every agent page, so it too matches exactly.
+    if (href === `${orgBase}/agents`) {
+      return pathname === href;
+    }
+    if (href === PLATFORM_BASE) {
+      return pathname === PLATFORM_BASE;
     }
     return pathname.startsWith(href);
   };
 
   return (
     <header
-      className="flex items-center gap-9 px-10 sticky top-0 z-10 h-[61px] flex-shrink-0"
+      className="flex items-center gap-4 px-4 lg:px-6 xl:gap-9 xl:px-10 sticky top-0 z-10 h-[61px] flex-shrink-0"
       style={{ borderBottom: "1px solid var(--line)", background: "var(--bg)" }}
     >
-      <div className="flex items-center gap-2.5 font-semibold text-[15.5px] tracking-tight" style={{ color: "var(--ink)" }}>
+      <Sheet open={navOpen} onOpenChange={setNavOpen}>
+        <SheetTrigger
+          className={`af-hover-bg -ml-1.5 grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg ${drawerTrigger}`}
+          style={{ color: "var(--ink-2)" }}
+          aria-label="Open navigation"
+        >
+          <Menu size={18} />
+        </SheetTrigger>
+
+        <SheetContent side="left" className="w-[17rem] p-0">
+          <SheetHeader className="px-4 pb-1 pt-4">
+            <SheetTitle
+              className="text-[11px] font-semibold uppercase tracking-[0.08em]"
+              style={{ color: "var(--ink-5)" }}
+            >
+              {isPlatformView ? "Platform" : "Navigation"}
+            </SheetTitle>
+          </SheetHeader>
+
+          <nav className="flex flex-col gap-0.5 px-2 pb-4">
+            {navTabs.map(({ href, label }) => (
+              <Link
+                key={href}
+                href={href}
+                className="af-hover-bg rounded-lg px-3.5 py-2.5 text-[14px] transition-colors"
+                style={{
+                  color: isActive(href) ? "var(--ink)" : "var(--ink-2)",
+                  fontWeight: isActive(href) ? 600 : 500,
+                  background: isActive(href) ? "var(--bg-soft)" : "transparent",
+                }}
+                aria-current={isActive(href) ? "page" : undefined}
+                onClick={() => setNavOpen(false)}
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
+        </SheetContent>
+      </Sheet>
+
+      <div
+        className="flex flex-shrink-0 items-center gap-2.5 font-semibold text-[15.5px] tracking-tight"
+        style={{ color: "var(--ink)" }}
+      >
         <LogoMark size={26} />
-        Agent Barn
+        <span className="hidden sm:inline">Agent Barn</span>
       </div>
 
       <OrgSwitcher />
 
-      <nav className="flex gap-0.5 flex-1">
+      <nav className={`no-scrollbar hidden min-w-0 flex-1 gap-0.5 overflow-x-auto ${inlineTabs}`}>
         {navTabs.map(({ href, label }) => (
           <Link
             key={href}
             href={href}
-            className="px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
+            className="flex-shrink-0 whitespace-nowrap px-2 xl:px-3.5 py-[7px] rounded-lg text-[14px] font-medium transition-colors"
             style={{
               color: isActive(href) ? "var(--ink)" : "var(--ink-3)",
               fontWeight: isActive(href) ? 600 : 500,
               background: "transparent",
             }}
+            aria-current={isActive(href) ? "page" : undefined}
             onMouseEnter={(e) => {
               if (!isActive(href))
                 (e.currentTarget as HTMLElement).style.background = "var(--bg-soft)";
@@ -109,10 +194,13 @@ export function TopNav({ onHire }: TopNavProps) {
         ))}
       </nav>
 
-      <div className="flex items-center gap-2.5">
+      {/* The drawer carries the tabs below that width, so keep the actions right-aligned. */}
+      <div className={`flex-1 ${drawerTrigger}`} />
+
+      <div className="flex flex-shrink-0 items-center gap-2.5">
         {!isPlatformView && (
-          <button className="af-btn af-btn-primary" onClick={onHire}>
-          <PlusIcon /> Hire agent
+          <button className="af-btn af-btn-primary" onClick={onHire} aria-label="Hire agent">
+            <PlusIcon /> <span className="hidden sm:inline">Hire agent</span>
           </button>
         )}
         <div ref={menuRef} className="relative">
@@ -200,6 +288,26 @@ export function TopNav({ onHire }: TopNavProps) {
                     onClick={() => setMenuOpen(false)}
                   >
                     <ServerIcon /> Event Deliveries
+                  </Link>
+                  <Link
+                    href="/dashboard/platform/costs"
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <Receipt size={14} /> Costs
+                  </Link>
+                  <Link href="/dashboard/platform/settings" className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }} onClick={() => setMenuOpen(false)}>
+                    <Settings size={14} /> Settings
+                  </Link>
+                  <Link
+                    href="/dashboard/platform/resource-usage"
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <Activity size={14} /> Resources
                   </Link>
                   <Link
                     href="/dashboard/platform/templates"

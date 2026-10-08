@@ -1,10 +1,12 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 import { PlatformStatsPanel } from "@/features/platform-stats/components/platform-stats-panel";
-import { FileText, Sparkles } from "lucide-react";
+import { Activity, FileText, Receipt, Settings, Sparkles } from "lucide-react";
 
 const platformLinks = [
+  { href: "/dashboard/platform/settings", title: "Platform Settings", description: "Choose the memory-processing model shared across Organizations.", Icon: Settings },
   {
     href: "/dashboard/platform/users",
     title: "Users",
@@ -24,6 +26,18 @@ const platformLinks = [
     title: "Event Deliveries",
     description: "Inspect delivery pipeline health and diagnose handler failures.",
     Icon: ServerIcon,
+  },
+  {
+    href: "/dashboard/platform/costs",
+    title: "Platform Costs",
+    description: "Model spend across every organization, with burn rate and OpenRouter credits.",
+    Icon: Receipt,
+  },
+  {
+    href: "/dashboard/platform/resource-usage",
+    title: "Platform Resource Usage",
+    description: "CPU and memory of every agent's container, with the heaviest organizations and agents.",
+    Icon: Activity,
   },
   {
     href: "/dashboard/platform/templates",
@@ -86,7 +100,9 @@ export default function PlatformPage() {
           ))}
         </div>
 
-        <PlatformStatsPanel />
+        <Suspense fallback={null}>
+          <PlatformStatsPanel />
+        </Suspense>
       </div>
     </PlatformAdminOnly>
   );

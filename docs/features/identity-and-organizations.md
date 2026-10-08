@@ -18,13 +18,15 @@ Authentication establishes a user and membership context; Organization is the te
 - Org-scoped routes require real membership in the selected organization, including for Platform Administrators. Platform Administrator authority is reserved for platform routes.
 - Cross-organization resource access is intentionally hidden with 404 for tenant-owned entities; known but unauthorized organization administration uses 403.
 - Agent Barn has no default Organization. Platform-owned resources are global Platform Resources, not Organization-owned rows. Any organization with active agents must remove them before deletion.
-- Platform routes accept Platform Administrator authority only from an authenticated user session. API-key, service, runtime, and other non-user-session credential classes are denied even when they identify a Platform Administrator.
+- Platform routes accept authority from an authenticated user session or a Personal API Key belonging to a current Platform Administrator. Service and runtime credentials remain excluded.
 - Platform Administrators can list users and organizations, provision pending users with an initial Organization, resend pending-user invitations, and grant or revoke Platform Privilege. Platform password reset, account deletion, and platform-level Organization creation/deletion are not supported.
 - Platform Privilege changes require a 1–1000 character reason, reject no-op changes, prohibit self-revocation, and cannot remove the final Platform Administrator. The user-state change and Platform-scoped Domain Event commit atomically.
 
 ## Authentication flows
 
 Access tokens are signed JWTs. Refresh tokens are opaque persisted values tied to the user's security stamp. Login returns both and writes the refresh token cookie. Refresh accepts the request token or cookie, validates persistence/expiry/stamp, revokes the used token, and rotates the pair.
+
+Personal API Keys are opaque User-owned Bearer credentials. Their hashes, access modes, optional expiry, revocation, and issue-time security stamps are persisted. The complete key is shown once. A key acts through the User's current Memberships and Agent Access; read-only mode blocks mutations. Full-access keys may issue or revoke the same User's keys. Password changes and resets invalidate keys issued under the prior security stamp. The platform API accepts a Platform Administrator's key, while Organization routes still require real Membership.
 
 Password change/reset updates the security stamp so existing refresh tokens fail later validation. Logout clears the browser cookie but does not revoke a separately held persisted refresh token.
 
@@ -33,6 +35,10 @@ Self-registration is disabled. Accounts enter through Platform Administrator pro
 ## Organization creation and membership flows
 
 Any authenticated user, including a Platform Administrator, creates an Organization through `POST /organizations` using only a name and optional description. The server records that user as the immutable Organization Creator, creates their Owner Membership in the same transaction, and applies the platform default model configuration. The configurable per-creator limit defaults to five non-deleted Organizations; Platform Privilege does not bypass it. A Platform-provisioned user's initial Organization follows the same creator and default-model rules and counts toward that limit.
+
+Organization Owners and Admins can rename their Organization from its management page. The name editor trims surrounding whitespace and accepts 3–255 characters; saving refreshes the detail and membership-derived Organization selector.
+
+Both creation paths provision an Organization-scoped LiteLLM team after commit when the proxy is configured. Team identity, reconciliation, and the platform-administered spend ceiling stored on the Organization are owned by [Costs](costs.md#organization-llm-budgets).
 
 Organization Name is a mutable display label and is intentionally not globally unique. Platform View disambiguates same-named Organizations with owner identity and Organization ID, and its allowlisted Organization detail projection exposes immutable Creator identity without exposing Organization configuration. A separate globally unique human-facing handle is deferred until a URL, CLI, API, or support workflow requires one.
 

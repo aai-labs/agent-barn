@@ -1,4 +1,4 @@
-import { Page } from "@playwright/test";
+import { Page, type Request, type Route } from "@playwright/test";
 
 export const MOCK_AGENT_ID = "33333333-3333-4333-8333-333333333333";
 export const MOCK_TEMPLATE_ID = "44444444-4444-4444-8444-444444444444";
@@ -105,13 +105,262 @@ export const mockAgent = {
   // Started on what it resolves to, so the default fixture reports nothing pending.
   running_model: "litellm/gpt-5-mini",
   pending_model: "",
+  // Started on the current platform code, so the default fixture offers no update.
+  update_available: false,
   approval_mode: "auto",
   secrets: [],
   skills: [],
   configured_platform_keys: ["slack", "discord"],
   allowed_actions: mockAgentAllowedActions,
+  creator: { id: MOCK_MEMBER_USER_ID, full_name: "Tommy", email: "tommy@example.com" },
+  last_message_at: "2026-05-14T09:14:00Z",
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
+};
+
+export const mockAgentLlmBudget = {
+  limit_usd: 25,
+  own_limit_usd: null,
+  source: "default",
+  default_limit_usd: 25,
+  organization_limit_usd: 100,
+  window: "30d",
+  state: "ok",
+  spend_usd: 7.5,
+  renews_at: "2026-10-01T00:00:00Z",
+  can_manage: true,
+};
+
+export const mockAgentLlmBudgetRows = [
+  {
+    agent_id: "33333333-3333-4333-8333-333333333333",
+    agent_name: "Support Bot",
+    limit_usd: 25,
+    own_limit_usd: null,
+    source: "default",
+    state: "ok",
+    spend_usd: 7.5,
+  },
+  {
+    agent_id: "44444444-4444-4444-8444-000000000002",
+    agent_name: "Research Bot",
+    limit_usd: 60,
+    own_limit_usd: 60,
+    source: "agent",
+    state: "exhausted",
+    spend_usd: 60.2,
+  },
+];
+
+// --- Activity ---------------------------------------------------------------
+//
+// Modelled on the case the tab exists to catch: a heartbeat waking every half
+// hour, resending a huge context, with nobody in the conversation.
+
+export const mockActivityBackgroundTrigger = {
+  trigger: "background",
+  wakes: 8,
+  calls: 32,
+  spend: 51.55,
+  prompt_tokens: 3_700_000,
+};
+
+export const mockActivityUserTrigger = {
+  trigger: "user",
+  wakes: 0,
+  calls: 0,
+  spend: 0,
+  prompt_tokens: 0,
+};
+
+export const mockAgentActivitySummary = {
+  agent_id: MOCK_AGENT_ID,
+  period: null,
+  from_date: "2026-09-10T00:00:00Z",
+  to_date: "2026-09-17T00:00:00Z",
+  granularity: "day",
+  totals: {
+    calls: 32,
+    wakes: 8,
+    spend: 51.55,
+    prompt_tokens: 3_700_000,
+    completion_tokens: 82_000,
+  },
+  prompt_tokens_per_call: { avg: 77_000, median: 81_600, p95: 121_400, max: 128_900 },
+  by_trigger: [mockActivityUserTrigger, mockActivityBackgroundTrigger],
+  by_bucket: [
+    {
+      bucket: "2026-09-10T00:00:00Z",
+      calls: 12,
+      prompt_tokens: 1_400_000,
+      completion_tokens: 32_000,
+      spend: 20.1,
+    },
+    { bucket: "2026-09-11T00:00:00Z", calls: 0, prompt_tokens: 0, completion_tokens: 0, spend: 0 },
+    {
+      bucket: "2026-09-12T00:00:00Z",
+      calls: 20,
+      prompt_tokens: 2_300_000,
+      completion_tokens: 50_000,
+      spend: 31.45,
+    },
+  ],
+  wake_cadence_seconds: 1800,
+};
+
+export const mockAgentWake = {
+  started_at: "2026-09-12T11:29:00Z",
+  ended_at: "2026-09-12T11:29:42Z",
+  trigger: "background",
+  calls: 4,
+  spend: 6.32,
+  prompt_tokens: 468_000,
+  completion_tokens: 3_100,
+  min_prompt_tokens: 116_900,
+  max_prompt_tokens: 117_100,
+  models: ["litellm/openrouter/z-ai/glm-5.3"],
+};
+
+export const mockUserAgentWake = {
+  ...mockAgentWake,
+  started_at: "2026-09-12T09:02:00Z",
+  ended_at: "2026-09-12T09:02:11Z",
+  trigger: "user",
+  calls: 2,
+  spend: 0.42,
+  min_prompt_tokens: 8_200,
+  max_prompt_tokens: 8_200,
+};
+
+export const mockAgentActivityCall = {
+  request_id: "gen-abc-123",
+  occurred_at: "2026-09-12T11:29:00Z",
+  model: "litellm/openrouter/z-ai/glm-5.3",
+  status: "success",
+  spend: 1.58,
+  prompt_tokens: 117_000,
+  completion_tokens: 780,
+  request_duration_ms: 4120,
+};
+
+export const MOCK_RESTORE_POINT_ID = "55555555-5555-4555-8555-555555555555";
+export const MOCK_PRE_RESTORE_POINT_ID = "66666666-6666-4666-8666-666666666666";
+
+export const mockRestorePointManifest = {
+  version: 2,
+  agent_type: "openclaw",
+  template_key: MOCK_TEMPLATE_KEY,
+  template_version: 1,
+  template_selection_type: "organization",
+  override_version: null,
+  model: "litellm/gpt-5-mini",
+  effective_model: "litellm/gpt-5-mini",
+  approval_mode: "auto",
+  verbose_mode: false,
+  skills: [],
+};
+
+export const mockRestorePoint = {
+  id: MOCK_RESTORE_POINT_ID,
+  agent_id: MOCK_AGENT_ID,
+  label: "Before the rewrite",
+  status: "READY",
+  origin: "MANUAL",
+  agent_type: "openclaw",
+  archive_bytes: 2_097_152,
+  file_count: 42,
+  failure_reason: null,
+  reapply_configuration: false,
+  configuration_error: null,
+  config_manifest: mockRestorePointManifest,
+  created_at: "2026-05-14T09:00:00Z",
+  captured_at: "2026-05-14T09:01:00Z",
+};
+
+export const mockCapturingRestorePoint = {
+  ...mockRestorePoint,
+  status: "CAPTURING",
+  archive_bytes: null,
+  file_count: null,
+  captured_at: null,
+};
+
+export const mockPreRestorePoint = {
+  ...mockRestorePoint,
+  id: MOCK_PRE_RESTORE_POINT_ID,
+  label: "Automatic backup before restore",
+  origin: "PRE_RESTORE",
+};
+
+export function mockRestorePointsPage({
+  items = [mockRestorePoint],
+  cap = 5,
+  manualCount,
+}: {
+  items?: unknown[];
+  cap?: number;
+  manualCount?: number;
+} = {}) {
+  return {
+    page: 1,
+    page_size: 20,
+    total: items.length,
+    items,
+    cap,
+    manual_count: manualCount ?? items.length,
+  };
+}
+
+// The classified failure the API returns for the quota exhaustion reported in
+// AF staging: the same shape on the Agent read and as a failed start's error body.
+export const mockProvisioningError = {
+  code: "QUOTA_EXHAUSTED",
+  category: "quota_exhausted",
+  summary:
+    "The agent could not start — its namespace has run out of resource quota. " +
+    "Ask an administrator to free up or raise it, then start the agent again.",
+  detail:
+    "requests.storage: requested 1Gi, used 30Gi, limit 30Gi (quota example-quota, creating persistentvolumeclaims)",
+};
+
+// A failure whose code this build does not know, for the fallback copy path.
+export const mockUnknownProvisioningError = {
+  code: "PROVISIONING_FAILED",
+  category: "unknown",
+  summary:
+    "The agent could not start — creating its runtime resources failed unexpectedly. " +
+    "Try again; if it keeps failing, ask an administrator to check the cluster.",
+  detail: null,
+};
+
+export const mockRbacProvisioningError = {
+  code: "CLUSTER_PERMISSION_DENIED",
+  category: "cluster_permission_denied",
+  summary:
+    "The agent could not start — Agent Barn's service account is missing RBAC permission to " +
+    "create the agent's resources. Ask an administrator to review them.",
+  detail: "cannot create deployments",
+};
+
+export const mockAgentInError = {
+  ...mockAgent,
+  status: "ERROR",
+  running_model: "",
+  last_error: mockProvisioningError,
+};
+export const mockWebChatApprovalPrompt = {
+  id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  direction: "OUTBOUND",
+  content: "```\nrm -rf build\n```\nReply with one of: once, deny",
+  occurred_at: "2026-09-01T08:00:00Z",
+  delivery_status: "SUCCEEDED",
+  cancel_requested_at: null,
+  approval: {
+    approval_id: "run_1:1726051234.5",
+    command: "rm -rf build",
+    choices: ["once", "deny"],
+    choice_labels: { once: "Allow once", deny: "Deny" },
+  },
 };
 
 export const mockSecret = {
@@ -287,6 +536,31 @@ export function mockVersionsForKey(templateKey: string) {
 export class AgentDataSupport {
   constructor(private page: Page) {}
 
+  async interceptWebChatApprovalPrompt({
+    answer,
+    prompt = mockWebChatApprovalPrompt,
+  }: {
+    answer: (route: Route, request: Request) => Promise<void>;
+    prompt?: typeof mockWebChatApprovalPrompt;
+  }) {
+    await this.page.route("**/api/v1/organizations/*/agents/*/web-chat/**", async (route, request) => {
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith("/messages") && request.method() === "POST") {
+        await answer(route, request);
+        return;
+      }
+      if (path.endsWith("/messages")) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([prompt]) });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: path.endsWith("/stream") ? "text/event-stream" : "application/json",
+        body: path.endsWith("/stream") ? ": keep-alive\n\n" : "[]",
+      });
+    });
+  }
+
   async interceptGetAgentsRequest({
     status = 200,
     detail = "Unable to load agents",
@@ -378,6 +652,64 @@ export class AgentDataSupport {
         });
       },
     );
+  }
+
+  /** Serves the Agent's spend limit and captures what a PUT sent. The PUT answers
+   *  with `saved`, or the GET body adjusted to the requested amount. */
+  async interceptAgentLlmBudget({
+    agentId = MOCK_AGENT_ID,
+    budget,
+    saveStatus = 200,
+    saveDetail = "Unable to save the spend limit",
+  }: {
+    agentId?: string;
+    budget?: Record<string, unknown>;
+    saveStatus?: number;
+    saveDetail?: string;
+  } = {}) {
+    const requests: unknown[] = [];
+    let current: Record<string, unknown> = { ...mockAgentLlmBudget, ...(budget ?? {}) };
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/llm-budget`, async (route) => {
+      const method = route.request().method();
+      if (method === "PUT") {
+        const body = route.request().postDataJSON() as { budget_usd: number | null };
+        requests.push(body);
+        if (saveStatus >= 400) {
+          await route.fulfill({
+            status: saveStatus,
+            contentType: "application/json",
+            body: JSON.stringify({ detail: saveDetail }),
+          });
+          return;
+        }
+        const own = body.budget_usd;
+        current = {
+          ...current,
+          own_limit_usd: own,
+          limit_usd: own ?? current.default_limit_usd,
+          source: own == null ? "default" : "agent",
+        };
+      } else if (method !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) });
+    });
+    return requests;
+  }
+
+  async interceptAgentLlmBudgets({ rows }: { rows?: unknown[] } = {}) {
+    await this.page.route("**/api/v1/organizations/*/agents/llm-budgets", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(rows ?? mockAgentLlmBudgetRows),
+      });
+    });
   }
 
   async interceptGetAgentConfigurationRequest({
@@ -515,6 +847,18 @@ export class AgentDataSupport {
     );
   }
 
+  async interceptGetAgentDiagnosticsRequest({ status = 200, body = {} }: { status?: number; body?: object } = {}) {
+    await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/diagnostics`, async (route) => {
+      await route.fulfill({ status, contentType: "application/json", body: JSON.stringify({
+        observed_at: "2026-09-17T12:30:00Z", available: true, pod_created_at: "2026-09-17T11:59:00Z",
+        restart_count: 21, ready: false, waiting_reason: "CrashLoopBackOff", termination_reason: "Error",
+        exit_code: 1, finished_at: "2026-09-17T12:28:00Z", current_logs: ["Starting gateway"],
+        previous_logs: ["Legacy workspace setup state requires migration"],
+        current_logs_available: true, previous_logs_available: true, ...body,
+      }) });
+    });
+  }
+
   async interceptGetAgentHealthRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,
@@ -524,17 +868,20 @@ export class AgentDataSupport {
     status?: number;
     body?: unknown;
   } = {}) {
+    const requests = { count: 0 };
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/healthz`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
+      requests.count += 1;
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(body ?? { status: "ok" }),
       });
     });
+    return requests;
   }
 
   async interceptGetConversationChannelsRequest({
@@ -660,6 +1007,14 @@ export class AgentDataSupport {
     });
   }
 
+  async interceptNameSuggestionRequest({ firstName = "Brandon", status = 200 }: { firstName?: string; status?: number } = {}) {
+    await this.page.route("**/api/v1/organizations/*/agents/name-suggestion", async (route) => {
+      await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(
+        status === 200 ? { first_name: firstName } : { detail: "Suggestion unavailable" },
+      ) });
+    });
+  }
+
   async interceptCreateAgentRequest({
     status = 201,
     detail = "Unable to create agent",
@@ -704,22 +1059,32 @@ export class AgentDataSupport {
     });
   }
 
+  /**
+   * `detail` is fulfilled verbatim, so a test can send either a plain string or
+   * the structured provisioning failure a failed start really returns.
+   */
   async interceptStartAgentRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,
     detail = "Unable to start agent",
     body,
+    networkError = false,
   }: {
     agentId?: string;
     status?: number;
-    detail?: string;
+    detail?: unknown;
     body?: unknown;
+    networkError?: boolean;
   } = {}) {
     await this.page.route(
       `**/api/v1/organizations/*/agents/${agentId}/start`,
       async (route) => {
         if (route.request().method() !== "POST") {
           await route.fallback();
+          return;
+        }
+        if (networkError) {
+          await route.abort("failed");
           return;
         }
         await route.fulfill({
@@ -1131,5 +1496,214 @@ export class AgentDataSupport {
         });
       },
     );
+  }
+
+  /**
+   * Restore point list. `body` may be a function, resolved per request, so a test
+   * can move a capture along between reads — which is how the real thing behaves,
+   * since the API resolves a row only when someone reads it.
+   */
+  async interceptGetRestorePointsRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load restore points",
+    body,
+    secondPageBody,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown | (() => unknown);
+    secondPageBody?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/restore-points*`,
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        const requestedPage = Number(new URL(route.request().url()).searchParams.get("page") ?? 1);
+        const firstPage =
+          typeof body === "function" ? (body as () => unknown)() : (body ?? mockRestorePointsPage());
+        const payload = requestedPage > 1 && secondPageBody ? secondPageBody : firstPage;
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : payload),
+        });
+      },
+    );
+  }
+
+  async interceptCreateRestorePointRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 202,
+    detail = "Unable to capture a restore point",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/restore-points`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400 ? { detail } : (body ?? mockCapturingRestorePoint),
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptRestoreRestorePointRequest({
+    agentId = MOCK_AGENT_ID,
+    restorePointId = MOCK_RESTORE_POINT_ID,
+    status = 202,
+    detail = "Unable to restore",
+    body,
+  }: {
+    agentId?: string;
+    restorePointId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/restore-points/${restorePointId}/restore`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(
+            status >= 400 ? { detail } : (body ?? { ...mockRestorePoint, status: "RESTORING" }),
+          ),
+        });
+      },
+    );
+  }
+
+  async interceptDeleteRestorePointRequest({
+    agentId = MOCK_AGENT_ID,
+    restorePointId = MOCK_RESTORE_POINT_ID,
+    status = 204,
+    detail = "Unable to delete",
+  }: {
+    agentId?: string;
+    restorePointId?: string;
+    status?: number;
+    detail?: string;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/restore-points/${restorePointId}`,
+      async (route) => {
+        if (route.request().method() !== "DELETE") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: status >= 400 ? "application/json" : "text/plain",
+          body: status >= 400 ? JSON.stringify({ detail }) : "",
+        });
+      },
+    );
+  }
+
+  // Matched by RegExp rather than glob: the summary route differs from its two
+  // children only by what follows "activity", and a glob cannot say "or nothing".
+  async interceptGetAgentActivityRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    detail = "Unable to load activity",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      new RegExp(`/agents/${agentId}/activity(\\?|$)`),
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockAgentActivitySummary)),
+        });
+      },
+    );
+  }
+
+  async interceptGetAgentWakesRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    items = [mockAgentWake],
+    onRequest,
+  }: {
+    agentId?: string;
+    status?: number;
+    items?: unknown[];
+    onRequest?: (url: URL) => void;
+  } = {}) {
+    await this.page.route(new RegExp(`/agents/${agentId}/activity/wakes`), async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const url = new URL(route.request().url());
+      onRequest?.(url);
+      const trigger = url.searchParams.get("trigger");
+      const matching = trigger
+        ? items.filter((item) => (item as { trigger: string }).trigger === trigger)
+        : items;
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify({ page: 1, page_size: 25, total: matching.length, items: matching }),
+      });
+    });
+  }
+
+  async interceptGetAgentActivityCallsRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 200,
+    items = [mockAgentActivityCall],
+    onRequest,
+  }: {
+    agentId?: string;
+    status?: number;
+    items?: unknown[];
+    onRequest?: (url: URL) => void;
+  } = {}) {
+    await this.page.route(new RegExp(`/agents/${agentId}/activity/calls`), async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      onRequest?.(new URL(route.request().url()));
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify({ page: 1, page_size: 50, total: items.length, items }),
+      });
+    });
   }
 }

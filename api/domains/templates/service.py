@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -297,9 +297,15 @@ class TemplateService:
         in_use = template_key in self.repository.get_keys_used_by_live_agents(org_id, [template_key])
         return read.model_copy(update={"in_use": in_use})
 
-    def list_template_versions(self, template_key: str, context: CurrentUserContext) -> list[TemplateRead]:
+    def list_template_versions(
+        self, template_key: str, context: CurrentUserContext, *, include_platform: bool = False
+    ) -> list[TemplateRead]:
         org_id = self._org_id(context)
-        versions = self.repository.resolve_versions(org_id, template_key)
+        versions = (
+            self.repository.get_shared_versions(org_id, template_key)
+            if include_platform
+            else self.repository.resolve_versions(org_id, template_key)
+        )
         if not versions:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -360,27 +366,46 @@ class TemplateService:
         return self._org_draft_read(draft)
 
     def start_org_draft(
-        self, template_key: str, source_version: int | None, context: CurrentUserContext
+        self,
+        template_key: str,
+        source_version: int | None,
+        context: CurrentUserContext,
+        *,
+        source_scope: Literal["organization", "platform"] | None = None,
     ) -> AgentTemplateDraftRead:
         """Get-or-create the single in-flight draft for an organization's view of
         a lineage, seeded from a selected version or, by default, the latest.
 
-        The source may be a PlatformTemplate the organization has never forked;
-        publishing the draft then creates Org v1 and records the fork origin,
-        exactly as a PATCH used to."""
+        Explicit scope selects one independent version sequence; an omitted
+        scope retains Organization-first resolution. Restoring a Platform
+        snapshot preserves the fork origin and updates only its baseline."""
         org_id = self._org_id(context)
         existing_draft = self.repository.get_org_draft(org_id, template_key)
-        source = (
-            self.repository.resolve_template(org_id, template_key, source_version)
-            if source_version is not None
-            else self.repository.resolve_latest_template(org_id, template_key)
-        )
+        source: AgentTemplate | PlatformTemplate | None
+        if source_scope == "platform":
+            source = (
+                self.repository.get_platform_template_by_key_version(template_key, source_version)
+                if source_version is not None
+                else self.repository.get_latest_platform_template(template_key)
+            )
+        elif source_scope == "organization":
+            source = (
+                self.repository.get_org_template_by_key_version(org_id, template_key, source_version)
+                if source_version is not None
+                else self.repository.get_latest_org_template(org_id, template_key)
+            )
+        else:
+            source = (
+                self.repository.resolve_template(org_id, template_key, source_version)
+                if source_version is not None
+                else self.repository.resolve_latest_template(org_id, template_key)
+            )
         if existing_draft is None and source is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {template_key} not found")
         self.permission_policy.require_organization(context, org_id, PermissionKey.TEMPLATE_MANAGE)
 
         if existing_draft is not None:
-            if source_version is not None:
+            if source_version is not None or source_scope is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="A draft already exists; discard it before restoring another published version",
@@ -390,10 +415,16 @@ class TemplateService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {template_key} not found")
 
         is_platform_source = isinstance(source, PlatformTemplate)
+        current_org = self.repository.get_latest_org_template(org_id, template_key) if is_platform_source else None
+        fork_origin = (
+            current_org.forked_from_platform_template_id
+            if current_org is not None and current_org.forked_from_platform_template_id is not None
+            else source.id
+        )
         draft = AgentTemplateDraft(
             organization_id=org_id,
             forked_from_platform_template_id=(
-                source.id if is_platform_source else source.forked_from_platform_template_id
+                fork_origin if is_platform_source else source.forked_from_platform_template_id
             ),
             fork_baseline_platform_template_id=(
                 source.id

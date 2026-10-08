@@ -4,7 +4,17 @@ from uuid import UUID
 import yaml
 from kubernetes import client
 
-from .common import _labels, _resource_name
+from api.domains.communications.models import ConversationLocation
+
+from .common import _labels, _resource_name, _setting_ids
+from .memory import (
+    MEMORY_COMMAND,
+    MEMORY_TOOL_INSTRUCTIONS,
+    MEMORY_WRITE_TOOL,
+    hermes_memory_settings,
+    memory_command_mount,
+    memory_command_volume,
+)
 
 # Matches OpenClaw, so limits.memory (100Gi quota) never binds before
 # requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
@@ -23,16 +33,56 @@ AGENT_RESOURCES = client.V1ResourceRequirements(
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
+_OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
+HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
+HERMES_MEMORY_SETUP_PY: str = (_SCRIPTS / "memory-setup.py").read_text()
+MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
+OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
+OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
+AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
+_HERMES_APPROVAL_TIMEOUT_SECONDS = 300
+_HERMES_HEADLESS_APPROVAL_MODE = "deny"
+# Hermes shows a first-message onboarding notice whenever this variable is
+# absent. This deliberately cannot be a real channel or chat ID: it suppresses
+# that notice without accidentally making an arbitrary real channel the
+# destination for proactive messages.
+_NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
+# Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
+_HERMES_AUXILIARY_TASKS = (
+    "vision",
+    "web_extract",
+    "compression",
+    "skills_hub",
+    "approval",
+    "mcp",
+    "title_generation",
+    "memory_query_rewrite",
+    "tts_audio_tags",
+    "triage_specifier",
+    "kanban_decomposer",
+    "profile_describer",
+    "goal_judge",
+    "curator",
+    "monitor",
+    "background_review",
+)
+
+HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
+
+
+# Persistent working directory for the agent's terminal and messaging layer.
+HERMES_WORKSPACE_DIR = "/workspace"
 
 
 def _hermes_config_core(
@@ -55,7 +105,7 @@ def _hermes_config_core(
         },
         "terminal": {
             "backend": "local",
-            "cwd": "/workspace",
+            "cwd": HERMES_WORKSPACE_DIR,
             "timeout": 120,
         },
         "memory": {
@@ -79,10 +129,23 @@ def _hermes_config_core(
         # Agent Barn materializes pinned Skills in the persistent workspace,
         # while Hermes otherwise scans only $HERMES_HOME/skills.
         "skills": {
-            "external_dirs": ["/workspace/skills"],
+            "external_dirs": [f"{HERMES_WORKSPACE_DIR}/skills"],
         },
         "approvals": {
             "mode": _HERMES_APPROVAL_MODE.get(approval_mode, "smart"),
+            "timeout": _HERMES_APPROVAL_TIMEOUT_SECONDS,
+            "cron_mode": _HERMES_HEADLESS_APPROVAL_MODE,
+            "single_query_mode": _HERMES_HEADLESS_APPROVAL_MODE,
+        },
+        # Left on "auto", auxiliary tasks resolve via provider=openrouter, find no
+        # OPENROUTER_API_KEY, and fall back to a keyless client the LiteLLM proxy
+        # rejects: smart approval escalated every flagged command, and title
+        # generation and vision failed. "custom" reuses OPENAI_API_KEY from the
+        # runtime secret against the same proxy. The main model stays on
+        # "openrouter" because "custom" there drops that key.
+        "auxiliary": {
+            task: {"provider": "custom", "base_url": litellm_base_url, "model": model_name}
+            for task in _HERMES_AUXILIARY_TASKS
         },
     }
 
@@ -91,13 +154,185 @@ def build_hermes_gateway_config(
     model: str,
     litellm_base_url: str,
     approval_mode: str = "auto",
+    native_slack: bool = False,
+    native_discord: bool = False,
+    discord_require_mention: bool = True,
+    telegram_settings: dict | None = None,
+    runtime_teams: bool = False,
+    verbose_mode: bool = False,
+    memory_enabled: bool = False,
 ) -> dict:
-    return _hermes_config_core(
-        model,
-        litellm_base_url,
-        enabled_plugins=["telemetry-push"],
-        approval_mode=approval_mode,
-    )
+    plugins = ["telemetry-push"]
+    if native_slack or native_discord or telegram_settings is not None or runtime_teams:
+        plugins.append("agentbarn-observer")
+    config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
+    config["memory"]["provider"] = "hindsight" if memory_enabled else ""
+    if memory_enabled:
+        config["memory"]["hindsight"] = hermes_memory_settings()
+    if native_slack:
+        config["slack"] = {
+            "reply_in_thread": True,
+            "reply_broadcast": False,
+            # Unknown DM senders would otherwise receive a pairing code.
+            "unauthorized_dm_behavior": "ignore",
+        }
+        # Slack's markdown block renders standard markdown, tables included, where
+        # mrkdwn would fence them as code. Hermes resends plain mrkdwn if rejected.
+        config["platforms"] = {"slack": {"extra": {"markdown_blocks": True}}}
+        # The Agent's Verbose mode. Progress accumulates in one edited message
+        # rather than a permanent Slack line per tool call.
+        config["display"]["platforms"]["slack"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if native_discord:
+        config["discord"] = {
+            # Agent Barn's Discord contract requires the same mention policy in
+            # parent channels and threads. Hermes otherwise keeps responding in
+            # a thread after its first turn without another mention.
+            "require_mention": discord_require_mention,
+            "thread_require_mention": discord_require_mention,
+        }
+        config["display"]["platforms"]["discord"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if telegram_settings is not None:
+        # Unknown DM senders would otherwise receive a pairing code.
+        telegram: dict = {"unauthorized_dm_behavior": "ignore"}
+        if telegram_settings.get("group_policy", "allowlist") != "open" and not _setting_ids(
+            telegram_settings, "allowed_chat_ids"
+        ):
+            # An empty chat allowlist means "any group" to Hermes; an empty group
+            # sender allowlist is the only gate that turns groups off entirely.
+            telegram["group_allow_from"] = []
+        config["telegram"] = telegram
+        config["display"]["platforms"]["telegram"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if runtime_teams:
+        config["display"]["platforms"]["teams"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    return config
+
+
+def native_slack_env(
+    settings: dict,
+    credentials: dict,
+    home_channel: ConversationLocation | None = None,
+) -> dict[str, str]:
+    """Map a Slack Connection onto the native Hermes Slack adapter's environment.
+
+    ``home_channel`` is the Connection's resolved default delivery target, which
+    native cron jobs without an origin deliver to.
+
+    ponytail: Hermes has one user allowlist for channels and DMs alike, so a DM
+    allowlist also restricts channel senders; model it separately if that matters
+    beyond the spike.
+    """
+    env = {
+        "SLACK_BOT_TOKEN": credentials["bot_token"],
+        "SLACK_APP_TOKEN": credentials["app_token"],
+        "SLACK_REQUIRE_MENTION": "true",
+        "SLACK_THREAD_REQUIRE_MENTION": "true" if settings.get("thread_mention_policy") != "start_only" else "false",
+        "SLACK_DISABLE_DMS": "true" if settings.get("dm_policy", "off") == "off" else "false",
+    }
+    if settings.get("group_policy", "allowlist") == "allowlist":
+        env["SLACK_ALLOWED_CHANNELS"] = ",".join(settings.get("channel_ids") or [])
+    if settings.get("dm_policy") == "allowlist":
+        env["SLACK_ALLOWED_USERS"] = ",".join(settings.get("dm_user_ids") or [])
+    else:
+        env["SLACK_ALLOW_ALL_USERS"] = "true"
+    if home_channel is not None:
+        env["SLACK_HOME_CHANNEL"] = home_channel.id
+        env["SLACK_HOME_CHANNEL_NAME"] = home_channel.display_name or ""
+        if home_channel.thread_id:
+            env["SLACK_HOME_CHANNEL_THREAD_ID"] = home_channel.thread_id
+    else:
+        # Hermes uses only the presence of this variable to decide whether to
+        # show its home-channel onboarding message. A sentinel keeps an
+        # intentionally-unconfigured Connection quiet; an originless native
+        # cron delivery still fails safely rather than landing in a real channel.
+        env["SLACK_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
+
+
+def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map the Discord Connection's native Hermes authorization gates."""
+    env = {
+        "DISCORD_BOT_TOKEN": credentials["bot_token"],
+        "DISCORD_ALLOW_ALL_USERS": "true" if settings.get("allow_all_users") else "false",
+    }
+    for settings_key, env_key in (
+        ("allowed_channel_ids", "DISCORD_ALLOWED_CHANNELS"),
+        ("allowed_user_ids", "DISCORD_ALLOWED_USERS"),
+        ("allowed_role_ids", "DISCORD_ALLOWED_ROLES"),
+    ):
+        if values := _setting_ids(settings, settings_key):
+            env[env_key] = ",".join(values)
+    if home_channel_id := settings.get("home_channel_id"):
+        env["DISCORD_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["DISCORD_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
+
+
+def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map a Telegram Connection onto the native Hermes Telegram adapter.
+
+    Groups always require a mention (or a reply to the bot); DMs never do. Hermes
+    authorizes a sender if any gate admits them, so a DM allowlist also admits
+    those users in groups; the adapter's chat allowlist still confines groups.
+    ``build_hermes_gateway_config(telegram_settings=...)`` closes groups when the
+    allowlist is empty.
+    """
+    env = {
+        "TELEGRAM_BOT_TOKEN": credentials["bot_token"],
+        "TELEGRAM_REQUIRE_MENTION": "true",
+    }
+    if settings.get("group_policy", "allowlist") == "open":
+        env["TELEGRAM_GROUP_ALLOWED_CHATS"] = "*"
+    elif chat_ids := _setting_ids(settings, "allowed_chat_ids"):
+        # The adapter drops other groups; the gateway admits any member of these.
+        env["TELEGRAM_ALLOWED_CHATS"] = env["TELEGRAM_GROUP_ALLOWED_CHATS"] = ",".join(chat_ids)
+    dm_policy = settings.get("dm_policy", "off")
+    if dm_policy == "open":
+        env["TELEGRAM_ALLOW_ALL_USERS"] = "true"
+    elif dm_policy == "allowlist" and (user_ids := _setting_ids(settings, "allowed_user_ids")):
+        env["TELEGRAM_ALLOWED_USERS"] = ",".join(user_ids)
+    if home_channel_id := settings.get("home_channel_id"):
+        env["TELEGRAM_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["TELEGRAM_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
+
+
+def runtime_teams_env(settings: dict, credentials: dict) -> dict[str, str]:
+    """Map a Teams Connection onto Hermes' runtime-owned Bot Framework adapter.
+
+    The public Agent Barn webhook verifies Bot Framework authentication and
+    applies the Connection's DM/channel policy before forwarding an activity.
+    The private runtime listener therefore admits the already-authorized event.
+    """
+    env = {
+        "TEAMS_CLIENT_ID": credentials["app_id"],
+        "TEAMS_CLIENT_SECRET": credentials["app_password"],
+        "TEAMS_TENANT_ID": credentials["tenant_id"],
+        "TEAMS_ALLOW_ALL_USERS": "true",
+        "TEAMS_PORT": "3978",
+    }
+    if home_channel_id := settings.get("home_channel_id"):
+        env["TEAMS_HOME_CHANNEL"] = str(home_channel_id)
+    else:
+        env["TEAMS_HOME_CHANNEL"] = _NO_HOME_CHANNEL
+    return env
 
 
 def build_hermes_config_map(
@@ -117,21 +352,32 @@ def build_hermes_config_map(
     gog_setup_sh: str | None = None,
     gog_shim_sh: str | None = None,
     skills_json: str | None = None,
+    memory_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
-        "TOOLS.md": tools_md,
+        "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn-memory": MEMORY_COMMAND,
+        "TOOLS.md": tools_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "AGENTS.md": agents_md,
         "BOOT.md": boot_md,
         "HEARTBEAT.md": heartbeat_md,
         "hermes-config.yaml": yaml.dump(hermes_config, default_flow_style=False, sort_keys=False),
         "telemetry-push-plugin.yaml": TELEMETRY_PUSH_PLUGIN_YAML,
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
+        "agentbarn-observer-plugin.yaml": OBSERVER_PLUGIN_YAML,
+        "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
+        "config-merge.py": HERMES_CONFIG_MERGE_PY,
+        "memory-setup.py": HERMES_MEMORY_SETUP_PY,
+        "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
+        "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
+        "retire-messaging.py": RETIRE_MESSAGING_PY,
+        "boot-run.py": HERMES_BOOT_RUN_PY,
     }
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
@@ -165,6 +411,7 @@ def build_secret_hermes_runtime(
     litellm_api_key: str,
     litellm_base_url: str,
     verbose_mode: bool = False,
+    approval_mode: str = "auto",
 ) -> client.V1Secret:
     return client.V1Secret(
         metadata=client.V1ObjectMeta(
@@ -177,7 +424,10 @@ def build_secret_hermes_runtime(
             "OPENAI_BASE_URL": litellm_base_url,
             "OPENROUTER_BASE_URL": litellm_base_url,
             "API_SERVER_ENABLED": "true",
-            "API_SERVER_HOST": "0.0.0.0",
+            # Only in-pod callers (adapter, boot-run, healthz) reach the API server,
+            # and the Service does not expose it; loopback keeps the unsandboxed
+            # terminal off the pod network.
+            "API_SERVER_HOST": "127.0.0.1",
             "API_SERVER_PORT": "8642",
             "API_SERVER_KEY": runtime_api_key,
             "API_SERVER_MODEL_NAME": agent_name,
@@ -185,7 +435,9 @@ def build_secret_hermes_runtime(
             "RUNTIME_API_URL": "http://127.0.0.1:8642",
             "RUNTIME_MODEL": agent_name,
             "RUNTIME_KIND": "hermes",
+            "AGENT_TRIGGER_RECEIPT_PATH": "/opt/data/agent-trigger-receipts.sqlite3",
             "VERBOSE_MODE": "true" if verbose_mode else "false",
+            "APPROVAL_MODE": approval_mode,
         },
     )
 
@@ -215,6 +467,7 @@ def build_hermes_deployment(
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
+                    automount_service_account_token=False,
                     image_pull_secrets=(
                         [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
                     ),
@@ -228,6 +481,10 @@ def build_hermes_deployment(
                                 "mkdir -p /opt/data/workspace && chown -R hermes:hermes /opt/data",
                             ],
                             security_context=client.V1SecurityContext(run_as_user=0),
+                            # A pod is charged the larger of its containers added up and its biggest
+                            # init container. With no block here the LimitRange fills one in, and it
+                            # is bigger than the agent's, so every agent would cost more than AGENT_RESOURCES.
+                            resources=AGENT_RESOURCES,
                             volume_mounts=[
                                 client.V1VolumeMount(name="data", mount_path="/opt/data"),
                             ],
@@ -265,11 +522,12 @@ def build_hermes_deployment(
                                 # agent's shell is anchored in the wrong place and
                                 # relative writes miss the persistent /workspace.
                                 # ocbw sets both alongside terminal.cwd — mirror it.
-                                client.V1EnvVar(name="TERMINAL_CWD", value="/workspace"),
-                                client.V1EnvVar(name="MESSAGING_CWD", value="/workspace"),
+                                client.V1EnvVar(name="TERMINAL_CWD", value=HERMES_WORKSPACE_DIR),
+                                client.V1EnvVar(name="MESSAGING_CWD", value=HERMES_WORKSPACE_DIR),
                             ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
+                                memory_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -286,13 +544,14 @@ def build_hermes_deployment(
                                 # sibling of the /opt/data content on one PVC.
                                 client.V1VolumeMount(
                                     name="data",
-                                    mount_path="/workspace",
+                                    mount_path=HERMES_WORKSPACE_DIR,
                                     sub_path="workspace",
                                 ),
                             ],
                         )
                     ],
                     volumes=[
+                        memory_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

@@ -6,7 +6,15 @@ from hamcrest import assert_that, contains_inanyorder, equal_to, has_item, is_no
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent, AgentAccess, AgentFilter, AgentStatus
+from api.domains.agents.models import (
+    Agent,
+    AgentAccess,
+    AgentFilter,
+    AgentRestorePoint,
+    AgentStatus,
+    RestorePointOrigin,
+    RestorePointStatus,
+)
 from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.organizations.models import Organization
@@ -19,6 +27,7 @@ from api.domains.rbac.catalog import (
     PermissionKey,
 )
 from api.domains.rbac.models import AgentAccessRole, AgentAccessRolePermission
+from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.shared.models import Pagination
@@ -29,6 +38,7 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
+from api.tests.helpers.memory_backend import memory_gateway_is_ready, memory_viewer_is_served
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
@@ -41,6 +51,7 @@ from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization_with_user_and_access_token,
 )
+from api.tests.steps.resource_usage import MockPrometheusModule
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -59,7 +70,7 @@ _GIVEN = [
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
         }
     ),
-    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), MockPrometheusModule()]),
     prepare_api_server(),
     create_test_client(),
     database_repo_is_ready(),
@@ -162,6 +173,7 @@ def test_member_creation_persists_creator_access_and_effective_permission_keys()
                 PermissionKey.AGENT_LIFECYCLE_MANAGE.value,
                 PermissionKey.AGENT_ACCESS_MANAGE.value,
                 PermissionKey.AGENT_SECRET_MANAGE.value,
+                PermissionKey.AGENT_MEMORY_MANAGE.value,
                 PermissionKey.ACTIVITY_READ.value,
                 PermissionKey.COST_READ.value,
             ),
@@ -365,7 +377,8 @@ def test_visible_agent_viewer_can_read_but_not_author_or_select_configuration():
 
 
 def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, memory_gateway_is_ready(), memory_viewer_is_served(), there_is_an_agent()]) as context:
+        context.backend_response = {"items": [], "total": 0}
         assigned_agent = context.agent
         there_is_an_agent(name="Hidden Aggregate")(context)
         hidden_agent = context.agent
@@ -374,15 +387,33 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
 
         assigned_urls = (
             f"{_BASE}/{assigned_agent.id}/logs",
+            f"{_BASE}/{assigned_agent.id}/diagnostics",
             f"{_BASE}/{assigned_agent.id}/conversations/channels",
             f"{_BASE}/{assigned_agent.id}/tool-calls",
+            f"{_BASE}/{assigned_agent.id}/activity",
+            f"{_BASE}/{assigned_agent.id}/activity/wakes",
+            f"{_BASE}/{assigned_agent.id}/activity/calls",
+            f"{_BASE}/{assigned_agent.id}/resource-usage",
+            f"{_BASE}/{assigned_agent.id}/memory/items",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/calls",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/monthly",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{assigned_agent.id}/filters/models",
         )
         hidden_urls = (
             f"{_BASE}/{hidden_agent.id}/logs",
+            f"{_BASE}/{hidden_agent.id}/diagnostics",
             f"{_BASE}/{hidden_agent.id}/conversations/channels",
             f"{_BASE}/{hidden_agent.id}/tool-calls",
+            f"{_BASE}/{hidden_agent.id}/activity",
+            f"{_BASE}/{hidden_agent.id}/activity/wakes",
+            f"{_BASE}/{hidden_agent.id}/activity/calls",
+            f"{_BASE}/{hidden_agent.id}/resource-usage",
+            f"{_BASE}/{hidden_agent.id}/memory/items",
             f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/calls",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/monthly",
+            f"/api/v1/organizations/{{organization_id}}/costs/agents/{hidden_agent.id}/filters/models",
         )
 
         for url in assigned_urls:
@@ -391,6 +422,21 @@ def test_assigned_activity_and_cost_endpoints_cannot_be_bypassed():
         for url in hidden_urls:
             response = context.client.get(url, headers=_auth(context))
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND), url)
+
+
+def test_assigned_overview_lists_only_visible_agents():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        assigned_agent = context.agent
+        there_is_an_agent(name="Hidden Aggregate")(context)
+        hidden_agent = context.agent
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=assigned_agent.id)(context)
+
+        response = context.client.get("/api/v1/organizations/{organization_id}/agent-overview", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that([item["id"] for item in response.json()["items"]], equal_to([str(assigned_agent.id)]))
+        assert_that(str(hidden_agent.id) in response.text, equal_to(False))
 
 
 def test_access_revocation_is_observed_on_next_request():
@@ -763,3 +809,165 @@ def test_membershipless_platform_admin_cannot_manage_agent_share_in_org_url():
         )
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def _restore_points_url(context) -> str:
+    return f"{_BASE}/{context.agent.id}/restore-points"
+
+
+def _seed_ready_restore_point(context):
+    repository: RestorePointRepository = context.injector.get(RestorePointRepository)
+    return repository.save(
+        AgentRestorePoint(
+            agent_id=context.agent.id,
+            status=RestorePointStatus.READY,
+            origin=RestorePointOrigin.MANUAL,
+            agent_type=context.agent.agent_type,
+            pvc_name=f"restore-point-{uuid7()}",
+            config_manifest={},
+        )
+    )
+
+
+def test_viewer_can_list_restore_points():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.get(_restore_points_url(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_viewer_cannot_capture_a_restore_point():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.post(_restore_points_url(context), json={}, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_viewer_cannot_restore_a_restore_point():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        restore_point = _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.post(
+            f"{_restore_points_url(context)}/{restore_point.id}/restore", headers=_auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_viewer_cannot_delete_a_restore_point():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        restore_point = _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.delete(f"{_restore_points_url(context)}/{restore_point.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_editor_can_delete_a_restore_point():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        restore_point = _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_EDITOR_ROLE_ID)(context)
+
+        response = context.client.delete(f"{_restore_points_url(context)}/{restore_point.id}", headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+
+def test_member_without_access_gets_404_for_restore_points_not_403():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        _seed_ready_restore_point(context)
+        _switch_to_member()(context)
+
+        response = context.client.get(_restore_points_url(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+@pytest.mark.parametrize("activity_access", [False, True])
+def test_agent_message_metadata_respects_activity_permission(activity_access):
+    from datetime import UTC, datetime
+
+    from api.tests.steps.conversation import there_is_a_recorded_message
+
+    occurred_at = datetime(2026, 10, 6, 11, 28, tzinfo=UTC)
+    with given(_GIVEN) as context:
+        creator_id = context.user.id
+        there_is_an_agent(created_by_user_id=creator_id)(context)
+        there_is_a_recorded_message(occurred_at)(context)
+        _switch_to_member()(context)
+        permissions = {PermissionKey.AGENT_READ}
+        if activity_access:
+            permissions.add(PermissionKey.ACTIVITY_READ)
+        role = _insert_custom_agent_role(context, permissions)
+        there_is_agent_access(access_role_id=role.id)(context)
+        for path in (_BASE, f"{_BASE}/{context.agent.id}"):
+            response = context.client.get(path, headers=_auth(context))
+            assert_that(response.status_code, equal_to(200))
+            body = response.json()["items"][0] if path == _BASE else response.json()
+            assert_that(body["creator"]["id"], equal_to(str(creator_id)))
+            assert_that(
+                body["last_message_at"],
+                equal_to(occurred_at.isoformat().replace("+00:00", "Z") if activity_access else None),
+            )
+
+
+def test_agent_list_metadata_queries_exclude_hidden_cross_org_and_deleted_agents():
+    from datetime import UTC, datetime
+
+    from api.domains.agents.authorization import AgentAuthorization
+    from api.domains.agents.models import AgentSecret, SecretProvider
+    from api.domains.conversations.repository import ConversationRepository
+    from api.tests.steps.conversation import there_is_a_recorded_message
+
+    occurred_at = datetime(2026, 10, 6, 11, 28, tzinfo=UTC)
+    with given(_GIVEN) as context:
+        creator_id = context.user.id
+        there_is_an_agent(name="Visible", created_by_user_id=creator_id)(context)
+        visible = context.agent
+        there_is_a_recorded_message(occurred_at)(context)
+        there_is_an_agent(name="Hidden", created_by_user_id=creator_id)(context)
+        hidden = context.agent
+        there_is_a_recorded_message(occurred_at)(context)
+        other_org = Organization(name="Other organization")
+        context.postgres_delegate.save(other_org)
+        there_is_an_agent(organization_id=other_org.id, created_by_user_id=creator_id)(context)
+        cross_org = context.agent
+        there_is_a_recorded_message(occurred_at)(context)
+        there_is_an_agent(deleted=True, created_by_user_id=creator_id)(context)
+        deleted = context.agent
+        there_is_a_recorded_message(occurred_at)(context)
+        for agent in (visible, hidden, cross_org, deleted):
+            context.postgres_delegate.save(
+                AgentSecret(
+                    agent_id=agent.id, provider=SecretProvider.GITHUB, secret_name="GitHub", content="encrypted-fixture"
+                )
+            )
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=visible.id)(context)
+        ids = [visible.id, hidden.id, cross_org.id, deleted.id]
+        authorization = context.injector.get(AgentAuthorization)
+        creators = context.injector.get(AgentRepository).get_creators_for_agents(
+            ids, authorization.authorization_scope(context.current_user_context, PermissionKey.AGENT_READ)
+        )
+        messages = context.injector.get(ConversationRepository).latest_message_times_for_agents(
+            ids, authorization.authorization_scope(context.current_user_context, PermissionKey.ACTIVITY_READ)
+        )
+        secrets = context.injector.get(AgentRepository).get_secret_summaries_for_agents(
+            ids, authorization.authorization_scope(context.current_user_context, PermissionKey.AGENT_READ)
+        )
+        assert_that(set(secrets), equal_to({visible.id}))
+        assert_that(secrets[visible.id][0].secret_name, equal_to("GitHub"))
+        assert_that(set(creators), equal_to({visible.id}))
+        assert_that(messages, equal_to({visible.id: occurred_at}))

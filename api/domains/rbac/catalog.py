@@ -27,12 +27,15 @@ class PermissionKey(str, Enum):
     AGENT_LIFECYCLE_MANAGE = "agent.lifecycle.manage"
     AGENT_ACCESS_MANAGE = "agent.access.manage"
     AGENT_SECRET_MANAGE = "agent.secret.manage"
+    AGENT_MEMORY_MANAGE = "agent.memory.manage"
+    MEMORY_ACCESS_MANAGE = "memory.access.manage"
     TEMPLATE_READ = "template.read"
     TEMPLATE_MANAGE = "template.manage"
     SKILL_READ = "skill.read"
     SKILL_MANAGE = "skill.manage"
     ACTIVITY_READ = "activity.read"
     COST_READ = "cost.read"
+    LLM_BUDGET_MANAGE = "llm_budget.manage"
 
 
 @dataclass(frozen=True)
@@ -81,12 +84,15 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
     ),
     PermissionSeed(UUID("8c5ae860-1a12-52e0-8902-de39b94e8145"), PermissionKey.AGENT_ACCESS_MANAGE),
     PermissionSeed(UUID("4412d59f-4e8c-5e7e-81a9-b257f99f9dbf"), PermissionKey.AGENT_SECRET_MANAGE),
+    PermissionSeed(UUID("a0a4981e-d2da-534e-9258-e7fb8e76e08e"), PermissionKey.AGENT_MEMORY_MANAGE),
+    PermissionSeed(UUID("77c885cb-06d0-5fd3-a990-60c129c273f6"), PermissionKey.MEMORY_ACCESS_MANAGE),
     PermissionSeed(UUID("a07c3af3-17d6-53cf-841a-80d509b94de4"), PermissionKey.TEMPLATE_READ),
     PermissionSeed(UUID("7b44d5da-b324-586b-9d32-d9c49c293037"), PermissionKey.TEMPLATE_MANAGE),
     PermissionSeed(UUID("36494947-1572-5cdd-8853-79a2bdbf8c4f"), PermissionKey.SKILL_READ),
     PermissionSeed(UUID("222ab95b-f67b-5275-8139-3f601574f3e1"), PermissionKey.SKILL_MANAGE),
     PermissionSeed(UUID("3f24e385-7c5e-56f0-828c-502985376af9"), PermissionKey.ACTIVITY_READ),
     PermissionSeed(UUID("b6557147-248a-5d34-8bb2-7c51944d9ee7"), PermissionKey.COST_READ),
+    PermissionSeed(UUID("5d0c2b7e-8f41-5a6c-9e3d-1b7f4a2c6e90"), PermissionKey.LLM_BUDGET_MANAGE),
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
 
@@ -107,6 +113,10 @@ _OWNER_ORGANIZATION_KEYS = frozenset(
         PermissionKey.SKILL_MANAGE,
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
+        PermissionKey.MEMORY_ACCESS_MANAGE,
+        # Organization-scoped only: an Agent's own Owner cannot set its limit, since
+        # dividing the allowance is the Organization's decision.
+        PermissionKey.LLM_BUDGET_MANAGE,
     }
 )
 _ADMIN_ORGANIZATION_KEYS = _OWNER_ORGANIZATION_KEYS - {
@@ -144,9 +154,11 @@ _EDITOR_KEYS = _VIEWER_KEYS | {
     PermissionKey.AGENT_LIFECYCLE_MANAGE,
     PermissionKey.AGENT_SECRET_MANAGE,
 }
+# Memory is Owner-only: enabling it starts paid Hindsight model calls for the Agent.
 _OWNER_KEYS = _EDITOR_KEYS | {
     PermissionKey.AGENT_DELETE,
     PermissionKey.AGENT_ACCESS_MANAGE,
+    PermissionKey.AGENT_MEMORY_MANAGE,
 }
 SYSTEM_AGENT_ACCESS_ROLE_GRANTS: dict[UUID, frozenset[PermissionKey]] = {
     AGENT_VIEWER_ROLE_ID: _VIEWER_KEYS,

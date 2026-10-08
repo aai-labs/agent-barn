@@ -5,6 +5,8 @@ import { z } from "zod";
 
 import { api } from "@/shared/api";
 
+import { openOAuthPopup, waitForOAuthPopupMessage } from "./use-oauth-popup";
+
 const AuthorizeUrlSchema = z.object({ authorizeUrl: z.string().url() });
 // email/grantedScopes are absent unless the openid scopes were requested, which
 // google_workspace always does.
@@ -16,14 +18,6 @@ const TokenSchema = z.object({
 
 // Must match the message contract the backend callback posts (google_oauth/routes.py).
 const MESSAGE_TYPE = "google-oauth";
-const POPUP_FEATURES =
-  "width=520,height=640,menubar=no,toolbar=no,location=no,status=no";
-
-type OAuthMessage = {
-  type?: string;
-  code?: string;
-  error?: string;
-};
 
 // Optional user-supplied Google client. When omitted, the app-owned client configured
 // on the backend is used.
@@ -71,12 +65,8 @@ export function useGoogleOAuth() {
       // user's service selection, so it passes services + read_only here.
       authorizeParams?: Record<string, string>,
     ): Promise<GoogleOAuthResult> => {
+      const popup = openOAuthPopup("google-oauth");
       setIsConnecting(true);
-      const popup = window.open("about:blank", "google-oauth", POPUP_FEATURES);
-      if (!popup) {
-        setIsConnecting(false);
-        throw new Error("Popup blocked. Allow popups for this site and try again.");
-      }
 
       try {
         const { data } = await api.get<{ authorizeUrl: string }>(
@@ -100,53 +90,7 @@ export function useGoogleOAuth() {
 
       try {
         // Wait for the callback popup to postMessage the authorization code back.
-        const code = await new Promise<string>((resolve, reject) => {
-          let settled = false;
-
-          const cleanup = () => {
-            window.removeEventListener("message", onMessage);
-            window.clearInterval(poll);
-          };
-          const finish = (fn: () => void) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            fn();
-          };
-
-          function onMessage(event: MessageEvent) {
-            // The callback is same-origin (served through the /api proxy); reject anything else.
-            if (event.origin !== window.location.origin) return;
-            // Pin to this call's own popup so a concurrent flow (e.g. a second popup opened
-            // before this one settles) can't resolve this promise with its code/error.
-            if (event.source !== popup) return;
-            const data = event.data as OAuthMessage;
-            if (!data || data.type !== MESSAGE_TYPE) return;
-            try {
-              popup?.close();
-            } catch {
-              /* ignore */
-            }
-            if (data.error) {
-              finish(() => reject(new Error(data.error)));
-            } else if (data.code) {
-              const authCode = data.code;
-              finish(() => resolve(authCode));
-            } else {
-              finish(() =>
-                reject(new Error("Google did not return an authorization code.")),
-              );
-            }
-          }
-
-          window.addEventListener("message", onMessage);
-          // If the user closes the popup without finishing, stop waiting.
-          const poll = window.setInterval(() => {
-            if (popup?.closed) {
-              finish(() => reject(new Error("Authentication was cancelled.")));
-            }
-          }, 500);
-        });
+        const { code } = await waitForOAuthPopupMessage(popup, MESSAGE_TYPE, "Google");
 
         // Exchange the code for a refresh token server-side. The client secret (if the
         // user supplied their own client) rides only in this authenticated request body.

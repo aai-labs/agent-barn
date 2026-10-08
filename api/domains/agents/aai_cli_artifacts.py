@@ -11,7 +11,7 @@ profile block, secret-store entries, and agents_md lines.
 
 from collections.abc import Iterable, Mapping
 
-from api.domains.agents.models import SecretContent, SecretProvider
+from api.domains.agents.models import SecretContent, SecretProvider, SharePointContent
 from api.domains.credential_gateway.models import gateway_token_env_var
 from api.domains.integrations.plugins.aai_cli_support import (
     AaiCliPlugin,
@@ -62,6 +62,12 @@ provider_secrets_map: dict[str, list[tuple[str, str]]] = {
 # the agent which --profile to pass. GitHub/Bitbucket use this as the base slug; each extra
 # configured repo appends -2, -3, ... via profile_repo_pairs.
 PROFILE_SLUGS: dict[SecretProvider, str] = {p.provider: p.aai_cli_slug for p in _aai_cli_plugins()}
+
+# SharePoint uses aai-cli's own delegated Microsoft profile. aai-cli refreshes the token and
+# stores each rotated one under this name, so the pod writes it only for a new sign-in (see
+# build_setup_sh); rewriting the original on every boot would end access 90 days after sign-in.
+SHAREPOINT_REFRESH_TOKEN_SECRET = "microsoft.sharepoint_refresh_token"
+SHAREPOINT_SIGN_IN_ID_ENV = "AAI_SHAREPOINT_SIGN_IN_ID"
 
 # Default config dir for OpenClaw (node user). Callers can pass a different home_dir for other
 # runtimes (e.g. Hermes runs as root -> home_dir="/root").
@@ -131,40 +137,18 @@ def build_local_tools_policy_md(mounted_skill_names: Iterable[str]) -> str:
 
     Kept separate from the integrations block because that one tells the agent to always
     pass ``--profile``, which is exactly wrong here — these take no profile and no
-    credentials.
-
-    A tool that produces files is only half useful if the agent cannot hand one back, and
-    naming the file in prose does not attach it. Both runtimes attach on a ``MEDIA:<path>``
-    token in the reply — Hermes matches it anywhere, OpenClaw also has a line-start-only
-    path, so the guidance insists on its own line to satisfy both.
+    credentials. Where to write a file and how to hand it back is
+    ``build_file_delivery_policy_md``'s job: it depends on the agent's Connections, not on
+    which tool made the file, and an Agent without a native chat Connection cannot share one.
     """
     lines = [CREDENTIAL_FREE_TOOLS[name] for name in mounted_skill_names if name in CREDENTIAL_FREE_TOOLS]
     if not lines:
         return ""
-    block = (
+    return (
         "\n## Local file tools (aai-cli)\n\n"
         "These work on files on this machine. They need **no credentials and no "
         "`--profile`** — do not ask the user to authenticate for them.\n\n" + "\n".join(lines) + "\n"
     )
-    block += (
-        "\nWrite files you intend to share into `/workspace` — it persists across restarts "
-        "and is readable by the messaging layer.\n"
-    )
-    block += (
-        "\n**Always send back a file you produced.** When you create or update a file the "
-        "user asked for, attach it in that same reply — do not wait to be asked, and do "
-        "not just tell them where you saved it. A path they cannot open is not an answer.\n"
-        "\nAttach it by putting `MEDIA:<absolute path>` **on its own line** at the end of the "
-        "reply:\n\n"
-        "```\n"
-        "Here's the Q1 report.\n"
-        "MEDIA:/workspace/q1-report.xlsx\n"
-        "```\n\n"
-        "Naming the file in prose does **not** attach it — delivery only happens when that "
-        "token is present. Keep it on its own line and keep the path absolute: one runtime "
-        "only scans line starts, so a token buried mid-sentence is silently ignored.\n"
-    )
-    return block
 
 
 def build_integrations_policy_md(
@@ -217,14 +201,16 @@ def build_config_toml(
     home_dir: str = "/home/node",
     *,
     gateway_base_url: str = "",
+    store_dir: str | None = None,
 ) -> str:
     """Render config.toml with one profile per provider present in ``decrypted``.
 
     Providers are emitted in a fixed (enum) order for deterministic output. Store-based providers
     reference their secret via ``*_secret``; env-based providers via ``*_env`` (token not injected).
+    ``store_dir`` places the encrypted secret store (default: beside the config); it must survive
+    restarts for tokens aai-cli rotates itself.
     """
-    dir_path = secrets_dir(home_dir)
-    blocks = [_header(dir_path)]
+    blocks = [_header(store_dir or secrets_dir(home_dir))]
     for provider in SecretProvider:
         content = decrypted.get(provider)
         plugin = _plugin_for(provider)
@@ -246,28 +232,59 @@ def build_config_toml(
 def build_setup_sh(
     store_providers: list[SecretProvider],
     home_dir: str = "/home/node",
+    *,
+    store_dir: str | None = None,
+    install_config: bool = True,
 ) -> str:
     """Render the in-pod setup script: install config.toml, then `secrets set` per store secret.
 
     The ``cp`` always runs (installs the mounted config); `secrets set` lines are emitted only for
-    store-based providers (``store_providers``), one line per secret name.
+    store-based providers (``store_providers``), one line per secret name. SharePoint's refresh
+    token is written only when its sign-in id differs from the one recorded beside the store:
+    aai-cli rotates that token in the store, and a restart must not put the original back.
+    Without SharePoint, a token left from an earlier sign-in is removed. ``install_config=False``
+    is for an agent with no aai-cli profiles, which still needs that cleanup.
     """
-    dir_path = secrets_dir(home_dir)
-    config_path = f"{dir_path}/config.toml"
+    config_dir = f"{home_dir}/.config/aai-cli"
+    config_path = f"{config_dir}/config.toml"
+    store = store_dir or config_dir
     present = set(store_providers)
     lines = [
         "#!/bin/sh",
         "set -e",
         f"export HOME={home_dir}",
-        f"mkdir -p {dir_path}",
-        f"cp /app/config/aai-cli-config.toml {config_path}",
+        f"mkdir -p {config_dir}" if store == config_dir else f"mkdir -p {config_dir} {store}",
     ]
+    if install_config:
+        lines.append(f"cp /app/config/aai-cli-config.toml {config_path}")
     for provider in SecretProvider:  # fixed order for determinism
         if provider not in present:
             continue
         for secret_name, _ in provider_secrets_map.get(provider.value, []):
+            if provider == SecretProvider.SHAREPOINT:
+                continue
             env = env_var_for(secret_name)
             lines.append(f"printf '%s' \"${env}\" | aai-cli --config {config_path} secrets set {secret_name}")
+    marker = f"{store}/{SHAREPOINT_REFRESH_TOKEN_SECRET}.sign-in"
+    if SecretProvider.SHAREPOINT in present:
+        token_env = env_var_for(SHAREPOINT_REFRESH_TOKEN_SECRET)
+        lines += [
+            f'if [ "$(cat {marker} 2>/dev/null)" != "${SHAREPOINT_SIGN_IN_ID_ENV}" ]; then',
+            f"  printf '%s' \"${token_env}\" | aai-cli --config {config_path} secrets set {SHAREPOINT_REFRESH_TOKEN_SECRET}",
+            f"  printf '%s' \"${SHAREPOINT_SIGN_IN_ID_ENV}\" > {marker}",
+            "fi",
+        ]
+    else:
+        # The store outlives the credential on the agent's volume; don't leave its token behind.
+        lines += [
+            f"if [ -f {marker} ]; then",
+            (
+                f"  aai-cli --secrets-file {store}/aai-secrets.enc.json --key-file {store}/key "
+                f"secrets remove {SHAREPOINT_REFRESH_TOKEN_SECRET} || true"
+            ),
+            f"  rm -f {marker}",
+            "fi",
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -282,6 +299,9 @@ def build_env(
     for provider, content in store_decrypted.items():
         for secret_name, attr in provider_secrets_map.get(provider.value, []):
             env[env_var_for(secret_name)] = getattr(content, attr)
+        if isinstance(content, SharePointContent):
+            env[env_var_for(SHAREPOINT_REFRESH_TOKEN_SECRET)] = content.refresh_token
+            env[SHAREPOINT_SIGN_IN_ID_ENV] = content.sign_in_id
     return env
 
 

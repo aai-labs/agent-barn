@@ -1,10 +1,11 @@
-import { CostsDashboard } from "@/features/costs/components/costs-dashboard";
 import { Metadata } from "next";
+
+import { CostsPage } from "@/features/costs/components/costs-page";
 
 export const metadata: Metadata = {
   title: "Costs | Agent Barn",
 };
 
-export default function CostsPage() {
-  return <CostsDashboard />;
+export default function OrganizationCostsPage() {
+  return <CostsPage />;
 }

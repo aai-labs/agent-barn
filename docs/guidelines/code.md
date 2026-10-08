@@ -20,7 +20,8 @@ routes.py       # HTTP handlers and dependency wiring
 Add extra files only for a real responsibility such as exceptions, parsers,
 builders, or provider-specific behavior. Register product routers in
 `../../api/api_app.py`, Ingest routers in `../../api/ingest_app.py`, and
-Communications routers in `../../api/communications_app.py`. Their separate
+Communications routers in `../../api/communications_app.py`, and Agent Memory
+gateway routers in `../../api/memory_app.py`. Their separate
 composition roots are described in `../architecture/api.md`.
 
 Public service and repository methods MUST have explicit type hints. New abstractions SHOULD match the neighboring domain before introducing a new pattern.
@@ -40,6 +41,7 @@ Use:
 
 - `200` for reads and updates returning a body.
 - `201` for creates.
+- `202` for work accepted now and completed asynchronously, where the response carries the record the client polls.
 - `204` for deletes or actions returning no body.
 - `400` for business precondition failures.
 - `401` for unauthenticated requests.

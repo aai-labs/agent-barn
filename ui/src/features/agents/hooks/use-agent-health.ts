@@ -8,7 +8,15 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { AgentHealth, AgentHealthSchema } from "../schemas";
 import { agentsKey } from "../utils";
 
-export function useAgentHealth(agentId: string, enabled: boolean) {
+const DEFAULT_HEALTH_REFETCH_MS = 10_000;
+
+/** `refetchIntervalMs` is for lists: each row polls on its own, so they poll slower than
+ *  the Agent page, where one Agent is on screen. */
+export function useAgentHealth(
+  agentId: string,
+  enabled: boolean,
+  refetchIntervalMs: number = DEFAULT_HEALTH_REFETCH_MS,
+) {
   const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
     queryKey: agentsKey.health(agentId),
@@ -20,7 +28,7 @@ export function useAgentHealth(agentId: string, enabled: boolean) {
       return response.data;
     },
     enabled,
-    refetchInterval: 10_000,
+    refetchInterval: refetchIntervalMs,
     retry: false,
   });
 

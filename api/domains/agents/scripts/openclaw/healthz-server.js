@@ -1,9 +1,13 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { execFile } = require('child_process');
 
 
-const PROXY_PORT = 8090;
+const PROXY_PORT = Number(process.env.LLM_PROXY_PORT || 8090);
 const PORT = parseInt(process.env.HEALTHZ_PORT || '8081', 10);
+// Test-only override; the builders never set it.
+const CGROUP_ROOT = process.env.HEALTHZ_CGROUP_ROOT || '/sys/fs/cgroup';
 const CACHE_TTL_MS = 10_000;
 const LITELLM_PROXY_TARGET = process.env.LITELLM_PROXY_TARGET || '';
 
@@ -17,6 +21,98 @@ const TERMINAL_LLM_ERRORS = {
   403: 'LLM API access denied. Check your account permissions.',
 };
 
+// Neutral about whose limit ran out: the Agent's own and its Organization's come back
+// as the same error type, and telling them apart would mean parsing upstream text.
+const BUDGET_EXHAUSTED =
+  'A model spend limit has been reached, so this agent cannot reply right now. ' +
+  'Contact your administrator to raise it or wait for the limit to renew.';
+
+// An exhausted limit has been seen as a 400, is documented as a 429, and is a 422 by
+// default on LiteLLM releases after the pinned one, depending on which budget was hit
+// and which proxy version answered. All are buffered and matched on the error body, so
+// a version difference cannot leak the upstream text. These statuses also carry
+// malformed requests, unknown models and rate limits, which must keep their own errors.
+const BUDGET_STATUSES = [400, 422, 429];
+// Terminal for both runtimes, like the credits-exhausted 402 above.
+const BUDGET_EXHAUSTED_STATUS = 402;
+
+// Where the Communications adapter in this container learns why a turn failed. The
+// runtime does not carry the reason out reliably (OpenClaw replaces this proxy's
+// message with its own billing text), so the refusal is recorded here and read there.
+const LLM_ERROR_MARKER = process.env.AGENTBARN_LLM_ERROR_MARKER || '/tmp/agentbarn-llm-terminal-error.json';
+
+// Best effort: a failed write costs the person chatting a precise reason, never the
+// response itself.
+function recordTerminalLlmError(code) {
+  try {
+    const tmp = `${LLM_ERROR_MARKER}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ code, at: Date.now() / 1000 }));
+    fs.renameSync(tmp, LLM_ERROR_MARKER);
+  } catch {
+    // Ignored on purpose; see above.
+  }
+}
+function budgetMessage(body) {
+  try {
+    const { error } = JSON.parse(body.toString('utf8'));
+    return error && error.type === 'budget_exceeded' ? BUDGET_EXHAUSTED : null;
+  } catch {
+    return null;
+  }
+}
+
+// Native channel Connections have no supervisor session, so their health
+// transitions reach the Connection Journal from the gateway's own snapshot.
+// Content-free: provider error text (lastError) never leaves the pod.
+const NATIVE_CHANNELS = (process.env.AGENTBARN_NATIVE_CHANNELS || '').split(',').filter(Boolean);
+const lastChannelStage = {};
+
+function productPlatform(channelId) {
+  return channelId === 'msteams' ? 'teams' : channelId;
+}
+
+// The Slack and Discord providers set connected: true once their socket is up,
+// and Telegram after its first successful poll; until then a running channel is
+// still connecting.
+function channelStage(snapshot) {
+  if (!snapshot) return null;
+  if (snapshot.running) return snapshot.connected === true ? 'connection_connected' : 'connection_connecting';
+  return snapshot.restartPending ? 'connection_degraded' : 'connection_error';
+}
+
+function reportChannelHealth(channels) {
+  const { AGENT_ID, INGEST_URL, INGEST_API_KEY } = process.env;
+  if (!AGENT_ID || !INGEST_URL || !INGEST_API_KEY) return;
+  const events = [];
+  for (const platform of NATIVE_CHANNELS) {
+    const stage = channelStage(channels[platform]);
+    if (!stage || lastChannelStage[platform] === stage) continue;
+    lastChannelStage[platform] = stage;
+    events.push({
+      stage,
+      platform: productPlatform(platform),
+      occurred_at: new Date().toISOString(),
+      ...(stage === 'connection_error' ? { error_code: 'channel_stopped' } : {}),
+    });
+  }
+  if (events.length === 0) return;
+  const body = JSON.stringify({ events });
+  const req = http.request(`${INGEST_URL}/agents/${AGENT_ID}/communication-events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${INGEST_API_KEY}`,
+      'Content-Length': Buffer.byteLength(body),
+    },
+    timeout: 10_000,
+  });
+  req.on('response', (res) => res.resume());
+  // ponytail: best-effort, a dropped transition shows on the next change; retry if health gaps show up.
+  req.on('error', (err) => console.error(`[healthz] channel health report failed: ${err.message}`));
+  req.on('timeout', () => req.destroy(new Error('timeout')));
+  req.end(body);
+}
+
 function refresh() {
   if (refreshing) return;
   refreshing = true;
@@ -27,7 +123,7 @@ function refresh() {
       return;
     }
     try {
-      JSON.parse(stdout);
+      reportChannelHealth(JSON.parse(stdout).channels || {});
       cache = { ok: true, everConnected: true };
     } catch {
       cache = { ok: false, everConnected: false, reason: 'failed to parse health output' };
@@ -52,6 +148,94 @@ function metricsText() {
   return lines.join('\n') + '\n';
 }
 
+function parseUint(text) {
+  const trimmed = text.trim();
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : null;
+}
+
+function readCgroup(name) {
+  try {
+    return fs.readFileSync(path.join(CGROUP_ROOT, name), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+// A single-number cgroup file; `max` (no limit) and unreadable both give null.
+function cgroupInt(name) {
+  const text = readCgroup(name);
+  return text === null ? null : parseUint(text);
+}
+
+// A flat `key value` cgroup file. Unknown and malformed lines are skipped.
+function cgroupKeyed(name) {
+  const values = new Map();
+  for (const line of (readCgroup(name) || '').split('\n')) {
+    const parts = line.trim().split(/\s+/);
+    const value = parts.length === 2 ? parseUint(parts[1]) : null;
+    if (value !== null) values.set(parts[0], value);
+  }
+  return values;
+}
+
+function cpuLimitCores() {
+  const parts = (readCgroup('cpu.max') || '').trim().split(/\s+/);
+  if (parts.length !== 2) return null;
+  const quota = parseUint(parts[0]);
+  const period = parseUint(parts[1]);
+  return quota && period ? quota / period : null;
+}
+
+// Container CPU and memory from the cgroup v2 files. Every series is independent:
+// one that cannot be read is left out, never guessed. The order and help text must
+// match hermes/healthz-server.py (a test compares them).
+function resourceMetricsText() {
+  const current = cgroupInt('memory.current');
+  const inactive = cgroupKeyed('memory.stat').get('inactive_file');
+  const cpuStat = cgroupKeyed('cpu.stat');
+  const usageUsec = cpuStat.get('usage_usec');
+  const workingSet = current !== null && inactive !== undefined ? Math.max(current - inactive, 0) : null;
+  const series = [
+    [
+      'agent_cgroup_metrics_available',
+      'gauge',
+      "1 if the container's cgroup v2 CPU and memory files were readable at this scrape, 0 otherwise",
+      workingSet !== null && usageUsec !== undefined ? 1 : 0,
+    ],
+    [
+      'agent_memory_working_set_bytes',
+      'gauge',
+      'Container memory in use excluding reclaimable page cache (memory.current minus inactive_file)',
+      workingSet,
+    ],
+    ['agent_memory_limit_bytes', 'gauge', 'Container memory limit (memory.max); absent when unlimited', cgroupInt('memory.max')],
+    [
+      'agent_cpu_usage_seconds_total',
+      'counter',
+      'CPU time consumed by the container (cpu.stat usage_usec)',
+      usageUsec === undefined ? null : usageUsec / 1e6,
+    ],
+    [
+      'agent_cpu_limit_cores',
+      'gauge',
+      'Container CPU limit in cores (cpu.max quota / period); absent when unlimited',
+      cpuLimitCores(),
+    ],
+    ['agent_cpu_periods_total', 'counter', 'CFS enforcement periods elapsed (cpu.stat nr_periods)', cpuStat.get('nr_periods') ?? null],
+    [
+      'agent_cpu_throttled_periods_total',
+      'counter',
+      'CFS periods in which the container was throttled (cpu.stat nr_throttled)',
+      cpuStat.get('nr_throttled') ?? null,
+    ],
+  ];
+  const lines = [];
+  for (const [name, kind, help, value] of series) {
+    if (value !== null) lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} ${kind}`, `${name} ${value}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
 function healthzResult() {
   if (!cache) return [503, { status: 'starting' }];
   if (cache.ok) return [200, { status: 'ok' }];
@@ -73,7 +257,7 @@ const server = http.createServer((req, res) => {
     // Prometheus exposition content type; canonical value lives in
     // api/core/metrics.py (standalone script, cannot share the constant).
     res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
-    res.end(metricsText());
+    res.end(metricsText() + resourceMetricsText());
   } else if (req.url === '/healthz') {
     const [code, body] = healthzResult();
     sendJson(res, code, body);
@@ -110,16 +294,31 @@ if (LITELLM_PROXY_TARGET) {
     };
 
     const upstreamReq = targetModule.request(opts, (upstreamRes) => {
-      const cleanMsg = TERMINAL_LLM_ERRORS[upstreamRes.statusCode];
-      if (cleanMsg) {
-        // Consume upstream body then send clean response
+      const mapped = TERMINAL_LLM_ERRORS[upstreamRes.statusCode];
+      // Only these are buffered alongside the mapped statuses. Everything else must
+      // keep streaming, which collecting it here would break.
+      if (mapped || BUDGET_STATUSES.includes(upstreamRes.statusCode)) {
         const chunks = [];
         upstreamRes.on('data', (c) => chunks.push(c));
         upstreamRes.on('end', () => {
+          const raw = Buffer.concat(chunks);
+          const budget = mapped ? null : budgetMessage(raw);
+          const cleanMsg = mapped || budget;
+          if (!cleanMsg) {
+            // A 400 we have no better words for: pass it through untouched.
+            clientRes.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+            clientRes.end(raw);
+            return;
+          }
+          // A spent limit is answered as 402 whatever the proxy said: it usually says
+          // 429, which the runtime retries as a rate limit indefinitely, so the person
+          // chatting would never hear back at all.
+          const status = budget ? BUDGET_EXHAUSTED_STATUS : upstreamRes.statusCode;
+          if (budget) recordTerminalLlmError('SPEND_LIMIT_REACHED');
           const body = JSON.stringify({
-            error: { message: cleanMsg, type: null, param: null, code: String(upstreamRes.statusCode) }
+            error: { message: cleanMsg, type: null, param: null, code: String(status) }
           });
-          clientRes.writeHead(upstreamRes.statusCode, {
+          clientRes.writeHead(status, {
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(body),
           });

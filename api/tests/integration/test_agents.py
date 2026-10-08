@@ -1,32 +1,44 @@
 import json
+import threading
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from unittest.mock import MagicMock, patch
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 import httpx
+import pytest
 from fastapi import HTTPException, status
 from hamcrest import (
     assert_that,
     contains_string,
     equal_to,
     greater_than,
+    has_entries,
     has_item,
     has_key,
+    has_length,
     is_in,
     is_not,
     none,
 )
+from sqlmodel import Session
 from starlette.testclient import TestClient
 
+from api.core.config import Config
 from api.domains.agents.models import (
+    AgentSecret,
     AgentStatus,
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
     AgentType,
+    CommandApprovalMode,
     SecretProvider,
 )
 from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.runtime_digest import agent_runtime_config_digest
+from api.domains.communications.models import CommunicationConnection
+from api.domains.conversations.models import MessageDirection
 from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
@@ -44,9 +56,13 @@ from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.events.processor import EventDeliveryProcessor
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditRepository
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.skills.models import Skill
+from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
+from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -69,8 +85,10 @@ from api.tests.steps.agent import (
     there_is_an_agent,
     use_org_for_auth,
 )
+from api.tests.steps.conversation import there_is_a_recorded_message
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
+    there_is_an_organization,
     there_is_an_organization_with_user_and_access_token,
 )
 from api.tests.steps.template import (
@@ -139,7 +157,6 @@ _GIVEN_WITH_HERMES_IMAGE = [
     use_org_for_auth(),
     there_is_a_template(),
 ]
-
 
 # Same as _GIVEN but with no server-owned Google OAuth client. Set here rather than in a
 # later step because Config is built (and cached) when the injector is prepared, and a
@@ -1127,6 +1144,96 @@ def test_start_agent_sets_status_running():
             )
 
 
+def test_start_agent_records_the_runtime_config_digest():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        config: Config = context.injector.get(Config)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the Agent records the digest of the code and images its pod was built from"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            persisted = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert persisted is not None
+            assert_that(
+                persisted.running_config_digest,
+                equal_to(agent_runtime_config_digest(config.openclaw_image, config.hermes_image)),
+            )
+
+
+def test_failed_start_records_no_runtime_config_digest():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+        k8s.create_deployment.side_effect = RuntimeError("cluster unavailable")
+
+        with when("provisioning fails before the runtime is created"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("no digest is recorded because no pod was built"):
+            assert_that(response.status_code, equal_to(status.HTTP_500_INTERNAL_SERVER_ERROR))
+            persisted = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert persisted is not None
+            assert_that(persisted.status, equal_to(AgentStatus.ERROR))
+            assert_that(persisted.running_config_digest, equal_to(""))
+
+
+def test_agent_read_reports_no_update_available_after_a_start():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I start the agent and read it back"):
+            client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+            response = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("it reports no available update because the pod matches the current platform"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["update_available"], equal_to(False))
+
+
+def test_agent_read_reports_update_available_when_the_recorded_digest_differs():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        context.agent.running_config_digest = "a" * 64
+        repository.save(context.agent)
+
+        with when("I read an Agent whose pod was built from older platform code"):
+            response = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("it reports an available update"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["update_available"], equal_to(True))
+
+
+def test_stopped_agent_reports_no_update_available():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+
+        with when("I read a stopped Agent"):
+            response = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("it reports no available update because it has no pod to update"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["update_available"], equal_to(False))
+
+
+def test_errored_agent_reports_no_update_available():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.ERROR)]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        context.agent.running_config_digest = "a" * 64
+        repository.save(context.agent)
+
+        with when("I read an Agent whose last start failed"):
+            response = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+        with then("it reports no available update whatever digest is recorded"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["update_available"], equal_to(False))
+
+
 def test_start_agent_emits_started_domain_event_and_delivery():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
@@ -1173,6 +1280,32 @@ def test_start_agent_wires_telemetry_push_into_the_secret():
             assert_that(secret.string_data["INGEST_API_KEY"], is_not(equal_to("")))
 
 
+def test_start_with_stored_secret_that_no_longer_validates_returns_400():
+    """Stored content is re-validated on every start. A Pipedrive domain saved before the
+    single-label rule must stop the start with a fixable message, not an unhandled error."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        client.patch(
+            f"{_BASE}/{context.agent.id}",
+            json={"secrets": [{"provider": "pipedrive", "content": {"api_token": "pd-token", "domain": "acme"}}]},
+            headers=_auth(context),
+        )
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        [stored] = [s for s in delegate.find_all(AgentSecret) if s.agent_id == context.agent.id]
+        stored.content = encrypt_token(json.dumps({"api_token": "pd-token", "domain": "foo.bar"}), TEST_ENCRYPTION_KEY)
+        delegate.save(stored)
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("it returns 400 naming the integration, and nothing is deployed"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that("Pipedrive" in response.json()["detail"], equal_to(True))
+            assert_that("save it again" in response.json()["detail"], equal_to(True))
+            k8s.create_deployment.assert_not_called()
+
+
 def test_start_already_running_returns_409():
     with given(
         [
@@ -1187,6 +1320,137 @@ def test_start_already_running_returns_409():
 
         with then("it returns 409"):
             assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_concurrent_start_requests_reject_the_loser_and_keep_credentials_consistent():
+    """Regression test for AF-287 / agent-barn#160: a second start request that
+    arrives while the first is still mid-provisioning must be rejected, not race
+    it to persist its own (different) credentials."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        entered_provisioning = threading.Event()
+        release_first_request = threading.Event()
+
+        def block_mid_provisioning(*args, **kwargs):
+            entered_provisioning.set()
+            release_first_request.wait(timeout=5)
+
+        k8s.create_deployment.side_effect = block_mid_provisioning
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_first():
+            responses["first"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when("a second start request arrives while the first is still provisioning the runtime"):
+            first_thread = threading.Thread(target=start_first)
+            first_thread.start()
+            assert_that(entered_provisioning.wait(timeout=5), equal_to(True))
+
+            responses["second"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+            release_first_request.set()
+            first_thread.join(timeout=5)
+
+        with then("the second, competing request is rejected as a lifecycle conflict, not raced through"):
+            assert_that(responses["second"].status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(responses["second"].json()["detail"], contains_string("already in progress"))
+
+        with then("the first request completes and starts the agent"):
+            assert_that(responses["first"].status_code, equal_to(status.HTTP_200_OK))
+
+        with then("the persisted credentials match what was written into the runtime secret"):
+            persisted = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+            assert persisted is not None
+            _, secret = k8s.create_secret.call_args.args
+            decrypted_ingest_key = decrypt_token(persisted.ingest_key_encrypted, TEST_ENCRYPTION_KEY)
+            assert_that(decrypted_ingest_key, equal_to(secret.string_data["INGEST_API_KEY"]))
+
+
+def test_start_agent_returns_404_if_deleted_while_racing_the_lock():
+    """Regression test for review feedback on AF-287: if the agent is soft-deleted
+    between the caller's authorization check and this request acquiring the
+    lifecycle lock, start must 404 rather than silently starting a stale copy."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+
+        entered_before_lock = threading.Event()
+        release_start = threading.Event()
+        original_lifecycle_lock = repository.lifecycle_lock
+
+        def blocked_lifecycle_lock(agent_id: UUID):
+            # Only the start request (the first caller) should stall here; the
+            # delete that races it must go straight through to the real lock.
+            if not entered_before_lock.is_set():
+                entered_before_lock.set()
+                release_start.wait(timeout=5)
+            return original_lifecycle_lock(agent_id)
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_agent():
+            responses["start"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when(
+            "the agent is deleted after the start request passes authorization "
+            "but before it acquires the lifecycle lock"
+        ):
+            with patch.object(repository, "lifecycle_lock", side_effect=blocked_lifecycle_lock):
+                start_thread = threading.Thread(target=start_agent)
+                start_thread.start()
+                assert_that(entered_before_lock.wait(timeout=5), equal_to(True))
+
+                delete_response = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+                assert_that(delete_response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+
+                release_start.set()
+                start_thread.join(timeout=5)
+
+        with then("start 404s instead of provisioning a runtime for the deleted agent"):
+            assert_that(responses["start"].status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_concurrent_delete_while_starting_is_rejected_as_conflict():
+    """Regression test for review feedback on AF-287: delete_agent now shares the
+    lifecycle lock with start/stop, so a delete racing an in-flight start is
+    rejected instead of tearing down k8s resources the start is still creating."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        entered_provisioning = threading.Event()
+        release_start = threading.Event()
+
+        def block_mid_provisioning(*args, **kwargs):
+            entered_provisioning.set()
+            release_start.wait(timeout=5)
+
+        k8s.create_deployment.side_effect = block_mid_provisioning
+
+        responses: dict[str, httpx.Response] = {}
+
+        def start_agent():
+            responses["start"] = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with when("a delete request arrives while start is still provisioning the runtime"):
+            start_thread = threading.Thread(target=start_agent)
+            start_thread.start()
+            assert_that(entered_provisioning.wait(timeout=5), equal_to(True))
+
+            responses["delete"] = client.delete(f"{_BASE}/{context.agent.id}", headers=_auth(context))
+
+            release_start.set()
+            start_thread.join(timeout=5)
+
+        with then("the delete is rejected as a lifecycle conflict rather than tearing down the runtime mid-start"):
+            assert_that(responses["delete"].status_code, equal_to(status.HTTP_409_CONFLICT))
+            k8s.delete_deployment.assert_not_called()
+
+        with then("the start request completes normally"):
+            assert_that(responses["start"].status_code, equal_to(status.HTTP_200_OK))
 
 
 def test_start_agent_rejects_model_removed_from_allowlist():
@@ -1240,6 +1504,28 @@ def test_stop_agent_sets_status_stopped():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["status"], equal_to(AgentStatus.STOPPED.value))
             k8s.delete_deployment.assert_called_once()
+
+
+def test_stop_agent_clears_the_runtime_config_digest():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(status=AgentStatus.RUNNING),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        context.agent.running_config_digest = "a" * 64
+        repository.save(context.agent)
+
+        with when("I stop the agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/stop", headers=_auth(context))
+
+        with then("the recorded digest is cleared because no pod is running"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            persisted = repository.get_by_id(context.agent.id)
+            assert persisted is not None
+            assert_that(persisted.running_config_digest, equal_to(""))
 
 
 def test_stop_agent_emits_stopped_domain_event_and_delivery():
@@ -1545,7 +1831,16 @@ def test_create_agent_calls_litellm_generate_key():
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
             agent_id = response.json()["id"]
             # the test uses _VALID_CREATE where name is "Test Agent"
-            litellm.generate_key.assert_called_once_with(agent_id, _VALID_CREATE["name"], str(context.organization.id))
+            # Capped from the first call at the default Agent limit, and a team created
+            # here would carry the Organization's (conftest: 25 and 100 per 30d).
+            litellm.generate_key.assert_called_once_with(
+                agent_id,
+                _VALID_CREATE["name"],
+                str(context.organization.id),
+                max_budget=25.0,
+                budget_duration="30d",
+                team_budget=100.0,
+            )
             litellm.delete_key.assert_not_called()
             litellm.block_key.assert_not_called()
 
@@ -1942,7 +2237,7 @@ def test_start_agent_configmap_and_headless_gateway_overlay_are_correct():
 
         with then("tools, memory, and the core/active-memory plugins are enabled"):
             assert_that(overlay["tools"]["profile"], equal_to("full"))
-            assert_that(overlay["memory"]["backend"], equal_to("builtin"))
+            assert_that(overlay["memory"], equal_to({"search": {"provider": "none"}}))
             assert_that(overlay["plugins"]["slots"]["memory"], equal_to("memory-core"))
             assert_that(overlay["plugins"]["entries"]["memory-core"]["enabled"], equal_to(True))
             assert_that(
@@ -2202,6 +2497,284 @@ def test_start_hermes_agent_configmap_has_hermes_config():
 
         with then("BOOTSTRAP.md is absent from the ConfigMap"):
             assert_that(config_map.data, is_not(has_key("BOOTSTRAP.md")))
+
+
+def _native_discord_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="discord",
+            display_name="Native Discord",
+            settings={
+                "allowed_channel_ids": ["channel-1"],
+                "allowed_user_ids": ["user-1"],
+                "allowed_role_ids": ["role-1"],
+                "allow_all_users": False,
+                "require_mention": False,
+                "home_channel_id": "channel-home",
+            },
+            credentials_encrypted=encrypt_token(json.dumps({"bot_token": "discord-token"}), TEST_ENCRYPTION_KEY),
+        )
+    )
+
+
+def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
+    import yaml as _yaml
+
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+            _native_discord_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with a native Discord Connection"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("Hermes owns Discord transport and receives its native authorization gates"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["discord"], equal_to({"require_mention": False, "thread_require_mention": False}))
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-observer"))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
+            assert_that(secret["DISCORD_ALLOW_ALL_USERS"], equal_to("false"))
+            assert_that(secret["DISCORD_ALLOWED_CHANNELS"], equal_to("channel-1"))
+            assert_that(secret["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
+            assert_that(secret["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
+            assert_that(secret["DISCORD_HOME_CHANNEL"], equal_to("channel-home"))
+            assert_that("AGENTBARN_DISCORD_POLICY" in secret, equal_to(False))
+
+
+def _native_telegram_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="telegram",
+            display_name="Native Telegram",
+            settings={
+                "allowed_chat_ids": ["-1001"],
+                "dm_policy": "allowlist",
+                "allowed_user_ids": ["111"],
+                "home_channel_id": "-1009",
+            },
+            credentials_encrypted=encrypt_token(json.dumps({"bot_token": "123:telegram-token"}), TEST_ENCRYPTION_KEY),
+        )
+    )
+
+
+def test_start_hermes_agent_runs_telegram_in_the_native_gateway() -> None:
+    import yaml as _yaml
+
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+            _native_telegram_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with a native Telegram Connection"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("Hermes owns Telegram transport, requires group mentions, and keeps the Connection's gates"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["telegram"], equal_to({"unauthorized_dm_behavior": "ignore"}))
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-observer"))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to("123:telegram-token"))
+            assert_that(secret["TELEGRAM_REQUIRE_MENTION"], equal_to("true"))
+            assert_that(secret["TELEGRAM_ALLOWED_CHATS"], equal_to("-1001"))
+            assert_that(secret["TELEGRAM_ALLOWED_USERS"], equal_to("111"))
+            assert_that(secret["TELEGRAM_HOME_CHANNEL"], equal_to("-1009"))
+
+
+def _runtime_teams_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="teams",
+            display_name="Runtime Teams",
+            settings={"dm_policy": "allowlist", "dm_user_ids": ["aad-user"], "home_channel_id": "19:home"},
+            credentials_encrypted=encrypt_token(
+                json.dumps({"app_id": "teams-app", "app_password": "teams-secret", "tenant_id": "teams-tenant"}),
+                TEST_ENCRYPTION_KEY,
+            ),
+        )
+    )
+
+
+def test_start_hermes_agent_runs_teams_in_the_runtime_transport() -> None:
+    import yaml as _yaml
+
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+            _runtime_teams_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start a Hermes Agent with a runtime-owned Teams Connection"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("Hermes owns Teams while the public relay remains on Agent Barn"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["plugins"]["enabled"], has_item("agentbarn-observer"))
+            assert_that(cfg["display"]["platforms"]["teams"]["tool_progress"], equal_to("off"))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["TEAMS_CLIENT_ID"], equal_to("teams-app"))
+            assert_that(secret["TEAMS_CLIENT_SECRET"], equal_to("teams-secret"))
+            assert_that(secret["TEAMS_TENANT_ID"], equal_to("teams-tenant"))
+            assert_that(secret["TEAMS_HOME_CHANNEL"], equal_to("19:home"))
+            service = k8s.create_service.call_args.args[1]
+            assert_that([port.name for port in service.spec.ports], has_item("webhook"))
+
+
+def _native_slack_connection(context) -> None:
+    delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+    delegate.save(
+        CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="slack",
+            display_name="Native Slack",
+            settings={"channel_ids": ["C1"], "group_policy": "allowlist", "dm_policy": "off"},
+            credentials_encrypted=encrypt_token(
+                json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}), TEST_ENCRYPTION_KEY
+            ),
+        )
+    )
+
+
+def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> None:
+    with given(
+        [
+            *_GIVEN_WITH_HERMES_IMAGE,
+            there_is_an_agent(),
+            _native_slack_connection,
+            _native_discord_connection,
+            _native_telegram_connection,
+            _runtime_teams_connection,
+        ]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an OpenClaw Agent with native chat platform Connections"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("OpenClaw owns every transport with the Connections' gates and tokens"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            assert_that(overlay["channels"]["slack"]["channels"], equal_to({"C1": {"enabled": True}}))
+            assert_that(overlay["channels"]["slack"]["dmPolicy"], equal_to("disabled"))
+            assert_that(overlay["channels"]["discord"]["guilds"]["*"]["users"], equal_to(["user-1"]))
+            assert_that(overlay["channels"]["telegram"]["groups"], equal_to({"-1001": {"requireMention": True}}))
+            assert_that(overlay["channels"]["telegram"]["defaultTo"], equal_to("-1009"))
+            assert_that(overlay["channels"]["msteams"].get("appPassword"), equal_to(None))
+            assert_that(overlay["channels"]["msteams"]["webhook"], equal_to({"port": 3978, "path": "/api/messages"}))
+            assert_that(overlay["plugins"]["allow"], has_item("agentbarn-observer"))
+            assert_that(config_map.data, has_key("agentbarn-observer-index.js"))
+            assert_that("xoxb-token" in config_map.data["openclaw-config-overlay.json"], equal_to(False))
+
+            secret = k8s.create_secret.call_args.args[1].string_data
+            assert_that(secret["SLACK_BOT_TOKEN"], equal_to("xoxb-token"))
+            assert_that(secret["SLACK_APP_TOKEN"], equal_to("xapp-token"))
+            assert_that(secret["DISCORD_BOT_TOKEN"], equal_to("discord-token"))
+            assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to("123:telegram-token"))
+            assert_that(secret["MSTEAMS_APP_PASSWORD"], equal_to("teams-secret"))
+            assert_that(secret["AGENTBARN_NATIVE_CHANNELS"], equal_to("slack,discord,telegram,msteams"))
+            service = k8s.create_service.call_args.args[1]
+            assert_that([port.name for port in service.spec.ports], has_item("webhook"))
+
+
+@pytest.mark.parametrize(
+    "agent_type,workspace",
+    [(AgentType.OPENCLAW, "/home/node/.openclaw/workspace"), (AgentType.HERMES, "/workspace")],
+)
+def test_start_agent_with_native_chat_connection_tells_it_how_to_send_files(agent_type, workspace) -> None:
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=agent_type), _native_slack_connection]) as (
+        context
+    ):
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent with a native Slack Connection and no file-producing skill starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md explains how to attach a file, since any reply can carry one"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(agents_md, contains_string("MEDIA:<absolute path>"))
+
+        with then("the example path is inside that runtime's workspace, where it can read files"):
+            assert_that(agents_md, contains_string(f"\nMEDIA:{workspace}/q1-report.xlsx\n"))
+
+
+def test_start_agent_without_native_chat_connection_does_not_promise_file_delivery() -> None:
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("an Agent reachable only through gateway-owned Connections starts"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("AGENTS.md does not tell it to attach files the gateway would drop"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            agents_md = k8s.create_config_map.call_args.args[1].data["AGENTS.md"]
+            assert_that(agents_md, is_not(contains_string("MEDIA:")))
+
+
+@pytest.mark.parametrize(
+    "approval_mode,runtime_mode",
+    [
+        (CommandApprovalMode.MANUAL, "manual"),
+        (CommandApprovalMode.AUTO, "smart"),
+        (CommandApprovalMode.OFF, "off"),
+    ],
+)
+def test_start_hermes_agent_carries_the_chosen_approval_mode_to_the_runtime(approval_mode, runtime_mode):
+    import yaml as _yaml
+
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES, approval_mode=approval_mode)]
+    ) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the Hermes agent"):
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the runtime config and the adapter both receive the chosen mode"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            config_map = k8s.create_config_map.call_args.args[1]
+            cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
+            assert_that(cfg["approvals"]["mode"], equal_to(runtime_mode))
+            _, secret = k8s.create_secret.call_args.args
+            assert_that(secret.string_data["APPROVAL_MODE"], equal_to(approval_mode.value))
 
 
 def test_start_hermes_agent_deployment_has_workspace_volume():
@@ -4430,6 +5003,110 @@ def test_agent_configuration_publish_rejects_unassigned_required_skill():
             assert_that(publish.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
+def _override_requiring_latest_skill(context) -> dict:
+    client: TestClient = context.client
+    skill_repository: SkillRepository = context.injector.get(SkillRepository)
+    skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+    configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+    draft = client.post(f"{configuration_url}/draft", headers=_auth(context)).json()
+    marked = client.patch(
+        f"{configuration_url}/draft",
+        json={
+            "expected_updated_at": draft["updated_at"],
+            "required_skill_ids": [str(context.skill.id)],
+        },
+        headers=_auth(context),
+    )
+    assert_that(marked.status_code, equal_to(status.HTTP_200_OK))
+    return marked.json()
+
+
+def test_override_draft_and_publish_accept_a_requirement_newer_than_the_agent_pin():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+
+        with when("I require the Skill while the Agent is still pinned to v1"):
+            marked_body = _override_requiring_latest_skill(context)
+
+        with then("the draft records the newer requirement"):
+            assert_that(marked_body["required_skills"], has_length(1))
+            assert_that(marked_body["required_skills"][0]["version"], equal_to(2))
+
+        with when("I publish that draft"):
+            publish = client.post(
+                f"{configuration_url}/draft/publish",
+                json={"expected_updated_at": marked_body["updated_at"]},
+                headers=_auth(context),
+            )
+
+        with then("the Override Version is created and the Agent's pin is untouched"):
+            assert_that(publish.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(publish.json()["required_skills"][0]["version"], equal_to(2))
+            agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(agent["skills"][0]["version"], equal_to(1))
+
+
+def test_selecting_an_override_applies_its_newer_required_skill_pin():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        configuration_url = f"{_BASE}/{context.agent.id}/configuration"
+        marked_body = _override_requiring_latest_skill(context)
+        published = client.post(
+            f"{configuration_url}/draft/publish",
+            json={"expected_updated_at": marked_body["updated_at"]},
+            headers=_auth(context),
+        ).json()
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the Override without its skill pin"):
+            refused = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": published["version"],
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused against the Agent's current assignments"):
+            assert_that(refused.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(refused.json()["detail"], contains_string("must be pinned to version 2"))
+
+        with when("I select the Override and its skill pin together"):
+            accepted = client.post(
+                f"{configuration_url}/select",
+                json={
+                    "selection_type": "override",
+                    "override_version": published["version"],
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 2}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("both land"):
+            assert_that(accepted.status_code, equal_to(status.HTTP_200_OK))
+            body = accepted.json()
+            assert_that(body["template_pin_type"], equal_to("override"))
+            assert_that(body["skills"][0]["version"], equal_to(2))
+
+
 def test_agent_configuration_override_history_retained_after_soft_delete():
     with given([*_GIVEN, there_is_an_agent(name="Retention Agent")]) as context:
         client: TestClient = context.client
@@ -4630,3 +5307,719 @@ def test_start_agent_rejects_google_workspace_without_a_client():
         with then("the start is rejected with a reconnect hint"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("Google Workspace credential"))
+
+
+def test_name_suggestion_advances_after_creation_and_does_not_rewind_after_deletion():
+    with given(_GIVEN) as context:
+        client = context.client
+        base = _BASE.format(organization_id=context.organization.id)
+        headers = _auth(context)
+        with when("I request a suggestion before creating an Agent"):
+            suggestion = client.get(f"{base}/name-suggestion", headers=headers)
+        with then("the suggestion is an A name"):
+            assert_that(suggestion.status_code, equal_to(200))
+            first_name = suggestion.json()["first_name"]
+            assert_that(
+                first_name, is_in(("Alfie", "Andy", "Archie", "Arlo", "Amos", "Abe", "Adrian", "Alex", "Aaron", "Arie"))
+            )
+        with when("I create and read an Agent using the suggestion"):
+            name = f"{first_name} the Assistant"
+            created = client.post(base, json={**_VALID_CREATE, "name": name}, headers=headers)
+        with then("the submitted name is persisted"):
+            assert_that(created.status_code, equal_to(201))
+            agent_url = f"{base}/{created.json()['id']}"
+            saved = client.get(agent_url, headers=headers)
+            assert_that(saved.status_code, equal_to(200))
+            assert_that(saved.json()["name"], equal_to(name))
+        with when("I request another suggestion"):
+            next_name = client.get(f"{base}/name-suggestion", headers=headers)
+        with then("the next initial is B"):
+            assert_that(next_name.status_code, equal_to(200))
+            assert_that(next_name.json()["first_name"][0], equal_to("B"))
+        with when("I delete the Agent and request another suggestion"):
+            deleted = client.delete(agent_url, headers=headers)
+        with then("soft deletion does not rewind the initial"):
+            assert_that(deleted.status_code, equal_to(204))
+            suggestion = client.get(f"{base}/name-suggestion", headers=headers)
+            assert_that(suggestion.status_code, equal_to(200))
+            assert_that(suggestion.json()["first_name"][0], equal_to("B"))
+
+
+def test_name_suggestion_requires_authentication():
+    with given(_GIVEN) as context:
+        base = _BASE.format(organization_id=context.organization.id)
+        with when("I request a suggestion without authentication"):
+            response = context.client.get(f"{base}/name-suggestion")
+        with then("authentication is required"):
+            assert_that(response.status_code, equal_to(401))
+
+
+def test_name_suggestion_counts_only_the_active_organization():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        first_org_id = context.organization.id
+        with when("I join a second Organization without Agents"):
+            there_is_an_organization(name="Second Organization")(context)
+            response = context.client.get(
+                f"/api/v1/organizations/{context.organization.id}/agents/name-suggestion", headers=_auth(context)
+            )
+        with then("the second Organization starts at A"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(response.json()["first_name"][0], equal_to("A"))
+        with when("I request another suggestion in the first Organization"):
+            response = context.client.get(
+                f"/api/v1/organizations/{first_org_id}/agents/name-suggestion", headers=_auth(context)
+            )
+        with then("its existing Agent advances its initial to B"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(response.json()["first_name"][0], equal_to("B"))
+
+
+def test_name_suggestion_rejects_non_member():
+    with given(_GIVEN) as context:
+        other = context.injector.get(OrganizationRepository).save(Organization(name="Other Organization"))
+        with when("I request a suggestion from an Organization I have not joined"):
+            response = context.client.get(
+                f"/api/v1/organizations/{other.id}/agents/name-suggestion", headers=_auth(context)
+            )
+        with then("access is forbidden"):
+            assert_that(response.status_code, equal_to(403))
+
+
+def test_failed_creation_and_repeated_suggestions_do_not_advance_initial():
+    with given(_GIVEN) as context:
+        base = _BASE.format(organization_id=context.organization.id)
+        with when("I submit an invalid Template"):
+            response = context.client.post(
+                base, json={**_VALID_CREATE, "template_key": "missing"}, headers=_auth(context)
+            )
+        with then("creation fails and repeated reads still suggest A"):
+            assert_that(response.status_code, equal_to(404))
+            for _ in range(2):
+                response = context.client.get(f"{base}/name-suggestion", headers=_auth(context))
+                assert_that(response.status_code, equal_to(200))
+                assert_that(response.json()["first_name"][0], equal_to("A"))
+
+
+def _select_url(context) -> str:
+    return f"{_BASE}/{context.agent.id}/configuration/select"
+
+
+def test_selection_applies_a_template_and_its_skill_pins_together():
+    """The case two requests cannot express.
+
+    The recorded template requires the Skill at v1 while the Agent currently holds
+    v2. Selecting the template alone is refused because the Agent's skills do not
+    satisfy it yet; re-pinning the skill alone is refused because the Agent's
+    current template requires v2. Sent together they validate as one.
+    """
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+        agent_repository: AgentRepository = context.injector.get(AgentRepository)
+        agent_repository.re_pin_skill(context.agent.id, context.skill.id, 2)
+
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        there_is_a_template_skill()(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the template without its skill pin"):
+            refused = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused against the Agent's current assignments"):
+            assert_that(refused.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(refused.json()["detail"], contains_string("must be pinned to version 1"))
+
+        with when("I select the template and its skill pin together"):
+            accepted = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("both land"):
+            assert_that(accepted.status_code, equal_to(status.HTTP_200_OK))
+            body = accepted.json()
+            assert_that(body["template_key"], equal_to("recorded-template"))
+            assert_that(body["skills"][0]["version"], equal_to(1))
+
+
+def test_selection_takes_the_named_scope_when_a_fork_shadows_the_platform_lineage():
+    """An Organization fork shares its platform lineage's key and restarts at v1,
+    so key and version alone name two different templates."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        platform = PlatformTemplate(
+            template_key="shadowed-lineage",
+            template_name="Shadowed",
+            version=1,
+            soul_md="platform soul",
+            identity_md="platform identity",
+            user_md="platform user",
+            tools_md="platform tools",
+            agents_md="platform agents",
+            boot_md="platform boot",
+            bootstrap_md="platform bootstrap",
+            heartbeat_md="platform heartbeat",
+        )
+        delegate.save(platform)
+        there_is_a_template(template_key="shadowed-lineage", name="Fork", version=1)(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the platform template at the shadowed key and version"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "platform",
+                    "template_key": "shadowed-lineage",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the platform lineage is pinned, not the fork that shadows it"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            repository: AgentRepository = context.injector.get(AgentRepository)
+            pinned = repository.get_by_id(context.agent.id)
+            assert pinned is not None
+            assert_that(pinned.platform_template_id, equal_to(platform.id))
+            assert_that(pinned.agent_template_id, none())
+
+
+def test_a_rejected_selection_writes_nothing():
+    # Hermes, because approval and verbose mode are Hermes-only: on OpenClaw the
+    # settings would be refused on their own and the model would never be reached.
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(agent_type=AgentType.HERMES),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        org_repo: OrganizationRepository = context.injector.get(OrganizationRepository)
+        org = org_repo.get(context.organization.id)
+        assert org is not None
+        org.allowed_models = ["openai/gpt-4o"]
+        org_repo.save(org)
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        original_pin = agent["template_key"]
+
+        with when("the selection carries a model the Organization does not allow"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "model": "litellm/openrouter/anthropic/claude-opus-5",
+                    "verbose_mode": True,
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused for the model, not for something incidental"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("not in the allowed model list"))
+
+        with then("the template pin and every setting are untouched"):
+            after = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(after["template_key"], equal_to(original_pin))
+            assert_that(after["verbose_mode"], equal_to(False))
+            assert_that(after["model"], equal_to(agent["model"]))
+
+
+def test_a_rejected_skill_pin_leaves_the_template_pin_alone():
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_skill(name="Calendar")]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        original_pin = agent["template_key"]
+
+        with when("the selection pins a Skill version that was never published"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_ids": [str(context.skill.id)],
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 99}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused and nothing moved"):
+            assert_that(response.status_code, is_in([status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND]))
+            after = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(after["template_key"], equal_to(original_pin))
+            assert_that(after["skills"], has_length(0))
+
+
+def test_selection_applies_recorded_runtime_settings_in_the_same_request():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select a template and the settings recorded alongside it"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "approval_mode": "manual",
+                    "verbose_mode": True,
+                },
+                headers=_auth(context),
+            )
+
+        with then("the pin and the settings move together"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            body = response.json()
+            assert_that(body["template_key"], equal_to("recorded-template"))
+            assert_that(body["approval_mode"], equal_to("manual"))
+            assert_that(body["verbose_mode"], equal_to(True))
+
+
+def test_selection_accepts_one_member_of_a_required_skill_group():
+    """A group means "at least one of", so the unchosen alternative is neither
+    assigned, version-pinned, nor credentialed — and must not be demanded."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="group-template", name="Grouped")(context)
+        there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+        group = _group_skill_ids(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the template assigning only one member of the group"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "group-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_ids": [group["GitHub"]],
+                    "skill_versions": [{"skill_id": group["GitHub"], "version": 1}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the selection is accepted and the alternative stays unassigned"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assigned = {skill["name"] for skill in response.json()["skills"]}
+            assert_that(assigned, equal_to({"GitHub"}))
+
+
+def test_selection_still_requires_at_least_one_group_member():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="group-template", name="Grouped")(context)
+        there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select the template without any member of the group"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "group-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("At least one"))
+
+
+def test_selection_refuses_a_skill_whose_provider_is_not_configured():
+    """The provider invariant covers optional Skills too: a replay can reintroduce
+    one whose credential was removed after it was captured."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Repo Reader", required_providers=[SecretProvider.GITHUB]),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("the selection assigns a Skill whose provider has no credential"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "recorded-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_ids": [str(context.skill.id)],
+                    "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused and nothing is assigned"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("github"))
+            after = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(after["skills"], has_length(0))
+
+
+def test_a_skill_only_selection_advances_the_agent_revision():
+    """Otherwise a stale expected_agent_updated_at stays acceptable, and the
+    optimistic-concurrency check that runs under the row lock never fires."""
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+        pinned = context.injector.get(TemplateRepository).get_pinned_template(context.agent)
+        assert pinned is not None
+        stale_timestamp = agent["updated_at"]
+
+        selection = {
+            "selection_type": "organization",
+            "template_key": pinned.template_key,
+            "template_version": pinned.version,
+            "expected_agent_updated_at": stale_timestamp,
+            "skill_ids": [str(context.skill.id)],
+            "skill_versions": [{"skill_id": str(context.skill.id), "version": 1}],
+        }
+
+        with when("I re-select the pin the Agent already holds while assigning a Skill"):
+            first = client.post(_select_url(context), json=selection, headers=_auth(context))
+
+        with then("it succeeds and the Agent's revision moves"):
+            assert_that(first.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(first.json()["updated_at"], is_not(equal_to(stale_timestamp)))
+
+        with when("a second request arrives carrying the timestamp from before"):
+            second = client.post(
+                _select_url(context),
+                json={**selection, "skill_versions": [{"skill_id": str(context.skill.id), "version": 2}]},
+                headers=_auth(context),
+            )
+
+        with then("it is refused as stale rather than silently overwriting"):
+            assert_that(second.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_selection_rejects_null_runtime_settings():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="recorded-template", name="Recorded")(context)
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        for field in ("approval_mode", "verbose_mode"):
+            with when(f"the selection sends an explicit null {field}"):
+                response = client.post(
+                    _select_url(context),
+                    json={
+                        "selection_type": "organization",
+                        "template_key": "recorded-template",
+                        "template_version": 1,
+                        "expected_agent_updated_at": agent["updated_at"],
+                        field: None,
+                    },
+                    headers=_auth(context),
+                )
+
+            with then("it is a validation error, not a database error"):
+                assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_selection_accepts_a_group_alternative_at_a_different_version():
+    """`update_agent` accepts GitHub v1 alongside Bitbucket v2 when the group asks
+    for v1 of either: one member satisfies it and the other is the caller's
+    business. Replaying that same configuration must not be refused."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="group-template", name="Grouped")(context)
+        there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+        group = _group_skill_ids(context)
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        bitbucket_id = UUID(group["Bitbucket"])
+        skill_repository.publish_version(bitbucket_id, [("SKILL.md", "# Bitbucket v2")])
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        selection = {
+            "selection_type": "organization",
+            "template_key": "group-template",
+            "template_version": 1,
+            "expected_agent_updated_at": agent["updated_at"],
+            "skill_ids": [group["GitHub"], group["Bitbucket"]],
+            "skill_versions": [
+                {"skill_id": group["GitHub"], "version": 1},
+                {"skill_id": group["Bitbucket"], "version": 2},
+            ],
+        }
+
+        with when("I select with one member at the required version and the other beyond it"):
+            response = client.post(_select_url(context), json=selection, headers=_auth(context))
+
+        with then("the satisfied group is enough"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            versions = {skill["name"]: skill["version"] for skill in response.json()["skills"]}
+            assert_that(versions, equal_to({"GitHub": 1, "Bitbucket": 2}))
+
+
+def test_selection_refuses_a_group_where_no_member_meets_the_required_version():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="group-template", name="Grouped")(context)
+        there_is_a_template_skill_group(("GitHub", "Bitbucket"))(context)
+        group = _group_skill_ids(context)
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skill_repository.publish_version(UUID(group["Bitbucket"]), [("SKILL.md", "# Bitbucket v2")])
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I select assigning only a member that is not at the required version"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "group-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                    "skill_ids": [group["Bitbucket"]],
+                    "skill_versions": [{"skill_id": group["Bitbucket"], "version": 2}],
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is refused, naming the group"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("One of these template Skills"))
+
+
+def test_a_template_switch_is_not_blocked_by_a_credential_added_to_a_newer_skill_version():
+    """`Skill.required_providers` tracks the newest version, not the pinned one.
+
+    Both templates require Calendar v1 and the Agent stays on v1; a credential added
+    by Calendar v2 is about a version the Agent does not use.
+    """
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(),
+            there_is_a_skill(name="Calendar"),
+            skill_is_assigned_to_agent(),
+        ]
+    ) as context:
+        client: TestClient = context.client
+        there_is_a_template(template_key="next-template", name="Next")(context)
+        there_is_a_template_skill()(context)
+
+        # Publishing v2 rewrites the lineage's denormalized requirement.
+        skill_repository: SkillRepository = context.injector.get(SkillRepository)
+        skill_repository.publish_version(context.skill.id, [("SKILL.md", "# Calendar v2")])
+        with Session(context.postgres_delegate.engine) as session:
+            skill = session.get(Skill, context.skill.id)
+            assert skill is not None
+            skill.required_providers = [SecretProvider.GITHUB]
+            session.add(skill)
+            session.commit()
+
+        agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+
+        with when("I switch templates without touching the Skill"):
+            response = client.post(
+                _select_url(context),
+                json={
+                    "selection_type": "organization",
+                    "template_key": "next-template",
+                    "template_version": 1,
+                    "expected_agent_updated_at": agent["updated_at"],
+                },
+                headers=_auth(context),
+            )
+
+        with then("the switch is allowed"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
+@pytest.mark.parametrize("direction", list(MessageDirection))
+def test_agent_list_metadata_uses_latest_message_occurrence_across_connections(direction):
+    latest = datetime(2026, 10, 6, 11, 28, tzinfo=UTC)
+    with given(_GIVEN) as context:
+        response = context.client.post(
+            _BASE, json=_VALID_CREATE, headers={"Authorization": f"Bearer {context.access_token}"}
+        )
+        assert_that(response.status_code, equal_to(201))
+        assert_that(
+            response.json(),
+            has_entries(
+                creator=has_entries(
+                    id=str(context.user.id), full_name=context.user.full_name, email=context.user.email
+                ),
+                last_message_at=None,
+            ),
+        )
+        agent_id = UUID(response.json()["id"])
+        context.agent = context.injector.get(AgentRepository).get_by_id(agent_id)
+        there_is_a_recorded_message(latest, direction, "web")(context)
+        # A later-ingested older message must not move the timestamp backwards.
+        there_is_a_recorded_message(latest - timedelta(days=1))(context)
+        for path in (_BASE, f"{_BASE}/{agent_id}"):
+            with when("the Agent metadata is read"):
+                result = context.client.get(path, headers={"Authorization": f"Bearer {context.access_token}"})
+                body = result.json()["items"][0] if path == _BASE else result.json()
+            with then("creator provenance and the latest inbound or outbound occurrence are returned"):
+                assert_that(result.status_code, equal_to(200))
+                assert_that(
+                    body,
+                    has_entries(
+                        creator=has_entries(
+                            id=str(context.user.id), full_name=context.user.full_name, email=context.user.email
+                        ),
+                        last_message_at=latest.isoformat().replace("+00:00", "Z"),
+                    ),
+                )
+
+
+def test_legacy_agent_list_metadata_does_not_guess_creator_or_message_time():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        response = context.client.get(_BASE, headers={"Authorization": f"Bearer {context.access_token}"})
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["items"][0], has_entries(creator=None, last_message_at=None))
+
+
+@pytest.mark.parametrize("agent_count", [1, 20])
+def test_agent_list_batches_shared_credential_labels(agent_count):
+    from api.domains.shared_credentials.repository import SharedCredentialRepository
+    from api.tests.steps.agent import shared_credential_is_attached_to_agent, there_is_a_shared_credential
+
+    with given([*_GIVEN, there_is_a_shared_credential()]) as context:
+        for index in range(agent_count):
+            there_is_an_agent(name=f"Teammate {index}")(context)
+            shared_credential_is_attached_to_agent()(context)
+        repository = context.injector.get(SharedCredentialRepository)
+        with patch.object(repository, "get_names_by_ids_and_org", wraps=repository.get_names_by_ids_and_org) as lookup:
+            response = context.client.get(
+                _BASE,
+                params={"page": 1, "page_size": 50},
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["items"], has_length(agent_count))
+        for agent in response.json()["items"]:
+            assert_that(
+                agent["secrets"],
+                equal_to(
+                    [
+                        {
+                            "provider": context.shared_credential.provider,
+                            "secret_name": context.shared_credential.name,
+                            "shared_credential_id": str(context.shared_credential.id),
+                            "shared_credential_name": context.shared_credential.name,
+                        }
+                    ]
+                ),
+            )
+        assert_that(lookup.call_count, equal_to(1))
+        assert_that(lookup.call_args.args, equal_to(([context.shared_credential.id], context.organization.id)))
+
+
+@pytest.mark.parametrize("pin_type", ["organization", "platform", "override"])
+def test_agent_list_projects_pin_metadata_without_loading_template_documents(pin_type):
+    from api.tests.helpers.sql_queries import capture_sql_statements
+    from api.tests.steps.template import agent_uses_template_pin
+
+    with given([*_GIVEN, there_is_an_agent(), agent_uses_template_pin(pin_type)]) as context:
+        with capture_sql_statements(context.postgres_delegate.engine) as statements:
+            response = context.client.get(_BASE, headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        body = response.json()["items"][0]
+        key, version, kind, override_version = context.expected_template_pin
+        assert_that(
+            body,
+            has_entries(
+                template_key=key, template_version=version, template_pin_type=kind, override_version=override_version
+            ),
+        )
+        for column in (
+            "soul_md",
+            "identity_md",
+            "user_md",
+            "tools_md",
+            "agents_md",
+            "boot_md",
+            "bootstrap_md",
+            "heartbeat_md",
+        ):
+            assert_that("\n".join(statements), is_not(contains_string(f".{column}")))
+
+
+def test_agent_list_credential_projections_do_not_load_encrypted_contents():
+    from api.tests.helpers.sql_queries import capture_sql_statements
+    from api.tests.steps.agent import shared_credential_is_attached_to_agent, there_is_a_shared_credential
+
+    with given(
+        [*_GIVEN, there_is_an_agent(), there_is_a_shared_credential(), shared_credential_is_attached_to_agent()]
+    ) as context:
+        context.postgres_delegate.save(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=SecretProvider.FIRECRAWL,
+                secret_name="Manual Firecrawl",
+                content="encrypted-fixture",
+            )
+        )
+        with capture_sql_statements(context.postgres_delegate.engine) as statements:
+            response = context.client.get(_BASE, headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        assert_that(
+            response.json()["items"][0]["secrets"],
+            has_item(
+                has_entries(
+                    provider="firecrawl",
+                    secret_name="Manual Firecrawl",
+                    shared_credential_id=None,
+                    shared_credential_name=None,
+                )
+            ),
+        )
+        assert_that("\n".join(statements), is_not(contains_string("agent_secret.content")))
+        assert_that("\n".join(statements), is_not(contains_string("shared_credential.content")))

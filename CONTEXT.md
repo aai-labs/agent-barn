@@ -20,6 +20,18 @@ _Avoid_: deleted Organization, disabled Membership
 The deployment-configured maximum number of non-deleted Organizations attributed to one Organization Creator. Active and Suspended Organizations both count, and Platform Privilege does not bypass the limit.
 _Avoid_: Membership limit, ownership limit, Platform Administrator quota
 
+**Model Spend Limit**:
+The amount an Organization or one of its Agents may spend on model calls in one renewal period. An Organization's limit in force is its own limit when it has set one, otherwise its Spend Ceiling; an Agent's is its own limit when it has one, otherwise the Organization's default Agent limit, and never more than the Organization's. Zero is a real limit of nothing. The Organization and all its Agents share one renewal period and renew together. Enforced by the proxy at request time, so it binds late rather than exactly — a spend cutoff, not an invoice ceiling.
+_Avoid_: budget, allowance, quota, cap
+
+**Spend Ceiling**:
+The most an Organization may spend on model calls in one renewal period, set by a Platform Administrator. Every Organization has one, starting at the deployment default. The Organization may set a lower Model Spend Limit of its own, never a higher one, and lowering the ceiling beneath that limit pulls it down.
+_Avoid_: allowance, plan limit, platform budget
+
+**Spend Limit Coverage**:
+Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.
+_Avoid_: enrolment status, team membership
+
 **Platform Administrator**:
 A user with platform-level authority to administer Agent Barn outside any single Organization. A Platform Administrator may also have normal Memberships, but platform authority is separate from Organization Membership authority.
 _Avoid_: superuser, super admin, global role
@@ -37,7 +49,7 @@ The product mode where a Platform Administrator manages Platform Resources and P
 _Avoid_: default Organization, admin Organization, global workspace
 
 **Platform Oversight Data**:
-An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
+An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
 _Avoid_: Organization View, impersonation, unrestricted tenant access
 
 **Organization View**:
@@ -51,6 +63,10 @@ _Avoid_: default Organization, primary Organization
 **Membership**:
 The relationship between a user and an organization, carrying exactly one organization role.
 _Avoid_: organization user, user organization
+
+**Personal API Key**:
+A revocable, User-owned Bearer credential that accesses the product API using the User's current Organization Memberships and Agent Permissions. It may be read-only or full access.
+_Avoid_: Agent Secret, runtime ingest token, Organization-owned key
 
 **Organization Role**:
 A Membership's fixed organization-scoped authority. The roles are Organization Owner, Organization Admin, and Organization Member; an Organization can have at most one Organization Owner.
@@ -77,7 +93,7 @@ The user who originally created an Agent, retained as immutable provenance. Crea
 _Avoid_: Organization Owner, permanent Agent authority
 
 **Agent**:
-An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, executed by one Runtime, and reachable through zero or more Communication Connections.
+An organization-owned AI worker configured from one active shared Template Version or Agent Template Override Version, executed by one Runtime, and reachable through zero or more Communication Connections or Agent Webhooks.
 _Avoid_: bot, pod
 
 **Configured Model**:
@@ -88,17 +104,65 @@ _Avoid_: model usage, observed model
 The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
 _Avoid_: configured model, current model
 
+**Agent Resource Usage**:
+The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
+_Avoid_: model usage, observed model usage, cost, spend
+
+**Capacity Limit**:
+A ceiling on the total memory or CPU limits of the namespace's containers, typed in by a Platform Administrator, normally the namespace's ResourceQuota. It is entered by hand because the tenant service account cannot read the quota. Platform Resource Usage compares it with what the namespace's pods have committed in limits, which is not the same as what they use.
+_Avoid_: quota (the cluster's own object), usage limit, budget
+
 **Runtime**:
 The implementation that executes an agent. Agent Barn currently supports Hermes and OpenClaw.
 _Avoid_: platform
+
+**Agent Restore Point**:
+A captured, restorable copy of one Agent's persistent volume contents, together with a record of the Agent's configuration pins at capture time. Capture and restore both require a stopped Agent, and restore replaces the volume contents in place. The archive deliberately excludes credential material and any state the Agent's start script regenerates, so it holds the Agent's own work rather than a byte-exact image of the volume.
+_Avoid_: snapshot, backup, volume image, checkpoint
+
+**Agent Memory**:
+Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, credentials, automatic Runtime use, and read-only viewing of an Agent's own and currently permitted Organization memories, an Owner/Admin Organization viewer, and asynchronous deletion purging are implemented. See [Agent Memory](docs/features/agent-memory.md).
+_Avoid_: MEMORY.md, Runtime memory, knowledge base
+
+**Organization Memory**:
+Agent Memory marked for sharing across one Organization. One Organization Memory grant gives an Agent either Read only access for recall or Read and write access for recall and explicit shared saves.
+_Avoid_: team memory, shared bank
+
+**Memory Grant**:
+A directional permission, managed by Organization Owners and Admins, letting one Agent recall Organization Memory or one other Agent's private memories. Organization Memory grants allow either read only or read and write; another Agent's memory is always read-only. Granting or revoking access never rewrites stored memories.
+_Avoid_: memory sharing, Agent Access
+
+**Pre-Restore Restore Point**:
+An Agent Restore Point the system captures automatically at the start of a restore, before the target volume is modified. It is the rollback path when a restore is unwanted or fails partway, and it does not count against the per-Agent retention cap.
+_Avoid_: automatic backup, undo point
 
 **Platform**:
 The chat system through which an Agent interacts with people. Agent Barn support for a Platform is supplied by a shipped Platform Plugin.
 _Avoid_: runtime
 
 **Communication Connection**:
-An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have multiple Communication Connections, including several on the same Platform.
+An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have one active Communication Connection per Platform; retired Connections preserve history and may be replaced.
 _Avoid_: channel, integration, platform config
+
+**Agent Webhook**:
+An Agent-owned HTTP endpoint through which an authenticated external system submits discrete work to that Agent. It is not a Platform or Communication Connection.
+_Avoid_: webhook Connection, webhook Platform
+
+**Webhook Invocation**:
+A durable request accepted through one Agent Webhook, identified idempotently by the external system's optional event identifier when one is supplied. It records submission to an Agent Trigger Job, not the job's execution, output, or native delivery lifecycle.
+_Avoid_: webhook message, Communication Delivery
+
+**Agent Trigger Job**:
+A one-shot job accepted and owned by an Agent Runtime after a Webhook Invocation. Its result is delivered through the Agent Webhook's selected runtime-owned Communication Connection.
+_Avoid_: Communication Delivery, webhook reply
+
+**Runtime-owned Connection**:
+A Communication Connection whose provider transport, session, and delivery behavior run inside the Agent Runtime rather than the Communications Gateway. Agent Barn still owns the Connection record, credentials, policy, and operational visibility.
+_Avoid_: native Connection
+
+**Runtime Webhook Relay**:
+The product API boundary that authenticates and policy-checks a provider webhook, then forwards the accepted request to a private Agent Runtime listener and returns that listener's HTTP response to the provider.
+_Avoid_: native webhook, native service
 
 **Connection Journal**:
 The append-only, content-free operational history for one Communication Connection. Its entries are either Delivery Transitions, which belong to one durable Communication Delivery, or Connection Events, which record provider connectivity and recovery without a Delivery.
@@ -161,11 +225,11 @@ An unpublished, in-progress next version of a template lineage. Platform lineage
 _Avoid_: unpublished template, WIP template
 
 **Template Restore**:
-An action that seeds the Draft Template Version from any selected immutable published version of the same lineage, in either scope. Publishing the restored draft creates the next version in the lineage; it never mutates or removes the selected historical version.
+An action that seeds the Draft Template Version from any selected immutable published version of the same lineage. An Organization fork may select its own history or the source Platform history; publishing creates the next version in the draft's owning scope and never mutates or removes the selected historical version.
 _Avoid_: version pointer switch, destructive rollback
 
 **Fork Baseline Version**:
-The Platform Template Version whose complete snapshot was copied into the current Organization Template version. It is stored with the organization row and advances each time a Template Update clones a newer platform snapshot.
+The Platform Template Version whose complete snapshot was copied into the current Organization Template version. It is stored with the organization row and changes when a Template Update or Template Restore adopts a Platform snapshot, including when a restore selects an older baseline.
 _Avoid_: fork version, template merge baseline
 
 **Template Update**:
@@ -228,6 +292,18 @@ _Avoid_: domain event, outbox message, audit event
 An ingested record of one external tool execution by an agent, with pending, success, or error status.
 _Avoid_: integration call
 
+**Business Action**:
+A content-free record of one aai-cli or gog command an Agent ran, derived from a Tool Call at Ingest. It carries the command's integration (the aai-cli command group, such as `jira` or `microsoft`, or `google-<service>` for gog, such as `google-gmail`, distinct from an **Integration**), its resource and verb, whether it writes, its **Outcome Type**, and a SUCCESS, ERROR, or UNKNOWN status inferred from the command's result. It stores no arguments and no results.
+_Avoid_: event, activity, tool call
+
+**Outcome Type**:
+The kind of business result a write Business Action produces, such as `PULL_REQUEST_OPENED` or `RECORD_UPDATED`, with default minutes of value that an Organization may override. A write without an Outcome Type, or with one no longer in the catalogue, is unclassified and never valued. A classified write is valued only when it succeeded. With `UNKNOWN` status it is unverified, and with `ERROR` status it is failed.
+_Avoid_: action type, category
+
+**Request**:
+One piece of work asked of an Agent: an inbound Conversation Message, from a person on any Platform or through Web Chat, or a Webhook Invocation. Scheduled runs are not Requests, though their Tool Calls and spend still count toward an Agent's per-Request figures. See [`business-value.md`](docs/features/business-value.md#organization-activity).
+_Avoid_: task, job, conversation
+
 **Domain Event**:
 An immutable, typed business fact that occurred at Platform or Organization scope and may be handled internally by Agent Barn.
 _Avoid_: outbox row, telemetry event, audit log
@@ -280,18 +356,21 @@ _Avoid_: webhook
 - A **Membership** links one user to one **Organization** with one **Organization Role**.
 - An **Organization Role** grants **Permissions** for Organization capabilities.
 - An **Agent Access Role** grants **Permissions** for one Agent aggregate.
-- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections**.
+- An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections** and **Agent Webhooks**.
 - Each **Communication Connection** belongs to one **Agent**, targets one **Platform**, and is interpreted by that Platform's **Platform Plugin**.
 - A **Communication Connection** on a mailbox-addressed **Platform** holds at most one active **Agent Email Address**.
+- Each **Agent Webhook** belongs to one **Agent** and owns zero or more **Webhook Invocations**.
+- Each **Webhook Invocation** may submit one **Agent Trigger Job** per dispatch generation.
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
 - A **Membership** may have **Agent Access** to many Agents, and each relationship carries one **Agent Access Role**; creating an Agent grants its creator explicit Agent Owner access without transferring Organization ownership.
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
+- An **Agent** has zero or more **Agent Restore Points**, each capturing its persistent volume at one instant. They exist only after the Agent has run at least once, and they are destroyed when the Agent is deleted.
 - A **Template Version** may require multiple immutable **Skill Versions**.
 - A **Platform Skill** has no owner; an **Organization Skill** belongs to one Organization; an **Agent Skill** belongs to one Agent and retains its Organization for tenant isolation.
 - An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
 - A custom **Skill Lineage** can be hard-deleted from its owning Platform, Organization, or Agent scope only when no Agent pins any of its versions and no Template, Override, or fork-source reference remains; the delete cascades the lineage's own Drafts, Versions, and files.
 - A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
-- A **Platform Administrator** can inspect any immutable Platform Template Version and use a **Template Restore** to seed a new Draft Template Version from it; the restore leaves version history and existing Agent pins unchanged.
+- A **Platform Administrator** can restore an immutable Platform Template Version into a Platform draft; an Organization member with template management permission can restore an Organization version or a Built-in source version into an Organization draft. Both forms of **Template Restore** preserve published history and existing Agent pins.
 - An Organization Template fork tracks a **Fork Baseline Version**; the first fork is Organization v1 and a **Template Update** clones its origin's newer Platform Template snapshot into the next organization version.
 - Editing an Agent's Template from the Agent's own screen creates or updates one **Agent Template Override Draft** as a snapshot of the exact active shared Template Version or Agent Template Override Version, retaining its **Override Source Version** lineage; other Agents and the shared source lineage are unaffected. Selecting or rolling back a published version does not modify or discard that draft.
 - Publishing the draft validates it and creates the next immutable **Agent Template Override Version** without changing the Agent's pin. Selecting a published shared or Override Version changes the active pin immediately for a stopped Agent; a running Agent uses the explicit **Apply & Restart** workflow, which stops, selects, and starts it without a pending pin.
@@ -308,3 +387,4 @@ _Avoid_: webhook
 - The persisted field `openclaw_msg_id` stores the runtime-external message identifier for both OpenClaw and Hermes messages. Its name is narrower than its current meaning.
 - “Integration” is sometimes used for both the external service and its credential. Use **Integration** for the service and **Agent Secret** for the stored credential payload.
 - “Owner” names both an Organization Role and a default Agent Access Role. Use **Organization Owner** for tenant governance and **Agent Owner** for full authority over one Agent.
+- “Restore” names two unrelated actions. **Template Restore** seeds a Draft Template Version from an earlier published version and is additive — it never destroys anything. Restoring an **Agent Restore Point** replaces an Agent's volume contents in place and is destructive. Always qualify which one is meant; never write “restore” unqualified.

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import patch
@@ -51,10 +52,11 @@ class _FakeAppsApi:
 
 
 class _FakeCoreApi:
-    def __init__(self, resource=None, pods=None, log_text=None, raises_on=None):
+    def __init__(self, resource=None, pods=None, log_text=None, raises_on=None, log_status=200):
         self._resource = resource
         self._pods = pods or []
         self._log_text = log_text
+        self._log_status = log_status
         self._raises_on = raises_on or {}
 
     def _maybe_raise(self, key):
@@ -77,7 +79,7 @@ class _FakeCoreApi:
         self.patched_service = (name, namespace, body)
         return self._resource
 
-    def list_namespaced_pod(self, namespace, label_selector=""):
+    def list_namespaced_pod(self, namespace, label_selector="", **kwargs):
         return SimpleNamespace(items=self._pods)
 
     def read_namespaced_pod_log(self, pod_name, namespace, **kwargs):
@@ -85,7 +87,22 @@ class _FakeCoreApi:
             raise self._raises_on["read_log"]
         if kwargs.get("follow") and not kwargs.get("_preload_content", True):
             return _FakeStreamResponse(self._log_text or "")
-        return self._log_text or ""
+        if not kwargs.get("_preload_content", True):
+            return _FakeLogResponse(self._log_text or "", status=self._log_status)
+        # Preloaded content is the repr of the response bytes, not the text —
+        # the real client's behaviour, and the reason callers must not preload.
+        return str((self._log_text or "").encode())
+
+
+class _FakeLogResponse:
+    """An un-preloaded log response: raw bytes plus a status, as urllib3 returns."""
+
+    def __init__(self, text: str, status: int = 200):
+        self.data = text.encode()
+        self.status = status
+
+    def close(self):
+        pass
 
 
 class _FakeStreamResponse:
@@ -306,8 +323,44 @@ def test_create_service_refreshes_labels_on_conflict():
     name, namespace, body = core.patched_service
     assert_that(name, equal_to("agent-x"))
     assert_that(namespace, equal_to("agent-farm"))
-    assert_that(body["metadata"]["labels"], equal_to(desired_labels))
+    assert_that(body, equal_to([{"op": "add", "path": "/metadata/labels", "value": desired_labels}]))
     assert_that(result, equal_to(existing))
+
+
+def test_create_service_replaces_ports_on_conflict():
+    """A Service created before Teams became runtime-owned must gain the
+    webhook port on restart, and lose it when the Connection is disabled."""
+    from kubernetes.client import V1Service, V1ServicePort, V1ServiceSpec
+
+    existing = V1Service(metadata=V1ObjectMeta(name="agent-x", labels={"app": "agent-x"}))
+    core = _FakeCoreApi(resource=existing, raises_on={"create": ApiException(status=409)})
+    k8s = _make_client(core_api=core)
+    manifest = V1Service(
+        metadata=V1ObjectMeta(name="agent-x", labels={"app": "agent-x"}),
+        spec=V1ServiceSpec(
+            ports=[
+                V1ServicePort(port=80, target_port=8080, name="gateway"),
+                V1ServicePort(port=3978, target_port=3978, name="webhook"),
+            ]
+        ),
+    )
+
+    k8s.create_service("agent-farm", manifest)
+
+    _, _, body = core.patched_service
+    assert_that(
+        body[1],
+        equal_to(
+            {
+                "op": "replace",
+                "path": "/spec/ports",
+                "value": [
+                    {"name": "gateway", "port": 80, "targetPort": 8080},
+                    {"name": "webhook", "port": 3978, "targetPort": 3978},
+                ],
+            }
+        ),
+    )
 
 
 def test_create_service_propagates_non_conflict_errors():
@@ -319,3 +372,113 @@ def test_create_service_propagates_non_conflict_errors():
         calling(k8s.create_service).with_args("agent-farm", V1Service(metadata=V1ObjectMeta(name="agent-x"))),
         raises(ApiException),
     )
+
+
+def _diagnostic_pod(created, *, deleting=False, phase="Running"):
+    termination = SimpleNamespace(reason="Error", exit_code=1, finished_at=created + timedelta(minutes=2))
+    container = SimpleNamespace(
+        name="agent",
+        restart_count=21,
+        ready=False,
+        state=SimpleNamespace(waiting=SimpleNamespace(reason="CrashLoopBackOff"), terminated=None),
+        last_state=SimpleNamespace(terminated=termination),
+    )
+    return SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="crashing-pod", creation_timestamp=created, deletion_timestamp=created if deleting else None
+        ),
+        status=SimpleNamespace(phase=phase, container_statuses=[container]),
+    )
+
+
+def test_runtime_diagnostics_reads_failed_pod_and_previous_container_evidence():
+    created = datetime(2026, 9, 17, 12, tzinfo=UTC)
+
+    class LogsApi(_FakeCoreApi):
+        def read_namespaced_pod_log(self, pod_name, namespace, **kwargs):
+            return _FakeLogResponse(
+                "2026-09-17T12:02:00Z Legacy workspace setup state requires migration"
+                if kwargs["previous"]
+                else "Starting"
+            )
+
+    core = LogsApi(pods=[_diagnostic_pod(created, phase="Failed")])
+    with when("a failed pod retains its last container logs"):
+        result = _make_client(core_api=core).get_runtime_diagnostics("agent-id", "agent-farm")
+    with then("the cause and termination are available even though the pod is not Running"):
+        assert_that(result["restart_count"], equal_to(21))
+        assert_that(result["exit_code"], equal_to(1))
+        assert_that(result["finished_at"], equal_to(created + timedelta(minutes=2)))
+        assert_that(
+            result["previous_logs"], equal_to(["2026-09-17T12:02:00Z Legacy workspace setup state requires migration"])
+        )
+        assert_that(result["current_logs"], equal_to(["Starting"]))
+
+
+def test_runtime_diagnostics_can_skip_the_logs_and_keep_the_rest():
+    created = datetime(2026, 9, 17, 12, tzinfo=UTC)
+    log_reads = []
+
+    class LogsApi(_FakeCoreApi):
+        def read_namespaced_pod_log(self, pod_name, namespace, **kwargs):
+            log_reads.append(kwargs)
+            return _FakeLogResponse("a line that must not be read")
+
+    core = LogsApi(pods=[_diagnostic_pod(created, phase="Failed")])
+    with when("the caller is outside the log boundary and asks for no logs"):
+        result = _make_client(core_api=core).get_runtime_diagnostics("agent-id", "agent-farm", include_logs=False)
+    with then("no log is read at all, and restarts and the reason the last one ended are still there"):
+        assert_that(log_reads, equal_to([]))
+        assert_that(result["restart_count"], equal_to(21))
+        assert_that(result["termination_reason"], equal_to("Error"))
+        assert_that("current_logs" in result or "previous_logs" in result, equal_to(False))
+        assert_that(result.get("current_logs_available", False), equal_to(False))
+
+
+def test_runtime_diagnostics_decodes_log_text_into_separate_lines():
+    """The evidence is only readable if it survives as lines.
+
+    A preloaded response hands back the repr of the response bytes, so the whole
+    log arrives as one `b"...\n..."` string and the cause is buried in escapes.
+    """
+    core = _FakeCoreApi(
+        pods=[_diagnostic_pod(datetime.now(UTC))],
+        log_text="openclaw 0.7.0 starting\nERROR Legacy workspace setup state requires migration\n",
+    )
+    result = _make_client(core_api=core).get_runtime_diagnostics("agent-id", "agent-farm")
+    assert_that(
+        result["current_logs"],
+        equal_to(["openclaw 0.7.0 starting", "ERROR Legacy workspace setup state requires migration"]),
+    )
+
+
+def test_runtime_diagnostics_ignores_deleting_pods_and_uses_newest_pod():
+    created = datetime(2026, 9, 17, tzinfo=UTC)
+    core = _FakeCoreApi(
+        pods=[
+            _diagnostic_pod(created),
+            _diagnostic_pod(created + timedelta(hours=2), deleting=True),
+            _diagnostic_pod(created + timedelta(hours=1)),
+        ]
+    )
+    result = _make_client(core_api=core).get_runtime_diagnostics("agent-id", "agent-farm")
+    assert_that(result["pod_created_at"], equal_to(created + timedelta(hours=1)))
+
+
+def test_runtime_diagnostics_preserves_status_when_logs_are_unavailable():
+    core = _FakeCoreApi(pods=[_diagnostic_pod(datetime.now(UTC))], raises_on={"read_log": ApiException(status=400)})
+    result = _make_client(core_api=core).get_runtime_diagnostics("agent-id", "agent-farm")
+    assert_that(result["waiting_reason"], equal_to("CrashLoopBackOff"))
+    assert_that(result.get("previous_logs_available", False), equal_to(False))
+
+
+def test_runtime_diagnostics_does_not_expose_arbitrary_cluster_reason():
+    pod = _diagnostic_pod(datetime.now(UTC))
+    pod.status.container_statuses[0].state.waiting.reason = "secret-cluster-detail"
+    result = _make_client(core_api=_FakeCoreApi(pods=[pod])).get_runtime_diagnostics("agent-id", "agent-farm")
+    assert_that(result["waiting_reason"], equal_to("Unknown"))
+
+
+def test_runtime_diagnostics_missing_pod_is_not_healthy():
+    result = _make_client().get_runtime_diagnostics("agent-id", "agent-farm")
+    assert_that(result["available"], equal_to(False))

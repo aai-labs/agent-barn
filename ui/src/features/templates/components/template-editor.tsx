@@ -89,7 +89,7 @@ export function TemplateEditor({
     !isNew && Boolean(lineage && lineage.latestPublishedVersion !== null);
   const [isEditing, setIsEditing] = useState(canManage && (isNew || !hasPublishedVersion));
   const [started, setStarted] = useState(false);
-  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const shouldLoadDraft =
     !isNew &&
     isEditing &&
@@ -137,9 +137,11 @@ export function TemplateEditor({
   const publishedTemplate = useMemo(
     () =>
       publishedVersions.find(
-        (version) => version.version === selectedVersion,
-      ) ?? publishedVersions[0],
-    [publishedVersions, selectedVersion],
+        (version) => version.id === selectedVersionId,
+      ) ??
+      publishedVersions.find((version) => version.organizationId !== null) ??
+      publishedVersions[0],
+    [publishedVersions, selectedVersionId],
   );
 
   useEffect(() => {
@@ -480,6 +482,7 @@ export function TemplateEditor({
       const result = await startDraft.mutateAsync({
         templateKey,
         sourceVersion: publishedTemplate?.version,
+        sourceScope: publishedTemplate?.organizationId ? "organization" : "platform",
       });
       setStarted(true);
       setIsEditing(true);
@@ -505,9 +508,9 @@ export function TemplateEditor({
         }
         isStartingDraft={startDraft.isPending}
         versions={publishedVersions}
-        selectedVersion={publishedTemplate?.version ?? null}
+        selectedVersionId={publishedTemplate?.id ?? null}
         onRetry={() => void refetchPublishedVersions()}
-        onVersionChange={setSelectedVersion}
+        onVersionChange={setSelectedVersionId}
         onStartEditing={() => void handleStartEditing()}
         onClose={requestClose}
       />

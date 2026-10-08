@@ -16,13 +16,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN --mount=type=secret,id=gh_token \
-    git clone --depth 1 \
-      "https://x-access-token:$(cat /run/secrets/gh_token)@github.com/aai-labs/aai-cli.git" repo && \
+RUN git clone --depth 1 https://github.com/aai-labs/aai-cli.git repo && \
     cargo install --path repo --root /out --locked
 
 FROM nousresearch/hermes-agent:v2026.8.19
 ARG APT_MIRROR
+
+ENV HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace
+
+# The gateway contract captures this client; memory must not install dependencies at boot.
+RUN uv pip install --python /opt/hermes/.venv/bin/python 'hindsight-client==0.6.1'
 
 # Keep /v1/runs approvals while explicitly resuming durable DM/thread history.
 COPY patch-run-session-history.py /tmp/patch-run-session-history.py

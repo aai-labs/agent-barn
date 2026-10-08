@@ -6,22 +6,27 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from api.core.config import get_config
+from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.service import _OPENROUTER_MODEL_PREFIX, AgentService, is_model_allowed
+from api.domains.agents.selection import _OPENROUTER_MODEL_PREFIX, is_model_allowed
+from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import (
-    EventDelivery,
     EventDeliveryDispatcher,
     SubjectIdentity,
     SubjectIdentityType,
     resolve_actor_identity,
 )
-from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_MODEL_ALLOWLIST_CHANGED
+from api.domains.events.catalog import (
+    EVENT_REGISTRY,
+    ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+)
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
+from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import (
     Organization,
     OrganizationCreate,
@@ -50,11 +55,13 @@ def _and_list(items: list[str]) -> str:
 @dataclass
 class OrganizationService:
     organization_repository: OrganizationRepository
+    llm_budgets: OrganizationLlmBudgetService
     agent_service: AgentService
     permission_policy: PermissionPolicy
     event_delivery_dispatcher: EventDeliveryDispatcher
     agent_settings_lookup: AgentSettingsLookupService
     agent_repository: AgentRepository
+    memory_keys: MemoryKeyRepository
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a platform administrator in explicit Organization context) may
@@ -198,6 +205,9 @@ class OrganizationService:
                 detail=f"You can create up to {error.limit} organizations",
             ) from error
 
+        # With its limit already on it: a new Organization is capped from the start.
+        # Best effort — creation is committed, and key generation provisions again.
+        self.llm_budgets.provision_team(organization.id)
         organization_read = self.organization_repository.get_read(organization.id)
         if not organization_read:
             raise HTTPException(
@@ -326,8 +336,8 @@ class OrganizationService:
                 self.organization_repository.outbox_repository.stage(
                     session=session, registry=EVENT_REGISTRY, event=event
                 )
-                delivery_ids = list(
-                    session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id))
+                delivery_ids = self.organization_repository.outbox_repository.delivery_ids_for_event(
+                    session, event.event_id
                 )
 
             session.commit()
@@ -364,4 +374,11 @@ class OrganizationService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(f"Delete this organization's agents before deleting it ({active_agents} still active)."),
             )
-        self.organization_repository.delete(organization.id)
+        self.organization_repository.delete(
+            organization.id, before_delete=lambda session: self.memory_keys.enqueue_deletion(organization.id, session)
+        )
+        try:
+            self.memory_keys.revoke_pending(self.llm_budgets.litellm.revoke_memory_key, organization_id=organization.id)
+        except Exception as exc:
+            # The durable cleanup intent already committed with deletion.
+            logger.warning("Memory credential cleanup deferred: %s", type(exc).__name__)

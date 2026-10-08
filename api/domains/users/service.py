@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from uuid import UUID, uuid7
 
@@ -12,6 +13,7 @@ from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.auth.service import AuthService
 from api.domains.events import EventDeliveryDispatcher
+from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.exceptions import (
@@ -39,6 +41,8 @@ from api.domains.users.organization_users.service import OrganizationUserService
 from api.domains.users.repository import UserRepository
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
+logger = logging.getLogger(__name__)
+
 
 @inject
 @dataclass
@@ -47,6 +51,7 @@ class UserService:
     organization_user_service: OrganizationUserService
     organization_user_repository: OrganizationUserRepository
     organization_repository: OrganizationRepository
+    llm_budgets: OrganizationLlmBudgetService
     refresh_token_repository: RefreshTokenRepository
     config: Config
     event_delivery_dispatcher: EventDeliveryDispatcher
@@ -108,6 +113,9 @@ class UserService:
             )
             session.commit()
 
+        # With its limit already on it: a new Organization is capped from the start.
+        # Best effort — creation is committed, and key generation provisions again.
+        self.llm_budgets.provision_team(organization.id)
         self.auth_service.send_prepared_invite(prepared)
         organization_read = self.organization_repository.get_platform_read(organization.id)
         if organization_read is None or prepared.invite_link is None:
@@ -128,17 +136,7 @@ class UserService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="An active user does not need an invitation",
             )
-        invited_user, invite_link = self.auth_service.invite_user(
-            email=user.email,
-            full_name=user.full_name,
-        )
-        del invited_user
-        if invite_link is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="An active user does not need an invitation",
-            )
-        return PlatformUserInviteResult(invite_link=invite_link)
+        return PlatformUserInviteResult(invite_link=self.auth_service.resend_invite(user))
 
     def get_user_by_id_and_organization_id(self, user_id: UUID, organization_id: UUID) -> User:
         user = self.user_repository.get_by_id_and_organization_id(user_id, organization_id)

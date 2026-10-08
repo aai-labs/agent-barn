@@ -28,6 +28,37 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 class ConversationRepository:
     delegate: PostgresRepositoryDelegate
 
+    def latest_message_times_for_agents(
+        self,
+        agent_ids: list[UUID],
+        authorization_scope: AuthorizationScope,
+    ) -> dict[UUID, datetime]:
+        """Latest occurrence across directions and Connections, including Web Chat."""
+        if not agent_ids:
+            return {}
+        # Each direction uses the existing (agent_id, direction, occurred_at)
+        # index to read one row instead of aggregating the full message history.
+        latest_by_direction = [
+            select(AgentChatMessage.occurred_at)
+            .where(
+                col(AgentChatMessage.agent_id) == col(Agent.id),
+                col(AgentChatMessage.direction) == direction,
+            )
+            .order_by(col(AgentChatMessage.occurred_at).desc())
+            .limit(1)
+            .correlate(Agent)
+            .scalar_subquery()
+            for direction in MessageDirection
+        ]
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, sa.func.greatest(*latest_by_direction)).where(
+                    col(Agent.id).in_(agent_ids),
+                    *agent_scope_predicates(authorization_scope),
+                )
+            ).all()
+        return {agent_id: occurred_at for agent_id, occurred_at in rows if occurred_at is not None}
+
     def upsert_messages(self, messages: list[AgentChatMessage]) -> None:
         if not messages:
             return
@@ -84,15 +115,15 @@ class ConversationRepository:
         """Daily inbound/outbound message counts for the stats surfaces (AF-256).
         Returns (iso_date, inbound, outbound) ordered by day.
 
-        Unscoped by default and only ever reached through
-        `require_platform_admin` — org-scoped reads go through AuthorizationScope
-        like everything else. `agent_scope_predicates` is unusable here on three
-        counts: it hard-requires a single organization_id, it appends
-        `deleted_at IS NULL`, and it adds per-membership EXISTS subqueries.
+        Unscoped by default, which only Platform View reaches, through
+        `require_platform_admin`.
 
-        `organization_id` narrows the same aggregate to one tenant so a future
-        Organization dashboard reuses this query behind its own route, DTO, and
-        authorization rather than growing a second one.
+        `organization_id` narrows the same aggregate to one tenant for the
+        Organization activity read (`BusinessValueService`). That caller
+        authorizes through `require_organization` and passes its scope's
+        organization_id. An Organization-wide scope reduces
+        `agent_scope_predicates(scope, include_deleted=True)` to exactly this
+        Agent join.
 
         The join to Agent is conditional: with no Agent-owned filter there is no
         join at all, which keeps messages of soft-deleted Agents counted.
@@ -195,26 +226,28 @@ class ConversationRepository:
         occurred_at_utc = sa.func.timezone("UTC", col(AgentChatMessage.occurred_at))
         day = sa.func.date_trunc(unit.value, occurred_at_utc).label("day")
 
-        agent_predicates = []
-        if organization_id is not None:
-            agent_predicates.append(col(Agent.organization_id) == organization_id)
-        if created_by_user_id is not None:
-            agent_predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
+        message_predicates = [
+            col(AgentChatMessage.occurred_at) >= window_start,
+            col(AgentChatMessage.occurred_at) < window_end,
+        ]
+        if agent_id is not None:
+            message_predicates.append(col(AgentChatMessage.agent_id) == agent_id)
         if platform is not None:
-            agent_predicates.append(
+            message_predicates.append(
                 sa.exists().where(
                     col(CommunicationConnection.id) == col(AgentChatMessage.connection_id),
                     col(CommunicationConnection.platform_key) == platform.value,
                 )
             )
 
+        agent_predicates = []
+        if organization_id is not None:
+            agent_predicates.append(col(Agent.organization_id) == organization_id)
+        if created_by_user_id is not None:
+            agent_predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
+
         with Session(self.delegate.engine) as session:
-            query = select(sa.func.timezone("UTC", day), col(AgentChatMessage.agent_id)).where(
-                col(AgentChatMessage.occurred_at) >= window_start,
-                col(AgentChatMessage.occurred_at) < window_end,
-            )
-            if agent_id is not None:
-                query = query.where(col(AgentChatMessage.agent_id) == agent_id)
+            query = select(sa.func.timezone("UTC", day), col(AgentChatMessage.agent_id)).where(*message_predicates)
             if agent_predicates:
                 query = query.join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id)).where(*agent_predicates)
 
@@ -233,6 +266,8 @@ class ConversationRepository:
 
         Provider channel identifiers are unique only within one Connection. Picks
         the latest non-null channel name for each (Connection, channel) pair.
+        Excludes the built-in Web Chat Connection: it already has its own live
+        Chat tab, so surfacing it again here would just duplicate that view.
         """
         with Session(self.delegate.engine) as session:
             query = (
@@ -244,6 +279,7 @@ class ConversationRepository:
                 )
                 .where(
                     col(AgentChatMessage.agent_id) == agent_id,
+                    col(CommunicationConnection.platform_key) != CommunicationPlatform.WEB.value,
                     *agent_scope_predicates(authorization_scope),
                 )
                 .order_by(

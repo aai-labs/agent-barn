@@ -1,11 +1,14 @@
+import asyncio
 import io
 import json
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import httpx
+import pytest
 from fastapi import status
 from hamcrest import (
     all_of,
@@ -16,6 +19,7 @@ from hamcrest import (
     equal_to,
     greater_than_or_equal_to,
     has_entries,
+    has_item,
     has_key,
     has_length,
     is_,
@@ -26,6 +30,7 @@ from hamcrest import (
     not_none,
     starts_with,
 )
+from sqlalchemy import MetaData, Table, literal_column
 from sqlmodel import Session, col, select
 from starlette.testclient import TestClient
 
@@ -33,9 +38,12 @@ from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.communications.delivery_repository import CommunicationDeliveryRepository
 from api.domains.communications.email_address_repository import AgentEmailAddressRepository
 from api.domains.communications.error_details import normalize_communication_error
+from api.domains.communications.maintenance import CommunicationsMaintenance
 from api.domains.communications.models import (
     AgentEmailAddress,
     CommunicationConnection,
+    CommunicationDelivery,
+    CommunicationDeliveryStatus,
     CommunicationJournalEntry,
     CommunicationJournalStage,
     CommunicationSender,
@@ -50,6 +58,7 @@ from api.domains.events.models import OutboxMessage
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
+from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.slack.errors import SlackFetchError
 from api.tests.core.givenpy import given, then, when
@@ -71,6 +80,7 @@ from api.tests.steps.agent import (
     there_is_an_agent_in_another_org,
     use_org_for_auth,
 )
+from api.tests.steps.communication import there_is_a_connection, there_is_an_outbound_delivery
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 
@@ -164,7 +174,7 @@ def _discord_payload(name: str = "Community Discord", bot_token: str = "token-on
     return {
         "platform_key": "discord",
         "display_name": name,
-        "settings": {"guild_ids": ["guild-one"]},
+        "settings": {"allowed_channel_ids": ["channel-one"]},
         "credentials": {"bot_token": bot_token},
     }
 
@@ -184,8 +194,18 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
             catalogue = response.json()
             assert_that(
                 [item["key"] for item in catalogue],
-                contains_inanyorder("discord", "email", "slack", "teams", "telegram"),
+                contains_inanyorder("discord", "email", "slack", "teams", "telegram", "web"),
             )
+            for platform in ("discord", "telegram", "slack", "teams"):
+                native = next(item for item in catalogue if item["key"] == platform)
+                assert_that(native["transport"], equal_to("native"))
+                assert_that("supervised_ingress" in native["capabilities"], equal_to(False))
+                assert_that("processing_feedback" in native["capabilities"], equal_to(False))
+                assert_that("agent_initiated_delivery" in native["capabilities"], equal_to(False))
+                assert_that("interactive_components" in native["capabilities"], equal_to(False))
+            slack = next(item for item in catalogue if item["key"] == "slack")
+            assert_that(slack["schema_version"], equal_to(2))
+            assert_that(slack["settings_schema"]["properties"], not_(has_key("verbose_mode")))
             hints = {item["key"]: item["setup_hint"] for item in catalogue}
             assert_that(
                 hints["slack"],
@@ -214,7 +234,11 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
                     contains_string("@BotFather"),
                     contains_string("/newbot"),
                     contains_string("getUpdates"),
+                    contains_string("native runtime"),
+                    contains_string("group administrator"),
                     contains_string("/setprivacy"),
+                    contains_string("remove and re-add"),
+                    contains_string("only when mentioned or replied to"),
                     contains_string("webhook"),
                 ),
             )
@@ -222,30 +246,65 @@ def test_platform_catalog_lists_the_shipped_plugins() -> None:
 
 def test_slack_workspace_preview_loads_directory_without_creating_a_connection() -> None:
     with given(_GIVEN) as context:
-        preview = {"platform_key": "slack", "credentials": _slack_payload()["credentials"]}
+        # The Connection editor creates this transient target while an operator
+        # is choosing a person. Directory discovery needs only Slack credentials,
+        # not a complete scheduled-delivery destination.
+        preview = {
+            "platform_key": "slack",
+            "settings": {"default_delivery_target": {"kind": "user", "recipient": ""}},
+            "credentials": _slack_payload()["credentials"],
+        }
         with patch(
             "api.infrastructure.slack.client.SlackClient.list_channels",
             return_value=[{"id": "C1", "name": "ops", "is_private": False}],
         ):
-            with patch(
-                "api.infrastructure.slack.client.SlackClient.list_users",
-                return_value=[{"id": "U1", "name": "aria", "real_name": "Aria", "display_name": ""}],
-            ):
-                response = context.client.post(
-                    f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
-                    json=preview,
-                    headers=_auth(context),
-                )
+            channels = context.client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                json={**preview, "kind": "channels"},
+                headers=_auth(context),
+            )
+        with patch(
+            "api.infrastructure.slack.client.SlackClient.list_users",
+            return_value=[{"id": "U1", "name": "aria", "real_name": "Aria", "display_name": ""}],
+        ):
+            users = context.client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                json={**preview, "kind": "users"},
+                headers=_auth(context),
+            )
+
+        assert_that(channels.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(channels.json()["entries"], equal_to([{"id": "C1", "label": "#ops", "detail": None}]))
+        assert_that(users.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(users.json()["entries"], equal_to([{"id": "U1", "label": "Aria", "detail": "@aria"}]))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), equal_to([]))
+
+
+def test_discord_bot_preview_loads_guilds_without_creating_a_connection() -> None:
+    with given(_GIVEN) as context:
+        preview = {
+            "platform_key": "discord",
+            "kind": "guilds",
+            "credentials": _discord_payload()["credentials"],
+        }
+        with patch(
+            "api.infrastructure.discord.client.DiscordClient.list_guilds",
+            return_value=[{"id": "guild-1", "name": "Community"}],
+        ):
+            response = context.client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connection-directory-preview",
+                json=preview,
+                headers=_auth(context),
+            )
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(response.json()["channels"], equal_to([{"id": "C1", "label": "#ops", "detail": None}]))
-        assert_that(response.json()["users"], equal_to([{"id": "U1", "label": "Aria", "detail": "@aria"}]))
+        assert_that(response.json()["entries"], equal_to([{"id": "guild-1", "label": "Community", "detail": None}]))
         assert_that(context.client.get(_base(context), headers=_auth(context)).json(), equal_to([]))
 
 
 def test_slack_workspace_preview_reports_a_provider_failure_instead_of_a_server_error() -> None:
     with given(_GIVEN) as context:
-        preview = {"platform_key": "slack", "credentials": _slack_payload()["credentials"]}
+        preview = {"platform_key": "slack", "kind": "channels", "credentials": _slack_payload()["credentials"]}
         with patch(
             "api.infrastructure.slack.client.SlackClient.list_channels",
             side_effect=SlackFetchError("conversations.list error: missing_scope"),
@@ -404,6 +463,93 @@ def test_email_connection_is_created_without_any_per_agent_credential() -> None:
             body = response.json()
             assert_that(body["platform_key"], equal_to("email"))
             assert_that(body, not_(has_key("credentials")))
+            delegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                connection = session.exec(
+                    select(CommunicationConnection).where(CommunicationConnection.id == UUID(body["id"]))
+                ).one()
+                assert_that(connection.model_dump(), not_(has_key("driver_key_encrypted")))
+
+
+@pytest.mark.parametrize("payload_factory", [_slack_payload, _discord_payload, _telegram_payload])
+def test_new_native_connection_stores_provider_credentials_without_a_driver_key(payload_factory) -> None:
+    with given(_GIVEN) as context:
+        payload = payload_factory()
+        with when("I create a native Connection"):
+            response = context.client.post(_base(context), json=payload, headers=_auth(context))
+
+        with then("provider credentials remain encrypted and no driver credential is minted"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            body = response.json()
+            assert_that(body, not_(has_key("driver_key_encrypted")))
+            delegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                connection = session.exec(
+                    select(CommunicationConnection).where(CommunicationConnection.id == UUID(body["id"]))
+                ).one()
+                assert_that(connection.model_dump(), not_(has_key("driver_key_encrypted")))
+                assert_that(
+                    json.loads(decrypt_token(connection.credentials_encrypted, TEST_ENCRYPTION_KEY)),
+                    equal_to(payload["credentials"]),
+                )
+
+
+@pytest.mark.parametrize("retire_agent", [False, True])
+def test_current_connection_crud_leaves_inert_legacy_fields_and_scrubs_provider_credentials(retire_agent) -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+        connection_id = UUID(created.json()["id"])
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        # Reflection models an older reader/writer without reintroducing these
+        # retired fields into the current application mapping.
+        table = Table("communication_connection", MetaData(), autoload_with=delegate.engine)
+        legacy_fields = {
+            "driver_key_encrypted": "fixture-retired-driver",
+            "ingress_lease_owner": "fixture-retired-owner",
+            "ingress_lease_expires_at": datetime.now(UTC) + timedelta(hours=1),
+        }
+        with delegate.engine.begin() as connection:
+            connection.execute(table.update().where(table.c.id == connection_id).values(**legacy_fields))
+
+        with when("current code reads and updates a Connection with legacy values"):
+            listed = context.client.get(_base(context), headers=_auth(context))
+            updated = context.client.patch(
+                f"{_base(context)}/{connection_id}",
+                headers=_auth(context),
+                json={"revision": created.json()["revision"], "display_name": "Updated native Connection"},
+            )
+
+        with then("current reads omit legacy fields and updates preserve older readers' values"):
+            assert_that(listed.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(updated.status_code, equal_to(status.HTTP_200_OK))
+            for name in legacy_fields:
+                assert_that(updated.json(), not_(has_key(name)))
+            with delegate.engine.connect() as connection:
+                row = connection.execute(table.select().where(table.c.id == connection_id)).mappings().one()
+                assert_that({name: row[name] for name in legacy_fields}, equal_to(legacy_fields))
+
+        with when("current code retires the Connection or deletes its Agent"):
+            if retire_agent:
+                retired = context.client.delete(
+                    f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}",
+                    headers=_auth(context),
+                )
+            else:
+                retired = context.client.delete(
+                    f"{_base(context)}/{connection_id}?revision={updated.json()['revision']}",
+                    headers=_auth(context),
+                )
+
+        with then("provider credentials and identities are released while legacy values remain inert"):
+            assert_that(retired.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            with delegate.engine.connect() as connection:
+                row = connection.execute(table.select().where(table.c.id == connection_id)).mappings().one()
+                assert_that({name: row[name] for name in legacy_fields}, equal_to(legacy_fields))
+                assert_that(row["credentials_encrypted"], equal_to(""))
+                assert_that(row["credential_fingerprint"], none())
+                assert_that(row["credential_scope_key"], none())
+                assert_that(row["retired_at"], not_none())
 
 
 def test_an_email_connection_is_allocated_its_own_address() -> None:
@@ -446,13 +592,17 @@ def test_a_platform_without_a_managed_address_reports_none() -> None:
             assert_that(response.json()["managed_address"], equal_to(None))
 
 
-def test_two_email_connections_on_one_agent_get_different_addresses() -> None:
+def test_a_replacement_email_connection_gets_a_different_address() -> None:
     with given(_GIVEN_WITH_AGENT_EMAIL) as context:
-        with when("I add two Email connections"):
+        with when("I replace the Agent's Email connection"):
             first = context.client.post(_base(context), json=_email_payload("Support"), headers=_auth(context))
+            context.client.delete(
+                f"{_base(context)}/{first.json()['id']}?revision={first.json()['revision']}",
+                headers=_auth(context),
+            )
             second = context.client.post(_base(context), json=_email_payload("Sales"), headers=_auth(context))
 
-        with then("each is separately addressable"):
+        with then("the replacement is separately addressable"):
             assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(second.status_code, equal_to(status.HTTP_201_CREATED))
             assert_that(
@@ -535,26 +685,41 @@ def test_other_organization_agent_is_hidden() -> None:
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
 
 
-def test_agent_can_have_multiple_connections_for_the_same_platform() -> None:
+def test_agent_has_at_most_one_active_connection_per_platform() -> None:
     with given(_GIVEN) as context:
         client: TestClient = context.client
 
-        with when("I create two Discord connections"):
+        with when("I add a second Discord connection, a Slack one, and then replace the Discord one"):
             first = client.post(_base(context), json=_discord_payload(), headers=_auth(context))
             second = client.post(
                 _base(context),
                 json=_discord_payload("Partner Discord", "token-two"),
                 headers=_auth(context),
             )
+            other_platform = client.post(_base(context), json=_slack_payload(), headers=_auth(context))
+            client.delete(
+                f"{_base(context)}/{first.json()['id']}?revision={first.json()['revision']}",
+                headers=_auth(context),
+            )
+            replacement = client.post(
+                _base(context),
+                json=_discord_payload("Partner Discord", "token-two"),
+                headers=_auth(context),
+            )
             listed = client.get(_base(context), headers=_auth(context))
 
-        with then("both connections belong to the Agent without exposing credentials"):
+        with then("only one Connection per platform is active, without exposing credentials"):
             assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
-            assert_that(second.status_code, equal_to(status.HTTP_201_CREATED))
-            assert_that(listed.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(len(listed.json()), equal_to(2))
             assert_that(first.json(), has_entries(platform_key="discord", display_name="Community Discord", revision=1))
             assert_that(first.json(), not_(has_key("credentials")))
+            assert_that(second.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(second.json()["detail"], contains_string("already has a Connection on this platform"))
+            assert_that(other_platform.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(replacement.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(
+                sorted(item["platform_key"] for item in listed.json()),
+                equal_to(["discord", "slack"]),
+            )
 
 
 def test_retiring_agent_releases_all_platform_credentials() -> None:
@@ -650,7 +815,7 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
                 json={
                     "revision": created["revision"],
                     "display_name": "Renamed Discord",
-                    "settings": {"guild_ids": ["guild-two"]},
+                    "settings": {"allowed_channel_ids": ["channel-two"]},
                     "credentials": {"bot_token": "rotated-token"},
                 },
                 headers=_auth(context),
@@ -663,12 +828,10 @@ def test_connection_settings_name_and_credentials_can_be_updated() -> None:
                 has_entries(
                     display_name="Renamed Discord",
                     settings={
-                        "guild_ids": ["guild-two"],
-                        "allowed_channel_ids": [],
+                        "allowed_channel_ids": ["channel-two"],
                         "allowed_user_ids": [],
                         "allowed_role_ids": [],
-                        "group_policy": "allowlist",
-                        "dm_policy": "off",
+                        "allow_all_users": False,
                         "require_mention": True,
                         "home_channel_id": None,
                     },
@@ -690,24 +853,6 @@ def test_unknown_connection_update_returns_404() -> None:
 
         with then("the subordinate resource is hidden as not found"):
             assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
-
-
-def test_ingress_lease_allows_only_one_gateway_replica() -> None:
-    with given(_GIVEN) as context:
-        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
-        connection_id = UUID(created["id"])
-        repository = context.injector.get(CommunicationConnectionRepository)
-
-        with when("two gateway replicas contend for one Connection"):
-            first = repository.claim_ingress_lease(connection_id, "gateway-a")
-            second = repository.claim_ingress_lease(connection_id, "gateway-b")
-            repository.release_ingress_lease(connection_id, "gateway-a")
-            after_release = repository.claim_ingress_lease(connection_id, "gateway-b")
-
-        with then("the lease serializes provider ownership and can be transferred"):
-            assert_that(first, equal_to(True))
-            assert_that(second, equal_to(False))
-            assert_that(after_release, equal_to(True))
 
 
 def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history() -> None:
@@ -744,12 +889,17 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
                     delivery_counts=has_entries(total=0),
                 ),
             )
-            assert_that(reconnect.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            assert_that(reconnect.status_code, equal_to(status.HTTP_409_CONFLICT))
             assert_that(journal_page.status_code, equal_to(status.HTTP_200_OK))
             assert_that(delivery_page.status_code, equal_to(status.HTTP_200_OK))
             assert_that(
-                reconnect.json()["connection"],
-                has_entries(observed_status="CONNECTING", revision=2),
+                diagnostics.json()["connection"],
+                has_entries(
+                    observed_status="ERROR",
+                    revision=1,
+                    transport="native",
+                    recovery_actions=[],
+                ),
             )
 
             with Session(context.postgres_delegate.engine) as session:
@@ -770,15 +920,15 @@ def test_connection_diagnostics_and_reconnect_preserve_safe_operational_history(
 
             assert_that(
                 [getattr(entry.stage, "value", entry.stage) for entry in journal],
-                equal_to(["connection_error", "connection_connecting", "reconnect_requested"]),
+                equal_to(["connection_error"]),
             )
             assert_that(journal[0].error_code, equal_to("REDACTED"))
             assert_that(journal[0].error_summary, equal_to("Provider error details were redacted"))
-            assert_that(len(events), equal_to(3))
+            assert_that(len(events), equal_to(1))
             assert_that(str(events[0].payload), not_(contains_string("invalid credential")))
             assert_that(str(diagnostics.json()), not_(contains_string("provider rejected")))
-            assert_that(journal_page.json(), has_entries(page=1, page_size=2, total=3))
-            assert_that(len(journal_page.json()["items"]), equal_to(2))
+            assert_that(journal_page.json(), has_entries(page=1, page_size=2, total=1))
+            assert_that(len(journal_page.json()["items"]), equal_to(1))
             assert_that(str(journal_page.json()), not_(contains_string("provider rejected")))
             assert_that(delivery_page.json(), has_entries(total=0, items=[]))
 
@@ -866,7 +1016,143 @@ def test_structured_provider_diagnostics_are_retained_without_provider_secrets()
         assert_that(str(summary.json()), not_(contains_string("botsecret-token")))
 
 
-def test_diagnostics_read_does_not_grant_connection_recovery_permission() -> None:
+@pytest.mark.parametrize("platform_key", ["web", "email"])
+def test_gateway_without_provider_session_only_offers_delivery_retry(platform_key: str) -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        if platform_key == "web":
+            created = context.client.post(
+                f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/web-chat/messages",
+                json={"text": "hello"},
+                headers=_auth(context),
+            )
+            assert_that(created.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            connection = context.client.get(_base(context), headers=_auth(context)).json()[0]
+        else:
+            created = context.client.post(
+                _base(context),
+                json=_email_payload() if platform_key == "email" else _teams_payload(),
+                headers=_auth(context),
+            )
+            assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+            connection = created.json()
+        assert_that(connection, has_entries(transport="gateway", recovery_actions=["retry_delivery"]))
+
+        with when("I request a reconnect without a gateway provider session"):
+            response = context.client.post(f"{_base(context)}/{connection['id']}/reconnect", headers=_auth(context))
+
+        with then("the Connection rejects the request without incrementing its revision"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            listed = context.client.get(_base(context), headers=_auth(context))
+            assert_that(listed.json()[0]["revision"], equal_to(connection["revision"]))
+
+
+@pytest.mark.parametrize("platform_key", ["slack", "discord", "telegram", "teams"])
+def test_native_connection_reports_no_gateway_recovery_actions(platform_key: str) -> None:
+    payloads = {
+        "slack": _slack_payload,
+        "discord": _discord_payload,
+        "telegram": _telegram_payload,
+        "teams": _teams_payload,
+    }
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=payloads[platform_key](), headers=_auth(context))
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+
+        with when("I read the native Connection and its diagnostics"):
+            listed = context.client.get(_base(context), headers=_auth(context))
+            summary = context.client.get(f"{_base(context)}/{created.json()['id']}/summary", headers=_auth(context))
+
+        with then("each read identifies native transport and excludes gateway recovery"):
+            assert_that(listed.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(summary.status_code, equal_to(status.HTTP_200_OK))
+            for connection in [created.json(), listed.json()[0], summary.json()["connection"]]:
+                assert_that(connection, has_entries(transport="native", recovery_actions=[]))
+
+
+@pytest.mark.parametrize("agent_type", [AgentType.HERMES, AgentType.OPENCLAW])
+def test_native_reconnect_preserves_health_and_history(agent_type: AgentType) -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(agent_type=agent_type)]) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+        connection_id = UUID(created.json()["id"])
+        repository = context.injector.get(CommunicationConnectionRepository)
+        repository.record_health(connection_id, ConnectionObservedStatus.ERROR, error_code="PROVIDER_UNAVAILABLE")
+
+        with when("I request gateway recovery for a native Connection"):
+            reconnect = client.post(f"{_base(context)}/{connection_id}/reconnect", headers=_auth(context))
+
+        with then("the request is rejected without changing the Connection"):
+            assert_that(reconnect.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(reconnect.json()["detail"], contains_string("restart the Agent"))
+            summary = client.get(f"{_base(context)}/{connection_id}/summary", headers=_auth(context))
+            assert_that(summary.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(summary.json()["connection"], has_entries(revision=1, observed_status="ERROR"))
+            journal = client.get(f"{_base(context)}/{connection_id}/journal?kind=connection", headers=_auth(context))
+            assert_that(journal.status_code, equal_to(status.HTTP_200_OK))
+            assert_that([entry["stage"] for entry in journal.json()["items"]], equal_to(["connection_error"]))
+
+
+def test_native_retry_preserves_historical_dead_lettered_delivery() -> None:
+    with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        client: TestClient = context.client
+        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+        connection_id = UUID(created.json()["id"])
+        context.connection = context.injector.get(CommunicationConnectionRepository).get_active(connection_id)
+        there_is_an_outbound_delivery(status=CommunicationDeliveryStatus.DEAD_LETTERED)(context)
+        outbound_id = context.outbound_delivery_id
+        context.injector.get(CommunicationOperationalRepository).record_journal(
+            organization_id=context.organization.id,
+            agent_id=context.agent.id,
+            connection_id=connection_id,
+            delivery_id=outbound_id,
+            stage=CommunicationJournalStage.DEAD_LETTERED,
+            error_code="PROVIDER_UNAVAILABLE",
+        )
+
+        with when("I retry a gateway Delivery after its Connection has moved to native transport"):
+            response = client.post(
+                f"{_base(context)}/{connection_id}/deliveries/{outbound_id}/retry", headers=_auth(context)
+            )
+
+        with then("the Delivery remains dead-lettered and readable without being requeued"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            with Session(context.postgres_delegate.engine) as session:
+                delivery = session.get(CommunicationDelivery, outbound_id)
+                assert_that(delivery, not_none())
+                assert_that(delivery.status if delivery else None, equal_to(CommunicationDeliveryStatus.DEAD_LETTERED))
+            journal = client.get(
+                f"{_base(context)}/{connection_id}/journal?kind=delivery&delivery_id={outbound_id}",
+                headers=_auth(context),
+            )
+            assert_that(journal.status_code, equal_to(status.HTTP_200_OK))
+            assert_that([entry["stage"] for entry in journal.json()["items"]], not_(has_item("retry_requested")))
+            assert_that(journal.json()["items"][0]["stage"], equal_to("dead_lettered"))
+
+
+@pytest.mark.parametrize("cross_organization", [False, True])
+def test_native_recovery_keeps_unknown_or_cross_organization_resources_hidden(cross_organization: bool) -> None:
+    with given(_GIVEN) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        assert_that(created.status_code, equal_to(status.HTTP_201_CREATED))
+        connection_id = created.json()["id"] if cross_organization else str(uuid4())
+        if cross_organization:
+            there_is_an_agent_in_another_org()(context)
+
+        with when("I attempt recovery through an inaccessible Connection path"):
+            reconnect = context.client.post(f"{_base(context)}/{connection_id}/reconnect", headers=_auth(context))
+            retry = context.client.post(
+                f"{_base(context)}/{connection_id}/deliveries/{uuid4()}/retry", headers=_auth(context)
+            )
+
+        with then("neither mutation reveals the Connection's native transport"):
+            assert_that(reconnect.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            assert_that(retry.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_diagnostics_read_does_not_grant_connection_recovery_permission(native: bool) -> None:
     with given(_GIVEN) as context:
         client: TestClient = context.client
         created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
@@ -879,11 +1165,13 @@ def test_diagnostics_read_does_not_grant_connection_recovery_permission() -> Non
             diagnostics = client.get(f"{connection_url}/summary", headers=_auth(context))
             journal_page = client.get(f"{connection_url}/journal", headers=_auth(context))
             reconnect = client.post(f"{connection_url}/reconnect", headers=_auth(context))
+            retry = client.post(f"{connection_url}/deliveries/{uuid4()}/retry", headers=_auth(context))
 
         with then("read access remains available while recovery requires Agent update"):
             assert_that(diagnostics.status_code, equal_to(status.HTTP_200_OK))
             assert_that(journal_page.status_code, equal_to(status.HTTP_200_OK))
             assert_that(reconnect.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+            assert_that(retry.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
 def _envelope(message_id: str) -> NormalizedCommunicationEnvelope:
@@ -899,8 +1187,8 @@ def _envelope(message_id: str) -> NormalizedCommunicationEnvelope:
 def test_connection_summary_reports_richer_health_and_delivery_signals() -> None:
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
-        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
-        connection_id = UUID(created["id"])
+        there_is_a_connection()(context)
+        connection_id = context.connection.id
         connections = context.injector.get(CommunicationConnectionRepository)
         deliveries = context.injector.get(CommunicationDeliveryRepository)
 
@@ -1098,8 +1386,8 @@ def test_communication_journal_pruning_keeps_the_configured_retention_window_bou
 def test_journal_filters_narrow_by_stage_error_direction_and_delivery() -> None:
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         client: TestClient = context.client
-        created = client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
-        connection_id = UUID(created["id"])
+        there_is_a_connection()(context)
+        connection_id = context.connection.id
         deliveries = context.injector.get(CommunicationDeliveryRepository)
 
         # An inbound Delivery that stays queued, plus an outbound reply that
@@ -1175,8 +1463,8 @@ def test_journal_filters_narrow_by_stage_error_direction_and_delivery() -> None:
 
 def test_retryable_journal_filter_excludes_dead_lettered_inbound_deliveries() -> None:
     with given([*_GIVEN[:-1], there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
-        connection_id = UUID(created["id"])
+        there_is_a_connection()(context)
+        connection_id = context.connection.id
         deliveries = context.injector.get(CommunicationDeliveryRepository)
         accepted = deliveries.accept_inbound(connection_id=connection_id, envelope=_envelope("inbound-dead-letter"))
         claimed = deliveries.claim_next_inbound(agent_id=context.agent.id)
@@ -1357,3 +1645,137 @@ def test_app_package_is_named_after_the_agent_not_the_connection() -> None:
             assert_that(manifest["name"]["short"], not_(equal_to("Microsoft Teams")))
             slug = context.agent.name.lower().replace(" ", "-")
             assert_that(response.headers["content-disposition"], contains_string(f"{slug}-teams-app.zip"))
+
+
+@pytest.mark.parametrize("mutation", ["revision", "disabled", "retired", "native"])
+def test_stale_email_configuration_health_cannot_mutate_changed_connection(mutation: str) -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        repository = context.injector.get(CommunicationConnectionRepository)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            connection = session.get(CommunicationConnection, connection_id)
+            assert connection is not None
+            if mutation == "revision":
+                connection.revision += 1
+            elif mutation == "disabled":
+                connection.enabled = False
+            elif mutation == "retired":
+                connection.retired_at = datetime.now(UTC)
+            else:
+                connection.platform_key = "slack"
+            session.add(connection)
+            session.commit()
+        repository.record_health(
+            connection_id, ConnectionObservedStatus.CONNECTED, expected_revision=created["revision"]
+        )
+        with Session(delegate.engine) as session:
+            connection = session.get(CommunicationConnection, connection_id)
+            assert connection is not None
+            assert connection.observed_status == ConnectionObservedStatus.PENDING
+            assert connection.last_health_at is None
+
+
+def test_concurrent_email_configuration_health_emits_one_connection_transition() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        repository = context.injector.get(CommunicationConnectionRepository)
+
+        def record_health():
+            repository.record_health(
+                connection_id, ConnectionObservedStatus.CONNECTED, expected_revision=created["revision"]
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(record_health) for _ in range(2)]
+            for future in futures:
+                future.result()
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            entries = session.exec(
+                select(CommunicationJournalEntry).where(
+                    col(CommunicationJournalEntry.connection_id) == connection_id,
+                    col(CommunicationJournalEntry.stage) == CommunicationJournalStage.CONNECTION_CONNECTED,
+                )
+            ).all()
+            assert len(entries) == 1
+            connection = session.get(CommunicationConnection, connection_id)
+            assert connection is not None
+            assert_that(connection.model_dump(), not_(has_key("ingress_lease_owner")))
+            assert_that(connection.model_dump(), not_(has_key("ingress_lease_expires_at")))
+
+
+def test_repeat_email_maintenance_cycle_does_not_rewrite_unchanged_health() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        worker = context.injector.get(CommunicationsMaintenance)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        asyncio.run(worker._reconcile())
+        with Session(delegate.engine) as session:
+            connection = session.exec(
+                select(CommunicationConnection).where(col(CommunicationConnection.id) == connection_id)
+            ).one()
+            assert_that(connection, not_none())
+            assert_that(connection.observed_status, equal_to(ConnectionObservedStatus.CONNECTED))
+            previous_health_at = connection.last_health_at
+            previous_version = session.exec(
+                select(literal_column("xmin::text"))
+                .select_from(CommunicationConnection)
+                .where(col(CommunicationConnection.id) == connection_id)
+            ).one()
+
+        with when("Email maintenance validates the same configuration again"):
+            asyncio.run(worker._reconcile())
+
+        with then("the durable row and its health timestamp remain unchanged"):
+            with Session(delegate.engine) as session:
+                connection = session.exec(
+                    select(CommunicationConnection).where(col(CommunicationConnection.id) == connection_id)
+                ).one()
+                assert_that(connection, not_none())
+                assert_that(connection.last_health_at, equal_to(previous_health_at))
+                version = session.exec(
+                    select(literal_column("xmin::text"))
+                    .select_from(CommunicationConnection)
+                    .where(col(CommunicationConnection.id) == connection_id)
+                ).one()
+                assert_that(version, equal_to(previous_version))
+
+
+def test_email_maintenance_pages_only_enabled_nonretired_email_connections() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_email_payload(), headers=_auth(context)).json()
+        context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))
+        repository = context.injector.get(CommunicationConnectionRepository)
+        page = repository.list_enabled_email_page(limit=1)
+        assert [connection.id for connection in page] == [UUID(created["id"])]
+        assert repository.list_enabled_email_page(after_id=page[-1].id, limit=1) == []
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            connection = session.get(CommunicationConnection, page[-1].id)
+            assert connection is not None
+            connection.enabled = False
+            session.add(connection)
+            session.commit()
+        assert repository.list_enabled_email_page() == []
+
+
+def test_journal_pruning_deletes_at_most_one_batch_and_preserves_recent_entries() -> None:
+    with given(_GIVEN_WITH_AGENT_EMAIL) as context:
+        created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context)).json()
+        connection_id = UUID(created["id"])
+        operations = context.injector.get(CommunicationOperationalRepository)
+        for _ in range(3):
+            operations.record_journal(
+                organization_id=context.organization.id,
+                agent_id=context.agent.id,
+                connection_id=connection_id,
+                stage=CommunicationJournalStage.CONNECTION_ERROR,
+                occurred_at=datetime.now(UTC) - timedelta(days=40),
+            )
+        assert operations.prune_journal(retention_days=30, batch_size=2) == 2
+        assert operations.prune_journal(retention_days=30, batch_size=2) == 1
+        assert operations.prune_journal(retention_days=30, batch_size=2) == 0

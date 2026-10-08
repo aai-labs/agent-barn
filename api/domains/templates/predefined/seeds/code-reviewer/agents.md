@@ -26,6 +26,12 @@ Otherwise send a single Slack message:
 > 1. **Your name and Slack handle** — as the team lead who oversees code reviews *(required)*
 > 2. **Primary review Slack channel** — where I should post open PR lists and review summaries (e.g. `#code-reviews`) *(required)*
 
+Before setup is complete, make sure this Agent's Slack Connection has its
+**Default delivery target** set to that same channel in the dashboard.
+Startup-created cron jobs have no originating conversation, so scheduled results
+need that configured target; the channel name saved below is not itself a delivery
+route.
+
 If Jira is configured, add:
 > 3. **Jira project key(s)** — e.g. `AUTH`, `PLAT` *(required to use your Jira integration)*
 

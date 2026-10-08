@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -19,27 +19,55 @@ AGENT_TEMPLATE_OVERRIDE_PUBLISHED = "agent.template_override.published"
 AGENT_TEMPLATE_OVERRIDE_SELECTED = "agent.template_override.selected"
 AGENT_UPDATED = "agent.updated"
 AGENT_DELETED = "agent.deleted"
+AGENT_RESTORE_POINT_CREATED = "agent.restore_point.created"
+AGENT_RESTORE_POINT_RESTORED = "agent.restore_point.restored"
+AGENT_RESTORE_POINT_DELETED = "agent.restore_point.deleted"
 AGENT_SECRET_ADDED = "agent.secret.added"
 AGENT_SECRET_UPDATED = "agent.secret.updated"
 AGENT_SECRET_REMOVED = "agent.secret.removed"
+AGENT_MEMORY_ENABLED = "agent.memory.enabled"
+AGENT_MEMORY_DISABLED = "agent.memory.disabled"
+AGENT_MEMORY_GRANT_CREATED = "agent.memory_grant.created"
+AGENT_MEMORY_GRANT_REVOKED = "agent.memory_grant.revoked"
 TEMPLATE_CREATED = "template.created"
 TEMPLATE_UPDATED = "template.updated"
 TEMPLATE_DELETED = "template.deleted"
 ORGANIZATION_MODEL_ALLOWLIST_CHANGED = "organization.model_allowlist.changed"
 ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
+ORGANIZATION_VALUE_SETTINGS_CHANGED = "organization.value_settings.changed"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
+PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
+PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
+API_KEY_CREATED = "api_key.created"
+API_KEY_REVOKED = "api_key.revoked"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
 COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconnect.requested"
 COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
 COMMUNICATION_DELIVERY_RETRY_REQUESTED = "communication.delivery.retry.requested"
 COMMUNICATION_DELIVERY_RECOVERED = "communication.delivery.recovered"
+ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED = "organization.llm_budget.threshold_reached"
+ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
+ORGANIZATION_LLM_BUDGET_CHANGED = "organization.llm_budget.changed"
+AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
+AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
+AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
 
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
+ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
+AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
+
+
+class PlatformMemoryModelChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    previous: str
+    current: str
+    actor_display: str
+    subject_display: str
 
 
 class OrganizationRoleChangedPayload(BaseModel):
@@ -168,6 +196,26 @@ class AgentDeletedPayload(BaseModel):
     subject_display: str
 
 
+class AgentRestorePointChangedPayload(BaseModel):
+    """Identifiers only: the captured configuration manifest stays on the row.
+
+    Putting it here would risk the registry's 16KB payload cap and its
+    sensitive-key filter, and the manifest is display data rather than an
+    audit fact.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    agent_name: str
+    restore_point_id: UUID
+    origin: str
+    label: str | None = None
+    actor_display: str | None = None
+    subject_display: str | None = None
+
+
 class AgentSecretChangedPayload(BaseModel):
     """Field names deliberately avoid "secret"/"credential" substrings — the
     registry's sensitive-key filter (api/domains/events/registry.py
@@ -183,6 +231,36 @@ class AgentSecretChangedPayload(BaseModel):
     provider: str
     label: str
     shared_reference_id: UUID | None
+    actor_display: str
+    subject_display: str
+
+
+class AgentMemoryChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    actor_display: str
+    subject_display: str
+
+
+class AgentMemoryGrantPayload(BaseModel):
+    """The Subject is the reading Agent, whose recall the grant widens.
+
+    source_agent_id is None for an Organization Memory grant. source_display is a
+    write-time snapshot of the source Agent's name, kept so the record still reads
+    after that Agent is deleted.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    grant_id: UUID
+    agent_id: UUID
+    source_agent_id: UUID | None
+    source_display: str
+    # Absent in original combined grants; "write" preserves historical split-grant events.
+    access: Literal["read", "read_write", "write"] | None = None
     actor_display: str
     subject_display: str
 
@@ -222,6 +300,75 @@ class TemplateDeletedPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationLlmBudgetPayload(BaseModel):
+    """Spend against an Organization's model budget at the moment a threshold was
+    first crossed. The figures are a snapshot, not a live reading — a notification
+    built from them is informational and never gates anything."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    threshold_percent: int
+    spend_usd: float
+    limit_usd: float
+    renews_at: str | None = None
+    subject_display: str
+
+
+class AgentLlmBudgetPayload(BaseModel):
+    """Spend against one Agent's own limit when a threshold was first crossed. Same
+    snapshot semantics as the Organization's: informational, never gating."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    threshold_percent: int
+    spend_usd: float
+    limit_usd: float
+    renews_at: str | None = None
+    subject_display: str
+
+
+class OrganizationLlmBudgetChangedPayload(BaseModel):
+    """The platform ceiling and the Organization's own limit, before and after.
+
+    Both travel together because one can move the other: lowering the ceiling below
+    the Organization's own limit pulls it down, and `reason` says so. `reason` is None
+    for a change someone asked for directly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    ceiling_usd: float
+    previous_ceiling_usd: float
+    own_limit_usd: float | None
+    previous_own_limit_usd: float | None
+    window: str
+    reason: str | None = None
+    actor_display: str
+    subject_display: str
+
+
+class AgentLlmBudgetChangedPayload(BaseModel):
+    """An Agent's own limit before and after; None follows the Organization default.
+
+    `reason` is set when the change was a consequence of a lower Organization limit
+    rather than something anyone asked of this Agent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    limit_usd: float | None
+    previous_limit_usd: float | None
+    reason: str | None = None
+    actor_display: str
+    subject_display: str
+
+
 class OrganizationModelAllowlistChangedPayload(BaseModel):
     """Carries the diff (added/removed), not the full before/after lists — the
     allowlist is validated against the OpenRouter catalog (400+ models) with no
@@ -250,9 +397,22 @@ class OrganizationAgentSettingsChangedPayload(BaseModel):
 
     organization_id: UUID
     setting: str
-    previous: str | None
-    current: str | None
+    # A model slug, or an amount for the default Agent spend limit.
+    previous: str | float | None
+    current: str | float | None
     inheriting_agent_count: int
+    # Set when the change followed from another one (a lower Organization limit
+    # pulling the default Agent limit down) rather than being asked for directly.
+    reason: str | None = None
+    actor_display: str
+    subject_display: str
+
+
+class OrganizationValueSettingsChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    field_changes: dict[str, dict[str, str | None]]
     actor_display: str
     subject_display: str
 
@@ -301,6 +461,33 @@ class PlatformUserPrivilegeChangedPayload(BaseModel):
     subject_user_id: UUID
     subject_display: str
     reason: str
+
+
+class PlatformResourceLimitsChangedPayload(BaseModel):
+    """One changed capacity limit, named by `setting`, with its before and after values.
+
+    Each is a single bounded number, so both can be carried. `previous` is None when the
+    limit was unset, and `current` is None when it was cleared.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    setting: str
+    previous: float | None
+    current: float | None
+
+
+class ApiKeyChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID
+    key_record_id: UUID
+    access_mode: str
+    actor_display: str
+    subject_display: str
 
 
 class CommunicationConnectionHealthChangedPayload(BaseModel):
@@ -383,7 +570,10 @@ def build_default_event_registry() -> DomainEventRegistry:
         (TEMPLATE_DELETED, TemplateDeletedPayload),
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
         (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
+        (ORGANIZATION_VALUE_SETTINGS_CHANGED, OrganizationValueSettingsChangedPayload),
         (ORGANIZATION_OWNERSHIP_TRANSFERRED, OrganizationOwnershipTransferredPayload),
+        (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
+        (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
     ):
         registry.register(
             DomainEventDefinition(
@@ -404,6 +594,21 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
+    for event_name, payload_model in (
+        (AGENT_MEMORY_ENABLED, AgentMemoryChangedPayload),
+        (AGENT_MEMORY_DISABLED, AgentMemoryChangedPayload),
+        (AGENT_MEMORY_GRANT_CREATED, AgentMemoryGrantPayload),
+        (AGENT_MEMORY_GRANT_REVOKED, AgentMemoryGrantPayload),
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=payload_model,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
     for event_name in (ORGANIZATION_MEMBER_ADDED, ORGANIZATION_MEMBER_REMOVED):
         registry.register(
             DomainEventDefinition(
@@ -419,6 +624,44 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=AGENT_CREATED,
             schema_version=1,
             payload_model=AgentCreatedPayload,
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    for event_name in (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, ORGANIZATION_LLM_BUDGET_EXHAUSTED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=OrganizationLlmBudgetPayload,
+                handler_names=(ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    for event_name in (AGENT_LLM_BUDGET_THRESHOLD_REACHED, AGENT_LLM_BUDGET_EXHAUSTED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=AgentLlmBudgetPayload,
+                handler_names=(AGENT_LLM_BUDGET_EMAIL_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    for event_name in (AGENT_RESTORE_POINT_CREATED, AGENT_RESTORE_POINT_DELETED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=AgentRestorePointChangedPayload,
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
+    registry.register(
+        DomainEventDefinition(
+            event_name=AGENT_RESTORE_POINT_RESTORED,
+            schema_version=1,
+            payload_model=AgentRestorePointChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )
     )
@@ -446,6 +689,15 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_MEMORY_MODEL_CHANGED,
+            schema_version=1,
+            payload_model=PlatformMemoryModelChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
     for event_name in (
         PLATFORM_USER_PRIVILEGE_GRANTED,
         PLATFORM_USER_PRIVILEGE_REVOKED,
@@ -455,6 +707,25 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_name=event_name,
                 schema_version=1,
                 payload_model=PlatformUserPrivilegeChangedPayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.PLATFORM,
+            )
+        )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_RESOURCE_LIMITS_CHANGED,
+            schema_version=1,
+            payload_model=PlatformResourceLimitsChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    for event_name in (API_KEY_CREATED, API_KEY_REVOKED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=ApiKeyChangedPayload,
                 handler_names=(SECURITY_AUDIT_HANDLER,),
                 event_scope=EventScope.PLATFORM,
             )

@@ -63,6 +63,7 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `agent.stopped` — emitted after an Agent transitions to `STOPPED`.
 - `platform.user_privilege.granted` — emitted atomically when Platform Privilege is granted.
 - `platform.user_privilege.revoked` — emitted atomically when Platform Privilege is revoked.
+- `platform.resource_limits.changed` — emitted atomically when a Platform Administrator changes a namespace quota ceiling, one event per ceiling that moved, naming the setting (`limits_memory_bytes`, `limits_cpu_cores`, `requests_memory_bytes` or `requests_cpu_cores`) with its previous and current value. The subject is the `SYSTEM` limits row. Not emitted when a save leaves the value unchanged.
 
 AF-167 broadens Security Audit Record coverage to additional mutations:
 
@@ -72,8 +73,16 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
 - `template.created` / `template.updated` / `template.deleted` — emitted on org Template lineage create/update/delete; `template.updated`'s `field_changes` is scoped to `template_name`/`description` only, excluding the markdown prompt bodies.
 - `organization.model_allowlist.changed` — emitted when an Organization's `allowed_models` list changes.
 - `organization.agent_settings.changed` — emitted when an Organization's Agent Settings change, naming the setting and carrying its previous and current values plus the number of Agents that inherit it. Not emitted when a save leaves the value unchanged.
+- `organization.value_settings.changed` — emitted when an Organization's value settings change: its hourly rate, or the minutes saved for an Outcome Type.
+  - Carries a `field_changes` diff keyed `hourly_rate_usd` or `outcome_minutes.<OUTCOME_TYPE>`. Each entry holds `previous` and `current` as strings, where `null` means unset or the default.
+  - Not emitted when a save changes nothing.
+  - Emitted by `PUT /organizations/{organization_id}/value-settings` (see [`business-value.md`](business-value.md#value-settings)).
 - `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
+
+Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, carrying previous/current model IDs and safe actor/subject display snapshots, projected by `security_audit.projection`.
+
+Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
 
 AF-273 adds Communications operational events as Organization-scoped audit inputs:
 
@@ -95,7 +104,7 @@ Dramatiq messages contain only the Event Delivery ID and safe diagnostic metadat
 
 The processor must atomically claim an eligible delivery in PostgreSQL before executing a handler. Claiming transitions `ENQUEUED` or stale `PROCESSING` to `PROCESSING`, sets `claimed_at`, and increments `attempt_count`; `PENDING`, fresh `PROCESSING`, `SUCCEEDED`, and `DEAD_LETTERED` are no-ops. Missing Delivery IDs in transport messages are logged/metricized and not retried forever because PostgreSQL is authoritative.
 
-Handlers use a formal interface. A handler has a unique stable name, declares supported event names and schema versions through a static startup registry, receives the `DomainEventEnvelope` plus a small `EventDeliveryContext`, and completes normally or raises typed retryable/terminal errors. Handler names are durable operational contracts once Event Deliveries can reference them; unknown handlers or unsupported event versions are terminal configuration errors and dead-letter their deliveries.
+Handlers use a formal interface. A handler has a unique stable name, declares supported event names and schema versions through a static startup registry, receives the `DomainEventEnvelope` plus a small `EventDeliveryContext`, and completes normally or raises typed retryable/terminal errors. Handler names are durable operational contracts once Event Deliveries can reference them; unknown handlers or unsupported event versions are terminal configuration errors and dead-letter their deliveries. The worker resolves the registry from one process-wide injector, so handler instances are singletons shared across worker threads: they must keep no per-delivery mutable state and must open their own database sessions per call.
 
 Handler side effects are at-least-once. The delivery framework prevents execution after terminal states, but a worker can crash after a handler commits side effects and before marking the delivery `SUCCEEDED`; each handler must prove its own idempotency using an appropriate key such as `event_id` or `(event_id, handler_name)`. Handlers may own their own database transactions, but they must not mutate Event Delivery lifecycle state directly.
 
@@ -306,3 +315,7 @@ This foundation deliberately excludes event sourcing, public webhooks, replay ad
 Adding a Domain Event requires a registered event name/version, payload schema, intended handler mapping, payload safety tests, and repository/integration coverage for any event-producing mutation. Adding an event-producing business mutation requires a domain-specific repository transaction boundary that commits business state and staged event rows together, plus service-layer post-commit enqueue if low-latency delivery is required. Adding an Event Handler requires static registry wiring, idempotency design, success/retry/terminal-failure tests, and metrics/logging coverage. Changes to event envelope fields, delivery identity, lifecycle states, dead-letter reasons, handler registry semantics, reconciliation thresholds, or privacy rules require model, migration, registry/processor tests, this document, and ADR review when the decision changes.
 
 Changes to the Platform Event Delivery Monitor's summary/explorer response contract, stale-threshold semantics, redaction behavior, or supported filters require updating `api/domains/events/models.py` (DTOs), `repository.py` (query composition), `service.py`/`routes.py`, the matching UI schemas/hooks/components under `ui/src/features/event-deliveries/`, this document, and both test suites listed in the source map. A new index needed for a monitor query requires an Alembic migration under `api/migrations/versions/`.
+
+## Personal API Key security events
+
+Platform-scoped `api_key.created` and `api_key.revoked` events record account credential lifecycle with a User actor and User subject. Their payloads contain only the User ID, key record ID, access mode, and safe display fields. The API Key repository commits each key mutation and outbox/delivery rows in one transaction; the Security Audit projection persists the resulting record.

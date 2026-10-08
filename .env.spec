@@ -11,7 +11,12 @@ DB_CONNECTION_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:$
 
 API_PORT=8000
 ENVIRONMENT=local
-UI_APP_URL=http://localhost:3000
+WEB_APP_URL=http://localhost:3000
+
+# Optional: the base URL callers use to reach this API, shown as the Agent Webhook
+# and Teams Connection webhook URLs. Local runs derive http://localhost:${API_PORT},
+# so set this only when an outside caller needs a reachable address — a tunnel, say.
+# API_EXTERNAL_URL=https://your-tunnel.example.com
 
 # Optional: Redis is only needed to run the event delivery worker/reconciler
 # locally (`make redis-up`, `make dev-worker`); defaults to localhost:6379.
@@ -64,6 +69,25 @@ K8S_NAMESPACE=agent-farm
 # requires a data migration (StatefulSet volumeClaimTemplates are immutable).
 STORAGE_CLASS=
 
+# ── Restore points ──
+# Full image ref the capture/restore Job runs. It must be the SAME build as the
+# API that creates the Job: the archive exclusion sets ship with that code, and
+# a stale image could archive the plaintext provider-token store the current one
+# excludes. In Kubernetes the chart wires this from its own image values; set it
+# by hand only when running the API outside the chart.
+API_IMAGE=
+# Size of each restore point's own PVC. Must be at least the agent PVC size
+# (1Gi) — a capture that fills this volume fails and is reclaimed.
+RESTORE_POINT_SIZE=1Gi
+# Manual restore points retained per Agent. Automatic pre-restore backups do not
+# count against it, so an Agent at the cap can still roll back. Failed captures
+# release their volume and are not counted either.
+RESTORE_POINT_MAX_PER_AGENT=5
+# Deadlines for the capture and restore Jobs. Restore does a capture's work plus
+# an extraction, so it is given longer.
+RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS=900
+RESTORE_POINT_RESTORE_TIMEOUT_SECONDS=1800
+
 # Agents
 # Full image ref for agent pods, e.g. {REGISTRY_URL}/agentbarn-openclaw-base:{VERSION}
 AGENT_IMAGE=
@@ -79,6 +103,17 @@ LITELLM_BASE_URL=
 AGENT_LITELLM_BASE_URL=
 # Name of the k8s Secret containing LITELLM_MASTER_KEY. Defaults to "litellm".
 LITELLM_SECRET_NAME=litellm
+# Percentages of an Organization's LLM limit at which its Owners and Admins are
+# notified. Comma separated, 1-100. Empty uses the default.
+ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS=80,100
+# Required. Model spend limit (USD) a new Organization starts with; a Platform
+# Administrator changes it per Organization afterwards. Existing Organizations without
+# a limit are given it by the AF-337 migration. For "no practical limit", use a very
+# large amount.
+ORGANIZATION_DEFAULT_LLM_BUDGET_USD=
+# Required. Model spend limit (USD) an Agent is held to until its Organization sets a
+# default or the Agent its own. Must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD.
+AGENT_DEFAULT_LLM_BUDGET_USD=
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —
@@ -104,10 +139,6 @@ LITELLM_MASTER_KEY=
 OPENCLAW_IMAGE=
 HERMES_IMAGE=
 
-# GitHub PAT with read access to aai-labs/aai-cli — the base-image
-# build clones that repo.
-GH_TOKEN=
-
 # In-container path to the kubeconfig, for the API started by `./run.sh`.
 # ./run.sh sets this automatically. Leave empty if you're not using k3d.
 API_K8S_KUBECONFIG_PATH=
@@ -126,9 +157,41 @@ INGEST_PORT=
 # through host.docker.internal; defaults to 8002.
 COMMUNICATIONS_PORT=
 
-# Credential gateway. When enabled, each Integration Plugin's egress mode decides how
-# that provider is handled; set false for an emergency rollback to direct credential
-# materialization. Agent pods in local k3d reach it through the host-published port.
-GATEWAY_PORT=8003
-CREDENTIAL_GATEWAY_BASE_URL=http://host.docker.internal:8003/gateway/v1
-CREDENTIAL_GATEWAY_ENABLED=true
+# Credential gateway. Integration Plugins decide how each provider is routed.
+# Agent pods in local k3d reach it through this distinct host-published port.
+GATEWAY_PORT=8004
+CREDENTIAL_GATEWAY_BASE_URL=http://host.docker.internal:8004/gateway/v1
+# Optional. Local Prometheus for the Resource usage views. `make dev-monitoring`
+# generates PROMETHEUS_PASSWORD here; once it is set the API in Docker looks for
+# Prometheus on the host at PROMETHEUS_PORT (default 9090), which is where
+# `make forward-prometheus` publishes it. Leave all three empty to run without it:
+# the views then say resource usage is not configured.
+PROMETHEUS_PASSWORD=
+PROMETHEUS_PORT=
+# Overrides the URL the API container uses, e.g. for a Prometheus somewhere else. A
+# host-run API (`make dev-api`) does not use compose, so set PROMETHEUS_URL instead,
+# e.g. http://localhost:9090.
+API_PROMETHEUS_URL=
+
+# Memory gateway. Choose a port distinct from API_PORT and other local services.
+# The backend is configured
+# separately; its shared key must never be injected into Agent runtime Secrets.
+MEMORY_PORT=8003
+# Optional. How the Docker-run product API reaches the gateway's read-only memory
+# viewer; defaults to the compose service (http://memory:8003/memory/view/v1).
+MEMORY_VIEW_BASE_URL=
+HINDSIGHT_BASE_URL=
+HINDSIGHT_API_KEY=
+# Internal model/key settings credential; generate separately from Hindsight API auth.
+MEMORY_RUNTIME_SERVICE_KEY=
+MEMORY_LITELLM_KEY_HASHES=
+# Optional initial model; shared by the API default and Hindsight startup.
+# MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini
+# Active key SHA-256 hash when several attribution hashes are retained.
+# Compose infers it for one hash; enabled Helmfile derives it from the current key.
+# MEMORY_LITELLM_ACTIVE_KEY_HASH=
+# Optional local backend (COMPOSE_PROFILES=local-hindsight). Use generated
+# URL-safe database/auth secrets and a dedicated, budgeted LiteLLM virtual key.
+# HINDSIGHT_BASE_URL=http://hindsight:8888 when this profile is enabled.
+COMPOSE_PROFILES=
+HINDSIGHT_DB_PASSWORD=

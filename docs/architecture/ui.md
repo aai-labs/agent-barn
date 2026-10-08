@@ -15,13 +15,13 @@ The active organization comes from `/dashboard/[orgId]`. Platform View lives und
 ## API and query invariants
 
 - Normal application HTTP calls use the singleton exported from `../../ui/src/shared/api`.
-- The client sends cookies, transforms request keys to snake_case and response keys to camelCase, and surfaces `ApiError`.
+- The client sends cookies, transforms request keys to snake_case and response keys to camelCase, and surfaces `ApiError`. Request keys that contain `-`, or that are already UPPER_SNAKE (`/^[A-Z0-9_]+$/`, such as enum codes used as map keys), are sent unchanged.
 - Important responses are validated with feature-local Zod schemas supplied by hooks.
 - Query keys use the centralized factory in `../../ui/src/shared/query-keys.ts` and feature-local key helpers.
 - Several organization-scoped keys do not include organization ID. `OrganizationProvider` removes the known organization-scoped query families on a genuine organization switch to prevent prior-organization data from remaining visible.
 - Adding an organization-scoped query family requires updating that eviction set or changing the key design so organization identity is represented safely.
 
-The agent log stream is an explicit exception to the normal client flow: a Next route handler proxies backend SSE through a `TransformStream`, and `../../ui/src/features/agents/hooks/use-agent-log-stream.ts` owns browser streaming and reconnection. The dedicated route avoids buffering in the ordinary Next.js rewrite path and resolves the internal API hostname server-side instead of exposing it to the browser.
+Streaming is an explicit exception to the normal client flow. The agent log stream uses a Next route handler and `../../ui/src/features/agents/hooks/use-agent-log-stream.ts`; Dashboard Web Chat connects to its authenticated organization-scoped SSE route through `../../ui/src/features/agents/hooks/use-web-chat.ts`. Each hook owns abort and bounded reconnection behavior. The shared API auth interceptor supplies and refreshes the bearer token before each raw streaming fetch and is forced after a 401, so the streaming exception does not bypass session recovery. Web Chat history is capped at the newest 500 messages and returned chronologically; the live stream advances by message ID and uses delivery-scoped reads for status signals, while frames upsert by message ID so delivery-status, `cancel_requested_at`, approval, or `error_message` changes update an existing message rather than creating duplicates. A command-approval prompt is converted to an assistant-ui `data` part named `approval`; `web-chat-approval.tsx` registers its renderer only for users whose Agent `allowed_actions` include `agent.update`, so a viewer sees the prompt text without buttons, and a click sends the choice with its `approval_id` and disables that approval's buttons unless the send fails. The additive `error_message` field carries the already-redacted terminal delivery summary; the UI tolerates its absence while an older API replica is still serving history. A processing message with `cancel_requested_at` is no longer treated as awaiting a reply while the runtime finishes its soft cancellation.
 
 ## Loading and errors
 
@@ -49,3 +49,7 @@ Use `make lint-ui`, `make check-ui`, and relevant Playwright tests for changed b
 ## Change impact
 
 When adding a feature query, define its schema and centralized key, decide whether it is organization-scoped, and verify switch behavior. When changing page-blocking data, align route loading/error boundaries with component-owned retry behavior. When changing API contracts, update the corresponding Zod schemas, hooks, mocks, and Playwright expectations.
+
+## Personal API Key settings
+
+The account feature manages User-owned keys through the shared API client. The complete key appears only in local component state after creation; list responses return safe metadata. Key-list queries are account-scoped and refresh after creation or revocation. The root `llms.txt` routes forward public developer content from the Product API.

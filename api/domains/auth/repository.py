@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
@@ -50,9 +51,10 @@ class PasswordResetTokenRepository:
             self.delegate.save_all(tokens)
         return len(tokens)
 
-    def invalidate_unused_for_user_with_session(self, user_id: UUID, session: Session) -> int:
-        """Session-scoped variant, so token rotation can share a caller's transaction
-        (invite issued atomically with org/membership writes)."""
+    def refresh_unused_expiry_for_user_with_session(self, user_id: UUID, expires_at: datetime, session: Session) -> int:
+        """Push out the expiry of a user's outstanding (unused) links without touching the
+        tokens themselves, so the link already sitting in their inbox keeps working. Shares
+        the caller's transaction. Returns the count."""
         tokens = list(
             session.exec(
                 select(PasswordResetToken).where(
@@ -62,7 +64,7 @@ class PasswordResetTokenRepository:
             )
         )
         for token in tokens:
-            token.is_used = True
+            token.expires_at = expires_at
             session.add(token)
         return len(tokens)
 

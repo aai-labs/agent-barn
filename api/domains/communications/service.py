@@ -1,9 +1,8 @@
 import json
-import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import NoReturn
+from typing import Literal, NoReturn
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -36,7 +35,6 @@ from api.domains.communications.models import (
     CommunicationInstallLinkRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
-    CommunicationReconnectRead,
     CommunicationRetryRead,
     ConnectionObservedStatus,
     PlatformCapability,
@@ -48,6 +46,7 @@ from api.domains.communications.repository import (
     CommunicationConnectionConflictError,
     CommunicationConnectionRepository,
 )
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS, platform_transport
 from api.domains.events import resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -70,6 +69,14 @@ _DIRECTORY_ERROR_STATUS = {
     CommunicationErrorCategory.PROVIDER_UNAVAILABLE: status.HTTP_502_BAD_GATEWAY,
     CommunicationErrorCategory.UNKNOWN: status.HTTP_502_BAD_GATEWAY,
 }
+
+
+@dataclass(frozen=True)
+class TeamsAppIdentity:
+    """Which Microsoft app, in which tenant, is behind a Teams connection. Nothing secret."""
+
+    app_id: str
+    tenant_id: str
 
 
 @inject
@@ -161,16 +168,17 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
-        if plugin.key != "slack" or PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
+        if PlatformCapability.DIRECTORY_DISCOVERY not in plugin.capabilities:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Workspace preview is available for Slack only",
+                detail="This platform does not support directory discovery",
             )
         try:
-            settings = plugin.settings_model.model_validate(data.settings)
+            preview_settings = dict(data.settings)
+            preview_settings.pop("default_delivery_target", None)
+            settings = plugin.settings_model.model_validate(preview_settings)
             credentials = plugin.credentials_model.model_validate(data.credentials)
-            channels = plugin.list_directory_entries(settings, credentials, kind="channels")
-            users = plugin.list_directory_entries(settings, credentials, kind="users")
+            entries = plugin.list_directory_entries(settings, credentials, kind=data.kind, guild_id=data.guild_id)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         except HTTPException:
@@ -178,8 +186,7 @@ class CommunicationsService:
         except Exception as exc:
             self._raise_directory_error(exc, "preview_directory")
         return CommunicationDirectoryPreviewRead(
-            channels=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in channels],
-            users=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in users],
+            entries=[CommunicationDirectoryEntryRead.model_validate(entry) for entry in entries],
         )
 
     def create_connection(
@@ -191,6 +198,7 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
+        self._reject_web_chat_mutation(plugin.key)
         validated = self._validate(
             plugin,
             data.settings,
@@ -207,10 +215,6 @@ class CommunicationsService:
             schema_version=plugin.schema_version,
             settings=validated.settings,
             credentials_encrypted=self._encrypt_credentials(validated.credentials),
-            driver_key_encrypted=encrypt_token(
-                secrets.token_urlsafe(32),
-                self.config.agent_token_encryption_key,
-            ),
             external_identity=validated.external_identity,
             credential_fingerprint=validated.credential_fingerprint,
             credential_scope_key=validated.credential_scope_key,
@@ -257,6 +261,7 @@ class CommunicationsService:
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
+        self._reject_web_chat_mutation(connection.platform_key)
 
         if data.credentials is not None:
             self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
@@ -300,8 +305,10 @@ class CommunicationsService:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
-        if self.repository.get_active_in_scope(connection_id, agent_id, action_scope) is None:
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
             self._raise_not_found(connection_id)
+        self._reject_web_chat_mutation(connection.platform_key)
         try:
             if not self.repository.retire(connection_id, expected_revision=revision):
                 self._raise_not_found(connection_id)
@@ -421,27 +428,13 @@ class CommunicationsService:
         agent_id: UUID,
         connection_id: UUID,
         context: CurrentUserContext,
-    ) -> CommunicationReconnectRead:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+    ) -> NoReturn:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        if not connection.enabled:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Enable the Communication Connection before reconnecting it",
-            )
-        updated = self.repository.request_reconnect(
-            connection_id,
-            actor=resolve_actor_identity(context, agent.organization_id),
-        )
-        if updated is None:
-            self._raise_not_found(connection_id)
-        return CommunicationReconnectRead(
-            connection=self._read(updated),
-            requested_at=datetime.now(UTC),
-        )
+        self._raise_recovery_conflict(connection)
 
     def retry_delivery(
         self,
@@ -452,8 +445,10 @@ class CommunicationsService:
     ) -> CommunicationRetryRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
-        if self.repository.get_active_in_scope(connection_id, agent_id, action_scope) is None:
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
             self._raise_not_found(connection_id)
+        self._require_recovery_action(connection, "retry_delivery")
         if self.delivery_repository is None:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Recovery is unavailable")
         try:
@@ -503,7 +498,7 @@ class CommunicationsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{plugin.display_name} does not provide a bot install link",
             ) from exc
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def build_app_package(
@@ -540,8 +535,16 @@ class CommunicationsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{plugin.display_name} does not provide an installable app package",
             ) from exc
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @staticmethod
+    def _reject_web_chat_mutation(platform_key: str) -> None:
+        if platform_key == "web":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The built-in Web Chat connection is managed by Agent Barn",
+            )
 
     def _require_plugin(self, key: str):
         try:
@@ -558,7 +561,7 @@ class CommunicationsService:
                 organization_id=organization_id,
                 agent_id=agent_id,
             )
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, PermissionError) as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     def _encrypt_credentials(self, credentials: dict) -> str:
@@ -566,6 +569,28 @@ class CommunicationsService:
             json.dumps(credentials, sort_keys=True, separators=(",", ":")),
             self.config.agent_token_encryption_key,
         )
+
+    def get_teams_app_identity(self, agent_id: UUID, connection_id: UUID) -> TeamsAppIdentity:
+        """The app id and tenant of one agent's active, enabled Teams connection.
+
+        SharePoint signs people in on the same Microsoft app as the agent's Teams bot, as a
+        public client, so it needs only these two public values; the app's secret stays in
+        this domain. No user context: callers authorize before calling.
+        """
+        connection = self.repository.get_active(connection_id)
+        if connection is None or connection.agent_id != agent_id or connection.platform_key != "teams":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Microsoft Teams connection not found for this agent.",
+            )
+        if not connection.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The Microsoft Teams connection is turned off. Turn it on to use SharePoint.",
+            )
+        plugin = self._require_plugin(connection.platform_key)
+        credentials = self._decrypt_credentials(plugin, connection.credentials_encrypted)
+        return TeamsAppIdentity(app_id=credentials["app_id"], tenant_id=credentials["tenant_id"])
 
     def _decrypt_credentials(self, plugin, ciphertext: str) -> dict:
         try:
@@ -600,6 +625,8 @@ class CommunicationsService:
         safe_details = CommunicationOperationalRepository.safe_error_details(connection.last_error_details)
         return read.model_copy(
             update={
+                "transport": platform_transport(connection.platform_key),
+                "recovery_actions": self._recovery_actions(connection),
                 "last_error_code": CommunicationOperationalRepository.safe_error_code(read.last_error_code),
                 "last_error_message": CommunicationOperationalRepository.safe_error_summary(
                     read.last_error_message,
@@ -610,6 +637,26 @@ class CommunicationsService:
                 "managed_address": managed_address,
             }
         )
+
+    def _recovery_actions(self, connection: CommunicationConnection) -> list[Literal["reconnect", "retry_delivery"]]:
+        if connection.platform_key in NATIVE_PLATFORM_KEYS:
+            return []
+        return ["retry_delivery"]
+
+    def _require_recovery_action(
+        self, connection: CommunicationConnection, action: Literal["reconnect", "retry_delivery"]
+    ) -> None:
+        if action in self._recovery_actions(connection):
+            return
+        self._raise_recovery_conflict(connection)
+
+    def _raise_recovery_conflict(self, connection: CommunicationConnection) -> NoReturn:
+        detail = (
+            "This Connection uses native transport; restart the Agent to recover it"
+            if connection.platform_key in NATIVE_PLATFORM_KEYS
+            else "This Connection has no gateway provider session to reconnect"
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
     @staticmethod
     def _raise_not_found(connection_id: UUID) -> NoReturn:

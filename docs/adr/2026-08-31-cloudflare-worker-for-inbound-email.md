@@ -1,6 +1,6 @@
 # Inbound email reaches Agent Barn through a Cloudflare Email Worker
 
-Status: Accepted
+Status: Superseded in part by [2026-09-21-api-owns-email-public-ingress](2026-09-21-api-owns-email-public-ingress.md)
 Date: 2026-08-31
 Origin: AF-276 Email communication platform
 
@@ -18,7 +18,7 @@ The Worker runs on Cloudflare's edge rather than in the cluster: no pod, no Helm
 
 The Worker is deliberately thin — parse, truncate, forward. Every admission decision (sender policy, automated-mail guards, threading, length bounds) stays in the Python Platform Plugin, which is covered by tests.
 
-Deployment runs through the existing pipeline rather than by hand. `ci.yml` and `deploy.yml` both call a `worker.yml` reusable workflow, the same shape as `ui.yml`: pull requests bundle it with `wrangler deploy --dry-run`, which needs no Cloudflare credentials and therefore works on forks, and merges to `staging`/`main` publish it — but only when `workers/**` actually changed, so rollback history is not consumed by unrelated merges. It publishes *after* the cluster deploy, because the Worker posts into the Communications service and the cluster must already hold the matching secret.
+Deployment runs through the existing pipeline rather than by hand. `ci.yml` and `deploy.yml` both call a `worker.yml` reusable workflow, the same shape as `ui.yml`: pull requests bundle it with `wrangler deploy --dry-run`, which needs no Cloudflare credentials and therefore works on forks, and merges to `staging`/`main` publish it — but only when `workers/**` actually changed, so rollback history is not consumed by unrelated merges. It publishes *after* the cluster deploy, because the Worker posts into the API and the cluster must already hold the matching secret.
 
 `EMAIL_INBOUND_SECRET` is written to the Worker by the same run that writes it into the cluster Secret, from one GitHub secret. That removes the class of failure where the two drift apart and every inbound message answers `401`.
 

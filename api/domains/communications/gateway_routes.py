@@ -2,8 +2,10 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
+from api.domains.communications.delivery_repository import CommunicationDeliveryCancelledError
 from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     AcceptedCommunicationRead,
@@ -11,12 +13,15 @@ from api.domains.communications.models import (
     RuntimeDeliveryResult,
     RuntimeReplyCreate,
 )
+from api.domains.communications.transport import NativeTransportUnsupported
 
-SUPPORTED_RUNTIME_PROTOCOL_VERSION = "1"
+# 3 was only ever shipped to staging by the retired webhook Platform. Its adapter falls
+# back to version 2 behaviour, so those pods stay accepted until the Agent restarts.
+SUPPORTED_RUNTIME_PROTOCOL_VERSIONS = frozenset({"1", "2", "3"})
+_CONTROL_STREAM_PROTOCOL_VERSIONS = frozenset({"2", "3"})
 
 runtime_communications_router = APIRouter(prefix="/agents", tags=["runtime-communications"])
-driver_communications_router = APIRouter(prefix="/connections", tags=["platform-driver-communications"])
-provider_webhook_router = APIRouter(prefix="/webhooks", tags=["provider-webhooks"])
+email_compatibility_router = APIRouter(prefix="/webhooks", tags=["provider-webhooks"])
 
 
 def _authenticate(
@@ -25,7 +30,7 @@ def _authenticate(
     authorization: str,
     protocol_version: str,
 ):
-    if protocol_version != SUPPORTED_RUNTIME_PROTOCOL_VERSION:
+    if protocol_version not in SUPPORTED_RUNTIME_PROTOCOL_VERSIONS:
         raise HTTPException(
             status_code=status.HTTP_426_UPGRADE_REQUIRED,
             detail=f"Unsupported Communications protocol version: {protocol_version}",
@@ -35,6 +40,30 @@ def _authenticate(
         return service.authenticate_runtime(agent_id, provided_key)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
+
+
+@runtime_communications_router.get("/{agent_id}/control")
+def stream_runtime_control(
+    agent_id: UUID,
+    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
+    authorization: Annotated[str, Header()],
+    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+) -> StreamingResponse:
+    if protocol_version not in _CONTROL_STREAM_PROTOCOL_VERSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_426_UPGRADE_REQUIRED,
+            detail="The persistent runtime control stream requires Communications protocol version 2 or later",
+        )
+    agent = _authenticate(service, agent_id, authorization, protocol_version)
+    return StreamingResponse(
+        service.stream_runtime_control(agent),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @runtime_communications_router.post(
@@ -86,10 +115,11 @@ def renew_runtime_delivery_lease(
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
     authorization: Annotated[str, Header()],
     protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+    awaiting_input: bool = False,
 ) -> Response:
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     try:
-        renewed = service.renew_runtime_delivery_lease(agent, delivery_id)
+        renewed = service.renew_runtime_delivery_lease(agent, delivery_id, awaiting_input=awaiting_input)
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if not renewed:
@@ -112,33 +142,16 @@ def enqueue_runtime_reply(
     agent = _authenticate(service, agent_id, authorization, protocol_version)
     try:
         outbound_delivery_id = service.enqueue_runtime_reply(agent, delivery_id, reply)
+    except (CommunicationDeliveryCancelledError, NativeTransportUnsupported) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return {"delivery_id": outbound_delivery_id}
 
 
-@driver_communications_router.post("/{connection_id}/events", status_code=status.HTTP_202_ACCEPTED)
-def accept_driver_event(
-    connection_id: UUID,
-    payload: dict[str, Any],
-    service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
-    authorization: Annotated[str, Header()],
-    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Driver-Version")],
-) -> dict[str, list[AcceptedCommunicationRead]]:
-    if protocol_version != "1":
-        raise HTTPException(status_code=status.HTTP_426_UPGRADE_REQUIRED, detail="Unsupported Platform Driver version")
-    try:
-        accepted = service.accept_driver_event(
-            connection_id,
-            authorization.removeprefix("Bearer ").strip(),
-            payload,
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
-    return {"accepted": accepted}
-
-
-@provider_webhook_router.post("/email/inbound", status_code=status.HTTP_202_ACCEPTED)
+# Retain for Workers pointed directly at Communications until their deployed
+# URLs are confirmed to target product API ingress; public path/payload unchanged.
+@email_compatibility_router.post("/email/inbound", status_code=status.HTTP_202_ACCEPTED)
 def accept_email_inbound(
     payload: dict[str, Any],
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
@@ -151,15 +164,17 @@ def accept_email_inbound(
     return {"accepted": accepted}
 
 
-@provider_webhook_router.post("/{connection_id}", status_code=status.HTTP_202_ACCEPTED)
-def accept_provider_webhook(
-    connection_id: UUID,
-    payload: dict[str, Any],
+# Remove after all deployed bridge clients restart onto the retired-bridge runtime
+# configuration and legacy submissions cease; see the native rollout runbook.
+@runtime_communications_router.post("/{agent_id}/messages", include_in_schema=False)
+def reject_retired_agent_message(
+    agent_id: UUID,
     service: Annotated[CommunicationsGatewayService, Injected(CommunicationsGatewayService)],
     authorization: Annotated[str, Header()],
-) -> dict[str, list[AcceptedCommunicationRead]]:
-    try:
-        accepted = service.accept_provider_webhook(connection_id, payload, authorization)
-    except (PermissionError, NotImplementedError) as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook authentication failed") from exc
-    return {"accepted": accepted}
+    protocol_version: Annotated[str, Header(alias="X-AgentBarn-Communications-Version")],
+) -> None:
+    _authenticate(service, agent_id, authorization, protocol_version)
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Gateway-initiated messages are retired; use the runtime's native delivery",
+    )

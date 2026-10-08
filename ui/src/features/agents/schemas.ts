@@ -55,6 +55,7 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.lifecycle.manage",
   "agent.access.manage",
   "agent.secret.manage",
+  "agent.memory.manage",
   "activity.read",
   "cost.read",
 ]);
@@ -88,6 +89,13 @@ export const AgentAccessSettingsReadSchema = z.object({
   assignments: z.array(AgentAccessMemberReadSchema),
 });
 
+export const AgentProvisioningErrorSchema = z.object({
+  code: z.string(),
+  category: z.string(),
+  summary: z.string(),
+  detail: z.string().nullish(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -108,12 +116,24 @@ export const AgentSchema = z.object({
   runningModel: z.string().default(""),
   /** Set only when a restart would move a running Agent onto a different model. */
   pendingModel: z.string().default(""),
+  /** True when a running Agent's pod was built from older platform code or images. */
+  updateAvailable: z.boolean().default(false),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  memoryEnabled: z.boolean().default(false),
+  lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
   configuredPlatformKeys: z.array(z.string()).default([]),
+  /** Platforms whose Connections this Agent's runtime runs itself; changing one requires a restart. */
+  nativePlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
+  creator: z.object({
+    id: z.string().uuid(),
+    fullName: z.string().nullable(),
+    email: z.string(),
+  }).nullable().optional().default(null),
+  lastMessageAt: z.string().datetime({ offset: true }).nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -205,6 +225,40 @@ export const ConversationChannelSchema = z.object({
   channelId: z.string(),
   channelName: z.string().nullable(),
   conversationType: z.enum(["CHANNEL", "DM"]),
+});
+
+export const WebChatApprovalSchema = z.object({
+  approvalId: z.string(),
+  command: z.string(),
+  choices: z.array(z.string()),
+  choiceLabels: z.record(z.string(), z.string()).default({}),
+});
+
+export const WebChatMessageSchema = z.object({
+  id: z.string().uuid(),
+  direction: z.enum(["INBOUND", "OUTBOUND"]),
+  content: z.string(),
+  occurredAt: z.string(),
+  deliveryStatus: z.enum([
+    "PENDING",
+    "PROCESSING",
+    "SUCCEEDED",
+    "DEAD_LETTERED",
+    "CANCELLED",
+    "UNAVAILABLE",
+  ]),
+  cancelRequestedAt: z.string().nullable(),
+  approval: WebChatApprovalSchema.nullish(),
+  // Additive during a rolling API deployment; new responses include null when
+  // no terminal error exists, while an older replica may omit the field.
+  errorMessage: z.string().nullable().optional(),
+});
+
+export const WebChatThreadSchema = z.object({
+  threadId: z.string(),
+  title: z.string(),
+  lastOccurredAt: z.string().nullable(),
+  lastContent: z.string().nullable(),
 });
 
 export const ConversationsCursorSchema = z.object({
@@ -323,10 +377,14 @@ export const AgentConfigurationSchema = z.object({
 export type CommandApprovalMode = "manual" | "auto" | "off";
 export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
+export type AgentProvisioningError = z.infer<typeof AgentProvisioningErrorSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;
 export type AgentTemplateRead = z.infer<typeof AgentTemplateReadSchema>;
+export const AgentNameSuggestionSchema = z.object({ firstName: z.string().min(1) });
+export type AgentNameSuggestion = z.infer<typeof AgentNameSuggestionSchema>;
+
 export type TemplateSource = AgentTemplateRead["templateSource"];
 export type PaginatedTemplates = z.infer<typeof PaginatedTemplatesSchema>;
 export type PaginatedAgents = z.infer<typeof PaginatedAgentsSchema>;
@@ -336,6 +394,9 @@ export type AgentConfigurationVersion = z.infer<typeof AgentConfigurationVersion
 export type AgentOverrideDraft = z.infer<typeof AgentOverrideDraftSchema>;
 export type AgentOverrideVersion = z.infer<typeof AgentOverrideVersionSchema>;
 export type AgentConfiguration = z.infer<typeof AgentConfigurationSchema>;
+export type WebChatMessage = z.infer<typeof WebChatMessageSchema>;
+export type WebChatApproval = z.infer<typeof WebChatApprovalSchema>;
+export type WebChatThread = z.infer<typeof WebChatThreadSchema>;
 export type ConversationMessage = z.infer<typeof ConversationMessageSchema>;
 export type ConversationChannel = z.infer<typeof ConversationChannelSchema>;
 export type ConversationsCursor = z.infer<typeof ConversationsCursorSchema>;
@@ -366,3 +427,216 @@ export type AgentAccessSettingsAssignmentUpdate = z.infer<
   typeof AgentAccessSettingsAssignmentUpdateSchema
 >;
 export type AgentAccessSettingsUpdate = z.infer<typeof AgentAccessSettingsUpdateSchema>;
+
+export const RestorePointStatusSchema = z.enum([
+  "PENDING",
+  "CAPTURING",
+  "RESTORING",
+  "READY",
+  "FAILED",
+  "DELETING",
+]);
+
+export const RestorePointOriginSchema = z.enum([
+  "MANUAL",
+  "PRE_RESTORE",
+  "PRE_RESET",
+  "PRE_UPGRADE",
+]);
+
+export const RestorePointSkillSchema = z.object({
+  skillId: z.string().uuid(),
+  name: z.string(),
+  pinnedVersion: z.number().int(),
+});
+
+// Versioned free-form JSON: a row captured before a field existed omits it, so
+// every field defaults rather than failing the parse.
+export const RestorePointConfigManifestSchema = z.object({
+  version: z.number().int().default(1),
+  agentType: z.string().default(""),
+  templateKey: z.string().default(""),
+  templateVersion: z.number().int().default(0),
+  templateSelectionType: z.enum(["platform", "organization", "override", ""]).catch(""),
+  overrideVersion: z.number().int().nullish().default(null),
+  model: z.string().default(""),
+  effectiveModel: z.string().default(""),
+  approvalMode: z.string().default(""),
+  verboseMode: z.boolean().default(false),
+  skills: z.array(RestorePointSkillSchema).default([]),
+});
+
+export const RestorePointSchema = z.object({
+  id: z.string().uuid(),
+  agentId: z.string().uuid(),
+  label: z.string().nullable(),
+  status: RestorePointStatusSchema,
+  origin: RestorePointOriginSchema,
+  agentType: z.string(),
+  archiveBytes: z.number().int().nullable(),
+  fileCount: z.number().int().nullable(),
+  failureReason: z.string().nullable(),
+  // True while a confirmed restore still owes the Agent its recorded configuration.
+  reapplyConfiguration: z.boolean().default(false),
+  // Set when the volume came back but the configuration did not.
+  configurationError: z.string().nullable().default(null),
+  configManifest: RestorePointConfigManifestSchema,
+  createdAt: z.string(),
+  capturedAt: z.string().nullable(),
+});
+
+export const PaginatedRestorePointsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(RestorePointSchema),
+  // The cap counts neither system-created backups nor failed captures; total counts both.
+  cap: z.number().int().min(1),
+  manualCount: z.number().int().min(0),
+});
+
+export type RestorePointStatus = z.infer<typeof RestorePointStatusSchema>;
+export type RestorePointOrigin = z.infer<typeof RestorePointOriginSchema>;
+export type RestorePointSkill = z.infer<typeof RestorePointSkillSchema>;
+export type RestorePointConfigManifest = z.infer<typeof RestorePointConfigManifestSchema>;
+export type RestorePoint = z.infer<typeof RestorePointSchema>;
+export type PaginatedRestorePoints = z.infer<typeof PaginatedRestorePointsSchema>;
+
+export const AgentLlmBudgetSchema = z.object({
+  // The limit in force on this Agent.
+  limitUsd: z.number(),
+  // The Agent's own limit. Null follows the organization's default.
+  ownLimitUsd: z.number().nullable().optional(),
+  // Where the limit in force comes from; "organization" means a higher own limit or
+  // default is being held to the organization's limit instead.
+  source: z.enum(["agent", "default", "organization"]),
+  // Organization-wide figures: sent only when canManage, null otherwise.
+  defaultLimitUsd: z.number().nullable().optional(),
+  organizationLimitUsd: z.number().nullable().optional(),
+  window: z.string(),
+  state: z.enum(["ok", "warning", "exhausted", "unknown"]),
+  // Null means not yet observed. Never coalesce it to 0.
+  spendUsd: z.number().nullable().optional(),
+  renewsAt: z.string().nullable().optional(),
+  canManage: z.boolean(),
+});
+
+export type AgentLlmBudget = z.infer<typeof AgentLlmBudgetSchema>;
+
+// --- Activity ---------------------------------------------------------------
+//
+// What the Agent has been doing, read off its billed model calls. A *wake* is a
+// burst of calls close together — the unit of work a person recognises — and its
+// trigger says whether anybody asked for it.
+
+export const ActivityTriggerSchema = z.enum(["user", "background"]);
+export const ActivityGranularitySchema = z.enum(["minute", "hour", "day", "week"]);
+
+export const ActivityTotalsSchema = z.object({
+  calls: z.number().int().default(0),
+  wakes: z.number().int().default(0),
+  spend: z.number().default(0),
+  promptTokens: z.number().int().default(0),
+  completionTokens: z.number().int().default(0),
+});
+
+export const PromptTokenDistributionSchema = z.object({
+  avg: z.number().default(0),
+  median: z.number().int().default(0),
+  p95: z.number().int().default(0),
+  max: z.number().int().default(0),
+});
+
+export const ActivityTriggerBreakdownSchema = z.object({
+  trigger: ActivityTriggerSchema,
+  wakes: z.number().int().default(0),
+  calls: z.number().int().default(0),
+  spend: z.number().default(0),
+  promptTokens: z.number().int().default(0),
+});
+
+export const ActivityBucketSchema = z.object({
+  bucket: z.string(),
+  calls: z.number().int().default(0),
+  promptTokens: z.number().int().default(0),
+  completionTokens: z.number().int().default(0),
+  spend: z.number().default(0),
+});
+
+export const AgentActivitySummarySchema = z.object({
+  agentId: z.string().uuid(),
+  period: z.string().nullable().default(null),
+  fromDate: z.string(),
+  toDate: z.string(),
+  granularity: ActivityGranularitySchema,
+  lastCallAt: z.string().nullable().default(null),
+  totals: ActivityTotalsSchema,
+  promptTokensPerCall: PromptTokenDistributionSchema,
+  byTrigger: z.array(ActivityTriggerBreakdownSchema).default([]),
+  byBucket: z.array(ActivityBucketSchema).default([]),
+  wakeCadenceSeconds: z.number().int().nullable().default(null),
+});
+
+export const AgentWakeSchema = z.object({
+  startedAt: z.string(),
+  endedAt: z.string(),
+  trigger: ActivityTriggerSchema,
+  calls: z.number().int(),
+  spend: z.number(),
+  promptTokens: z.number().int(),
+  completionTokens: z.number().int(),
+  minPromptTokens: z.number().int(),
+  maxPromptTokens: z.number().int(),
+  models: z.array(z.string()).default([]),
+});
+
+export const AgentActivityCallSchema = z.object({
+  requestId: z.string(),
+  occurredAt: z.string(),
+  model: z.string(),
+  status: z.string(),
+  spend: z.number(),
+  promptTokens: z.number().int(),
+  completionTokens: z.number().int(),
+  requestDurationMs: z.number().int().nullable().default(null),
+});
+
+export const PaginatedAgentWakesSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(AgentWakeSchema),
+});
+
+export const PaginatedAgentActivityCallsSchema = z.object({
+  page: z.number().int().min(1),
+  pageSize: z.number().int().min(1),
+  total: z.number().int().min(0),
+  items: z.array(AgentActivityCallSchema),
+});
+
+export type ActivityTrigger = z.infer<typeof ActivityTriggerSchema>;
+export type ActivityTriggerBreakdown = z.infer<typeof ActivityTriggerBreakdownSchema>;
+export type ActivityBucket = z.infer<typeof ActivityBucketSchema>;
+export type AgentActivitySummary = z.infer<typeof AgentActivitySummarySchema>;
+export type AgentWake = z.infer<typeof AgentWakeSchema>;
+export type AgentActivityCall = z.infer<typeof AgentActivityCallSchema>;
+export type PaginatedAgentWakes = z.infer<typeof PaginatedAgentWakesSchema>;
+export type PaginatedAgentActivityCalls = z.infer<typeof PaginatedAgentActivityCallsSchema>;
+
+export const AgentRuntimeDiagnosticsSchema = z.object({
+  observedAt: z.string(),
+  available: z.boolean(),
+  podCreatedAt: z.string().nullable(),
+  restartCount: z.number().int(),
+  ready: z.boolean(),
+  waitingReason: z.string().nullable(),
+  terminationReason: z.string().nullable(),
+  exitCode: z.number().int().nullable(),
+  finishedAt: z.string().nullable(),
+  currentLogs: z.array(z.string()),
+  previousLogs: z.array(z.string()),
+  currentLogsAvailable: z.boolean(),
+  previousLogsAvailable: z.boolean(),
+});
+export type AgentRuntimeDiagnostics = z.infer<typeof AgentRuntimeDiagnosticsSchema>;

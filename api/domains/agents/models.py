@@ -1,27 +1,48 @@
 import enum
 import json
+import re
 from datetime import datetime
-from typing import Literal, Self
+from typing import Any, Literal, NamedTuple, Self
 from uuid import UUID
 
 import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, field_validator, model_validator
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
 from api.domains.agents.google_workspace_scopes import required_service_scopes
+from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.models import BaseModel
+
+ACTIVE_CAPTURE_PREDICATE = "status IN ('PENDING', 'CAPTURING')"
 
 
 class AgentStatus(str, enum.Enum):
     STOPPED = "STOPPED"
     RUNNING = "RUNNING"
     ERROR = "ERROR"
+
+
+class RestorePointStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    CAPTURING = "CAPTURING"
+    RESTORING = "RESTORING"
+    READY = "READY"
+    FAILED = "FAILED"
+    DELETING = "DELETING"
+
+
+class RestorePointOrigin(str, enum.Enum):
+    MANUAL = "MANUAL"
+    PRE_RESTORE = "PRE_RESTORE"
+    PRE_RESET = "PRE_RESET"
+    PRE_UPGRADE = "PRE_UPGRADE"
 
 
 class CommandApprovalMode(str, enum.Enum):
@@ -56,6 +77,7 @@ class SecretProvider(str, enum.Enum):
     FIRECRAWL = "firecrawl"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
+    SHAREPOINT = "sharepoint"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -72,6 +94,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.FIRECRAWL: "Firecrawl credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
+    SecretProvider.SHAREPOINT: "SharePoint credential",
 }
 
 
@@ -175,6 +198,34 @@ class GoogleWorkspaceContent(SecretContent):
         return self
 
 
+class SharePointContent(SecretContent):
+    """A SharePoint sign-in made on the agent's Microsoft Teams app.
+
+    The sign-in is a public client (PKCE, no secret), so the refresh token here refreshes
+    without the Teams app's secret; aai-cli's ``microsoft_delegated`` profile does exactly
+    that and stores each rotated token itself. The Teams app's secret is never read for
+    SharePoint and cannot be stored here (``extra="forbid"`` on SecretContent).
+    """
+
+    # Strings rather than UUIDs: encrypt_content JSON-serialises model_dump(), which a UUID
+    # object would break. Validated and normalised below.
+    connection_id: str
+    tenant_id: str = Field(min_length=1)
+    client_id: str = Field(min_length=1)
+    email: str = Field(min_length=1)
+    scopes: list[str] = Field(default_factory=list)
+    read_only: bool = False
+    refresh_token: str = Field(min_length=1)
+    # New for every sign-in. The pod writes the refresh token into aai-cli's store only when
+    # this changes, so a restart keeps aai-cli's rotated token and a reconnect replaces it.
+    sign_in_id: str
+
+    @field_validator("connection_id", "sign_in_id")
+    @classmethod
+    def _validate_uuid(cls, value: str) -> str:
+        return str(UUID(value))
+
+
 class FirecrawlContent(SecretContent):
     api_key: str
     # Self-hosted override. Kept for backward-compatible decryption of already-stored
@@ -183,12 +234,27 @@ class FirecrawlContent(SecretContent):
     base_url: str = ""
 
 
+_PIPEDRIVE_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
 class PipedriveContent(SecretContent):
     api_token: str
     # Bare subdomain, e.g. "aai-labs" (-> https://aai-labs.pipedrive.com). Optional: a
     # Pipedrive personal API token is self-identifying, so the global
     # https://api.pipedrive.com endpoint works for any account without this.
     domain: str = ""
+
+    @field_validator("domain")
+    @classmethod
+    def _validate_domain(cls, value: str) -> str:
+        # The API server and the agent's aai-cli both build https://{domain}.pipedrive.com,
+        # so anything beyond one DNS label ("evil.example#") would move the request, and
+        # the token, to another host. A pasted company URL is reduced to its label first.
+        label = value.strip().lower().removeprefix("https://").removeprefix("http://").rstrip("/")
+        label = label.removesuffix(".pipedrive.com")
+        if label and not _PIPEDRIVE_DOMAIN_LABEL.fullmatch(label):
+            raise ValueError('domain must be the company subdomain only, e.g. "aai-labs"')
+        return label
 
 
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
@@ -199,7 +265,14 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.FIRECRAWL: FirecrawlContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
+    SecretProvider.SHAREPOINT: SharePointContent,
 }
+
+
+# Providers whose credential only their sign-in writes: the refresh token must come from a
+# sign-in on the named app, checked for tenant and permissions. Saving content directly would
+# skip those checks or point a sign-in at another app.
+SIGN_IN_ONLY_PROVIDERS: frozenset[SecretProvider] = frozenset({SecretProvider.SHAREPOINT})
 
 
 def validate_content(provider: SecretProvider, raw: dict) -> SecretContent:
@@ -237,6 +310,7 @@ class Agent(BaseModel, table=True):
             "+ (agent_template_override_version_id IS NOT NULL)::integer = 1)",
             name="ck_agent_template_pin_state",
         ),
+        sa.CheckConstraint("llm_budget_usd IS NULL OR llm_budget_usd >= 0", name="check_agent_llm_budget_non_negative"),
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
@@ -255,6 +329,8 @@ class Agent(BaseModel, table=True):
     )
     name: str = SqlField(nullable=False, max_length=255)
     litellm_key_encrypted: str = SqlField(nullable=False, default="")
+    # Only a digest is persisted; the fresh plaintext key belongs to the runtime Secret.
+    memory_key_hash: str | None = SqlField(default=None, nullable=True, max_length=64, unique=True, index=True)
     status: AgentStatus = SqlField(
         default=AgentStatus.STOPPED,
         sa_column=Column(Enum(AgentStatus), nullable=False, server_default="STOPPED"),
@@ -292,15 +368,25 @@ class Agent(BaseModel, table=True):
         default="",
         sa_column=Column(sa.String(), nullable=False, server_default=""),
     )
+    running_config_digest: str = SqlField(
+        default="",
+        sa_column=Column(sa.String(64), nullable=False, server_default=""),
+    )
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
     )
+    # Provisioning failure, as normalized by provisioning_errors.py. `last_error` is
+    # the one-line display rendering (summary + detail); `last_error_code` names the
+    # category the read boundary rebuilds the rest from, and its absence on a row
+    # that has `last_error` marks pre-normalization text that was never sanitized.
     last_error: str | None = SqlField(
         default=None,
         nullable=True,
         sa_type=sa.Text,
     )
+    last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
+    last_error_detail: str | None = SqlField(default=None, nullable=True, max_length=500)
 
     ingest_key_encrypted: str | None = SqlField(default=None, nullable=True)
     communication_key_encrypted: str | None = SqlField(default=None, nullable=True)
@@ -312,6 +398,30 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # Opt-in Agent Memory. Turning it off stops recall and retain but keeps stored memories.
+    memory_enabled: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
+    # The Agent's own spend limit (USD), enforced on its LiteLLM key. NULL follows the
+    # Organization's default Agent limit. Never above the Organization's own limit.
+    llm_budget_usd: float | None = SqlField(default=None, nullable=True)
+    # Spend snapshot and alert state, refreshed on a schedule — the same shape and
+    # reasoning as the Organization's: surfaces read this, never the proxy, and NULL
+    # spend means "not yet observed", never zero.
+    llm_spend_usd: float | None = SqlField(default=None, nullable=True)
+    llm_spend_observed_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    llm_budget_renews_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    llm_alerted_threshold: int | None = SqlField(default=None, nullable=True)
+    llm_alert_key: str | None = SqlField(default=None, nullable=True, max_length=128)
 
 
 class AgentAccess(BaseModel, table=True):
@@ -424,6 +534,71 @@ class AgentLogSnapshot(BaseModel, table=True):
     )
     log_text: str = SqlField(sa_column=Column(sa.Text(), nullable=False))
     byte_size: int = SqlField(nullable=False)
+
+
+class AgentRestorePoint(BaseModel, table=True):
+    __tablename__: str = "agent_restore_point"
+
+    __table_args__ = (
+        Index(
+            "ix_agent_restore_point_agent_created",
+            "agent_id",
+            sa.text("created_at DESC"),
+        ),
+        Index(
+            "uq_agent_restore_point_active_capture",
+            "agent_id",
+            unique=True,
+            postgresql_where=sa.text(ACTIVE_CAPTURE_PREDICATE),
+        ),
+    )
+
+    agent_id: UUID = SqlField(foreign_key="agent.id", nullable=False, ondelete="CASCADE")
+    created_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    label: str | None = SqlField(default=None, nullable=True, max_length=120)
+    status: RestorePointStatus = SqlField(
+        default=RestorePointStatus.PENDING,
+        sa_column=Column(Enum(RestorePointStatus), nullable=False, server_default="PENDING"),
+    )
+    origin: RestorePointOrigin = SqlField(
+        default=RestorePointOrigin.MANUAL,
+        sa_column=Column(Enum(RestorePointOrigin), nullable=False, server_default="MANUAL"),
+    )
+    agent_type: AgentType = SqlField(sa_column=Column(sa.String(20), nullable=False))
+    pvc_name: str = SqlField(nullable=False, max_length=253)
+    job_name: str | None = SqlField(default=None, nullable=True, max_length=253)
+    archive_bytes: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
+    file_count: int | None = SqlField(default=None, nullable=True)
+    config_manifest: dict[str, Any] = SqlField(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False),
+    )
+    failure_reason: str | None = SqlField(default=None, nullable=True, max_length=500)
+    # Set when a restore is asked to bring the recorded configuration back with it.
+    # The configuration is written only after the Job confirms the volume is back,
+    # so the intent has to outlive the request that made it.
+    reapply_configuration: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+    # Why the recorded configuration did not land, once the volume already has.
+    configuration_error: str | None = SqlField(default=None, nullable=True, max_length=500)
+    # Who asked for the restore, which is who authorized the configuration write that
+    # follows it. Not the same person as the one who captured the restore point.
+    restored_by_user_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="user.id",
+        nullable=True,
+        ondelete="SET NULL",
+    )
+    restored_by_display: str | None = SqlField(default=None, nullable=True, max_length=255)
+    captured_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
 
 
 class AgentLifecycleEmailReceipt(BaseModel, table=True):
@@ -700,6 +875,10 @@ class AgentSecretCreate(PydanticBaseModel):  # no secret_name — backend stamps
 
     @model_validator(mode="after")
     def validate_provider_content(self) -> AgentSecretCreate:
+        if self.provider in SIGN_IN_ONLY_PROVIDERS:
+            raise ValueError(
+                f"{PROVIDER_DISPLAY_NAMES[self.provider]} is connected by signing in, not by saving content"
+            )
         validate_content(self.provider, self.content)
         return self
 
@@ -713,6 +892,10 @@ class SkillVersionPin(PydanticBaseModel):
 
     skill_id: UUID
     version: int = Field(ge=1)
+
+
+class AgentNameSuggestionRead(PydanticBaseModel):
+    first_name: str
 
 
 class AgentCreate(PydanticBaseModel):
@@ -906,11 +1089,43 @@ class AgentTemplateOverridePublish(PydanticBaseModel):
 
 
 class AgentTemplateSelection(PydanticBaseModel):
+    """A configuration selection: the template pin, and optionally the skill pins
+    and runtime settings that must hold with it.
+
+    Required skill pins are validated against the assignments the Agent *will* have,
+    so a template and its own skills have to arrive in one request.
+    """
+
     selection_type: Literal["platform", "organization", "override"]
     template_key: str | None = Field(default=None, min_length=1, max_length=255)
     template_version: int | None = Field(default=None, ge=1)
     override_version: int | None = Field(default=None, ge=1)
     expected_agent_updated_at: datetime
+
+    # Same vocabulary as AgentUpdate: additive assignment plus explicit removal.
+    skill_ids: list[UUID] = Field(default_factory=list)
+    removed_skill_ids: list[UUID] = Field(default_factory=list)
+    skill_versions: list[SkillVersionPin] = Field(default_factory=list)
+
+    # Unset means "leave as it is"; a null model clears the override, as in AgentUpdate.
+    model: str | None = None
+    approval_mode: CommandApprovalMode | None = None
+    verbose_mode: bool | None = None
+
+    # These columns are not nullable; only `model` gives null a meaning.
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_approval_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("approval_mode", ...) is None:
+            raise ValueError("approval_mode must be omitted rather than null")
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_verbose_mode(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("verbose_mode", ...) is None:
+            raise ValueError("verbose_mode must be omitted rather than null")
+        return values
 
     @model_validator(mode="after")
     def validate_target(self) -> AgentTemplateSelection:
@@ -921,6 +1136,9 @@ class AgentTemplateSelection(PydanticBaseModel):
                 )
         elif self.override_version is None or self.template_key is not None or self.template_version is not None:
             raise ValueError("Override selection requires override_version, and no template_key or template_version")
+        overlap = set(self.skill_ids) & set(self.removed_skill_ids)
+        if overlap:
+            raise ValueError("A Skill cannot be both assigned and removed in the same selection")
         return self
 
 
@@ -1054,6 +1272,29 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 AgentModelSource = Literal["default", "override"]
 
 
+class AgentProvisioningErrorRead(PydanticBaseModel):
+    """A failed start, as shown to anyone who can read the Agent.
+
+    Every field is derived from the stored category or rebuilt from validated
+    fragments; no cluster text reaches this DTO. See `provisioning_errors.py`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    category: AgentProvisioningErrorCategory
+    summary: str
+    detail: str | None = None
+
+
+class AgentCreatorRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    full_name: str | None
+    email: str
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1078,18 +1319,57 @@ class AgentRead(PydanticBaseModel):
     #: Set only when a running Agent's resolved model has moved since it started, so a
     #: surface can say what a restart would switch it to without recomputing the rule.
     pending_model: str
+    update_available: bool = False
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)
+    #: Platforms whose Connections this Agent's runtime runs natively. A change to
+    #: one of them takes effect only after the Agent restarts.
+    native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    memory_enabled: bool = False
+    last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
+    creator: AgentCreatorRead | None = None
+    #: Latest recorded inbound or outbound message, withheld without activity.read.
+    last_message_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
+
+
+class PlatformAgentIdentity(NamedTuple):
+    """An Agent as the Platform view may name it: identity and lifecycle, nothing more.
+
+    A fixed column list rather than the Agent row, per the Platform oversight ADR's
+    explicit-allowlist rule.
+    """
+
+    id: UUID
+    name: str
+    status: AgentStatus
+    organization_id: UUID
+    organization_name: str
+
+
+class AgentRuntimeDiagnosticsRead(PydanticBaseModel):
+    observed_at: datetime
+    available: bool = False
+    pod_created_at: datetime | None = None
+    restart_count: int = 0
+    ready: bool = False
+    waiting_reason: str | None = None
+    termination_reason: str | None = None
+    exit_code: int | None = None
+    finished_at: datetime | None = None
+    current_logs: list[str] = Field(default_factory=list)
+    previous_logs: list[str] = Field(default_factory=list)
+    current_logs_available: bool = False
+    previous_logs_available: bool = False
 
 
 class AgentHealthRead(PydanticBaseModel):
@@ -1121,3 +1401,63 @@ class AgentLogHistoryRead(PydanticBaseModel):
     has_more: bool
     session_ended_at: datetime | None = None
     next_snapshot_id: UUID | None = None
+
+
+class AgentLlmBudgetState(str, enum.Enum):
+    OK = "ok"
+    WARNING = "warning"
+    EXHAUSTED = "exhausted"
+    # Spend has never been observed: we do not know it is fine, only that we have not
+    # looked yet.
+    UNKNOWN = "unknown"
+
+
+# Where an Agent's limit in force comes from: its own, the Organization's default for
+# Agents, or the Organization's own limit holding either of those down.
+AgentLlmBudgetSource = Literal["agent", "default", "organization"]
+
+
+class AgentLlmBudgetRead(PydanticBaseModel):
+    """An Agent's spend limit and what it has spent against it.
+
+    Readable by anyone who may read the Agent's costs (`cost.read` on the Agent).
+    """
+
+    # The limit in force on the Agent's key.
+    limit_usd: float
+    # The Agent's own limit, or None when it follows the Organization's default.
+    own_limit_usd: float | None = None
+    # Where `limit_usd` comes from: the Agent's own limit, or the default. A default
+    # or own limit above the Organization's is held to the Organization's instead.
+    source: AgentLlmBudgetSource
+    # What an Agent without a limit of its own gets, for "use default ($X)". Only for
+    # callers who may change the limit (`can_manage`); None otherwise.
+    default_limit_usd: float | None = None
+    # The ceiling an Agent's own limit may not exceed: the Organization's limit. Only
+    # for callers who may change the limit (`can_manage`); None otherwise.
+    organization_limit_usd: float | None = None
+    window: str
+    state: AgentLlmBudgetState
+    spend_usd: float | None = None
+    renews_at: datetime | None = None
+    can_manage: bool = False
+
+
+class AgentLlmBudgetListItem(PydanticBaseModel):
+    """One row of the Organization's Agent spend-limit overview."""
+
+    agent_id: UUID
+    agent_name: str
+    limit_usd: float
+    own_limit_usd: float | None = None
+    source: AgentLlmBudgetSource
+    state: AgentLlmBudgetState
+    spend_usd: float | None = None
+
+
+class AgentLlmBudgetUpdate(PydanticBaseModel):
+    """An Agent's own spend limit. Null follows the Organization's default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    budget_usd: float | None = Field(ge=0, allow_inf_nan=False)

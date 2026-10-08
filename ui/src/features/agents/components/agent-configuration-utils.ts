@@ -17,9 +17,13 @@ export type AgentConfigurationSectionKey =
   | "profile"
   | "template"
   | "channels"
+  | "webhooks"
   | "skills"
+  | "memory"
   | "keys"
   | "override"
+  | "restore"
+  | "spend"
   | "danger";
 
 export type AgentConfigurationSection = {
@@ -45,9 +49,19 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     description: "Where this Agent receives messages and sends replies.",
   },
   {
+    key: "webhooks",
+    label: "Webhooks",
+    description: "URLs external systems can call to make this Agent run a job.",
+  },
+  {
     key: "skills",
     label: "Skills",
     description: "Assigned tools and the credentials they require.",
+  },
+  {
+    key: "memory",
+    label: "Memory",
+    description: "Long-term memory that adds to this Agent's own notes.",
   },
   {
     key: "keys",
@@ -58,6 +72,16 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     key: "override",
     label: "Agent-owned override",
     description: "Draft, edit, and publish a private template snapshot.",
+  },
+  {
+    key: "restore",
+    label: "Restore points",
+    description: "Capture and roll back the Agent's working files.",
+  },
+  {
+    key: "spend",
+    label: "Model spend limit",
+    description: "The most this Agent can spend on model calls.",
   },
   {
     key: "danger",

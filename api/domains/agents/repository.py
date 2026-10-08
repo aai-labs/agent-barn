@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
@@ -5,19 +7,23 @@ from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from injector import inject, singleton
-from sqlalchemy import exists, func, or_
+from sqlalchemy import exists, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
+from api.domains.agent_memory.repository import stage_agent_memory_cleanup
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
+    AgentCreatorRead,
     AgentFilter,
     AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
     AgentSecret,
+    AgentSecretRead,
     AgentSkill,
     AgentStatus,
+    PlatformAgentIdentity,
     SecretProvider,
 )
 from api.domains.communications.email_address_repository import release_agent_email_addresses
@@ -35,12 +41,14 @@ from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
+    AGENT_LLM_BUDGET_CHANGED,
     AGENT_SECRET_ADDED,
     AGENT_SECRET_REMOVED,
     AGENT_UPDATED,
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.organizations.models import Organization
 from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.catalog import (
     AGENT_OWNER_ROLE_ID,
@@ -106,6 +114,148 @@ class AgentRepository:
     delegate: PostgresRepositoryDelegate
     outbox_repository: OutboxMessageRepository
 
+    def list_llm_credentials(self, organization_id: UUID) -> list[tuple[UUID, str, str]]:
+        """System-only credential projection for one Organization's live Agents.
+
+        Soft-deleted Agents are excluded on purpose: their keys are already blocked,
+        so they cannot spend against a team budget and counting them would only make
+        an Organization look permanently under-covered.
+        """
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, Agent.name, Agent.litellm_key_encrypted).where(
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                    col(Agent.litellm_key_encrypted) != "",
+                )
+            ).all()
+            return [(row[0], row[1], row[2]) for row in rows]
+
+    def list_llm_budget_targets(self, organization_id: UUID | None = None, *, with_key: bool = True) -> list[Agent]:
+        """Live Agents for spend-limit work: by default only those holding a key a
+        limit can be written onto, or every live Agent for an overview.
+
+        One Organization's, or every Organization's for the scheduled passes. Same
+        exclusions and reasoning as list_llm_credentials. Unscoped by Agent
+        visibility: callers are system passes or hold Organization-wide `cost.read`.
+        """
+        with Session(self.delegate.engine) as session:
+            query = select(Agent).where(col(Agent.deleted_at).is_(None))
+            if with_key:
+                query = query.where(col(Agent.litellm_key_encrypted) != "")
+            if organization_id is not None:
+                query = query.where(col(Agent.organization_id) == organization_id)
+            return list(session.exec(query.order_by(col(Agent.created_at).asc())).all())
+
+    def count_by_llm_budget_source(self, organization_id: UUID) -> tuple[int, int]:
+        """(inheriting, own) Agent counts for the default Agent spend limit.
+
+        Unscoped by Agent visibility for the same reason as count_by_model_source:
+        the numbers state how far a default change reaches, naming no Agent.
+        """
+        with Session(self.delegate.engine) as session:
+            inheriting, own = session.exec(
+                select(
+                    func.count().filter(col(Agent.llm_budget_usd).is_(None)),
+                    func.count().filter(col(Agent.llm_budget_usd).is_not(None)),
+                )
+                .select_from(Agent)
+                .where(col(Agent.organization_id) == organization_id)
+                .where(col(Agent.deleted_at).is_(None))
+            ).one()
+            return int(inheriting or 0), int(own or 0)
+
+    def set_llm_budget_with_event(
+        self,
+        agent_id: UUID,
+        amount_usd: float | None,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> tuple[Agent, list[UUID]] | None:
+        """An Agent's own spend limit and its change Event, atomically. None when the
+        Agent is gone."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agent = session.exec(
+                select(Agent).where(col(Agent.id) == agent_id, col(Agent.deleted_at).is_(None)).with_for_update()
+            ).first()
+            if agent is None:
+                return None
+            delivery_ids = self._stage_llm_budget_change(session, agent, amount_usd, actor, actor_display, None)
+            session.commit()
+            return agent, delivery_ids
+
+    def lower_llm_budgets_above(
+        self,
+        organization_id: UUID,
+        limit_usd: float,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+        reason: str,
+    ) -> tuple[list[Agent], list[UUID]]:
+        """Pull every live Agent limit above `limit_usd` down to it, one Event each.
+
+        One transaction: an Organization limit either brings all its Agents within it
+        or none, and each lowered Agent carries the reason in its audit record.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agents = list(
+                session.exec(
+                    select(Agent)
+                    .where(
+                        col(Agent.organization_id) == organization_id,
+                        col(Agent.deleted_at).is_(None),
+                        col(Agent.llm_budget_usd) > limit_usd,
+                    )
+                    .with_for_update()
+                ).all()
+            )
+            delivery_ids: list[UUID] = []
+            for agent in agents:
+                delivery_ids += self._stage_llm_budget_change(session, agent, limit_usd, actor, actor_display, reason)
+            session.commit()
+            return agents, delivery_ids
+
+    def _stage_llm_budget_change(
+        self,
+        session: Session,
+        agent: Agent,
+        amount_usd: float | None,
+        actor: ActorIdentity,
+        actor_display: str,
+        reason: str | None,
+    ) -> list[UUID]:
+        previous = agent.llm_budget_usd
+        agent.llm_budget_usd = amount_usd
+        agent.updated_at = datetime.now(UTC)
+        session.add(agent)
+        session.flush()
+        event = EVENT_REGISTRY.build_event(
+            event_name=AGENT_LLM_BUDGET_CHANGED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=agent.organization_id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT,
+                id=agent.id,
+                organization_id=agent.organization_id,
+            ),
+            correlation_id=uuid4(),
+            payload={
+                "organization_id": agent.organization_id,
+                "agent_id": agent.id,
+                "limit_usd": amount_usd,
+                "previous_limit_usd": previous,
+                "reason": reason,
+                "actor_display": actor_display,
+                "subject_display": agent.name,
+            },
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+
     def get_by_id(self, agent_id: UUID) -> Agent | None:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
@@ -129,6 +279,13 @@ class AgentRepository:
                 *agent_scope_predicates(authorization_scope, include_deleted=True),
             )
             return session.exec(query).first()
+
+    def count_all_by_org(self, org_id: UUID) -> int:
+        """Include soft-deleted Agents so deletion does not rewind naming."""
+        with Session(self.delegate.engine) as session:
+            return (
+                session.scalar(select(func.count()).select_from(Agent).where(col(Agent.organization_id) == org_id)) or 0
+            )
 
     def count_active_by_org(self, org_id: UUID) -> int:
         with Session(self.delegate.engine) as session:
@@ -199,6 +356,7 @@ class AgentRepository:
         agent_id: UUID | None,
         created_by_user_id: UUID | None,
         platform: CommunicationPlatform | None,
+        include_retired_connections: bool = False,
     ) -> list[Any]:
         """Shared narrowing for the stats aggregates (AF-256). Deliberately does
         not include a deleted_at predicate — callers decide that, since inventory
@@ -211,13 +369,13 @@ class AgentRepository:
         if created_by_user_id is not None:
             predicates.append(col(Agent.created_by_user_id) == created_by_user_id)
         if platform is not None:
-            predicates.append(
-                exists().where(
-                    col(CommunicationConnection.agent_id) == col(Agent.id),
-                    col(CommunicationConnection.platform_key) == platform.value,
-                    col(CommunicationConnection.retired_at).is_(None),
-                )
-            )
+            connection_predicates = [
+                col(CommunicationConnection.agent_id) == col(Agent.id),
+                col(CommunicationConnection.platform_key) == platform.value,
+            ]
+            if not include_retired_connections:
+                connection_predicates.append(col(CommunicationConnection.retired_at).is_(None))
+            predicates.append(exists().where(*connection_predicates))
         return predicates
 
     def count_agents_for_stats(
@@ -280,7 +438,13 @@ class AgentRepository:
         two-year one is not seven hundred. It also drives the generate_series
         step, so the empty buckets are filled in at the same resolution.
         """
-        predicates = self._stats_predicates(organization_id, agent_id, created_by_user_id, platform)
+        predicates = self._stats_predicates(
+            organization_id,
+            agent_id,
+            created_by_user_id,
+            platform,
+            include_retired_connections=True,
+        )
         step = sa.text(f"interval '1 {unit.value}'")
         created_utc = sa.func.timezone("UTC", col(Agent.created_at))
         deleted_utc = sa.func.timezone("UTC", col(Agent.deleted_at))
@@ -363,8 +527,14 @@ class AgentRepository:
         self,
         authorization_scope: AuthorizationScope,
         agent_filter: AgentFilter,
-        pagination: Pagination,
+        pagination: Pagination | None,
     ) -> tuple[list[Agent], int]:
+        """Agents the scope may read, oldest first, and how many there are in all.
+
+        `pagination=None` returns every one of them, for a caller that has to rank before
+        it cuts (the agents overview), where a page taken in creation order would drop the
+        very Agents the ranking is meant to find.
+        """
         with Session(self.delegate.engine) as session:
             visibility = agent_scope_predicates(authorization_scope)
             query = select(Agent).where(*visibility)
@@ -376,12 +546,28 @@ class AgentRepository:
                 count_query = count_query.where(status_filter)
 
             total = session.scalar(count_query) or 0
-            query = (
-                query.order_by(col(Agent.created_at).asc())
-                .offset((pagination.page - 1) * pagination.size)
-                .limit(pagination.size)
-            )
+            query = query.order_by(col(Agent.created_at).asc())
+            if pagination is not None:
+                query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
             return list(session.exec(query).all()), total
+
+    def get_creators_for_agents(
+        self,
+        agent_ids: list[UUID],
+        authorization_scope: AuthorizationScope,
+    ) -> dict[UUID, AgentCreatorRead]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, User.id, User.full_name, User.email)
+                .join(User, col(User.id) == col(Agent.created_by_user_id))
+                .where(col(Agent.id).in_(agent_ids), *agent_scope_predicates(authorization_scope))
+            ).all()
+        return {
+            agent_id: AgentCreatorRead(id=user_id, full_name=full_name, email=email)
+            for agent_id, user_id, full_name, email in rows
+        }
 
     def get_active_communication_platforms_for_agents(
         self,
@@ -753,6 +939,32 @@ class AgentRepository:
             session.commit()
             return AgentLifecycleEventResult(agent=agent, delivery_ids=delivery_ids)
 
+    @contextmanager
+    def lifecycle_lock(self, agent_id: UUID) -> Iterator[bool]:
+        """Serialize lifecycle-mutating operations (start/stop/delete, and the
+        maintenance rebuild path) for one Agent across API processes, so a competing
+        request fails fast with 409 instead of racing this one through runtime
+        provisioning or teardown.
+
+        Uses a session-scoped Postgres advisory lock (non-blocking): it is not tied
+        to any single transaction, so the caller may commit intermediate work while
+        still holding it. It is released when this context manager exits, or, as a
+        crash safety net, automatically by Postgres when the underlying connection
+        closes. Callers must not release it (let the `with` block exit) until after
+        their own writes have committed, or a losing request could still observe
+        stale state once it acquires the lock.
+        """
+        lock_key = f"agent-lifecycle:{agent_id}"
+        with Session(self.delegate.engine) as session:
+            acquired = bool(
+                session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
+            )
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    session.scalar(text("SELECT pg_advisory_unlock(hashtext(:lock_key))"), {"lock_key": lock_key})
+
     def save_with_lifecycle_event(
         self,
         agent: Agent,
@@ -799,8 +1011,12 @@ class AgentRepository:
             # Anything start/stop writes has to be listed here or it is silently dropped.
             persisted.status = agent.status
             persisted.last_error = agent.last_error
+            persisted.last_error_code = agent.last_error_code
+            persisted.last_error_detail = agent.last_error_detail
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
+            persisted.memory_key_hash = agent.memory_key_hash
             persisted.running_model = agent.running_model
+            persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
             session.add(persisted)
             session.flush()
@@ -919,8 +1135,10 @@ class AgentRepository:
                 return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
             now = datetime.now(UTC)
             persisted.deleted_at = now
+            persisted.memory_key_hash = None
             session.add(persisted)
             session.flush()
+            stage_agent_memory_cleanup(session, persisted.id, persisted.organization_id, now)
             # Agent deletion is a soft delete, so the database FK cascade does
             # not retire the Agent-owned Communication Connections. Release
             # their provider credentials in this same transaction so retired
@@ -936,11 +1154,8 @@ class AgentRepository:
                     enabled=False,
                     observed_status=None,
                     credentials_encrypted="",
-                    driver_key_encrypted="",
                     credential_fingerprint=None,
                     credential_scope_key=None,
-                    ingress_lease_owner=None,
-                    ingress_lease_expires_at=None,
                     retired_at=now,
                     updated_at=now,
                     revision=col(CommunicationConnection.revision) + 1,
@@ -1206,10 +1421,42 @@ class AgentRepository:
             )
             return list(session.exec(query).all())
 
+    def find_live_for_platform_usage(self) -> list[PlatformAgentIdentity]:
+        """Every live Agent on the platform, with its Organization's name.
+
+        Platform-wide by design, for the Platform resource usage page behind
+        `require_platform_admin`. Only identity and lifecycle columns are read.
+        """
+        query = (
+            sa.select(
+                col(Agent.id),
+                col(Agent.name),
+                col(Agent.status),
+                col(Agent.organization_id),
+                col(Organization.name),
+            )
+            .join(Organization, col(Organization.id) == col(Agent.organization_id))
+            .where(col(Agent.deleted_at).is_(None))
+        )
+        with self.delegate.engine.connect() as connection:
+            return [PlatformAgentIdentity(*row) for row in connection.execute(query).all()]
+
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.organization_id) == org_id).order_by(col(Agent.created_at).asc())
+            return list(session.exec(query).all())
+
+    def find_all_with_litellm_keys(self) -> list[Agent]:
+        """Every agent that has ever held a LiteLLM key, across all organizations.
+
+        Deleted agents are included on purpose: their keys still appear in historical
+        spend logs, and dropping them would push real cost into the unattributed
+        bucket. Platform-wide by design — the cost sync builds one key-hash map per
+        run rather than querying per organization.
+        """
+        with Session(self.delegate.engine) as session:
+            query = select(Agent).where(col(Agent.litellm_key_encrypted) != "").order_by(col(Agent.created_at).asc())
             return list(session.exec(query).all())
 
     # --- Integration secrets ---
@@ -1228,14 +1475,27 @@ class AgentRepository:
             query = select(AgentSecret).where(col(AgentSecret.agent_id) == agent_id)
             return list(session.exec(query).all())
 
-    def get_secrets_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, list[AgentSecret]]:
+    def get_secret_summaries_for_agents(
+        self, agent_ids: list[UUID], authorization_scope: AuthorizationScope
+    ) -> dict[UUID, list[AgentSecretRead]]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            query = select(AgentSecret).where(col(AgentSecret.agent_id).in_(agent_ids))
-            result: dict[UUID, list[AgentSecret]] = {}
-            for secret in session.exec(query).all():
-                result.setdefault(secret.agent_id, []).append(secret)
+            query = (
+                select(
+                    AgentSecret.agent_id,
+                    AgentSecret.provider,
+                    AgentSecret.secret_name,
+                    AgentSecret.shared_credential_id,
+                )
+                .join(Agent, col(Agent.id) == col(AgentSecret.agent_id))
+                .where(col(AgentSecret.agent_id).in_(agent_ids), *agent_scope_predicates(authorization_scope))
+            )
+            result: dict[UUID, list[AgentSecretRead]] = {}
+            for agent_id, provider, name, credential_id in session.exec(query).all():
+                result.setdefault(agent_id, []).append(
+                    AgentSecretRead(provider=provider, secret_name=name, shared_credential_id=credential_id)
+                )
             return result
 
     # --- Skills ---

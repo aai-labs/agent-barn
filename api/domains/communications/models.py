@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -27,8 +27,10 @@ class CommunicationPlatform(str, enum.Enum):
     """Stable keys for the communication plugins shipped with Agent Barn."""
 
     SLACK = "slack"
+    TEAMS = "teams"
     TELEGRAM = "telegram"
     DISCORD = "discord"
+    WEB = "web"
     EMAIL = "email"
 
 
@@ -41,14 +43,7 @@ class PlatformCapability(str, enum.Enum):
     ATTACHMENTS = "attachments"
     THREADS = "threads"
     MENTIONS = "mentions"
-    PROCESSING_FEEDBACK = "processing_feedback"
-
-
-class ProcessingFeedbackStage(str, enum.Enum):
-    ACCEPTED = "accepted"
-    CLAIMED = "claimed"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
+    INTERACTIVE_COMPONENTS = "interactive_components"
 
 
 class CredentialUniquenessScope(str, enum.Enum):
@@ -132,6 +127,7 @@ class CommunicationJournalStage(str, enum.Enum):
     AGENT_CLAIMED = "agent_claimed"
     MODEL_COMPLETED = "model_completed"
     REPLY_QUEUED = "reply_queued"
+    INITIATED_QUEUED = "initiated_queued"
     PROVIDER_DELIVERY_ATTEMPTED = "provider_delivery_attempted"
     PROVIDER_DELIVERED = "provider_delivered"
     CONNECTION_CONNECTING = "connection_connecting"
@@ -159,6 +155,19 @@ class CommunicationConnection(BaseModel, table=True):
         sa.Index("ix_communication_connection_agent", "agent_id"),
         sa.Index("ix_communication_connection_organization", "organization_id"),
         sa.Index("ix_communication_connection_platform", "platform_key"),
+        sa.Index(
+            "uq_communication_connection_default_target",
+            "agent_id",
+            unique=True,
+            postgresql_where=sa.text("retired_at IS NULL AND settings->>'default_delivery_target' IS NOT NULL"),
+        ),
+        sa.Index(
+            "uq_communication_connection_active_platform",
+            "agent_id",
+            "platform_key",
+            unique=True,
+            postgresql_where=sa.text("retired_at IS NULL"),
+        ),
         sa.Index(
             "uq_communication_connection_active_name",
             "agent_id",
@@ -191,7 +200,6 @@ class CommunicationConnection(BaseModel, table=True):
         sa_column=Column(sa.JSON(), nullable=False, server_default="{}"),
     )
     credentials_encrypted: str = SqlField(nullable=False, sa_type=sa.Text)
-    driver_key_encrypted: str = SqlField(nullable=False, sa_type=sa.Text)
     external_identity: str | None = SqlField(default=None, nullable=True, max_length=512)
     credential_fingerprint: str | None = SqlField(default=None, nullable=True, max_length=128)
     credential_scope_key: str | None = SqlField(default=None, nullable=True, max_length=128)
@@ -209,12 +217,6 @@ class CommunicationConnection(BaseModel, table=True):
     last_error_details: dict[str, Any] | None = SqlField(
         default=None,
         sa_column=Column(JSONB, nullable=True),
-    )
-    ingress_lease_owner: str | None = SqlField(default=None, nullable=True, max_length=64)
-    ingress_lease_expires_at: datetime | None = SqlField(
-        default=None,
-        nullable=True,
-        sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
     revision: int = SqlField(
         default=1,
@@ -273,10 +275,12 @@ class CommunicationDelivery(BaseModel, table=True):
             name="uq_communication_delivery_idempotency",
         ),
         sa.CheckConstraint("attempt_count >= 0", name="ck_communication_delivery_attempt_count"),
+        sa.UniqueConstraint("agent_id", "submission_key", name="uq_communication_delivery_submission"),
         sa.Index("ix_communication_delivery_connection_status", "connection_id", "status"),
         sa.Index("ix_communication_delivery_status_available", "status", "available_at"),
         sa.Index("ix_communication_delivery_ordering", "ordering_key", "created_at"),
         sa.Index("ix_communication_delivery_agent", "agent_id"),
+        sa.Index("ix_communication_delivery_agent_direction_completed", "agent_id", "direction", "completed_at"),
     )
 
     organization_id: UUID = SqlField(nullable=False)
@@ -293,6 +297,8 @@ class CommunicationDelivery(BaseModel, table=True):
         sa_column=Column(sa.String(32), nullable=False, server_default="PENDING"),
     )
     idempotency_key: str = SqlField(nullable=False, max_length=512)
+    submission_key: str | None = SqlField(default=None, nullable=True, max_length=64)
+    request_digest: str | None = SqlField(default=None, nullable=True, max_length=64)
     ordering_key: str = SqlField(nullable=False, max_length=1024)
     attempt_count: int = SqlField(
         default=0,
@@ -309,6 +315,15 @@ class CommunicationDelivery(BaseModel, table=True):
     provider_message_id: str | None = SqlField(default=None, nullable=True, max_length=512)
     last_error_code: str | None = SqlField(default=None, nullable=True, max_length=100)
     last_error_message: str | None = SqlField(default=None, nullable=True, max_length=500)
+    cancel_requested_at: datetime | None = SqlField(default=None, nullable=True, sa_type=sa.DateTime(timezone=True))  # type: ignore
+    # A claimed delivery whose run is parked waiting on a human answer. The
+    # answer can only arrive as another message on this same thread, so such a
+    # delivery must not block its own ordering key or the reply deadlocks
+    # behind the run that is waiting for it.
+    awaiting_input: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
     envelope: dict[str, Any] = SqlField(sa_column=Column(JSONB, nullable=False))
 
 
@@ -441,6 +456,7 @@ class CommunicationPipelineCounts(PydanticBaseModel):
     agent_claimed: int = 0
     model_completed: int = 0
     reply_queued: int = 0
+    initiated_queued: int = 0
     provider_delivered: int = 0
     dead_lettered: int = 0
 
@@ -536,11 +552,6 @@ class CommunicationDiagnosticsRead(PydanticBaseModel):
     window_end: datetime
 
 
-class CommunicationReconnectRead(PydanticBaseModel):
-    connection: CommunicationConnectionRead
-    requested_at: datetime
-
-
 class CommunicationRetryRead(PydanticBaseModel):
     delivery_id: UUID
     status: CommunicationDeliveryStatus
@@ -554,6 +565,7 @@ class RuntimeDeliveryRead(PydanticBaseModel):
     connection_id: UUID
     attempt_count: int
     envelope: NormalizedCommunicationEnvelope
+    progress_updates: bool = True
 
 
 class RuntimeDeliveryResult(PydanticBaseModel):
@@ -562,26 +574,68 @@ class RuntimeDeliveryResult(PydanticBaseModel):
     error_message: str | None = Field(default=None, max_length=500)
 
 
+class ApprovalRequest(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approval_id: str = Field(min_length=1, max_length=512)
+    command: str = Field(min_length=1, max_length=100_000)
+    choices: list[str] = Field(min_length=1, max_length=16)
+    choice_labels: dict[str, str] = Field(
+        default_factory=lambda: {
+            "once": "Allow once",
+            "session": "Allow for session",
+            "always": "Always allow",
+            "deny": "Deny",
+        }
+    )
+
+
 class RuntimeReplyCreate(PydanticBaseModel):
     idempotency_key: str = Field(min_length=1, max_length=512)
     text: str = Field(min_length=1, max_length=100_000)
     attachments: list[CommunicationAttachment] = Field(default_factory=list)
+    approval: ApprovalRequest | None = None
 
 
 class OutboundCommunicationEnvelope(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = Field(default=1, ge=1)
-    source_delivery_id: UUID
+    origin: Literal["reply", "cron", "user_directed"] = "reply"
+    execution_id: str | None = None
+    source_delivery_id: UUID | None = None
     location: ConversationLocation
     text: str = Field(min_length=1, max_length=100_000)
     attachments: list[CommunicationAttachment] = Field(default_factory=list)
     reply_to_provider_message_id: str | None = Field(default=None, max_length=512)
     provider_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    approval: ApprovalRequest | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="after")
+    def require_reply_source(self) -> OutboundCommunicationEnvelope:
+        if self.origin in {"reply", "user_directed"} and self.source_delivery_id is None:
+            raise ValueError("Replies and user-directed messages require a source delivery")
+        if self.origin == "cron" and (self.source_delivery_id is not None or not self.execution_id):
+            raise ValueError("Scheduled messages require a run identity and no reply source")
+        return self
+
+
+class OutboundTargetRequest(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["channel", "user", "dm"] = "channel"
+    recipient: str = Field(min_length=1, max_length=512, title="Channel or recipient")
+    thread_id: str | None = Field(default=None, min_length=1, max_length=512, title="Thread (optional)")
+
+
+class ResolvedOutboundTarget(PydanticBaseModel):
+    location: ConversationLocation
+    provider_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
 
 
 class PlatformDescriptorRead(PydanticBaseModel):
     key: str
+    transport: Literal["gateway", "native"]
     display_name: str
     schema_version: int
     capabilities: list[PlatformCapability]
@@ -603,13 +657,14 @@ class CommunicationDirectoryPreview(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     platform_key: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=64)
     settings: dict[str, Any] = Field(default_factory=dict)
     credentials: dict[str, Any]
+    guild_id: str | None = Field(default=None, max_length=64)
 
 
 class CommunicationDirectoryPreviewRead(PydanticBaseModel):
-    channels: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
-    users: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
+    entries: list[CommunicationDirectoryEntryRead] = Field(default_factory=list)
 
 
 class CommunicationConnectionCreate(PydanticBaseModel):
@@ -646,6 +701,8 @@ class CommunicationConnectionRead(PydanticBaseModel):
     platform_key: str
     display_name: str
     enabled: bool
+    transport: Literal["gateway", "native"] = "gateway"
+    recovery_actions: list[Literal["retry_delivery"]] = Field(default_factory=list)
     schema_version: int
     settings: dict[str, Any]
     external_identity: str | None

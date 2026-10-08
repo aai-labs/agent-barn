@@ -1,15 +1,21 @@
+from collections.abc import Callable
 from dataclasses import dataclass
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 from injector import inject, singleton
 from sqlalchemy import and_, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
+from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_LLM_BUDGET_CHANGED
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.organizations.exceptions import OrganizationCreationLimitReached
+from api.domains.organizations.exceptions import LlmBudgetAboveCeiling, OrganizationCreationLimitReached
 from api.domains.organizations.models import (
     Organization,
+    OrganizationBudgetEmailReceipt,
     OrganizationFilter,
     OrganizationRead,
     PlatformOrganizationRead,
@@ -21,6 +27,15 @@ from api.domains.users.organization_users.models import (
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+
+def _deduped_recipients(rows) -> list[tuple[str, str | None]]:
+    """One entry per address, compared case-insensitively while keeping the stored
+    casing for display."""
+    seen: dict[str, tuple[str, str | None]] = {}
+    for email, full_name in rows:
+        seen.setdefault(str(email).lower(), (str(email), full_name))
+    return list(seen.values())
 
 
 @inject
@@ -77,6 +92,9 @@ class OrganizationRepository:
                 col(creator.id).label("creator_user_id"),
                 col(creator.email).label("creator_email"),
                 col(creator.full_name).label("creator_name"),
+                col(Organization.llm_budget_usd).label("llm_budget_usd"),
+                col(Organization.llm_budget_duration).label("llm_budget_duration"),
+                col(Organization.llm_own_budget_usd).label("llm_own_budget_usd"),
             )
             .select_from(Organization)
             .outerjoin(
@@ -123,6 +141,205 @@ class OrganizationRepository:
             )
 
         return query
+
+    def find_budget_email_recipients(self, organization_id: UUID) -> list[tuple[str, str | None]]:
+        """Owners and Admins, i.e. the same audience `cost.read` gives the figures to.
+        Plain members are deliberately excluded."""
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(User.email, User.full_name)
+                .join(OrganizationUser, col(OrganizationUser.user_id) == col(User.id))
+                .where(
+                    col(OrganizationUser.organization_id) == organization_id,
+                    col(OrganizationUser.role).in_([OrganizationRole.OWNER, OrganizationRole.ADMIN]),
+                )
+            ).all()
+        return _deduped_recipients(rows)
+
+    def find_platform_admin_recipients(self) -> list[tuple[str, str | None]]:
+        """Platform Administrators, for the one budget event that is our problem too:
+        an Organization cut off from model calls is a support ticket inbound."""
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(select(User.email, User.full_name).where(col(User.is_platform_admin).is_(True))).all()
+        return _deduped_recipients(rows)
+
+    def find_notified_budget_recipients(self, delivery_id: UUID) -> set[str]:
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(OrganizationBudgetEmailReceipt.recipient_email).where(
+                        col(OrganizationBudgetEmailReceipt.delivery_id) == delivery_id
+                    )
+                ).all()
+            )
+
+    def record_budget_recipient_notified(self, delivery_id: UUID, recipient_email: str) -> None:
+        with Session(self.delegate.engine) as session:
+            session.add(OrganizationBudgetEmailReceipt(delivery_id=delivery_id, recipient_email=recipient_email))
+            try:
+                session.commit()
+            except IntegrityError:
+                # The receipt already exists, which is exactly the idempotency it records.
+                session.rollback()
+
+    def list_capped_organizations(self) -> list[Organization]:
+        """Organizations with a spend limit set — since AF-337 every Organization has
+        one, so this is all of them; the filter only guards rows mid-migration."""
+        with Session(self.delegate.engine) as session:
+            return list(session.exec(select(Organization).where(col(Organization.llm_budget_usd).is_not(None))).all())
+
+    def list_budget_policies(self) -> list[tuple[UUID, float, str]]:
+        """System-only inventory of the limit each team should carry: the
+        Organization's own where it set one, else the ceiling. Never exposed through
+        a route."""
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(
+                    Organization.id,
+                    func.coalesce(col(Organization.llm_own_budget_usd), col(Organization.llm_budget_usd)),
+                    Organization.llm_budget_duration,
+                )
+            ).all()
+            return [(row[0], float(row[1]), row[2]) for row in rows]
+
+    def set_llm_budget_renews_at(self, organization_id: UUID, renews_at: datetime) -> None:
+        """When the Organization's window renews, as the proxy reported it. Written on
+        its own so it never races a concurrent limit change."""
+        with Session(self.delegate.engine) as session:
+            organization = session.get(Organization, organization_id)
+            if organization is None:
+                return
+            organization.llm_budget_renews_at = renews_at
+            session.add(organization)
+            session.commit()
+
+    def set_llm_ceiling_with_event(
+        self,
+        organization_id: UUID,
+        *,
+        ceiling_usd: float,
+        window: str | None,
+        actor: ActorIdentity,
+        actor_display: str,
+        reason_if_lowered: str,
+    ) -> tuple[Organization, list[UUID]] | None:
+        """Set the platform ceiling, pulling the Organization's own limit down to it if
+        it is higher, and stage the change Event atomically.
+
+        The own limit is compared under the row lock, not as the caller last read it:
+        an own limit saved concurrently is still clamped instead of escaping above
+        the new ceiling. A `window` of None keeps the one in force. None when the
+        Organization does not exist.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = self._locked(session, organization_id)
+            if organization is None:
+                return None
+            own = organization.llm_own_budget_usd
+            lowered = own is not None and own > ceiling_usd
+            return self._write_llm_budgets(
+                session,
+                organization,
+                ceiling_usd=ceiling_usd,
+                window=window or organization.llm_budget_duration,
+                own_limit_usd=ceiling_usd if lowered else own,
+                actor=actor,
+                actor_display=actor_display,
+                reason=reason_if_lowered if lowered else None,
+            )
+
+    def set_own_llm_budget_with_event(
+        self,
+        organization_id: UUID,
+        *,
+        own_limit_usd: float | None,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> tuple[Organization, list[UUID]] | None:
+        """Set the Organization's own limit and stage the change Event atomically.
+
+        Checked against the ceiling under the row lock and written without touching
+        it, so a ceiling lowered by a concurrent request can neither be exceeded nor
+        written back. Raises LlmBudgetAboveCeiling; None when the Organization does
+        not exist.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = self._locked(session, organization_id)
+            if organization is None:
+                return None
+            if own_limit_usd is not None and own_limit_usd > organization.llm_budget_usd:
+                raise LlmBudgetAboveCeiling(organization.llm_budget_usd)
+            return self._write_llm_budgets(
+                session,
+                organization,
+                ceiling_usd=organization.llm_budget_usd,
+                window=organization.llm_budget_duration,
+                own_limit_usd=own_limit_usd,
+                actor=actor,
+                actor_display=actor_display,
+                reason=None,
+            )
+
+    @staticmethod
+    def _locked(session: Session, organization_id: UUID) -> Organization | None:
+        return session.exec(
+            select(Organization).where(col(Organization.id) == organization_id).with_for_update()
+        ).first()
+
+    def _write_llm_budgets(
+        self,
+        session: Session,
+        organization: Organization,
+        *,
+        ceiling_usd: float,
+        window: str,
+        own_limit_usd: float | None,
+        actor: ActorIdentity,
+        actor_display: str,
+        reason: str | None,
+    ) -> tuple[Organization, list[UUID]]:
+        """Persist the limits on a locked row and stage their change Event in the same
+        transaction, so a limit can never move without its audit record. The previous
+        values are read under that lock, so two concurrent changes cannot both report
+        the same "before"."""
+        organization_id = organization.id
+        previous_ceiling = organization.llm_budget_usd
+        previous_own = organization.llm_own_budget_usd
+        organization.llm_budget_usd = ceiling_usd
+        organization.llm_budget_duration = window
+        organization.llm_own_budget_usd = own_limit_usd
+        organization.updated_at = datetime.now(UTC)
+        session.add(organization)
+        session.flush()
+
+        event = EVENT_REGISTRY.build_event(
+            event_name=ORGANIZATION_LLM_BUDGET_CHANGED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization_id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.ORGANIZATION,
+                id=organization_id,
+                organization_id=organization_id,
+            ),
+            correlation_id=uuid4(),
+            payload={
+                "organization_id": organization_id,
+                "ceiling_usd": ceiling_usd,
+                "previous_ceiling_usd": previous_ceiling,
+                "own_limit_usd": own_limit_usd,
+                "previous_own_limit_usd": previous_own,
+                "window": window,
+                "reason": reason,
+                "actor_display": actor_display,
+                "subject_display": organization.name,
+            },
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+        session.commit()
+        return organization, delivery_ids
 
     def get(self, organization_id: UUID) -> Organization | None:
         return self.delegate.find_by_id(Organization, organization_id)
@@ -286,5 +503,13 @@ class OrganizationRepository:
             session.commit()
             return organization
 
-    def delete(self, organization_id: UUID) -> bool:
-        return self.delegate.delete_one(Organization, organization_id)
+    def delete(self, organization_id: UUID, before_delete: Callable[[Session], None] | None = None) -> bool:
+        with Session(self.delegate.engine) as session:
+            if before_delete:
+                before_delete(session)
+            organization = session.get(Organization, organization_id)
+            if organization is None:
+                return False
+            session.delete(organization)
+            session.commit()
+            return True

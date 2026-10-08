@@ -6,9 +6,14 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
+import api.domains.agent_memory.models
+import api.domains.agent_memory.platform_models
 import api.domains.agent_settings.models
+import api.domains.agent_webhooks.models
 import api.domains.agents.models
+import api.domains.api_keys.models
 import api.domains.auth.models
+import api.domains.business_value.models
 import api.domains.communications.models
 import api.domains.conversations.models
 import api.domains.costs.models
@@ -23,6 +28,7 @@ import api.domains.tool_calls.models
 import api.domains.users.models
 import api.domains.users.organization_users.models  # noqa: F401
 from api.core.config import get_config
+from api.migrations.autogenerate import include_object
 
 config = context.config
 connection_url = str(get_config().db_connection_url)
@@ -34,7 +40,11 @@ if db_url_override and db_url_override != "":
 config.set_main_option("sqlalchemy.url", connection_url)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # The model imports above create every api.* logger before this runs, and
+    # fileConfig disables existing loggers unless told otherwise. In-process
+    # callers -- the test harness runs migrations against a live app -- would
+    # otherwise silence application logging for the rest of the process.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = SQLModel.metadata
 
@@ -48,6 +58,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -67,6 +78,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             compare_server_default=True,
+            include_object=include_object,
         )
 
         with context.begin_transaction():
