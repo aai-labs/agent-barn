@@ -410,7 +410,7 @@ _AGENTBARN_TELEGRAM = AgentBarnTelegramRuntime(
 def test_agentbarn_telegram_points_hermes_at_the_proxy_and_closes_groups() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", agentbarn_telegram=_AGENTBARN_TELEGRAM)
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
     assert config["platforms"]["telegram"]["extra"] == {
         "base_url": "http://communications:8002/communications/v1/telegram/c0ffee/bot",
         "base_file_url": "http://communications:8002/communications/v1/telegram/c0ffee/file/bot",
