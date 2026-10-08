@@ -12,10 +12,11 @@ import { useAgents } from "@/features/agents/hooks/use-agents";
 import { AgentCard } from "@/features/agents/components/agent-card";
 import { HireDialog } from "@/features/agents/components/hire-dialog";
 import { HireTeammateCard } from "@/features/agents/components/hire-teammate-card";
+import { isQuiet } from "@/features/agents/utils";
 
 function LoadingCard() {
   return (
-    <div className="af-card flex min-h-56 flex-col overflow-hidden" aria-hidden="true">
+    <div className="af-card flex min-h-48 flex-col overflow-hidden" aria-hidden="true">
       <div className="flex items-center gap-3 p-4.5">
         <Skeleton className="size-11 rounded-full" />
         <div className="flex flex-1 flex-col gap-2">
@@ -27,8 +28,7 @@ function LoadingCard() {
         <Skeleton className="h-3 w-28" />
         <Skeleton className="h-3 w-36" />
       </div>
-      <div className="mt-auto flex min-h-24 flex-col justify-center gap-2 px-4.5 py-3" style={{ background: "var(--bg)", borderTop: "1px solid var(--line)" }}>
-        <Skeleton className="h-3 w-20" />
+      <div className="mt-auto px-4.5 py-3" style={{ background: "var(--bg)", borderTop: "1px solid var(--line)" }}>
         <Skeleton className="h-4 w-28" />
       </div>
     </div>
@@ -48,6 +48,7 @@ export default function DashboardPage() {
   const firstName = (user.fullName ?? user.email ?? "").split(" ")[0];
   const running = agents.filter((a) => a.status === "RUNNING").length;
   const idle = agents.filter((a) => a.status === "STOPPED").length;
+  const quiet = agents.filter((a) => isQuiet(a.lastMessageAt)).length;
   const displayedAgents = agents.filter((agent) => agent.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   return (
@@ -59,6 +60,7 @@ export default function DashboardPage() {
           </h1>
           <div className="text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
             {isLoading ? "Loading…" : `${running} working now · ${idle} idle`}
+            {!isLoading && quiet > 0 && <span style={{ color: "var(--warn)" }}> · {quiet} quiet for 2+ weeks</span>}
           </div>
         </div>
       </div>
