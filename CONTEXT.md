@@ -49,7 +49,7 @@ The product mode where a Platform Administrator manages Platform Resources and P
 _Avoid_: default Organization, admin Organization, global workspace
 
 **Platform Oversight Data**:
-An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
+An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
 _Avoid_: Organization View, impersonation, unrestricted tenant access
 
 **Organization View**:
@@ -63,6 +63,10 @@ _Avoid_: default Organization, primary Organization
 **Membership**:
 The relationship between a user and an organization, carrying exactly one organization role.
 _Avoid_: organization user, user organization
+
+**Personal API Key**:
+A revocable, User-owned Bearer credential that accesses the product API using the User's current Organization Memberships and Agent Permissions. It may be read-only or full access.
+_Avoid_: Agent Secret, runtime ingest token, Organization-owned key
 
 **Organization Role**:
 A Membership's fixed organization-scoped authority. The roles are Organization Owner, Organization Admin, and Organization Member; an Organization can have at most one Organization Owner.
@@ -100,6 +104,14 @@ _Avoid_: model usage, observed model
 The models and token usage attributed to Agent executions during a defined reporting period. It may include multiple models and may differ from the Agent's current Configured Model.
 _Avoid_: configured model, current model
 
+**Agent Resource Usage**:
+The CPU and memory an Agent's container is using, against the limits it runs with. Each Agent reports its own; Prometheus stores it. It describes the container, not model calls or spend. Platform Administrators see it across every Organization, named from the database.
+_Avoid_: model usage, observed model usage, cost, spend
+
+**Capacity Limit**:
+A ceiling on the total memory or CPU limits of the namespace's containers, typed in by a Platform Administrator, normally the namespace's ResourceQuota. It is entered by hand because the tenant service account cannot read the quota. Platform Resource Usage compares it with what the namespace's pods have committed in limits, which is not the same as what they use.
+_Avoid_: quota (the cluster's own object), usage limit, budget
+
 **Runtime**:
 The implementation that executes an agent. Agent Barn currently supports Hermes and OpenClaw.
 _Avoid_: platform
@@ -107,6 +119,18 @@ _Avoid_: platform
 **Agent Restore Point**:
 A captured, restorable copy of one Agent's persistent volume contents, together with a record of the Agent's configuration pins at capture time. Capture and restore both require a stopped Agent, and restore replaces the volume contents in place. The archive deliberately excludes credential material and any state the Agent's start script regenerates, so it holds the Agent's own work rather than a byte-exact image of the volume.
 _Avoid_: snapshot, backup, volume image, checkpoint
+
+**Agent Memory**:
+Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, credentials, automatic Runtime use, and read-only viewing of an Agent's own and currently permitted Organization memories, an Owner/Admin Organization viewer, and asynchronous deletion purging are implemented. See [Agent Memory](docs/features/agent-memory.md).
+_Avoid_: MEMORY.md, Runtime memory, knowledge base
+
+**Organization Memory**:
+Agent Memory marked for sharing across one Organization. One Organization Memory grant gives an Agent either Read only access for recall or Read and write access for recall and explicit shared saves.
+_Avoid_: team memory, shared bank
+
+**Memory Grant**:
+A directional permission, managed by Organization Owners and Admins, letting one Agent recall Organization Memory or one other Agent's private memories. Organization Memory grants allow either read only or read and write; another Agent's memory is always read-only. Granting or revoking access never rewrites stored memories.
+_Avoid_: memory sharing, Agent Access
 
 **Pre-Restore Restore Point**:
 An Agent Restore Point the system captures automatically at the start of a restore, before the target volume is modified. It is the rollback path when a restore is unwanted or fails partway, and it does not count against the per-Agent retention cap.
@@ -201,11 +225,11 @@ An unpublished, in-progress next version of a template lineage. Platform lineage
 _Avoid_: unpublished template, WIP template
 
 **Template Restore**:
-An action that seeds the Draft Template Version from any selected immutable published version of the same lineage, in either scope. Publishing the restored draft creates the next version in the lineage; it never mutates or removes the selected historical version.
+An action that seeds the Draft Template Version from any selected immutable published version of the same lineage. An Organization fork may select its own history or the source Platform history; publishing creates the next version in the draft's owning scope and never mutates or removes the selected historical version.
 _Avoid_: version pointer switch, destructive rollback
 
 **Fork Baseline Version**:
-The Platform Template Version whose complete snapshot was copied into the current Organization Template version. It is stored with the organization row and advances each time a Template Update clones a newer platform snapshot.
+The Platform Template Version whose complete snapshot was copied into the current Organization Template version. It is stored with the organization row and changes when a Template Update or Template Restore adopts a Platform snapshot, including when a restore selects an older baseline.
 _Avoid_: fork version, template merge baseline
 
 **Template Update**:
@@ -346,7 +370,7 @@ _Avoid_: webhook
 - An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
 - A custom **Skill Lineage** can be hard-deleted from its owning Platform, Organization, or Agent scope only when no Agent pins any of its versions and no Template, Override, or fork-source reference remains; the delete cascades the lineage's own Drafts, Versions, and files.
 - A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
-- A **Platform Administrator** can inspect any immutable Platform Template Version and use a **Template Restore** to seed a new Draft Template Version from it; the restore leaves version history and existing Agent pins unchanged.
+- A **Platform Administrator** can restore an immutable Platform Template Version into a Platform draft; an Organization member with template management permission can restore an Organization version or a Built-in source version into an Organization draft. Both forms of **Template Restore** preserve published history and existing Agent pins.
 - An Organization Template fork tracks a **Fork Baseline Version**; the first fork is Organization v1 and a **Template Update** clones its origin's newer Platform Template snapshot into the next organization version.
 - Editing an Agent's Template from the Agent's own screen creates or updates one **Agent Template Override Draft** as a snapshot of the exact active shared Template Version or Agent Template Override Version, retaining its **Override Source Version** lineage; other Agents and the shared source lineage are unaffected. Selecting or rolling back a published version does not modify or discard that draft.
 - Publishing the draft validates it and creates the next immutable **Agent Template Override Version** without changing the Agent's pin. Selecting a published shared or Override Version changes the active pin immediately for a stopped Agent; a running Agent uses the explicit **Apply & Restart** workflow, which stops, selects, and starts it without a pending pin.

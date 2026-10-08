@@ -36,6 +36,7 @@ _OPENCLAW = "openclaw"
 _AGENTS_DIR = Path(__file__).resolve().parents[2] / "domains" / "agents"
 _HERMES_START = _AGENTS_DIR / "scripts" / "hermes" / "start.sh"
 _OPENCLAW_START = _AGENTS_DIR / "scripts" / "openclaw" / "start.sh"
+_RETIRE_MESSAGING = _AGENTS_DIR / "scripts" / "retire-messaging.py"
 _OPENCLAW_INIT = _AGENTS_DIR / "scripts" / "openclaw" / "init-openclaw.js"
 _AAI_CLI_ARTIFACTS = _AGENTS_DIR / "aai_cli_artifacts.py"
 _AGENT_SERVICE = _AGENTS_DIR / "service.py"
@@ -50,13 +51,13 @@ _EXCLUSION_EVIDENCE = {
         "SOUL.md": (_HERMES_START, "cp /app/config/SOUL.md /opt/data/SOUL.md"),
         "config.yaml": (_HERMES_START, "/opt/data/config.yaml"),
         "plugins": (_HERMES_START, "/opt/data/plugins/"),
-        "agentbarn-messages.sqlite3": (_HERMES_START, "/opt/data/agentbarn-messages.sqlite3"),
+        "agentbarn-messages.sqlite3": (_RETIRE_MESSAGING, "agentbarn-messages.sqlite3"),
         "workspace/skills": (_HERMES_START, "rm -rf /workspace/skills"),
     },
     _OPENCLAW: {
         "aai-cli": (_AGENT_SERVICE, '"/home/node/.openclaw/aai-cli"'),
         "local-plugins": (_OPENCLAW_START, "/home/node/.openclaw/local-plugins/"),
-        "agentbarn-messages.sqlite3": (_OPENCLAW_START, "/home/node/.openclaw/agentbarn-messages.sqlite3"),
+        "agentbarn-messages.sqlite3": (_RETIRE_MESSAGING, "agentbarn-messages.sqlite3"),
         "openclaw.json": (_OPENCLAW_INIT, "'openclaw.json'"),
         "workspace/skills": (_OPENCLAW_INIT, "path.join(WORKSPACE_DIR, 'skills')"),
     },

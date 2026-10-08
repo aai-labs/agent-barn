@@ -16,9 +16,9 @@ from api.domains.communications.models import (
     PlatformCapability,
 )
 from api.domains.communications.plugins.base import (
+    GatewayDeliveryPlugin,
     InboundAdmissionResult,
     PlatformCredentials,
-    PlatformPlugin,
     PlatformSettings,
 )
 from api.infrastructure.email.client import EmailClient
@@ -76,7 +76,7 @@ class EmailCredentials(PlatformCredentials):
     pass
 
 
-class EmailPlatformPlugin(PlatformPlugin):
+class EmailPlatformPlugin(GatewayDeliveryPlugin):
     key = "email"
     display_name = "Email"
     setup_hint = (

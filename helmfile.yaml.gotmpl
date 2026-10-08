@@ -14,6 +14,35 @@ helmDefaults:
   timeout: 600
 
 releases:
+  - name: postgres-hindsight
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/postgres
+    values:
+      - secretName: postgres-hindsight
+        image:
+          repository: pgvector/pgvector
+          tag: pg18
+        storage:
+          size: 10Gi
+          storageClass: {{ env "STORAGE_CLASS" | default "" | quote }}
+        db:
+          user: hindsight
+          name: hindsight
+          password: {{ env "HINDSIGHT_DB_PASSWORD" | required "HINDSIGHT_DB_PASSWORD is required" | quote }}
+  - name: hindsight
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/hindsight
+    labels:
+      name: hindsight
+    needs: ["{{ env "NAMESPACE" | default "agent-farm" }}/postgres-hindsight", "{{ env "NAMESPACE" | default "agent-farm" }}/litellm"]
+    values:
+      - databaseUrl: {{ printf "postgresql://hindsight:%s@postgres-hindsight:5432/hindsight" (env "HINDSIGHT_DB_PASSWORD" | urlquery | replace "+" "%20") | quote }}
+        runtimeServiceKey: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | required "MEMORY_RUNTIME_SERVICE_KEY is required" | quote }}
+        apiKey: {{ env "HINDSIGHT_API_KEY" | required "HINDSIGHT_API_KEY is required" | quote }}
+        llm:
+          model: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
+          retiredKeyHashes: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
+        litellmKeyServiceAccountName: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
   - name: postgres-app
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -159,6 +188,18 @@ releases:
         value: {{ env "HERMES_IMAGE_TAG" | default "latest" | quote }}
       - name: dbConnectionUrl
         value: {{ printf "postgresql://%s:%s@postgres-app:5432/%s" (env "POSTGRES_APP_USER") (env "POSTGRES_APP_PASSWORD") (env "POSTGRES_APP_DB") | quote }}
+      - name: memory.defaultModel
+        value: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
+      - name: memory.enabled
+        value: true
+      - name: memory.litellmKeyHashes
+        value: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
+      - name: memory.litellmActiveKeyHash
+        value: {{ env "MEMORY_LITELLM_ACTIVE_KEY_HASH" | default "" | quote }}
+      - name: memory.settingsKeyChecksum
+        value: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | sha256sum | quote }}
+      - name: memory.authChecksum
+        value: {{ env "HINDSIGHT_API_KEY" | sha256sum | quote }}
       - name: secretSigningKey
         value: {{ env "SECRET_SIGNING_KEY" | required "SECRET_SIGNING_KEY is required" | quote }}
       - name: platformAdminCredentials
@@ -206,8 +247,6 @@ releases:
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist
         value: {{ env "AGENT_MODEL_ALLOWLIST" | default "" | quote }}
-      - name: communicationsNativePlatforms
-        value: {{ env "COMMUNICATIONS_NATIVE_PLATFORMS" | default "" | quote }}
       - name: registry.server
         value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" | quote }}
       - name: registry.username
@@ -220,11 +259,17 @@ releases:
       # with it for the remaining-credit-limit metric.
       - name: openrouterApiKey
         value: {{ env "OPENROUTER_API_KEY" | default "" | quote }}
+      # The API queries the monitoring release's Prometheus, which requires this
+      # password. Passed here rather than read from that release's Secret: monitoring
+      # needs this release, so on a fresh install the Secret does not exist yet.
+      - name: prometheus.password
+        value: {{ env "MONITORING_WEB_PASSWORD" | required "MONITORING_WEB_PASSWORD is required" | quote }}
     needs:
       - {{ env "NAMESPACE" | default "agent-farm" }}/postgres-app
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
       - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
+      - {{ env "NAMESPACE" | default "agent-farm" }}/hindsight
 
   - name: agentbarn-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}

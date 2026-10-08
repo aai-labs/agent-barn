@@ -3,6 +3,8 @@ export type OrganizationSettingsSectionKey =
   | "spend-limits"
   | "templates"
   | "skills"
+  | "organization-memory"
+  | "memory-access"
   | "shared-credentials";
 
 export type OrganizationSettingsSection = {
@@ -12,6 +14,11 @@ export type OrganizationSettingsSection = {
   description: string;
   /** Hidden from Members entirely, the way Shared Credentials already is. */
   adminOnly: boolean;
+  /**
+   * Needs an Owner or Admin membership in this Organization specifically. A platform
+   * administrator who is only a Member does not hold `memory.access.manage`.
+   */
+  membershipAdminOnly?: boolean;
 };
 
 export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
@@ -42,6 +49,20 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
     adminOnly: false,
   },
   {
+    key: "organization-memory",
+    label: "Organization Memory",
+    description: "Shared knowledge saved by your Agents for this Organization.",
+    adminOnly: true,
+    membershipAdminOnly: true,
+  },
+  {
+    key: "memory-access",
+    label: "Memory access",
+    description: "Which Agents may recall each other's memories or share Organization Memory.",
+    adminOnly: true,
+    membershipAdminOnly: true,
+  },
+  {
     key: "shared-credentials",
     label: "Shared Credentials",
     description: "Organization-wide integration keys reusable across Agents.",
@@ -53,6 +74,9 @@ export const ORGANIZATION_SETTINGS_SECTION_KEYS = ORGANIZATION_SETTINGS_SECTIONS
   (section) => section.key,
 );
 
-export function visibleOrganizationSettingsSections(canManage: boolean) {
-  return ORGANIZATION_SETTINGS_SECTIONS.filter((section) => !section.adminOnly || canManage);
+export function visibleOrganizationSettingsSections(canManage: boolean, isMembershipAdmin = canManage) {
+  return ORGANIZATION_SETTINGS_SECTIONS.filter(
+    (section) =>
+      (!section.adminOnly || canManage) && (!section.membershipAdminOnly || isMembershipAdmin),
+  );
 }

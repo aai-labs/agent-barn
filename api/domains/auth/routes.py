@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import (
     APIRouter,
@@ -10,6 +11,7 @@ from fastapi import (
 )
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_injector import Injected
+from pydantic import BaseModel
 
 from api.core.config import Config
 from api.domains.auth.hashing import check_hash
@@ -31,6 +33,23 @@ from api.domains.users.service import UserService
 auth_router = APIRouter(prefix="/auth", tags=["authentication"])
 
 REFRESH_TOKEN_COOKIE_KEY = "refresh_token"
+
+
+class ApiContextOrganization(BaseModel):
+    organization_id: UUID
+    role: str
+
+
+class ApiContextRead(BaseModel):
+    user_id: UUID
+    credential_class: CredentialClass
+    api_key_id: UUID | None
+    api_key_access_mode: str | None
+    is_platform_admin: bool
+    organizations: list[ApiContextOrganization]
+    openapi_url: str = "/api/v1/openapi.json"
+    docs_url: str = "/api/v1/docs"
+    llms_url: str = "/api/v1/llms.txt"
 
 
 def _set_refresh_token_cookie(response: Response, refresh_token: str, config: Config):
@@ -128,6 +147,25 @@ def get_current_user_context(
     user_service: UserService = Injected(UserService),
 ):
     return user_service.to_user_read(context.user)
+
+
+@auth_router.get("/context", response_model=ApiContextRead)
+def get_api_context(
+    context: Annotated[CurrentUserContext, Depends(get_current_user(require_organization=False))],
+    response: Response,
+):
+    response.headers["Cache-Control"] = "no-store"
+    return ApiContextRead(
+        user_id=context.user.id,
+        credential_class=context.credential_class,
+        api_key_id=context.api_key_id,
+        api_key_access_mode=context.api_key_access_mode.value if context.api_key_access_mode else None,
+        is_platform_admin=context.user.is_platform_admin,
+        organizations=[
+            ApiContextOrganization(organization_id=membership.organization_id, role=membership.role.value)
+            for membership in context.user_organization_map.values()
+        ],
+    )
 
 
 @auth_router.post("/me", response_model=UserRead)

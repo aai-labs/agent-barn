@@ -1,5 +1,6 @@
 import json
 import threading
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid7
@@ -12,6 +13,7 @@ from hamcrest import (
     contains_string,
     equal_to,
     greater_than,
+    has_entries,
     has_item,
     has_key,
     has_length,
@@ -36,6 +38,7 @@ from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.communications.models import CommunicationConnection
+from api.domains.conversations.models import MessageDirection
 from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
@@ -82,6 +85,7 @@ from api.tests.steps.agent import (
     there_is_an_agent,
     use_org_for_auth,
 )
+from api.tests.steps.conversation import there_is_a_recorded_message
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization,
@@ -153,23 +157,6 @@ _GIVEN_WITH_HERMES_IMAGE = [
     use_org_for_auth(),
     there_is_a_template(),
 ]
-
-_GIVEN_WITH_NATIVE_PLATFORMS = [
-    set_env_variable(
-        {
-            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
-            "LITELLM_BASE_URL": "http://litellm:4000",
-            "LITELLM_SECRET_NAME": "litellm",
-            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
-            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-            "API_EXTERNAL_URL": "https://api.test.com",
-            "HERMES_IMAGE": "nousresearch/hermes-agent:v1.0",
-            "COMMUNICATIONS_NATIVE_PLATFORMS": "slack,discord,telegram,teams",
-        }
-    ),
-    *_GIVEN_WITH_HERMES_IMAGE[1:],
-]
-
 
 # Same as _GIVEN but with no server-owned Google OAuth client. Set here rather than in a
 # later step because Config is built (and cached) when the injector is prepared, and a
@@ -2491,7 +2478,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
             assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["display"]["platforms"], equal_to({}))
-            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push", "agentbarn-messaging"]))
+            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push"]))
             assert_that(cfg, is_not(has_key("slack")))
 
         with then("the ConfigMap has the headless runtime adapter"):
@@ -2529,7 +2516,6 @@ def _native_discord_connection(context) -> None:
                 "home_channel_id": "channel-home",
             },
             credentials_encrypted=encrypt_token(json.dumps({"bot_token": "discord-token"}), TEST_ENCRYPTION_KEY),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2539,7 +2525,7 @@ def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
 
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(agent_type=AgentType.HERMES),
             _native_discord_connection,
         ]
@@ -2564,7 +2550,6 @@ def test_start_hermes_agent_runs_discord_in_the_native_gateway() -> None:
             assert_that(secret["DISCORD_ALLOWED_USERS"], equal_to("user-1"))
             assert_that(secret["DISCORD_ALLOWED_ROLES"], equal_to("role-1"))
             assert_that(secret["DISCORD_HOME_CHANNEL"], equal_to("channel-home"))
-            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
             assert_that("AGENTBARN_DISCORD_POLICY" in secret, equal_to(False))
 
 
@@ -2583,7 +2568,6 @@ def _native_telegram_connection(context) -> None:
                 "home_channel_id": "-1009",
             },
             credentials_encrypted=encrypt_token(json.dumps({"bot_token": "123:telegram-token"}), TEST_ENCRYPTION_KEY),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2593,7 +2577,7 @@ def test_start_hermes_agent_runs_telegram_in_the_native_gateway() -> None:
 
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(agent_type=AgentType.HERMES),
             _native_telegram_connection,
         ]
@@ -2617,7 +2601,6 @@ def test_start_hermes_agent_runs_telegram_in_the_native_gateway() -> None:
             assert_that(secret["TELEGRAM_ALLOWED_CHATS"], equal_to("-1001"))
             assert_that(secret["TELEGRAM_ALLOWED_USERS"], equal_to("111"))
             assert_that(secret["TELEGRAM_HOME_CHANNEL"], equal_to("-1009"))
-            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
 
 
 def _runtime_teams_connection(context) -> None:
@@ -2633,7 +2616,6 @@ def _runtime_teams_connection(context) -> None:
                 json.dumps({"app_id": "teams-app", "app_password": "teams-secret", "tenant_id": "teams-tenant"}),
                 TEST_ENCRYPTION_KEY,
             ),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2643,7 +2625,7 @@ def test_start_hermes_agent_runs_teams_in_the_runtime_transport() -> None:
 
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(agent_type=AgentType.HERMES),
             _runtime_teams_connection,
         ]
@@ -2682,7 +2664,6 @@ def _native_slack_connection(context) -> None:
             credentials_encrypted=encrypt_token(
                 json.dumps({"bot_token": "xoxb-token", "app_token": "xapp-token"}), TEST_ENCRYPTION_KEY
             ),
-            driver_key_encrypted=encrypt_token("unused", TEST_ENCRYPTION_KEY),
         )
     )
 
@@ -2690,7 +2671,7 @@ def _native_slack_connection(context) -> None:
 def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> None:
     with given(
         [
-            *_GIVEN_WITH_NATIVE_PLATFORMS,
+            *_GIVEN_WITH_HERMES_IMAGE,
             there_is_an_agent(),
             _native_slack_connection,
             _native_discord_connection,
@@ -2726,7 +2707,6 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
             assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to("123:telegram-token"))
             assert_that(secret["MSTEAMS_APP_PASSWORD"], equal_to("teams-secret"))
             assert_that(secret["AGENTBARN_NATIVE_CHANNELS"], equal_to("slack,discord,telegram,msteams"))
-            assert_that(secret["AGENTBARN_SCHEDULED_DELIVERY"], equal_to("0"))
             service = k8s.create_service.call_args.args[1]
             assert_that([port.name for port in service.spec.ports], has_item("webhook"))
 
@@ -2736,7 +2716,7 @@ def test_start_openclaw_agent_runs_chat_platforms_in_the_native_gateway() -> Non
     [(AgentType.OPENCLAW, "/home/node/.openclaw/workspace"), (AgentType.HERMES, "/workspace")],
 )
 def test_start_agent_with_native_chat_connection_tells_it_how_to_send_files(agent_type, workspace) -> None:
-    with given([*_GIVEN_WITH_NATIVE_PLATFORMS, there_is_an_agent(agent_type=agent_type), _native_slack_connection]) as (
+    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=agent_type), _native_slack_connection]) as (
         context
     ):
         client: TestClient = context.client
@@ -5884,3 +5864,148 @@ def test_a_template_switch_is_not_blocked_by_a_credential_added_to_a_newer_skill
 
         with then("the switch is allowed"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
+@pytest.mark.parametrize("direction", list(MessageDirection))
+def test_agent_list_metadata_uses_latest_message_occurrence_across_connections(direction):
+    latest = datetime(2026, 10, 6, 11, 28, tzinfo=UTC)
+    with given(_GIVEN) as context:
+        response = context.client.post(
+            _BASE, json=_VALID_CREATE, headers={"Authorization": f"Bearer {context.access_token}"}
+        )
+        assert_that(response.status_code, equal_to(201))
+        assert_that(
+            response.json(),
+            has_entries(
+                creator=has_entries(
+                    id=str(context.user.id), full_name=context.user.full_name, email=context.user.email
+                ),
+                last_message_at=None,
+            ),
+        )
+        agent_id = UUID(response.json()["id"])
+        context.agent = context.injector.get(AgentRepository).get_by_id(agent_id)
+        there_is_a_recorded_message(latest, direction, "web")(context)
+        # A later-ingested older message must not move the timestamp backwards.
+        there_is_a_recorded_message(latest - timedelta(days=1))(context)
+        for path in (_BASE, f"{_BASE}/{agent_id}"):
+            with when("the Agent metadata is read"):
+                result = context.client.get(path, headers={"Authorization": f"Bearer {context.access_token}"})
+                body = result.json()["items"][0] if path == _BASE else result.json()
+            with then("creator provenance and the latest inbound or outbound occurrence are returned"):
+                assert_that(result.status_code, equal_to(200))
+                assert_that(
+                    body,
+                    has_entries(
+                        creator=has_entries(
+                            id=str(context.user.id), full_name=context.user.full_name, email=context.user.email
+                        ),
+                        last_message_at=latest.isoformat().replace("+00:00", "Z"),
+                    ),
+                )
+
+
+def test_legacy_agent_list_metadata_does_not_guess_creator_or_message_time():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        response = context.client.get(_BASE, headers={"Authorization": f"Bearer {context.access_token}"})
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["items"][0], has_entries(creator=None, last_message_at=None))
+
+
+@pytest.mark.parametrize("agent_count", [1, 20])
+def test_agent_list_batches_shared_credential_labels(agent_count):
+    from api.domains.shared_credentials.repository import SharedCredentialRepository
+    from api.tests.steps.agent import shared_credential_is_attached_to_agent, there_is_a_shared_credential
+
+    with given([*_GIVEN, there_is_a_shared_credential()]) as context:
+        for index in range(agent_count):
+            there_is_an_agent(name=f"Teammate {index}")(context)
+            shared_credential_is_attached_to_agent()(context)
+        repository = context.injector.get(SharedCredentialRepository)
+        with patch.object(repository, "get_names_by_ids_and_org", wraps=repository.get_names_by_ids_and_org) as lookup:
+            response = context.client.get(
+                _BASE,
+                params={"page": 1, "page_size": 50},
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()["items"], has_length(agent_count))
+        for agent in response.json()["items"]:
+            assert_that(
+                agent["secrets"],
+                equal_to(
+                    [
+                        {
+                            "provider": context.shared_credential.provider,
+                            "secret_name": context.shared_credential.name,
+                            "shared_credential_id": str(context.shared_credential.id),
+                            "shared_credential_name": context.shared_credential.name,
+                        }
+                    ]
+                ),
+            )
+        assert_that(lookup.call_count, equal_to(1))
+        assert_that(lookup.call_args.args, equal_to(([context.shared_credential.id], context.organization.id)))
+
+
+@pytest.mark.parametrize("pin_type", ["organization", "platform", "override"])
+def test_agent_list_projects_pin_metadata_without_loading_template_documents(pin_type):
+    from api.tests.helpers.sql_queries import capture_sql_statements
+    from api.tests.steps.template import agent_uses_template_pin
+
+    with given([*_GIVEN, there_is_an_agent(), agent_uses_template_pin(pin_type)]) as context:
+        with capture_sql_statements(context.postgres_delegate.engine) as statements:
+            response = context.client.get(_BASE, headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        body = response.json()["items"][0]
+        key, version, kind, override_version = context.expected_template_pin
+        assert_that(
+            body,
+            has_entries(
+                template_key=key, template_version=version, template_pin_type=kind, override_version=override_version
+            ),
+        )
+        for column in (
+            "soul_md",
+            "identity_md",
+            "user_md",
+            "tools_md",
+            "agents_md",
+            "boot_md",
+            "bootstrap_md",
+            "heartbeat_md",
+        ):
+            assert_that("\n".join(statements), is_not(contains_string(f".{column}")))
+
+
+def test_agent_list_credential_projections_do_not_load_encrypted_contents():
+    from api.tests.helpers.sql_queries import capture_sql_statements
+    from api.tests.steps.agent import shared_credential_is_attached_to_agent, there_is_a_shared_credential
+
+    with given(
+        [*_GIVEN, there_is_an_agent(), there_is_a_shared_credential(), shared_credential_is_attached_to_agent()]
+    ) as context:
+        context.postgres_delegate.save(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=SecretProvider.FIRECRAWL,
+                secret_name="Manual Firecrawl",
+                content="encrypted-fixture",
+            )
+        )
+        with capture_sql_statements(context.postgres_delegate.engine) as statements:
+            response = context.client.get(_BASE, headers=_auth(context))
+        assert_that(response.status_code, equal_to(200))
+        assert_that(
+            response.json()["items"][0]["secrets"],
+            has_item(
+                has_entries(
+                    provider="firecrawl",
+                    secret_name="Manual Firecrawl",
+                    shared_credential_id=None,
+                    shared_credential_name=None,
+                )
+            ),
+        )
+        assert_that("\n".join(statements), is_not(contains_string("agent_secret.content")))
+        assert_that("\n".join(statements), is_not(contains_string("shared_credential.content")))

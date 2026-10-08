@@ -20,7 +20,6 @@ from api.domains.communications.models import (
     CommunicationInstallLinkRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
-    CommunicationReconnectRead,
     CommunicationRetryRead,
     PlatformDescriptorRead,
 )
@@ -225,8 +224,13 @@ def list_communication_connection_journal(
 
 @communications_router.post(
     "/agents/{agent_id}/connections/{connection_id}/reconnect",
-    response_model=CommunicationReconnectRead,
-    status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
+    summary="Retired provider-session reconnect",
+    description="Compatibility endpoint: authorized requests for an active Connection always return 409. "
+    "Restart the Agent to recover native transport. Authentication, Agent permissions, and tenant scoping still apply.",
+    response_model=None,
+    status_code=status.HTTP_409_CONFLICT,
+    responses={409: {"description": "Provider-session reconnect is retired; restart native Agents instead."}},
 )
 def reconnect_communication_connection(
     agent_id: UUID,

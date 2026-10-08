@@ -2,7 +2,7 @@ import enum
 import json
 import re
 from datetime import datetime
-from typing import Any, Literal, Self
+from typing import Any, Literal, NamedTuple, Self
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -388,6 +388,8 @@ class Agent(BaseModel, table=True):
     )
     name: str = SqlField(nullable=False, max_length=255)
     litellm_key_encrypted: str = SqlField(nullable=False, default="")
+    # Only a digest is persisted; the fresh plaintext key belongs to the runtime Secret.
+    memory_key_hash: str | None = SqlField(default=None, nullable=True, max_length=64, unique=True, index=True)
     status: AgentStatus = SqlField(
         default=AgentStatus.STOPPED,
         sa_column=Column(Enum(AgentStatus), nullable=False, server_default="STOPPED"),
@@ -452,6 +454,11 @@ class Agent(BaseModel, table=True):
         sa_column=Column(sa.String(10), nullable=False, server_default="auto"),
     )
     verbose_mode: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
+    # Opt-in Agent Memory. Turning it off stops recall and retain but keeps stored memories.
+    memory_enabled: bool = SqlField(
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
@@ -1339,6 +1346,14 @@ class AgentProvisioningErrorRead(PydanticBaseModel):
     detail: str | None = None
 
 
+class AgentCreatorRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    full_name: str | None
+    email: str
+
+
 class AgentRead(PydanticBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1372,14 +1387,32 @@ class AgentRead(PydanticBaseModel):
     native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    memory_enabled: bool = False
     last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
+    creator: AgentCreatorRead | None = None
+    #: Latest recorded inbound or outbound message, withheld without activity.read.
+    last_message_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
+
+
+class PlatformAgentIdentity(NamedTuple):
+    """An Agent as the Platform view may name it: identity and lifecycle, nothing more.
+
+    A fixed column list rather than the Agent row, per the Platform oversight ADR's
+    explicit-allowlist rule.
+    """
+
+    id: UUID
+    name: str
+    status: AgentStatus
+    organization_id: UUID
+    organization_name: str
 
 
 class AgentRuntimeDiagnosticsRead(PydanticBaseModel):

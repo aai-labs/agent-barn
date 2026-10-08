@@ -8,6 +8,7 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.communications.models import (
+    CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationDirection,
@@ -336,3 +337,46 @@ def test_a_delivery_is_bound_to_the_connection_that_owns_the_address() -> None:
             assert_that(delivery.agent_id, equal_to(context.agent.id))
             assert_that(delivery.organization_id, equal_to(context.organization.id))
             assert_that(delivery.envelope, is_(not_(equal_to({}))))
+
+
+def test_email_compatibility_ingress_shares_authentication_and_idempotency_with_product_api() -> None:
+    with given(_GIVEN) as context:
+        address = _create_email_connection(context)
+        compat = context.communications_client.post(
+            INBOUND_PATH,
+            json=_payload(address),
+            headers={"Authorization": f"Bearer {INBOUND_SECRET}"},
+        )
+        public = _post(context, _payload(address))
+        unauthorized = context.communications_client.post(
+            INBOUND_PATH,
+            json=_payload(address),
+            headers={"Authorization": "Bearer wrong"},
+        )
+        assert compat.status_code == status.HTTP_202_ACCEPTED
+        assert public.status_code == status.HTTP_202_ACCEPTED
+        assert unauthorized.status_code == status.HTTP_401_UNAUTHORIZED
+        assert len(_deliveries(context)) == 1
+
+
+def test_email_address_cannot_admit_work_to_a_native_connection() -> None:
+    with given(_GIVEN) as context:
+        address = _create_email_connection(context)
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            connection = session.exec(
+                select(CommunicationConnection).where(
+                    col(CommunicationConnection.agent_id) == context.agent.id,
+                    col(CommunicationConnection.platform_key) == "email",
+                )
+            ).one()
+            connection.platform_key = "slack"
+            session.add(connection)
+            session.commit()
+        for client in (context.client, context.communications_client):
+            response = client.post(
+                INBOUND_PATH, json=_payload(address), headers={"Authorization": f"Bearer {INBOUND_SECRET}"}
+            )
+            assert response.status_code == status.HTTP_202_ACCEPTED
+            assert response.json() == {"accepted": []}
+        assert _deliveries(context) == []

@@ -228,6 +228,16 @@ class OpenRouterClient:
                     "name": entry.get("name") or model_id,
                     "context_length": entry.get("context_length"),
                     "pricing": entry.get("pricing"),
+                    **(
+                        {"supported_parameters": entry["supported_parameters"]}
+                        if "supported_parameters" in entry
+                        else {}
+                    ),
+                    **(
+                        {"output_modalities": entry["architecture"].get("output_modalities", [])}
+                        if "architecture" in entry
+                        else {}
+                    ),
                 }
             )
         return models

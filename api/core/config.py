@@ -74,6 +74,20 @@ class Config(BaseSettings):
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
+    memory_base_url: str = "http://agentbarn-api-memory:8003/memory/v1"
+    # Where the product API reaches the gateway's read-only viewer; Agents never use it.
+    memory_view_base_url: str = "http://agentbarn-api-memory:8003/memory/view/v1"
+    # Non-secret SHA-256 hashes of current and retired Hindsight LiteLLM keys.
+    memory_litellm_key_hashes: str = ""
+
+    memory_runtime_service_key: str = ""
+
+    memory_default_model: str = "openrouter/openai/gpt-4.1-mini"
+    memory_litellm_active_key_hash: str = ""
+
+    hindsight_base_url: str = ""
+    hindsight_api_key: str = ""
+    hindsight_request_timeout_seconds: int = Field(default=120, ge=1, le=600)
     communications_base_url: str = (
         "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
     )
@@ -92,20 +106,9 @@ class Config(BaseSettings):
     teams_privacy_url: str = "https://aai-labs.com/privacy"
     teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
-    # Content-free Communication journal history is pruned by the gateway
-    # supervisor after this many days.
+    # Content-free Communication journal history is pruned by Communications
+    # maintenance after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
-    # Native gateway spike (ADR 2026-09-16): comma-separated Platform keys whose
-    # Connections run inside the Agent runtime's own gateway instead of the
-    # Communications supervisor, for Hermes and OpenClaw alike. Replaced by a
-    # per-Connection transport once the spike is accepted.
-    communications_native_platforms: str = ""
-
-    @property
-    def native_platform_keys(self) -> frozenset[str]:
-        """Platforms whose Agent Connections run in the runtime's native gateway."""
-        return frozenset(key.strip() for key in self.communications_native_platforms.split(",") if key.strip())
-
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.
@@ -117,6 +120,15 @@ class Config(BaseSettings):
     # TTL for the credits poll behind agentbarn_openrouter_credits_remaining
     # (GET /key with the inference key above; no management key involved).
     openrouter_credits_cache_ttl_seconds: int = 300
+
+    # The in-namespace Prometheus (helm/monitoring) that stores each Agent's CPU and
+    # memory. Empty means resource usage reports "not configured", which is the normal
+    # local state until `make dev-monitoring`. Prometheus requires basic auth; the
+    # password is the monitoring release's MONITORING_WEB_PASSWORD.
+    prometheus_url: str = ""
+    prometheus_username: str = "monitoring"
+    prometheus_password: str = ""
+    prometheus_timeout_seconds: float = Field(default=5, gt=0, le=30)
 
     redis_url: str = "redis://localhost:6379/0"
 
@@ -178,6 +190,10 @@ class Config(BaseSettings):
     def llm_budget_alert_thresholds(self) -> list[int]:
         """Sorted and de-duplicated by the validator above."""
         return [int(part) for part in self.organization_llm_budget_alert_thresholds.split(",")]
+
+    @property
+    def memory_cost_key_hashes(self) -> frozenset[str]:
+        return frozenset(part.strip() for part in self.memory_litellm_key_hashes.split(",") if part.strip())
 
     @property
     def is_email_delivery_enabled(self) -> bool:

@@ -9,6 +9,11 @@ configuration, start, and stop instructions. Its
 [development section](../../README.md#development) covers the native service
 topology.
 
+The API keeps `fastapi[standard]` for its supported server/tooling dependencies.
+`websockets` remains a transitive Uvicorn standard dependency; it is no longer an
+API-owned provider-session requirement. Use `uv sync` with the committed lockfile
+as in the README setup; native transport dependencies belong to the runtime images.
+
 ## Database migrations
 
 ```bash
@@ -24,6 +29,8 @@ before autogenerating a revision. `make merge-heads` operates on revision files
 and does not require a database.
 
 Schema changes require a migration under `../../api/migrations/versions/`.
+Alembic autogeneration excludes only reflected, unmapped `driver_key_encrypted`, `ingress_lease_owner`, and `ingress_lease_expires_at` columns on `communication_connection`, through `api/migrations/autogenerate.py`. This prevents accidental contraction while older deployed readers/writers remain. After the [native rollout cutoff](#native-runtime-gateway-rollout), remove the guard with an explicit contraction migration. Other schema differences remain visible.
+
 Review generated migrations before applying them and run the migration check
 listed in [`testing.md`](testing.md#verification-commands). Deployment runs
 Alembic through the API chart migration hook described in
@@ -38,6 +45,254 @@ Testing and verification commands live in [`testing.md`](testing.md).
 The deployable services have independent Helm charts. `../../helmfile.yaml.gotmpl` controls release ordering, and `../../.github/workflows/deploy.yml` builds images and applies Helmfile. Read `../architecture/runtime-and-deployment.md` before changing runtime images, agent Kubernetes resources, chart wiring, migrations, or deployment order.
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
+
+## Local Communications reload
+
+Compose and `make dev-api` / `make dev-communications` run the Communications
+gateway with a five-second graceful shutdown timeout. Its persistent runtime
+control streams otherwise keep Uvicorn waiting indefinitely during a code reload,
+leaving accepted Web Chat messages queued. After the timeout, open streams are
+cancelled and runtimes reconnect; PostgreSQL retains pending deliveries. If an
+already running local gateway is stuck, recreate it with
+`docker compose up -d --no-deps communications` to load these launch flags.
+
+## Agent Memory deployment
+
+The gateway runs from the API image as `api.memory_main:app` on port 8003, with
+access logging disabled so client paths cannot enter logs. `make dev-api` starts
+it alongside the other HTTP processes; `make dev-memory` runs it separately.
+For local use set `HINDSIGHT_BASE_URL` to the backend root and `HINDSIGHT_API_KEY`
+to its shared API key. Compose starts the gateway; the optional local backend is
+enabled separately with the `local-hindsight` profile.
+`./run.sh` includes the `memory` service. Its published `MEMORY_PORT` defaults
+to 8003; set a distinct port if the product API or another local service uses it.
+An Agent needs no messaging connection to view saved memories. A missing bank
+returns an empty list, while an absent gateway or unconfigured/unavailable
+Hindsight backend produces an unavailable error, including for a new Agent.
+
+To use the local backend, configure these values in the ignored `.env`:
+
+```dotenv
+COMPOSE_PROFILES=local-hindsight
+HINDSIGHT_BASE_URL=http://hindsight:8888
+HINDSIGHT_DB_PASSWORD=<generated URL-safe password>
+HINDSIGHT_API_KEY=<generated API authentication key>
+HINDSIGHT_LITELLM_API_KEY=<dedicated budgeted LiteLLM virtual key>
+MEMORY_LITELLM_KEY_HASHES=<SHA-256 of that virtual key>
+```
+
+Initially use a virtual key restricted to `openrouter/openai/gpt-4.1-mini`, with no
+Organization team assignment. Keep its hash alongside any retired hashes in
+`MEMORY_LITELLM_KEY_HASHES` for cost attribution. `./run.sh` starts the backend
+when that profile is enabled. To start it on an already running stack:
+
+```bash
+docker compose up -d hindsight-db hindsight memory
+docker compose up -d --no-deps api worker communications
+```
+
+The local backend uses the pinned Hindsight image and attribution bridge, with
+control plane disabled and API authentication enabled. Its Postgres 18 database
+has pgvector, an isolated storage network, and its own named volume; neither
+backend nor database publishes a host port. The LiteLLM model key and database
+password are blanked in the shared application environment, and only the
+gateway receives the backend authentication key. Stop preserves database data.
+Backups and tested restores remain deferred.
+The product API lists an Agent's saved memories through the gateway's separate
+viewer under `/memory/view/v1`, addressed by `MEMORY_VIEW_BASE_URL`. `make dev-api`
+points it at `localhost`, Compose at the `memory` service, and the chart at the
+`<release>-memory` Service; override it only when the gateway lives elsewhere.
+The viewer authenticates a short-lived capability signed with the platform signing
+key, which the gateway already receives from the shared API Secret; no additional
+Hindsight or Kubernetes credential reaches the product API.
+Opted-in starts configure Hermes and OpenClaw for automatic recall and retain
+alongside native memory. Rebuild the runtime base images to install the pinned
+Hindsight clients/plugin before using this integration, then restart opted-in
+Agents so they receive the current configuration and fresh credentials. Runtime
+startup waits briefly for authenticated gateway health before loading the plugin;
+native memory remains available when the gateway is unavailable.
+
+Helmfile always deploys the backend and gateway. For an operator-run deployment,
+provide `HINDSIGHT_DB_PASSWORD`, `HINDSIGHT_API_KEY`, and
+`MEMORY_RUNTIME_SERVICE_KEY` in `.env.deploy`, using distinct values, then run
+`./deploy.sh`. CI reads the same three credentials from GitHub Secrets:
+`STAGING_HINDSIGHT_DB_PASSWORD`, `STAGING_HINDSIGHT_API_KEY`, and
+`STAGING_MEMORY_RUNTIME_SERVICE_KEY` for staging; the unprefixed names for
+production; and `PUBLIC_`-prefixed names for public releases. Missing secrets fail
+deployment before syncing releases; they are never generated or recovered from
+Kubernetes automatically. The runner validates them with
+`api/scripts/provision_memory.py` and uses a temporary mode-0600 file.
+
+When moving an existing deployment to GitHub Secrets, preserve the current
+values from its database/backend Secrets (or the legacy
+`agentbarn-memory-bootstrap` Secret). Changing a PostgreSQL Secret does not change
+an initialized database's password. Keep the original credentials until an
+explicit rotation is performed. Legacy bootstrap Secrets are no longer read or
+written by deployment.
+
+Hindsight's `pre-install,pre-upgrade` LiteLLM key Job follows the same pattern as
+the `agentbarn-api` key Job: wait for LiteLLM, delete the previous key by alias,
+call `/key/generate`, then create or update a Kubernetes Secret. The alias is
+`agentbarn-hindsight`; `hindsight-litellm-key` stores its `LITELLM_API_KEY` and only
+the Hindsight backend references it. The hook uses the existing LiteLLM Secret
+and selected tenant ServiceAccount, which needs Secret `get`/`create`/`update`.
+The runner no longer generates LiteLLM keys or executes code inside its pod.
+
+The key is recreated on every Hindsight install or upgrade, including a repeated
+deployment of the same commit. A release-revision annotation rolls the backend
+to load the new key. It has no Organization team, never expires, and has
+no key-level budget limit. It is used for bankless startup verification;
+Organization processing retains its runtime-team keys and budget enforcement.
+Like the application key hook, it allows the proxy's configured models; the
+Platform Memory setting selects the model Hindsight uses.
+
+A separate `hindsight-litellm-hashes` Secret contains only the active key's SHA-256
+hash and all retained platform-key hashes. The hook carries old hashes forward
+for late/replayed cost attribution. Deployments first sync Hindsight and its
+transitive dependencies, load those hashes, then sync the other releases without
+rerunning Hindsight's hook. The API and memory gateway receive only these hashes,
+never the platform key. This ordering is shared by `deploy.sh`, `deploy.yml`, and
+`deploy-public.yml`.
+
+Optional repository variables `MEMORY_DEFAULT_MODEL` and
+`MEMORY_LITELLM_KEY_HASHES` (with `STAGING_` or `PUBLIC_` counterparts) select the
+initial model and seed retired hashes when recovering deployment state. The
+model defaults to `openrouter/openai/gpt-4.1-mini`. Database/backend/settings
+credential rotation remains an operator action: update GitHub Secrets and the
+underlying database/backend credentials consistently.
+
+This adds `postgres-hindsight` (pgvector/PostgreSQL 18, its own 10Gi PVC) and
+Hindsight 0.10.2. Only its API port 8888 is exposed, as ClusterIP; its control
+plane is off and API authentication is mandatory. The gateway gets the auth key
+through one Secret key reference. The product API holds no Hindsight auth key. A separate
+`MEMORY_RUNTIME_SERVICE_KEY`, distinct from `HINDSIGHT_API_KEY`, is provided only
+to its internal settings listener and the Hindsight bridge; worker and Agent
+pods receive neither.
+Rotating `HINDSIGHT_API_KEY` through Helmfile rolls Hindsight and the gateway
+through their Secret/auth checksums. Rotating `MEMORY_RUNTIME_SERVICE_KEY` rolls
+Hindsight and the product API through their Secret/settings-key checksums.
+With a manually managed Secret, restart Hindsight and the gateway after rotating
+the Hindsight auth key; restart Hindsight and the product API after rotating the
+settings key. Environment variables are read at boot.
+
+Hindsight uses a dedicated platform key for bankless startup verification.
+Bank operations resolve an encrypted Organization key on its runtime LiteLLM
+team through the internal settings listener. Apply migration `f69a2e0c847d` before deploying
+this bridge; keep `AGENT_TOKEN_ENCRYPTION_KEY` stable so existing memory keys
+remain decryptable. Apply migration `f03a9c61d872` for the memory-key cleanup
+journal. The existing `llm-budget-reconciler` job retries up to 20 remote key
+revocations per pass; `make reconcile-llm-budgets` runs the same cleanup locally.
+Only hashes are journaled, so cleanup also works after an encryption-key change.
+Do not rotate `AGENT_TOKEN_ENCRYPTION_KEY` without migrating encrypted values:
+decryption failures return 503 and preserve the existing record. Deliberately
+blocked LiteLLM keys also return 503; unblocking requires an operator action.
+A confirmed missing key or mismatched team assignment is repaired on settings
+refresh, while transient proxy failures never trigger new key issuance.
+If both database journaling and remote revocation are unavailable after issuance,
+use LiteLLM's `agentbarn_memory` metadata to identify and revoke the orphan;
+distributed issuance cannot guarantee cleanup during simultaneous outages.
+The internal listener uses the API workload's existing LiteLLM master access
+to provision these keys; the Agent gateway needs neither master nor encryption
+credentials.
+`openrouter/openai/gpt-4.1-mini` is the initial default; Platform Admins can
+choose subsequent models in Platform Settings → Agent Memory. Do not share this key with Agents or attach it to
+an Organization team. The chart runs a pinned startup bridge that sends each
+operation's canonical bank as the model request's `user` field; the existing cost
+CronJob attributes LiteLLM's billed calls to that Organization without reading
+Hindsight traces. Deployment loads the current key's SHA-256 hash through the hook-generated
+`hindsight-litellm-hashes` Secret into `MEMORY_LITELLM_KEY_HASHES`. The hook retains
+retired hashes so late/replayed calls keep their attribution. Only hashes,
+never the platform key, enter the API's shared Secret.
+
+For a locally operated Hindsight instance, run `helm/hindsight/files/start_hindsight.py`
+with the pinned image's Python, external database, OpenAI provider, and normal
+Hindsight auth/LLM environment. Set `MEMORY_LITELLM_KEY_HASHES` in `.env` to the
+SHA-256 of its dedicated LiteLLM key. The standard upstream entrypoint does not
+install our bridge and cannot attribute memory spend per Organization.
+
+The enabled gateway chart requires attribution key hashes. Keep the existing
+cost-sync CronJob (every 15 minutes) and LLM-budget-alerts snapshot job (every
+5 minutes) running. All Organizations need a successful cost sync and a current
+runtime snapshot before retain/reflect become available. The local `./run.sh`
+stack runs cost sync immediately and every 15 minutes through Compose's
+`cost-sync` service. Restart that service after changing its Python code or
+environment. Compose's `budget-snapshots` service refreshes runtime snapshots immediately
+and every five minutes. Restart it after changes to code or environment. Host-run setups also need cost sync
+on its schedule (`cd api && uv run python -c "from api.domains.costs.sync import main; main()"`). See
+[Costs](../features/costs.md#organization-llm-budgets) for freshness
+requirements, 429/503 behavior, and the observed-spend limitation. The gateway
+uses persisted accounting and needs no LiteLLM master key or Kubernetes credentials.
+
+When memory is enabled, the chart deploys `agentbarn-api-memory-purge` every five
+minutes with `Forbid` concurrency and a 280-second pod deadline. It holds only the
+product database URL and Hindsight auth key, mounts no kubeconfig, and disables
+service-account token mounting. Keep it running while tombstones remain; disabling
+the optional release pauses physical cleanup.
+
+For local operation, schedule `make purge-agent-memory` with `DB_CONNECTION_URL`,
+`HINDSIGHT_BASE_URL`, and `HINDSIGHT_API_KEY`. Repeating runs after a failure or
+restart is safe. The cleanup/repair launchers supply inert creation-budget defaults
+because they never create Organizations or Agents; no deployment budget settings or
+user-authentication credentials are required. Inspect `agent_memory_purge.last_error`, `attempts`,
+`next_attempt_at`, and `last_cleaned_at` for progress without reading memory content.
+The [deletion contract](../features/agent-memory.md#deletion-cleanup) owns retry
+leases, runtime limits, and hourly sweeps for previously accepted Hindsight work.
+Downgrading `a63e8c941d20` drops pending cleanup; it cannot restore removed grants.
+Complete cleanup before retiring this table/job. Backups and restore work are
+deferred in the [delivery log](../features/agent-memory/CHANGELOG.md).
+
+When upgrading from shared writes tagged with `agent:<id>`, repair each affected
+Organization using `uv run --project api python -m api.domains.agent_memory.retag_shared
+<organization_id>` from the repository root with `HINDSIGHT_BASE_URL` and
+`HINDSIGHT_API_KEY`. Stop shared writes and let outstanding extraction and consolidation work
+finish before this one-time repair. Repeat the command after any earlier
+extraction work finishes. It reports document
+counts only. The [memory upgrade contract](../features/agent-memory.md#upgrade-legacy-shared-ownership-tags)
+owns tag replacement and observation invalidation. This does not require a
+Postgres schema migration.
+
+Run `make check-memory` with Helm installed to validate both enabled and disabled
+renders without connecting to a cluster. The API CI workflow runs the same check.
+
+### Operating Platform Agent Memory model settings
+
+Apply migration `d83f291bc7a0` before deploying the settings API. Deploy both
+bridge files (`start_hindsight.py` and `memory_model.py`) and set
+`AGENTBARN_MEMORY_SETTINGS_URL` to the API workload's internal port 8004
+`/memory/runtime/v1/model` endpoint. Set `MEMORY_RUNTIME_SERVICE_KEY` to a
+separate random credential and supply it to the bridge as
+`AGENTBARN_MEMORY_SETTINGS_KEY`; never reuse Hindsight's API auth key. Compose and Helm supply the internal URL. Existing backends need one
+restart to install the bridge; subsequent settings changes need none. The
+endpoint is absent from the public product API and is not published by Compose
+or routed through ingress. The API workload receives only the settings key
+through an explicit Secret reference; Agent pods do not.
+
+Set `MEMORY_LITELLM_ACTIVE_KEY_HASH` when retaining multiple attribution hashes.
+The Hindsight hook writes it to the hash Secret and deployment loads it; Compose
+operators supply it in `.env`. With a single hash the API infers the active one.
+Settings saves expand only that key's model allowlist and preserve prior models,
+budgets, and spend. On key rotation provision the persisted model, startup
+fallback, and models needed by in-progress operations on the new key. Keep
+retired hashes for delayed cost attribution.
+
+Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
+customize the initial model. Both deployments use that one setting for the API
+default and Hindsight startup model. When using charts directly, set API
+`memory.defaultModel` and Hindsight `llm.model` to the same value. Gateway outages
+retain the last known selection,
+or the startup model before the first successful fetch. A schema downgrade drops
+the persisted choice.
+
+### Integrating Agent Memory with staging spend limits
+
+Migration `e94b17c62a30` joins the memory and self-service spend-limit histories.
+Existing local databases can upgrade in place; applied memory revisions are kept
+rather than squashed, preserving saved records, grants, and development data.
+Migration `e81c2a97b4f3` also joins the memory team-key history with staging's
+Personal API Keys history. Run migrations before restarting API processes after integrating staging. Both
+`ORGANIZATION_DEFAULT_LLM_BUDGET_USD` and `AGENT_DEFAULT_LLM_BUDGET_USD` are required;
+set them before startup. The new local `budget-snapshots` service uses the same
+`--watch` loop as the budget job entry point, refreshing every five minutes.
 
 ## Organization LLM budgets
 
@@ -178,14 +433,39 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 - **A routing rule names one specific Worker, and CI cannot repoint it.** When an environment's rule was created against a differently-named Worker — a `--env local` one used for tunnel testing, say — publishing through CI creates the correctly-named Worker but leaves the rule pointing at the old one, so mail keeps going to the stale Worker. Cut over in this order: **let CI publish first, then repoint the rule's destination, and only then delete the old Worker.** Deleting first leaves the rule aimed at nothing and bounces every message for that domain.
 - **Delete `--env local` Workers when finished.** They point at a `cloudflared` tunnel that stops existing when the laptop closes, and an account accumulating them is an account where it is easy to point a rule at the wrong one.
 - Deploys publish a **new version of one Worker per environment**, not new Workers; Cloudflare retains ~100 versions for `wrangler rollback`. That is why the deploy is path-filtered: unrelated merges would otherwise consume the rollback history.
-- **Local k3d testing**: a Worker runs on Cloudflare's edge and cannot reach a local cluster. Either expose the Communications service with a tunnel (`cloudflared tunnel`) and point `INBOUND_URL` at it, or skip the Cloudflare hop entirely and exercise the whole Agent Barn path by posting the Worker's JSON straight at `/communications/v1/webhooks/email/inbound` with the configured bearer token.
+- **Local k3d testing**: a Worker runs on Cloudflare's edge and cannot reach a local cluster. Either expose the product API with a tunnel (`cloudflared tunnel`) and point `INBOUND_URL` at it, or skip the Cloudflare hop entirely and exercise the whole Agent Barn path by posting the Worker's JSON straight at `/communications/v1/webhooks/email/inbound` with the configured bearer token.
 - **Agent mail draws on the same account-wide sending quota** as invites, password resets, and lifecycle notifications, across both environments. A chatty Agent can starve real user invites; see the quota note above.
 - Relevant limits: 200 routing rules per domain, 200 verified destination addresses per account, 30 domains per zone, 25 MiB inbound message size.
 
 ## Native runtime gateway rollout
 
-- **`COMMUNICATIONS_NATIVE_PLATFORMS`** is one shared GitHub variable containing a comma-separated native runtime Platform allowlist. Set it to **`slack,discord`** to enable the Hermes/OpenClaw native Slack and Discord gateways in every deployment workflow. It flows through `helmfile.yaml.gotmpl` into the API chart's shared Secret, so both the API and Communications processes receive the same cutoff.
-- Empty is the rollback setting: all Platforms remain on the Communications Gateway. Restart affected Agents after deploying a change so their runtime configuration is rebuilt.
+- Transport ownership is fixed by Platform under the [runtime ownership contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary). Current Config, chart values/Helmfile, deployment workflows, and deployment spec no longer expose or forward `COMMUNICATIONS_NATIVE_PLATFORMS`/`communicationsNativePlatforms`. Stale environment values are ignored and cannot restore chat gateway transport. Retire externally managed GitHub variables and deployment overrides as an operator task after older releases no longer depend on them.
+- Before replacing flag-controlled application replicas, verify their existing allowlist is `slack,discord,telegram,teams`, excluding chat gateway sessions and claims. This chart retains that hard-coded Secret key to fence older replicas restarting during its pre-upgrade hook. Roll every application replica and background worker onto fixed ownership before removing the key in a follow-up release; an older replica restarting against a Secret without the key could otherwise restore its empty-default gateway fallback. Restart affected Agents onto compatible Hermes/OpenClaw images to rebuild native configuration; application rollout alone does not restart Agent pods.
+- Before deploying the chart or running its pre-upgrade migration hook, inspect the **running processes** in every API, Communications, and worker replica of the older release. Updating a repository variable or Secret does not change an existing process environment. Use the target namespace and release below; this prints only the transport allowlist:
+
+  ```bash
+  rollout_namespace='<namespace>'
+  rollout_release='<api-helm-release>'
+  for component in api communications worker; do
+    for pod in $(kubectl -n "$rollout_namespace" get pods \
+      -l "app.kubernetes.io/name=agentbarn-api,app.kubernetes.io/instance=$rollout_release,app.kubernetes.io/component=$component" \
+      -o name); do
+      echo "$component $pod"
+      kubectl -n "$rollout_namespace" exec "$pod" -c "$component" -- \
+        python -c 'import pathlib; entries=pathlib.Path("/proc/1/environ").read_bytes().split(b"\0"); print(next((v.decode() for v in entries if v.startswith(b"COMMUNICATIONS_NATIVE_PLATFORMS=")), "COMMUNICATIONS_NATIVE_PLATFORMS=<missing>"))'
+    done
+  done
+  ```
+
+  Confirm every expected replica was inspected and every flag-controlled process includes all four `slack,discord,telegram,teams` platforms. An empty result is not success. If PID 1 is a launcher, inspect the actual application process environment instead. A missing/incomplete value blocks retirement migration: first roll the older chart/application with the complete allowlist, verify live processes and cessation of native gateway sessions/claims, then deploy this release. Keep the Secret fence until all application and worker consumers run fixed ownership.
+- Rollback requires a compatible application/runtime release. Never re-enable legacy provider sessions or replay historical chat Deliveries. Web Chat and Email still require the Communications deployment.
+- Before applying native-work retirement revision `72c4a9e1b6d8`, fence older applications from native sessions/claims using the allowlist above and stop their in-flight provider sessions. The chart migration hook runs before application rollout. This data-only revision cancels pending/processing native work atomically with content-free journal entries; it does not drop columns, change credentials/history, or touch Web/Email work. Its downgrade changes only the Alembic revision marker and never undoes cancellations or removes journal history. Physical driver/ingress-lease column removal must wait until all mapped readers/writers of those columns have exited.
+- Deploy a Hermes image built without the retired completion-capture patch together with the new runtime assembly, then restart affected Agents. Old pods keep their mounted bridge until restarted; restored volumes run the same sanitation at start. The retained history patch must remain in the Hermes image.
+- Restart affected OpenClaw Agents after deploying the native message-tool correction so their ConfigMap and saved configuration receive the [startup sanitation](../architecture/runtime-and-deployment.md#runtime-neutral-communications). This correction is delivered by the API's builder and startup script; it requires no new base image.
+- Driver-default revision `8b1d5e7f9a23` adds an empty-string database default to the existing non-null `driver_key_encrypted` column without rewriting existing rows. Apply it before deploying current code, which omits driver and ingress-lease columns from its mapping and writes. Its downgrade removes only the database default and preserves values; deploy writers that explicitly supply the driver column before downgrading. Retained legacy driver/ingress-lease values are inert and untouched by current code, including Connection retirement and Agent deletion; provider credentials and credential identities are still scrubbed. Older mapped readers/writers can coexist while fenced as above; do not drop driver or ingress-lease columns until all their deployed consumers have exited.
+- The legacy runtime `/communications/v1/agents/{agent_id}/messages` path is an authenticated `410` handler only. Remove that handler after confirming every deployed Agent pod has restarted onto bridge-free configuration (including the matching Hermes image), restored volumes run startup sanitation, and legacy submissions have ceased. Code cleanup alone does not establish that cutoff; do not restore the initiated-send service during rollout or rollback.
+- Review `[messaging-retirement]` startup counts and the Agent-volume `retired-messaging-audit.json` report (`/opt/data` on Hermes, `/home/node/.openclaw` on OpenClaw). `job_audit=unreadable` requires inspecting the native store before treating the audit as complete. `report_write=failed` means the report could not be saved (without masking `job_audit=unreadable`); startup continues after plugin removal, but repair volume permissions and inspect the native store before declaring the audit complete. Reports contain job IDs and flags, not prompts, message content, or destinations.
+- Repair listed jobs through the native scheduler only after verifying their stored Connection, allowed recipient, and thread policy. Hermes `api_server`/`connection:` origins and OpenClaw `last` destinations do not prove a usable native recipient. Missing explicit recipients are accepted only with a usable configured native home (`defaultTo` in the merged OpenClaw config or the Hermes home-channel environment); the no-home sentinel is never accepted. Disabled jobs, completed/paused Hermes jobs, and OpenClaw main-session jobs without delivery are excluded. Malformed jobs mark the audit unreadable while other jobs remain auditable. Required managed-plugin removal must succeed before runtime startup. Preserve schedules, job identity, and session history; never replay the retired spool or infer delivery from it. No automatic rerouting is performed. Startup jobs should explicitly select a configured native home platform. Web Chat and Email support ordinary replies, not scheduled pushes.
 
 ## Staging environment
 
@@ -329,6 +609,8 @@ Documentation-only changes do not change a service image and do not require a se
   [`testing.md`](testing.md#verification-commands). CI selects
   `.github/workflows/monitoring.yml` for `helm/monitoring/**` changes.
 - Agents that were already running before the monitoring deploy are invisible to Prometheus until stopped and started once: the `/metrics` sidecar script and the Service labels the agent scrape config relies on (`agentbarn.io/component`, `agent-name`, `org-name`) only apply when the API rebuilds the agent's resources in the start flow. When only the scrape label is missing (e.g. agents predating the agentfarm→agentbarn rebrand), no restart is needed — patch the Service labels in place, which does not disturb running pods: `kubectl -n NAMESPACE label svc -l agentfarm.io/component=agent agentbarn.io/component=agent --overwrite`.
+- The product API also queries this Prometheus, for Agent CPU and memory ([`resource-usage.md`](../features/resource-usage.md)). helmfile passes `MONITORING_WEB_PASSWORD` straight to the `agentbarn-api` release (`prometheus.password`), so the API and the monitoring release always share one password, and rotating it rolls the API pods too. It is passed directly, not read from the `monitoring-web-auth` Secret, because the monitoring release deploys after the API. With the password unset, or Prometheus unreachable, the Resource usage views say so and everything else keeps working.
+- Agents report CPU and memory from their healthz script, which ships in the Agent's ConfigMap. After a deploy that changes it, a running Agent shows "Update this agent to start reporting CPU and memory" (and "update available") until it is updated once, which restarts it. Bump `hermes-base/VERSION` and `openclaw-base/VERSION` in the same change when agents must pick it up: the image tags are part of the digest, so the banner shows however the update check is later made. The bump may then be only a signal, with the image contents unchanged.
 
 ## Operational safety
 

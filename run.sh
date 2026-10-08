@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-command local dev stack: validates .env, brings up the k3d cluster +
 # LiteLLM, loads agent base images (skipping any already in the cluster),
-# runs migrations, then starts db/redis/api/worker/communications/ui in Docker with hot
+# runs migrations, then starts db/redis/api/worker/cost-sync/communications/memory/ui in Docker with hot
 # reload.
 #
 # Usage:
@@ -59,6 +59,9 @@ required_vars=(
   OPENROUTER_API_KEY LITELLM_MASTER_KEY OPENCLAW_IMAGE HERMES_IMAGE
   ORGANIZATION_DEFAULT_LLM_BUDGET_USD AGENT_DEFAULT_LLM_BUDGET_USD
 )
+if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
+  required_vars+=(HINDSIGHT_DB_PASSWORD HINDSIGHT_API_KEY HINDSIGHT_LITELLM_API_KEY)
+fi
 missing=()
 for var in "${required_vars[@]}"; do
   [[ -n "${!var:-}" ]] || missing+=("$var")
@@ -98,8 +101,12 @@ step "Running database migrations"
 ${COMPOSE} build api
 ${COMPOSE} run --rm --no-deps --workdir /app/api api python -m alembic upgrade head
 
-step "Building and starting api, worker, communications, ui"
-${COMPOSE} up -d --build api worker communications ui
+step "Building and starting api, worker, cost-sync, budget-snapshots, communications, memory, ui"
+if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
+  step "Starting local Hindsight database and backend"
+  ${COMPOSE} up -d hindsight-db hindsight
+fi
+${COMPOSE} up -d --build api worker cost-sync budget-snapshots communications memory ui
 
 # Prints a boxed row padded to the border width, measuring visible width only
 # (ANSI color/bold codes stripped before computing the pad) so values of any
@@ -119,6 +126,7 @@ green "+------------------------------------------------------+"
 box_line "UI  -> $(printf '\033[1mhttp://localhost:3000\033[0m')"
 box_line "API -> $(printf '\033[1mhttp://localhost:%s\033[0m' "${API_PORT}")"
 box_line "Communications -> $(printf '\033[1mhttp://localhost:%s\033[0m' "${COMMUNICATIONS_PORT:-8002}")"
+box_line "Memory -> $(printf '\033[1mhttp://localhost:%s\033[0m' "${MEMORY_PORT:-8003}")"
 green "+------------------------------------------------------+"
 printf '\n'
 echo "Log in with PLATFORM_ADMIN_CREDENTIALS from .env."

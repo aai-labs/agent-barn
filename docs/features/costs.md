@@ -52,6 +52,9 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - The unattributed bucket stays inside platform totals and is also reported separately. Excluding it would make the platform total exceed the sum of the organizations listed beneath it.
 - The OpenRouter balance is reported as one of three states, never as a bare number: `ok` carries the key's remaining credit and its limit, `no_limit` means the key spends without a ceiling, and `unavailable` means the poll failed. The last two used to collapse into a single null, which let "we cannot read it" render the same as "there is nothing to worry about".
 - The platform surface warns when a healthy read falls below $5, the threshold the `OpenRouterCreditsLow` alert uses, so the page and the pager cannot disagree. An `unavailable` read warns separately, matching `OpenRouterCreditsUnknown`.
+- Both Costs pages refetch on a one-minute timer (`costsPollingOptions`), so spend and the OpenRouter balance stay current on a page left open. The filter dropdown options are left out: their contents only change when a new Agent or model appears, and a stale list costs the reader nothing. The Refresh button stays, for a reader who does not want to wait out the interval.
+- A hidden tab issues no requests, but the timer behind it keeps running and only skips the fetch. That is why the polled queries set `refetchOnWindowFocus` against the global default: without it a tab brought back after an hour would show hour-old spend until the next tick, up to a minute later.
+- The two record lists are infinite queries, so each tick refetches every page the reader has loaded, not just the first. Twenty pages of scrolling means twenty requests a minute. The Refresh button already behaved this way, so polling adds no new shape of load, and `maxPages` is deliberately unset: capping it would drop pages the reader had already scrolled past.
 
 ### Authorization and status
 
@@ -61,15 +64,47 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - Per-Agent detail requires `cost.read` through the effective Agent Access Role. Agent Viewer, Editor and Owner can read accessible active-Agent costs; Organization Owner/Admin may also read deleted-Agent history.
 - Per-Agent detail respects the requested window. It previously read `/key/info`, which is lifetime spend and ignores the date range.
 - Every Agent-surface read, including its calls, monthly totals and model options, authorizes through `_authorized_agent` with the same Agent Access and deleted-Agent rules as the detail read. None of them requires the Organization-wide `cost.read`.
+- The Agents overview totals spend for a page of Agents through `CostService.spend_for_agents`: the caller's Agent-level `cost.read` scope joined to the Agent, over the same predicates as the Costs tab, so a row and its cost panel agree. An Agent the caller cannot read is absent from the result, and no Organization total is produced (see [`resource-usage.md`](resource-usage.md)).
 - The Agent's Costs tab is gated on `cost.read` alone and does not require `activity.read`, unlike the Activity tab (see [`agent-activity.md`](agent-activity.md)). A custom Agent Access Role can grant one Permission without the other, and Costs is the only surface that makes a Permission-`cost.read`-but-not-`activity.read` reader's access reachable.
 - Per-Agent detail carries its own spend trend, prompt-size trend and cost-per-call histogram, plus call, failure, recovered-call, latency and burn-rate figures. They are built from the same queries the Organization summary uses under an Agent-pinned filter. It is not read from the summary: that surface requires the Organization-wide `cost.read` an Agent Access Role never grants, so an Agent Viewer or Editor could not load it. The response echoes the resolved window and granularity, because a chart cannot label a bucket without knowing the resolution it was grouped at.
 - Failed calls are counted in `total_calls` and in every average that divides by it, including `avg_cost_per_call` and `avg_prompt_tokens`. That is the basis the Organization summary already uses, so a per-Agent average and an Organization one describe the same thing and can be read against each other. `failed_calls` is reported alongside them because a run of failures is worth seeing on its own, not because it is excluded.
 - Cost-facing status is mapped to `active`, `stopped`, `error` or `deleted`; it is not the persisted AgentStatus enum.
 - Every platform route requires `require_platform_admin`. Nothing re-scopes by membership, because a platform admin deliberately has none.
 
+## Agent Memory attribution
+
+Hindsight's trace API has token counts but no billed amount or provider generation
+ID. We therefore do not ingest or price its traces. The pinned Hindsight startup
+bridge carries the canonical `org-<uuid>` bank from its operation ContextVar into
+the OpenAI-compatible request's `user` field. LiteLLM stores that as `end_user` in
+its spend log, including background retain/consolidation calls. Calls outside a
+bank context are permitted only during explicit server connection verification
+and remain platform costs. Other bankless calls fail before model execution.
+
+Cost sync recognizes this marker only on `MEMORY_LITELLM_KEY_HASHES`, the allowlist
+of dedicated Hindsight bootstrap key hashes or registered Organization memory keys.
+Registered keys identify their Organization directly; request bank markers cannot
+change that identity. Shared legacy keys still require the canonical bank marker. A forged bank marker on an Agent key
+cannot change attribution. Invalid, noncanonical, or unknown bank markers remain
+in platform unattributed totals. No arbitrary end-user value, trace, prompt,
+response, or metadata is copied into `cost_record`.
+
+Memory rows have `is_memory=true`, their Organization identity and captured name,
+`agent_id=NULL`, and the display name `Agent Memory`. They count in Organization
+and platform totals, without appearing in any Agent's Costs tab or active-Agent
+count. They use the same request ID, exact spend, replay guard, and OpenRouter
+healing as all other LiteLLM rows, so each model call is counted once.
+Migration `e4c9b72a6f10` defaults existing rows to `is_memory=false`.
+
+The deployment bridge is pinned to Hindsight 0.10.2's OpenAI-compatible provider;
+its concurrent-bank contract exercises real HTTP requests for retain, reflect,
+background consolidation, and startup verification. Changing the provider/image
+requires checking this contract. Key rotation and local setup belong in
+[operations](../guidelines/operations.md#agent-memory-deployment).
+
 ## Organization LLM budgets
 
-Three limits, each enforced by LiteLLM, all sharing the Organization's renewal window:
+Organization and Agent spend limits share the Organization's renewal window:
 
 | Limit | Set by | Stored on | Enforced on |
 | --- | --- | --- | --- |
@@ -77,6 +112,43 @@ Three limits, each enforced by LiteLLM, all sharing the Organization's renewal w
 | The Organization's own limit | Owners and Admins (`llm_budget.manage`) | `organization.llm_own_budget_usd` (NULL follows the ceiling) | The Organization's team: `own ?? ceiling` |
 | Default Agent limit | Owners and Admins | `organization_agent_settings.default_agent_llm_budget_usd` (NULL follows `AGENT_DEFAULT_LLM_BUDGET_USD`) | — |
 | An Agent's own limit | Owners and Admins | `agent.llm_budget_usd` (NULL follows the default) | The Agent's key: `min(own ?? default, Organization limit)` |
+
+### Agent Memory spend gate
+
+The optional [Agent Memory](agent-memory.md) backend resolves one encrypted
+LiteLLM virtual key per Organization, attached to the same team as its runtime
+keys. Retain, reflect, and queued consolidation therefore share the team's
+native spend cutoff with runtime calls. Memory keys are backend-only, allow the
+platform's configured models, and have no per-Agent budget: shared consolidation
+can combine multiple Agents' contributions.
+
+For historical calls made using the shared bootstrap key, the Organization's
+remaining team allowance is reduced by that key's imported memory charges in the
+current renewal window. Only configured legacy key hashes are added to the team
+snapshot; new team memory charges already count there. Budget views and threshold
+alerts use this combined total. Reconciliation refreshes the reduced allowance as
+late legacy charges arrive. Migration `f69a2e0c847d` adds encrypted credentials and
+a partial `(organization_id, occurred_at)` index restricted to memory charges.
+
+Before forwarding retain or reflect, the gateway also checks observed spend.
+A zero limit blocks immediately; positive limits need a runtime snapshot at most
+10 minutes old, a cost-sync heartbeat at most 20 minutes old, and a future renewal.
+Missing or invalid accounting returns 503, and observed exhaustion returns 429.
+Recall remains available. Migration `f2a8d41b9c63` adds the sync heartbeat, updated
+only after a complete paging pass, independently of OpenRouter healing.
+
+LiteLLM enforcement uses observed billing, not reservations. Concurrent calls,
+late billing and healing can overshoot; accepted jobs are not cancelled. Queued
+jobs still encounter the same team cutoff when they make their model calls.
+Historical shared-key charges affect the cap after import and reconciliation. The reconciler runs every 15 minutes: rollout
+can retain the old runtime allowance until that pass, and renewal can retain a
+legacy-reduced allowance until the next pass. Run reconciliation during rollout
+with `make reconcile-llm-budgets` before accepting model traffic when legacy
+shared-key spend exists (see [budget operations](../guidelines/operations.md#organization-llm-budgets)).
+Calls made through an operator-run bridge without platform settings continue to
+use the bootstrap key and do not receive the shared-team guarantee.
+
+### Runtime limit management
 
 `../../api/domains/organizations/llm_budget_service.py` owns the ceiling and the
 Organization's own limit; `../../api/domains/agents/llm_budget.py` owns Agent limits;
@@ -118,7 +190,9 @@ without undoing the committed Organization; first Agent key creation provisions 
 team again — with the Organization's limit, so it is never uncapped in between — and
 fails rather than issuing an unassigned key. `ensure_team_exists` never writes policy
 over an existing team: issuing a key must not re-assert a policy its caller was not
-given.
+given. The internal memory-key provisioning service does apply the stored
+Organization policy before issuing a key, so the shared team cap is already in
+force.
 
 Rows are authoritative and LiteLLM is a projection of them. A limit is stored with
 its change Event first and pushed second, so a proxy failure surfaces as `502` with
@@ -154,7 +228,7 @@ healing recovers costs LiteLLM booked as zero, into our table only, and cannot w
 them back — so a cap binds marginally late in real dollars and always fails open,
 never closed. Historical requests made before team attachment are not retroactively
 charged. In-flight requests can exceed any cap. This is a proxy spend cutoff, not an
-exact provider-invoice ceiling, and only calls using these LiteLLM Agent keys count.
+exact provider-invoice ceiling, and only calls using enrolled LiteLLM runtime or Organization memory keys count.
 A rejection does not stop the Agent container or suspend the Organization; model
 calls fail until the limit renews or is raised. Both runtimes' in-pod LLM proxy
 catches the rejection before the runtime sees it — matched on the error body, since
@@ -170,13 +244,14 @@ records the refusal in the container (`/tmp/agentbarn-llm-terminal-error.json`),
 the Communications adapter in the same container reports a turn that fails after it
 as `SPEND_LIMIT_REACHED`. Communications turns that code into a terminal,
 non-retried failure whose notice reads "A model spend limit has been reached, so this
-agent cannot reply right now…": shown under the message in web chat, and posted as the
-failure notice on Slack, Telegram, Discord and Teams. The wording deliberately does not
+agent cannot reply right now…": shown under the message in Web Chat. Native Slack, Telegram, Discord and Teams
+turns and their error notices belong to the selected runtime. The wording deliberately does not
 say whose limit it was: the rejection is the same whether the Agent's or its
 Organization's ran out.
 
 ## Operational
 
+- Local `./run.sh` starts the Compose `cost-sync` service: it syncs immediately and every 15 minutes using the same entrypoint with `--watch`. Runs never overlap; a failed run retries on the next interval. The UI reads imported records, so calls recorded only in LiteLLM stay invisible until this job runs.
 - The CronJob runs every 15 minutes under `concurrencyPolicy: Forbid`. `COST_SYNC_MAX_RUNTIME_SECONDS` must stay below the schedule interval: an overrunning pass does not overlap, it silently costs the next tick.
 - Unlike the event reconciler, this job talks to the Kubernetes API — it reads the LiteLLM master key from the `litellm` Secret. It needs the service account, `K8S_NAMESPACE`, `K8S_KUBECONFIG_PATH` and the mounted kubeconfig, or it fails on first run with `Secret 'litellm' not found`.
 - `/spend/logs/v2` needs the LiteLLM **master** key; the virtual key in `litellmApiKeySecretName` cannot authenticate it.
@@ -201,6 +276,7 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 | Table and response contracts  | `../../api/domains/costs/models.py`         |
 | Persistence and aggregation   | `../../api/domains/costs/repository.py`     |
 | Sync and healing job          | `../../api/domains/costs/sync.py`           |
+| Memory spend gate             | `../../api/domains/agent_memory/spend_policy.py`, `../../api/tests/integration/test_memory_spend_gate.py` |
 | Tunables                      | `../../api/domains/costs/constants.py`      |
 | Org reads                     | `../../api/domains/costs/service.py`        |
 | Platform reads                | `../../api/domains/costs/platform_service.py` |
@@ -218,6 +294,7 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 | Agent-facing rejection        | `../../api/domains/agents/scripts/hermes/healthz-server.py`, `../../api/domains/agents/scripts/openclaw/healthz-server.js` |
 | UI schemas, hooks, and charts | `../../ui/src/features/costs/`              |
 | Agent Costs tab               | `../../ui/src/features/costs/components/agent-costs-panel.tsx`, composed by `../../ui/src/features/agents/components/agent-detail-page.tsx` |
+| Spend on the Agents overview  | `spend_for_agents` in `../../api/domains/costs/service.py` and `../../api/domains/costs/repository.py`, assembled by `../../api/domains/resource_usage/service.py` |
 | Local fixtures                | `../../api/scripts/seed_cost_fixtures.py` (`make seed-costs`) |
 | Investigation and evidence    | `../plans/AF-281-cost-tracking-findings.md` |
 | Tests                         | `../../api/tests/unit/test_cost_sync.py`, `../../api/tests/unit/test_monthly_costs.py`, `../../api/tests/integration/test_costs.py`, `../../api/tests/integration/test_platform_costs.py`, `../../ui/tests/e2e/costs.spec.ts`, `../../ui/tests/e2e/platform-costs.spec.ts`, `../../ui/tests/e2e/agent-detail-page.spec.ts` (Costs tab), `../../api/tests/unit/test_organization_llm.py`, `../../api/tests/integration/test_organization_llm.py`, `../../api/tests/unit/test_spend_limits.py`, `../../api/tests/integration/test_spend_limits.py`, `../../api/tests/integration/test_spend_limits_migration.py`, `../../ui/tests/e2e/organization-llm-budget.spec.ts`, `../../ui/tests/e2e/spend-limits.spec.ts` |
@@ -225,3 +302,11 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 ## Change impact
 
 Changing the sync or heal predicates changes what is recorded as money, so cover them in unit tests before touching the job. Changing attribution affects agent key lifecycle, deleted-agent behavior, and the unattributed bucket. Changing the schedule requires rechecking `COST_SYNC_MAX_RUNTIME_SECONDS`. Status changes require checking both persisted AgentStatus and the cost-facing mapped labels. A new Agent-surface route must go through `_authorized_agent` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`.
+
+The KPIs page ([`business-value.md`](business-value.md#kpi-dashboard)) reuses `../../ui/src/features/costs/format.ts`, `StatCard` from `cost-summary-cards.tsx`, and `useCostUrlFilters`, and links to Costs with its own `from` and `to`. A change to those helpers, or to the Costs page's `from`/`to` query keys, must re-run `../../ui/tests/e2e/kpis.spec.ts` as well as `costs.spec.ts`.
+
+Platform Admins select the shared Hindsight processing model in
+[Platform Settings](agent-memory.md#platform-memory-processing-model). Changing
+it preserves the dedicated key's budgets and existing cost records; subsequent
+calls carry the chosen model with the same Organization bank attribution.
+Agent chat models remain independently configured.

@@ -6,19 +6,20 @@ Read before changing agent creation, Agent Access Roles, explicit Agent Access a
 
 ## Role in the system
 
-An Agent is the central execution aggregate. It connects organization tenancy, an exact active shared Template or Agent Template Override version, Skills, tool Integrations, one Runtime deployment, telemetry, and LiteLLM identity. External chat transport is a separate Agent-subordinate Communications aggregate.
+An Agent is the central execution aggregate. It connects organization tenancy, an exact active shared Template or Agent Template Override version, Skills, tool Integrations, one Runtime deployment, telemetry, and LiteLLM identity. Communication Connection configuration is a separate Agent-subordinate Communications aggregate; transport follows the [fixed Platform contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary).
 
 ## Invariants
 
 - Every Agent belongs to one Organization and pins an exact active shared Template Version or Agent Template Override Version. The Organization owns the Agent; creator identity is immutable provenance rather than ownership.
 - Human Agent creation atomically records creator provenance and explicit Agent Owner access for the creator.
 - Organization Owner/Admin have implicit Agent Owner authority over every Agent. An Organization Member requires explicit Agent Access, applicable Agent General Access, or both; inaccessible and cross-Organization Agents are concealed with 404.
-- The locked Agent Viewer role grants read, activity, and cost access; Agent Editor adds configuration, lifecycle, Skill assignment, and credential management; Agent Owner adds deletion and access management. Start and stop share the single `agent.lifecycle.manage` Permission because lifecycle authority is granted as one capability; current Agent state determines which transition is available.
+- The locked Agent Viewer role grants read, activity, and cost access; Agent Editor adds configuration, lifecycle, Skill assignment, and credential management; Agent Owner adds deletion, access management, and Agent Memory management. Start and stop share the single `agent.lifecycle.manage` Permission because lifecycle authority is granted as one capability; current Agent state determines which transition is available.
+- Agent Memory is opt-in and its setting is exposed as `memory_enabled` on Agent reads. Opted-in starts configure automatic Hindsight recall and retain alongside native runtime memory. See [`Agent Memory`](agent-memory.md) for its permissions and sharing contract.
 - Any effective role containing access-management Permission may replace the Agent's full share settings: Agent General Access plus the complete explicit Agent Access assignment list. Creator provenance is immutable but is not a separate authorization source.
 - Explicit Agent Access is granted only to accepted Organization Members in the same Organization. Pending invitees and cross-Organization users are ineligible; removing a Membership cascades its access rows.
 - Agent General Access is an Agent-level setting: Restricted or All Organization Members with one Agent Access Role. It applies only to accepted Memberships and is additive with explicit Agent Access; removing one source leaves the other source intact.
 - Agent read DTOs expose current effective Agent-related Permission keys. The UI uses those keys for lifecycle, configuration, secret, activity, cost, and deletion controls rather than deriving Agent authority from either role family; mutations independently reauthorize and validate current state. AF-150 does not expose access-management UI.
-- Runtime and Platform are independent. An Agent may own zero or many Communication Connections, with at most one active Connection per Platform. Gateway-owned Connections use the runtime-neutral Communications protocol; configured native Connections run inside the Agent's runtime (Hermes or OpenClaw) instead.
+- Runtime and Platform are independent. An Agent may own zero or many Communication Connections, with at most one active Connection per Platform. Transport ownership follows the [fixed Platform contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary); enabled runtime-owned Connections are projected at startup for both Hermes and OpenClaw.
 - Agent Webhooks are Agent-subordinate machine-ingress resources, separate from Platforms and Communication Connections. Their configuration follows Agent read/update/secret authority, while invocation content follows activity-read authority. See [`agent-webhooks.md`](agent-webhooks.md).
 - The Dashboard Web Chat composer accepts new messages only while the Agent is `RUNNING` and its health status is `ok` (shown as Working). A thread remains visibly awaiting a reply while its latest durable inbound Communication Delivery is `PENDING` or `PROCESSING`, so the working indicator survives tab navigation and page remounts until an outbound reply arrives or the user stops generation. Stop is durable and suppresses late replies for both runtimes; neither pinned runtime currently exposes a proven abort handle for this chat-completions path, so the product does not promise compute interruption. A Web Chat message that is a command-approval prompt exposes its `approval` (identity, command and offered choices), read from its outbound delivery, and renders one button per offered choice; clicking one sends that choice with the `approval_id` it answers. Answering requires the same Agent update permission as any send, and the buttons are not shown without it. A stored approval that no longer validates is omitted rather than failing the thread.
 - Command approval is currently Hermes-only: the persisted `approval_mode` field maps onto the Hermes runtime's approval policy. OpenClaw has no user-configurable command-approval control, so create/update reject an explicit non-default `approval_mode` for an OpenClaw Agent (HTTP 400) rather than silently ignoring it, and reads report the effective `AUTO` default for OpenClaw regardless of the stored value. OpenClaw command approval is deferred to a future task.
@@ -29,8 +30,8 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - An Agent's model is either inherited or overridden. An empty `model` means the Agent follows its Organization's default runtime model, resolved at every start; a non-empty `model` is an explicit override that no default change touches. Agent read DTOs expose `model_source` and the resolved `effective_model` so no client re-derives this. Sending `model: null` on update clears an override and returns the Agent to the default. See [`agent-settings.md`](agent-settings.md).
 - A running Agent reports whether the platform has moved on beneath it. `running_config_digest` records the digest of the code and runtime images the Agent's pod was actually built from, and `update_available` is true when a running Agent's recorded digest differs from what the API would build now. The signal is advisory: it blocks no operation, changes no Agent behaviour, and clears when the Agent restarts. It covers platform-authored code and runtime images only, so the Agent's own configuration keeps its existing surfaces — `pending_model`, Template `source_update`, and the Skill-level `update_available` are unaffected. An Agent already running before its digest was first recorded reports an available update, because its pod genuinely predates the record. See [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - The start-time model allowlist re-check applies only to Agents carrying an explicit override. An inheriting Agent runs Organization policy: its Organization's own default is held inside the allowlist by invariant, and a platform default it may instead be following is outside any Organization's control.
-- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram and Discord agents require a bot token. Native Telegram answers group messages only when the bot is mentioned or replied to, and answers DMs without a mention. Runtime-owned Teams keeps its Azure messaging endpoint on Agent Barn: the authenticated relay applies the Connection's DM/channel policy and forwards accepted activities to the private runtime listener. Discord bots must enable Message Content Intent; bots using role-based access must also enable Server Members Intent so gateway-owned and native admission can establish membership. Discord uses Hermes' native user, role, and channel gates: access is closed unless an allowlist matches or Allow all users is enabled. User allowlists apply in DMs and server messages; role and channel allowlists apply in server messages. It has no separate guild or DM policy switches.
-- Agents respond in shared channels and groups only to messages that explicitly mention them, on every supported platform. Slack additionally requires that mention on every message rather than inheriting it from earlier thread participation. Native Telegram also accepts a reply to the bot; gateway-owned Telegram and Teams expose no equivalent control. Direct messages are exempt. Gating is generated at start; see [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
+- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram and Discord agents require a bot token. Native Telegram answers group messages only when the bot is mentioned or replied to, and answers DMs without a mention. Runtime-owned Teams keeps its Azure messaging endpoint on Agent Barn: the authenticated relay applies the Connection's DM/channel policy and forwards accepted activities to the private runtime listener. Discord bots must enable Message Content Intent; bots using role-based access must also enable Server Members Intent so native admission can establish membership. Discord uses Hermes' native user, role, and channel gates: access is closed unless an allowlist matches or Allow all users is enabled. User allowlists apply in DMs and server messages; role and channel allowlists apply in server messages. It has no separate guild or DM policy switches.
+- Agents apply their Connection policy in shared channels and groups. Slack exposes every-message and start-only thread mention policies; Telegram accepts a mention or reply to the bot in groups, with DMs exempt. Native admission configuration is generated at start, while Teams policy remains at the authenticated public relay; see [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - Each active Slack or Discord agent must use a distinct bot token within its platform (enforced globally); creating or updating with a duplicate returns 409. Deleting an agent releases its token for reuse.
 - Platform is not changed through agent update. Runtime/platform compatibility is schema-validated.
 - Agents are told how to attach a file to a reply (a `MEDIA:<absolute path>` line) only when a native Slack, Discord, or Telegram Connection carries their replies; the runtimes' native adapters upload the file. The path must be inside the runtime's workspace (`/workspace` on Hermes, `/home/node/.openclaw/workspace` on OpenClaw), where the agent can both write and attach it. Gateway-owned Connections deliver text only, so gateway-only Agents never receive that instruction.
@@ -39,7 +40,7 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Per-Agent LiteLLM keys are encrypted at rest. Creation performs deterministic validation before allocating a key; if creation fails after allocation, the unowned key is deleted, and a failed deletion triggers a best-effort block as a safety fallback. Deleting an existing Agent soft-deletes it and blocks its key rather than deleting it, preserving the LiteLLM identity needed for historical spend attribution.
 - Communication Connection settings and credentials are validated by the selected shipped Platform Plugin, encrypted independently of Agent Secrets, and omitted from read responses. Global plugin credential-identity constraints prevent two active Connections from owning the same bot/application identity where required.
 - Communication health is independent of lifecycle: a provider session may be pending, connected, degraded, or errored while the Agent remains running. Retiring a Connection preserves its canonical Conversation Messages.
-- The API rejects direct Agent configuration updates while an Agent is running, but running Agent read DTOs still expose the caller's configuration and secret permissions so the canonical UI can offer section-specific apply actions. Runtime configuration changes use `Apply & Restart`; Template selection uses `Apply` while stopped or `Apply & Restart` while running, with the latter stopping the Agent, selecting the published version, and starting it again. A running Agent's native Communication Connection changes also use stop, mutate, start because Hermes reads those settings only at boot. For stopped Agents, `Apply` changes the active pin and leaves the Agent stopped until the user starts it from the Agent detail page.
+- The API rejects direct Agent configuration updates while an Agent is running, but running Agent read DTOs still expose the caller's configuration and secret permissions so the canonical UI can offer section-specific apply actions. Runtime configuration changes use `Apply & Restart`; Template selection uses `Apply` while stopped or `Apply & Restart` while running, with the latter stopping the Agent, selecting the published version, and starting it again. A running Agent's native Communication Connection changes also use stop, mutate, start because both runtimes read those settings only at boot. For stopped Agents, `Apply` changes the active pin and leaves the Agent stopped until the user starts it from the Agent detail page.
 - Template-required skills are validated as explicit assignments during agent create, update, and repin, and cannot be removed while currently required.
 - Each assigned skill is pinned to an exact version at apply time (mirroring template pins): `agent_skill.pinned_version`. Publishing a newer skill version never moves an existing pin, and an agent recovers from a bad version by re-pinning to an older one. Start mounts each assigned skill's pinned-version files; a version pinned by any agent is protected from skill version deletion.
 - Provider requirements for assigned skills are validated during agent create/update against the agent's resulting Agent Secrets. During Agent creation, the service live-validates the exact submitted manual and shared credentials before allocating a LiteLLM key or persisting the Agent; providers without a live validator still receive schema validation and remain eligible for on-demand validation. Later edits to skill metadata are not revalidated at Agent start.
@@ -47,6 +48,46 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Secret values are encrypted at rest and omitted from read DTOs. Google Workspace credentials are validated as one service-scoped OAuth payload and materialized through the gog CLI; retired per-service Google providers are not supported.
 - Agent Restore Points capture and restore only while the Agent is `STOPPED`, and only one capture or restore may be in flight per Agent — enforced by a database constraint, not only a service check. The per-Agent retention cap counts manual restore points that still hold a volume: Pre-Restore Restore Points and failed captures do not consume it, so an Agent at the cap can still roll back and a run of failures cannot lock it out of capturing.
 - A restore point archive never contains credential material or state the runtime regenerates on boot, so it is not a byte-exact image of the volume. It also never contains a member a restore could not extract: capture offers every member to the same safety filter the restore applies, and drops what that filter refuses — a link pointing outside the volume, for instance, which is unusable once the volume is mounted somewhere else. The count of dropped members is reported with the archive's size. Without this a single such link fails the entire restore rather than costing one link. Reads authorize on `activity.read`; capture, restore, and delete on `agent.lifecycle.manage`. No restore-point-specific Permission exists.
+
+Runtime startup retires the custom messaging bridge and audits old scheduled-job routing
+without changing destinations or history. See [runtime assembly and sanitation](../architecture/runtime-and-deployment.md#runtime-neutral-communications)
+before changing startup or restore behavior.
+
+## Agent list metadata
+
+Organization Agent reads expose `creator` (User ID, full name, and email) and
+`last_message_at`. Creator identity is immutable provenance, displayed as
+“By <name>” on the team card, with email as the fallback when no name is set.
+Legacy or deleted-user provenance is null and displays “Creator not recorded”;
+the UI never guesses a creator from access assignments. The creation date is
+labeled separately.
+
+`last_message_at` is the greatest recorded Conversation Message occurrence time
+across inbound and outbound directions and all Connections, including Web Chat
+and retired Connections. It is independent of runtime health and billed calls.
+Reads use the Agent visibility query and require `activity.read` for that
+Agent; without it the timestamp is null and the card says “Not available”. With
+permission, null means “No messages yet”. No message content is returned.
+An older API response that omits the field also displays “Not available”.
+The card shows relative recency alongside an exact timestamp in the reader's
+local time zone. Late ingestion uses occurrence time rather than insertion time.
+
+Team cards are whole-card links with keyboard navigation and no separate Open
+button. A single “Hire a teammate” card follows the displayed teammates in the
+dashboard grid and opens the hiring dialog with a click or keyboard activation.
+It remains available when the team is empty or search has no matches. Teammate
+cards' last-message footers stay at the bottom even when names or pending model notes wrap. The
+dashboard search filters the currently loaded page, and identifies that limit
+when more Agents exist than are loaded.
+
+List reads batch shared credential labels for the visible page within the
+Organization; resolving each card must not issue a credential lookup per Agent.
+Response fields and credential-content exclusion match detail reads.
+Pin display queries load only IDs, keys, and versions, and credential list
+projections load only labels and references, excluding Markdown and encrypted
+payload columns. Home cards poll health every 30 seconds only for running
+Agents with `activity.read`; without that permission, a running Agent is labeled
+“Running” without claiming a known health state.
 
 ## State model
 
@@ -105,7 +146,7 @@ Start renders the pinned Template, decrypts Agent Secrets, selects Hermes/OpenCl
 
 ### Stop and delete
 
-Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. Individual Communication Connection retirement remains an independent Communications workflow.
+Stop snapshots logs before removing active runtime resources and marking the Agent stopped, clearing the recorded running model and runtime configuration digest. A successful transition to `STOPPED` emits `agent.stopped`; its email handler notifies the Agent Creator and users with Agent Owner access, de-duplicated by email. Delete removes runtime resources, retires all owned Communication Connections (cancelling pending deliveries and releasing provider credential identities), soft-deletes the Agent, and preserves the record for history and cost attribution. It also revokes memory credentials and grants and schedules [Agent Memory cleanup](agent-memory.md#deletion-cleanup). Individual Communication Connection retirement remains an independent Communications workflow.
 
 ### Capture and restore
 
@@ -157,7 +198,8 @@ Share-management endpoints expose locked Agent Access Roles and one canonical Ag
 - [`2026-07-21-additive-agent-general-access.md`](../adr/2026-07-21-additive-agent-general-access.md)
 - [`2026-08-09-agent-scoped-template-overrides.md`](../adr/2026-08-09-agent-scoped-template-overrides.md)
 - [`2026-08-19-organization-scoped-agent-settings.md`](../adr/2026-08-19-organization-scoped-agent-settings.md)
-- [`2026-08-22-agent-barn-owned-communications-gateway.md`](../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+- [Gateway ownership (partially superseded)](../adr/2026-08-22-agent-barn-owned-communications-gateway.md)
+- [Native runtime gateways](../adr/2026-09-16-native-runtime-gateways-for-chat-platforms.md)
 - [`2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md`](../adr/2026-09-10-restore-points-use-tar-jobs-not-csi-snapshots.md)
 
 ## Change impact
@@ -180,3 +222,8 @@ stored provisioning errors and retained Logs remain separate sources.
 This is not durable crash history. Pod replacement resets counts and can remove
 previous logs; the latest exit does not establish when a crash loop began. Reading
 diagnostics never restarts an Agent, executes a command, or mutates its workspace.
+
+How much CPU and memory the container is using, against its limits, is a separate
+read behind the same `activity.read`: the Resource usage tab. See
+[`resource-usage.md`](resource-usage.md). Its out-of-memory callout reads
+`termination_reason` from these diagnostics.
