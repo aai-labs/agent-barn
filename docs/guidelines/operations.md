@@ -686,16 +686,25 @@ Documentation-only changes do not change a service image and do not require a se
 
 Ingest records Business Actions only for Tool Calls it completes after the Business Value
 release (see [`../features/business-value.md`](../features/business-value.md)). The backfill
-classifies the history that already exists. It is operator-run and never scheduled: nothing
-calls it from a router, and no CronJob runs it.
+classifies the history that already exists. Nothing calls it from a router, and no CronJob
+runs it.
 
-- Run it against a deployed release from the API container, which holds the database
-  credentials:
-  `kubectl -n <namespace> exec deploy/<release> -c api -- python -c "from api.domains.business_value.backfill import main; main()"`.
-  Locally, `make backfill-business-actions` runs the same entry point against whatever
+- The `agentbarn-api` chart runs it on every install and upgrade, including a client's
+  `./deploy.sh`, as the plain Job `<release>-business-action-backfill-<revision>`
+  (`helm/agentbarn-api/templates/business-action-backfill-job.yaml`). It starts after the
+  `-migrate` hook, in its own pod with `worker.resources`, and stops after
+  `businessValue.backfill.activeDeadlineSeconds`.
+  - It is not a Helm hook, so `--wait` (Helm 3 and 4, and `helmfile sync --wait`) neither
+    waits for it nor fails the deploy when it fails.
+  - The next upgrade deletes the previous revision's Job, so the latest run's logs stay
+    readable: `kubectl -n <namespace> logs job/<release>-business-action-backfill-<revision>`.
+  - To re-run it, redeploy. `businessValue.backfill.enabled: false` turns it off.
+- Never run it with `kubectl exec` in the API container: on local k3d that OOM-killed the
+  API container at its 512Mi limit.
+- Locally, `make backfill-business-actions` runs the same entry point against whatever
   `DB_CONNECTION_URL` points at, so check that value before invoking it.
 - It walks completed `terminal` and `exec` Tool Calls in id order, `BACKFILL_BATCH_SIZE`
-  (500) per batch.
+  (50) per batch, because each row carries its full stored result.
   - It infers each action's status from the stored result, never from the Tool Call's own
     status.
   - It writes each batch in its own transaction, so an interrupted run keeps the batches it

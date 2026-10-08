@@ -1,0 +1,35 @@
+{{- if .Values.businessValue.backfill.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-business-action-backfill-{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: business-action-backfill
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: {{ .Values.businessValue.backfill.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentbarn-api.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: business-action-backfill
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      containers:
+        - name: business-action-backfill
+          image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python
+            - -c
+            - "from api.domains.business_value.backfill import main; main()"
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretName }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+{{- end }}
