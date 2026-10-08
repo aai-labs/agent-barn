@@ -2,6 +2,8 @@ from uuid import UUID
 
 from api.domains.agents.builders import (
     START_SH,
+    agentbarn_telegram_channel,
+    agentbarn_telegram_channel_env,
     build_config_map,
     build_deployment,
     build_openclaw_gateway_config,
@@ -18,6 +20,7 @@ from api.domains.agents.builders.openclaw import (
     OPENCLAW_WORKSPACE_DIR,
 )
 from api.domains.communications.models import ConversationLocation
+from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -354,6 +357,38 @@ def test_native_channel_env_carries_tokens_and_hands_over_scheduled_delivery() -
         "MSTEAMS_APP_ID": "app-id",
         "MSTEAMS_APP_PASSWORD": "secret",
         "MSTEAMS_TENANT_ID": "tenant-id",
+    }
+
+
+_AGENTBARN_TELEGRAM = AgentBarnTelegramRuntime(
+    api_root="http://communications:8002/communications/v1/telegram/c0ffee",
+    api_token="424242:stand-in",
+    webhook_secret="derived-secret",
+    webhook_url="http://agent-x.agent-farm.svc.cluster.local:8443/telegram",
+)
+
+
+def test_agentbarn_telegram_channel_uses_the_proxy_and_a_private_webhook() -> None:
+    assert agentbarn_telegram_channel(_AGENTBARN_TELEGRAM) == {
+        "enabled": True,
+        "dmPolicy": "open",
+        "allowFrom": ["*"],
+        "groupPolicy": "disabled",
+        "apiRoot": "http://communications:8002/communications/v1/telegram/c0ffee",
+        "webhookUrl": "http://agent-x.agent-farm.svc.cluster.local:8443/telegram",
+        # Resolved from the Secret at startup, so the secret never sits in openclaw.json.
+        "webhookSecret": "${AGENTBARN_TELEGRAM_WEBHOOK_SECRET}",
+        "webhookHost": "0.0.0.0",
+        "webhookPort": 8443,
+        "webhookPath": "/telegram",
+        "defaultTo": "channel:__agentbarn_no_home_channel__",
+    }
+
+
+def test_agentbarn_telegram_secret_entries_carry_the_stand_in_token_and_webhook_secret() -> None:
+    assert agentbarn_telegram_channel_env(_AGENTBARN_TELEGRAM) == {
+        "TELEGRAM_BOT_TOKEN": "424242:stand-in",
+        "AGENTBARN_TELEGRAM_WEBHOOK_SECRET": "derived-secret",
     }
 
 

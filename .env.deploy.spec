@@ -146,6 +146,11 @@ POSTGRES_FIRECRAWL_DB=firecrawl
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
+# Optional: Agent Barn's own Telegram bot for this environment. The token is a GitHub
+# secret (STAGING_/PUBLIC_ variants per environment), the username a variable. Unset
+# hides the Agent Barn Telegram platform. Never reuse one bot across environments.
+AGENTBARN_TELEGRAM_BOT_TOKEN=
+AGENTBARN_TELEGRAM_BOT_USERNAME=
 # Default model. Format: litellm/openrouter/<slug>
 # e.g. litellm/openrouter/z-ai/glm-5.2. Empty uses the API's built-in default.
 AGENT_DEFAULT_MODEL=

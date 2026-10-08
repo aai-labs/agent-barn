@@ -11,7 +11,9 @@ def test_deployment_configuration_cannot_change_platform_ownership(legacy_allowl
     # Stale external environment entries cannot break startup or restore a switch.
     Config()
 
-    assert_that(NATIVE_PLATFORM_KEYS, equal_to(frozenset({"slack", "discord", "telegram", "teams"})))
+    assert_that(
+        NATIVE_PLATFORM_KEYS, equal_to(frozenset({"slack", "discord", "telegram", "teams", "agentbarn_telegram"}))
+    )
     for key in NATIVE_PLATFORM_KEYS:
         assert_that(platform_transport(key), equal_to("native"))
     for key in ("web", "email"):

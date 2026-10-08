@@ -467,6 +467,16 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 - Review `[messaging-retirement]` startup counts and the Agent-volume `retired-messaging-audit.json` report (`/opt/data` on Hermes, `/home/node/.openclaw` on OpenClaw). `job_audit=unreadable` requires inspecting the native store before treating the audit as complete. `report_write=failed` means the report could not be saved (without masking `job_audit=unreadable`); startup continues after plugin removal, but repair volume permissions and inspect the native store before declaring the audit complete. Reports contain job IDs and flags, not prompts, message content, or destinations.
 - Repair listed jobs through the native scheduler only after verifying their stored Connection, allowed recipient, and thread policy. Hermes `api_server`/`connection:` origins and OpenClaw `last` destinations do not prove a usable native recipient. Missing explicit recipients are accepted only with a usable configured native home (`defaultTo` in the merged OpenClaw config or the Hermes home-channel environment); the no-home sentinel is never accepted. Disabled jobs, completed/paused Hermes jobs, and OpenClaw main-session jobs without delivery are excluded. Malformed jobs mark the audit unreadable while other jobs remain auditable. Required managed-plugin removal must succeed before runtime startup. Preserve schedules, job identity, and session history; never replay the retired spool or infer delivery from it. No automatic rerouting is performed. Startup jobs should explicitly select a configured native home platform. Web Chat and Email support ordinary replies, not scheduled pushes.
 
+## Agent Barn Telegram
+
+Agent Barn's own Telegram bot lets Organizations use Telegram without bringing a bot. See `../features/communications/CHANGELOG.md` for how linking, relaying, and the Bot API proxy work.
+
+- **`AGENTBARN_TELEGRAM_BOT_TOKEN`** is a GitHub secret and **`AGENTBARN_TELEGRAM_BOT_USERNAME`** (the bot's username, without `@`) a GitHub variable, with `STAGING_` variants for staging and `PUBLIC_` variants for the public cluster. Both flow through `helmfile.yaml.gotmpl` into the API chart's shared Secret. Unset hides the Agent Barn Telegram Platform in that environment; existing Connections stay readable.
+- **Create one bot per environment** with @BotFather (`/newbot`). Telegram lets only one process poll a bot, and the Communications process takes over every update the bot receives, so a bot must never be shared between environments, developers' local stacks, or anything else.
+- The token never leaves the Communications process: Agents get a per-Connection stand-in token for Agent Barn's proxy. Rotating the token (BotFather `/revoke`) needs only a redeploy, not Agent restarts.
+- Optional tunables, normally left unset: `AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL` (where linked users' messages are delivered to an Agent; defaults to its in-cluster Service on port 8443) and `AGENTBARN_TELEGRAM_BOT_RATE_PER_SECOND` / `AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND` (defaults 25 and 5).
+- Polling and proxying run on one Communications replica at a time (a database lease decides which). Rate limits are per process, which holds while `communications.replicaCount` is 1.
+
 ## Staging environment
 
 Staging is a fully separate stack in its own namespace (`agent-farm-staging`),
@@ -530,6 +540,7 @@ git push origin "$RELEASE_TAG"
 | `PUBLIC_GRAFANA_HOST` | `grafana-app.agentbarn.dev` |
 | `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
 | `PUBLIC_AGENT_EMAIL_DOMAIN` | `agents.agentbarn.dev`. Unset leaves agent email inert and skips the Worker publish |
+| `PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME` | The public deployment's own bot, without `@`. Unset hides Agent Barn Telegram |
 | `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
 
 ### Public GitHub secrets
@@ -556,6 +567,7 @@ kubeconfig portably with
 | `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 | `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
+| `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`, and

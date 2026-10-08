@@ -336,6 +336,9 @@ jobs:
           # The public deployment's own defaults, like its other PUBLIC_ settings.
           ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_ORGANIZATION_DEFAULT_LLM_BUDGET_USD }}
           AGENT_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_AGENT_DEFAULT_LLM_BUDGET_USD }}
+          # The public deployment's own bot; Telegram allows one consumer per bot.
+          AGENTBARN_TELEGRAM_BOT_TOKEN: ${{ secrets.PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN }}
+          AGENTBARN_TELEGRAM_BOT_USERNAME: ${{ vars.PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME }}
           MEMORY_DEFAULT_MODEL: ${{ vars.PUBLIC_MEMORY_DEFAULT_MODEL }}
           MEMORY_LITELLM_KEY_HASHES: ${{ vars.PUBLIC_MEMORY_LITELLM_KEY_HASHES }}
         run: |

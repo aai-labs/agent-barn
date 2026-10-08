@@ -9,6 +9,8 @@ from prometheus_client import REGISTRY
 
 from api.core.metrics import CONTENT_TYPE_LATEST, render_metrics, setup_http_metrics
 from api.core.utils import create_injector
+from api.domains.communications.agentbarn_telegram_ingress import AgentBarnTelegramIngress
+from api.domains.communications.agentbarn_telegram_routes import agentbarn_telegram_router
 from api.domains.communications.gateway_routes import (
     email_compatibility_router,
     runtime_communications_router,
@@ -40,11 +42,18 @@ def create_communications_app(injector: Injector | None = None) -> FastAPI:
             injector.get(CommunicationsMaintenance).run(maintenance_stop),
             name="communications-maintenance",
         )
+        # Idles until Agent Barn's own bot is configured.
+        shared_bot_stop = asyncio.Event()
+        shared_bot_task = asyncio.create_task(
+            injector.get(AgentBarnTelegramIngress).run(shared_bot_stop),
+            name="communications-agentbarn-telegram-ingress",
+        )
         try:
             yield
         finally:
             maintenance_stop.set()
-            await maintenance_task
+            shared_bot_stop.set()
+            await asyncio.gather(maintenance_task, shared_bot_task)
             stop.set()
             worker.join(timeout=5)
 
@@ -52,6 +61,7 @@ def create_communications_app(injector: Injector | None = None) -> FastAPI:
     subapi = FastAPI()
     subapi.include_router(runtime_communications_router)
     subapi.include_router(email_compatibility_router)
+    subapi.include_router(agentbarn_telegram_router)
     app.mount("/communications/v1", subapi)
 
     http_registry = setup_http_metrics(subapi)

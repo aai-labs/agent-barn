@@ -282,6 +282,9 @@ services:
       - .env
     environment:
       <<: *api-env
+      # Agent Barn Telegram forwards linked users' updates to the Agent's webhook in
+      # k3d, which this container cannot resolve; `make forward-telegram` bridges it.
+      AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL: ${AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL:-http://host.docker.internal:8443/telegram}
     volumes:
       - ./api:/app/api
     ports:

@@ -25,3 +25,7 @@ The [runtime architecture](../architecture/runtime-and-deployment.md#platform-pl
 
 - Native runtime hooks cannot provide required Connection Journal correlation or health without patching the runtime.
 - A native adapter cannot enforce the Connection's admission policy before dispatch.
+
+## Agent Barn Telegram (AF-367)
+
+Agent Barn Telegram lets Organizations, initially trial clients, use one Telegram bot owned by Agent Barn instead of bringing their own. It stays on the runtimes' native Telegram adapters, consistent with this decision, rather than reviving gateway-owned delivery. The shared token must never reach an Agent, so the native adapters run behind two Agent Barn components in the Communications process. The poller is the bot's single consumer and forwards each linked user's raw updates to that Agent's private webhook, authenticated by a secret derived from the Connection's own runtime secret, as the Teams relay does for Bot Framework. The Bot API proxy is each runtime's API root (Hermes `extra.base_url`, OpenClaw `apiRoot`) and takes a per-Connection stand-in token derived from the same secret. It answers bot-wide calls such as `setWebhook` and `setMyCommands` locally, forwards chat calls only for users linked to that Connection, and rate-limits per Organization. People link their own Telegram account through a one-time deep link; a Telegram user reaches at most one Agent at a time.

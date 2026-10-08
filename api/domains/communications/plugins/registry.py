@@ -36,4 +36,5 @@ class PlatformPluginRegistry:
         return plugin
 
     def descriptors(self) -> list[PlatformDescriptorRead]:
-        return [self._plugins[key].descriptor for key in sorted(self._plugins)]
+        """Catalogue of platforms on which new Connections may be created."""
+        return [self._plugins[key].descriptor for key in sorted(self._plugins) if self._plugins[key].is_offered()]

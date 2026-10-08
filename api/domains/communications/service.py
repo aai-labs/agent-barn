@@ -199,6 +199,11 @@ class CommunicationsService:
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         plugin = self._require_plugin(data.platform_key)
         self._reject_web_chat_mutation(plugin.key)
+        if not plugin.is_offered():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{plugin.display_name} is not available",
+            )
         validated = self._validate(
             plugin,
             data.settings,

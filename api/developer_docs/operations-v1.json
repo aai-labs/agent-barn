@@ -21,6 +21,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-links/{link_id}",
+    "unlink_telegram_account_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_links__link_id__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/agents/{agent_id}/restore-points/{restore_point_id}",
     "delete_restore_point_organizations__organization_id__agents__agent_id__restore_points__restore_point_id__delete"
   ],
@@ -268,6 +273,16 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/summary",
     "get_communication_connection_summary_organizations__organization_id__agents__agent_id__connections__connection_id__summary_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-link-tokens/{token_id}",
+    "get_telegram_link_token_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_link_tokens__token_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-links",
+    "list_telegram_links_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_links_get"
   ],
   [
     "GET",
@@ -908,6 +923,11 @@
     "POST",
     "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/reconnect",
     "reconnect_communication_connection_organizations__organization_id__agents__agent_id__connections__connection_id__reconnect_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-link-tokens",
+    "create_telegram_link_token_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_link_tokens_post"
   ],
   [
     "POST",

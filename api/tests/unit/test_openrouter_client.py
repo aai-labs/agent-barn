@@ -147,6 +147,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         connection_repository=MagicMock(),
         conversation_repository=MagicMock(),
         plugins=MagicMock(),
+        agentbarn_telegram_secrets=MagicMock(),
         override_repository=MagicMock(),
         authorization=MagicMock(),
         template_repository=MagicMock(),

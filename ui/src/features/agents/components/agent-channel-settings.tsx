@@ -40,6 +40,7 @@ import {
 } from "@/features/communication-connections/hooks/use-communication-connections";
 import { DefaultDeliveryTargetInput } from "@/features/communication-connections/components/default-delivery-target-input";
 import { DirectoryPickerDialog } from "@/features/communication-connections/components/directory-picker-dialog";
+import { TelegramAccountLinking } from "@/features/communication-connections/components/telegram-account-linking";
 import { createSlackAppManifest } from "@/features/communication-connections/slack-manifest";
 import type { CommunicationConnection, CommunicationDirectoryEntry, CommunicationPlatform } from "@/features/communication-connections/schemas";
 
@@ -1129,6 +1130,16 @@ export function AgentChannelSettings({
                   )}
                   {installError && installBusyId === null && (
                     <div className="mt-2 text-xs" style={{ color: "var(--err)" }}>{installError}</div>
+                  )}
+                  {platforms.data
+                    ?.find((p) => p.key === connection.platformKey)
+                    ?.capabilities.includes("account_linking") && (
+                    <TelegramAccountLinking
+                      agentId={agent.id}
+                      connectionId={connection.id}
+                      enabled={connection.enabled}
+                      canManage={agent.allowedActions.includes("agent.update")}
+                    />
                   )}
                   <div className="mt-3">
                     <PlatformSetupHint

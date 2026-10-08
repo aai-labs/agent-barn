@@ -25,6 +25,7 @@ _ASSEMBLY_METHODS = {
     "_build_skill_pointers",
     "_native_slack_connection",
     "_native_connection_configuration",
+    "_agentbarn_telegram_runtime",
     "_backfill_google_client_credentials",
 }
 

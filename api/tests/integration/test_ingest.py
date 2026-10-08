@@ -516,3 +516,61 @@ def test_communication_events_mirror_native_transcripts_to_dashboard_conversatio
                 [message.direction for message in messages],
                 equal_to([MessageDirection.INBOUND, MessageDirection.OUTBOUND]),
             )
+
+
+def _agentbarn_telegram_connection():
+    def step(context):
+        delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+        context.connection = CommunicationConnection(
+            organization_id=context.agent.organization_id,
+            agent_id=context.agent.id,
+            platform_key="agentbarn_telegram",
+            display_name="Agent Barn Telegram",
+            credentials_encrypted="test-credentials",
+            driver_key_encrypted="test-driver-key",
+        )
+        delegate.save(context.connection)
+
+    return step
+
+
+def test_telegram_events_land_on_an_agentbarn_telegram_connection():
+    # The runtime's adapter is plain Telegram either way, so it reports "telegram".
+    with given(
+        [*_GIVEN, there_is_an_agent(), _set_ingest_key(), _agentbarn_telegram_connection(), _create_ingest_client()]
+    ) as context:
+        observed_at = datetime(2026, 10, 7, 12, 0, tzinfo=UTC).isoformat()
+        payload = {
+            "events": [{"stage": "connection_connected", "platform": "telegram", "occurred_at": observed_at}],
+            "messages": [
+                {
+                    "platform": "telegram",
+                    "provider_message_id": "5550001:42",
+                    "session_key": "agent:main:telegram:direct:5550001",
+                    "channel_id": "5550001",
+                    "direction": "INBOUND",
+                    "conversation_type": "DM",
+                    "sender_id": "5550001",
+                    "sender_name": "Jane",
+                    "content": "hello through the shared bot",
+                    "occurred_at": observed_at,
+                }
+            ],
+        }
+
+        with when("the observer reports health and a message as Telegram"):
+            response = context.ingest_client.post(
+                f"/ingest/v1/agents/{context.agent.id}/communication-events", json=payload, headers=_auth(context)
+            )
+
+        with then("both are recorded on the Agent Barn Telegram Connection"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            assert_that({entry.connection_id for entry in _journal(context)}, equal_to({context.connection.id}))
+            delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
+            with Session(delegate.engine) as session:
+                messages = list(
+                    session.exec(
+                        select(AgentChatMessage).where(col(AgentChatMessage.connection_id) == context.connection.id)
+                    ).all()
+                )
+            assert_that([message.content for message in messages], equal_to(["hello through the shared bot"]))

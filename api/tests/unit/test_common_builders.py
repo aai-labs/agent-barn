@@ -59,6 +59,16 @@ def test_service_exposes_the_private_teams_webhook_only_when_requested():
     ]
 
 
+def test_service_exposes_the_private_telegram_webhook_only_when_requested():
+    service = build_service(_AGENT_ID, _ORG_ID, _NS, include_telegram_webhook_port=True)
+
+    assert [(port.name, port.port, port.target_port) for port in service.spec.ports][-1] == (
+        "tg-webhook",
+        8443,
+        8443,
+    )
+
+
 def test_build_service_carries_org_name_slug_label():
     service = build_service(_AGENT_ID, _ORG_ID, _NS, org_name="Secure Capital Solutions!")
     assert_that(
