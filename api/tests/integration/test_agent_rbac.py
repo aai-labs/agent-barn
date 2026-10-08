@@ -885,6 +885,44 @@ def test_editor_can_delete_a_restore_point():
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
 
 
+def _managed_update_url(context) -> str:
+    return f"{_BASE}/{context.agent.id}/managed-update"
+
+
+def test_viewer_cannot_run_a_managed_update():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.post(_managed_update_url(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_member_without_access_gets_404_for_a_managed_update_not_403():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _switch_to_member()(context)
+
+        response = context.client.post(_managed_update_url(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_a_managed_update_needs_agent_update_too_because_its_rollback_replays_configuration():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        _switch_to_member()(context)
+        role = _insert_custom_agent_role(context, {PermissionKey.AGENT_READ, PermissionKey.AGENT_LIFECYCLE_MANAGE})
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=role.id)(context)
+
+        response = context.client.post(_managed_update_url(context), headers=_auth(context))
+
+        # Refused up front, not in the background task where it would leave the Agent in ERROR.
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        agent = context.injector.get(AgentRepository).get_by_id(context.agent.id)
+        assert_that(agent.status, equal_to(AgentStatus.RUNNING))
+        assert_that(agent.managed_update_heartbeat_at, equal_to(None))
+
+
 def test_member_without_access_gets_404_for_restore_points_not_403():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         _seed_ready_restore_point(context)

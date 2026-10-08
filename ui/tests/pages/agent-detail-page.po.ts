@@ -102,6 +102,10 @@ export class AgentDetailPage {
     return this.page.getByTestId("agent-update-button");
   }
 
+  updateOutcome(): Locator {
+    return this.page.getByTestId("agent-update-outcome");
+  }
+
   updateReleasesLink(): Locator {
     return this.page.getByTestId("agent-update-releases-link");
   }

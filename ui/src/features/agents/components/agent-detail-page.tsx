@@ -19,7 +19,7 @@ import { AgentAvatar } from "./agent-avatar";
 import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
-import { AgentUpdateBanner } from "./agent-update-banner";
+import { AgentUpdateBanner, AgentUpdateOutcomeNote } from "./agent-update-banner";
 import { StatusLine } from "./status-line";
 import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
@@ -208,7 +208,15 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               </div>
             </div>
 
-            {canManageLifecycle && <AgentUpdateBanner agent={agent} />}
+            {canManageLifecycle && (
+              <>
+                <AgentUpdateBanner agent={agent} />
+                <AgentUpdateOutcomeNote
+                  agent={agent}
+                  restorePointsHref={`${homeHref}/agents/${agent.id}/configuration?section=restore`}
+                />
+              </>
+            )}
 
             {/* The classified provisioning failure comes off the Agent itself, so
                 it renders on first paint and does not depend on health polling —
