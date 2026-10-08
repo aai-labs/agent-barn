@@ -19,6 +19,7 @@ import { usePlatformOrganization } from "../hooks/use-platform-organization";
 import { usePlatformOrganizationMembers } from "../hooks/use-platform-organization-members";
 import type { PlatformOrganizationMember } from "../schemas";
 import { LlmBudgetCard } from "./llm-budget-card";
+import { TrialCard } from "./trial-card";
 import { organizationInitials } from "./organization-detail-utils";
 
 function initialsOf(member: PlatformOrganizationMember) {
@@ -144,6 +145,8 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
       </div>
 
       <LlmBudgetCard organization={organization} />
+
+      <TrialCard organization={organization} />
 
       <div style={{ borderTop: "1px solid var(--line)" }} className="pt-8">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">

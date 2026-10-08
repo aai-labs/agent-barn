@@ -9,8 +9,9 @@ import { toast } from "sonner";
 import { useAuthActions } from "@/auth/hooks/use-auth-actions";
 import { LoginFormData, LoginSchema } from "@/auth/schemas";
 import { LogoMark } from "@/components/logo-mark";
+import { GoogleSignInButton, SignInError } from "@/features/onboarding/components/google-sign-in";
 
-export function LoginForm() {
+export function LoginForm({ signInError }: { signInError?: string | null }) {
   const router = useRouter();
   const { login, isLoggingIn } = useAuthActions();
   const {
@@ -59,6 +60,17 @@ export function LoginForm() {
           <p className="text-[13.5px] m-0" style={{ color: "var(--ink-3)" }}>
             Enter your credentials to continue.
           </p>
+        </div>
+
+        <div className="mb-5 flex flex-col gap-3">
+          <SignInError code={signInError} />
+          <GoogleSignInButton origin="login" />
+        </div>
+
+        <div className="mb-5 flex items-center gap-3 text-[12px]" style={{ color: "var(--ink-4)" }}>
+          <span className="h-px flex-1" style={{ background: "var(--line)" }} />
+          or use your password
+          <span className="h-px flex-1" style={{ background: "var(--line)" }} />
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} onKeyDown={onFormKeyDown}>
@@ -115,6 +127,12 @@ export function LoginForm() {
           </div>
         </form>
 
+        <p className="mb-0 mt-5 text-center text-[12.5px]" style={{ color: "var(--ink-3)" }}>
+          New here?{" "}
+          <Link href="/signup" style={{ color: "var(--accent-ink)" }}>
+            Create an account
+          </Link>
+        </p>
       </div>
 
       <p className="text-center text-[12.5px] mt-5 px-4" style={{ color: "var(--ink-4)" }}>

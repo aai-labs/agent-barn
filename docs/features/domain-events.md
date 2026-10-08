@@ -64,6 +64,8 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `platform.user_privilege.granted` — emitted atomically when Platform Privilege is granted.
 - `platform.user_privilege.revoked` — emitted atomically when Platform Privilege is revoked.
 - `platform.resource_limits.changed` — emitted atomically when a Platform Administrator changes a namespace quota ceiling, one event per ceiling that moved, naming the setting (`limits_memory_bytes`, `limits_cpu_cores`, `requests_memory_bytes` or `requests_cpu_cores`) with its previous and current value. The subject is the `SYSTEM` limits row. Not emitted when a save leaves the value unchanged.
+- `platform.trial_settings.changed` — emitted atomically when a Platform Administrator changes a trial setting (`credit_usd` or `agent_limit`), one event per setting that moved, with its previous and current value. The subject is the `SYSTEM` trial settings row. Not emitted when a save leaves the value unchanged.
+- `organization.trial.ended` — emitted atomically when a Platform Administrator ends a Trial Organization's trial. Not emitted when the Organization was not a trial.
 
 AF-167 broadens Security Audit Record coverage to additional mutations:
 

@@ -45,6 +45,7 @@ PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
+PLATFORM_TRIAL_SETTINGS_CHANGED = "platform.trial_settings.changed"
 API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
 USER_LOGGED_IN = "user.logged_in"
@@ -57,6 +58,7 @@ COMMUNICATION_DELIVERY_RECOVERED = "communication.delivery.recovered"
 ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED = "organization.llm_budget.threshold_reached"
 ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
 ORGANIZATION_LLM_BUDGET_CHANGED = "organization.llm_budget.changed"
+ORGANIZATION_TRIAL_ENDED = "organization.trial.ended"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
 AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
 AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
@@ -489,6 +491,29 @@ class PlatformUserPrivilegeChangedPayload(BaseModel):
     reason: str
 
 
+class OrganizationTrialEndedPayload(BaseModel):
+    """A Platform Administrator made a trial an ordinary Organization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    actor_display: str
+    subject_display: str
+
+
+class PlatformTrialSettingsChangedPayload(BaseModel):
+    """The trial credit a new trial Organization starts with, before and after."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    setting: str
+    previous: float
+    current: float
+
+
 class PlatformResourceLimitsChangedPayload(BaseModel):
     """One changed capacity limit, named by `setting`, with its before and after values.
 
@@ -609,6 +634,7 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_VALUE_SETTINGS_CHANGED, OrganizationValueSettingsChangedPayload),
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
         (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
+        (ORGANIZATION_TRIAL_ENDED, OrganizationTrialEndedPayload),
     ):
         registry.register(
             DomainEventDefinition(
@@ -794,6 +820,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_RESOURCE_LIMITS_CHANGED,
             schema_version=1,
             payload_model=PlatformResourceLimitsChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_TRIAL_SETTINGS_CHANGED,
+            schema_version=1,
+            payload_model=PlatformTrialSettingsChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )
