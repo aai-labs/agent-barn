@@ -176,6 +176,17 @@ def test_deployment_declares_explicit_resources_rather_than_inheriting_limitrang
     assert resources.limits == {"memory": "1Gi", "cpu": "500m"}
 
 
+def test_init_container_costs_no_more_quota_than_the_agent() -> None:
+    """A pod is charged the larger of its containers added up and its biggest init
+    container. Left without a block, the init container gets the LimitRange default,
+    which is above the agent's own and raises what every agent costs."""
+    deployment = build_deployment(_AGENT_ID, _ORG_ID, _NS, "openclaw:test")
+    pod = deployment.spec.template.spec
+    init = pod.init_containers[0]
+
+    assert init.resources == pod.containers[0].resources
+
+
 def test_deployment_recreates_rather_than_rolling_update() -> None:
     """replicas=1 on a ReadWriteOnce PVC: a RollingUpdate surge briefly wants two
     pods, doubling the agent's memory and deadlocking on the volume."""

@@ -9,6 +9,7 @@ import { formatPercent } from "@/features/costs/format";
 import { formatBytes, formatCores } from "../format";
 import type { PlatformAgentUsage } from "../schemas";
 import { THROTTLING_WARN_RATIO, usageRatio } from "../utils";
+import { LimitLabel } from "./limit-label";
 import { PlatformAgentDetails } from "./platform-agent-details";
 import { UsageMeter } from "./usage-meter";
 
@@ -36,7 +37,14 @@ function amount(agent: PlatformAgentUsage, key: SortKey): number {
  * Platform page. A row opens to the same Status and Resource usage panels the
  * Organization Usage page shows, without the Cost panel and without links.
  */
-export function PlatformAgentsUsageTable({ agents }: { agents: PlatformAgentUsage[] }) {
+export function PlatformAgentsUsageTable({
+  agents,
+  needUpdate,
+}: {
+  agents: PlatformAgentUsage[];
+  /** Agents that cannot report until they are updated, for the empty state to say so. */
+  needUpdate: number;
+}) {
   const [sortKey, setSortKey] = useState<SortKey>("memory");
   const [showAll, setShowAll] = useState(false);
   // Kept here, by Agent id, so a row stays open when the table is sorted or trimmed.
@@ -64,7 +72,13 @@ export function PlatformAgentsUsageTable({ agents }: { agents: PlatformAgentUsag
         style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-3)" }}
         data-testid="platform-agents-empty"
       >
-        No agent is reporting CPU or memory right now.
+        <p className="m-0">No agent is reporting CPU or memory right now.</p>
+        {needUpdate > 0 && (
+          <p className="m-0 mt-1.5" data-testid="platform-agents-need-update">
+            {needUpdate === 1 ? "1 agent is" : `${needUpdate} agents are`} running an older version. Their owners can
+            update them from the agent page to start reporting.
+          </p>
+        )}
       </div>
     );
   }
@@ -212,20 +226,49 @@ function AgentRow({
               {agent.memoryWorkingSetBytes !== null ? formatBytes(agent.memoryWorkingSetBytes) : "—"}
             </span>
             {agent.memoryLimitBytes !== null && (
-              <span style={{ color: "var(--ink-4)" }}> / {formatBytes(agent.memoryLimitBytes)}</span>
+              <span style={{ color: "var(--ink-4)" }}>
+                {" / "}
+                {formatBytes(agent.memoryLimitBytes)}
+                <LimitLabel />
+              </span>
             )}
-            <UsageMeter ratio={memoryRatio} label={`${agentLabel(agent)} memory`} className="mt-1" />
+            <UsageMeter
+              ratio={memoryRatio}
+              markerRatio={usageRatio(agent.memoryRequestBytes, agent.memoryLimitBytes)}
+              label={`${agentLabel(agent)} memory`}
+              className="mt-1"
+            />
+            {agent.memoryRequestBytes !== null && (
+              <div className="mt-0.5 text-[0.75rem]" style={{ color: "var(--ink-4)" }} data-testid="platform-agent-memory-request">
+                requests {formatBytes(agent.memoryRequestBytes)}
+              </div>
+            )}
           </div>
         </td>
         <td className="px-3 py-2.5">
           <div className="min-w-[8rem]">
             <span style={{ color: "var(--ink)" }}>
-              {agent.cpuCores !== null ? `${formatCores(agent.cpuCores)} cores` : "—"}
+              {agent.cpuCores !== null ? formatCores(agent.cpuCores) : "—"}
+              {agent.cpuLimitCores === null && agent.cpuCores !== null ? " cores" : ""}
             </span>
             {agent.cpuLimitCores !== null && (
-              <span style={{ color: "var(--ink-4)" }}> / {formatCores(agent.cpuLimitCores)}</span>
+              <span style={{ color: "var(--ink-4)" }}>
+                {" / "}
+                {formatCores(agent.cpuLimitCores)} cores
+                <LimitLabel />
+              </span>
             )}
-            <UsageMeter ratio={cpuRatio} label={`${agentLabel(agent)} CPU`} className="mt-1" />
+            <UsageMeter
+              ratio={cpuRatio}
+              markerRatio={usageRatio(agent.cpuRequestCores, agent.cpuLimitCores)}
+              label={`${agentLabel(agent)} CPU`}
+              className="mt-1"
+            />
+            {agent.cpuRequestCores !== null && (
+              <div className="mt-0.5 text-[0.75rem]" style={{ color: "var(--ink-4)" }} data-testid="platform-agent-cpu-request">
+                requests {formatCores(agent.cpuRequestCores)} cores
+              </div>
+            )}
           </div>
         </td>
         <td

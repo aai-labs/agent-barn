@@ -19,6 +19,14 @@ The namespace's ResourceQuota caps the total of every container's limits, and a 
 - The API now stores one thing for this feature: the ceilings. Usage itself is still never stored.
 - The ceilings are for the whole namespace, so the Organization filter does not narrow them.
 
+## Amendment, 2026-10-07: requests too, and init containers
+
+Origin: AF-170, from what staging showed after the page shipped.
+
+- **Requests count as much as limits.** The quota caps `requests.memory` and `requests.cpu` beside `limits.memory` and `limits.cpu`, and a new pod is refused when any one of the four would go over (a server-side dry run of a pod that exceeded only the CPU requests was refused, with its limits well under). On staging the requests ceilings (20 GiB, 5 cores) were the tight ones for CPU, and an administrator had typed them into the limits boxes. The dialog and the table now hold all four, named as the quota names them, and the page warns on whichever is nearest its ceiling. The two stored columns were renamed (`memory_limit_bytes` to `limits_memory_bytes`, `cpu_limit_cores` to `limits_cpu_cores`) and two added; this shipped to staging a day earlier and prod had no data, so the rename was cheap, and the saved values keep their meaning.
+- **A pod is charged the larger of its containers and its biggest init container.** The committed figure first read only the containers, and showed 34.06 GiB and 19.85 cores while the quota counted 42.56 GiB and 24.1 cores. The cause was an init container with no resources, which the namespace LimitRange filled with more than the agent itself had. The query now follows the rule (verified pod by pod against the quota on staging), and the agent's init container carries the agent's own resources, which frees about 8.5 GiB and 4.25 cores there.
+- The ceilings are still typed in. The way to read the quota's real values is a server-side dry run, not a grant, and it is a manual step, so the decision to enter them by hand stands.
+
 ## Revisit when
 
 The platform owners let our account read the ResourceQuota. The page could then show the real quota, and the typed ceilings would become an override or be removed.

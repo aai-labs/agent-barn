@@ -10,6 +10,7 @@ import {
   MOCK_SECOND_AGENT_ID,
   mockAgentOverview,
   mockOverviewItem,
+  mockResourceUsage,
   mockUsageSnapshot,
 } from "../pages/data-support/resource-usage-data-support.po";
 
@@ -62,6 +63,34 @@ test.describe("Agents overview", () => {
     await expect(maya.getByTestId("agents-overview-cpu")).toContainText("0.05 / 0.5 cores");
     await expect(maya.getByTestId("agents-overview-memory")).toContainText("342 MiB / 1 GiB");
     await expect(maya.getByRole("meter")).toHaveCount(2);
+  });
+
+  test("shows what an agent requests under its CPU and memory, with a tick on each meter", async () => {
+    await dataSupportPage.resourceUsage.interceptAgentOverview({
+      body: mockAgentOverview([
+        mockOverviewItem({
+          resource_usage: mockUsageSnapshot({ memory_request_bytes: 805_306_368, cpu_request_cores: 0.1 }),
+        }),
+      ]),
+    });
+    await overview.goto();
+
+    const maya = overview.row("Maya");
+    await expect(maya.getByTestId("agents-overview-memory-request")).toHaveText("requests 768 MiB");
+    await expect(maya.getByTestId("agents-overview-cpu-request")).toHaveText("requests 0.1 cores");
+    await expect(maya.getByTestId("usage-meter-request-marker")).toHaveCount(2);
+    // 768 MiB of a 1 GiB limit, and 0.1 of 0.5 cores.
+    await expect(maya.getByRole("meter").first()).toHaveAttribute("aria-label", /request at 20% of the limit/);
+    await expect(maya.getByRole("meter").nth(1)).toHaveAttribute("aria-label", /request at 75% of the limit/);
+  });
+
+  test("says nothing about requests for an agent whose request could not be read", async () => {
+    await overview.goto();
+
+    const maya = overview.row("Maya");
+    await expect(maya.getByTestId("agents-overview-memory-request")).toHaveCount(0);
+    await expect(maya.getByTestId("agents-overview-cpu-request")).toHaveCount(0);
+    await expect(maya.getByTestId("usage-meter-request-marker")).toHaveCount(0);
   });
 
   test("re-sorts by any column and says which way", async ({ page }) => {
@@ -189,7 +218,7 @@ test.describe("Agents overview", () => {
     await dataSupportPage.resourceUsage.interceptAgentOverview({ body: mockAgentOverview([stale]) });
     await overview.goto();
 
-    await expect(overview.row("Maya").getByText("Restart to report")).toHaveCount(2);
+    await expect(overview.row("Maya").getByText("Update to report")).toHaveCount(2);
   });
 
   test("keeps spend and status when the usage source cannot be reached", async ({ page }) => {
@@ -290,6 +319,21 @@ test.describe("Agents overview", () => {
         "href",
         /tab=resource-usage$/,
       );
+    });
+
+    test("shows the request in the resource usage panel, as a tick, a line and on the chart", async ({ page }) => {
+      await dataSupportPage.resourceUsage.interceptAgentResourceUsage(MOCK_AGENT_ID, {
+        body: mockResourceUsage({ memory_request_bytes: 805_306_368, cpu_request_cores: 0.05 }),
+      });
+      await overview.goto();
+
+      await overview.toggleFor("Maya").click();
+
+      const usage = page.getByTestId("agent-overview-usage");
+      await expect(usage.getByTestId("usage-panel-memory-request")).toHaveText("requests 768 MiB");
+      await expect(usage.getByTestId("usage-panel-cpu-request")).toHaveText("requests 0.05 cores");
+      await expect(usage.getByTestId("usage-meter-request-marker")).toHaveCount(2);
+      await expect(usage.getByText("Request", { exact: true })).toBeVisible();
     });
 
     test("shows the same spend in the row and in its cost panel", async ({ page }) => {
