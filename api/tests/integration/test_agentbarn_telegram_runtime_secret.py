@@ -55,6 +55,7 @@ def test_a_connection_gets_its_own_secret_once_and_keeps_it() -> None:
             second = _service(context).runtime_secret(context.second.id, create=True)
 
         with then("each Connection keeps one secret of its own, stored only encrypted"):
+            assert first is not None
             assert_that(again, equal_to(first))
             assert_that(second, is_not(equal_to(first)))
             assert_that(first, has_length(43))

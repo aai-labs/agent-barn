@@ -167,7 +167,6 @@ def _existing_agentbarn_telegram_connection():
                 platform_key="agentbarn_telegram",
                 display_name="Agent Barn Telegram",
                 credentials_encrypted="unused",
-                driver_key_encrypted="unused",
             )
         )
 

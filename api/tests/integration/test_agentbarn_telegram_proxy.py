@@ -48,7 +48,7 @@ class Telegram:
         return [request.url.path.rsplit("/", 1)[-1] for request in self.received]
 
 
-def _connection(key: str, driver_key: str):
+def _connection(key: str, connection_secret: str):
     def step(context):
         there_is_an_agent(name=key)(context)
         connection = CommunicationConnection(
@@ -57,11 +57,13 @@ def _connection(key: str, driver_key: str):
             platform_key="agentbarn_telegram",
             display_name="Agent Barn Telegram",
             credentials_encrypted="unused",
-            driver_key_encrypted=encrypt_token(driver_key, TEST_ENCRYPTION_KEY),
         )
         context.injector.get(PostgresRepositoryDelegate).save(connection)
+        context.injector.get(AgentBarnTelegramRepository).create_connection_secret(
+            connection.id, encrypt_token(connection_secret, TEST_ENCRYPTION_KEY)
+        )
         setattr(context, key, connection)
-        setattr(context, f"{key}_token", runtime_api_token(driver_key, _REAL_TOKEN))
+        setattr(context, f"{key}_token", runtime_api_token(connection_secret, _REAL_TOKEN))
 
     return step
 
@@ -104,8 +106,8 @@ _GIVEN = [
     database_repo_is_ready(),
     database_is_clean(),
     there_is_an_organization_with_user_and_access_token(),
-    _connection("sales", "sales-driver-key"),
-    _connection("support", "support-driver-key"),
+    _connection("sales", "sales-connection-secret"),
+    _connection("support", "support-connection-secret"),
     _link("sales", _JANE),
     _link("support", 5550002),
     _fake_telegram,
@@ -141,10 +143,10 @@ def _call(context, method: str, payload: dict | None = None, **kwargs) -> httpx.
 
 
 def test_each_connection_has_its_own_stand_in_token_shaped_like_a_bot_token() -> None:
-    sales = runtime_api_token("sales-driver-key", _REAL_TOKEN)
+    sales = runtime_api_token("sales-connection-secret", _REAL_TOKEN)
 
     assert sales.startswith("424242:")
-    assert sales != runtime_api_token("support-driver-key", _REAL_TOKEN)
+    assert sales != runtime_api_token("support-connection-secret", _REAL_TOKEN)
     assert "the-real-shared-bot-token" not in sales
 
 

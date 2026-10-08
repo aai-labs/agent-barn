@@ -14,10 +14,10 @@ from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import AgentStatus
 from api.domains.communications.agentbarn_telegram_processor import AgentBarnTelegramBot
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.models import AgentBarnTelegramUpdate
 from api.domains.communications.plugins.agentbarn_telegram import runtime_webhook_secret
 from api.domains.rbac.catalog import PermissionKey
-from api.infrastructure.crypto import decrypt_token
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,7 @@ class AgentBarnTelegramForwarder:
 
     config: Config
     repository: AgentBarnTelegramRepository
+    connection_secrets: AgentBarnTelegramService
     bot: AgentBarnTelegramBot
     authorization: AgentAuthorization
     client: httpx.Client = field(
@@ -151,7 +152,7 @@ class AgentBarnTelegramForwarder:
                 self._reply(update.telegram_user_id, _OFFLINE)
             self.repository.schedule_retry(update.update_id, at=now + _OFFLINE_RECHECK)
             return False
-        delivery = self._post(update, target.driver_key_encrypted)
+        delivery = self._post(update)
         if delivery == _Delivery.ACCEPTED:
             self.repository.mark_forwarded(update.update_id)
             return True
@@ -165,11 +166,17 @@ class AgentBarnTelegramForwarder:
         self.repository.schedule_retry(update.update_id, at=now + timedelta(seconds=delay))
         return False
 
-    def _post(self, update: AgentBarnTelegramUpdate, driver_key_encrypted: str) -> _Delivery:
+    def _post(self, update: AgentBarnTelegramUpdate) -> _Delivery:
+        assert update.connection_id is not None
+        connection_secret = self.connection_secrets.runtime_secret(update.connection_id, create=False)
+        if connection_secret is None:
+            # The Agent has not started with this Connection yet, so its pod has no
+            # Telegram webhook; wait for it as for a pod that is still starting.
+            return _Delivery.UNREACHABLE
         url = self.config.agentbarn_telegram_runtime_webhook_url.format(
             agent_id=update.agent_id, namespace=self.config.k8s_namespace
         )
-        secret = runtime_webhook_secret(decrypt_token(driver_key_encrypted, self.config.agent_token_encryption_key))
+        secret = runtime_webhook_secret(connection_secret)
         try:
             response = self.client.post(
                 url,

@@ -131,6 +131,7 @@ from api.domains.agents.selection import (
     is_model_allowed,
 )
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
 from api.domains.communications.plugins.agentbarn_telegram import (
     AgentBarnTelegramRuntime,
@@ -292,6 +293,7 @@ class AgentService:
     connection_repository: CommunicationConnectionRepository
     conversation_repository: ConversationRepository
     plugins: PlatformPluginRegistry
+    agentbarn_telegram_secrets: AgentBarnTelegramService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -1849,11 +1851,14 @@ class AgentService:
         connection = self.connection_repository.get_active_by_platform_key(agent_id, "agentbarn_telegram")
         if connection is None or not connection.enabled:
             return None
-        driver_key = decrypt_token(connection.driver_key_encrypted, self.config.agent_token_encryption_key)
+        # Created on the Agent's first start with this Connection and kept after
+        # that, so a restarted pod presents the same credentials.
+        connection_secret = self.agentbarn_telegram_secrets.runtime_secret(connection.id, create=True)
+        assert connection_secret is not None
         return AgentBarnTelegramRuntime(
             api_root=f"{self.config.communications_base_url.rstrip('/')}/telegram/{connection.id}",
-            api_token=runtime_api_token(driver_key, bot_token),
-            webhook_secret=runtime_webhook_secret(driver_key),
+            api_token=runtime_api_token(connection_secret, bot_token),
+            webhook_secret=runtime_webhook_secret(connection_secret),
             webhook_url=self.config.agentbarn_telegram_runtime_webhook_url.format(
                 agent_id=agent_id, namespace=self.config.k8s_namespace
             ),

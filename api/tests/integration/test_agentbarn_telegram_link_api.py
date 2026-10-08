@@ -263,7 +263,6 @@ def test_no_links_are_issued_once_the_shared_bot_is_unconfigured() -> None:
             platform_key="agentbarn_telegram",
             display_name="Agent Barn Telegram",
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
         context.injector.get(PostgresRepositoryDelegate).save(connection)
         context.existing = {"id": str(connection.id)}

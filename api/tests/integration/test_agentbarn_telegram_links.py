@@ -38,7 +38,6 @@ def _agent_with_connection(key: str, name: str):
             platform_key="agentbarn_telegram",
             display_name="Agent Barn Telegram",
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
         context.injector.get(PostgresRepositoryDelegate).save(connection)
         setattr(context, key, connection)

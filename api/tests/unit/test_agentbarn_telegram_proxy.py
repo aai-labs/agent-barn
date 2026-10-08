@@ -18,18 +18,17 @@ from api.domains.communications.agentbarn_telegram_proxy import (
 )
 from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
-from api.infrastructure.crypto import encrypt_token
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY
 
 _REAL_TOKEN = "424242:the-real-shared-bot-token"
-_DRIVER_KEY = "driver-key"
+_CONNECTION_SECRET = "root-secret-of-the-connection"
 
 
-def _proxy(handler) -> AgentBarnTelegramProxy:
+def _proxy(handler, *, connection_secret: str | None = _CONNECTION_SECRET) -> AgentBarnTelegramProxy:
     repository = Mock()
-    repository.proxy_connection.return_value = SimpleNamespace(
-        organization_id=uuid4(), driver_key_encrypted=encrypt_token(_DRIVER_KEY, TEST_ENCRYPTION_KEY)
-    )
+    repository.proxy_connection.return_value = SimpleNamespace(id=uuid4(), organization_id=uuid4())
+    connection_secrets = Mock()
+    connection_secrets.runtime_secret.return_value = connection_secret
     repository.linked_user_ids.return_value = {5550001}
     config = cast(
         Config,
@@ -40,14 +39,19 @@ def _proxy(handler) -> AgentBarnTelegramProxy:
             agentbarn_telegram_organization_rate_per_second=5,
         ),
     )
-    proxy = AgentBarnTelegramProxy(config=config, repository=repository, limits=AgentBarnTelegramRateLimits(config))
+    proxy = AgentBarnTelegramProxy(
+        config=config,
+        repository=repository,
+        connection_secrets=connection_secrets,
+        limits=AgentBarnTelegramRateLimits(config),
+    )
     proxy.client = httpx.Client(transport=httpx.MockTransport(handler))
     return proxy
 
 
 def _call(proxy: AgentBarnTelegramProxy, method: str, params: dict | None = None):
     return proxy.handle(
-        uuid4(), runtime_api_token(_DRIVER_KEY, _REAL_TOKEN), method, request=BotApiRequest(params=params or {})
+        uuid4(), runtime_api_token(_CONNECTION_SECRET, _REAL_TOKEN), method, request=BotApiRequest(params=params or {})
     )
 
 
@@ -95,7 +99,7 @@ def test_only_plain_file_paths_are_fetched(file_path: str) -> None:
         return httpx.Response(200, content=b"x")
 
     proxy = _proxy(telegram)
-    downloaded = proxy.download(uuid4(), runtime_api_token(_DRIVER_KEY, _REAL_TOKEN), file_path)
+    downloaded = proxy.download(uuid4(), runtime_api_token(_CONNECTION_SECRET, _REAL_TOKEN), file_path)
 
     assert downloaded.status_code == 404
     assert requests == []
@@ -158,3 +162,14 @@ def test_reply_parameters_sent_as_text_are_forwarded_as_read() -> None:
 @pytest.mark.parametrize("chat_id", ["123\n", "\u0661\u0662\u0663", " 123", "+123"])
 def test_only_plain_ascii_chat_ids_are_accepted(chat_id: str) -> None:
     assert AgentBarnTelegramProxy._named_chats({"chat_id": chat_id}) is None
+
+
+def test_a_connection_whose_agent_never_started_with_it_cannot_use_the_proxy() -> None:
+    # Without a stored secret there is no stand-in token to accept, whatever is presented.
+    requests: list[httpx.Request] = []
+    proxy = _proxy(lambda request: requests.append(request) or httpx.Response(200), connection_secret=None)
+
+    response = _call(proxy, "sendMessage", {"chat_id": 5550001, "text": "hi"})
+
+    assert response.status_code == 401
+    assert requests == []

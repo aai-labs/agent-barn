@@ -53,7 +53,6 @@ class ForwardTarget:
     agent_status: AgentStatus | None
     # False once the Connection is retired, disabled, or its Agent deleted.
     in_use: bool
-    driver_key_encrypted: str
     # The sender's active link to this Connection; None once they were unlinked or switched.
     link: AgentBarnTelegramLink | None
 
@@ -438,7 +437,6 @@ class AgentBarnTelegramRepository:
             return ForwardTarget(
                 agent_status=status,
                 in_use=deleted_at is None and connection.enabled and connection.retired_at is None,
-                driver_key_encrypted=connection.driver_key_encrypted,
                 link=link,
             )
 

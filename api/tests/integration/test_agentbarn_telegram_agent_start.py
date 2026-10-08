@@ -7,6 +7,7 @@ from hamcrest import assert_that, contains_string, equal_to, has_item, is_not
 from starlette.testclient import TestClient
 
 from api.domains.agents.models import AgentType
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.models import CommunicationConnection
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token, runtime_webhook_secret
 from api.infrastructure.crypto import encrypt_token
@@ -26,7 +27,6 @@ from api.tests.steps.organization import there_is_an_organization_with_user_and_
 from api.tests.steps.template import there_is_a_template
 
 _REAL_TOKEN = "424242:the-real-shared-bot-token"
-_DRIVER_KEY = "driver-key-of-the-connection"
 _COMMUNICATIONS = "http://communications.test:8002/communications/v1"
 
 
@@ -67,11 +67,17 @@ def _agentbarn_telegram_connection(*, enabled: bool = True):
             display_name="Agent Barn Telegram",
             enabled=enabled,
             credentials_encrypted=encrypt_token("{}", TEST_ENCRYPTION_KEY),
-            driver_key_encrypted=encrypt_token(_DRIVER_KEY, TEST_ENCRYPTION_KEY),
         )
         context.injector.get(PostgresRepositoryDelegate).save(context.connection)
 
     return step
+
+
+def _connection_secret(context) -> str:
+    """The secret starting the Agent created for its Connection."""
+    secret = context.injector.get(AgentBarnTelegramService).runtime_secret(context.connection.id, create=False)
+    assert secret is not None
+    return secret
 
 
 def _start(context) -> int:
@@ -107,8 +113,9 @@ def test_hermes_uses_agentbarn_telegram_through_the_proxy_without_the_real_token
                 config["platforms"]["telegram"]["extra"],
                 equal_to({"base_url": f"{api_root}/bot", "base_file_url": f"{api_root}/file/bot"}),
             )
-            assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to(runtime_api_token(_DRIVER_KEY, _REAL_TOKEN)))
-            assert_that(secret["TELEGRAM_WEBHOOK_SECRET"], equal_to(runtime_webhook_secret(_DRIVER_KEY)))
+            connection_secret = _connection_secret(context)
+            assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to(runtime_api_token(connection_secret, _REAL_TOKEN)))
+            assert_that(secret["TELEGRAM_WEBHOOK_SECRET"], equal_to(runtime_webhook_secret(connection_secret)))
             assert_that(
                 secret["TELEGRAM_WEBHOOK_URL"],
                 equal_to(f"http://agent-{context.agent.id}.agent-farm.svc.cluster.local:8443/telegram"),
@@ -135,15 +142,20 @@ def test_openclaw_uses_agentbarn_telegram_through_the_proxy_without_the_real_tok
             assert_that(telegram["apiRoot"], equal_to(f"{_COMMUNICATIONS}/telegram/{context.connection.id}"))
             assert_that(telegram["webhookSecret"], equal_to("${AGENTBARN_TELEGRAM_WEBHOOK_SECRET}"))
             assert_that(telegram["groupPolicy"], equal_to("disabled"))
-            assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to(runtime_api_token(_DRIVER_KEY, _REAL_TOKEN)))
-            assert_that(secret["AGENTBARN_TELEGRAM_WEBHOOK_SECRET"], equal_to(runtime_webhook_secret(_DRIVER_KEY)))
+            connection_secret = _connection_secret(context)
+            assert_that(secret["TELEGRAM_BOT_TOKEN"], equal_to(runtime_api_token(connection_secret, _REAL_TOKEN)))
+            assert_that(
+                secret["AGENTBARN_TELEGRAM_WEBHOOK_SECRET"], equal_to(runtime_webhook_secret(connection_secret))
+            )
             assert_that(secret["AGENTBARN_NATIVE_CHANNELS"].split(","), has_item("telegram"))
             assert_that(ports, has_item("tg-webhook"))
 
         with then("the shared bot's real token and the webhook secret stay out of the ConfigMap"):
             assert_that(json.dumps(secret), is_not(contains_string("the-real-shared-bot-token")))
             assert_that(json.dumps(config_map), is_not(contains_string("the-real-shared-bot-token")))
-            assert_that(json.dumps(config_map), is_not(contains_string(runtime_webhook_secret(_DRIVER_KEY))))
+            assert_that(
+                json.dumps(config_map), is_not(contains_string(runtime_webhook_secret(_connection_secret(context))))
+            )
 
 
 def test_a_turned_off_connection_leaves_telegram_out() -> None:
@@ -184,3 +196,15 @@ def test_agents_report_agentbarn_telegram_as_runtime_owned() -> None:
         )
 
         assert_that(response.json()["native_platform_keys"], has_item("agentbarn_telegram"))
+
+
+def test_restarting_an_agent_keeps_its_connection_secret() -> None:
+    with given([*_given(), there_is_an_agent(), _agentbarn_telegram_connection()]) as context:
+        with when("the Agent starts, and starts again"):
+            _start(context)
+            first = _created(context)[1]["TELEGRAM_BOT_TOKEN"]
+            _start(context)
+            second = _created(context)[1]["TELEGRAM_BOT_TOKEN"]
+
+        with then("its stand-in token stays the same, so a running pod keeps working"):
+            assert_that(second, equal_to(first))

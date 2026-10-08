@@ -4,14 +4,15 @@ from datetime import UTC, datetime, timedelta
 from itertools import count
 
 import httpx
-from hamcrest import assert_that, contains_exactly, equal_to, has_properties, none
-from sqlmodel import Session, col, select
+from hamcrest import assert_that, contains_exactly, equal_to, has_properties, is_not, none
+from sqlmodel import Session, col, delete, select
 
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.communications.agentbarn_telegram_forwarder import AgentBarnTelegramForwarder
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.agentbarn_telegram_service import hash_link_token
 from api.domains.communications.models import (
+    AgentBarnTelegramConnectionSecret,
     AgentBarnTelegramUpdate,
     AgentBarnTelegramUpdateStatus,
     CommunicationConnection,
@@ -29,7 +30,7 @@ from api.tests.steps.organization import there_is_an_organization_with_user_and_
 
 _JANE = 5550001
 _SAM = 7770007
-_DRIVER_KEY = "driver-key-for-the-test-connection"
+_CONNECTION_SECRET = "root-secret-of-the-test-connection"
 
 
 class RecordingBot:
@@ -67,9 +68,11 @@ def _agent(status: AgentStatus):
             platform_key="agentbarn_telegram",
             display_name="Agent Barn Telegram",
             credentials_encrypted="unused",
-            driver_key_encrypted=encrypt_token(_DRIVER_KEY, TEST_ENCRYPTION_KEY),
         )
         context.injector.get(PostgresRepositoryDelegate).save(context.connection)
+        context.injector.get(AgentBarnTelegramRepository).create_connection_secret(
+            context.connection.id, encrypt_token(_CONNECTION_SECRET, TEST_ENCRYPTION_KEY)
+        )
         context.bot = RecordingBot()
         context.injector.get(AgentBarnTelegramForwarder).bot = context.bot
 
@@ -167,7 +170,7 @@ def test_a_queued_message_reaches_its_agent_with_the_connection_secret() -> None
             request = pod.received[0]
             assert_that(str(request.url), equal_to(f"http://agent-{context.agent.id}.trials.test:8443/telegram"))
             assert_that(
-                request.headers["X-Telegram-Bot-Api-Secret-Token"], equal_to(runtime_webhook_secret(_DRIVER_KEY))
+                request.headers["X-Telegram-Bot-Api-Secret-Token"], equal_to(runtime_webhook_secret(_CONNECTION_SECRET))
             )
             assert_that(json.loads(request.content)["update_id"], equal_to(update_id))
             assert_that(
@@ -451,3 +454,20 @@ def test_a_replica_that_no_longer_holds_the_lease_delivers_nothing() -> None:
         with then("the update stays queued for the new holder"):
             assert_that(pod.received, equal_to([]))
             assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))
+
+
+def test_an_agent_not_yet_started_with_the_connection_is_retried_not_contacted() -> None:
+    with given(_given()) as context:
+        update_id = _queue(context, "hello")
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            session.exec(delete(AgentBarnTelegramConnectionSecret))  # type: ignore[call-overload]
+            session.commit()
+        pod = Pod()
+
+        with when("the forwarder runs before the Agent has started with its Connection"):
+            _forward(context, pod)
+
+        with then("nothing is sent without the Connection's secret, and the update waits to be retried"):
+            assert_that(pod.received, equal_to([]))
+            assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))
+            assert_that(_row(context, update_id).next_attempt_at, is_not(none()))

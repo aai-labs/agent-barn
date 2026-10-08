@@ -17,8 +17,8 @@ from injector import inject, singleton
 from api.core.config import Config
 from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
-from api.infrastructure.crypto import decrypt_token
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +215,7 @@ class AgentBarnTelegramProxy:
 
     config: Config
     repository: AgentBarnTelegramRepository
+    connection_secrets: AgentBarnTelegramService
     limits: AgentBarnTelegramRateLimits
     client: httpx.Client = field(default_factory=lambda: httpx.Client(timeout=_TIMEOUT_SECONDS), init=False)
     _bot: dict[str, Any] | None = field(default=None, init=False)
@@ -301,8 +302,11 @@ class AgentBarnTelegramProxy:
         real_token = self.config.agentbarn_telegram_bot_token.strip()
         if connection is None or not real_token:
             return None
-        driver_key = decrypt_token(connection.driver_key_encrypted, self.config.agent_token_encryption_key)
-        if not secrets.compare_digest(token, runtime_api_token(driver_key, real_token)):
+        # An Agent that never started with this Connection has no stand-in token to present.
+        connection_secret = self.connection_secrets.runtime_secret(connection.id, create=False)
+        if connection_secret is None or not secrets.compare_digest(
+            token, runtime_api_token(connection_secret, real_token)
+        ):
             return None
         return real_token, connection.organization_id
 
