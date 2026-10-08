@@ -112,6 +112,16 @@ Agents so they receive the current configuration and fresh credentials. Runtime
 startup waits briefly for authenticated gateway health before loading the plugin;
 native memory remains available when the gateway is unavailable.
 
+The memory command and save/recall instructions are API-owned runtime configuration too.
+After deploying an instruction change, use the normal Agent **Update** or stop/start
+flow for existing opted-in Agents, in batches to limit interruption. A deployment
+alone does not refresh their running configuration. Verify a shared-save request
+in a fresh conversation: the writer must report acceptance, then the fact must
+appear in Organization Memory after asynchronous extraction. A restart preserves
+private memories; it does not publish them to Organization Memory. Also verify
+an explicit recall of a known fact from a currently granted source Agent. Grant
+changes themselves apply on the next search and require no restart.
+
 Helmfile always deploys the backend and gateway. For an operator-run deployment,
 provide `HINDSIGHT_DB_PASSWORD`, `HINDSIGHT_API_KEY`, and
 `MEMORY_RUNTIME_SERVICE_KEY` in `.env.deploy`, using distinct values, then run
