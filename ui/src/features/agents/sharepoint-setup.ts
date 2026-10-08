@@ -25,6 +25,8 @@ export const MICROSOFT_GUIDES = {
   applicationPermission:
     "https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-configure-app-access-web-apis#application-permission-to-microsoft-graph",
   adminConsent: "https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent",
+  blockDeviceCode:
+    "https://learn.microsoft.com/en-us/entra/identity/conditional-access/policy-block-authentication-flows",
 } as const;
 
 // Selected-sites mode: an application permission that reaches only sites granted one by one,

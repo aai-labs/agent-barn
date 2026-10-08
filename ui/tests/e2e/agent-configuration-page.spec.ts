@@ -1212,6 +1212,9 @@ test.describe("Agent configuration page", () => {
       await expect(guide.getByText("Sites.ReadWrite.All")).toHaveCount(0);
       await expect(guide.getByText(REDIRECT_URI)).toBeVisible();
       await expect(guide.getByRole("button", { name: "Approve as an administrator" })).toBeVisible();
+      // The app allows public client flows, so device code sign-in must be blocked for it.
+      await expect(guide.getByText("Block device code sign-in", { exact: false })).toBeVisible();
+      await expect(guide.getByText("only these permissions", { exact: false })).toBeVisible();
     });
 
     test("grants selected sites with an administrator's sign-in", async ({ page }) => {

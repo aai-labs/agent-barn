@@ -162,9 +162,10 @@ def test_start_agent_with_selected_sites_fetches_tokens_from_the_platform(agent_
             secret = k8s.create_secret.call_args.args[1]
             assert_that("AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN" in secret.string_data, equal_to(False))
 
-        with then("the Teams app's secret never reaches the pod"):
-            everything = "\n".join([*config_map.data.values(), *secret.string_data.values()])
-            assert_that(everything, is_not(contains_string(TEAMS_APP_PASSWORD)))
+        with then("the Teams app's secret reaches the pod only as native Teams' bot credential"):
+            bot_secret_key = "MSTEAMS_APP_PASSWORD" if agent_type == AgentType.OPENCLAW else "TEAMS_CLIENT_SECRET"
+            others = [value for key, value in secret.string_data.items() if key != bot_secret_key]
+            assert_that("\n".join([*config_map.data.values(), *others]), is_not(contains_string(TEAMS_APP_PASSWORD)))
 
         with then("the agent is told which sites it can reach"):
             assert_that(config_map.data["TOOLS.md"], contains_string(_FINANCE))

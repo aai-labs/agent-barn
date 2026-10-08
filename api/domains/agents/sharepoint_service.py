@@ -699,8 +699,10 @@ class SharePointService:
         """A short-lived app-only token for an agent in selected-sites mode.
 
         It reaches only the sites granted to the agent's Teams app. Minted here with the Teams
-        app's secret, which never leaves the API. Callers authenticate the agent first (its
-        ingest key); there is no user here.
+        app's secret, so aai-cli needs no Microsoft credential. Not a security boundary: native
+        Teams gives the pod the same secret, for the bot, and any token minted with it reaches
+        the same sites. Callers authenticate the agent first (its ingest key); there is no user
+        here.
         """
         content = self._stored_content(agent_id)
         if content is None:

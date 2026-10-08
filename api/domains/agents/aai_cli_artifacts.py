@@ -60,8 +60,8 @@ SHAREPOINT_REFRESH_TOKEN_SECRET = "microsoft.sharepoint_refresh_token"
 SHAREPOINT_SIGN_IN_ID_ENV = "AAI_SHAREPOINT_SIGN_IN_ID"
 
 # aai-cli secret-store name for the agent's platform key (its ingest key). A ``token_url``
-# profile presents it to fetch short-lived tokens from the API, so the credential behind them
-# never reaches the pod. Used by SharePoint's selected-sites mode.
+# profile presents it to fetch short-lived tokens from the API, so aai-cli holds no Microsoft
+# credential of its own. Used by SharePoint's selected-sites mode.
 PLATFORM_KEY_SECRET = "agentfarm.ingest_key"
 
 # Default config dir for OpenClaw (node user). Callers can pass a different home_dir for other

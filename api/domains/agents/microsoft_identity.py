@@ -151,7 +151,8 @@ class MicrosoftIdentityClient:
     def client_credentials(self, *, tenant_id: str, client_id: str, client_secret: str) -> MicrosoftTokens:
         """An app-only Graph token for the app itself, carrying its consented application permissions.
 
-        Server-side only: the secret is the Teams bot's identity and never leaves the API.
+        The secret is the Teams bot's identity. Native Teams also gives it to the agent's pod, for
+        the bot, so a token minted here grants nothing the pod couldn't get itself.
         """
         return self._token(
             tenant_id,

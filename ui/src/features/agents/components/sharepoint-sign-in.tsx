@@ -241,6 +241,19 @@ function TeamsAppSetupGuide({
             <ExternalLink href={MICROSOFT_GUIDES.adminConsent}>Microsoft&apos;s guide</ExternalLink>
           </Links>
         </Step>
+
+        {selectedSites && (
+          <Step n={6} title="Keep the app limited">
+            <Note>
+              The agent can use the app&apos;s own permissions, so give the app only these permissions and
+              nothing else. Block device code sign-in for the app with a Conditional Access policy, so the
+              agent can&apos;t get an administrator&apos;s access by asking someone to sign in on its behalf.
+            </Note>
+            <Links>
+              <ExternalLink href={MICROSOFT_GUIDES.blockDeviceCode}>Microsoft&apos;s guide</ExternalLink>
+            </Links>
+          </Step>
+        )}
       </ol>
     </div>
   );
