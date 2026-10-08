@@ -139,6 +139,7 @@ from api.domains.communications.plugins.agentbarn_telegram import (
 )
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
@@ -563,8 +564,7 @@ class AgentService:
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
-            # Agent Barn Telegram has no gateway path, so it is runtime-owned everywhere.
-            native_platform_keys=sorted(self.config.native_platform_keys | {"agentbarn_telegram"}),
+            native_platform_keys=sorted(NATIVE_PLATFORM_KEYS),
             allowed_actions=allowed_actions or [],
             creator=creator,
             last_message_at=last_message_at,
@@ -1827,7 +1827,7 @@ class AgentService:
         platform_key: str,
     ) -> _NativeConnectionConfiguration | None:
         """Load an enabled Connection configured for native runtime transport."""
-        if platform_key not in self.config.native_platform_keys:
+        if platform_key not in NATIVE_PLATFORM_KEYS:
             return None
         connection = self.connection_repository.get_active_by_platform_key(agent_id, platform_key)
         if connection is None or not connection.enabled:
@@ -1840,9 +1840,8 @@ class AgentService:
     def _agentbarn_telegram_runtime(self, agent_id: UUID) -> AgentBarnTelegramRuntime | None:
         """Runtime settings for an enabled Agent Barn Telegram Connection.
 
-        Always runtime-owned, whatever COMMUNICATIONS_NATIVE_PLATFORMS says. The
-        runtime gets a stand-in token and the proxy's address; the shared bot's
-        real token never leaves the Communications process.
+        The runtime gets a stand-in token and the proxy's address; the shared
+        bot's real token is only ever sent to Telegram, by the Communications process.
         """
         bot_token = self.config.agentbarn_telegram_bot_token.strip()
         if not bot_token or not self.config.agentbarn_telegram_bot_username.strip():
@@ -1870,7 +1869,7 @@ class AgentService:
         if target:
             plugin = self.plugins.require("slack")
             try:
-                # Same resolution and allowlist policy as gateway-delivered sends.
+                # Resolve the native home target through the Connection recipient policy.
                 home_channel = plugin.resolve_outbound_target(
                     plugin.settings_model.model_validate(connection.settings),
                     plugin.credentials_model.model_validate(connection.credentials),

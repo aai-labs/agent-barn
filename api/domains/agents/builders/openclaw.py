@@ -60,11 +60,8 @@ OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
 OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
 OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
-
-_MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
-AGENTBARN_MESSAGE_PY: str = (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text()
-OPENCLAW_MESSAGING_JS: str = (_MESSAGE_SCRIPTS / "openclaw-messaging.js").read_text()
 
 
 def _openclaw_config_core(
@@ -105,17 +102,15 @@ def _openclaw_config_core(
         # multi-user Agent would carry one person's private conversation into the next.
         "session": {"dmScope": "per-channel-peer"},
         "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-messaging"],
+            "allow": ["memory-core", "active-memory", "telemetry-push"],
             "load": {
                 "paths": [
                     "/home/node/.openclaw/local-plugins/telemetry-push",
-                    "/home/node/.openclaw/local-plugins/agentbarn-messaging",
                 ]
             },
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
-                "agentbarn-messaging": {"enabled": True},
                 "active-memory": {
                     "enabled": True,
                     "config": {
@@ -341,8 +336,6 @@ def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, st
     """Secret entries for native channel tokens and the observer."""
     env = {
         "AGENTBARN_NATIVE_CHANNELS": ",".join(credentials_by_platform),
-        # The native gateway delivers scheduled results to their origin or defaultTo.
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     if slack := credentials_by_platform.get("slack"):
         env["SLACK_BOT_TOKEN"] = slack["bot_token"]
@@ -404,8 +397,7 @@ def build_config_map(
         data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
-        data["agentbarn_message.py"] = AGENTBARN_MESSAGE_PY
-        data["openclaw-messaging.js"] = OPENCLAW_MESSAGING_JS
+        data["retire-messaging.py"] = RETIRE_MESSAGING_PY
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:

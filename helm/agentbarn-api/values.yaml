@@ -88,11 +88,6 @@ prometheus:
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""
 
-# Comma-separated Platform keys handled by the Agent runtime's native gateway,
-# e.g. "slack,discord". Empty keeps every Platform on the Communications
-# Gateway, providing an environment-level rollback switch.
-communicationsNativePlatforms: ""
-
 # Agent Barn's own Telegram bot (token from @BotFather, and its @username without
 # the @). Empty hides the Agent Barn Telegram Platform. Use a separate bot per
 # environment: Telegram lets only one deployment poll a bot.

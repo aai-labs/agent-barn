@@ -1,10 +1,10 @@
 # Chat platforms use native runtime gateways, observed by Agent Barn
 
-Status: Proposed
+Status: Accepted
 Date: 2026-09-16
-Origin: maintainer decision; partially supersedes [2026-08-22-agent-barn-owned-communications-gateway](2026-08-22-agent-barn-owned-communications-gateway.md) once accepted
+Origin: maintainer decision; partially supersedes [2026-08-22-agent-barn-owned-communications-gateway](2026-08-22-agent-barn-owned-communications-gateway.md)
 
-Slack, Discord, Telegram, and then Microsoft Teams Communication Connections move back to the Agent runtime's native gateway. The runtime owns provider transport, sessions, approvals, slash commands, scheduled delivery, and progress. Agent Barn still owns the Connection record (credentials, allowlists, UI, and RBAC) and keeps Connection Journal visibility through runtime hooks. The reason is the cost of parity: driving runtimes through their HTTP APIs forced Agent Barn to rebuild, per platform, features the native gateways already ship. Examples are session resume, cron delivery to origin, BOOT.md, and approval buttons (AF-299 and AF-325, where Discord alone took three defect rounds). Every runtime upgrade also risked the image patches that made those rebuilds possible.
+Slack, Discord, Telegram, and Microsoft Teams Communication Connections move back to the Agent runtime's native gateway. The runtime owns provider transport, sessions, approvals, slash commands, scheduled delivery, and progress. Agent Barn still owns the Connection record (credentials, allowlists, UI, and RBAC) and keeps Connection Journal visibility through runtime hooks. The reason is the cost of parity: driving runtimes through their HTTP APIs forced Agent Barn to rebuild, per platform, features the native gateways already ship. Examples are session resume, cron delivery to origin, BOOT.md, and approval buttons (AF-299 and AF-325, where Discord alone took three defect rounds). Every runtime upgrade also risked the image patches that made those rebuilds possible.
 
 ## Considered alternatives
 
@@ -13,41 +13,19 @@ Slack, Discord, Telegram, and then Microsoft Teams Communication Connections mov
 
 ## Consequences
 
-- A Connection has a transport: `gateway` or `native`. Web Chat and Email stay on the Communications Gateway because they have no native equivalent. Telegram follows Slack and Discord.
+- Transport ownership is code-owned by the shipped Platform definition, not selected per Connection or by a deployment allowlist. All four chat Platforms use native transport on both Hermes and OpenClaw, with no gateway fallback. Web Chat and Email retain the Communications Gateway because they have no native equivalent.
 - Native Connections lose Postgres-authoritative at-least-once delivery, dead-letter retry, and in-place reconnect. The runtime's own delivery ledger and reconnect loop replace them. Recovery becomes an Agent restart, and credential changes require a rollout.
-- Journal entries, health, and delivery status for native Connections are runtime-reported and best-effort, and they stay content-free. The same authenticated runtime observer may separately mirror normalized inbound and outbound transcript messages into Agent Barn's existing conversation history, where normal Agent-conversation authorization and retention apply. Mirrored Communication Deliveries are never claimable or retryable.
-- Teams keeps its registered Azure messaging endpoint. The product API verifies the Bot Framework token and relays the activity, with its authorization header, to the Agent pod over the cluster network, so no Agent pod is publicly exposed.
-- Hermes is adopted first because its pinned image ships Slack, Discord, and Teams adapters with native approvals. OpenClaw follows with the official Slack, Discord, and Microsoft Teams channel packages published for its pinned core; Telegram remains bundled in the core, so no core upgrade is needed.
+- Native Connection Journal entries and health are runtime-reported, best-effort, and content-free. The authenticated runtime observer may separately mirror normalized transcript messages into existing conversation history, where Agent-conversation authorization and retention apply. Observation creates no Communication Delivery rows and cannot become a claim or retry path.
+- Teams keeps its registered Azure messaging endpoint. The product API verifies the Bot Framework token, applies Connection admission policy, and relays the activity with its authorization header to the Agent pod over the cluster network, so no Agent pod is publicly exposed.
+- Agent Barn continues to own Connection configuration, credentials, authorization, and shipped Platform Plugins. Native channel packages and runtime observers remain supported independently of the retired gateway transports and custom messaging bridge.
+
+The [runtime architecture](../architecture/runtime-and-deployment.md#platform-plugin-boundary) owns the current transport, policy projection, observation, and recovery contract. The [Communications change log](../features/communications/CHANGELOG.md) records the Hermes-first adoption, OpenClaw adoption, and subsequent fallback retirement. The [rollout runbook](../guidelines/operations.md#native-runtime-gateway-rollout) owns compatibility cutoffs and retained historical state.
 
 ## Revisit when
 
-- The Phase 1 spike cannot correlate native gateway hooks to per-message Journal stages or Connection health without patching the runtime.
-- A native adapter cannot enforce the Connection's allowlist policy before dispatch.
+- Native runtime hooks cannot provide required Connection Journal correlation or health without patching the runtime.
+- A native adapter cannot enforce the Connection's admission policy before dispatch.
 
-## Phase 1 implementation note
+## Agent Barn Telegram (AF-367)
 
-The Hermes Slack spike uses a deployment-level native Platform allowlist rather than the final per-Connection transport field. When Slack is native, Agent Barn excludes it from supervised ingress, expired-lease recovery, and runtime delivery claims. Hermes owns scheduled delivery for the whole runtime: the Agent Barn scheduler capture and persisted spool drain are both disabled, including for other Platforms on that Agent.
-
-## Phase 2 implementation note
-
-Discord uses the same deployment-level cutoff and observer. Agent Barn adopts Hermes' native Discord authorization surface—global user, role, and channel allowlists plus Allow all users—rather than maintaining distinct guild and DM policies Hermes cannot represent. Agent Barn projects these gates directly into Hermes; the observer reports content-free Connection Journal telemetry only and does not make admission decisions.
-
-## Phase 3 implementation note
-
-OpenClaw uses the same deployment-level cutoff, now applied regardless of runtime. Agent start installs the official Slack and Discord plugins from npm at the core's version (OpenClaw 2026.8 grants plugin state only to recorded npm installs, not to packages loaded by path) and configures them with a `channels.slack`/`channels.discord` block projected from the Connection; tokens stay in the Secret. Discord's global gates map onto OpenClaw's wildcard guild entry. An `agentbarn-observer` plugin reports content-free message, run, and send stages from OpenClaw hooks, and the pod's health server reports channel health from the gateway's own health snapshot. OpenClaw command approvals stay off, as before.
-
-## Transcript mirroring implementation note
-
-Native observers submit transcript messages alongside their content-free Journal events through the existing Agent-authenticated ingest endpoint. The ingest service resolves the active Connection from the authenticated Agent and platform, then upserts the existing `AgentChatMessage` rows by the provider message identifier. This preserves dashboard history without making message content part of the Connection Journal or creating claimable Communication Deliveries.
-
-## Phase 4 implementation note
-
-Telegram uses the same deployment-level cutoff and observer on both runtimes, and keeps Agent Barn's existing DM and group settings rather than adopting a runtime surface. Group messages now require a mention or a reply to the bot; DMs do not. Hermes authorizes a sender when any of its gates admits them, so the projection combines a chat allowlist, a group chat authorization list, the user allowlist or allow-all flag, and an empty group sender allowlist when groups are closed; `hermes-base/test-image.sh` proves each policy combination through the pinned adapter and gateway authorization chain. OpenClaw bundles Telegram in its core package, so nothing is installed; the Connection maps onto `channels.telegram` with `groups` as the group allowlist and `groupPolicy: "open"` admitting any member of an allowed group.
-
-## Phase 5 implementation note
-
-Teams uses the same deployment-level cutoff but retains its public Connection webhook. The API owns a focused Teams relay at that stable URL: it verifies the Bot Framework JWT and applies the Connection's DM/channel policy before relaying the untouched activity and Authorization header to the Agent's private ClusterIP Service on port 3978. Rejected activities are acknowledged without reaching the runtime, and an unavailable runtime returns 503 so Bot Framework can retry. The runtime returns the Bot Framework HTTP response through the relay, preserving `invoke` responses used by native approval cards. Gateway-owned Teams remains a rollback path, proxied to Communications only while `teams` is absent from the native allowlist. Hermes reads `TEAMS_*` credentials and listens on `/api/messages`; OpenClaw reads its documented `MSTEAMS_*` environment variables and runs the official `@openclaw/msteams` plugin. Both observers report the product Platform key `teams`, even though OpenClaw's internal channel key is `msteams`.
-
-## Agent Barn Telegram implementation note (AF-367)
-
-Agent Barn Telegram lets Organizations, initially trial clients, use one Telegram bot owned by Agent Barn instead of bringing their own. A maintainer chose to keep it on the runtimes' native Telegram adapters, consistent with this ADR, rather than revive gateway-owned delivery and its parity work. The shared token must never reach an Agent, so the native adapters run behind two Agent Barn components in the Communications process. The poller is the bot's single consumer and forwards each linked user's raw updates to that Agent's private webhook, authenticated by a secret derived from the Connection's driver key, as the Teams relay does for Bot Framework. The Bot API proxy is each runtime's API root (Hermes `extra.base_url`, OpenClaw `apiRoot`) and takes a per-Connection stand-in token. It answers bot-wide calls such as `setWebhook` and `setMyCommands` locally, forwards chat calls only for users linked to that Connection, and rate-limits per Organization. People link their own Telegram account through a one-time deep link; a Telegram user reaches at most one Agent at a time. The Platform is always runtime-owned, independent of the deployment-level native allowlist, because it has no gateway path.
+Agent Barn Telegram lets Organizations, initially trial clients, use one Telegram bot owned by Agent Barn instead of bringing their own. It stays on the runtimes' native Telegram adapters, consistent with this decision, rather than reviving gateway-owned delivery. The shared token must never reach an Agent, so the native adapters run behind two Agent Barn components in the Communications process. The poller is the bot's single consumer and forwards each linked user's raw updates to that Agent's private webhook, authenticated by a secret derived from the Connection's own runtime secret, as the Teams relay does for Bot Framework. The Bot API proxy is each runtime's API root (Hermes `extra.base_url`, OpenClaw `apiRoot`) and takes a per-Connection stand-in token derived from the same secret. It answers bot-wide calls such as `setWebhook` and `setMyCommands` locally, forwards chat calls only for users linked to that Connection, and rate-limits per Organization. People link their own Telegram account through a one-time deep link; a Telegram user reaches at most one Agent at a time.

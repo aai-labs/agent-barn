@@ -12,14 +12,13 @@ from api.core.utils import create_injector
 from api.domains.communications.agentbarn_telegram_ingress import AgentBarnTelegramIngress
 from api.domains.communications.agentbarn_telegram_routes import agentbarn_telegram_router
 from api.domains.communications.gateway_routes import (
-    driver_communications_router,
-    provider_webhook_router,
+    email_compatibility_router,
     runtime_communications_router,
 )
+from api.domains.communications.maintenance import CommunicationsMaintenance
 from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.operations import CommunicationOperationalRepository
 from api.domains.communications.processor import OutboundCommunicationProcessor
-from api.domains.communications.supervisor import PlatformIngressSupervisor
 
 
 def create_communications_app(injector: Injector | None = None) -> FastAPI:
@@ -38,29 +37,30 @@ def create_communications_app(injector: Injector | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         worker = threading.Thread(target=process_outbound, name="communications-outbound", daemon=True)
         worker.start()
-        ingress_stop = asyncio.Event()
-        ingress_task = asyncio.create_task(
-            injector.get(PlatformIngressSupervisor).run(ingress_stop),
-            name="communications-ingress-supervisor",
+        maintenance_stop = asyncio.Event()
+        maintenance_task = asyncio.create_task(
+            injector.get(CommunicationsMaintenance).run(maintenance_stop),
+            name="communications-maintenance",
         )
         # Idles until Agent Barn's own bot is configured.
+        shared_bot_stop = asyncio.Event()
         shared_bot_task = asyncio.create_task(
-            injector.get(AgentBarnTelegramIngress).run(ingress_stop),
+            injector.get(AgentBarnTelegramIngress).run(shared_bot_stop),
             name="communications-agentbarn-telegram-ingress",
         )
         try:
             yield
         finally:
-            ingress_stop.set()
-            await asyncio.gather(ingress_task, shared_bot_task)
+            maintenance_stop.set()
+            shared_bot_stop.set()
+            await asyncio.gather(maintenance_task, shared_bot_task)
             stop.set()
             worker.join(timeout=5)
 
     app = FastAPI(lifespan=lifespan)
     subapi = FastAPI()
     subapi.include_router(runtime_communications_router)
-    subapi.include_router(driver_communications_router)
-    subapi.include_router(provider_webhook_router)
+    subapi.include_router(email_compatibility_router)
     subapi.include_router(agentbarn_telegram_router)
     app.mount("/communications/v1", subapi)
 

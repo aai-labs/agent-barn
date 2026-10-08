@@ -51,8 +51,8 @@ jobs:
             # startup, Skill-discovery, PVC, and telemetry contracts, so
             # changes at those seams must run them too -- not just the API
             # suite.
-            if grep -qE '^(hermes-base/|api/domains/agents/builders/(hermes|memory)\.py|api/domains/agents/scripts/hermes/|api/domains/agents/scripts/messaging/|api/domains/agents/scripts/memory-gateway-ready\.py|api/runtime_tests/|api/tests/fixtures/agent_memory/hermes_runtime_driver\.py|api/tests/fixtures/hermes_(pvc_permissions|session_store|message_completion|telegram_access)_driver\.py)' /tmp/changed.txt; then hermes=true; fi
-            if grep -qE '^(openclaw-base/|api/domains/agents/builders/(openclaw|memory)\.py|api/domains/agents/scripts/openclaw/|api/domains/agents/scripts/messaging/|api/domains/agents/scripts/memory-gateway-ready\.py|api/runtime_tests/|api/tests/fixtures/agent_memory/openclaw_runtime_driver\.mjs|api/tests/fixtures/openclaw_(message_hooks|observer)_driver\.mjs)' /tmp/changed.txt; then openclaw=true; fi
+            if grep -qE '^(hermes-base/|api/domains/agents/builders/(hermes|memory)\.py|api/domains/agents/scripts/hermes/|api/domains/agents/scripts/(retire-messaging|memory-gateway-ready|agentbarn_memory)\.py|api/tests/fixtures/(test-messaging-retirement\.sh|runtime_messaging_retirement_driver\.py)|api/runtime_tests/|api/tests/fixtures/agent_memory/hermes_runtime_driver\.py|api/tests/fixtures/hermes_(pvc_permissions|session_store|native_delivery|telegram_access)_driver\.py)' /tmp/changed.txt; then hermes=true; fi
+            if grep -qE '^(openclaw-base/|api/domains/agents/builders/(openclaw|memory)\.py|api/domains/agents/scripts/openclaw/|api/domains/agents/scripts/(retire-messaging|memory-gateway-ready|agentbarn_memory)\.py|api/tests/fixtures/(test-messaging-retirement\.sh|runtime_messaging_retirement_driver\.py)|api/runtime_tests/|api/tests/fixtures/agent_memory/openclaw_runtime_driver\.mjs|api/tests/fixtures/openclaw_(native_delivery|observer|message_tool)_driver\.mjs)' /tmp/changed.txt; then openclaw=true; fi
             if grep -qE '^workers/' /tmp/changed.txt; then worker=true; fi
           fi
 

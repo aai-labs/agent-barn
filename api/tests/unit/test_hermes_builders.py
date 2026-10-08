@@ -24,7 +24,7 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
     assert config["display"]["platforms"] == {}
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging"]
+    assert config["plugins"]["enabled"] == ["telemetry-push"]
     assert "slack" not in config
     assert "telegram" not in config
     assert "discord" not in config
@@ -33,7 +33,7 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
 def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
     assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
     assert config["platforms"]["slack"]["extra"]["markdown_blocks"] is True
     assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
@@ -73,7 +73,6 @@ def test_native_slack_env_maps_connection_policy() -> None:
     assert open_env["SLACK_ALLOWED_USERS"] == "U1"
     assert "SLACK_ALLOW_ALL_USERS" not in open_env
     assert open_env["SLACK_THREAD_REQUIRE_MENTION"] == "false"
-    assert open_env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
     assert open_env["SLACK_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
     home = native_slack_env(
@@ -94,7 +93,7 @@ def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
         discord_require_mention=False,
     )
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
     assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
     assert config["display"]["platforms"]["discord"]["tool_progress"] == "off"
 
@@ -123,7 +122,6 @@ def test_native_discord_env_maps_hermes_authorization_gates() -> None:
     assert env["DISCORD_ALLOWED_USERS"] == "user-1"
     assert env["DISCORD_ALLOWED_ROLES"] == "role-1"
     assert env["DISCORD_HOME_CHANNEL"] == "channel-home"
-    assert env["AGENTBARN_SCHEDULED_DELIVERY"] == "0"
     assert "AGENTBARN_DISCORD_POLICY" not in env
 
 
@@ -141,7 +139,7 @@ def test_native_telegram_config_ignores_unknown_dms() -> None:
         "litellm/gpt-5", "http://litellm:4000", telegram_settings={"group_policy": "open"}
     )
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-messaging", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
     assert config["telegram"] == {"unauthorized_dm_behavior": "ignore"}
     assert config["display"]["platforms"]["telegram"]["tool_progress"] == "off"
 
@@ -175,7 +173,6 @@ def test_native_telegram_env_confines_groups_to_the_allowlist_and_requires_menti
     assert env == {
         "TELEGRAM_BOT_TOKEN": "123:abc",
         "TELEGRAM_REQUIRE_MENTION": "true",
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
         "TELEGRAM_ALLOWED_CHATS": "-1001",
         "TELEGRAM_GROUP_ALLOWED_CHATS": "-1001",
         "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
@@ -228,7 +225,6 @@ def test_runtime_teams_env_keeps_credentials_in_the_secret_and_sets_home() -> No
         "TEAMS_ALLOW_ALL_USERS": "true",
         "TEAMS_PORT": "3978",
         "TEAMS_HOME_CHANNEL": "19:home@thread.tacv2",
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
 
 
@@ -238,13 +234,10 @@ def test_runtime_teams_env_uses_no_home_sentinel() -> None:
     assert env["TEAMS_HOME_CHANNEL"] == "__agentbarn_no_home_channel__"
 
 
-def test_native_gateway_does_not_drain_agent_barn_scheduled_completions() -> None:
-    guarded = HERMES_START_SH.split(
-        'if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then',
-        1,
-    )[1].split("\nfi", 1)[0]
-
-    assert "python3 /app/config/agentbarn_message.py drain &" in guarded
+def test_runtime_does_not_install_or_drain_the_retired_bridge() -> None:
+    assert "agentbarn_message.py" not in HERMES_START_SH
+    assert "AGENTBARN_SCHEDULED_DELIVERY" not in HERMES_START_SH
+    assert "retire-messaging.py hermes /opt/data" in HERMES_START_SH
 
 
 def test_gateway_config_enables_persistent_memory_for_scheduled_runs() -> None:
@@ -321,7 +314,8 @@ def test_config_map_contains_runtime_adapter_and_no_provider_policy_plugins() ->
     assert "agent-trigger-server.py" in config_map.data
     # Pinned Hermes ships no gateway:startup hook, so BOOT.md only runs if we drive it.
     assert "boot-run.py" in config_map.data
-    assert "agentbarn_message.py" in config_map.data
+    assert "agentbarn_message.py" not in config_map.data
+    assert "retire-messaging.py" in config_map.data
     # OpenClaw's plugin has no business in a Hermes ConfigMap.
     assert "openclaw-messaging.js" not in config_map.data
     assert not any("allowlist" in name or "deny-dms" in name for name in config_map.data)

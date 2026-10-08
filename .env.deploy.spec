@@ -146,9 +146,6 @@ POSTGRES_FIRECRAWL_DB=firecrawl
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
-# Comma-separated Platform keys handled by native runtime gateways, e.g.
-# slack,discord. Empty keeps all Platforms on the Communications Gateway.
-COMMUNICATIONS_NATIVE_PLATFORMS=
 # Optional: Agent Barn's own Telegram bot for this environment. The token is a GitHub
 # secret (STAGING_/PUBLIC_ variants per environment), the username a variable. Unset
 # hides the Agent Barn Telegram platform. Never reuse one bot across environments.

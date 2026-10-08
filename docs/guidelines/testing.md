@@ -217,8 +217,8 @@ hooks directly. Shared setup lives in
   `../../hermes-base/test-image.sh`, invoked by
   `../../.github/workflows/hermes-base.yml`. Both that workflow and
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
-  selects the matching workflow when base-image, builder, startup, or
-  telemetry-plugin paths change.
+  selects the matching workflow when base-image, builder, startup,
+  telemetry-plugin, or matching runtime-fixture paths change.
 - `../../hermes-base/test-image.sh` and `../../openclaw-base/test-healthz-metrics.sh`
   run each healthz script in its pinned image under `--memory 1g --cpus 0.5`, as the
   image's own user, and check the CPU and memory it reports. Whether the cgroup files
@@ -235,6 +235,19 @@ hooks directly. Shared setup lives in
   chain, pins the Teams runtime listener's environment/port/path contract, and runs
   the telemetry plugin against the real SessionStore. The workflow invokes this
   entrypoint when either the Hermes builder or base image changes.
+- `../../api/tests/fixtures/test-messaging-retirement.sh` exercises fresh, upgraded,
+  and restored persistent state using generated configuration in both pinned images.
+  It covers malformed-job isolation, managed files, inactive/main-session jobs, effective
+  home targets, and rejection of stale saved defaults after OpenClaw configuration merge.
+  Hermes image tests also drive native origin/home scheduled delivery and silence.
+  `../../openclaw-base/test-native-runtime.sh` checks native one-shot scheduling,
+  observer hooks, retirement, and native `message`/`cron` tool access. Its pinned-image
+  message fixture uses the real tool factory/filter and dry-run sends for replies
+  to an existing message and other channels, and verifies native context restrictions.
+  Upgraded/restored state retains unrelated tool denies and message policy while
+  removing the stale `message` deny. Hermes checks that its send engine is absent
+  from the agent tool registry. Scheduler fixtures simulate model/provider execution;
+  message fixtures use dry runs. These checks send no live provider messages.
 - The separate `../../api/runtime_tests/` pytest suite starts Agent Barn's
   generated runtime configuration in the real image and proves materialized
   Agent Skills are visible through Hermes' `skills_list` and `skill_view`. The

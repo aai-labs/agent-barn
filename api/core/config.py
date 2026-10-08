@@ -106,14 +106,9 @@ class Config(BaseSettings):
     teams_privacy_url: str = "https://aai-labs.com/privacy"
     teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
-    # Content-free Communication journal history is pruned by the gateway
-    # supervisor after this many days.
+    # Content-free Communication journal history is pruned by Communications
+    # maintenance after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
-    # Native gateway spike (ADR 2026-09-16): comma-separated Platform keys whose
-    # Connections run inside the Agent runtime's own gateway instead of the
-    # Communications supervisor, for Hermes and OpenClaw alike. Replaced by a
-    # per-Connection transport once the spike is accepted.
-    communications_native_platforms: str = ""
     # Agent Barn's own Telegram bot, shared by every Agent on the agentbarn_telegram
     # Platform. The platform is offered only when both are set. The API reads only
     # the bot's id from the token; the Communications process alone calls Telegram
@@ -128,11 +123,6 @@ class Config(BaseSettings):
     # use up the bot for the others.
     agentbarn_telegram_bot_rate_per_second: float = Field(default=25, gt=0)
     agentbarn_telegram_organization_rate_per_second: float = Field(default=5, gt=0)
-
-    @property
-    def native_platform_keys(self) -> frozenset[str]:
-        """Platforms whose Agent Connections run in the runtime's native gateway."""
-        return frozenset(key.strip() for key in self.communications_native_platforms.split(",") if key.strip())
 
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off

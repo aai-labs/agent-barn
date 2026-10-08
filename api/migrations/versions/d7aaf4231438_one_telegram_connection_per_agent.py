@@ -1,7 +1,7 @@
 """one telegram connection per agent
 
 Revision ID: d7aaf4231438
-Revises: 69011ec264e7
+Revises: fa6ffd5fe1f2
 Create Date: 2026-10-06 12:00:00.000000
 
 An Agent runs a single Telegram adapter, so it may hold either a bring-your-own
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d7aaf4231438"
-down_revision: str | Sequence[str] | None = "69011ec264e7"
+down_revision: str | Sequence[str] | None = "fa6ffd5fe1f2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

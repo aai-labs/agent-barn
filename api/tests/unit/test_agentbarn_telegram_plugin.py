@@ -40,7 +40,7 @@ def test_agentbarn_telegram_is_never_supervised_by_the_communications_gateway() 
     # gateway must never poll it or create Communication Deliveries for it.
     plugin = AgentBarnTelegramPlatformPlugin(BotConfig())
 
-    assert PlatformCapability.SUPERVISED_INGRESS not in plugin.capabilities
+    assert plugin.descriptor.transport == "native"
     assert PlatformCapability.WEBHOOK_INGRESS not in plugin.capabilities
 
 

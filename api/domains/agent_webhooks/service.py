@@ -28,6 +28,7 @@ from api.domains.agents.authorization import AgentAuthorization
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.models import CommunicationConnection
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -288,7 +289,7 @@ class AgentWebhookService:
         """Why a Connection cannot receive webhook results, or None when it can."""
         if (
             platform_key not in SUPPORTED_PLATFORM_KEYS
-            or platform_key not in self.config.native_platform_keys
+            or platform_key not in NATIVE_PLATFORM_KEYS
             or connection is None
             or not connection.enabled
         ):
