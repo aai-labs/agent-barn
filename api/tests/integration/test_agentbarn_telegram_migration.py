@@ -20,7 +20,7 @@ from sqlmodel import SQLModel
 import api.domains.communications.models  # noqa: F401
 from api.core.config import get_config
 
-PRE_AF367_REVISION = "fa6ffd5fe1f2"
+PRE_AF367_REVISION = "aaf767b06036"
 AF367_HEAD = "164fb0fb6c2c"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 AF367_TABLES = (
