@@ -69,14 +69,17 @@ Reads use the Agent visibility query and require `activity.read` for that
 Agent; without it the timestamp is null and the card says “Not available”. With
 permission, null means “No messages yet”. No message content is returned.
 An older API response that omits the field also displays “Not available”.
-The card shows relative recency alongside an exact timestamp in the reader's
-local time zone. Late ingestion uses occurrence time rather than insertion time.
+The card shows relative recency; the exact timestamp in the reader's local time
+zone appears on hover or keyboard focus. A last message 14 or more days old, or
+no messages yet, is highlighted as quiet, and the dashboard header counts quiet
+Agents on the loaded page from this field alone, without further queries. Late
+ingestion uses occurrence time rather than insertion time.
 
 Team cards are whole-card links with keyboard navigation and no separate Open
 button. A single “Hire a teammate” card follows the displayed teammates in the
 dashboard grid and opens the hiring dialog with a click or keyboard activation.
 It remains available when the team is empty or search has no matches. Teammate
-cards' last-message footers stay at the bottom even when names or pending model notes wrap. The
+cards truncate long names to one line (the full name shows on hover), and their last-message footers stay at the bottom. Cards do not show a pending model; the Agent detail page does (see [Agent settings](agent-settings.md)). The
 dashboard search filters the currently loaded page, and identifies that limit
 when more Agents exist than are loaded.
 
@@ -87,7 +90,9 @@ Pin display queries load only IDs, keys, and versions, and credential list
 projections load only labels and references, excluding Markdown and encrypted
 payload columns. Home cards poll health every 30 seconds only for running
 Agents with `activity.read`; without that permission, a running Agent is labeled
-“Running” without claiming a known health state.
+“Running” without claiming a known health state. Each card shows its state as a
+presence dot on the avatar and a labeled badge (Working, Idle, Initializing,
+Disconnected, Needs attention, Running).
 
 ## State model
 

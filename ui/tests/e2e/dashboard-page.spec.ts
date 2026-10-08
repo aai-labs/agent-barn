@@ -54,14 +54,25 @@ test.describe("Dashboard Page", () => {
     expect(requests.map((request) => request.count)).toEqual([2, 0, 0]);
   });
 
-  test("shows creator and exact last-message time directly on the card", async () => {
+  test("shows creator and reveals the exact last-message time on hover", async ({ page }) => {
     await dashboardPage.goto();
     const card = dashboardPage.agentCard("Maya");
+    const time = dashboardPage.lastMessageTime("Maya");
     await expect(card.getByText("By Tommy", { exact: true })).toBeVisible();
-    await expect(card.getByText("Last message", { exact: true })).toBeVisible();
-    await expect(dashboardPage.lastMessageTime("Maya")).toHaveAttribute("datetime", mockAgent.last_message_at);
+    await expect(time).toHaveAttribute("datetime", mockAgent.last_message_at);
+    await expect(time).toHaveCSS("opacity", "0");
+    await card.hover();
+    await expect(time).toHaveCSS("opacity", "1");
     await expect(card.getByRole("button")).toHaveCount(0);
-    await expect(card).toHaveAccessibleDescription(/Working By Tommy Last message/);
+    await expect(card).toHaveAccessibleDescription(/Working By Tommy .*Last message/);
+    await expect(page.getByText(/1 quiet for 2\+ weeks/)).toBeVisible();
+  });
+
+  test("badges both idle and working teammates", async () => {
+    await dataSupportPage.agents.interceptGetAgentsRequest({ body: agentListWithPollingStates });
+    await dashboardPage.goto();
+    await expect(dashboardPage.agentCard(agentListWithPollingStates.items[1].name).getByText("Idle", { exact: true })).toBeVisible();
+    await expect(dashboardPage.agentCard("Maya").getByText("Working", { exact: true })).toBeVisible();
   });
 
   test("does not mistake an older API's missing metadata for an empty history", async () => {

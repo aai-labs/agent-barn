@@ -7,7 +7,7 @@ import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
 import { MessageCircleWarning, Plus } from "lucide-react";
 import { canAgent, currentModelOf, formatModelName } from "../utils";
 import { ModelSourceBadge } from "./model-source-badge";
-import { PendingModelNote } from "./pending-model-note";
+import { PendingModelBanner } from "./pending-model-note";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
@@ -175,13 +175,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   {agent.name}
                 </h1>
                 {currentModelOf(agent) && (
-                  <>
-                    <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
-                      <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
-                      <ModelSourceBadge source={agent.modelSource} />
-                    </div>
-                    <PendingModelNote pendingModel={agent.pendingModel} />
-                  </>
+                  <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
+                    <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
+                    <ModelSourceBadge source={agent.modelSource} />
+                  </div>
                 )}
                 <AgentMetaBadges
                   agent={agent}
@@ -207,6 +204,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 )}
               </div>
             </div>
+
+            <PendingModelBanner agent={agent} canRestart={canManageLifecycle} />
 
             {canManageLifecycle && (
               <>
