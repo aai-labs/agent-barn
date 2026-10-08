@@ -9,6 +9,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
+from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.agentbarn_telegram_repository import (
@@ -28,11 +29,13 @@ from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTeleg
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.rbac.catalog import PermissionKey
+from api.infrastructure.crypto import decrypt_token, encrypt_token
 
 LINK_TOKEN_TTL = timedelta(minutes=10)
 # 24 random bytes encode to 32 URL-safe characters, inside Telegram's 64-character
 # limit for a /start parameter.
 _LINK_TOKEN_BYTES = 24
+_RUNTIME_SECRET_BYTES = 32
 
 
 def hash_link_token(raw_token: str) -> str:
@@ -45,10 +48,25 @@ def hash_link_token(raw_token: str) -> str:
 class AgentBarnTelegramService:
     """Link Telegram accounts to an Agent through Agent Barn's shared bot."""
 
+    config: Config
     authorization: AgentAuthorization
     connections: CommunicationConnectionRepository
     repository: AgentBarnTelegramRepository
     plugins: PlatformPluginRegistry
+
+    def runtime_secret(self, connection_id: UUID, *, create: bool) -> str | None:
+        """A Connection's root secret, from which its Agent's credentials are derived.
+
+        Starting the Agent creates it (`create=True`); the proxy and the relay only
+        read it, so a Connection whose Agent never started with it has none.
+        """
+        key = self.config.agent_token_encryption_key
+        stored = self.repository.connection_secret_encrypted(connection_id)
+        if stored is None and create:
+            stored = self.repository.create_connection_secret(
+                connection_id, encrypt_token(secrets.token_urlsafe(_RUNTIME_SECRET_BYTES), key)
+            )
+        return None if stored is None else decrypt_token(stored, key)
 
     def create_link_token(
         self,

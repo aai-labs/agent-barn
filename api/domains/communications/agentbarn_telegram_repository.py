@@ -13,6 +13,7 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
 from api.domains.communications.models import (
+    AgentBarnTelegramConnectionSecret,
     AgentBarnTelegramIngressLease,
     AgentBarnTelegramLink,
     AgentBarnTelegramLinkToken,
@@ -509,6 +510,31 @@ class AgentBarnTelegramRepository:
                 if user_id is not None:
                     counts[user_id] = counts.get(user_id, 0) + 1
             return counts
+
+    def connection_secret_encrypted(self, connection_id: UUID) -> str | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(AgentBarnTelegramConnectionSecret.secret_encrypted).where(
+                    col(AgentBarnTelegramConnectionSecret.connection_id) == connection_id
+                )
+            ).first()
+
+    def create_connection_secret(self, connection_id: UUID, secret_encrypted: str) -> str:
+        """Store a Connection's secret unless it has one; return the one it keeps."""
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                pg_insert(AgentBarnTelegramConnectionSecret)
+                .values(
+                    AgentBarnTelegramConnectionSecret(
+                        connection_id=connection_id, secret_encrypted=secret_encrypted
+                    ).model_dump()
+                )
+                .on_conflict_do_nothing(index_elements=["connection_id"])
+            )  # type: ignore[call-overload]
+            session.commit()
+        stored = self.connection_secret_encrypted(connection_id)
+        assert stored is not None
+        return stored
 
     def purge_settled(self, *, settled_before: datetime) -> int:
         """Delete updates settled before the cutoff; return how many went.
