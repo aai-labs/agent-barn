@@ -132,7 +132,8 @@ a partial `(organization_id, occurred_at)` index restricted to memory charges.
 
 Before forwarding retain or reflect, the gateway also checks observed spend.
 A zero limit blocks immediately; positive limits need a runtime snapshot at most
-10 minutes old, a cost-sync heartbeat at most 20 minutes old, and a future renewal.
+10 minutes old, a cost-sync heartbeat at most 20 minutes old, and a future renewal
+(a one-off limit has none and needs none).
 Missing or invalid accounting returns 503, and observed exhaustion returns 429.
 Recall remains available. Migration `f2a8d41b9c63` adds the sync heartbeat, updated
 only after a complete paging pass, independently of OpenRouter healing.
@@ -182,6 +183,21 @@ those to calendar boundaries — next midnight, next Monday, the 1st of the mont
 matter when a budget was set. The team and every Agent key therefore renew at the
 same moment; any other `Nd` would renew N days after it was set and drift. `30d` is a
 calendar month, not a 30-day interval.
+
+**One-off limits.** A Trial Organization's limit is its Trial Credit, granted once:
+its window is stored as `once`, which the LiteLLM client sends as no
+`budget_duration`, so the team and every Agent key accumulate spend for good and never
+renew (proven against the pinned image by
+`../../api/tests/integration/test_one_off_spend_limit_litellm_contract.py`). A key that
+never had a window is normally zeroed before its first cap; a one-off key is not, since
+its spend is the credit already used. The Agent Memory spend gate counts memory spend
+since the Organization was created. `once` is never offered as a window to choose: a
+Platform Administrator who changes only a trial's amount keeps it one-off, and choosing
+a renewing window moves the trial onto it. When the credit runs out the Agent stops,
+exactly as at any other limit. Moving onto a renewing window keeps the spend already used:
+the pinned LiteLLM cannot zero a team's spend, so a key that had a limit keeps its spend too
+(only a key that never had a limit or a window is zeroed before its first cap). Team and
+keys then reset together at their first renewal.
 
 When LiteLLM is configured, every Organization receives a LiteLLM team whose
 `team_id` is the Organization UUID. Creating an Organization, through either path that

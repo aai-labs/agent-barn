@@ -10,7 +10,7 @@ from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
 from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
-from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_LLM_BUDGET_CHANGED
+from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_LLM_BUDGET_CHANGED, ORGANIZATION_TRIAL_ENDED
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.exceptions import LlmBudgetAboveCeiling, OrganizationCreationLimitReached
 from api.domains.organizations.models import (
@@ -95,6 +95,7 @@ class OrganizationRepository:
                 col(Organization.llm_budget_usd).label("llm_budget_usd"),
                 col(Organization.llm_budget_duration).label("llm_budget_duration"),
                 col(Organization.llm_own_budget_usd).label("llm_own_budget_usd"),
+                col(Organization.is_trial).label("is_trial"),
             )
             .select_from(Organization)
             .outerjoin(
@@ -343,6 +344,70 @@ class OrganizationRepository:
 
     def get(self, organization_id: UUID) -> Organization | None:
         return self.delegate.find_by_id(Organization, organization_id)
+
+    def owns_active_trial(self, user_id: UUID) -> bool:
+        with Session(self.delegate.engine) as session:
+            owned = session.exec(
+                select(Organization.id)
+                .join(OrganizationUser, col(OrganizationUser.organization_id) == Organization.id)
+                .where(
+                    col(OrganizationUser.user_id) == user_id,
+                    col(OrganizationUser.role) == OrganizationRole.OWNER,
+                    col(Organization.is_trial).is_(True),
+                )
+            ).first()
+            return owned is not None
+
+    def first_created_by(self, user_id: UUID) -> Organization | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(Organization)
+                .where(col(Organization.created_by_user_id) == user_id)
+                .order_by(col(Organization.created_at))
+            ).first()
+
+    def end_trial_with_event(
+        self, organization_id: UUID, *, actor: ActorIdentity, actor_display: str
+    ) -> tuple[Organization, list[UUID]] | None:
+        """Make a trial an ordinary Organization, with its audit Event in the same commit.
+        None when the Organization does not exist; no Event when it was not a trial."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = self._locked(session, organization_id)
+            if organization is None:
+                return None
+            if not organization.is_trial:
+                return organization, []
+            organization.is_trial = False
+            organization.updated_at = datetime.now(UTC)
+            session.add(organization)
+            # The trial's creator may now create Organizations of their own.
+            creator = session.get(User, organization.created_by_user_id) if organization.created_by_user_id else None
+            if creator is not None and creator.trial_ended_at is None:
+                creator.trial_ended_at = organization.updated_at
+                session.add(creator)
+            session.flush()
+            event = EVENT_REGISTRY.build_event(
+                event_name=ORGANIZATION_TRIAL_ENDED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION,
+                    id=organization_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "actor_display": actor_display,
+                    "subject_display": organization.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return organization, delivery_ids
 
     def get_read(self, organization_id: UUID) -> OrganizationRead | None:
         with Session(self.delegate.engine) as session:

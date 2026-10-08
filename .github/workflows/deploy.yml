@@ -310,6 +310,9 @@ jobs:
           ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS: ${{ vars.ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS }}
           ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${{ github.ref_name == 'staging' && vars.STAGING_ORGANIZATION_DEFAULT_LLM_BUDGET_USD || vars.ORGANIZATION_DEFAULT_LLM_BUDGET_USD }}
           AGENT_DEFAULT_LLM_BUDGET_USD: ${{ github.ref_name == 'staging' && vars.STAGING_AGENT_DEFAULT_LLM_BUDGET_USD || vars.AGENT_DEFAULT_LLM_BUDGET_USD }}
+          # Public trial signup, opted into per environment; an unset variable means off,
+          # never the other environment's setting.
+          SELF_SIGNUP_ENABLED: ${{ github.ref_name == 'staging' && (vars.STAGING_SELF_SIGNUP_ENABLED || 'false') || (vars.SELF_SIGNUP_ENABLED || 'false') }}
           # Each environment polls its own bot; Telegram allows one consumer per bot.
           AGENTBARN_TELEGRAM_BOT_TOKEN: ${{ github.ref_name == 'staging' && secrets.STAGING_AGENTBARN_TELEGRAM_BOT_TOKEN || secrets.AGENTBARN_TELEGRAM_BOT_TOKEN }}
           AGENTBARN_TELEGRAM_BOT_USERNAME: ${{ github.ref_name == 'staging' && vars.STAGING_AGENTBARN_TELEGRAM_BOT_USERNAME || vars.AGENTBARN_TELEGRAM_BOT_USERNAME }}

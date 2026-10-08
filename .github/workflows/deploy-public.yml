@@ -336,6 +336,8 @@ jobs:
           # The public deployment's own defaults, like its other PUBLIC_ settings.
           ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_ORGANIZATION_DEFAULT_LLM_BUDGET_USD }}
           AGENT_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_AGENT_DEFAULT_LLM_BUDGET_USD }}
+          # Public trial signup, opted into on purpose; unset means off.
+          SELF_SIGNUP_ENABLED: ${{ vars.PUBLIC_SELF_SIGNUP_ENABLED || 'false' }}
           # The public deployment's own bot; Telegram allows one consumer per bot.
           AGENTBARN_TELEGRAM_BOT_TOKEN: ${{ secrets.PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN }}
           AGENTBARN_TELEGRAM_BOT_USERNAME: ${{ vars.PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME }}

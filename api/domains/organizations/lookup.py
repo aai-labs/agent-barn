@@ -48,6 +48,15 @@ class OrganizationLookupService:
         organization = self.repository.get(organization_id)
         return organization.allowed_models if organization else None
 
+    def first_created_by(self, user_id: UUID) -> UUID | None:
+        """The first Organization a user created: a self-signed-up user's trial."""
+        organization = self.repository.first_created_by(user_id)
+        return organization.id if organization else None
+
+    def is_trial(self, organization_id: UUID) -> bool:
+        organization = self.repository.get(organization_id)
+        return organization is not None and organization.is_trial
+
     def get_llm_limit(self, organization_id: UUID) -> OrganizationLlmLimit | None:
         """None when the Organization does not exist."""
         organization = self.repository.get(organization_id)

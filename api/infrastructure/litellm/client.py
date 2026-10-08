@@ -12,6 +12,15 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 logger = logging.getLogger(__name__)
 
 
+# A spend limit granted once, such as trial credit. LiteLLM has no name for it: a budget
+# with no budget_duration simply never resets, so the window is sent as None.
+ONE_OFF_BUDGET_WINDOW = "once"
+
+
+def _budget_duration(window: str | None) -> str | None:
+    return None if window == ONE_OFF_BUDGET_WINDOW else window
+
+
 class LiteLLMError(Exception):
     pass
 
@@ -106,7 +115,11 @@ class LiteLLMClient:
         missing team is created with the policy passed in, so it is never uncapped
         between its creation and the next reconciliation.
         """
-        policy = {"max_budget": max_budget, "budget_duration": budget_duration} if max_budget is not None else {}
+        policy = (
+            {"max_budget": max_budget, "budget_duration": _budget_duration(budget_duration)}
+            if max_budget is not None
+            else {}
+        )
         try:
             headers = self._headers(self._master_key())
             if self._team_info(org_id, headers) is None:
@@ -126,7 +139,7 @@ class LiteLLMClient:
         """
         desired = {
             "max_budget": max_budget,
-            "budget_duration": budget_duration if max_budget is not None else None,
+            "budget_duration": _budget_duration(budget_duration) if max_budget is not None else None,
         }
         try:
             headers = self._headers(self._master_key())
@@ -227,12 +240,16 @@ class LiteLLMClient:
         the same moment as the team.
         """
         failure = "Failed to reconcile Agent key budget"
-        desired = {"max_budget": max_budget, "budget_duration": budget_duration}
+        desired = {"max_budget": max_budget, "budget_duration": _budget_duration(budget_duration)}
         current = self._key_info(key, failure)
         changed = {name: value for name, value in desired.items() if current.get(name) != value}
         if not changed:
             return
-        if current.get("budget_duration") is None and current.get("spend"):
+        # Only a key that never had a limit carries spend no cap ever counted. A one-off
+        # key (trial credit) has a limit and no window: its spend is the credit already
+        # used, and LiteLLM can't zero its team's to match, so it is kept.
+        never_capped = current.get("max_budget") is None and current.get("budget_duration") is None
+        if desired["budget_duration"] is not None and never_capped and current.get("spend"):
             self._reset_key_spend(key, failure)
         try:
             response = httpx.post(
@@ -356,7 +373,11 @@ class LiteLLMClient:
         self.ensure_team_exists(org_id, team_budget, budget_duration)
         master_key = self._master_key()
         url = f"{self.config.litellm_base_url}/key/generate"
-        policy = {"max_budget": max_budget, "budget_duration": budget_duration} if max_budget is not None else {}
+        policy = (
+            {"max_budget": max_budget, "budget_duration": _budget_duration(budget_duration)}
+            if max_budget is not None
+            else {}
+        )
         try:
             resp = httpx.post(
                 url,

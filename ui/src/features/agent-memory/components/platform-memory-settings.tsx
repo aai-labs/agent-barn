@@ -1,10 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Brain, Check, ChevronsUpDown, Pencil } from "lucide-react";
+import { Check, ChevronsUpDown, Pencil } from "lucide-react";
 
-import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
-import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { AppErrorState } from "@/components/app-error-state";
 import {
   Command,
@@ -23,6 +21,7 @@ import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { usePlatformMemorySettings } from "../hooks/use-platform-memory-settings";
 
+/** The Agent Memory section of the platform settings page. */
 export function PlatformMemorySettings() {
   const {
     memorySettings,
@@ -42,8 +41,7 @@ export function PlatformMemorySettings() {
   const [open, setOpen] = useState(false);
   const [saved, setSaved] = useState(false);
   const [editing, setEditing] = useState(false);
-  if (isLoadingSettings)
-    return <div className="af-page">Loading Platform Settings…</div>;
+  if (isLoadingSettings) return <p className="m-0">Loading Agent Memory settings…</p>;
   if (settingsError)
     return (
       <AppErrorState
@@ -69,47 +67,7 @@ export function PlatformMemorySettings() {
   }
 
   return (
-    <div className="af-page">
-      <div className="mb-8 flex flex-wrap items-start gap-4">
-        <div className="min-w-0 flex-1">
-          <h1
-            className="m-0 text-[2rem] font-semibold tracking-[-0.025em]"
-            style={{ color: "var(--ink)" }}
-          >
-            Settings
-          </h1>
-          <p
-            className="mb-0 mt-1 text-[0.9rem]"
-            style={{ color: "var(--ink-3)" }}
-          >
-            Platform
-          </p>
-        </div>
-        <div
-          className="rounded-full border px-3 py-1.5 text-[0.78rem]"
-          style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}
-        >
-          Admin access
-        </div>
-      </div>
-      <SettingsPageLayout
-        sidebar={
-          <SettingsSidebar
-            eyebrow="Platform"
-            items={[
-              {
-                key: "agent-memory",
-                label: "Agent Memory",
-                icon: <Brain size={15} aria-hidden />,
-              },
-            ]}
-            activeKey="agent-memory"
-            onSelect={() => {}}
-          />
-        }
-        heading="Agent Memory"
-        description="Long-term memory settings shared by every Agent and Organization."
-      >
+    <>
         <section
           className="af-card overflow-hidden"
           aria-label="Agent Memory settings"
@@ -317,7 +275,6 @@ export function PlatformMemorySettings() {
             and applies to new memory work within five seconds.
           </p>
         </section>
-      </SettingsPageLayout>
-    </div>
+    </>
   );
 }

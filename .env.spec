@@ -127,6 +127,14 @@ ORGANIZATION_DEFAULT_LLM_BUDGET_USD=
 # Required. Model spend limit (USD) an Agent is held to until its Organization sets a
 # default or the Agent its own. Must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD.
 AGENT_DEFAULT_LLM_BUDGET_USD=
+# Whether a first sign-in with Google creates an account and a trial Organization.
+# false turns new accounts away; existing users can still sign in with Google. Sign-in
+# uses GOOGLE_CLOUD_CLIENT_ID/SECRET; register <WEB_APP_URL>/api/v1/auth/google/callback
+# as a redirect URI on that client.
+SELF_SIGNUP_ENABLED=true
+# Credit (USD) a new trial Organization starts with, until a Platform Administrator
+# sets one on the platform settings page. Granted once; it never renews.
+TRIAL_DEFAULT_CREDIT_USD=10
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —

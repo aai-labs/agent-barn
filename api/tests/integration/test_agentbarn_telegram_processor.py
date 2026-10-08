@@ -195,7 +195,7 @@ def test_a_stranger_is_pointed_to_sign_up_and_reaches_no_agent() -> None:
                 contains_exactly(
                     (
                         7770007,
-                        f"Hi! To talk to an agent here, sign up at {_WEB_APP_URL} and connect Telegram from there.",
+                        f"Hi! To talk to an agent here, sign up at {_WEB_APP_URL}/signup and connect Telegram from there.",
                     )
                 ),
             )

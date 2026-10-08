@@ -101,12 +101,17 @@ API_HOST=api.agentbarn.local
 UI_HOST=agentbarn.local
 WEB_APP_URL=http://agentbarn.local
 
-# ── Gmail OAuth (AF-153) ─────────────────────────────────────────────────────
-# Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate
-# with Google" flow. Leave blank to disable. Register
-# "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.
+# ── Google OAuth (AF-153, AF-368) ────────────────────────────────────────────
+# Shared Google OAuth 2.0 "Web application" client for "Sign in with Google" and
+# the Gmail "Authenticate with Google" flow. Leave blank to disable both. Register
+# both "<WEB_APP_URL>/api/v1/auth/google/callback" and
+# "<WEB_APP_URL>/api/v1/integrations/google/callback" as authorized redirect URIs.
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
+# Public trial signup through "Sign in with Google". Off unless set to true. The
+# deploy workflows read SELF_SIGNUP_ENABLED, STAGING_SELF_SIGNUP_ENABLED and
+# PUBLIC_SELF_SIGNUP_ENABLED (GitHub Variables) for their environments.
+SELF_SIGNUP_ENABLED=false
 
 # ── Ingress TLS ──────────────────────────────────────────────────────────────
 # cert-manager ClusterIssuer that signs the api/ui ingress certs. cert-manager

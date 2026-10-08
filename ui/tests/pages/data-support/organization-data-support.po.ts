@@ -558,8 +558,8 @@ export class OrganizationDataSupport {
               role: "MEMBER",
               is_pending: true,
             },
-            invite_link:
-              "http://127.0.0.1:3003/set-password?token=member-token-456",
+            // The link goes only to the invitee's inbox; the API never returns it.
+            invite_link: null,
           },
         ),
       });

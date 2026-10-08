@@ -54,7 +54,7 @@ from api.domains.agents.builders import (
     runtime_teams_env,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
-from api.domains.agents.exceptions import AgentProvisioningPrecondition
+from api.domains.agents.exceptions import AgentProvisioningPrecondition, TrialAgentLimitReached
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
@@ -149,6 +149,7 @@ from api.domains.events.catalog import (
     AGENT_STARTED,
     AGENT_STOPPED,
 )
+from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.service import RestorePointService
@@ -286,6 +287,7 @@ class AgentService:
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    trial_settings: TrialSettingsService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
     agent_budgets: AgentLlmBudgetService
@@ -706,6 +708,11 @@ class AgentService:
             missing_detail = f"Template {data.template_key} not found"
         if template is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
+        # Checked again under a lock when the Agent is stored; checked here too so a
+        # refused create never allocates a LiteLLM key.
+        agent_limit = self.trial_settings.agent_limit() if self.organization_lookup.is_trial(org_id) else None
+        if agent_limit is not None and self.repository.count_active_by_org(org_id) >= agent_limit:
+            raise TrialAgentLimitReached(agent_limit)
 
         agent = Agent(
             organization_id=org_id,
@@ -867,6 +874,7 @@ class AgentService:
                 secrets=prepared_secrets,
                 skills=prepared_skills,
                 actor_display=secret_actor_display,
+                agent_limit=agent_limit,
             )
             created_delivery_ids = created.delivery_ids
         except Exception as exc:

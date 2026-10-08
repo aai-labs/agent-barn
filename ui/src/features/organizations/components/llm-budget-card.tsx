@@ -22,6 +22,7 @@ import { MoneyInput } from "@/features/spend-limits/components/money-input";
 
 import {
   DEFAULT_SPEND_LIMIT_WINDOW,
+  ONE_OFF_SPEND_LIMIT_WINDOW,
   SPEND_LIMIT_WINDOWS,
   amountError,
   formatRenewal,
@@ -111,6 +112,10 @@ export function LlmBudgetCard({ organization }: { organization: PlatformOrganiza
                     {option.label}
                   </SelectItem>
                 ))}
+                {/* A trial's credit can be kept one-off, or moved onto a renewing window. */}
+                {storedWindow === ONE_OFF_SPEND_LIMIT_WINDOW.value && (
+                  <SelectItem value={ONE_OFF_SPEND_LIMIT_WINDOW.value}>never renews</SelectItem>
+                )}
               </SelectGroup>
             </SelectContent>
           </Select>
@@ -122,7 +127,11 @@ export function LlmBudgetCard({ organization }: { organization: PlatformOrganiza
           onClick={() => {
             if (parsed === null || Number.isNaN(parsed)) return;
             setBudget.mutate(
-              { budgetUsd: parsed, budgetDuration: duration },
+              {
+                budgetUsd: parsed,
+                // Omitted keeps a one-off limit one-off; it is never a window to choose.
+                budgetDuration: duration === ONE_OFF_SPEND_LIMIT_WINDOW.value ? undefined : duration,
+              },
               { onSuccess: () => setTouched(false) },
             );
           }}

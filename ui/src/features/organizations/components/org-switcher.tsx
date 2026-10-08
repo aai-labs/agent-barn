@@ -16,6 +16,13 @@ const GLOBAL_DASHBOARD_SEGMENTS = new Set(["account", "platform"]);
 export function OrgSwitcher() {
   const { organizations, selectedOrganization } = useOrganizationContext();
   const { user } = useCurrentUser();
+  // Mirrors the API: a self-signed-up user stays on their trial (even after deleting
+  // it) until a platform admin ends it, and nobody owning a running trial creates more.
+  const onTrial =
+    (Boolean(user.signedUpAt) && !user.trialEndedAt) ||
+    (user.organizationUsers ?? []).some(
+      (membership) => membership.role === "OWNER" && membership.organization.isTrial,
+    );
   const router = useRouter();
   const pathname = usePathname() ?? "";
   const [open, setOpen] = useState(false);
@@ -141,18 +148,23 @@ export function OrgSwitcher() {
               </button>
             );
           })}
-            <div className="mx-3 my-1" style={{ borderTop: "1px solid var(--line)" }} />
-            <button
-              className="af-hover-bg flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px]"
-              style={{ color: "var(--ink-2)" }}
-              onClick={() => {
-                setOpen(false);
-                setCreateOpen(true);
-              }}
-            >
-              <PlusIcon size={15} style={{ color: "var(--ink-4)" }} />
-              Create organization
-            </button>
+            {/* The owner of a running trial creates no other organizations; the API refuses them. */}
+            {!onTrial && (
+              <>
+                <div className="mx-3 my-1" style={{ borderTop: "1px solid var(--line)" }} />
+                <button
+                  className="af-hover-bg flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13.5px]"
+                  style={{ color: "var(--ink-2)" }}
+                  onClick={() => {
+                    setOpen(false);
+                    setCreateOpen(true);
+                  }}
+                >
+                  <PlusIcon size={15} style={{ color: "var(--ink-4)" }} />
+                  Create organization
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>

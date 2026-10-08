@@ -88,6 +88,11 @@ prometheus:
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""
 
+# Whether a first sign-in with Google creates an account and a trial Organization.
+# Off by default so a rollout never opens public signup by accident; existing users
+# can always sign in with Google.
+selfSignupEnabled: false
+
 # Agent Barn's own Telegram bot (token from @BotFather, and its @username without
 # the @). Empty hides the Agent Barn Telegram Platform. Use a separate bot per
 # environment: Telegram lets only one deployment poll a bot.

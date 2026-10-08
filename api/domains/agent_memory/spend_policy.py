@@ -13,6 +13,7 @@ from injector import inject, singleton
 from api.core.config import Config
 from api.domains.costs.repository import CostRepository
 from api.domains.organizations.repository import OrganizationRepository
+from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 
 # Existing schedules: runtime snapshot every 5 minutes, cost sync every 15.
 MAX_RUNTIME_SNAPSHOT_AGE = timedelta(minutes=10)
@@ -45,28 +46,34 @@ class MemorySpendPolicy:
         renewal = organization.llm_budget_renews_at
         runtime_spend = organization.llm_spend_usd
         synced = self.costs.last_sync_completed_at()
+        one_off = organization.llm_budget_duration == ONE_OFF_BUDGET_WINDOW
         duration = _DURATION.fullmatch(organization.llm_budget_duration or "")
         if (
             not self.config.memory_cost_key_hashes
             or observed is None
-            or renewal is None
             or synced is None
             or runtime_spend is None
             or not math.isfinite(runtime_spend)
             or runtime_spend < 0
             or not math.isfinite(limit)
             or limit < 0
-            or not duration
             or not timedelta(0) <= now - _utc(observed) <= MAX_RUNTIME_SNAPSHOT_AGE
             or not timedelta(0) <= now - _utc(synced) <= MAX_COST_SYNC_AGE
-            or _utc(renewal) <= now
+            # A one-off limit never renews, so it has no renewal date to check.
+            or (not one_off and (renewal is None or not duration or _utc(renewal) <= now))
         ):
             raise HTTPException(503, "Organization memory spend status is unavailable; try again later.")
-        try:
-            window = timedelta(seconds=int(duration.group(1)) * _SECONDS[duration.group(2)])
-            start = _utc(renewal) - window
-        except OverflowError, ValueError:
-            raise HTTPException(503, "Organization memory spend status is unavailable; try again later.") from None
+        if one_off:
+            # Everything the Organization has ever spent counts against a one-off limit.
+            start = _utc(organization.created_at)
+        elif renewal is not None and duration is not None:
+            try:
+                window = timedelta(seconds=int(duration.group(1)) * _SECONDS[duration.group(2)])
+                start = _utc(renewal) - window
+            except OverflowError, ValueError:
+                raise HTTPException(503, "Organization memory spend status is unavailable; try again later.") from None
+        else:
+            raise HTTPException(503, "Organization memory spend status is unavailable; try again later.")
         # A policy update may leave an old renewal snapshot until the next refresh.
         if start > now:
             raise HTTPException(503, "Organization memory spend status is unavailable; try again later.")

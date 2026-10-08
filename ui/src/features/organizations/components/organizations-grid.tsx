@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Building, Loader2, UserRound } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { Badge } from "@/components/badge";
 import { ListPageHeader } from "@/components/list-page-header";
 import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
 
@@ -77,6 +78,7 @@ export function OrganizationsGrid() {
                   <span className="font-semibold text-[14.5px] truncate" style={{ color: "var(--ink)" }}>
                     {org.name}
                   </span>
+                  {org.isTrial && <Badge variant="accent">Trial</Badge>}
                 </div>
                 <div className="text-[13px] mb-4 leading-[1.45]" style={{ color: "var(--ink-3)" }}>
                   {org.description || "No description"}

@@ -65,6 +65,11 @@ class Config(BaseSettings):
     # divides its own allowance among its Agents.
     organization_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
     agent_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
+    # Self-signup: a first Google sign-in creates the account and a trial Organization.
+    # Off (the default) turns new Google accounts away; existing users can still sign in.
+    self_signup_enabled: bool = False
+    # Trial credit (USD) until a Platform Administrator sets one on the platform settings page.
+    trial_default_credit_usd: float = Field(default=10.0, ge=0, allow_inf_nan=False)
     # The API's own public base URL, used to show callers where to reach an Agent
     # Webhook or a Teams Connection. Deployments set it from API_HOST; locally it is
     # derived below, because the host port is the only thing that makes it up.
