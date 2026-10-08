@@ -48,7 +48,7 @@ export default function DashboardPage() {
   const firstName = (user.fullName ?? user.email ?? "").split(" ")[0];
   const running = agents.filter((a) => a.status === "RUNNING").length;
   const idle = agents.filter((a) => a.status === "STOPPED").length;
-  const quiet = agents.filter((a) => isQuiet(a.lastMessageAt)).length;
+  const quiet = agents.filter((a) => a.status !== "STOPPED" && isQuiet(a.lastMessageAt)).length;
   const displayedAgents = agents.filter((agent) => agent.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   return (

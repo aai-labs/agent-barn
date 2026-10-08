@@ -71,7 +71,10 @@ test.describe("Dashboard Page", () => {
   test("badges both idle and working teammates", async () => {
     await dataSupportPage.agents.interceptGetAgentsRequest({ body: agentListWithPollingStates });
     await dashboardPage.goto();
-    await expect(dashboardPage.agentCard(agentListWithPollingStates.items[1].name).getByText("Idle", { exact: true })).toBeVisible();
+    const idleCard = dashboardPage.agentCard(agentListWithPollingStates.items[1].name);
+    await expect(idleCard.getByText("Idle", { exact: true })).toHaveCount(1);
+    await expect(idleCard.getByText("Last message")).toHaveCount(0);
+    await expect(dashboardPage.agentCard("Maya").getByText("Last message")).toBeVisible();
     await expect(dashboardPage.agentCard("Maya").getByText("Working", { exact: true })).toBeVisible();
   });
 

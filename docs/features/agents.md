@@ -91,8 +91,10 @@ projections load only labels and references, excluding Markdown and encrypted
 payload columns. Home cards poll health every 30 seconds only for running
 Agents with `activity.read`; without that permission, a running Agent is labeled
 “Running” without claiming a known health state. Each card shows its state as a
-presence dot on the avatar and a labeled badge (Working, Idle, Initializing,
-Disconnected, Needs attention, Running).
+presence dot on the avatar and a labeled badge (Working, Initializing,
+Disconnected, Needs attention, Running). A stopped Agent shows a muted Idle status in
+the card footer in place of the labeled last-message time, and is not counted as
+quiet.
 
 ## State model
 

@@ -50,6 +50,7 @@ export function AgentCard({ agent, href }: AgentCardProps) {
   const lastMessage = agent.lastMessageAt ? new Date(agent.lastMessageAt) : null;
   const canReadActivity = hasActivityPermission && agent.lastMessageAt !== undefined;
   const model = currentModelOf(agent);
+  const idle = agent.status === "STOPPED";
 
   let recencyColor = "var(--ink-3)";
   if (canReadActivity && (!lastMessage || isQuiet(agent.lastMessageAt))) recencyColor = "var(--warn)";
@@ -77,11 +78,13 @@ export function AgentCard({ agent, href }: AgentCardProps) {
               <h3 className="m-0 min-w-0 truncate font-semibold text-base tracking-tight" title={agent.name} style={{ color: "var(--ink)" }}>
                 {agent.name}
               </h3>
-              <span id={`${agent.id}-status`} className="shrink-0">
-                <span className="inline-block rounded-full px-2 py-px text-[0.68rem] font-medium" style={{ background: presence.badge.bg, color: presence.badge.fg }}>
-                  {presence.label}
+              {!idle && (
+                <span id={`${agent.id}-status`} className="shrink-0">
+                  <span className="inline-block rounded-full px-2 py-px text-[0.68rem] font-medium" style={{ background: presence.badge.bg, color: presence.badge.fg }}>
+                    {presence.label}
+                  </span>
                 </span>
-              </span>
+              )}
             </div>
             <div id={`${agent.id}-creator`} className="mt-0.5 flex min-w-0 whitespace-nowrap text-xs" style={{ color: "var(--ink-3)" }}>
               <span className="min-w-0 truncate" title={creatorName ? `Created by ${creatorName}` : undefined}>
@@ -102,23 +105,33 @@ export function AgentCard({ agent, href }: AgentCardProps) {
         )}
       </div>
 
-      <div className="mt-auto flex items-baseline justify-between gap-3 px-4.5 py-3" style={{ background: "var(--bg)", borderTop: "1px solid var(--line)" }}>
-        <div id={`${agent.id}-message`} className="flex min-w-0 items-baseline whitespace-nowrap">
-          <span className="sr-only">Last message </span>
-          <span className="shrink-0 text-[0.95rem] font-semibold tracking-tight" style={{ color: recencyColor }}>
-            {!canReadActivity ? "Not available" : lastMessage ? formatDistanceToNowStrict(lastMessage, { addSuffix: true }) : "No messages yet"}
-          </span>
-          {canReadActivity && lastMessage && (
-            <time
-              dateTime={agent.lastMessageAt!}
-              title={lastMessage.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}
-              className="min-w-0 truncate text-xs opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
-              style={{ color: "var(--ink-4)" }}
-            >
-              &nbsp;&nbsp;·&nbsp;&nbsp;{lastMessage.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })}
-            </time>
-          )}
-        </div>
+      <div className="mt-auto flex min-h-16 items-center justify-between gap-3 px-4.5 py-3" style={{ background: "var(--bg)", borderTop: "1px solid var(--line)" }}>
+        {idle ? (
+          // A stopped Agent's last message says nothing new; its state is the news.
+          <div id={`${agent.id}-message`}>
+            <div className="text-[0.68rem]" style={{ color: "var(--ink-4)" }}>Status</div>
+            <div className="text-[0.95rem] font-semibold tracking-tight" style={{ color: "var(--ink-4)" }}>{presence.label}</div>
+          </div>
+        ) : (
+          <div id={`${agent.id}-message`} className="min-w-0">
+            <div className="text-[0.68rem]" style={{ color: "var(--ink-4)" }}>Last message</div>
+            <div className="flex min-w-0 items-baseline whitespace-nowrap">
+              <span className="shrink-0 text-[0.95rem] font-semibold tracking-tight" style={{ color: recencyColor }}>
+                {!canReadActivity ? "Not available" : lastMessage ? formatDistanceToNowStrict(lastMessage, { addSuffix: true }) : "No messages yet"}
+              </span>
+              {canReadActivity && lastMessage && (
+                <time
+                  dateTime={agent.lastMessageAt!}
+                  title={lastMessage.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}
+                  className="min-w-0 truncate text-xs opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+                  style={{ color: "var(--ink-4)" }}
+                >
+                  &nbsp;&nbsp;·&nbsp;&nbsp;{lastMessage.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })}
+                </time>
+              )}
+            </div>
+          </div>
+        )}
         <ArrowUpRight size={16} aria-hidden="true" className="shrink-0 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" style={{ color: "var(--ink-3)" }} />
       </div>
     </Link>
