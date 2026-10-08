@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     AgentCreate,
+    ApolloContent,
     BitbucketContent,
     FirecrawlContent,
     GithubContent,
@@ -351,6 +352,37 @@ def test_pipedrive_content_normalizes_domain_to_its_subdomain_label(domain):
     content = validate_content(SecretProvider.PIPEDRIVE, {**_PIPEDRIVE_BASE, "domain": domain})
     assert isinstance(content, PipedriveContent)
     assert content.domain == "aai-labs"
+
+
+# --- Apollo ---
+
+_APOLLO_BASE = {"api_token": "apollo-test-key"}
+
+
+def test_apollo_content_validates_api_token():
+    content = validate_content(SecretProvider.APOLLO, _APOLLO_BASE)
+    assert isinstance(content, ApolloContent)
+    assert content.api_token == "apollo-test-key"
+
+
+@pytest.mark.parametrize("raw", [{}, {"api_token": ""}])
+def test_apollo_content_rejects_missing_api_token(raw):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.APOLLO, raw)
+
+
+@pytest.mark.parametrize("field", ["base_url", "extra"])
+def test_apollo_content_rejects_extra_fields(field):
+    # A base_url would let a caller send the key to a host other than Apollo's API.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.APOLLO, {**_APOLLO_BASE, field: "https://evil.example"})
+
+
+def test_apollo_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.APOLLO, _APOLLO_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "apollo-test-key" not in blob
+    assert decrypt_content(SecretProvider.APOLLO, blob, _KEY) == original
 
 
 def test_retired_google_providers_are_gone():

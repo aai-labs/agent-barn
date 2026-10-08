@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable, Mapping
 
 from api.domains.agents.microsoft_graph_scopes import GRAPH_SCOPE_PREFIX, sharepoint_permission
 from api.domains.agents.models import (
+    ApolloContent,
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
@@ -35,6 +36,7 @@ provider_secrets_map: dict[str, list[tuple[str, str]]] = {
     ],
     "slack": [("slack.token", "token")],
     "pipedrive": [("pipedrive.api_token", "api_token")],
+    "apollo": [("apollo.api_token", "api_token")],
 }
 
 # Canonical aai-cli --profile slug per provider — the single source of truth shared by the
@@ -51,6 +53,7 @@ PROFILE_SLUGS: dict[SecretProvider, str] = {
     SecretProvider.SLACK: "slack-work",
     SecretProvider.PIPEDRIVE: "pipedrive-work",
     SecretProvider.SHAREPOINT: "sharepoint-work",
+    SecretProvider.APOLLO: "apollo-work",
 }
 
 # SharePoint uses aai-cli's own delegated Microsoft profile. aai-cli refreshes the token and
@@ -208,6 +211,16 @@ def _pipedrive_block(c: PipedriveContent) -> str:
     return "".join(lines)
 
 
+def _apollo_block(c: ApolloContent) -> str:
+    # No base_url: aai-cli defaults to Apollo's public API, the only host the key is for.
+    return (
+        f"[profiles.{PROFILE_SLUGS[SecretProvider.APOLLO]}]\n"
+        'provider = "apollo"\n'
+        'auth_type = "apollo_api_key"\n'
+        'api_token_secret = "apollo.api_token"\n'
+    )
+
+
 def _sharepoint_block(c: SharePointContent) -> str:
     """aai-cli ``microsoft`` profile for the person who signed in on the agent's Teams app.
 
@@ -236,6 +249,7 @@ _PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
     SecretProvider.SLACK: _slack_block,
     SecretProvider.PIPEDRIVE: _pipedrive_block,
     SecretProvider.SHAREPOINT: _sharepoint_block,
+    SecretProvider.APOLLO: _apollo_block,
 }
 
 
@@ -364,6 +378,7 @@ _INTEGRATION_LABELS: dict[SecretProvider, str] = {
     SecretProvider.SLACK: "Slack",
     SecretProvider.PIPEDRIVE: "Pipedrive",
     SecretProvider.SHAREPOINT: "SharePoint",
+    SecretProvider.APOLLO: "Apollo",
 }
 
 # One-clause summary of what each integration can actually do, appended to its agents_md
@@ -389,6 +404,13 @@ _INTEGRATION_CAPABILITIES: dict[SecretProvider, str] = {
         "SharePoint only, as the signed-in account: files in document libraries "
         "(`microsoft sharepoint files` upload/download/delete), lists and list items; find sites, "
         "libraries and folders with `microsoft request get` — read `./skills/aai-microsoft/SKILL.md`"
+    ),
+    SecretProvider.APOLLO: (
+        "people and organization search and enrichment, contacts, accounts, deals, sequences, "
+        "emails, tasks, calls, notes; a key reaches only the endpoints chosen when it was "
+        "created, and people and organization search and enrichment need a paid Apollo plan, "
+        "so a 403 means the key or plan lacks access to that endpoint, not that Apollo is "
+        "unavailable"
     ),
 }
 

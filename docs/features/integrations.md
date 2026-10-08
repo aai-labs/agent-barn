@@ -10,7 +10,7 @@ Integrations make external services available to an Agent. Agent Secrets hold en
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, Pipedrive, and SharePoint. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Zoho Mail, Zoho Calendar, Firecrawl, Slack, Pipedrive, SharePoint, and Apollo. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace.
 
 Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or gog (Google Workspace only). The two have separate runtime artifacts, secret stores, and agent policy blocks. Commands run through either CLI are recorded as Business Actions (see [`business-value.md`](business-value.md)).
 
@@ -28,7 +28,7 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 
 ## Invariants
 
-- Agent Secret payloads are validated against provider-specific schemas before encryption and again after decryption. Agent creation does not trust client-side validation: for providers with a live validator, the service validates the exact submitted manual or shared credential before allocating a LiteLLM key or persisting the Agent. Providers without a live validator remain schema-validated and can be checked through the on-demand validation endpoint.
+- Agent Secret payloads are validated against provider-specific schemas before encryption and again after decryption. Agent creation does not trust client-side validation: for providers with a live validator, the service validates the exact submitted manual or shared credential before allocating a LiteLLM key or persisting the Agent. Providers without a live validator remain schema-validated and can be checked through the on-demand validation endpoint. Apollo's validator proves only that the key is valid: Apollo offers no check of which endpoints a key may call, so an agent can still get 403 from endpoints the key or the Apollo plan does not cover.
 - An agent has at most one Agent Secret per provider.
 - Duplicate providers in create/update payloads are rejected.
 - Read APIs return provider and display label, not credential contents.

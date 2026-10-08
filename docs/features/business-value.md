@@ -42,7 +42,7 @@ The classifier (`api/domains/business_value/classifier.py`) is a pure function o
 4. Drop the global flags `--profile`, `--config`, `--secrets-file`, and `--key-file` with their values, in both `--flag VALUE` and `--flag=VALUE` form and in any position.
 5. Ignore any invocation that has `--help` or `-h`, a `help` subcommand, or no command path, and any invocation in the aai-cli tooling groups `config`, `skills`, `secrets`, or `help`. `--version` is not a help flag, because `confluence pages update` takes `--version N`.
 6. Match the longest known command path. `verb` is its last token and `resource` is the tokens in between.
-   - Passthrough `request` commands (microsoft, pipedrive, hubspot, openpanel) read their HTTP method: `get` and `head` are reads, and any other method is a write with no Outcome Type.
+   - Passthrough `request` commands (microsoft, pipedrive, hubspot, openpanel, apollo) read their HTTP method: `get` and `head` are reads, and any other method is a write with no Outcome Type.
    - An unknown path keeps the deepest known resource. It keeps the next token as `verb` only if that token looks like a command word, so no argument text is stored.
 
 ### gog commands
@@ -93,16 +93,16 @@ Every write path in both catalogues maps to exactly one Outcome Type: 90 aai-cli
 | `PULL_REQUEST_OPENED` | 20 | github/bitbucket `prs create` |
 | `DOCUMENT_AUTHORED` | 20 | confluence `pages create`/`update`, excel `workbook create`, gog `sheets create` |
 | `COMMENT_POSTED` | 5 | jira `issues comments create`, github `prs reviews create`, confluence `pages comments create`, gog `drive comments create`/`reply` |
-| `MESSAGE_SENT` | 5 | microsoft `mail send`, gog `gmail send`/`reply`/`reply-all`/`forward`/`autoreply`/`drafts send` |
+| `MESSAGE_SENT` | 5 | microsoft `mail send`, apollo `emails send-now`, gog `gmail send`/`reply`/`reply-all`/`forward`/`autoreply`/`drafts send` |
 | `MEETING_SCHEDULED` | 5 | microsoft `calendar events create`, gog `calendar create`/`focus-time`/`out-of-office` |
 | `SPREADSHEET_UPDATED` | 5 | excel and microsoft excel writes to values, sheets, and table rows; gog `sheets` writes, including `clear` |
 | `FILE_UPLOADED` | 2 | drive/microsoft/sharepoint `files upload`, jira/confluence `attachments upload`, gog `drive upload`/`sync push` |
-| `RECORD_CREATED` | 5 | jira issues/ideas/sprints, pipedrive records, `leads convert`, microsoft contacts/todo/planner, gog Gmail drafts/labels/filters, `drive mkdir`/`copy` |
-| `RECORD_UPDATED` | 3 | issue and record updates, `prs close`/`decline`, `sprints issues add`, comment edits, gog label/read-state changes, `drive share`/`move`/`rename`, `calendar update`/`respond` |
+| `RECORD_CREATED` | 5 | jira issues/ideas/sprints, pipedrive and apollo records, apollo `emails draft`, `leads convert`, microsoft contacts/todo/planner, gog Gmail drafts/labels/filters, `drive mkdir`/`copy` |
+| `RECORD_UPDATED` | 3 | issue and record updates, `prs close`/`decline`, `sprints issues add`, apollo sequence activation and contact enrolment, comment edits, gog label/read-state changes, `drive share`/`move`/`rename`, `calendar update`/`respond` |
 | `RECORD_DELETED` | 1 | any delete, including gog `gmail trash` and `drive delete` (which moves to trash) |
 
 Deletes always map to `RECORD_DELETED`, including sheets, tables, and comments. Housekeeping commands are ignored and not stored:
-- aai-cli: `microsoft auth login`/`status`, `hubspot health`, `hubspot events custom send`, and `hubspot conversations visitor-identification tokens create`;
+- aai-cli: `microsoft auth login`/`status`, `hubspot health`, `apollo health`, `hubspot events custom send`, and `hubspot conversations visitor-identification tokens create`;
 - gog: the tooling commands above, `gmail settings watch …`, `gmail track setup`/`status`/`key rotate`, `gmail settings sendas verify`, `drive changes serve`/`watch`/`stop`, and `calendar alias …`.
 
 ## Value settings
@@ -373,7 +373,7 @@ Each of these is an **undercount**, not a verdict on the Agent. The last one is 
   - Expect a higher unverified share for gog than for aai-cli. How often Agents do this has not been measured.
 - **Only direct invocations are detected.** `timeout aai-cli …`, `xargs aai-cli …`, and scripts that call aai-cli are not seen. Invocations inside `$(…)`, inside `(…)`, or after `&` are recorded but never `SUCCESS`.
 - **Orphaned results and calls that never complete are not counted.** `ToolCallRepository.complete()` returns `None` for a result without a matching call, and such calls stay `PENDING`. Hermes produces one whenever its hook lacks a tool call id. How often this happens in real traffic has not been measured. The CHANGELOG records the staging query that would size it.
-- **Some commands are unclassified.** Command groups with no bundled reference are stored with `is_write` `NULL`: the aai-cli binary also ships `calendar`, `apollo`, `sheets`, and `slack`. So are paths the catalogue does not know.
+- **Some commands are unclassified.** Command groups with no bundled reference are stored with `is_write` `NULL`: the aai-cli binary also ships `calendar`, `sheets`, and `slack`. So are paths the catalogue does not know.
 - **aai-cli is unpinned.** Both runtime images build it from its default branch, and it has no `--version`, so the commands actually run can drift from the bundled references the catalogue is tested against. gog is pinned, and its catalogue is tested against the recorded command tree of the pinned version.
 - **Business Actions store no arguments and no results.** They say what kind of action happened, not to what or with which content.
 - **Success is conservative.** Actions outside the segment the exit code covers, background runs, and multi-action failures that cannot be attributed are `UNKNOWN`, even when they succeeded.

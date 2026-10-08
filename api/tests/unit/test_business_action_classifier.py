@@ -106,6 +106,19 @@ def _openclaw_quote(value: str) -> str:
             [("microsoft", "", "request", True, None)],
         ),
         ("aai-cli openpanel request", [("openpanel", "", "request", None, None)]),
+        (
+            "aai-cli apollo request post /people/match --allow-write --query email=a@b.c",
+            [("apollo", "", "request", True, None)],
+        ),
+        (
+            "aai-cli --profile apollo-work apollo sequences add-contacts S1 --contact-id C1",
+            [("apollo", "sequences", "add-contacts", True, OutcomeType.RECORD_UPDATED)],
+        ),
+        (
+            "aai-cli apollo emails send-now M1",
+            [("apollo", "emails", "send-now", True, OutcomeType.MESSAGE_SENT)],
+        ),
+        ("aai-cli apollo people search --limit 5", [("apollo", "people", "search", False, None)]),
         ("aai-cli jira issues transition A-1", [("jira", "issues", "transition", None, None)]),
         ("aai-cli jira issues 'Some Text'", [("jira", "issues", "", None, None)]),
         ("aai-cli excel nonsense-command", [("excel", "", "nonsense-command", None, None)]),
@@ -143,6 +156,7 @@ def test_classifies_command_paths(command, expected):
         "aai-cli secrets set x",
         "aai-cli microsoft auth login",
         "aai-cli hubspot health",
+        "aai-cli apollo health",
         "aai-cli hubspot events custom send --json e.json",
         "aai-cli hubspot conversations visitor-identification tokens create --json t.json",
         "ls -la",

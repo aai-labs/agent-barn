@@ -8,8 +8,10 @@ from api.domains.agents.aai_cli_skills import (
     build_skills_manifest,
     root_relative_files,
 )
+from api.domains.agents.models import SecretProvider
 
 _EXPECTED_PROVIDER_NAMES = {
+    "Apollo",
     "Jira",
     "Confluence",
     "GitHub",
@@ -40,6 +42,15 @@ def test_each_provider_skill_has_required_providers():
         if skill_def["name"] in _CREDENTIAL_FREE_SKILLS | _UNMANAGED_BUNDLED_SKILLS:
             continue
         assert skill_def["required_providers"], f"No required_providers for {skill_def['name']}"
+
+
+def test_apollo_skill_requires_the_apollo_credential():
+    (skill_def,) = [s for s in AAI_CLI_PROVIDER_SKILLS if s["slug"] == "aai-apollo"]
+    assert skill_def["required_providers"] == [SecretProvider.APOLLO]
+    assert {f["skill_file_path"] for f in skill_def["files"]} == {
+        "aai-apollo/SKILL.md",
+        "aai-apollo/references/command-reference.md",
+    }
 
 
 def test_credential_free_skills_declare_no_providers():

@@ -5120,6 +5120,118 @@ def test_agent_configuration_override_history_retained_after_soft_delete():
 
 
 # ---------------------------------------------------------------------------
+# Apollo integration
+# ---------------------------------------------------------------------------
+
+_APOLLO_CONTENT = {"api_token": "apollo-test-key"}
+_APOLLO_HTTPX_GET = "api.infrastructure.integration_validators.apollo.httpx.get"
+
+
+def _apollo_response(status_code: int, payload: dict) -> httpx.Response:
+    return httpx.Response(status_code, json=payload, request=httpx.Request("GET", "https://api.apollo.io"))
+
+
+def _configure_apollo(client: TestClient, context, content: dict | None = None):
+    return client.patch(
+        f"{_BASE}/{context.agent.id}",
+        json={"secrets": [{"provider": "apollo", "content": content or _APOLLO_CONTENT}]},
+        headers=_auth(context),
+    )
+
+
+def test_patch_agent_accepts_apollo_secret():
+    """Covers the enum member, the content schema, and the DB check constraint."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I configure an Apollo credential"):
+            response = _configure_apollo(client, context)
+
+        with then("it is stored and listed without exposing the key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["apollo"]))
+            assert_that(response.json()["secrets"][0]["secret_name"], equal_to("Apollo credential"))
+            assert_that(response.text, is_not(contains_string("apollo-test-key")))
+
+
+def test_patch_agent_rejects_apollo_secret_with_base_url():
+    """The key is only ever sent to Apollo's own API, so no field may redirect it."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I configure an Apollo credential that names another host"):
+            response = _configure_apollo(client, context, {**_APOLLO_CONTENT, "base_url": "https://evil.example"})
+
+        with then("it is rejected"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_create_agent_with_valid_apollo_key_succeeds():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "secrets": [{"provider": "apollo", "content": _APOLLO_CONTENT}]}
+        healthy = _apollo_response(200, {"healthy": True, "is_logged_in": True})
+
+        with when("I create an agent with an Apollo key that Apollo recognises"):
+            with patch(_APOLLO_HTTPX_GET, return_value=healthy) as apollo_get:
+                response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the key is live-validated and the agent is created"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            apollo_get.assert_called_once()
+            assert_that(_providers(response), equal_to(["apollo"]))
+
+
+def test_create_agent_rejects_invalid_apollo_key():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        payload = {**_VALID_CREATE, "secrets": [{"provider": "apollo", "content": _APOLLO_CONTENT}]}
+
+        with when("I create an agent with an Apollo key that Apollo does not recognise"):
+            with patch(_APOLLO_HTTPX_GET, return_value=_apollo_response(200, {"is_logged_in": False})):
+                response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it is rejected before anything is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("Invalid API key"))
+            litellm.generate_key.assert_not_called()
+            assert_that(client.get(_BASE, headers=_auth(context)).json()["items"], equal_to([]))
+
+
+def test_start_agent_wires_apollo_into_aai_cli():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        from api.domains.skills.skill_seeder import seed_aai_cli_skills
+
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+        seed_aai_cli_skills(context.injector.get(SkillRepository))
+
+        with when("I start an agent with an Apollo credential"):
+            _configure_apollo(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the pod secret carries the key for aai-cli's secret store"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["AAI_SECRET_APOLLO_API_TOKEN"], equal_to("apollo-test-key"))
+
+        with then("aai-cli gets an apollo-work profile that keeps Apollo's default host"):
+            config_map = k8s.create_config_map.call_args.args[1]
+            toml = config_map.data["aai-cli-config.toml"]
+            assert_that(toml, contains_string("[profiles.apollo-work]"))
+            assert_that(toml, contains_string('auth_type = "apollo_api_key"'))
+            assert_that(toml, is_not(contains_string("base_url")))
+            assert_that(toml, is_not(contains_string("apollo-test-key")))
+            assert_that(config_map.data["AGENTS.md"], contains_string("--profile apollo-work"))
+
+        with then("the bundled aai-apollo skill is mounted"):
+            paths = [entry["path"] for entry in json.loads(config_map.data["skills.json"])]
+            assert_that(paths, has_item("aai-apollo/SKILL.md"))
+            assert_that(paths, has_item("aai-apollo/references/command-reference.md"))
+
+
+# ---------------------------------------------------------------------------
 # Google Workspace (gog) integration
 # ---------------------------------------------------------------------------
 

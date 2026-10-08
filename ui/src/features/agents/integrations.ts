@@ -206,6 +206,14 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "domain", label: "Company domain", type: "text", required: false, placeholder: "aai-labs", hint: "Subdomain only — the part before .pipedrive.com. Leave empty to use the default api.pipedrive.com endpoint." },
     ],
   },
+  {
+    id: "apollo",
+    label: "Apollo",
+    scopeNote: "A key only reaches the endpoints chosen when it was created, so use a master API key or give the key every endpoint the agent needs. People and organization search and enrichment also need a paid Apollo plan.",
+    fields: [
+      { key: "apiToken", label: "API key", type: "secret", required: true, hint: "Create one in Apollo under Settings → Integrations → API Keys." },
+    ],
+  },
   // zoho_calendar disabled: not currently offered as an integration. Re-enable by
   // uncommenting if needed again.
   // {
