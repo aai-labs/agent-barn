@@ -15,6 +15,9 @@ export const OnboardingSchema = z.object({
 export const TrialSettingsSchema = z.object({
   creditUsd: z.number(),
   agentLimit: z.number().int(),
+  // Null: no cap on how many trials may be active at once.
+  maxActiveTrials: z.number().int().nullable().optional(),
+  activeTrials: z.number().int().optional(),
   updatedAt: z.string().nullable().optional(),
 });
 
@@ -30,4 +33,5 @@ export const SIGN_IN_ERRORS: Record<string, string> = {
   unverified: "Google hasn't verified the email address on that account. Verify it with Google, then try again.",
   signup_closed: "Sign-up is closed right now. If you already have an account, sign in with it.",
   trial_used: "This email has already had a free trial.",
+  trials_full: "We've reached our limit of free trials for now. Try again later.",
 };

@@ -1,10 +1,11 @@
 """Trial onboarding: the platform's trial settings and what the onboarding flow reads."""
 
 from datetime import datetime
+from typing import Self
 from uuid import UUID
 
 import sqlalchemy as sa
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlmodel import Field as SqlField
 from sqlmodel import SQLModel
 
@@ -13,6 +14,7 @@ TRIAL_SETTINGS_SUBJECT_DISPLAY = "Trial settings"
 MAX_TRIAL_CREDIT_USD = 10_000.0
 MAX_TRIAL_AGENT_LIMIT = 50
 DEFAULT_TRIAL_AGENT_LIMIT = 1
+MAX_ACTIVE_TRIALS_CAP = 100_000
 
 
 class PlatformTrialSettings(SQLModel, table=True):
@@ -24,11 +26,14 @@ class PlatformTrialSettings(SQLModel, table=True):
         sa.CheckConstraint("id = 1", name="ck_platform_trial_settings_singleton"),
         sa.CheckConstraint("credit_usd >= 0", name="ck_platform_trial_settings_credit_non_negative"),
         sa.CheckConstraint("agent_limit >= 1", name="ck_platform_trial_settings_agent_limit_positive"),
+        sa.CheckConstraint("max_active_trials >= 1", name="ck_platform_trial_settings_max_active_trials_positive"),
     )
     id: int = SqlField(default=1, primary_key=True)
     credit_usd: float
     # How many Agents a Trial Organization may run, checked whenever one is hired.
     agent_limit: int = SqlField(default=DEFAULT_TRIAL_AGENT_LIMIT, sa_column_kwargs={"server_default": "1"})
+    # How many Organizations may be on a trial at once, checked at sign-up. None: no cap.
+    max_active_trials: int | None = SqlField(default=None, nullable=True)
     updated_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
     updated_by: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
 
@@ -46,16 +51,33 @@ class TrialGrant(SQLModel, table=True):
 class TrialSettingsRead(BaseModel):
     credit_usd: float
     agent_limit: int = DEFAULT_TRIAL_AGENT_LIMIT
+    # None: any number of trials may be active at once.
+    max_active_trials: int | None = None
+    # Organizations on a trial right now, counted against `max_active_trials`.
+    active_trials: int = 0
     # None until the first save.
     updated_at: datetime | None = None
 
 
 class TrialSettingsUpdate(BaseModel):
-    """Omitting a setting leaves it as it is."""
+    """Omitting a setting leaves it as it is. `max_active_trials: null` removes the cap;
+    the credit and the agent limit always have a value."""
 
     model_config = ConfigDict(extra="forbid")
     credit_usd: float | None = Field(default=None, ge=0, le=MAX_TRIAL_CREDIT_USD, allow_inf_nan=False)
     agent_limit: int | None = Field(default=None, ge=1, le=MAX_TRIAL_AGENT_LIMIT)
+    max_active_trials: int | None = Field(default=None, ge=1, le=MAX_ACTIVE_TRIALS_CAP)
+
+    @model_validator(mode="after")
+    def _required_settings_keep_a_value(self) -> Self:
+        for setting in ("credit_usd", "agent_limit"):
+            if setting in self.model_fields_set and getattr(self, setting) is None:
+                raise ValueError(f"{setting} can't be removed")
+        return self
+
+    def changes(self) -> dict[str, float | int | None]:
+        """The settings this update sets, a removed cap included."""
+        return self.model_dump(include=self.model_fields_set)
 
 
 class OnboardingRead(BaseModel):

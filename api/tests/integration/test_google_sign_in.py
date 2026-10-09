@@ -7,18 +7,22 @@ from datetime import UTC, datetime
 
 import pytest
 from hamcrest import assert_that, empty, equal_to, has_entries, has_length, is_not, none, not_none
+from sqlmodel import Session
 
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.auth.google_sign_in import GoogleSignInService
 from api.domains.auth.repository import PasswordResetTokenRepository
 from api.domains.auth.service import AuthService
 from api.domains.onboarding.repository import TrialSettingsRepository
+from api.domains.onboarding.settings_service import TrialSettingsService
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
 from api.infrastructure.google.identity import GoogleIdentityError, GoogleIdentityUnavailable
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
@@ -43,13 +47,16 @@ ONBOARDING = f"{WEB_APP_URL}/onboarding"
 DASHBOARD = f"{WEB_APP_URL}/dashboard"
 
 
-def _setup(*steps, signup: str = "true"):
+def _setup(*steps, signup: str = "true", telegram: bool = True):
     return [
         set_env_variable(
             {
                 "WEB_APP_URL": WEB_APP_URL,
                 "SELF_SIGNUP_ENABLED": signup,
                 "TRIAL_DEFAULT_CREDIT_USD": "7.5",
+                # A trial is reached through Agent Barn's shared bot.
+                "AGENTBARN_TELEGRAM_BOT_TOKEN": "424242:the-shared-bot-token" if telegram else "",
+                "AGENTBARN_TELEGRAM_BOT_USERNAME": "AgentBarnTestBot" if telegram else "",
             }
         ),
         prepare_injector(modules=[FakeGoogleIdentityModule()]),
@@ -429,6 +436,105 @@ def test_with_signup_closed_existing_users_still_sign_in_with_google():
         assert_that(redirect_target(response), equal_to((DASHBOARD, {})))
 
 
+def test_without_the_shared_telegram_bot_new_accounts_are_turned_away():
+    """A trial is used through Agent Barn's Telegram bot; without one configured, a new
+    user could never finish onboarding."""
+    with given(_setup(telegram=False)) as context:
+        with when("someone new comes back from Google"):
+            response = finish_google_sign_in(context)
+
+        with then("they are told sign-up is closed, and nothing is created or recorded"):
+            assert_that(redirect_target(response)[1], equal_to({"error": "signup_closed"}))
+            assert_that(_user(context), none())
+            assert_that(_has_had_trial(context, GOOGLE_EMAIL), equal_to(False))
+
+
+def test_without_the_shared_telegram_bot_existing_users_still_sign_in_with_google():
+    with given(_setup(there_is_a_user(email=GOOGLE_EMAIL), telegram=False)) as context:
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response), equal_to((DASHBOARD, {})))
+
+
+# --- the cap on active trials ------------------------------------------------------------
+
+
+def test_once_the_active_trials_are_at_the_cap_new_accounts_are_turned_away():
+    with given(_setup()) as context:
+        _set_trial_cap(context, 1)
+        google_returns(google_identity(sub="first", email="first@example.com"))(context)
+        finish_google_sign_in(context)
+        google_returns(google_identity())(context)
+
+        with when("someone new comes back from Google while the trials are full"):
+            response = finish_google_sign_in(context)
+
+        with then("they are told trials are full, and nothing is created or recorded, so they can come back"):
+            assert_that(redirect_target(response), equal_to((f"{WEB_APP_URL}/signup", {"error": "trials_full"})))
+            assert_that(_user(context), none())
+            assert_that(_has_had_trial(context, GOOGLE_EMAIL), equal_to(False))
+
+
+def test_while_trials_are_full_existing_users_still_sign_in_with_google():
+    with given(_setup(there_is_a_user(email=GOOGLE_EMAIL))) as context:
+        _set_trial_cap(context, 1)
+        _trial_organization(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response), equal_to((DASHBOARD, {})))
+
+
+def test_ending_a_trial_frees_its_place():
+    with given(_setup()) as context:
+        _set_trial_cap(context, 1)
+        ended = _trial_organization(context)
+        ended.is_trial = False
+        context.injector.get(OrganizationRepository).save(ended)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response), equal_to((ONBOARDING, {})))
+
+
+def test_without_a_cap_trials_are_not_limited():
+    with given(_setup()) as context:
+        for index in range(3):
+            _trial_organization(context, name=f"Trial {index}")
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response), equal_to((ONBOARDING, {})))
+
+
+def test_simultaneous_sign_ups_cannot_overshoot_the_cap():
+    with given(_setup()) as context:
+        _set_trial_cap(context, 1)
+        service = context.injector.get(GoogleSignInService)
+        barrier = threading.Barrier(2)
+        outcomes = []
+
+        def sign_up(index: int) -> None:
+            barrier.wait()
+            try:
+                outcomes.append(
+                    service._sign_in(google_identity(sub=f"racer-{index}", email=f"racer-{index}@example.com"))
+                )
+            except Exception as exc:
+                outcomes.append(exc)
+
+        with when("two new people come back from Google at the same moment, with one place left"):
+            threads = [threading.Thread(target=sign_up, args=(index,)) for index in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+
+        with then("only one trial is created"):
+            assert_that(outcomes, has_length(2))
+            assert_that(_active_trials(context), equal_to(1))
+
+
 def test_a_callback_cannot_be_replayed():
     with given(_setup()) as context:
         state = state_from(start_google_sign_in(context))
@@ -451,6 +557,30 @@ def _set_trial_credit(context, credit: float) -> None:
     context.injector.get(TrialSettingsRepository).set_settings(
         {"credit_usd": credit}, 7.5, context.user.id, "Platform Admin"
     )
+
+
+def _set_trial_cap(context, cap: int) -> None:
+    admin = there_is_a_user(email="trial-cap-admin@example.com", is_platform_admin=True)
+    admin(context)
+    context.injector.get(TrialSettingsRepository).set_settings(
+        {"max_active_trials": cap}, 7.5, context.user.id, "Platform Admin"
+    )
+
+
+def _trial_organization(context, name: str = "Someone's trial") -> Organization:
+    return context.injector.get(OrganizationRepository).save(
+        Organization(name=name, allowed_models=["*"], is_trial=True)
+    )
+
+
+def _active_trials(context) -> int:
+    return context.injector.get(OrganizationRepository).count_trials()
+
+
+def _has_had_trial(context, email: str) -> bool:
+    repository = context.injector.get(TrialSettingsRepository)
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        return repository.has_grant(TrialSettingsService.email_hash(email), session)
 
 
 def _delete_account(context, user) -> None:

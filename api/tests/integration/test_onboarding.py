@@ -2,13 +2,16 @@
 Connection, is set up and started for them; finishing onboarding sends returning users
 straight to the dashboard."""
 
+import logging
 from unittest.mock import MagicMock
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_entries, has_length, none, not_none
 
+from api.core.config import Config
 from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.agents.repository import AgentRepository
+from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.onboarding.service import OnboardingService
 from api.domains.templates.service import TemplateService
 from api.infrastructure.kubernetes.client import KubernetesClient
@@ -18,6 +21,7 @@ from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLL
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.google_sign_in import WEB_APP_URL, FakeGoogleIdentityModule, finish_google_sign_in
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.user import there_is_a_user
 
 ONBOARDING = "/api/v1/onboarding"
 
@@ -248,3 +252,47 @@ def test_a_running_agent_given_a_new_connection_is_restarted_with_it():
             assert_that(again["connection_id"], not_none())
             assert_that(again["agent_status"], equal_to(AgentStatus.RUNNING.value))
             assert_that(k8s.create_deployment.call_count, equal_to(starts_before + 1))
+
+
+def test_a_setup_that_cannot_succeed_says_why_and_is_logged(caplog):
+    """Agent Barn's bot was taken away after this user signed up: their Agent can't get its
+    Telegram Connection, and they should see why rather than a retry that never works."""
+    with given(_setup(someone_signed_up_with_google())) as context:
+        context.injector.get(Config).agentbarn_telegram_bot_token = ""
+
+        with when("onboarding sets up their Agent"), caplog.at_level(logging.WARNING):
+            response = _set_up_agent(context)
+
+        with then("the reason is returned"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST), response.text)
+            assert_that(response.json(), has_entries(detail="Agent Barn Telegram is not available"))
+
+        with then("and logged"):
+            assert_that(
+                any("Agent Barn Telegram is not available" in record.getMessage() for record in caplog.records),
+                equal_to(True),
+                caplog.text,
+            )
+
+
+def test_onboarding_follows_the_trials_first_agent():
+    """With a trial agent limit above one, the user may hire more; onboarding keeps to the
+    Agent it set up, which is the trial's oldest."""
+    with given(_setup(someone_signed_up_with_google())) as context:
+        first = _set_up_agent(context).json()
+        there_is_a_user(email="limit-admin@example.com", is_platform_admin=True, organization_id=None)(context)
+        context.injector.get(TrialSettingsRepository).set_settings(
+            {"agent_limit": 2}, 10, context.user.id, "Platform Admin"
+        )
+        hired = context.client.post(
+            f"/api/v1/organizations/{first['organization_id']}/agents",
+            json={"name": "Aardvark", "template_key": "general-purpose"},
+            headers=auth(context),
+        )
+        assert_that(hired.status_code, equal_to(status.HTTP_201_CREATED), hired.text)
+
+        with when("they open onboarding again"):
+            response = context.client.get(ONBOARDING, headers=auth(context))
+
+        with then("it is still about the Agent it set up"):
+            assert_that(response.json(), has_entries(agent_id=first["agent_id"]))

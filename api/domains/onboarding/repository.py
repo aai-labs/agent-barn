@@ -21,6 +21,8 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 # Serializes trial settings changes, including creation of the singleton row.
 _TRIAL_SETTINGS_LOCK = 732914106
+# Serializes sign-ups' check against the cap on active trials.
+_TRIAL_ADMISSION_LOCK = 732914107
 
 
 @inject
@@ -32,16 +34,27 @@ class TrialSettingsRepository:
 
     def read(self, default_credit_usd: float) -> TrialSettingsRead:
         with Session(self.delegate.engine) as session:
-            row = session.get(PlatformTrialSettings, 1)
-            return (
-                TrialSettingsRead(credit_usd=row.credit_usd, agent_limit=row.agent_limit, updated_at=row.updated_at)
-                if row
-                else TrialSettingsRead(credit_usd=default_credit_usd)
-            )
+            return self._current(session.get(PlatformTrialSettings, 1), default_credit_usd)
+
+    @staticmethod
+    def _current(row: PlatformTrialSettings | None, default_credit_usd: float) -> TrialSettingsRead:
+        if row is None:
+            return TrialSettingsRead(credit_usd=default_credit_usd)
+        return TrialSettingsRead(
+            credit_usd=row.credit_usd,
+            agent_limit=row.agent_limit,
+            max_active_trials=row.max_active_trials,
+            updated_at=row.updated_at,
+        )
+
+    def lock_trial_admission(self, session: Session) -> None:
+        """Held until the caller's transaction ends, so concurrent sign-ups count active
+        trials one at a time and cannot overshoot the cap together."""
+        session.connection().execute(sa.text(f"SELECT pg_advisory_xact_lock({_TRIAL_ADMISSION_LOCK})"))
 
     def set_settings(
         self,
-        changes: Mapping[str, float | int],
+        changes: Mapping[str, float | int | None],
         default_credit_usd: float,
         actor_id: UUID,
         actor_display: str,
@@ -51,11 +64,7 @@ class TrialSettingsRepository:
         with Session(self.delegate.engine) as session:
             session.connection().execute(sa.text(f"SELECT pg_advisory_xact_lock({_TRIAL_SETTINGS_LOCK})"))
             row = session.get(PlatformTrialSettings, 1)
-            current = (
-                TrialSettingsRead(credit_usd=row.credit_usd, agent_limit=row.agent_limit, updated_at=row.updated_at)
-                if row
-                else TrialSettingsRead(credit_usd=default_credit_usd)
-            )
+            current = self._current(row, default_credit_usd)
             moved = [
                 (setting, getattr(current, setting), value)
                 for setting, value in changes.items()
@@ -70,6 +79,7 @@ class TrialSettingsRepository:
                     id=1,
                     credit_usd=stored.credit_usd,
                     agent_limit=stored.agent_limit,
+                    max_active_trials=stored.max_active_trials,
                     updated_at=now,
                     updated_by=actor_id,
                 )
@@ -91,8 +101,8 @@ class TrialSettingsRepository:
                         "actor_display": actor_display,
                         "subject_display": TRIAL_SETTINGS_SUBJECT_DISPLAY,
                         "setting": setting,
-                        "previous": float(previous),
-                        "current": float(value),
+                        "previous": None if previous is None else float(previous),
+                        "current": None if value is None else float(value),
                     },
                 )
                 self.outbox.stage(session=session, registry=EVENT_REGISTRY, event=event)

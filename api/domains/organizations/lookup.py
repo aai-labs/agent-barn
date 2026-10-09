@@ -53,6 +53,10 @@ class OrganizationLookupService:
         organization = self.repository.first_created_by(user_id)
         return organization.id if organization else None
 
+    def count_trials(self) -> int:
+        """How many Organizations are on a trial right now."""
+        return self.repository.count_trials()
+
     def is_trial(self, organization_id: UUID) -> bool:
         organization = self.repository.get(organization_id)
         return organization is not None and organization.is_trial

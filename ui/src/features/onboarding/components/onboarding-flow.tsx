@@ -9,6 +9,7 @@ import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { AppErrorState } from "@/components/app-error-state";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { useOrgStore } from "@/features/organizations/stores/org-store";
+import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { useOnboarding, useOnboardingActions } from "../hooks/use-onboarding";
 import { DoneStep } from "./done-step";
@@ -103,7 +104,11 @@ export function OnboardingFlow() {
           <StepHeading title="Setting up your agent">This takes a few seconds.</StepHeading>
           {setUpAgent.isError || (agentFailed && !setUpAgent.isPending) ? (
             <div className="flex flex-col gap-4">
-              <StepAlert>We couldn&apos;t start your agent. Try again in a moment.</StepAlert>
+              <StepAlert>
+                {setUpAgent.isError
+                  ? `We couldn't set up your agent: ${getErrorDisplay(setUpAgent.error).description}`
+                  : "We couldn't start your agent. Try again in a moment."}
+              </StepAlert>
               <div>
                 <button type="button" className="af-btn af-btn-lg" onClick={() => setUpAgent.mutate()}>
                   Try again

@@ -358,6 +358,12 @@ class OrganizationRepository:
             ).first()
             return owned is not None
 
+    def count_trials(self) -> int:
+        """Organizations still on a trial: ended trials and deleted Organizations don't count."""
+        with Session(self.delegate.engine) as session:
+            query = select(func.count()).select_from(Organization).where(col(Organization.is_trial).is_(True))
+            return session.scalar(query) or 0
+
     def first_created_by(self, user_id: UUID) -> Organization | None:
         with Session(self.delegate.engine) as session:
             return session.exec(

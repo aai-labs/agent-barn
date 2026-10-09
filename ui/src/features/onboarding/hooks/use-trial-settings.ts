@@ -17,7 +17,7 @@ export function useTrialSettings() {
     queryFn: async () => (await api.get<TrialSettings>(BASE, { schema: TrialSettingsSchema })).data,
   });
   const save = useMutation({
-    mutationFn: async (settings: { creditUsd: number; agentLimit: number }) =>
+    mutationFn: async (settings: { creditUsd: number; agentLimit: number; maxActiveTrials: number | null }) =>
       (await api.put<TrialSettings>(BASE, settings, { schema: TrialSettingsSchema })).data,
     onSuccess: (data) => client.setQueryData(KEY, data),
   });

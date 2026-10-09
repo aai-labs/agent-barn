@@ -29,7 +29,7 @@ The most an Organization may spend on model calls in one renewal period, set by 
 _Avoid_: allowance, plan limit, platform budget
 
 **Trial Organization**:
-The one Organization a self-signed-up user gets; an email address gets one trial, ever. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A Platform Administrator ends the trial, choosing the spend limit it goes on to, after which it is an ordinary Organization.
+The one Organization a self-signed-up user gets; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A Platform Administrator ends the trial, choosing the spend limit it goes on to, after which it is an ordinary Organization.
 _Avoid_: free plan, trial account, demo org
 
 **Trial Credit**:

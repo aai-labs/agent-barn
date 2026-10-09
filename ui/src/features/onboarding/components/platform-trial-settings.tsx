@@ -12,16 +12,21 @@ import { useTrialSettings } from "../hooks/use-trial-settings";
 // Match the API's bounds: they only stop a typo from granting a fortune.
 const MAX_CREDIT_USD = 10_000;
 const MAX_AGENT_LIMIT = 50;
+const MAX_ACTIVE_TRIALS = 100_000;
 
-type Draft = { credit: string; agentLimit: string };
+type Draft = { credit: string; agentLimit: string; cap: string };
 
 function agentsLabel(count: number) {
   return `${count} ${count === 1 ? "agent" : "agents"}`;
 }
 
-function parseAgentLimit(raw: string): number | null {
+function parseWholeNumber(raw: string, max: number): number | null {
   const parsed = Number(raw.trim());
-  return Number.isInteger(parsed) && parsed >= 1 && parsed <= MAX_AGENT_LIMIT ? parsed : null;
+  return raw.trim() !== "" && Number.isInteger(parsed) && parsed >= 1 && parsed <= max ? parsed : null;
+}
+
+function capLabel(active: number, cap: number | null) {
+  return cap === null ? `${active} active, no cap` : `${active} of ${cap.toLocaleString("en-US")} active`;
 }
 
 /** The Trials section of the platform settings page: what every trial organization gets. */
@@ -51,9 +56,15 @@ export function PlatformTrialSettings() {
 
   const credit = draft === null ? null : parseAmount(draft.credit);
   const creditInvalid = draft !== null && (credit === null || Number.isNaN(credit) || credit > MAX_CREDIT_USD);
-  const agentLimit = draft === null ? null : parseAgentLimit(draft.agentLimit);
+  const agentLimit = draft === null ? null : parseWholeNumber(draft.agentLimit, MAX_AGENT_LIMIT);
   const agentLimitInvalid = draft !== null && agentLimit === null;
-  const unchanged = credit === trialSettings.creditUsd && agentLimit === trialSettings.agentLimit;
+  const savedCap = trialSettings.maxActiveTrials ?? null;
+  // Empty means no cap.
+  const capCleared = draft !== null && draft.cap.trim() === "";
+  const cap = draft === null || capCleared ? null : parseWholeNumber(draft.cap, MAX_ACTIVE_TRIALS);
+  const capInvalid = draft !== null && !capCleared && cap === null;
+  const unchanged =
+    credit === trialSettings.creditUsd && agentLimit === trialSettings.agentLimit && cap === savedCap;
 
   function change(next: Partial<Draft>) {
     setDraft((current) => (current ? { ...current, ...next } : current));
@@ -62,9 +73,9 @@ export function PlatformTrialSettings() {
   }
 
   async function submit() {
-    if (credit === null || Number.isNaN(credit) || agentLimit === null) return;
+    if (credit === null || Number.isNaN(credit) || agentLimit === null || capInvalid) return;
     try {
-      await saveSettings({ creditUsd: credit, agentLimit });
+      await saveSettings({ creditUsd: credit, agentLimit, maxActiveTrials: cap });
       setDraft(null);
       setSaved(true);
     } catch {
@@ -121,6 +132,29 @@ export function PlatformTrialSettings() {
                 can&apos;t hire more.
               </p>
             </div>
+            <div>
+              <label className="mb-2 block text-sm font-medium" htmlFor="trial-cap">
+                Active trials at once
+              </label>
+              <input
+                id="trial-cap"
+                inputMode="numeric"
+                className="af-input max-w-[8rem]"
+                placeholder="No cap"
+                value={draft.cap}
+                aria-invalid={capInvalid}
+                onChange={(event) => change({ cap: event.target.value })}
+              />
+              {capInvalid && (
+                <p className="mt-2 text-sm" style={{ color: "var(--err)" }}>
+                  Enter a whole number from 1 to {MAX_ACTIVE_TRIALS.toLocaleString("en-US")}, or leave it empty.
+                </p>
+              )}
+              <p className="mb-0 mt-2 text-sm" style={{ color: "var(--ink-3)" }}>
+                Once this many trials are active, new sign-ups are turned away until a place frees up. Ending or
+                deleting a trial frees its place. Leave it empty for no cap.
+              </p>
+            </div>
           </div>
         ) : (
           <dl className="m-0 grid gap-x-8 gap-y-5 sm:grid-cols-2">
@@ -147,6 +181,17 @@ export function PlatformTrialSettings() {
               </dt>
               <dd className="m-0 text-[0.9rem]" data-testid="saved-trial-agent-limit">
                 {agentsLabel(trialSettings.agentLimit)}
+              </dd>
+            </div>
+            <div>
+              <dt
+                className="mb-2 text-[0.7rem] font-semibold uppercase tracking-[0.08em]"
+                style={{ color: "var(--ink-4)" }}
+              >
+                Active trials
+              </dt>
+              <dd className="m-0 text-[0.9rem]" data-testid="saved-trial-cap">
+                {capLabel(trialSettings.activeTrials ?? 0, savedCap)}
               </dd>
             </div>
           </dl>
@@ -177,7 +222,7 @@ export function PlatformTrialSettings() {
             </button>
             <button
               className="af-btn af-btn-primary"
-              disabled={creditInvalid || agentLimitInvalid || isSaving || unchanged}
+              disabled={creditInvalid || agentLimitInvalid || capInvalid || isSaving || unchanged}
               onClick={() => void submit()}
             >
               {isSaving ? "Saving…" : "Save"}
@@ -187,7 +232,11 @@ export function PlatformTrialSettings() {
           <button
             className="af-btn"
             onClick={() => {
-              setDraft({ credit: String(trialSettings.creditUsd), agentLimit: String(trialSettings.agentLimit) });
+              setDraft({
+                credit: String(trialSettings.creditUsd),
+                agentLimit: String(trialSettings.agentLimit),
+                cap: savedCap === null ? "" : String(savedCap),
+              });
               setSaved(false);
             }}
           >

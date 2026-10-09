@@ -71,7 +71,17 @@ class OnboardingService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="There is nothing left to set up.")
         agent = self._agent(trial) or self._create_agent(trial)
         # Before starting: the Agent picks up its Connection when it starts.
-        connection, created = self._ensure_telegram_connection(agent.id, trial)
+        try:
+            connection, created = self._ensure_telegram_connection(agent.id, trial)
+        except HTTPException as exc:
+            # Retrying won't help with most of these (no shared bot, for one), so say why.
+            logger.warning(
+                "Onboarding could not give agent %s its Telegram connection (%s: %s)",
+                agent.id,
+                exc.status_code,
+                exc.detail,
+            )
+            raise
         if agent.status in _STARTABLE:
             agent = self._start(agent, trial)
         elif created and agent.status == AgentStatus.RUNNING:
@@ -114,6 +124,8 @@ class OnboardingService:
         self.users.complete_onboarding(context.user.id)
 
     def _agent(self, trial: CurrentUserContext) -> AgentRead | None:
+        """The trial's oldest live Agent: the one onboarding set up, even after the user
+        hires more. Agent lists are oldest first."""
         page = self.agents.list_agents(AgentFilter(), Pagination(page=1, size=1), trial)
         return page.items[0] if page.items else None
 

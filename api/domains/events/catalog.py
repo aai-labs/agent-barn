@@ -476,7 +476,8 @@ class OrganizationTrialEndedPayload(BaseModel):
 
 
 class PlatformTrialSettingsChangedPayload(BaseModel):
-    """The trial credit a new trial Organization starts with, before and after."""
+    """One changed trial setting, named by `setting`, before and after. None is a removed
+    cap on active trials."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -484,8 +485,8 @@ class PlatformTrialSettingsChangedPayload(BaseModel):
     actor_display: str
     subject_display: str
     setting: str
-    previous: float
-    current: float
+    previous: float | None
+    current: float | None
 
 
 class PlatformResourceLimitsChangedPayload(BaseModel):

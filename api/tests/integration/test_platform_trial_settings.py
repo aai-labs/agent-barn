@@ -1,5 +1,6 @@
 """Trial settings (AF-368): Platform Administrators set the credit a new trial
-Organization starts with, and every change is audited."""
+Organization starts with, how many Agents a trial runs and how many trials may be active
+at once, and every change is audited."""
 
 from uuid import uuid7
 
@@ -9,6 +10,8 @@ from sqlmodel import Session, select
 
 from api.domains.events.catalog import PLATFORM_TRIAL_SETTINGS_CHANGED
 from api.domains.events.models import OutboxMessage
+from api.domains.organizations.models import Organization
+from api.domains.organizations.repository import OrganizationRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -42,6 +45,15 @@ def a_platform_admin():
     return step
 
 
+def trial_organizations(count: int, ended: int = 0):
+    def step(context):
+        repository = context.injector.get(OrganizationRepository)
+        for index in range(count + ended):
+            repository.save(Organization(name=f"Trial {index}", allowed_models=["*"], is_trial=index < count))
+
+    return step
+
+
 def auth(context):
     return {"Authorization": f"Bearer {context.access_token}"}
 
@@ -61,7 +73,10 @@ def test_the_deployment_default_applies_until_an_administrator_sets_one():
 
         with then("the deployment default is shown, never saved"):
             assert_that(response.status_code, equal_to(200))
-            assert_that(response.json(), has_entries(credit_usd=10.0, agent_limit=1, updated_at=none()))
+            assert_that(
+                response.json(),
+                has_entries(credit_usd=10.0, agent_limit=1, max_active_trials=none(), updated_at=none()),
+            )
 
 
 def test_a_platform_administrator_sets_the_trial_credit():
@@ -108,6 +123,59 @@ def test_a_platform_administrator_sets_the_trial_agent_limit():
             events = _trial_setting_events(context)
             assert_that(events, has_length(2))
             assert_that(events[1].payload, has_entries(setting="agent_limit", previous=1.0, current=3.0))
+
+
+def test_a_platform_administrator_caps_the_active_trials():
+    with given(_setup(a_platform_admin())) as context:
+        with when("they cap the trials that may be active at once"):
+            saved = context.client.put(BASE, headers=auth(context), json={"max_active_trials": 20})
+
+        with then("it is stored, and the other settings are left as they were"):
+            assert_that(saved.status_code, equal_to(200), saved.text)
+            assert_that(saved.json(), has_entries(credit_usd=10.0, agent_limit=1, max_active_trials=20))
+
+        with then("the change is audited, from no cap to the cap"):
+            events = _trial_setting_events(context)
+            assert_that(events, has_length(1))
+            assert_that(events[0].payload, has_entries(setting="max_active_trials", previous=none(), current=20.0))
+
+
+def test_a_platform_administrator_removes_the_cap():
+    with given(_setup(a_platform_admin())) as context:
+        context.client.put(BASE, headers=auth(context), json={"max_active_trials": 20})
+
+        with when("they clear the cap"):
+            saved = context.client.put(BASE, headers=auth(context), json={"max_active_trials": None})
+
+        with then("trials are uncapped again, and the change is audited"):
+            assert_that(saved.status_code, equal_to(200), saved.text)
+            assert_that(saved.json(), has_entries(max_active_trials=none()))
+            events = _trial_setting_events(context)
+            assert_that(events, has_length(2))
+            assert_that(events[1].payload, has_entries(previous=20.0, current=none()))
+
+
+def test_the_settings_say_how_many_trials_are_active():
+    with given(_setup(a_platform_admin(), trial_organizations(2, ended=1))) as context:
+        response = context.client.get(BASE, headers=auth(context))
+
+        assert_that(response.json(), has_entries(active_trials=2))
+
+
+@pytest.mark.parametrize("cap", [0, -1, 1.5, 100_001])
+def test_an_invalid_trial_cap_is_refused(cap):
+    with given(_setup(a_platform_admin())) as context:
+        response = context.client.put(BASE, headers=auth(context), json={"max_active_trials": cap})
+
+        assert_that(response.status_code, equal_to(422))
+
+
+@pytest.mark.parametrize("setting", ["credit_usd", "agent_limit"])
+def test_the_credit_and_agent_limit_cannot_be_cleared(setting):
+    with given(_setup(a_platform_admin())) as context:
+        response = context.client.put(BASE, headers=auth(context), json={setting: None})
+
+        assert_that(response.status_code, equal_to(422))
 
 
 @pytest.mark.parametrize("limit", [0, 51, 1.5])
