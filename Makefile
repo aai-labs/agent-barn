@@ -2,7 +2,7 @@ COMPOSE := docker compose -f compose.yml
 RUNTIME ?= hermes
 
 .PHONY: \
-	setup run stop stop-clean test-api-runtime \
+	setup run stop stop-clean test-api-runtime test-integration-isolation \
 	restart-ui \
 	dev-api dev-ingest dev-communications dev-gateway dev-memory dev-ui dev-worker dev-monitoring reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs purge-agent-memory
@@ -202,6 +202,11 @@ test-api-k8s:
 test-api-runtime:
 	@case "$(RUNTIME)" in hermes|openclaw) ;; *) echo 'RUNTIME must be hermes or openclaw'; exit 1 ;; esac
 	cd api && uv run python -m pytest runtime_tests/test_$(RUNTIME)_*.py -v
+
+test-integration-isolation:
+	@case "$(RUNTIME)" in hermes|openclaw|both) ;; *) echo 'RUNTIME must be hermes, openclaw or both'; exit 1 ;; esac
+	@mkdir -p .scratch
+	cd api && ISOLATION_TEST_RUNTIME=$(RUNTIME) uv run python -m pytest k8s_runtime_tests -v --junitxml=../.scratch/isolation-junit.xml
 
 test-ui:
 	cd ui && pnpm test

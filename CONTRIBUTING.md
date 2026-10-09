@@ -185,3 +185,11 @@ licenses.
 
 After your first pull request is merged, post its link in Discord
 [#contributing](https://discord.gg/A3vJF5ZKnu) to request the Contributor role.
+
+### Optional integration isolation check
+
+The **Integration Isolation (on demand)** GitHub Actions workflow is manually
+triggered and is not a required PR workflow. It runs the same disposable-cluster
+contract as `make test-integration-isolation`; see the
+[testing guide](docs/guidelines/testing.md#on-demand-integration-isolation-verification)
+for local prerequisites, runtime selection, coverage, and cleanup.
