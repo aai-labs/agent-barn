@@ -122,6 +122,7 @@ def test_sends_one_count_per_row_as_the_installation_with_distinct_ids():
                         "count": 2,
                         "organization_id": str(context.agent.organization_id),
                         "installation_id": str(installation_id),
+                        "installation_name": "test-installation",
                         "$groups": {
                             "installation": str(installation_id),
                             "organization": str(context.agent.organization_id),

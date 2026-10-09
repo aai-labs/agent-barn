@@ -318,6 +318,7 @@ jobs:
           SENDER_EMAIL: ${{ github.ref_name == 'staging' && vars.STAGING_SENDER_EMAIL || vars.SENDER_EMAIL }}
           ANALYTICS_ENABLED: ${{ github.ref_name == 'main' && 'true' || 'false' }}
           ANALYTICS_INCLUDE_USER_DETAILS: "true"
+          INSTALLATION_NAME: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
           AGENT_EMAIL_DOMAIN: ${{ github.ref_name == 'staging' && vars.STAGING_AGENT_EMAIL_DOMAIN || vars.AGENT_EMAIL_DOMAIN }}
           EMAIL_INBOUND_SECRET: ${{ github.ref_name == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.EMAIL_INBOUND_SECRET }}
           API_HOST: ${{ needs.resolve-env.outputs.api_host }}

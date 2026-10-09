@@ -65,6 +65,10 @@ _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
 _HUMAN_ACTORS = frozenset({ActorIdentityType.MEMBERSHIP, ActorIdentityType.USER})
 
 
+def installation_name(config: Config, installation_id: UUID | str) -> str:
+    return config.installation_display_name or str(installation_id)
+
+
 def _as_uuid(value: object) -> UUID | None:
     try:
         return value if isinstance(value, UUID) else UUID(str(value))
@@ -149,7 +153,13 @@ class ProductAnalyticsHandler:
         installation_id = str(self.installation_repository.get_id())
         common = {"source": SOURCE, "$geoip_disable": True, "$lib": SOURCE}
         groups = {INSTALLATION_GROUP: installation_id}
-        properties: dict[str, Any] = {**self._event_fields(event), **common, "installation_id": installation_id}
+        name = installation_name(self.config, installation_id)
+        properties: dict[str, Any] = {
+            **self._event_fields(event),
+            **common,
+            "installation_id": installation_id,
+            "installation_name": name,
+        }
         if organization_id is not None:
             groups[ORGANIZATION_GROUP] = str(organization_id)
             properties["organization_id"] = str(organization_id)
@@ -170,7 +180,7 @@ class ProductAnalyticsHandler:
                     **common,
                     "$group_type": INSTALLATION_GROUP,
                     "$group_key": installation_id,
-                    "$group_set": {"name": self.config.installation_display_name},
+                    "$group_set": {"name": name},
                 },
             },
         ]

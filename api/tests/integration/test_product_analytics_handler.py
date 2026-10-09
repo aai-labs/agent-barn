@@ -45,13 +45,21 @@ from api.tests.steps.user import there_is_a_user
 OCCURRED_AT = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 
 
-def _given(posthog: MockPostHogModule, *, enabled: bool = True, user_details: bool = False):
+def _given(
+    posthog: MockPostHogModule,
+    *,
+    enabled: bool = True,
+    user_details: bool = False,
+    installation_name: str = "test-installation",
+    web_app_url: str = "http://localhost:3000",
+):
     return [
         set_env_variable(
             {
                 "ANALYTICS_ENABLED": str(enabled).lower(),
                 "ANALYTICS_INCLUDE_USER_DETAILS": str(user_details).lower(),
-                "INSTALLATION_NAME": "test-installation",
+                "INSTALLATION_NAME": installation_name,
+                "WEB_APP_URL": web_app_url,
             }
         ),
         prepare_injector(modules=[posthog]),
@@ -135,6 +143,18 @@ def test_a_platform_event_is_sent_with_only_the_installation_group():
         assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
         assert_that(capture["properties"]["$groups"], equal_to({"installation": installation_id}))
         assert_that(capture["properties"], is_not(has_key("organization_id")))
+        assert_that(capture["properties"]["installation_name"], equal_to("test-installation"))
+
+
+def test_without_any_name_the_installation_is_named_by_its_id():
+    posthog = MockPostHogModule()
+    with given(_given(posthog, installation_name="", web_app_url="")) as context:
+        _handle(context, _agent_created(context))
+
+        installation_id = str(context.injector.get(InstallationRepository).get_id())
+        capture, group_identify = posthog.batches[0]
+        assert_that(capture["properties"]["installation_name"], equal_to(installation_id))
+        assert_that(group_identify["properties"]["$group_set"], equal_to({"name": installation_id}))
 
 
 def test_is_registered_in_the_application_handler_registry():
@@ -174,6 +194,7 @@ def test_sends_the_event_as_the_acting_user_with_installation_and_organization_g
                     "source": "agentbarn-api",
                     "organization_id": str(context.organization.id),
                     "installation_id": installation_id,
+                    "installation_name": "test-installation",
                     "$groups": {"installation": installation_id, "organization": str(context.organization.id)},
                     "$geoip_disable": True,
                     "$lib": "agentbarn-api",
@@ -464,5 +485,15 @@ def test_organization_created_is_sent_with_the_organization_group_and_no_extra_f
         assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
         assert_that(
             set(capture["properties"]),
-            equal_to({"source", "installation_id", "organization_id", "$groups", "$geoip_disable", "$lib"}),
+            equal_to(
+                {
+                    "source",
+                    "installation_id",
+                    "installation_name",
+                    "organization_id",
+                    "$groups",
+                    "$geoip_disable",
+                    "$lib",
+                }
+            ),
         )

@@ -21,7 +21,8 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
   - Only allowlisted identifiers and safe fields (see [Events](#events)).
   - Names, display snapshots, and changed values are never sent.
   - User email and name are sent as person properties only when `ANALYTICS_INCLUDE_USER_DETAILS` is true. It defaults to false for privacy; our production and staging workflows explicitly enable it.
-- **Groups.** Every event belongs to the `installation` group, keyed by the Installation id. It is named from `INSTALLATION_NAME`, or the `WEB_APP_URL` host when that is unset.
+- **Installation name.** Every event carries `installation_name`. It comes from `INSTALLATION_NAME`, otherwise the `WEB_APP_URL` host, and otherwise the Installation id, so it is never empty. Filter or break down by this event property to see one Installation's events (for example `installation_name = production`); it needs no Group Analytics.
+- **Groups.** Every event belongs to the `installation` group, keyed by the Installation id and named with the same value as `installation_name`.
   - Organization-scoped events also belong to the `organization` group, keyed by the Organization id, and carry `organization_id`.
   - Platform-scoped events (`organization_id` is null) carry neither. They are sent only for a User Actor, because a Membership Actor cannot be resolved without an Organization.
 - **Labels and privacy flags.** Every event carries `source: agentbarn-api` and `$lib: agentbarn-api`, so app events can be separated from website events. It also carries `$geoip_disable: true`.
@@ -55,7 +56,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `user.logged_in` | `method` (`password`); platform-scoped, so installation group only. Failed logins, token refresh and API-key requests are not logins |
 | `user.signed_up` | none; platform-scoped. Public signup is disabled, so this is the first invite acceptance (`POST /auth/set-password` on a user whose email is not yet verified). Known gap: an invitee who first gets in through forgot-password never emits it |
 
-The common set is `source`, `installation_id`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`. When user details are enabled, `$set` (email and name) is added.
+The common set is `source`, `installation_id`, `installation_name`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`. When user details are enabled, `$set` (email and name) is added.
 
 ## Message counts
 

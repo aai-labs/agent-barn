@@ -42,6 +42,20 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 
 ## Changes
 
+### 2026-10-09 — AF-357 — installation_name on every event
+
+- Delivered: every captured event, including hourly message counts, carries `installation_name`.
+  - It is `INSTALLATION_NAME`, else the `WEB_APP_URL` host, else the Installation id, so it is never empty.
+  - The installation group's `$group_set.name` uses the same value.
+  - PostHog can filter and break down by Installation through this event property, without Group Analytics.
+  - Our deploys are named explicitly: `production` (k3s `main`), `staging` (k3s `staging`) and `cloud` (public).
+- Changed: `analytics/event_handlers.py` (the `installation_name()` helper), `analytics/message_counts.py`, `.github/workflows/deploy.yml`, `.github/workflows/deploy-public.yml`, `product-analytics.md`, `operations.md`.
+- Verified:
+  - The handler and message-count tests expect `installation_name`, including platform events and the fallback to the Installation id when no name is configured. They failed before the change.
+  - The handler, message-count, wiring, config, and org-event suites pass.
+  - Both workflows parse, and `helmfile template` renders `INSTALLATION_NAME` as `production`, `staging` and `cloud` into the API Secret.
+- Note: events already in PostHog have no `installation_name`. It applies to events sent after deployment.
+
 ### 2026-10-09 — AF-357 — Synchronize Installation naming
 
 - Delivered: a per-handler lock protects the Installation naming check, batch send, and success update. Concurrent first deliveries send one group-identification capture; captures after successful naming can still send concurrently. Failed sends leave naming eligible for the next delivery.
