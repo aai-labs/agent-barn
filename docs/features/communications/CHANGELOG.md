@@ -14,6 +14,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-09 — Spend-limit notice on native chat — PR pending
+
+- Corrected: native Slack, Discord, Telegram, and Teams no longer show OpenClaw's "top up your API key" billing text when a model spend limit is reached. Both runtimes' in-pod LLM proxies answer a refused chat completion with the spend-limit notice as an ordinary assistant reply (JSON or SSE, matching the request), which the native gateway posts. Other refused endpoints keep the terminal `402`.
+- Preserved: Web Chat and Email still show the notice as a terminal `SPEND_LIMIT_REACHED` failure under the message. The runtime adapter treats a turn during which the proxy recorded the refusal as that failure even when the runtime ended it with the notice, and does not post the notice as an Agent reply.
+- Rollout: the proxies and adapter ship in the Agent ConfigMap, so restart Agents to apply; no runtime image change. See [Costs](../costs.md#runtime-limit-management).
+
 ### 2026-10-07 — Reserve new runtime image versions — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 
 - Versioned: Hermes `0.2.7` and OpenClaw `0.7.4` give the cleanup builds fresh immutable image tags. Hermes removes the installed completion bridge patch; both runtime versions advance for the requested rollout.

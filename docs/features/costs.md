@@ -234,20 +234,27 @@ calls fail until the limit renews or is raised. Both runtimes' in-pod LLM proxy
 catches the rejection before the runtime sees it — matched on the error body, since
 the proxy has answered with `400`, `429`, and `422` on releases after the pinned one,
 and those statuses also carry malformed requests and ordinary rate limits that must
-keep their own errors. It answers the runtime with `402` and a clean message, because
-both runtimes retry a `429` as a rate limit indefinitely and the person chatting
-would never hear back.
+keep their own errors. It never passes the `429` on, because both runtimes retry a
+`429` as a rate limit indefinitely and the person chatting would never hear back.
 
-Neither runtime carries the reason out faithfully: OpenClaw replaces the proxy's
-message with its own billing text, and Hermes aborts the turn. So the proxy also
-records the refusal in the container (`/tmp/agentbarn-llm-terminal-error.json`), and
-the Communications adapter in the same container reports a turn that fails after it
-as `SPEND_LIMIT_REACHED`. Communications turns that code into a terminal,
-non-retried failure whose notice reads "A model spend limit has been reached, so this
-agent cannot reply right now…": shown under the message in Web Chat. Native Slack, Telegram, Discord and Teams
-turns and their error notices belong to the selected runtime. The wording deliberately does not
-say whose limit it was: the rejection is the same whether the Agent's or its
-Organization's ran out.
+Neither runtime carries an error reason out faithfully: OpenClaw replaces any `402`
+with its own "top up your API key" billing text, and Hermes aborts the turn. So a
+refused **chat completion** is answered as an ordinary assistant reply whose text is
+the notice "A model spend limit has been reached, so this agent cannot reply right
+now…", in the request's own format (JSON, or a server-sent event stream when
+`stream` is true). Native Slack, Telegram, Discord and Teams post it like any other
+reply, including from scheduled runs. Any other refused endpoint, or a request the
+proxy cannot read back, still gets a terminal `402` with the same message.
+
+The proxy also records the refusal in the container
+(`/tmp/agentbarn-llm-terminal-error.json`). The Communications adapter in the same
+container reports a Web Chat or Email turn during which the refusal was recorded as
+`SPEND_LIMIT_REACHED`, whether the runtime failed the turn or ended it with the
+notice, and does not post the notice as an Agent reply. Communications turns that code
+into a terminal, non-retried failure shown under the message in Web Chat. The wording
+deliberately does not say whose limit it was: the rejection is the same whether the
+Agent's or its Organization's ran out. The notice reply is kept in the runtime's
+session history like any other assistant message.
 
 ## Operational
 

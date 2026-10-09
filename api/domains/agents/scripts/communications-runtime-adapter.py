@@ -227,6 +227,16 @@ def _terminal_llm_error(delivery_id: str) -> str | None:
     return code if isinstance(code, str) and code else None
 
 
+def _spend_limit_reached(delivery_id: str) -> bool:
+    """The proxy answers a refused chat completion with the notice as an ordinary reply,
+    so native chat can post it. Web Chat keeps it as a terminal failure instead, shown
+    under the person's message rather than as something the Agent said."""
+    return _terminal_llm_error(delivery_id) == "SPEND_LIMIT_REACHED"
+
+
+_SPEND_LIMIT_ERROR = RuntimeError("Model spend limit reached")
+
+
 def _failure(delivery_id: str, error: Exception) -> dict:
     return {
         "succeeded": False,
@@ -322,6 +332,8 @@ def run_delivery_chat_completions(delivery: dict) -> None:
                 "error_code": "CANCELLED",
                 "error_message": "Cancelled by user",
             }
+        elif _spend_limit_reached(delivery_id):
+            completion = _failure(delivery_id, _SPEND_LIMIT_ERROR)
         else:
             reply = result["choices"][0]["message"]["content"]
             post_reply(delivery_id, reply)
@@ -609,9 +621,12 @@ def _drain_run(run_id: str, delivery_id: str, session_key: str, *, progress_upda
                 continue
 
             if event == "run.completed":
-                post_reply(delivery_id, payload.get("text") or payload.get("output") or "", suffix=str(sequence))
                 with _PENDING_APPROVALS_LOCK:
                     _PENDING_APPROVALS.pop(session_key, None)
+                if _spend_limit_reached(delivery_id):
+                    complete_delivery(delivery_id, succeeded=False, error=_SPEND_LIMIT_ERROR)
+                    return
+                post_reply(delivery_id, payload.get("text") or payload.get("output") or "", suffix=str(sequence))
                 complete_delivery(delivery_id, succeeded=True)
                 return
 
