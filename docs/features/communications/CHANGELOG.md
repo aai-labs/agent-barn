@@ -14,7 +14,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
-### 2026-10-09 — One silence marker for scheduled runs — PR pending
+### 2026-10-09 — Spend-limit notice on native chat — [PR #284](https://github.com/aai-labs/agent-barn/pull/284)
+
+- Corrected: native Slack, Discord, Telegram, and Teams no longer show OpenClaw's "top up your API key" billing text when a model spend limit is reached. Both runtimes' in-pod LLM proxies answer a refused chat completion with the spend-limit notice as an ordinary assistant reply (JSON or SSE, matching the request), which the native gateway posts. Other refused endpoints keep the terminal `402`.
+- Preserved: Web Chat and Email still show the notice as a terminal `SPEND_LIMIT_REACHED` failure under the message. The runtime adapter treats a turn during which the proxy recorded the refusal as that failure even when the runtime ended it with the notice, and does not post the notice as an Agent reply.
+- Rollout: the proxies and adapter ship in the Agent ConfigMap, so restart Agents to apply; no runtime image change. See [Costs](../costs.md#runtime-limit-management).
+
+### 2026-10-09 — One silence marker for scheduled runs — [PR #283](https://github.com/aai-labs/agent-barn/pull/283)
 
 - Corrected: the appended Scheduled runs policy now requires exactly `NO_REPLY` for an empty scheduled run. It previously listed `[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, and `HEARTBEAT_OK` as interchangeable, but OpenClaw 2026.8 suppresses only `NO_REPLY` (and `HEARTBEAT_OK`) and posted `[SILENT]` verbatim, while Hermes suppresses `[SILENT]`/`SILENT`/`NO_REPLY`/`NO REPLY` but not `HEARTBEAT_OK`. The rule now overrides any marker a template names for scheduled runs.
 - Follow-up: the built-in templates still name `HEARTBEAT_OK` for cron work. The seeder only bootstraps missing lineages, so existing environments need Platform Administrators to publish new template versions; the policy override applies to every Agent on its next start.
