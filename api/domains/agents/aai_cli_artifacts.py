@@ -235,6 +235,7 @@ def build_setup_sh(
     *,
     store_dir: str | None = None,
     install_config: bool = True,
+    isolated_providers: Iterable[SecretProvider] = (),
 ) -> str:
     """Render the in-pod setup script: install config.toml, then `secrets set` per store secret.
 
@@ -249,14 +250,48 @@ def build_setup_sh(
     config_path = f"{config_dir}/config.toml"
     store = store_dir or config_dir
     present = set(store_providers)
+    isolated = set(isolated_providers)
+    if present & isolated:
+        raise ValueError("Credential cleanup requires a supported isolated binding")
     lines = [
         "#!/bin/sh",
         "set -e",
+        "umask 077",
         f"export HOME={home_dir}",
         f"mkdir -p {config_dir}" if store == config_dir else f"mkdir -p {config_dir} {store}",
     ]
     if install_config:
         lines.append(f"cp /app/config/aai-cli-config.toml {config_path}")
+    if SecretProvider.SHAREPOINT in isolated:
+        # Old pod is terminated. Authenticate its last rotation before PVC cleanup.
+        # Read sensitive files through jq, never shell argv or diagnostic output.
+        lines += [
+            "handoff_store=$(mktemp)",
+            "handoff_key=$(mktemp)",
+            "handoff_marker=$(mktemp)",
+            'trap \'rm -f "$handoff_store" "$handoff_key" "$handoff_marker"\' EXIT HUP INT TERM',
+            f'if [ -f {store}/aai-secrets.enc.json ]; then cp {store}/aai-secrets.enc.json "$handoff_store"; fi',
+            f'if [ -f {store}/key ]; then cp {store}/key "$handoff_key"; fi',
+            f'if [ -f {store}/{SHAREPOINT_REFRESH_TOKEN_SECRET}.sign-in ]; then cp {store}/{SHAREPOINT_REFRESH_TOKEN_SECRET}.sign-in "$handoff_marker"; fi',
+            'jq -n --rawfile store "$handoff_store" --rawfile key "$handoff_key" --rawfile marker "$handoff_marker"',
+        ]
+        lines[-1] += (
+            ' \\\n  \'{store: $store, key: $key, marker: $marker}\' | \\\n  curl --fail --silent --show-error --connect-timeout 15 --max-time 60 \\\n    -H "Authorization: Bearer $AF_GATEWAY_TOKEN_SHAREPOINT" -H "Content-Type: application/json" \\\n    --data-binary @- "$AF_GATEWAY_URL/sharepoint/handoff" >/dev/null'
+        )
+        # The DB grant is now proven. Remove its marker before the token so a crash
+        # between cleanup steps makes the next generation use the durable DB copy.
+        lines.append(f"rm -f {store}/{SHAREPOINT_REFRESH_TOKEN_SECRET}.sign-in")
+    # Only explicit isolated bindings are eligible. These static credentials retain
+    # their encrypted service-side copy; delegated SharePoint grants are excluded.
+    for provider in SecretProvider:
+        if provider not in isolated:
+            continue
+        for secret_name, _ in provider_secrets_map.get(provider.value, []):
+            lines += [
+                f"if [ -f {store}/aai-secrets.enc.json ]; then",
+                f"  aai-cli --secrets-file {store}/aai-secrets.enc.json --key-file {store}/key secrets remove {secret_name}",
+                "fi",
+            ]
     for provider in SecretProvider:  # fixed order for determinism
         if provider not in present:
             continue
@@ -301,7 +336,9 @@ def build_env(
             env[env_var_for(secret_name)] = getattr(content, attr)
         if isinstance(content, SharePointContent):
             env[env_var_for(SHAREPOINT_REFRESH_TOKEN_SECRET)] = content.refresh_token
-            env[SHAREPOINT_SIGN_IN_ID_ENV] = content.sign_in_id
+            env[SHAREPOINT_SIGN_IN_ID_ENV] = content.sign_in_id + (
+                f":{content.store_revision}" if content.store_revision else ""
+            )
     return env
 
 

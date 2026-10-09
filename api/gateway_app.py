@@ -1,4 +1,6 @@
 from fastapi import FastAPI, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi_injector import attach_injector
 from injector import Injector
 from prometheus_client import REGISTRY
@@ -24,6 +26,12 @@ def create_gateway_app(injector: Injector | None = None) -> FastAPI:
 
     app = FastAPI()
     subapi = FastAPI()
+
+    @subapi.exception_handler(RequestValidationError)
+    async def invalid_request(_request, _error):
+        # Import payloads contain encrypted stores and keys. Never echo inputs.
+        return JSONResponse(status_code=422, content={"detail": "Invalid gateway request."})
+
     subapi.include_router(gateway_router)
     app.mount("/gateway/v1", subapi)
 

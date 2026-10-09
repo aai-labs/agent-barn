@@ -20,6 +20,10 @@ from api.domains.agents.models import SecretContent, SecretProvider
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 
 
+class TokenBrokerService(str, enum.Enum):
+    SHAREPOINT = "sharepoint"
+
+
 class EgressMode(str, enum.Enum):
     """How a provider's real credential reaches the upstream service.
 
@@ -121,6 +125,8 @@ class IntegrationPlugin[ContentT: SecretContent](ABC):
     schema_version: int = 1
     credentials_model: type[ContentT]
     egress_mode: EgressMode = EgressMode.DIRECT
+    # A durable broker needs a domain service with storage locks, not a pure plugin call.
+    token_broker_service: TokenBrokerService | None = None
     #: Which agent-side CLI reaches this provider. Must resolve to a registered adapter.
     runtime_tool: str
     #: Whether an org-scoped Shared Credential may carry this provider. OAuth-based

@@ -12,7 +12,7 @@ from collections.abc import Iterable
 
 from api.domains.agents.models import SecretProvider
 from api.domains.integrations.plugins.aai_cli_support import AaiCliIntegration
-from api.domains.integrations.plugins.base import EgressMode, IntegrationPlugin
+from api.domains.integrations.plugins.base import EgressMode, IntegrationPlugin, TokenBrokerService
 from api.domains.integrations.plugins.providers import AAI_CLI, GOG, NO_TOOL, SHIPPED_PLUGINS
 
 #: Adapters that exist to materialize a provider's runtime artifacts. A plugin naming
@@ -65,13 +65,21 @@ class IntegrationPluginRegistry:
 
 def _check_egress_seam(plugin: IntegrationPlugin) -> None:
     """A declared egress mode must be backed by the methods that mode needs."""
+    if plugin.token_broker_service is not None and (
+        plugin.egress_mode != EgressMode.TOKEN_BROKER or not isinstance(plugin.token_broker_service, TokenBrokerService)
+    ):
+        raise ValueError(f"Integration Plugin {plugin.key!r} has an unsupported broker service")
     if plugin.egress_mode == EgressMode.GATEWAY_PROXY:
         for method in ("upstream_base_url", "apply_upstream_auth"):
             if not _overrides(plugin, method):
                 raise ValueError(
                     f"Integration Plugin {plugin.key!r} is {plugin.egress_mode.value} but never overrides {method}"
                 )
-    elif plugin.egress_mode == EgressMode.TOKEN_BROKER and not _overrides(plugin, "mint_upstream_token"):
+    elif (
+        plugin.egress_mode == EgressMode.TOKEN_BROKER
+        and not _overrides(plugin, "mint_upstream_token")
+        and plugin.token_broker_service is None
+    ):
         raise ValueError(
             f"Integration Plugin {plugin.key!r} is {plugin.egress_mode.value} but never overrides mint_upstream_token"
         )

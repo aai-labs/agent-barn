@@ -43,11 +43,11 @@ done
 export PATH="/home/hermes/.local/bin:$PATH"
 
 if [ -f /app/config/aai-cli-setup.sh ]; then
-  sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
+  sh /app/config/aai-cli-setup.sh || exit $?
 fi
 
 if [ -f /app/config/gog-setup.sh ]; then
-  sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
+  sh /app/config/gog-setup.sh || exit $?
 fi
 
 # /workspace persists across restarts (PVC). The personality files above are

@@ -1,13 +1,13 @@
-"""Builders for the gog CLI's runtime artifacts (env, shim, agent policy).
+"""Builders for isolated gog artifacts and the shared Google tool policy.
 
 Parallel to ``aai_cli_artifacts`` but for a different tool: gog (gogcli) reaches Google
 Workspace, so it shares nothing with aai-cli's profile/secret-store machinery. These are
 pure string/dict builders consumed by ``start_agent``.
 
-gog is always brokered through the credential gateway (see
-``docs/features/integrations.md``): the refresh token and OAuth client secret never leave
-the gateway, and the pod's ``gog-shim.sh`` exchanges its Gateway Token for a short-lived
-access token on every invocation. Nothing gog-related is persisted in the pod.
+In isolated mode, ``gog-shim.sh`` exchanges its Gateway Token for a short-lived
+access token on every invocation. Direct imports live in ``integrations.gog_direct``;
+their disposable keyring stays on the container filesystem, outside the PVC.
+See ``docs/features/integrations.md`` for mode selection and exposure.
 """
 
 from api.domains.agents.models import GoogleWorkspaceContent, SecretProvider

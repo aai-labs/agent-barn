@@ -25,7 +25,7 @@ Use this skill for Microsoft 365 work through `aai-cli microsoft`. Start from th
 
 Read [Microsoft 365 concepts and routing](references/microsoft-365-concepts.md) before acting when the request crosses products, refers to a Team or SharePoint URL rather than IDs, or leaves ownership/visibility ambiguous. It explains resource relationships, identifier choice, auth choice, and common workflows.
 
-Confirm the active profile or pass `--profile`. App-only profiles are best for unattended organization-owned automation. Delegated profiles act on behalf of one user and are required by this CLI for complete Microsoft To Do CRUD. Both obtain short-lived access tokens automatically from credentials saved in the encrypted secret store; never request or copy an access token into a command.
+Confirm the active profile or pass `--profile`. App-only profiles are best for unattended organization-owned automation. Delegated profiles act on behalf of one user and are required by this CLI for complete Microsoft To Do CRUD. Profiles obtain short-lived access tokens automatically, either from the encrypted secret store or from a configured `token_url` broker. Agent Barn's isolated SharePoint profile uses the broker and remains delegated; its authorized scopes still govern workbook and file access. Never request or copy an access token into a command.
 
 Prefer typed commands for supported operations. Use `microsoft request` only for a Graph endpoint without a typed command. Writes through `request` require `--allow-write`.
 

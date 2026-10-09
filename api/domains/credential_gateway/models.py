@@ -13,6 +13,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
+from pydantic import Field
 from sqlmodel import Column
 from sqlmodel import Field as SqlField
 
@@ -88,6 +89,9 @@ class GatewayToken(BaseModel, table=True):
     agent_id: UUID = SqlField(nullable=False)
     provider: SecretProvider = SqlField(sa_column=Column(sa.String(50), nullable=False))
     token_hash: str = SqlField(nullable=False, max_length=64)
+    binding_id: UUID | None = SqlField(default=None, nullable=True)
+    generation: UUID | None = SqlField(default=None, nullable=True)
+    source: str = SqlField(default="agent_secret", max_length=30)
     revoked_at: datetime.datetime | None = SqlField(
         default=None,
         sa_column=Column(sa.DateTime(timezone=True), nullable=True),
@@ -132,6 +136,8 @@ class GatewayTokenResolution(PydanticBaseModel):
     agent_id: UUID
     organization_id: UUID
     provider: SecretProvider
+    source: str = Field(default="agent_secret", exclude=True)
+    generation: UUID | None = Field(default=None, exclude=True)
 
 
 class BrokeredTokenRead(PydanticBaseModel):

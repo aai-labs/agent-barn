@@ -31,6 +31,7 @@ dependencies = [
     "dramatiq[redis,watch]>=2.2.0",
     "redis>=8.1.0",
     "prometheus-fastapi-instrumentator>=8.1.0",
+    "pynacl>=1.6.2",
 ]
 
 [tool.pytest.ini_options]

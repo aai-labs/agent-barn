@@ -1447,7 +1447,9 @@ def test_concurrent_delete_while_starting_is_rejected_as_conflict():
 
         with then("the delete is rejected as a lifecycle conflict rather than tearing down the runtime mid-start"):
             assert_that(responses["delete"].status_code, equal_to(status.HTTP_409_CONFLICT))
-            k8s.delete_deployment.assert_not_called()
+            # Start reconciles a previous incomplete workload before provisioning;
+            # the concurrent delete must not add another teardown.
+            k8s.delete_deployment.assert_called_once()
 
         with then("the start request completes normally"):
             assert_that(responses["start"].status_code, equal_to(status.HTTP_200_OK))
@@ -4206,6 +4208,9 @@ def test_start_agent_per_agent_firecrawl_is_routed_through_the_gateway_not_the_p
                 json={"secrets": [{"provider": "firecrawl", "content": {"api_key": "fc-my-key"}}]},
                 headers=_auth(context),
             )
+            from api.domains.integrations.repository import IntegrationRepository
+
+            context.injector.get(IntegrationRepository).set_policy(context.agent.id, SecretProvider.FIRECRAWL, True)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("neither the real per-agent key nor the platform key reaches the pod"):
@@ -4249,6 +4254,9 @@ def test_start_agent_per_agent_firecrawl_ignores_a_stored_self_hosted_base_url()
                 },
                 headers=_auth(context),
             )
+            from api.domains.integrations.repository import IntegrationRepository
+
+            context.injector.get(IntegrationRepository).set_policy(context.agent.id, SecretProvider.FIRECRAWL, True)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("the pod still points at the gateway, not the stored base_url"):
@@ -5229,6 +5237,11 @@ def test_start_agent_brokered_google_workspace_leaves_no_renewable_credential_in
 
         with when("I start an agent whose Google Workspace credential is brokered"):
             _configure_gws(client, context)
+            from api.domains.integrations.repository import IntegrationRepository
+
+            context.injector.get(IntegrationRepository).set_policy(
+                context.agent.id, SecretProvider.GOOGLE_WORKSPACE, True
+            )
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("the refresh token and OAuth client secret are absent from the pod Secret"):
@@ -5954,6 +5967,19 @@ def test_agent_list_batches_shared_credential_labels(agent_count):
                             "secret_name": context.shared_credential.name,
                             "shared_credential_id": str(context.shared_credential.id),
                             "shared_credential_name": context.shared_credential.name,
+                            "isolation": {
+                                "desired": True,
+                                "supported_modes": ["direct", "isolated"],
+                                "direct_description": "This Agent receives the Jira credential and connects to Jira directly.",
+                                "isolated_description": "The Jira credential stays outside this Agent; Agent Barn authenticates requests.",
+                                "switch_available": True,
+                                "applied": None,
+                                "generation": None,
+                                "pending": True,
+                                "last_verified": None,
+                                "reconnect_required": False,
+                            },
+                            "source": "shared_credential",
                         }
                     ]
                 ),

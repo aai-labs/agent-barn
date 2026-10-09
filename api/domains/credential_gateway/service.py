@@ -1,21 +1,16 @@
-"""Gateway Token issuance, revocation, and resolution.
-
-Issuance is driven by each provider's ``EgressMode``: a provider whose credential still
-materializes into the pod (``DIRECT``) needs no gateway token, so nothing is issued for
-it. Flipping a provider to ``GATEWAY_PROXY`` or ``TOKEN_BROKER`` starts issuance for that
-provider with no change here.
-"""
+"""Source-bound gateway authorization for explicitly isolated runtime bindings."""
 
 import base64
 import binascii
 import datetime
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.agents.models import SecretContent, SecretProvider, decrypt_content
+from api.domains.agents.models import FirecrawlContent, SecretContent, SecretProvider, decrypt_content
 from api.domains.agents.repository import AgentRepository
 from api.domains.credential_gateway.audit import GatewayAuditSink, ResolutionOutcome
 from api.domains.credential_gateway.forwarding import (
@@ -33,13 +28,20 @@ from api.domains.credential_gateway.models import (
     issue_token_value,
 )
 from api.domains.credential_gateway.repository import GatewayTokenRepository
+from api.domains.credential_gateway.sharepoint_broker import (
+    SharePointBroker,
+    SharePointHandoff,
+    SharePointHandoffRefused,
+)
 from api.domains.integrations.plugins.base import (
     EgressMode,
     MintedToken,
     OutboundRequest,
+    TokenBrokerService,
     UpstreamAuthenticationError,
 )
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
+from api.domains.integrations.repository import IntegrationRepository
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 
 
@@ -61,6 +63,8 @@ class CredentialGatewayService:
     agent_repository: AgentRepository
     shared_credential_repository: SharedCredentialRepository
     forwarder: UpstreamForwarder
+    integrations: IntegrationRepository
+    sharepoint_broker: SharePointBroker
 
     # --- issuance, called from agent start ---
 
@@ -77,6 +81,8 @@ class CredentialGatewayService:
         agent_id: UUID,
         organization_id: UUID,
         providers: set[SecretProvider],
+        *,
+        generation: UUID | None = None,
     ) -> list[IssuedGatewayToken]:
         """Issue one token per gateway-served provider, replacing any live ones.
 
@@ -84,7 +90,22 @@ class CredentialGatewayService:
         token is revoked in the same operation and the pod receives the new value.
         Returns an empty list when no configured provider is served by the gateway.
         """
-        needed = self.providers_needing_a_token(providers)
+        policies = self.integrations.policies(agent_id)
+        from api.domains.integrations.isolation import legacy_isolation
+
+        bindings = {SecretProvider(s.provider): s.id for s in self.agent_repository.get_secrets_for_agent(agent_id)}
+        needed = {
+            p
+            for p in self.providers_needing_a_token(providers)
+            if p in bindings and policies.get(p, legacy_isolation(p))
+        }
+        default_firecrawl = SecretProvider.FIRECRAWL not in bindings and bool(
+            self.config.agent_firecrawl_api_key and self.config.agent_firecrawl_base_url
+        )
+        if default_firecrawl and self.integrations.policies(agent_id, "platform_default").get(
+            SecretProvider.FIRECRAWL, False
+        ):
+            needed.add(SecretProvider.FIRECRAWL)
         # Always revoke the full set first: a provider removed from the Agent since the
         # last start must lose its token even though it is absent from `needed`.
         self.repository.revoke_for_agent(agent_id)
@@ -98,6 +119,11 @@ class CredentialGatewayService:
                     agent_id=agent_id,
                     provider=provider,
                     token_hash=hash_token(value),
+                    binding_id=bindings.get(provider),
+                    generation=generation,
+                    source="platform_default"
+                    if provider == SecretProvider.FIRECRAWL and default_firecrawl
+                    else "agent_secret",
                 )
             )
             self.audit.record_lifecycle(
@@ -151,6 +177,21 @@ class CredentialGatewayService:
             self.audit.record_resolution(ResolutionOutcome.UNKNOWN)
             raise GatewayTokenRejected(ResolutionOutcome.UNKNOWN)
 
+        if not self.integrations.authorizes(
+            token.agent_id, token.organization_id, token.provider, token.binding_id, token.generation, token.source
+        ):
+            self.audit.record_resolution(
+                ResolutionOutcome.REVOKED,
+                provider=token.provider,
+                agent_id=token.agent_id,
+                organization_id=token.organization_id,
+            )
+            raise GatewayTokenRejected(ResolutionOutcome.REVOKED)
+        if token.source == "platform_default" and not (
+            self.config.agent_firecrawl_api_key and self.config.agent_firecrawl_base_url
+        ):
+            raise GatewayTokenRejected(ResolutionOutcome.REVOKED)
+
         self.audit.record_resolution(
             ResolutionOutcome.RESOLVED,
             provider=token.provider,
@@ -162,6 +203,8 @@ class CredentialGatewayService:
             agent_id=token.agent_id,
             organization_id=token.organization_id,
             provider=token.provider,
+            source=token.source,
+            generation=token.generation,
         )
 
     # --- forwarding, called per agent request ---
@@ -185,7 +228,9 @@ class CredentialGatewayService:
             # landed between them). Refuse rather than forward unauthenticated.
             raise GatewayForwardRefused(f"{plugin.key} is not routed through the gateway")
 
-        content = self._decrypt_credential(resolution.agent_id, resolution.organization_id, resolution.provider)
+        content = self._decrypt_credential(
+            resolution.agent_id, resolution.organization_id, resolution.provider, source=resolution.source
+        )
         if content is None:
             raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
 
@@ -200,6 +245,18 @@ class CredentialGatewayService:
                 ),
             )
             base = plugin.upstream_base_url(content).rstrip("/")
+            if resolution.source == "platform_default":
+                base = self.config.agent_firecrawl_base_url.rstrip("/")
+                target = urlsplit(base)
+                if (
+                    target.scheme not in {"https", "http"}
+                    or not target.hostname
+                    or target.username
+                    or target.password
+                    or target.query
+                    or target.fragment
+                ):
+                    raise ValueError("Invalid configured Firecrawl upstream")
         except UpstreamAuthenticationError as exc:
             raise UpstreamUnreachable("provider authorization could not be established") from exc
         except ValueError as exc:
@@ -233,7 +290,14 @@ class CredentialGatewayService:
         if content is None:
             raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
 
-        minted = plugin.mint_upstream_token(content)
+        brokers = {TokenBrokerService.SHAREPOINT: self.sharepoint_broker}
+        minted = (
+            brokers[plugin.token_broker_service].mint(
+                resolution.agent_id, resolution.organization_id, resolution.generation
+            )
+            if plugin.token_broker_service is not None
+            else plugin.mint_upstream_token(content)
+        )
         self.audit.record_lifecycle(
             "minted",
             provider=resolution.provider,
@@ -242,13 +306,27 @@ class CredentialGatewayService:
         )
         return minted
 
+    def handoff_sharepoint(self, authorization: str | None, data: SharePointHandoff) -> None:
+        resolution = self.resolve(authorization)
+        if resolution.provider != SecretProvider.SHAREPOINT:
+            raise SharePointHandoffRefused()
+        self.sharepoint_broker.handoff(resolution.agent_id, resolution.organization_id, resolution.generation, data)
+
     def _decrypt_credential(
         self,
         agent_id: UUID,
         organization_id: UUID,
         provider: SecretProvider,
+        *,
+        source: str = "agent_secret",
     ) -> SecretContent | None:
         """Load and decrypt one Agent Secret, following a Shared Credential when set."""
+        if source == "platform_default":
+            if provider != SecretProvider.FIRECRAWL:
+                return None
+            return FirecrawlContent(
+                api_key=self.config.agent_firecrawl_api_key, base_url=self.config.agent_firecrawl_base_url
+            )
         secrets = [s for s in self.agent_repository.get_secrets_for_agent(agent_id) if s.provider == provider.value]
         if not secrets:
             return None

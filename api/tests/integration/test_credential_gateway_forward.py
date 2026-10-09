@@ -112,6 +112,11 @@ def _provider_secret(context, provider: SecretProvider, content) -> None:
 
 
 def _token_for(context, provider: SecretProvider = SecretProvider.GITHUB) -> str:
+    from api.domains.agents.repository import AgentRepository
+    from api.domains.integrations.repository import IntegrationRepository
+
+    binding = context.injector.get(AgentRepository).get_secret(context.agent.id, provider)
+    context.injector.get(IntegrationRepository).set_policy(context.agent.id, provider, True)
     value = issue_token_value()
     context.injector.get(GatewayTokenRepository).save(
         GatewayToken(
@@ -119,6 +124,7 @@ def _token_for(context, provider: SecretProvider = SecretProvider.GITHUB) -> str
             agent_id=context.agent.id,
             provider=provider,
             token_hash=hash_token(value),
+            binding_id=binding.id if binding else None,
         )
     )
     return value
@@ -332,6 +338,12 @@ def test_the_refusal_shape_matches_the_identity_endpoint():
 
 def test_issuance_follows_plugin_modes():
     with given(_GIVEN) as context:
+        _github_secret(context)
+        _provider_secret(
+            context,
+            SecretProvider.JIRA,
+            JiraContent(email="jira@example.com", api_token="fixture", site_url="https://acme.atlassian.net"),
+        )
         service = context.injector.get(CredentialGatewayService)
 
         with when("start issues tokens with GitHub enabled"):

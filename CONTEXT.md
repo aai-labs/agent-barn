@@ -280,6 +280,10 @@ _Avoid_: org secret, global credential
 An external service made available to an agent through an Agent Secret and runtime-specific configuration.
 _Avoid_: credential
 
+**Credential Isolation Policy**:
+The Agent-specific choice of whether a tool Integration keeps long-lived provider credentials outside its runtime. It is independent of credential ownership; Agents sharing a Shared Credential can choose independently. New bindings default OFF, and running changes require explicit application and restart. See [Integrations](docs/features/integrations.md#optional-credential-isolation) for routing, applied generations and recovery.
+_Avoid_: encryption toggle, Shared Credential setting
+
 **Conversation Message**:
 An inbound or outbound chat message ingested from an agent runtime and associated with a channel, direct message, session, and optional thread.
 _Avoid_: conversation

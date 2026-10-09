@@ -1,6 +1,7 @@
 # Agent pods never hold provider credentials
 
 Status: Accepted
+Transition: [Optional per-Agent isolation](2026-10-08-optional-agent-integration-isolation.md) partly supersedes permanent routing with explicit binding policy; native messaging follows its separate runtime-owned contract.
 Date: 2026-09-02
 Implemented: 2026-09-03
 
@@ -37,6 +38,10 @@ Because resolution happens per request rather than at agent start, revocation ap
 `gogcli` exposes no base-URL or endpoint override anywhere. Proxying it would mean threading `option.WithEndpoint` through every service client and carrying that against upstream indefinitely. That permanent divergence is not worth the marginal gain of converting "≤1h scoped token in pod" into "nothing in pod."
 
 Residual `TOKEN_BROKER` exposure is narrowed two ways: minting per-subcommand scope subsets rather than the full granted set, and using service accounts with domain-wide delegation where the customer is a Workspace org, which removes the user refresh token from the system entirely.
+
+## Durable delegated refresh amendment (2026-10-08)
+
+SharePoint's typed file and workbook commands use Graph directly, so a token broker preserves their command surface without introducing a file-buffering proxy. Unlike Google's existing broker, Microsoft's delegated refresh rotates a grant that may already be newer on the direct pod's persistent volume. The optional-isolation work therefore uses a domain broker with durable locking/cache and a proven boot handoff before cleanup. Current lifecycle details belong in [Integrations](../features/integrations.md#sharepoint-broker-and-handoff).
 
 ## Consequences
 

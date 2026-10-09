@@ -22,6 +22,11 @@ from api.domains.credential_gateway.service import (
     GatewayForwardRefused,
     GatewayTokenRejected,
 )
+from api.domains.credential_gateway.sharepoint_broker import (
+    SharePointHandoff,
+    SharePointHandoffRefused,
+    SharePointReconnectRequired,
+)
 from api.domains.integrations.plugins.base import UpstreamAuthenticationError
 
 SUPPORTED_GATEWAY_PROTOCOL_VERSION = "1"
@@ -101,7 +106,7 @@ async def forward_to_provider(
     )
 
 
-@gateway_router.get("/token", response_model=BrokeredTokenRead)
+@gateway_router.api_route("/token", methods=["GET", "POST"], response_model=BrokeredTokenRead)
 async def mint_upstream_token(
     service: Annotated[CredentialGatewayService, Injected(CredentialGatewayService)],
     authorization: Annotated[str | None, Header()] = None,
@@ -116,6 +121,16 @@ async def mint_upstream_token(
         minted = await run_in_threadpool(service.mint_upstream_token, authorization)
     except (GatewayTokenRejected, GatewayForwardRefused) as exc:
         raise _refused("The presented gateway token is not valid for this request.") from exc
+    except SharePointHandoffRefused as exc:
+        raise _refused("The presented gateway token is not valid for this request.") from exc
+    except SharePointReconnectRequired as exc:
+        raise HTTPException(
+            409,
+            detail={
+                "error": "sharepoint_reconnect_required",
+                "message": "Reconnect SharePoint before retrying this operation.",
+            },
+        ) from exc
     except UpstreamAuthenticationError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -126,3 +141,29 @@ async def mint_upstream_token(
         expires_in=minted.expires_in,
         scopes=sorted(minted.scopes),
     )
+
+
+@gateway_router.post("/sharepoint/handoff", status_code=204)
+async def handoff_sharepoint(
+    data: SharePointHandoff,
+    service: Annotated[CredentialGatewayService, Injected(CredentialGatewayService)],
+    authorization: Annotated[str | None, Header()] = None,
+) -> Response:
+    try:
+        await run_in_threadpool(service.handoff_sharepoint, authorization, data)
+    except (GatewayTokenRejected, SharePointHandoffRefused) as exc:
+        raise _refused("The presented gateway token is not valid for this handoff.") from exc
+    except SharePointReconnectRequired as exc:
+        raise HTTPException(
+            409,
+            detail={
+                "error": "sharepoint_reconnect_required",
+                "message": "Reconnect SharePoint before retrying this operation.",
+            },
+        ) from exc
+    except UpstreamAuthenticationError as exc:
+        raise HTTPException(
+            502,
+            detail={"error": "upstream_unreachable", "message": "SharePoint authentication could not be completed."},
+        ) from exc
+    return Response(status_code=204)

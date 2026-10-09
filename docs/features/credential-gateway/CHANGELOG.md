@@ -1,17 +1,41 @@
 # Credential Gateway — change log
 
-Status: Active
+Status: Completed
 Epic: credential gateway (ticket pending)
 Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../../adr/2026-09-02-credential-gateway-egress-modes.md), [`../../adr/2026-09-02-integration-plugin-and-runtime-tool-adapter-seams.md`](../../adr/2026-09-02-integration-plugin-and-runtime-tool-adapter-seams.md), [`../integrations.md`](../integrations.md)
 
 ## Current state
 
-- **Delivered:** the Integration Plugin seam; the credential gateway as a separate deployment; token issue/revoke/resolve; the `GATEWAY_PROXY` forward path for every shipped aai-cli provider without changing aai-cli; `TOKEN_BROKER` for Google Workspace; `GATEWAY_PROXY` for Firecrawl; and a durable audit trail for every resolution and lifecycle event. **SharePoint retains staging's `EgressMode.DIRECT` delegated-token lifecycle; the previously gateway-routed tool providers remain isolated.** Native communication credentials also reach the runtimes as described in [`../communications/CHANGELOG.md`](../communications/CHANGELOG.md). The gateway is unconditional — `CREDENTIAL_GATEWAY_ENABLED` is gone, and each plugin's `egress_mode` is the sole, permanent routing decision.
-- **In transition:** `PROVIDER_DISPLAY_NAMES`, `PROVIDER_CONTENT_MODELS`, and `PROVIDER_VALIDATORS` still live outside the plugins (import cycle) and are pinned by contract test rather than derived.
-- **Next:** reassess credential isolation for SharePoint and native communication transports.
-- **Blockers:** none.
+- **Delivered:** optional per-binding isolation, default OFF for new credentials; activated direct/proxy/broker adapters; source/generation-bound gateway authorization; preflight, serialized explicit restart, durable mode/readiness/recovery; provider-aware Keys controls; independent platform-default Firecrawl; and delegated SharePoint brokerage with proven PVC handoff and encrypted rotation/cache. Native messaging remains runtime-owned. Durable behavior is described in [`../integrations.md`](../integrations.md).
+- **In transition:** migrations preserve legacy modes and tokens, and existing pods remain unverified until explicit restart. Base images must be rebuilt with the pinned patched CLI before isolated SharePoint is used. Versions/publication follow the release rules during release preparation; this implementation does not publish or deploy.
+- **Next:** release preparation and rollout under [`../../guidelines/operations.md`](../../guidelines/operations.md), when requested. All implementation slices are complete.
+- **Blockers:** none; final independent Opus review is GO after the startup-readiness and retryable-pod-error fixes.
 
 ## Changes
+
+### 2026-10-08 — Remaining optional-isolation slices
+
+- Activated: desired policy selects direct, proxy or broker artifacts; new stored and operator-default bindings start OFF while migrated bindings retain prior routing.
+- Delivered: authorized Apply & Restart, complete preflight before interruption, durable source-bound generations, setup cleanup, fail-closed errors and explicit retry/previous-mode recovery. User choices emit credential-free Agent update events.
+- Delivered: provider-specific UI copy and permission gates, including independent operator-default Firecrawl choices that survive stored override removal.
+- Delivered: SharePoint POST token broker, row-locked encrypted rotation/cache and sign-in-aware one-time PVC handoff before cleanup; latest-grant handback on direct restart. Added pinned CLI/compatibility patches to both image builds for token-env isolation and delegated Excel parity.
+- Verified: 124 final API/unit regressions, 334 adjacent API checks, 37 browser cases, all ten Hermes/OpenClaw runtime contracts, both rebuilt runtime-image smoke suites, and API image build/encrypted-store import. API/UI static checks, the migration graph and rendered Firecrawl deployment configuration pass. The broad API run passed 4,009 tests with one skip; its sole failure was the new endpoint missing from the reviewed operation inventory, corrected and verified in the final public API checks.
+- Reviewed: final Opus GO; its independent final run passed 307 Agent/isolation/readiness checks. Slow or retryable image/configuration failures remain provisioned and unverified; only proven runtime exits reconcile to startup failure under the lifecycle lock. Regression tests reproduced all eight image/configuration teardown cases before the fix.
+
+### 2026-10-08 — Explicit credential adapters (prepared)
+
+- Delivered: validated per-binding route selection and aai-cli, gog and stored Firecrawl materializers. Mixed direct/isolated routes separate real credential environment from gateway profiles and tokens; unsupported modes or missing gateway authorization fail without a credential fallback.
+- Restored: direct Google client/token import with a disposable encrypted keyring; capability metadata now advertises both Google routes. Its renewable credentials remain confined to Secret environment, with credential-free setup files and the read-only guard retained.
+- Verified: direct and isolated provider artifact contracts plus real, offline gog imports in both runtime images.
+- Deferred: startup activation, applied generations, mode-transition credential cleanup and explicit restart. The user switch remains unavailable and legacy routing/defaults remain in effect.
+
+### 2026-10-08 — Isolation policy foundation
+
+- Delivered: per-Agent/provider dormant policy, migration preserving existing modes, atomic initialization/removal with credential events, and scoped read metadata with provider-specific descriptions. Credential replacement and shared-credential changes preserve policy.
+- Changed: provider capabilities distinguish Google's isolated-only path and SharePoint's direct-only path. No applied-mode inference, switch or runtime activation is delivered.
+- Changed: a manual-to-shared source swap updates the same binding and emits one `agent.secret.updated` event with its shared reference, preserving policy instead of emitting removal and addition events. Deleting a Shared Credential also removes policy for orphaned bindings on deleted Agents.
+- Decision: [optional per-Agent isolation](../../adr/2026-10-08-optional-agent-integration-isolation.md) records the maintainer's recovery requirement and planned default-OFF behavior. The default remains transitional until direct auth and restart transitions work; existing isolated bindings must not be silently downgraded.
+- Follow-up: direct adapters, durable applied-mode tracking, explicit Apply & Restart, then provider-aware UI and remaining isolation paths.
 
 ### 2026-10-08 — Merge staging and preserve native runtime credentials
 

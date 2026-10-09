@@ -29,16 +29,29 @@ from api.domains.agents.models import (
     AgentTemplateOverrideVersionRead,
     AgentTemplateSelection,
     AgentUpdate,
+    IntegrationIsolationUpdate,
     SecretProvider,
     get_agent_filter,
 )
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.domains.integrations.service import IntegrationIsolationService
 from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 agents_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["agents"])
+
+
+@agents_router.put("/{agent_id}/integrations/{provider}/isolation", response_model=AgentRead)
+def apply_integration_isolation(
+    agent_id: UUID,
+    provider: SecretProvider,
+    data: IntegrationIsolationUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[IntegrationIsolationService, Injected(IntegrationIsolationService)],
+) -> AgentRead:
+    return service.apply(agent_id, provider, data, context)
 
 
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)

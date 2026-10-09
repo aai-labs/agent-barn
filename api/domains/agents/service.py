@@ -5,7 +5,7 @@ import json
 import logging
 import secrets
 from collections.abc import Collection, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID
 
@@ -16,14 +16,8 @@ from pydantic import ValidationError
 from api.core.config import Config
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.aai_cli_artifacts import (
-    PROFILE_SLUGS,
-    build_config_toml,
-    build_env,
-    build_integrations_policy_md,
     build_local_tools_policy_md,
-    build_setup_sh,
     build_tool_context_md,
-    store_providers_for,
 )
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
@@ -52,12 +46,6 @@ from api.domains.agents.builders import (
 )
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentProvisioningPrecondition
-from api.domains.agents.gog_artifacts import (
-    build_gog_env,
-    build_gog_policy_md,
-    build_gog_shim_install_sh,
-    build_gog_shim_sh,
-)
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -97,6 +85,7 @@ from api.domains.agents.models import (
     AgentUpdate,
     CommandApprovalMode,
     ConfluenceContent,
+    FirecrawlContent,
     GoogleWorkspaceContent,
     JiraContent,
     SecretProvider,
@@ -146,9 +135,18 @@ from api.domains.events.catalog import (
     AGENT_STARTED,
     AGENT_STOPPED,
 )
+from api.domains.integrations.isolation import isolation_read, legacy_isolation
+from api.domains.integrations.repository import IntegrationRepository
+from api.domains.integrations.runtime import (
+    RuntimeBinding,
+    RuntimeContext,
+    materialize_integrations,
+    select_egress_mode,
+)
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.service import RestorePointService
+from api.domains.shared_credentials.models import SharedCredential
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
@@ -286,6 +284,7 @@ class AgentService:
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
     credential_gateway: CredentialGatewayService
+    integrations: IntegrationRepository
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
@@ -492,6 +491,8 @@ class AgentService:
         secrets_read = []
         for secret in secrets or []:
             read = AgentSecretRead.model_validate(secret)
+            if read.isolation is None:
+                read.isolation = isolation_read(SecretProvider(read.provider), None)
             if secret.shared_credential_id and secret.shared_credential_id in credential_names:
                 read.shared_credential_name = credential_names[secret.shared_credential_id]
             secrets_read.append(read)
@@ -571,8 +572,75 @@ class AgentService:
             updated_at=agent.updated_at,
         )
 
+    def _observe_integration_readiness(self, agent: Agent, readiness: str | None = None) -> None:
+        runtime = self.integrations.runtime(agent.id)
+        if agent.status == AgentStatus.RUNNING and runtime is not None and runtime.state == "provisioned":
+            if readiness is None:
+                readiness, _ = self.k8s.get_pod_readiness(f"agent-{agent.id}", self.config.k8s_namespace)
+            if readiness == "ready" and runtime.authentication_complete:
+                self.integrations.set_state(agent.id, "ready", runtime.generation, expected_state="provisioned")
+            elif readiness == "crashed" and runtime.bindings:
+                # A stale observation must never delete a replacement generation.
+                with self.repository.lifecycle_lock(agent.id) as acquired:
+                    if not acquired or self.restore_points.has_blocking_operation(agent.id):
+                        return
+                    current = self.repository.get_by_id(agent.id)
+                    latest = self.integrations.runtime(agent.id)
+                    if (
+                        current is None
+                        or current.status != AgentStatus.RUNNING
+                        or latest is None
+                        or latest.generation != runtime.generation
+                        or latest.state != "provisioned"
+                    ):
+                        return
+                    observed, _ = self.k8s.get_pod_readiness(f"agent-{agent.id}", self.config.k8s_namespace)
+                    if observed != "crashed" or not self.k8s.runtime_has_exited(
+                        f"agent-{agent.id}", self.config.k8s_namespace
+                    ):
+                        return
+                    self._record_provisioning_failure(current, RuntimeError("Agent runtime crashed during startup"))
+                    agent.status = current.status
+                    agent.last_error = current.last_error
+                    agent.last_error_code = current.last_error_code
+                    agent.last_error_detail = current.last_error_detail
+
     def _get_agent_read(self, agent: Agent, context: CurrentUserContext) -> AgentRead:
-        secrets = self.repository.get_secrets_for_agent(agent.id)
+        self._observe_integration_readiness(agent)
+        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+        secrets = self.repository.get_secret_summaries_for_agents([agent.id], read_scope).get(agent.id, [])
+        if (
+            self.config.agent_firecrawl_api_key
+            and self.config.agent_firecrawl_base_url
+            and not any(s.provider == SecretProvider.FIRECRAWL for s in secrets)
+        ):
+            desired = self.integrations.policies(agent.id, "platform_default").get(SecretProvider.FIRECRAWL, False)
+            metadata = isolation_read(SecretProvider.FIRECRAWL, desired)
+            runtime = self.integrations.runtime(agent.id)
+            applied = runtime.bindings.get("firecrawl") if runtime else None
+            verified = runtime.previous_bindings.get("firecrawl", {}) if runtime else {}
+            if runtime and applied and applied.get("source") == "platform_default":
+                metadata.generation = runtime.generation
+            if verified.get("source") == "platform_default":
+                metadata.last_verified = verified.get("isolated")
+            if (
+                runtime
+                and runtime.state == "ready"
+                and agent.status == AgentStatus.RUNNING
+                and applied
+                and applied.get("source") == "platform_default"
+            ):
+                metadata.applied = applied["isolated"]
+                metadata.generation = runtime.generation
+                metadata.pending = metadata.desired != metadata.applied
+            secrets.append(
+                AgentSecretRead(
+                    provider=SecretProvider.FIRECRAWL,
+                    secret_name="Platform Firecrawl",
+                    source="platform_default",
+                    isolation=metadata,
+                )
+            )
         skills = [
             PinnedSkill(skill=s, version=row.pinned_version)
             for row, s in self.skill_repository.get_agent_skills_with_details(agent.id)
@@ -590,7 +658,6 @@ class AgentService:
             template_key = template.source_template_key
         elif template is not None:
             template_key = template.template_key
-        read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
         creators = self.repository.get_creators_for_agents([agent.id], read_scope)
         message_times = self.conversation_repository.latest_message_times_for_agents(
@@ -1543,7 +1610,45 @@ class AgentService:
             items=items,
         )
 
+    def _shared_credentials_for_update(self, agent: Agent, data: AgentUpdate) -> list[SharedCredential]:
+        """Validate source replacements before deleting the old credential binding."""
+        removed = set(data.removed_secret_providers or [])
+        manual = {
+            SecretProvider(s.provider)
+            for s in self.repository.get_secrets_for_agent(agent.id)
+            if not s.shared_credential_id and SecretProvider(s.provider) not in removed
+        }
+        manual.update(item.provider for item in data.secrets or [])
+        providers: set[str] = set()
+        credentials: list[SharedCredential] = []
+        for attach in data.shared_credentials or []:
+            credential = self.shared_credential_repository.get_by_id_and_org(
+                attach.shared_credential_id, agent.organization_id
+            )
+            if credential is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Shared credential {attach.shared_credential_id} not found"
+                )
+            if credential.provider in manual:
+                raise HTTPException(
+                    status_code=400, detail=f"Provider {credential.provider} already has a manual credential"
+                )
+            if credential.provider in providers:
+                raise HTTPException(
+                    status_code=400, detail=f"Duplicate shared credential provider: {credential.provider}"
+                )
+            providers.add(credential.provider)
+            credentials.append(credential)
+        return credentials
+
     def update_agent(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(409, "An Agent lifecycle operation is already in progress")
+            return self._update_agent_locked(agent_id, data, context)
+
+    def _update_agent_locked(self, agent_id: UUID, data: AgentUpdate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         updated = data.model_dump(exclude_unset=True)
@@ -1671,6 +1776,8 @@ class AgentService:
         secret_actor = resolve_actor_identity(context, org_id)
         secret_actor_display = context.user.full_name or context.user.email
         secret_delivery_ids: list[UUID] = []
+        shared_upserts = self._shared_credentials_for_update(agent, data) if data.shared_credentials else []
+        replaced_by_shared = {credential.provider for credential in shared_upserts}
 
         # Integration secrets: platform-independent. Remove first, then upsert
         # (the AgentUpdate validator already forbids a provider in both lists).
@@ -1689,6 +1796,10 @@ class AgentService:
                 for item in data.secrets or []
             ]
             for provider in updated.get("removed_secret_providers") or []:
+                if provider in replaced_by_shared:
+                    # An explicitly requested source swap updates the same binding
+                    # below, preserving its policy in the credential/event transaction.
+                    continue
                 secret_delivery_ids += self.repository.delete_secret_with_event(
                     agent.id,
                     provider,
@@ -1729,27 +1840,7 @@ class AgentService:
 
         # Shared credential attachments
         if "shared_credentials" in updated:
-            current_secrets = self.repository.get_secrets_for_agent(agent.id)
-            manual_providers = {s.provider for s in current_secrets if not s.shared_credential_id}
-            shared_providers_seen: set[str] = set()
-            for attach in data.shared_credentials or []:
-                shared_cred = self.shared_credential_repository.get_by_id_and_org(attach.shared_credential_id, org_id)
-                if shared_cred is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Shared credential {attach.shared_credential_id} not found",
-                    )
-                if shared_cred.provider in manual_providers:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Provider {shared_cred.provider} already has a manual credential",
-                    )
-                if shared_cred.provider in shared_providers_seen:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Duplicate shared credential provider: {shared_cred.provider}",
-                    )
-                shared_providers_seen.add(shared_cred.provider)
+            for shared_cred in shared_upserts:
                 existing = self.repository.get_secret(agent.id, shared_cred.provider)
                 if existing:
                     existing.content = None
@@ -1860,6 +1951,7 @@ class AgentService:
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
         try:
+            self._provision_and_start(agent, preflight=True)
             previous_status = self._provision_and_start(agent)
         except AgentProvisioningPrecondition:
             raise
@@ -1874,6 +1966,13 @@ class AgentService:
         The full exception is already in the logs; only the normalized form is
         persisted or returned, so no cluster text reaches a client.
         """
+        try:
+            self.k8s.delete_deployment(f"agent-{agent.id}", self.config.k8s_namespace)
+            self.k8s.wait_for_termination(f"agent-{agent.id}", self.config.k8s_namespace)
+        except Exception:
+            logger.exception("Could not terminate failed runtime for agent %s", agent.id)
+        self.integrations.set_state(agent.id, "failed")
+        self.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
         normalized = normalize_agent_provisioning_error(exc)
         agent.status = AgentStatus.ERROR
         agent.last_error = normalized.display_message
@@ -1893,14 +1992,20 @@ class AgentService:
             detail=_provisioning_error_dto(normalized).model_dump(mode="json"),
         )
 
-    def _provision_and_start(self, agent: Agent) -> str:
+    def _provision_and_start(
+        self,
+        agent: Agent,
+        *,
+        preflight: bool = False,
+        isolation_overrides: Mapping[SecretProvider, bool] | None = None,
+    ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
         org_id = agent.organization_id
         # Stamped as Service labels for monitoring; resolved here (not in the
         # route) so every start path labels agents consistently.
         org_name = self.organization_lookup.get_name(org_id)
-        if agent.status == AgentStatus.RUNNING:
+        if agent.status == AgentStatus.RUNNING and not preflight:
             raise AgentProvisioningPrecondition(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is already running",
@@ -2040,6 +2145,20 @@ class AgentService:
             )
 
         # aai-cli integration secrets — all agent types.
+        if not preflight:
+            # Reconcile stale workloads before rotating any machine authorization.
+            self.k8s.delete_deployment(name, ns)
+            self.k8s.wait_for_termination(name, ns)
+            previous_runtime = self.integrations.runtime(agent.id)
+            previous_sharepoint = previous_runtime.bindings.get("sharepoint", {}) if previous_runtime else {}
+            desired_sharepoint = self.integrations.policies(agent.id).get(SecretProvider.SHAREPOINT, False)
+            if (
+                previous_sharepoint.get("isolated")
+                and previous_sharepoint.get("handoff_complete")
+                and not desired_sharepoint
+                and self.repository.get_secret(agent.id, SecretProvider.SHAREPOINT)
+            ):
+                self.credential_gateway.sharepoint_broker.prepare_direct(agent.id, agent.organization_id)
         agent_secrets = self.repository.get_secrets_for_agent(agent.id)
         shared_ids = [s.shared_credential_id for s in agent_secrets if s.shared_credential_id is not None]
         shared_by_id = {}
@@ -2085,70 +2204,68 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
-        # Rotates the Agent's gateway tokens and revokes any left from a previous start.
-        # Computed here (rather than where it's written into the Secret, below) because
-        # the Firecrawl block also needs to know its own token, if one was issued.
-        gateway_tokens = self.credential_gateway.issue_for_agent(agent.id, agent.organization_id, set(decrypted.keys()))
-        gateway_tokens_by_provider = {issued.provider: issued.value for issued in gateway_tokens}
-
-        # A gateway-routed provider is excluded from the store, which is what actually
-        # keeps its real credential out of the pod Secret and aai-secrets.enc.json.
-        store = store_providers_for(decrypted)
+        policies = self.integrations.policies(agent.id)
+        default_firecrawl = SecretProvider.FIRECRAWL not in decrypted and bool(
+            self.config.agent_firecrawl_api_key and self.config.agent_firecrawl_base_url
+        )
+        if default_firecrawl:
+            decrypted[SecretProvider.FIRECRAWL] = FirecrawlContent(
+                api_key=self.config.agent_firecrawl_api_key, base_url=self.config.agent_firecrawl_base_url
+            )
+            policies[SecretProvider.FIRECRAWL] = self.integrations.policies(agent.id, "platform_default").get(
+                SecretProvider.FIRECRAWL, False
+            )
+        policies.update(isolation_overrides or {})
+        bindings = [
+            RuntimeBinding(
+                provider,
+                content,
+                select_egress_mode(provider, isolated=policies.get(provider, legacy_isolation(provider))),
+            )
+            for provider, content in decrypted.items()
+        ]
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
-        # The store must survive restarts: aai-cli rotates delegated Microsoft tokens in it.
-        # Hermes' home is its volume; OpenClaw's volume is only ~/.openclaw.
         aai_store_dir = None if agent.agent_type == AgentType.HERMES else "/home/node/.openclaw/aai-cli"
-        # Gated on providers that actually get an aai-cli profile: an agent whose only
-        # integrations are profile-less (google_workspace, firecrawl) would otherwise get
-        # a config.toml holding nothing but the store header.
-        has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
-        aai_config_toml = (
-            build_config_toml(
-                decrypted,
-                home_dir=aai_home,
-                store_dir=aai_store_dir,
-                gateway_base_url=self.config.credential_gateway_base_url,
-            )
-            if has_aai_profiles
-            else None
+        gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
+        runtime_context = RuntimeContext(
+            aai_home,
+            gog_home_dir,
+            gateway_base_url=self.config.credential_gateway_base_url,
+            store_dir=aai_store_dir,
+            gateway_tokens={provider: "preflight" for provider in decrypted},
         )
-        # Always mounted, even without profiles, so a removed SharePoint sign-in is cleaned up.
-        aai_setup_sh = build_setup_sh(
-            list(store), home_dir=aai_home, store_dir=aai_store_dir, install_config=has_aai_profiles
-        )
-        if store:
-            secret.string_data.update(build_env(store))
-
-        # gog (Google Workspace) — always brokered through the gateway: no keyring, no
-        # stored OAuth client and no token to import, so installing the shim on PATH is
-        # the whole of boot-time setup. GOG_HOME is deliberately the container
-        # filesystem, not the PVC that aai_home points at for Hermes.
-        gog_setup_sh = None
-        gog_shim_sh = None
-        if isinstance(gws_content, GoogleWorkspaceContent):
-            gog_home_dir = "/home/hermes" if agent.agent_type == AgentType.HERMES else "/home/node"
-            secret.string_data.update(
-                build_gog_env(
-                    gws_content,
-                    gog_home_dir,
-                    gateway_base_url=self.config.credential_gateway_base_url,
-                ),
+        # Validate all artifacts before changing authorization or cluster resources.
+        artifacts = materialize_integrations(bindings, runtime_context)
+        snapshot: dict[str, dict[str, Any]] = {
+            s.provider: {
+                "binding_id": str(s.id),
+                "isolated": policies.get(SecretProvider(s.provider), legacy_isolation(SecretProvider(s.provider))),
+            }
+            for s in agent_secrets
+        }
+        if default_firecrawl:
+            snapshot["firecrawl"] = {
+                "binding_id": None,
+                "isolated": policies[SecretProvider.FIRECRAWL],
+                "source": "platform_default",
+            }
+        gateway_tokens = []
+        if not preflight:
+            runtime = self.integrations.begin(agent.id, snapshot)
+            gateway_tokens = self.credential_gateway.issue_for_agent(
+                agent.id, agent.organization_id, set(decrypted), generation=runtime.generation
             )
-            gog_setup_sh = build_gog_shim_install_sh(gog_home_dir)
-            gog_shim_sh = build_gog_shim_sh()
-
-        fc_gateway_token = gateway_tokens_by_provider.get(SecretProvider.FIRECRAWL)
-        if fc_gateway_token is not None:
-            # A stored credential is always gateway-routed: the real key never enters
-            # the pod. The pod's Firecrawl clients already read whatever value is here.
-            fc_api_key = fc_gateway_token
-            fc_base_url = f"{self.config.credential_gateway_base_url.rstrip('/')}/p/firecrawl"
-        else:
-            # No stored credential for this agent: the server-operator-configured
-            # platform default, injected directly as it always has been. Outside the
-            # Agent Secret model entirely, so the gateway has nothing to decrypt here.
-            fc_api_key = self.config.agent_firecrawl_api_key
-            fc_base_url = self.config.agent_firecrawl_base_url
+            artifacts = materialize_integrations(
+                bindings,
+                replace(runtime_context, gateway_tokens={issued.provider: issued.value for issued in gateway_tokens}),
+            )
+        secret.string_data.update(artifacts.env)
+        aai_config_toml = artifacts.files.get("aai-cli-config.toml")
+        aai_setup_sh = artifacts.files["aai-cli-setup.sh"]
+        gog_setup_sh = artifacts.files.get("gog-setup.sh")
+        gog_shim_sh = artifacts.files.get("gog-shim.sh")
+        fc_api_key = artifacts.env.get("FIRECRAWL_API_KEY", self.config.agent_firecrawl_api_key)
+        fc_base_url = artifacts.env.get("FIRECRAWL_API_URL", self.config.agent_firecrawl_base_url)
         if fc_api_key and fc_base_url:
             secret.string_data["FIRECRAWL_API_KEY"] = fc_api_key
             if hermes_cfg is not None:
@@ -2251,8 +2368,7 @@ class AgentService:
         workspace_dir = HERMES_WORKSPACE_DIR if agent.agent_type == AgentType.HERMES else OPENCLAW_WORKSPACE_DIR
         agents_md = (
             rendered.agents_md
-            + build_integrations_policy_md(decrypted)
-            + build_gog_policy_md(gws_content if isinstance(gws_content, GoogleWorkspaceContent) else None)
+            + artifacts.policy_md
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_file_delivery_policy_md(
                 # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
@@ -2306,6 +2422,9 @@ class AgentService:
                 skills_json=skills_json,
             )
 
+        if preflight:
+            return previous_status
+
         # Failures here are recorded and normalized by _start_agent_unchecked, which
         # wraps this whole method rather than only the cluster calls.
         self.k8s.delete_config_map(name, ns)
@@ -2318,6 +2437,7 @@ class AgentService:
         )
         self.k8s.create_service(ns, service)
         self.k8s.create_deployment(ns, deployment)
+        self.integrations.set_state(agent.id, "provisioned", runtime.generation)
 
         agent.status = AgentStatus.RUNNING
         agent.last_error = None
@@ -2493,13 +2613,16 @@ class AgentService:
         self._capture_logs_before_stop(agent)
         name = f"agent-{agent.id}"
         ns = self.config.k8s_namespace
+        self.integrations.set_state(agent.id, "stopping")
         self.k8s.delete_deployment(name, ns)
+        self.k8s.wait_for_termination(name, ns)
         self.k8s.delete_config_map(name, ns)
         self.k8s.delete_secret(name, ns)
         # The pod is gone, so its gateway tokens must stop resolving even if a copy of
         # the Secret was taken while it ran.
         self.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
 
+        self.integrations.set_state(agent.id, "stopped")
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""
         agent.running_config_digest = ""
@@ -2777,6 +2900,7 @@ class AgentService:
         ns = self.config.k8s_namespace
 
         pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)
+        self._observe_integration_readiness(agent, pod_status)
         if pod_status == "crashed":
             return AgentHealthRead(status="crashed", reason=friendly_pod_reason(pod_reason))
         if pod_status != "ready":

@@ -31,6 +31,10 @@ Add both seams under `api/domains/integrations/plugins/`.
 
 Plugins are trusted release artifacts, not dynamically installed packages — the same stance as Platform Plugins, and a stronger requirement here because these code paths decrypt credentials and mint upstream tokens. No entry-point discovery, no runtime registration.
 
+## Durable broker amendment (2026-10-08)
+
+SharePoint refresh rotation must persist alongside a shared encrypted cache and serialize with reconnect/handoff. A pure plugin method cannot own that transaction without crossing the existing SQL boundary. Plugins therefore declare a typed `TokenBrokerService` when durable orchestration is required; gateway dispatch binds it to a domain broker/repository. Registry validation requires either that supported service or a pure `mint_upstream_token` override. Provider plugins remain free of database sessions, routes and Kubernetes clients. The [optional-isolation decision](2026-10-08-optional-agent-integration-isolation.md) establishes the credential-continuity requirement behind this amendment.
+
 ## Boundary constraint
 
 `apply_upstream_auth` is called by the gateway at request time; `materialize` is called by the API at agent start. If the gateway deploys separately, these run in different processes. Plugin modules therefore depend only on credential models, stdlib, and the HTTP client — never on routes, the SQLAlchemy session, or the Kubernetes client. Violating this is what would force the gateway back into the API deployment.

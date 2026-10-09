@@ -66,8 +66,18 @@ def _issue(context, agent, provider=SecretProvider.GITHUB):
     Bypasses ``issue_for_agent``'s egress-mode policy deliberately, so the gateway's
     identity contract is testable independently of which providers it currently serves.
     """
+    from api.domains.agents.models import AgentSecret
+    from api.domains.agents.repository import AgentRepository
     from api.domains.credential_gateway.models import GatewayToken
     from api.domains.credential_gateway.repository import GatewayTokenRepository
+    from api.domains.integrations.repository import IntegrationRepository
+
+    agents = context.injector.get(AgentRepository)
+    binding = agents.get_secret(agent.id, provider)
+    if binding is None:
+        binding = AgentSecret(agent_id=agent.id, provider=provider, secret_name=provider.value, content="fixture")
+        context.postgres_delegate.save(binding)
+    context.injector.get(IntegrationRepository).set_policy(agent.id, provider, True)
 
     value = issue_token_value()
     repo = context.injector.get(GatewayTokenRepository)
@@ -77,6 +87,7 @@ def _issue(context, agent, provider=SecretProvider.GITHUB):
             agent_id=agent.id,
             provider=provider,
             token_hash=hash_token(value),
+            binding_id=binding.id,
         )
     )
     return value
@@ -304,6 +315,7 @@ def test_issuing_and_revoking_persist_durable_lifecycle_rows():
     with given(_GIVEN) as context:
         agent = context.agent
         service = context.injector.get(CredentialGatewayService)
+        _issue(context, agent)
 
         with when("a token is issued and then revoked"):
             service.issue_for_agent(agent.id, agent.organization_id, {SecretProvider.GITHUB})

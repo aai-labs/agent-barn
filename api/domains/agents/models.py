@@ -219,6 +219,11 @@ class SharePointContent(SecretContent):
     # New for every sign-in. The pod writes the refresh token into aai-cli's store only when
     # this changes, so a restart keeps aai-cli's rotated token and a reconnect replaces it.
     sign_in_id: str
+    # Encrypted broker cache and a direct-store revision; optional for existing grants.
+    broker_access_token: str | None = Field(default=None, repr=False)
+    broker_expires_at: float | None = None
+    store_revision: str | None = None
+    subject_id: str | None = None
 
     @field_validator("connection_id", "sign_in_id")
     @classmethod
@@ -1198,6 +1203,24 @@ class AgentConfigurationRead(PydanticBaseModel):
     override_versions: list[AgentTemplateOverrideVersionRead] = Field(default_factory=list)
 
 
+class IntegrationIsolationRead(PydanticBaseModel):
+    desired: bool
+    supported_modes: list[Literal["direct", "isolated"]]
+    direct_description: str
+    isolated_description: str
+    switch_available: bool = False
+    applied: bool | None = None
+    generation: UUID | None = None
+    pending: bool = True
+    last_verified: bool | None = None
+    reconnect_required: bool = False
+
+
+class IntegrationIsolationUpdate(PydanticBaseModel):
+    isolated: bool
+    restart: bool = False
+
+
 class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
     model_config = ConfigDict(from_attributes=True)
 
@@ -1205,6 +1228,8 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
     secret_name: str
     shared_credential_id: UUID | None = None
     shared_credential_name: str | None = None
+    isolation: IntegrationIsolationRead | None = None
+    source: Literal["agent_secret", "shared_credential", "platform_default"] = "agent_secret"
 
 
 class AgentAccessRoleRead(PydanticBaseModel):

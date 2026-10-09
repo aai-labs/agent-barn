@@ -42,6 +42,9 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
+          env:
+            - name: AGENT_FIRECRAWL_BASE_URL
+              value: {{ .Values.agentFirecrawlBaseUrl | quote }}
           readinessProbe:
             httpGet:
               path: /health

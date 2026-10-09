@@ -1,7 +1,7 @@
 """The shipped Integration Plugins, one class per provider.
 
-``egress_mode`` owns how a provider sends credentials; adding a new gateway provider
-stays local to its plugin.
+``egress_mode`` declares the available isolated route. Stored per-binding policy
+selects it or the direct adapter. Durable token rotation uses a broker service.
 
 Plugins are trusted release artifacts, not dynamically installed packages: adding one is
 a merged PR, never runtime registration.
@@ -38,6 +38,7 @@ from api.domains.integrations.plugins.base import (
     IntegrationPlugin,
     MintedToken,
     OutboundRequest,
+    TokenBrokerService,
     UpstreamAuthenticationError,
 )
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
@@ -519,14 +520,15 @@ class FirecrawlPlugin(IntegrationPlugin[FirecrawlContent]):
 
 
 class SharePointPlugin(AaiCliPlugin[SharePointContent]):
-    """Preserve the native delegated sign-in and token rotation shipped on staging."""
+    """Delegated SharePoint, with either PVC rotation or service-side token brokerage."""
 
     key = "sharepoint"
     provider = SecretProvider.SHAREPOINT
     display_name = "SharePoint credential"
     credentials_model = SharePointContent
-    egress_mode = EgressMode.DIRECT
+    egress_mode = EgressMode.TOKEN_BROKER
     bundled_skill_slugs = ("aai-microsoft",)
+    token_broker_service = TokenBrokerService.SHAREPOINT
     aai_cli_slug = "sharepoint-work"
     aai_cli_label = "SharePoint"
     aai_cli_secret_entries = (("microsoft.sharepoint_refresh_token", "refresh_token"),)
@@ -546,6 +548,15 @@ class SharePointPlugin(AaiCliPlugin[SharePointContent]):
             f"client_id = {quote(content.client_id)}\n"
             f"scope = {quote(scope)}\n"
             'refresh_token_secret = "microsoft.sharepoint_refresh_token"\n'
+        )
+
+    def aai_cli_gateway_profile_block(self, content: SharePointContent, *, base_url: str, token_env: str) -> str:
+        return (
+            f"[profiles.{self.aai_cli_slug}]\n"
+            'provider = "microsoft"\n'
+            'auth_type = "token_url"\n'
+            f"token_url = {quote(base_url)}\n"
+            f"api_token_env = {quote(token_env)}\n"
         )
 
     def aai_cli_context_line(self, content: SharePointContent) -> str:

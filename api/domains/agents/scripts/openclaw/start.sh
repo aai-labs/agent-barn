@@ -63,11 +63,11 @@ done
 export PATH="/home/node/.local/bin:$PATH"
 
 if [ -f /app/config/aai-cli-setup.sh ]; then
-  sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
+  sh /app/config/aai-cli-setup.sh || exit $?
 fi
 
 if [ -f /app/config/gog-setup.sh ]; then
-  sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
+  sh /app/config/gog-setup.sh || exit $?
 fi
 if [ -n "${MEMORY_API_KEY:-}" ]; then
   python3 /app/config/memory-gateway-ready.py || true
