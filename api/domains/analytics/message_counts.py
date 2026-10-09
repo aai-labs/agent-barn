@@ -8,7 +8,13 @@ from uuid import UUID, uuid5
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.analytics.event_handlers import INSTALLATION_GROUP, ORGANIZATION_GROUP, SOURCE, installation_name
+from api.domains.analytics.event_handlers import (
+    INSTALLATION_GROUP,
+    ORGANIZATION_GROUP,
+    SOURCE,
+    installation_environment,
+    installation_name,
+)
 from api.domains.analytics.repository import InstallationRepository
 from api.domains.conversations.repository import ConversationRepository, MessageCount
 from api.infrastructure.posthog.client import PostHogClient
@@ -37,7 +43,13 @@ class MessageCountReporter:
             return 0
         installation_id = self.installation_repository.get_id()
         messages = [
-            self._message(row, hour_start, installation_id, installation_name(self.config, installation_id))
+            self._message(
+                row,
+                hour_start,
+                installation_id,
+                installation_name(self.config, installation_id),
+                installation_environment(self.config),
+            )
             for row in self.conversation_repository.hourly_message_counts(hour_start)
         ]
         for start in range(0, len(messages), MAX_BATCH_SIZE):
@@ -46,7 +58,9 @@ class MessageCountReporter:
         return len(messages)
 
     @staticmethod
-    def _message(row: MessageCount, hour_start: datetime, installation_id: UUID, name: str) -> dict[str, Any]:
+    def _message(
+        row: MessageCount, hour_start: datetime, installation_id: UUID, name: str, environment: str
+    ) -> dict[str, Any]:
         direction = row.direction.value
         return {
             "event": MESSAGE_COUNT_EVENT,
@@ -61,6 +75,7 @@ class MessageCountReporter:
                 "organization_id": str(row.organization_id),
                 "installation_id": str(installation_id),
                 "installation_name": name,
+                "installation_environment": environment,
                 "$groups": {INSTALLATION_GROUP: str(installation_id), ORGANIZATION_GROUP: str(row.organization_id)},
                 "source": SOURCE,
                 "$geoip_disable": True,

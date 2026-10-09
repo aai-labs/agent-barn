@@ -12,7 +12,7 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - User-detail collection and its setting have been removed. User email and full name are never sent; UUID attribution remains.
   - `ANALYTICS_POSTHOG_HOST` defaults to PostHog Cloud EU.
   - `ANALYTICS_POSTHOG_PROJECT_TOKEN` defaults to the Agent Barn project token. Committing it is an approved exception to the AGENTS.md token rule, because PostHog project tokens are public by design.
-  - The Installation label is the `WEB_APP_URL` hostname, falling back to the persisted Installation id when no hostname is available. There is no configurable name override.
+  - The Installation label is the normalized `WEB_APP_URL` hostname for remote installs, or `local-<first 8 UUID characters>` for local hosts. Events carry `installation_environment`; the persisted UUID remains the identity. There is no configurable name override.
 - Also delivered: `PostHogClient.send_batch` in `api/infrastructure/posthog/`.
   - Makes one POST to `{host}/batch/` and waits at most 5 seconds.
   - A 408, a 429, a 5xx or a transport failure raises `RetryablePostHogException`. Any other non-200 status raises `TerminalPostHogException`.
@@ -41,6 +41,50 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-09 — AF-357 — Integrate remote naming changes
+
+- Merged the remote hostname normalization and local/remote event properties while preserving removal of user-detail collection, synchronized naming, and the domain-change identity regression.
+- Local/remote classification is descriptive; `ANALYTICS_ENABLED` controls sending. Developer stacks using custom domains may be labelled remote.
+- Verified: 83 focused analytics tests pass; API static checks and migration-head validation pass.
+
+### 2026-10-09 — AF-357 — Only developer machines count as local
+
+- Delivered: following an independent audit, `installation_environment = local` now means an empty host, `localhost`, `*.localhost`, or a loopback or unspecified IP (including IPv4-mapped IPv6).
+  - `*.local` hosts, private, link-local and CGNAT IPs, and dotless intranet names are now `remote` and named by their host.
+  - The reason: the customer template ships `WEB_APP_URL=http://agentbarn.local`, and on-premises installs often use private IPs. Under the previous rule, both were hidden by the `remote` filter.
+- Fixed: a malformed `WEB_APP_URL` such as `http://[abc` made `urlparse` raise inside every analytics send. It now gives an empty host and counts as local.
+- Also fixed: a URL without a scheme now yields its host instead of nothing, and a trailing dot is stripped, so `app.example.com.` and `app.example.com` share one name.
+- Changed: `core/config.py` (`web_app_host`, `is_local_installation`), `product-analytics.md`, `operations.md`, and this file's Current state, which still described `INSTALLATION_NAME`.
+- Verified:
+  - The config unit tests cover:
+    - 14 local URLs
+    - 10 remote URLs
+    - 5 host normalisation cases, including credentials that never reach the name and the malformed URL
+  - 10 of them failed before the change, including the `Invalid IPv6 URL` crash.
+  - The config, handler and message-count suites pass (66).
+- Follow-up: the local end-to-end run, which also covers `agentbarn.local`, a private IP and a malformed URL.
+
+### 2026-10-09 — AF-357 — Installation name from the domain, plus installation_environment
+
+- Delivered: following team feedback, the Installation is named from `WEB_APP_URL` with no configuration. Every event, including message counts, also carries `installation_environment`.
+  - remote: the lowercased host
+  - local (empty, `localhost`, `*.localhost`, `*.local`, or a loopback, private or link-local IP): `local-<first 8 of the Installation id>`
+  - The `$groupidentify` name matches.
+  - `installation_environment = remote` filters out every developer stack.
+  - The `INSTALLATION_NAME` variable is removed everywhere, and a leftover one is ignored.
+- Changed: `core/config.py` (`web_app_host`, `is_local_installation`; removed `installation_name` and `installation_display_name`), `analytics/event_handlers.py` (`installation_name()`, `installation_environment()`), `analytics/message_counts.py`, the Helm values and Secret, Helmfile, `.env.spec`, `.env.deploy.spec`, `deploy.yml` and `deploy-public.yml` (the PR 16 names removed), `product-analytics.md`, `operations.md`, `README.md`.
+- Verified:
+  - The config, handler and message-count tests pass:
+    - local and remote hosts
+    - host normalisation
+    - a leftover variable is ignored
+    - remote and local naming, and the group name
+  - They failed before the change.
+  - The analytics suites pass (76).
+  - Render check 18 of 18: the Secret, Helmfile, specs and workflows carry no `INSTALLATION_NAME`. `helm lint` is clean, and the workflows parse.
+- Follow-up: local end-to-end check.
+
 
 ### 2026-10-09 — AF-357 — Remove user-detail collection
 

@@ -45,6 +45,9 @@ SOURCE = "agentbarn-api"
 MAX_DELIVERY_ATTEMPTS = 3
 INSTALLATION_GROUP = "installation"
 ORGANIZATION_GROUP = "organization"
+LOCAL_ENVIRONMENT = "local"
+REMOTE_ENVIRONMENT = "remote"
+LOCAL_NAME_ID_LENGTH = 8
 _AGENT_LIFECYCLE_FIELDS = ("agent_id", "runtime", "previous_status", "new_status")
 _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     AGENT_CREATED: ("agent_id", "runtime"),
@@ -66,7 +69,13 @@ _HUMAN_ACTORS = frozenset({ActorIdentityType.MEMBERSHIP, ActorIdentityType.USER}
 
 
 def installation_name(config: Config, installation_id: UUID | str) -> str:
-    return config.installation_display_name or str(installation_id)
+    if config.is_local_installation:
+        return f"{LOCAL_ENVIRONMENT}-{str(installation_id)[:LOCAL_NAME_ID_LENGTH]}"
+    return config.web_app_host
+
+
+def installation_environment(config: Config) -> str:
+    return LOCAL_ENVIRONMENT if config.is_local_installation else REMOTE_ENVIRONMENT
 
 
 def _as_uuid(value: object) -> UUID | None:
@@ -126,12 +135,15 @@ class ProductAnalyticsHandler:
         # The singleton is shared by worker threads. Hold the lock through a
         # naming send so another delivery cannot name the same Installation too.
         with self._installation_naming_lock:
-            name = installation_name(self.config, self.installation_repository.get_id())
+            name = self._installation_name()
             if name != self._identified_installation_name:
                 self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify=True))
                 self._identified_installation_name = name
                 return
         self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify=False))
+
+    def _installation_name(self) -> str:
+        return installation_name(self.config, self.installation_repository.get_id())
 
     def _resolve_user(self, event: DomainEventEnvelope, organization_id: UUID | None) -> User | None:
         actor_id = _as_uuid(event.actor.id)
@@ -159,6 +171,7 @@ class ProductAnalyticsHandler:
             **common,
             "installation_id": installation_id,
             "installation_name": name,
+            "installation_environment": installation_environment(self.config),
         }
         if organization_id is not None:
             groups[ORGANIZATION_GROUP] = str(organization_id)

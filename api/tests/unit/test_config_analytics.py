@@ -45,18 +45,64 @@ def test_a_blank_switch_falls_back_to_off(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("url", "hostname"),
+    "web_app_url",
     [
-        ("https://agentbarn.gg-group.com/app", "agentbarn.gg-group.com"),
-        ("https://AgentBarn.GG-Group.com:8443/app?token=private#section", "agentbarn.gg-group.com"),
-        ("https://user:password@cloud.agentbarn.dev:443/", "cloud.agentbarn.dev"),
-        ("http://localhost:3000", "localhost"),
-        ("http://127.0.0.1:3000", "127.0.0.1"),
-        ("http://[::1]:3000", "::1"),
-        ("", ""),
+        "http://localhost:3000",
+        "localhost:3000",
+        "http://LOCALHOST.",
+        "http://app.localhost",
+        "http://127.0.0.1:3000",
+        "http://127.5.5.5",
+        "http://[::1]:3000",
+        "http://[::ffff:127.0.0.1]",
+        "http://0.0.0.0:3000",
+        "http://[::]",
+        "",
+        "   ",
+        "http://:3000",
+        "http://[abc",
     ],
 )
-def test_the_installation_display_name_is_only_the_web_app_hostname(url, hostname):
-    config = _config(web_app_url=url)
+def test_a_developer_machine_web_app_url_is_a_local_installation(web_app_url):
+    assert_that(_config(web_app_url=web_app_url).is_local_installation, equal_to(True))
 
-    assert_that(config.installation_display_name, equal_to(hostname))
+
+@pytest.mark.parametrize(
+    "web_app_url",
+    [
+        "http://agentbarn.local",
+        "http://agentfarm.local",
+        "http://10.0.5.20",
+        "http://192.168.1.2:8080",
+        "http://169.254.1.1",
+        "http://100.64.0.1",
+        "http://intranet",
+        "https://app.agentbarn.dev",
+        "https://cloud.agentbarn.dev/app",
+        "http://8.8.8.8",
+    ],
+)
+def test_any_other_web_app_url_is_a_remote_installation(web_app_url):
+    assert_that(_config(web_app_url=web_app_url).is_local_installation, equal_to(False))
+
+
+@pytest.mark.parametrize(
+    ("web_app_url", "host"),
+    [
+        (" https://Agents.GG-Group.com:8443/app?x=1 ", "agents.gg-group.com"),
+        ("https://app.example.com.", "app.example.com"),
+        ("app.example.com/path", "app.example.com"),
+        ("https://user:pw@host.example.com", "host.example.com"),
+        ("http://[abc", ""),
+    ],
+)
+def test_the_web_app_host_is_the_normalised_hostname_only(web_app_url, host):
+    assert_that(_config(web_app_url=web_app_url).web_app_host, equal_to(host))
+
+
+def test_a_leftover_installation_name_variable_is_ignored(monkeypatch):
+    monkeypatch.setenv("INSTALLATION_NAME", "Old Name")
+
+    config = _config(web_app_url="https://app.agentbarn.dev")
+
+    assert_that(hasattr(config, "installation_name"), equal_to(False))

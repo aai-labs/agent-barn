@@ -670,8 +670,8 @@ credentials, changed values, user email addresses, or full names. Users are
 identified by UUID, so the usage tracking is pseudonymous.
 
 To opt out, set `ANALYTICS_ENABLED=false` in `.env.deploy` and redeploy.
-The `WEB_APP_URL` hostname labels your install; its UUID remains stable when the
-URL changes. The local development
+Remote installs use the `WEB_APP_URL` hostname as their label; local installs use
+`local-<short UUID>`. The installation UUID remains stable when the URL changes. The local development
 `.env.spec` explicitly disables analytics; keep `ANALYTICS_ENABLED=false` in your
 local `.env`. The full list of events and fields is in
 [`docs/features/product-analytics.md`](docs/features/product-analytics.md).

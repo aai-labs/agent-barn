@@ -21,7 +21,10 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
   - Only allowlisted identifiers and safe fields (see [Events](#events)).
   - Names, display snapshots, and changed values are never sent.
   - User email and name are never sent. Human actors are identified only by their user UUID; there is no user-details setting.
-- **Installation name.** Every event carries `installation_name`. It is the hostname extracted from `WEB_APP_URL`, excluding credentials, port, path, query, and fragment. If the URL has no hostname, it uses the Installation id so it is never empty. Filter or break down by this event property to see one Installation's events (for example `installation_name = cloud.agentbarn.dev`); it needs no Group Analytics.
+- **Installation name and environment.** Every event carries `installation_name` and `installation_environment`, derived from `WEB_APP_URL` with no configuration:
+  - **local** (a developer machine: an empty or malformed host, `localhost`, `*.localhost`, or a loopback or unspecified IP such as `127.0.0.1`, `::1` or `0.0.0.0`): `installation_name` is `local-<first 8 characters of the Installation id>`, for example `local-02012e58`, and `installation_environment` is `local`.
+  - **remote** (every other host, including `*.local`, private IPs and intranet names): `installation_name` is the host, lowercased with any trailing dot removed, for example `app.agentbarn.dev`, `agentbarn.local` or `10.0.5.20`, and `installation_environment` is `remote`. So a customer on an internal network appears under its own name. A developer stack whose `WEB_APP_URL` is not localhost also appears as remote.
+  - Filter or break down by these event properties without Group Analytics. For example, `installation_environment = remote` excludes stacks labelled local, and `installation_name = app.agentbarn.dev` shows one Installation.
 - **Groups.** Every event belongs to the `installation` group, keyed by the Installation id and named with the same value as `installation_name`.
   - Organization-scoped events also belong to the `organization` group, keyed by the Organization id, and carry `organization_id`.
   - Platform-scoped events (`organization_id` is null) carry neither. They are sent only for a User Actor, because a Membership Actor cannot be resolved without an Organization.
@@ -56,7 +59,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `user.logged_in` | `method` (`password`); platform-scoped, so installation group only. Failed logins, token refresh and API-key requests are not logins |
 | `user.signed_up` | none; platform-scoped. Public signup is disabled, so this is the first invite acceptance (`POST /auth/set-password` on a user whose email is not yet verified). Known gap: an invitee who first gets in through forgot-password never emits it |
 
-The common set is `source`, `installation_id`, `installation_name`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`.
+The common set is `source`, `installation_id`, `installation_name`, `installation_environment`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`.
 
 ## Message counts
 

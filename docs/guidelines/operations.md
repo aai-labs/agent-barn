@@ -427,9 +427,7 @@ Business events go to the Agent Barn PostHog project (EU) through the `product_a
   - `.env.deploy.spec` ships `true`, as do customer release bundles.
   - Plain Helm and Helmfile installs also report by default.
 - **User privacy.** Analytics never sends user email or full name. The former user-details setting has been removed; stale environment entries have no effect in updated processes. Previously sent personal details require separate PostHog cleanup.
-- **Installation label.** The hostname from `WEB_APP_URL` is sent on every event as `installation_name` and names the install's PostHog group. Only the hostname is sent, excluding credentials, port, path, query, and fragment. If the URL has no hostname, the label is the Installation id. There is no separate name override. URL changes rename the group while preserving its UUID identity.
-  - Our deploys set it explicitly: `deploy.yml` uses `production` on `main` and `staging` on `staging`, and `deploy-public.yml` uses `cloud`.
-  - Customer installs use their `WEB_APP_URL` host unless they set their own name.
+- **Installation label.** Events use the `WEB_APP_URL` hostname for remote installs, or `local-<first 8 UUID characters>` for localhost, loopback, unspecified IPs, or a missing host. The `installation_environment` property labels these as `remote` or `local`; it does not control telemetry. A developer stack with a custom domain is labelled remote. There is no name override, and URL changes preserve the Installation UUID. See [`../features/product-analytics.md`](../features/product-analytics.md).
 - **`ANALYTICS_POSTHOG_HOST`** and **`ANALYTICS_POSTHOG_PROJECT_TOKEN`** default to the EU host and the Agent Barn project token committed in `api/core/config.py`. Override them only to point an install at a test receiver. The project token is write-only and public by design; never commit a personal API key (`phx_`).
 - **Message counts CronJob.**
   - `analytics-message-counts` runs at minute 15 each hour (`analyticsMessageCounts.schedule`). It sends the previous closed hour's counts.

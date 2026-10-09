@@ -50,7 +50,7 @@ def _given(
     posthog: MockPostHogModule,
     *,
     enabled: bool = True,
-    web_app_url: str = "https://test-installation.example.com/app",
+    web_app_url: str = "https://app.example.com",
 ):
     return [
         set_env_variable(
@@ -140,18 +140,24 @@ def test_a_platform_event_is_sent_with_only_the_installation_group():
         assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
         assert_that(capture["properties"]["$groups"], equal_to({"installation": installation_id}))
         assert_that(capture["properties"], is_not(has_key("organization_id")))
-        assert_that(capture["properties"]["installation_name"], equal_to("test-installation.example.com"))
+        assert_that(
+            (capture["properties"]["installation_name"], capture["properties"]["installation_environment"]),
+            equal_to(("app.example.com", "remote")),
+        )
 
 
-def test_without_any_name_the_installation_is_named_by_its_id():
+def test_a_local_installation_is_named_local_and_its_short_id():
     posthog = MockPostHogModule()
-    with given(_given(posthog, web_app_url="")) as context:
+    with given(_given(posthog, web_app_url="http://localhost:3000")) as context:
         _handle(context, _agent_created(context))
 
-        installation_id = str(context.injector.get(InstallationRepository).get_id())
+        expected = f"local-{str(context.injector.get(InstallationRepository).get_id())[:8]}"
         capture, group_identify = posthog.batches[0]
-        assert_that(capture["properties"]["installation_name"], equal_to(installation_id))
-        assert_that(group_identify["properties"]["$group_set"], equal_to({"name": installation_id}))
+        assert_that(
+            (capture["properties"]["installation_name"], capture["properties"]["installation_environment"]),
+            equal_to((expected, "local")),
+        )
+        assert_that(group_identify["properties"]["$group_set"], equal_to({"name": expected}))
 
 
 def test_a_domain_change_renames_the_group_without_changing_installation_identity():
@@ -211,7 +217,8 @@ def test_sends_the_event_as_the_acting_user_with_installation_and_organization_g
                     "source": "agentbarn-api",
                     "organization_id": str(context.organization.id),
                     "installation_id": installation_id,
-                    "installation_name": "test-installation.example.com",
+                    "installation_name": "app.example.com",
+                    "installation_environment": "remote",
                     "$groups": {"installation": installation_id, "organization": str(context.organization.id)},
                     "$geoip_disable": True,
                     "$lib": "agentbarn-api",
@@ -226,7 +233,7 @@ def test_sends_the_event_as_the_acting_user_with_installation_and_organization_g
                 {
                     "$group_type": "installation",
                     "$group_key": installation_id,
-                    "$group_set": {"name": "test-installation.example.com"},
+                    "$group_set": {"name": "app.example.com"},
                 }
             ),
         )
@@ -505,6 +512,7 @@ def test_organization_created_is_sent_with_the_organization_group_and_no_extra_f
                     "source",
                     "installation_id",
                     "installation_name",
+                    "installation_environment",
                     "organization_id",
                     "$groups",
                     "$geoip_disable",
