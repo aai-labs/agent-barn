@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
 
+from api.domains.agents.sharepoint_service import SharePointService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.communications.models import (
@@ -19,7 +20,6 @@ from api.domains.communications.models import (
     CommunicationInstallLinkRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
-    CommunicationReconnectRead,
     CommunicationRetryRead,
     PlatformDescriptorRead,
 )
@@ -137,7 +137,9 @@ def update_communication_connection(
     data: CommunicationConnectionUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+    sharepoint: Annotated[SharePointService, Injected(SharePointService)],
 ):
+    sharepoint.refuse_swapping_teams_app(agent_id, connection_id, data.credentials, context)
     return service.update_connection(agent_id, connection_id, data, context)
 
 
@@ -151,7 +153,9 @@ def retire_communication_connection(
     revision: Annotated[int, Query(ge=1)],
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+    sharepoint: Annotated[SharePointService, Injected(SharePointService)],
 ) -> Response:
+    sharepoint.refuse_retiring_teams_app(agent_id, connection_id, context)
     service.retire_connection(agent_id, connection_id, revision, context)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -220,8 +224,13 @@ def list_communication_connection_journal(
 
 @communications_router.post(
     "/agents/{agent_id}/connections/{connection_id}/reconnect",
-    response_model=CommunicationReconnectRead,
-    status_code=status.HTTP_202_ACCEPTED,
+    deprecated=True,
+    summary="Retired provider-session reconnect",
+    description="Compatibility endpoint: authorized requests for an active Connection always return 409. "
+    "Restart the Agent to recover native transport. Authentication, Agent permissions, and tenant scoping still apply.",
+    response_model=None,
+    status_code=status.HTTP_409_CONFLICT,
+    responses={409: {"description": "Provider-session reconnect is retired; restart native Agents instead."}},
 )
 def reconnect_communication_connection(
     agent_id: UUID,

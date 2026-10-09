@@ -42,9 +42,12 @@ export const AgentResourceUsageSchema = z.object({
   observedAt: z.string(),
   memoryWorkingSetBytes: z.number().nullable().default(null),
   memoryLimitBytes: z.number().nullable().default(null),
+  /** What the pod asks for, read from the cluster. Null when it could not be read. */
+  memoryRequestBytes: z.number().nullable().default(null),
   memoryPeakBytes: z.number().nullable().default(null),
   cpuCores: z.number().nullable().default(null),
   cpuLimitCores: z.number().nullable().default(null),
+  cpuRequestCores: z.number().nullable().default(null),
   cpuAverageCores: z.number().nullable().default(null),
   /** Share (0 to 1) of scheduling periods in which the container hit its CPU limit. */
   cpuThrottledRatio: z.number().nullable().default(null),
@@ -57,8 +60,10 @@ export const AgentUsageSnapshotSchema = z.object({
   state: ResourceUsageStateSchema,
   memoryWorkingSetBytes: z.number().nullable().default(null),
   memoryLimitBytes: z.number().nullable().default(null),
+  memoryRequestBytes: z.number().nullable().default(null),
   cpuCores: z.number().nullable().default(null),
   cpuLimitCores: z.number().nullable().default(null),
+  cpuRequestCores: z.number().nullable().default(null),
   cpuThrottledRatio: z.number().nullable().default(null),
 });
 export type AgentUsageSnapshot = z.infer<typeof AgentUsageSnapshotSchema>;
@@ -102,10 +107,15 @@ export const PlatformUsageTotalsSchema = z.object({
   agentsWithContainer: z.number().int(),
   /** The rest are null when the source could not be read. */
   agentsReporting: z.number().int().nullable().default(null),
+  /** Scraped, but still on a helper from before usage was reported: reports once updated. */
+  agentsRestartRequired: z.number().int().nullable().default(null),
   memoryWorkingSetBytes: z.number().nullable().default(null),
   memoryLimitBytes: z.number().nullable().default(null),
+  /** What the pods ask for, over the same reporting agents as the limits. Null when unread. */
+  memoryRequestBytes: z.number().nullable().default(null),
   cpuCores: z.number().nullable().default(null),
   cpuLimitCores: z.number().nullable().default(null),
+  cpuRequestCores: z.number().nullable().default(null),
 });
 export type PlatformUsageTotals = z.infer<typeof PlatformUsageTotalsSchema>;
 
@@ -124,38 +134,50 @@ export const PlatformAgentUsageSchema = z.object({
   organizationName: z.string().nullable().default(null),
   memoryWorkingSetBytes: z.number().nullable().default(null),
   memoryLimitBytes: z.number().nullable().default(null),
+  memoryRequestBytes: z.number().nullable().default(null),
   cpuCores: z.number().nullable().default(null),
   cpuLimitCores: z.number().nullable().default(null),
+  cpuRequestCores: z.number().nullable().default(null),
   /** Over the last hour. */
   cpuThrottledRatio: z.number().nullable().default(null),
 });
 export type PlatformAgentUsage = z.infer<typeof PlatformAgentUsageSchema>;
 
 /**
- * The namespace's ceilings, entered by a Platform Administrator because the quota itself
- * cannot be read, beside what its pods commit in limits. Always for the whole namespace.
+ * The namespace's quota ceilings, entered by a Platform Administrator because the quota
+ * itself cannot be read, beside what its pods commit. Always for the whole namespace.
+ * A quota caps limits and requests alike, and a new pod is refused when any one of the
+ * four would go over, so all four are here, named as the quota names them.
  */
 export const PlatformCapacitySchema = z.object({
-  memoryLimitBytes: z.number().nullable().default(null),
-  cpuLimitCores: z.number().nullable().default(null),
-  limitsUpdatedAt: z.string().nullable().default(null),
+  limitsMemoryBytes: z.number().nullable().default(null),
+  limitsCpuCores: z.number().nullable().default(null),
+  requestsMemoryBytes: z.number().nullable().default(null),
+  requestsCpuCores: z.number().nullable().default(null),
+  ceilingsUpdatedAt: z.string().nullable().default(null),
   /** Null when the source could not be read: unknown, not zero. */
-  memoryCommittedBytes: z.number().nullable().default(null),
-  cpuCommittedCores: z.number().nullable().default(null),
+  committedLimitsMemoryBytes: z.number().nullable().default(null),
+  committedLimitsCpuCores: z.number().nullable().default(null),
+  committedRequestsMemoryBytes: z.number().nullable().default(null),
+  committedRequestsCpuCores: z.number().nullable().default(null),
 });
 export type PlatformCapacity = z.infer<typeof PlatformCapacitySchema>;
 
 export const ResourceLimitsSchema = z.object({
-  memoryLimitBytes: z.number().nullable().default(null),
-  cpuLimitCores: z.number().nullable().default(null),
+  limitsMemoryBytes: z.number().nullable().default(null),
+  limitsCpuCores: z.number().nullable().default(null),
+  requestsMemoryBytes: z.number().nullable().default(null),
+  requestsCpuCores: z.number().nullable().default(null),
   updatedAt: z.string().nullable().default(null),
 });
 export type ResourceLimits = z.infer<typeof ResourceLimitsSchema>;
 
-/** A null clears a limit. Both are always sent: an unchanged one is not a change. */
+/** A null clears a ceiling. All four are always sent: an unchanged one is not a change. */
 export interface ResourceLimitsUpdate {
-  memoryLimitBytes: number | null;
-  cpuLimitCores: number | null;
+  limitsMemoryBytes: number | null;
+  limitsCpuCores: number | null;
+  requestsMemoryBytes: number | null;
+  requestsCpuCores: number | null;
 }
 
 export const PlatformResourceUsageSchema = z.object({

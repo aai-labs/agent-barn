@@ -102,6 +102,18 @@ export class AgentDetailPage {
     return this.page.getByTestId("agent-update-button");
   }
 
+  pendingModelBanner(): Locator {
+    return this.page.getByTestId("agent-pending-model-banner");
+  }
+
+  pendingModelRestartButton(): Locator {
+    return this.page.getByTestId("agent-pending-model-restart");
+  }
+
+  updateOutcome(): Locator {
+    return this.page.getByTestId("agent-update-outcome");
+  }
+
   updateReleasesLink(): Locator {
     return this.page.getByTestId("agent-update-releases-link");
   }

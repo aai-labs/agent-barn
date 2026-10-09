@@ -129,6 +129,10 @@ spec:
             - name: RESTORE_POINT_RESTORE_TIMEOUT_SECONDS
               value: "{{ .Values.restorePoints.restoreTimeoutSeconds }}"
             {{- end }}
+            {{- if .Values.managedUpdate.readyTimeoutSeconds }}
+            - name: AGENT_UPDATE_READY_TIMEOUT_SECONDS
+              value: "{{ .Values.managedUpdate.readyTimeoutSeconds }}"
+            {{- end }}
           volumeMounts:
             - name: kubeconfig
               mountPath: /etc/kubeconfig

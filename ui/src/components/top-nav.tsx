@@ -56,8 +56,13 @@ export function TopNav({ onHire }: TopNavProps) {
         // Every member: the page lists the agents they can read, with what each costs and
         // uses, and shows each figure only where they hold the permission for it.
         { href: `${orgBase}/agents`, label: "Usage" },
-        // Costs is owner/admin-only (the endpoint is gated too); hide it from members.
-        ...(canManageMembers ? [{ href: `${orgBase}/costs`, label: "Costs" }] : []),
+        // Costs and KPIs are owner/admin-only (their endpoints are gated too); hide them from members.
+        ...(canManageMembers
+          ? [
+              { href: `${orgBase}/costs`, label: "Costs" },
+              { href: `${orgBase}/kpis`, label: "KPIs" },
+            ]
+          : []),
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
   // Platform view has nine tabs, and they do not fit inline until about 1300px: with the

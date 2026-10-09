@@ -49,6 +49,13 @@ class Config(BaseSettings):
     restore_point_max_per_agent: int = Field(default=5, ge=1, le=50)
     restore_point_capture_timeout_seconds: int = Field(default=900, ge=60, le=7200)
     restore_point_restore_timeout_seconds: int = Field(default=1800, ge=60, le=7200)
+    # How long a managed update waits for the new pod to report ready before it
+    # rolls back, counted from when the start returns. It has to cover pulling
+    # an image the node has never seen, init, the start script's installs, and
+    # the probe's 30s initial delay. The readiness probe sets no upper bound of
+    # its own: failures only mark the pod unready and probing goes on.
+    agent_update_ready_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    agent_update_ready_poll_seconds: int = Field(default=5, ge=0, le=60)
 
     openclaw_image: str = ""
     hermes_image: str = ""
@@ -110,20 +117,9 @@ class Config(BaseSettings):
     teams_privacy_url: str = "https://aai-labs.com/privacy"
     teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
-    # Content-free Communication journal history is pruned by the gateway
-    # supervisor after this many days.
+    # Content-free Communication journal history is pruned by Communications
+    # maintenance after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
-    # Native gateway spike (ADR 2026-09-16): comma-separated Platform keys whose
-    # Connections run inside the Agent runtime's own gateway instead of the
-    # Communications supervisor, for Hermes and OpenClaw alike. Replaced by a
-    # per-Connection transport once the spike is accepted.
-    communications_native_platforms: str = ""
-
-    @property
-    def native_platform_keys(self) -> frozenset[str]:
-        """Platforms whose Agent Connections run in the runtime's native gateway."""
-        return frozenset(key.strip() for key in self.communications_native_platforms.split(",") if key.strip())
-
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.

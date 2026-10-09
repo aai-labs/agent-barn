@@ -46,21 +46,18 @@ POSTGRES_LITELLM_USER=litellm
 POSTGRES_LITELLM_PASSWORD=
 POSTGRES_LITELLM_DB=litellm
 
-# Opt-in Hindsight release. Supply distinct database/auth secrets and a budgeted
-# LiteLLM virtual key for memory; the gateway alone receives the Hindsight API key.
-HINDSIGHT_ENABLED=false
+# Hindsight is always deployed. Supply distinct database/auth secrets and an
+# internal settings key for operator-run syncs; CI reads these from GitHub Secrets.
 HINDSIGHT_DB_PASSWORD=
 HINDSIGHT_API_KEY=
 # Internal model/key settings credential; generate separately from Hindsight API auth.
 MEMORY_RUNTIME_SERVICE_KEY=
-HINDSIGHT_LITELLM_API_KEY=
 # Retired backend LiteLLM key SHA-256 hashes, comma separated (current hash is derived).
 MEMORY_LITELLM_KEY_HASHES=
 # Optional initial model; shared by the API default and Hindsight startup.
 # MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini
 # Active key SHA-256 hash when several attribution hashes are retained.
-# Compose infers it for one hash; enabled Helmfile derives it from the current key.
-# MEMORY_LITELLM_ACTIVE_KEY_HASH=
+# Compose infers it for one hash; deployment loads it from the hook-generated hash Secret.
 
 # ── LiteLLM + OpenRouter ─────────────────────────────────────────────────────
 # Any strong secret prefixed with sk-; LiteLLM uses it to mint agent-scoped
@@ -159,9 +156,6 @@ POSTGRES_FIRECRAWL_DB=firecrawl
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
-# Comma-separated Platform keys handled by native runtime gateways, e.g.
-# slack,discord. Empty keeps all Platforms on the Communications Gateway.
-COMMUNICATIONS_NATIVE_PLATFORMS=
 # Default model. Format: litellm/openrouter/<slug>
 # e.g. litellm/openrouter/z-ai/glm-5.2. Empty uses the API's built-in default.
 AGENT_DEFAULT_MODEL=

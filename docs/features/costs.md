@@ -244,8 +244,8 @@ records the refusal in the container (`/tmp/agentbarn-llm-terminal-error.json`),
 the Communications adapter in the same container reports a turn that fails after it
 as `SPEND_LIMIT_REACHED`. Communications turns that code into a terminal,
 non-retried failure whose notice reads "A model spend limit has been reached, so this
-agent cannot reply right now…": shown under the message in web chat, and posted as the
-failure notice on Slack, Telegram, Discord and Teams. The wording deliberately does not
+agent cannot reply right now…": shown under the message in Web Chat. Native Slack, Telegram, Discord and Teams
+turns and their error notices belong to the selected runtime. The wording deliberately does not
 say whose limit it was: the rejection is the same whether the Agent's or its
 Organization's ran out.
 
@@ -302,6 +302,8 @@ Agents own LiteLLM key creation, encryption, deletion blocking, and lifecycle st
 ## Change impact
 
 Changing the sync or heal predicates changes what is recorded as money, so cover them in unit tests before touching the job. Changing attribution affects agent key lifecycle, deleted-agent behavior, and the unattributed bucket. Changing the schedule requires rechecking `COST_SYNC_MAX_RUNTIME_SECONDS`. Status changes require checking both persisted AgentStatus and the cost-facing mapped labels. A new Agent-surface route must go through `_authorized_agent` and be added to the assigned/hidden bypass test in `../../api/tests/integration/test_agent_rbac.py`.
+
+The KPIs page ([`business-value.md`](business-value.md#kpi-dashboard)) reuses `../../ui/src/features/costs/format.ts`, `StatCard` from `cost-summary-cards.tsx`, and `useCostUrlFilters`, and links to Costs with its own `from` and `to`. A change to those helpers, or to the Costs page's `from`/`to` query keys, must re-run `../../ui/tests/e2e/kpis.spec.ts` as well as `costs.spec.ts`.
 
 Platform Admins select the shared Hindsight processing model in
 [Platform Settings](agent-memory.md#platform-memory-processing-model). Changing

@@ -1,7 +1,8 @@
 /**
- * The advisory Update banner. It appears only when the server says a running
- * Agent's pod was built from older platform code, and its Update button runs
- * the same stop/start the Restart menu item does.
+ * The Update banner. It appears when the server says a running Agent's pod was
+ * built from older platform code. Its button asks the server for a managed
+ * update; the server's updateInProgress flag then keeps it busy until the
+ * update ends, and a note says how it ended when that was not a success.
  */
 
 import { expect, test } from "@playwright/test";
@@ -110,60 +111,125 @@ test.describe("Agent update banner", () => {
     await expect(agentDetailPage.updateButton()).toHaveCount(0);
   });
 
-  test("updating stops the agent and starts it again", async ({ page }) => {
+  test("updating asks the server to run the managed update", async ({ page }) => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "RUNNING", update_available: true },
     });
-    await dataSupport.agents.interceptStopAgentRequest();
-    await dataSupport.agents.interceptStartAgentRequest();
+    await page.route(`**/agents/${MOCK_AGENT_ID}/managed-update`, async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ ...mockAgent, status: "RUNNING", update_available: true }),
+      });
+    });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
-    const stopped = page.waitForRequest(
+    const requested = page.waitForRequest(
       (request) =>
-        request.url().endsWith(`/agents/${MOCK_AGENT_ID}/stop`) && request.method() === "POST",
-    );
-    const started = page.waitForRequest(
-      (request) =>
-        request.url().endsWith(`/agents/${MOCK_AGENT_ID}/start`) && request.method() === "POST",
+        request.url().endsWith(`/agents/${MOCK_AGENT_ID}/managed-update`) &&
+        request.method() === "POST",
     );
 
     await agentDetailPage.updateButton().click();
 
-    await Promise.all([stopped, started]);
+    await requested;
   });
 
-  test("stays visible showing progress while the restart is still provisioning", async ({
+  test("stays busy while the server runs the update, then goes away once it succeeds", async ({
     page,
   }) => {
-    await dataSupport.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, status: "RUNNING", update_available: true },
+    let current: Record<string, unknown> = { ...mockAgent, status: "RUNNING", update_available: true };
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) });
     });
-    await dataSupport.agents.interceptStopAgentRequest({
-      body: { ...mockAgent, status: "STOPPED", running_model: "", update_available: false },
-    });
-
-    let releaseStart = () => {};
-    const startHeld = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
-    await page.route(`**/agents/${MOCK_AGENT_ID}/start`, async (route) => {
-      await startHeld;
+    await page.route(`**/agents/${MOCK_AGENT_ID}/managed-update`, async (route) => {
+      current = { ...mockAgent, status: "STOPPED", running_model: "", update_in_progress: true };
       await route.fulfill({
-        status: 200,
+        status: 202,
         contentType: "application/json",
-        body: JSON.stringify({ ...mockAgent, status: "RUNNING", update_available: false }),
+        body: JSON.stringify({ ...mockAgent, status: "RUNNING", update_available: true, update_in_progress: true }),
       });
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
     await agentDetailPage.updateButton().click();
 
-    await expect(agentDetailPage.updateButton()).toBeVisible();
+    // Still offered as "available" in the 202, but it cannot be clicked twice.
     await expect(agentDetailPage.updateButton()).toHaveText(/updating/i);
+    await expect(agentDetailPage.updateButton()).toBeDisabled();
 
-    releaseStart();
-    await expect(agentDetailPage.updateButton()).toHaveCount(0);
+    current = {
+      ...mockAgent,
+      status: "RUNNING",
+      update_available: false,
+      update_in_progress: false,
+      last_managed_update: { outcome: "SUCCEEDED", restore_point_id: null, failure_reason: null },
+    };
+    await expect(agentDetailPage.updateButton()).toHaveCount(0, { timeout: 15_000 });
+    await expect(agentDetailPage.updateOutcome()).toHaveCount(0);
+  });
+
+  test("after a rollback, offers the update again and says why", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "RUNNING",
+        update_available: true,
+        last_managed_update: { outcome: "ROLLED_BACK", restore_point_id: null, failure_reason: null },
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(agentDetailPage.updateButton()).toBeEnabled();
+    await expect(agentDetailPage.updateOutcome()).toContainText(/rolled back/i);
+  });
+
+  test("when the backup failed, says why and that the Agent was not changed", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "STOPPED",
+        running_model: "",
+        last_managed_update: {
+          outcome: "BACKUP_FAILED",
+          restore_point_id: null,
+          failure_reason: "The Agent is still shutting down. Try again in a moment.",
+        },
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    const note = agentDetailPage.updateOutcome();
+    await expect(note).toContainText(/backup could not be taken/i);
+    await expect(note).toContainText(/still shutting down/i);
+    await expect(note).toContainText(/not changed/i);
+  });
+
+  test("when the rollback failed, points at the restore points", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "ERROR",
+        running_model: "",
+        last_managed_update: { outcome: "ROLLBACK_FAILED", restore_point_id: null, failure_reason: null },
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    const note = agentDetailPage.updateOutcome();
+    await expect(note).toContainText(/rollback did not finish/i);
+    await expect(note.getByRole("link", { name: /restore points/i })).toHaveAttribute(
+      "href",
+      new RegExp(`/agents/${MOCK_AGENT_ID}/configuration\\?section=restore$`),
+    );
   });
 
   test("a reader without lifecycle permission is never offered the update", async () => {

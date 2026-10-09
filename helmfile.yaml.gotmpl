@@ -14,7 +14,6 @@ helmDefaults:
   timeout: 600
 
 releases:
-{{- if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}
   - name: postgres-hindsight
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -33,6 +32,8 @@ releases:
   - name: hindsight
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/hindsight
+    labels:
+      name: hindsight
     needs: ["{{ env "NAMESPACE" | default "agent-farm" }}/postgres-hindsight", "{{ env "NAMESPACE" | default "agent-farm" }}/litellm"]
     values:
       - databaseUrl: {{ printf "postgresql://hindsight:%s@postgres-hindsight:5432/hindsight" (env "HINDSIGHT_DB_PASSWORD" | urlquery | replace "+" "%20") | quote }}
@@ -40,8 +41,8 @@ releases:
         apiKey: {{ env "HINDSIGHT_API_KEY" | required "HINDSIGHT_API_KEY is required" | quote }}
         llm:
           model: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
-          apiKey: {{ env "HINDSIGHT_LITELLM_API_KEY" | required "HINDSIGHT_LITELLM_API_KEY is required" | quote }}
-{{- end }}
+          retiredKeyHashes: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
+        litellmKeyServiceAccountName: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
   - name: postgres-app
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -190,11 +191,11 @@ releases:
       - name: memory.defaultModel
         value: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
       - name: memory.enabled
-        value: {{ env "HINDSIGHT_ENABLED" | default "false" }}
+        value: true
       - name: memory.litellmKeyHashes
-        value: {{ if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}{{ printf "%s,%s" (env "HINDSIGHT_LITELLM_API_KEY" | sha256sum) (env "MEMORY_LITELLM_KEY_HASHES") | quote }}{{ else }}{{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}{{ end }}
+        value: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
       - name: memory.litellmActiveKeyHash
-        value: {{ if eq (env "HINDSIGHT_ENABLED" | default "false") "true" }}{{ env "HINDSIGHT_LITELLM_API_KEY" | sha256sum | quote }}{{ else }}{{ env "MEMORY_LITELLM_ACTIVE_KEY_HASH" | default "" | quote }}{{ end }}
+        value: {{ env "MEMORY_LITELLM_ACTIVE_KEY_HASH" | default "" | quote }}
       - name: memory.settingsKeyChecksum
         value: {{ env "MEMORY_RUNTIME_SERVICE_KEY" | sha256sum | quote }}
       - name: memory.authChecksum
@@ -252,8 +253,6 @@ releases:
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist
         value: {{ env "AGENT_MODEL_ALLOWLIST" | default "" | quote }}
-      - name: communicationsNativePlatforms
-        value: {{ env "COMMUNICATIONS_NATIVE_PLATFORMS" | default "" | quote }}
       - name: registry.server
         value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" | quote }}
       - name: registry.username
@@ -276,6 +275,7 @@ releases:
       - {{ env "NAMESPACE" | default "agent-farm" }}/litellm
       - {{ env "NAMESPACE" | default "agent-farm" }}/firecrawl
       - {{ env "NAMESPACE" | default "agent-farm" }}/redis
+      - {{ env "NAMESPACE" | default "agent-farm" }}/hindsight
 
   - name: agentbarn-ui
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}

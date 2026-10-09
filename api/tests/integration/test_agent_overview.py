@@ -37,8 +37,10 @@ from api.tests.steps.organization import (
 )
 from api.tests.steps.resource_usage import (
     MockPrometheusModule,
+    prometheus_fails_agent_requests,
     prometheus_is_down,
     prometheus_is_not_configured,
+    prometheus_reports_agent_requests,
     prometheus_reports_for_agents,
 )
 from api.tests.steps.template import there_is_a_template
@@ -191,6 +193,38 @@ def test_overview_lists_every_agent_with_status_spend_and_usage():
             assert_that(body["resource_usage_availability"], equal_to("available"))
 
 
+def test_each_row_carries_what_its_pod_requests_beside_its_limits():
+    with given([*_GIVEN, _there_is_an_agent_named("Alpha"), _there_is_an_agent_named("Beta")]) as context:
+        alpha, beta = context.agents["Alpha"], context.agents["Beta"]
+        prometheus_reports_for_agents({alpha.id: _REPORTING, beta.id: _REPORTING})(context)
+        # Beta has no pod yet, so the cluster says nothing about it.
+        prometheus_reports_agent_requests(lambda c: {alpha.id: (805_306_368.0, 0.05)})(context)
+        with when("I read the overview"):
+            rows = _by_name(context.client.get(_url(context), headers=_auth(context)).json())
+        with then("an agent shows its requests with its limits"):
+            usage = rows["Alpha"]["resource_usage"]
+            assert_that(usage["memory_request_bytes"], equal_to(805_306_368))
+            assert_that(usage["memory_limit_bytes"], equal_to(1_073_741_824))
+            assert_that(usage["cpu_request_cores"], close_to(0.05, 1e-9))
+        with then("one the cluster knows nothing about has them unknown, not zero"):
+            assert_that(rows["Beta"]["resource_usage"]["memory_request_bytes"], none())
+            assert_that(rows["Beta"]["resource_usage"]["cpu_request_cores"], none())
+
+
+def test_a_failed_requests_read_leaves_them_unknown_and_the_usage_columns_standing():
+    with given([*_GIVEN, _there_is_an_agent_named("Alpha")]) as context:
+        prometheus_reports_for_agents({context.agents["Alpha"].id: _REPORTING})(context)
+        prometheus_fails_agent_requests()(context)
+        with when("I read the overview"):
+            body = context.client.get(_url(context), headers=_auth(context)).json()
+        with then("the usage is still there, with the requests unknown"):
+            assert_that(body["resource_usage_availability"], equal_to("available"))
+            usage = body["items"][0]["resource_usage"]
+            assert_that(usage["state"], equal_to("reporting"))
+            assert_that(usage["memory_limit_bytes"], equal_to(1_073_741_824))
+            assert_that(usage["memory_request_bytes"], none())
+
+
 def test_only_measurable_agents_are_queried_and_only_within_this_organization():
     with given(
         [
@@ -202,14 +236,22 @@ def test_only_measurable_agents_are_queried_and_only_within_this_organization():
         client: TestClient = context.client
         with when("I read the overview"):
             client.get(_url(context), headers=_auth(context))
-        with then("one instant query names the running agent in this organization"):
+        with then("one instant query for readings names the running agent in this organization"):
             prometheus = context.injector.get(PrometheusClient)
-            assert_that(prometheus.query.call_count, equal_to(1))
-            promql = prometheus.query.call_args.args[0]
+            queries = [call.args[0] for call in prometheus.query.call_args_list]
+            assert_that(queries, has_length(2))
+            promql = next(q for q in queries if "org_id" in q)
             assert_that(promql, contains_string(f'org_id="{context.organization.id}"'))
             assert_that(promql, contains_string(str(context.agents["Alpha"].id)))
         with then("the stopped agent is not part of it"):
             assert_that(promql, not_(contains_string(str(context.agents["Gamma"].id))))
+        with then(
+            "the one for requests names only the running agent too, since the cluster's series have no organization"
+        ):
+            requests = next(q for q in queries if '"app", "$1", "pod"' in q)
+            assert_that(requests, contains_string(f'pod=~"agent-{context.agents["Alpha"].id}-.+"'))
+            assert_that(requests, not_(contains_string(str(context.agents["Gamma"].id))))
+            assert_that(requests, not_(contains_string('pod=~"agent-[0-9a-f]')))
 
 
 def test_rows_for_agents_outside_the_page_are_dropped():

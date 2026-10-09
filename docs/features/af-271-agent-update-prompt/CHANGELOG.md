@@ -20,7 +20,10 @@ Related context: [`../agents.md`](../agents.md),
   Agent reports an available update at once.** Those pods predate the record, so
   the report is accurate rather than a defect, and it clears per Agent on the
   next start. An operator fleet rebuild
-  (`rebuild_running_agents_for_maintenance`) clears it for everyone.
+  (`rebuild_running_agents_for_maintenance`) clears it for every Agent except
+  one a managed-update rollback pinned to its previous image (AF-201): that
+  Agent restarts on the pinned image and keeps reporting the update until a
+  managed update succeeds.
 - Next: nothing. The epic is complete.
 - Blockers: none.
 

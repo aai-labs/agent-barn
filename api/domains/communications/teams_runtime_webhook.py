@@ -52,13 +52,13 @@ class TeamsRuntimeWebhookRelay:
         connection_id: UUID,
         payload: dict[str, Any],
         authorization: str,
-    ) -> RuntimeWebhookRelayResponse | None:
-        """Return None when this Connection remains gateway-owned for rollback."""
+    ) -> RuntimeWebhookRelayResponse:
+        """Authenticate and relay Teams; no gateway transport fallback exists."""
         connection = self.connection_repository.get_active(connection_id)
         if connection is None or not connection.enabled:
             raise PermissionError("Communication Connection not found")
-        if connection.platform_key != "teams" or "teams" not in self.config.native_platform_keys:
-            return None
+        if connection.platform_key != "teams":
+            raise PermissionError("Communication Connection not found")
 
         plugin = self.plugins.require("teams")
         if not isinstance(plugin, TeamsPlatformPlugin):

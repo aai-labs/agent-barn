@@ -12,8 +12,10 @@ def _read(limits: PlatformResourceLimits | None) -> ResourceLimitsRead:
     if limits is None:
         return ResourceLimitsRead()
     return ResourceLimitsRead(
-        memory_limit_bytes=limits.memory_limit_bytes,
-        cpu_limit_cores=limits.cpu_limit_cores,
+        limits_memory_bytes=limits.limits_memory_bytes,
+        limits_cpu_cores=limits.limits_cpu_cores,
+        requests_memory_bytes=limits.requests_memory_bytes,
+        requests_cpu_cores=limits.requests_cpu_cores,
         updated_at=limits.updated_at,
     )
 

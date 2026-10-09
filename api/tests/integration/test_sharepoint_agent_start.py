@@ -1,6 +1,6 @@
 """Starting an agent with SharePoint: aai-cli gets its own delegated Microsoft profile, the refresh
-token arrives as a store secret written only for a new sign-in, and the Teams app's secret never
-reaches the pod."""
+token arrives as a store secret written only for a new sign-in, and the native Teams channel
+receives its separate bot credential."""
 
 from unittest.mock import MagicMock
 
@@ -28,11 +28,14 @@ from api.tests.steps.sharepoint import (
     agent_base,
     auth,
     sharepoint_is_signed_in,
+    sites_are_granted,
     there_is_a_teams_connection,
 )
 
+_FINANCE = "https://contoso.sharepoint.com/sites/finance"
 
-def _given(agent_type: AgentType):
+
+def _given(agent_type: AgentType, sharepoint=None):
     return [
         set_env_variable(
             {
@@ -55,7 +58,7 @@ def _given(agent_type: AgentType):
         use_org_for_auth(),
         there_is_an_agent(agent_type=agent_type),
         there_is_a_teams_connection(),
-        sharepoint_is_signed_in(),
+        sharepoint or sharepoint_is_signed_in(),
     ]
 
 
@@ -96,9 +99,11 @@ def test_start_agent_gives_aai_cli_the_delegated_microsoft_profile(
             assert_that(setup, contains_string("$AAI_SHAREPOINT_SIGN_IN_ID"))
             assert_that(setup, contains_string("secrets set microsoft.sharepoint_refresh_token"))
 
-        with then("the Teams app's secret never reaches the pod"):
-            everything = "\n".join([*config_map.data.values(), *secret.string_data.values()])
-            assert_that(everything, is_not(contains_string(TEAMS_APP_PASSWORD)))
+        with then("native Teams gets its bot credential separately from the delegated SharePoint profile"):
+            bot_secret_key = "MSTEAMS_APP_PASSWORD" if agent_type == AgentType.OPENCLAW else "TEAMS_CLIENT_SECRET"
+            assert_that(secret.string_data[bot_secret_key], equal_to(TEAMS_APP_PASSWORD))
+            assert_that("AAI_SECRET_MICROSOFT_CLIENT_SECRET" in secret.string_data, equal_to(False))
+            assert_that("\n".join(config_map.data.values()), is_not(contains_string(TEAMS_APP_PASSWORD)))
 
         with then("the agent is told it has SharePoint only, through the Microsoft skill"):
             assert_that(config_map.data["AGENTS.md"], contains_string("./skills/aai-microsoft/SKILL.md"))
@@ -123,3 +128,44 @@ def test_start_agent_without_integrations_still_cleans_up_a_removed_sharepoint_s
             setup = config_map.data["aai-cli-setup.sh"]
             assert_that(setup, contains_string("secrets remove microsoft.sharepoint_refresh_token"))
             assert_that(setup, is_not(contains_string("cp /app/config/aai-cli-config.toml")))
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "aai_home"),
+    [(AgentType.OPENCLAW, "/home/node"), (AgentType.HERMES, "/opt/data")],
+)
+def test_start_agent_with_selected_sites_fetches_tokens_from_the_platform(agent_type: AgentType, aai_home: str) -> None:
+    with given(_given(agent_type, sharepoint=sites_are_granted(_FINANCE))) as context:
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            response = context.client.post(f"{agent_base(context)}/start", headers=auth(context))
+
+        with then("aai-cli gets a token_url profile pointing at this agent's token endpoint"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            config_map = k8s.create_config_map.call_args.args[1]
+            toml = config_map.data["aai-cli-config.toml"]
+            assert_that(toml, contains_string('auth_type = "token_url"'))
+            assert_that(
+                toml,
+                contains_string(
+                    f'token_url = "http://agentbarn-api:8001/ingest/v1/agents/{context.agent.id}'
+                    '/integrations/sharepoint/token"'
+                ),
+            )
+            assert_that(toml, contains_string('api_token_secret = "agentfarm.ingest_key"'))
+
+        with then("the boot script stores the agent's platform key, and no SharePoint token reaches the pod"):
+            setup = config_map.data["aai-cli-setup.sh"]
+            assert_that(setup, contains_string(f"export HOME={aai_home}"))
+            assert_that(setup, contains_string("secrets set agentfarm.ingest_key"))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that("AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN" in secret.string_data, equal_to(False))
+
+        with then("the Teams app's secret reaches the pod only as native Teams' bot credential"):
+            bot_secret_key = "MSTEAMS_APP_PASSWORD" if agent_type == AgentType.OPENCLAW else "TEAMS_CLIENT_SECRET"
+            others = [value for key, value in secret.string_data.items() if key != bot_secret_key]
+            assert_that("\n".join([*config_map.data.values(), *others]), is_not(contains_string(TEAMS_APP_PASSWORD)))
+
+        with then("the agent is told which sites it can reach"):
+            assert_that(config_map.data["TOOLS.md"], contains_string(_FINANCE))

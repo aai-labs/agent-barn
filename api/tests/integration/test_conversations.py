@@ -76,7 +76,6 @@ def _seed_message(
             platform_key="slack",
             display_name="Test Slack",
             credentials_encrypted="test-credentials",
-            driver_key_encrypted="test-driver-key",
         )
         delegate.save(context.communication_connection)
     connection = connection or context.communication_connection
@@ -107,7 +106,6 @@ def _seed_connection(context, display_name: str, platform_key: str = "slack") ->
         platform_key=platform_key,
         display_name=display_name,
         credentials_encrypted="test-credentials",
-        driver_key_encrypted="test-driver-key",
     )
     delegate: PostgresRepositoryDelegate = context.injector.get(PostgresRepositoryDelegate)
     delegate.save(connection)
@@ -211,7 +209,6 @@ def test_list_channels_excludes_the_built_in_web_chat_connection():
             platform_key="web",
             display_name="Web Chat",
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
         delegate.save(web_connection)
 

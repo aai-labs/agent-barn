@@ -16,7 +16,7 @@ const NO_LIVE_AGENT_HINT =
 // below, so Tailwind finds both classes. The reporting count is the first thing to go on
 // a phone: name, memory and CPU are what the row is for.
 const ROW_COLUMNS =
-  "grid-cols-[minmax(0,1fr)_72px_84px] sm:grid-cols-[minmax(140px,1fr)_140px_90px_90px]";
+  "grid-cols-[minmax(0,1fr)_72px_84px] sm:grid-cols-[minmax(140px,1fr)_210px_90px_90px] lg:grid-cols-[minmax(140px,1fr)_210px_90px_90px_104px_96px]";
 
 /** Organizations listed when the page is not narrowed to one. */
 const TOP_COUNT = 5;
@@ -104,13 +104,31 @@ export function OrganizationsByUsage({
                   ? `${organization.agentsReporting ?? 0} ${
                       organization.agentsReporting === 1 ? "container" : "containers"
                     }`
-                  : `${organization.agentsReporting ?? 0} of ${organization.agentsWithContainer} reporting`}
+                  : `${organization.agentsReporting ?? 0} of ${organization.agentsWithContainer} reporting${
+                      (organization.agentsRestartRequired ?? 0) > 0
+                        ? ` · ${organization.agentsRestartRequired} to update`
+                        : ""
+                    }`}
               </span>
               <span className="relative text-right font-medium" style={{ color: "var(--ink)" }}>
                 {formatBytes(memory)}
               </span>
               <span className="relative whitespace-nowrap text-right" style={{ color: "var(--ink-4)" }}>
                 {formatCores(organization.cpuCores ?? 0)} cores
+              </span>
+              <span
+                className="relative hidden whitespace-nowrap text-right lg:block"
+                style={{ color: "var(--ink-4)" }}
+                data-testid="organization-request-memory"
+              >
+                {organization.memoryRequestBytes !== null ? `req ${formatBytes(organization.memoryRequestBytes)}` : "—"}
+              </span>
+              <span
+                className="relative hidden whitespace-nowrap text-right lg:block"
+                style={{ color: "var(--ink-4)" }}
+                data-testid="organization-request-cpu"
+              >
+                {organization.cpuRequestCores !== null ? `req ${formatCores(organization.cpuRequestCores)}` : "—"}
               </span>
             </button>
           );

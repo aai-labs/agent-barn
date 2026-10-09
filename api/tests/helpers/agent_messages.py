@@ -1,15 +1,12 @@
-"""Communication runtime setup shared by initiated-delivery scenarios."""
+"""Communication runtime setup for legacy-client retirement and native cutover."""
 
 import json
-from datetime import UTC, datetime
-from uuid import UUID
 
-from hamcrest import assert_that, equal_to
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import AgentStatus
 from api.domains.communications.models import CommunicationConnection, CommunicationDelivery, CommunicationJournalEntry
-from api.domains.conversations.models import AgentChatMessage, ConversationType, MessageDirection
+from api.domains.conversations.models import AgentChatMessage
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.modules import (
@@ -38,7 +35,6 @@ STEPS = [
             "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
             "SKIP_SLACK_TOKEN_VALIDATION": "true",
-            "COMMUNICATIONS_NATIVE_PLATFORMS": "",
         }
     ),
     prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -67,7 +63,6 @@ def messaging_ready(context):
         credentials_encrypted=encrypt_token(
             json.dumps({"bot_token": "xoxb-test", "app_token": "xapp-test"}), TEST_ENCRYPTION_KEY
         ),
-        driver_key_encrypted="unused",
     )
     delegate.save(context.connection)
     context.runtime_headers = {"Authorization": "Bearer runtime-key", "X-AgentBarn-Communications-Version": "2"}
@@ -94,25 +89,6 @@ def origin_request(context, connection=None, channel="C456", thread=None, key="r
         },
         "context": {"kind": "scheduled", "run_id": "hermes:run-origin"},
     }
-
-
-def agent_was_in_conversation(context, connection=None, channel="C456", conversation_type=ConversationType.CHANNEL):
-    """Canonical history for a channel, which is what proves the Agent was really there."""
-    delegate = context.injector.get(PostgresRepositoryDelegate)
-    delegate.save(
-        AgentChatMessage(
-            agent_id=context.agent.id,
-            connection_id=(connection or context.connection).id,
-            openclaw_msg_id=f"inbound:{channel}",
-            session_key=f"seed:{channel}",
-            channel_id=channel,
-            channel_name="updates",
-            direction=MessageDirection.INBOUND,
-            conversation_type=conversation_type,
-            content="schedule a daily summary here",
-            occurred_at=datetime.now(UTC),
-        )
-    )
 
 
 def submit(context, payload):
@@ -144,27 +120,3 @@ def change_connection(context, **changes):
         connection.revision += 1
         session.add(connection)
         session.commit()
-
-
-def receipt_id(response):
-    assert_that(response.status_code, equal_to(202), response.text)
-    return UUID(response.json()["delivery_id"])
-
-
-def other_platform_connection(context):
-    """Another Connection on the same Agent, which a send must never leak into."""
-    delegate = context.injector.get(PostgresRepositoryDelegate)
-    connection = CommunicationConnection(
-        organization_id=context.agent.organization_id,
-        agent_id=context.agent.id,
-        platform_key="discord",
-        display_name="Other Discord",
-        enabled=True,
-        settings={"channel_ids": ["C456"]},
-        credentials_encrypted=encrypt_token(
-            json.dumps({"bot_token": "xoxb-other", "app_token": "xapp-other"}), TEST_ENCRYPTION_KEY
-        ),
-        driver_key_encrypted="unused",
-    )
-    delegate.save(connection)
-    return connection

@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, HTTPException, Response, status
 from fastapi_injector import Injected
 
+from api.domains.agents.sharepoint_service import SharePointAccessTokenRead, SharePointService
 from api.domains.ingest.models import IngestBatchRequest, IngestCommunicationEventBatch
 from api.domains.ingest.service import IngestService
 
@@ -45,3 +46,24 @@ def ingest_communication_events(
 
     service.record_communication_events(agent, batch)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@ingest_router.post("/{agent_id}/integrations/sharepoint/token", response_model=SharePointAccessTokenRead)
+def sharepoint_access_token(
+    agent_id: UUID,
+    service: Annotated[IngestService, Injected(IngestService)],
+    sharepoint: Annotated[SharePointService, Injected(SharePointService)],
+    authorization: Annotated[str, Header()],
+):
+    """A short-lived app-only Microsoft token for an agent limited to selected SharePoint sites.
+
+    Served here because pods can only reach the ingest app, which already authenticates each
+    agent by its ingest key. The Teams app's secret that mints the token stays in the API.
+    """
+    provided_key = authorization.removeprefix("Bearer ").strip()
+    try:
+        service.authenticate(agent_id, provided_key)
+    except PermissionError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+    return sharepoint.access_token(agent_id)

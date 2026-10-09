@@ -76,7 +76,9 @@ def runtime_is_present(runtime: str, image: str, root: Path):
     return step
 
 
-def memory_http_boundary_is_ready(*, health_denials: int = 0, organization_write_status: int = 202):
+def memory_http_boundary_is_ready(
+    *, health_denials: int = 0, organization_write_status: int = 202, explicit_recall_status: int = 200
+):
     def step(context):
         context.requests = []
         context.health_denials = health_denials
@@ -159,6 +161,8 @@ def memory_http_boundary_is_ready(*, health_denials: int = 0, organization_write
                         "detail": "Forbidden"
                     }
                 if self.path.endswith("/memories/recall"):
+                    if payload["query"] == "Explicit release convention":
+                        return explicit_recall_status, {"results": []}
                     return 200, {"results": [{"id": str(AGENT_ID), "text": RECALLED_FACT, "type": "world"}]}
                 if self.path.endswith("/memories") and self.command == "POST":
                     return 200, {"success": True, "bank_id": "agentbarn", "items_count": 1, "async": True}
