@@ -14,6 +14,11 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-09 — One silence marker for scheduled runs — PR pending
+
+- Corrected: the appended Scheduled runs policy now requires exactly `NO_REPLY` for an empty scheduled run. It previously listed `[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, and `HEARTBEAT_OK` as interchangeable, but OpenClaw 2026.8 suppresses only `NO_REPLY` (and `HEARTBEAT_OK`) and posted `[SILENT]` verbatim, while Hermes suppresses `[SILENT]`/`SILENT`/`NO_REPLY`/`NO REPLY` but not `HEARTBEAT_OK`. The rule now overrides any marker a template names for scheduled runs.
+- Follow-up: the built-in templates still name `HEARTBEAT_OK` for cron work. The seeder only bootstraps missing lineages, so existing environments need Platform Administrators to publish new template versions; the policy override applies to every Agent on its next start.
+
 ### 2026-10-07 — Reserve new runtime image versions — [PR #263](https://github.com/aai-labs/agent-barn/pull/263)
 
 - Versioned: Hermes `0.2.7` and OpenClaw `0.7.4` give the cleanup builds fresh immutable image tags. Hermes removes the installed completion bridge patch; both runtime versions advance for the requested rollout.

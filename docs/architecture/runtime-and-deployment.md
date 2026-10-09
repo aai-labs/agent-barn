@@ -152,7 +152,7 @@ OpenClaw's own repair commands cannot do this: they abort on the install record
 the damaged plugin still holds, and the gateway refuses to start until the files
 are back, so without the repair the Agent crash-loops.
 
-Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be a recognized silence marker (`[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`); ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement. The appended Scheduled runs policy carries this silence rule and native origin/home-target guidance, including the startup HTTP-session boundary and repair of old jobs. The prompt no longer routes sends through `agentbarn-message`; native scheduler delivery belongs to the runtime. Native message-tool access and context restrictions are separate from this scheduled-run prompt.
+Cron delivery is automatic. When a scheduled run has nothing actionable to deliver, its final response must be exactly `NO_REPLY`, the only marker both runtimes suppress: OpenClaw delivers `[SILENT]` verbatim and Hermes delivers `HEARTBEAT_OK` verbatim, so the policy overrides any marker a template names for scheduled runs. Ordinary prose such as `Nothing to flag today.` is a deliverable message, not a private acknowledgement. The appended Scheduled runs policy carries this silence rule and native origin/home-target guidance, including the startup HTTP-session boundary and repair of old jobs. The prompt no longer routes sends through `agentbarn-message`; native scheduler delivery belongs to the runtime. Native message-tool access and context restrictions are separate from this scheduled-run prompt.
 
 ## Telemetry and costs
 
