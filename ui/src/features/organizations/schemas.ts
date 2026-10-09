@@ -11,6 +11,9 @@ export const OrganizationSchema = z.object({
   // Tolerate lightweight org views (e.g. the account/user-context memberships)
   // that don't carry the allowlist; the full org endpoint always sends it.
   allowedModels: z.array(z.string()).default([]),
+  isTrial: z.boolean().default(false),
+  // How many agents a trial may run; only the organization read carries it.
+  trialAgentLimit: z.number().int().nullable().optional(),
 });
 
 export const OrganizationCreateSchema = z.object({
@@ -37,11 +40,13 @@ export const OrganizationMembersSchema = z.array(OrganizationMemberSchema);
 
 export const MemberInviteResultSchema = z.object({
   member: OrganizationMemberSchema,
+  // Always null: the link goes only to the invitee's inbox.
   inviteLink: z.string().nullable(),
 });
 
 export const InviteLinkResultSchema = z.object({
-  inviteLink: z.string(),
+  // Always null: the link goes only to the invitee's inbox.
+  inviteLink: z.string().nullable().optional(),
 });
 
 export const AddMemberFormSchema = z.object({
@@ -65,6 +70,7 @@ export const PlatformOrganizationSchema = z.object({
   creatorUserId: z.string().uuid().nullable().optional(),
   creatorEmail: z.string().nullable().optional(),
   creatorName: z.string().nullable().optional(),
+  isTrial: z.boolean().default(false),
   // Platform-administered spend ceiling. Every organization has one; 0 is a real
   // zero allowance, so never coalesce it away.
   llmBudgetUsd: z.number().nullable().optional(),

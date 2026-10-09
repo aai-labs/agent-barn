@@ -202,6 +202,14 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
               This permanently deletes <strong>{organization.name}</strong>{" "}
               and all its agents, templates, skills, and memberships. This
               can&apos;t be undone. Type the organization name to confirm.
+              {organization.isTrial && (
+                <>
+                  <br />
+                  <br />
+                  This also ends your free trial for good: this account can&apos;t start another trial or create
+                  an organization of its own afterwards.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <input

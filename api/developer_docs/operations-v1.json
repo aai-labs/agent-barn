@@ -121,6 +121,16 @@
   ],
   [
     "GET",
+    "/auth/google/callback",
+    "finish_google_sign_in_auth_google_callback_get"
+  ],
+  [
+    "GET",
+    "/auth/google/start",
+    "start_google_sign_in_auth_google_start_get"
+  ],
+  [
+    "GET",
     "/auth/me",
     "get_current_user_context_auth_me_get"
   ],
@@ -178,6 +188,11 @@
     "GET",
     "/llms.txt",
     "llms_txt_llms_txt_get"
+  ],
+  [
+    "GET",
+    "/onboarding",
+    "read_onboarding_onboarding_get"
   ],
   [
     "GET",
@@ -676,6 +691,11 @@
   ],
   [
     "GET",
+    "/platform/settings/trial",
+    "read_trial_settings_platform_settings_trial_get"
+  ],
+  [
+    "GET",
     "/platform/skills",
     "list_global_skills_for_platform_admin_platform_skills_get"
   ],
@@ -878,6 +898,16 @@
     "POST",
     "/integrations/google/token",
     "google_token_exchange_integrations_google_token_post"
+  ],
+  [
+    "POST",
+    "/onboarding/agent",
+    "set_up_onboarding_agent_onboarding_agent_post"
+  ],
+  [
+    "POST",
+    "/onboarding/complete",
+    "complete_onboarding_onboarding_complete_post"
   ],
   [
     "POST",
@@ -1091,6 +1121,11 @@
   ],
   [
     "POST",
+    "/platform/organizations/{organization_id}/end-trial",
+    "end_organization_trial_platform_organizations__organization_id__end_trial_post"
+  ],
+  [
+    "POST",
     "/platform/organizations/{organization_id}/llm-budget/enroll",
     "enroll_organization_llm_keys_platform_organizations__organization_id__llm_budget_enroll_post"
   ],
@@ -1178,5 +1213,10 @@
     "PUT",
     "/platform/settings/agent-memory",
     "update_settings_platform_settings_agent_memory_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/trial",
+    "update_trial_settings_platform_settings_trial_put"
   ]
 ]

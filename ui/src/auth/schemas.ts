@@ -54,6 +54,10 @@ export const CurrentUserSchema = z.object({
   fullName: z.string().nullable(),
   isPlatformAdmin: z.boolean(),
   emailVerifiedAt: z.string().nullable().optional(),
+  // Set for people who signed themselves up; they run one trial organization.
+  signedUpAt: z.string().nullable().optional(),
+  // Set once a platform admin ended their trial; until then they create no organizations.
+  trialEndedAt: z.string().nullable().optional(),
   organizationUsers: z.array(OrganizationUserReadSchema).nullable().optional(),
 });
 

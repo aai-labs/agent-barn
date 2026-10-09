@@ -159,6 +159,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         shared_credential_repository=MagicMock(),
         event_delivery_dispatcher=MagicMock(),
         organization_lookup=org_lookup,
+        trial_settings=MagicMock(),
         agent_settings_lookup=agent_settings_lookup,
         agent_budgets=MagicMock(),
         restore_points=MagicMock(),

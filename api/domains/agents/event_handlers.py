@@ -28,6 +28,7 @@ from api.infrastructure.email.exceptions import (
     TerminalEmailSendingException,
 )
 from api.infrastructure.email.service import EmailService
+from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -122,10 +123,12 @@ class AgentBudgetEmailHandler:
         agent_id = UUID(str(event.payload["agent_id"]))
         agent_name = str(event.payload["subject_display"])
         organization_name = self.organization_lookup.get_name(event.organization_id)
+        limit = self.organization_lookup.get_llm_limit(event.organization_id)
         headline, body = self._message(
             event.payload,
             agent_name=agent_name,
             organization_name=organization_name,
+            one_off=limit is not None and limit.window == ONE_OFF_BUDGET_WINDOW,
             exhausted=event.event_name == AGENT_LLM_BUDGET_EXHAUSTED,
         )
         reason = f"You received this because you own {agent_name}."
@@ -165,19 +168,23 @@ class AgentBudgetEmailHandler:
             raise TerminalEventHandlerError(f"{len(terminal)} agent budget notification(s) cannot be delivered")
 
     @staticmethod
-    def _message(payload: dict, *, agent_name: str, organization_name: str, exhausted: bool) -> tuple[str, str]:
+    def _message(
+        payload: dict, *, agent_name: str, organization_name: str, exhausted: bool, one_off: bool = False
+    ) -> tuple[str, str]:
         limit = float(payload["limit_usd"])
         used = f"{_format_usd(float(payload['spend_usd']), limit)} of {_format_usd(limit, limit)}"
         if exhausted:
             headline = f"{agent_name} reached its model spend limit"
+            # A one-off limit, such as trial credit, never resets: only raising it helps.
+            until = "until the limit is raised" if one_off else "until the limit resets or is raised"
             body = (
                 f"{agent_name} in {organization_name} has used its entire model spend limit ({used}). "
-                "It can't make model calls until the limit resets or is raised."
+                f"It can't make model calls {until}."
             )
         else:
             headline = f"{agent_name} has used {payload['threshold_percent']}% of its model spend limit"
             body = f"{agent_name} in {organization_name} has used {used} of its model spend limit."
         renews = payload.get("renews_at")
-        if renews:
+        if renews and not one_off:
             body = f"{body} It resets on {str(renews)[:10]}."
         return headline, body

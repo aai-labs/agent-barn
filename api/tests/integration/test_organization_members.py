@@ -42,7 +42,12 @@ from api.tests.core.modules import (
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.rbac import role_lacks_permission
-from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
+from api.tests.steps.user import (
+    invite_emails_are_captured,
+    last_emailed_invite_token,
+    there_is_a_user,
+    there_is_an_access_token_for_user,
+)
 
 ORG = uuid7()
 ORG2 = uuid7()
@@ -54,6 +59,7 @@ _GIVEN = [
     create_test_client(),
     database_repo_is_ready(),
     database_is_clean(),
+    invite_emails_are_captured(),
 ]
 
 
@@ -324,7 +330,7 @@ def test_admin_without_membership_invite_cannot_add_member():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_owner_adds_new_member_and_gets_invite_link():
+def test_owner_adds_new_member_who_is_emailed_the_invite_link():
     with given([*_GIVEN, _there_is_an_owner()]) as context:
         with when("the owner adds a brand-new member by email and name"):
             response = context.client.post(
@@ -337,14 +343,16 @@ def test_owner_adds_new_member_and_gets_invite_link():
                 headers=_auth(context),
             )
 
-            with then("member created as pending with the given name + invite link"):
+            with then("member created as pending with the given name; the link goes only to their inbox"):
                 assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
                 body = response.json()
                 assert_that(body["member"]["email"], equal_to("newbie@example.com"))
                 assert_that(body["member"]["full_name"], equal_to("New Bie"))
                 assert_that(body["member"]["role"], equal_to("MEMBER"))
                 assert_that(body["member"]["is_pending"], is_(True))
-                assert_that(body["invite_link"], contains_string("/set-password?token="))
+                assert_that(body["invite_link"], is_(none()))
+                assert_that(context.invite_emails[-1][0], equal_to("newbie@example.com"))
+                assert_that(context.invite_emails[-1][1], contains_string("/set-password?token="))
 
 
 def test_add_member_with_owner_role_is_rejected():
@@ -682,7 +690,7 @@ def test_removing_pending_member_revokes_their_invite():
         assert_that(add.status_code, equal_to(status.HTTP_201_CREATED))
         body = add.json()
         member_id = body["member"]["user_id"]
-        token = body["invite_link"].split("token=")[1]
+        token = last_emailed_invite_token(context)
 
         remove = context.client.delete(f"{_members_url()}/{member_id}", headers=_auth(context))
         assert_that(remove.status_code, equal_to(status.HTTP_204_NO_CONTENT))
@@ -705,7 +713,7 @@ def test_duplicate_add_does_not_invalidate_existing_invite():
             headers=_auth(context),
         )
         assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
-        token = first.json()["invite_link"].split("token=")[1]
+        token = last_emailed_invite_token(context)
 
         duplicate = context.client.post(
             _members_url(),
@@ -732,7 +740,7 @@ def test_adding_pending_user_to_another_org_keeps_their_invite():
             headers=_auth(context),
         )
         assert_that(first.status_code, equal_to(status.HTTP_201_CREATED))
-        token = first.json()["invite_link"].split("token=")[1]
+        token = last_emailed_invite_token(context)
 
         with when("the same person is added to a second organization"):
             second = context.client.post(
@@ -785,7 +793,7 @@ def test_expired_invite_is_revived_by_a_later_add():
             headers=_auth(context),
         )
         user_id = first.json()["member"]["user_id"]
-        token = first.json()["invite_link"].split("token=")[1]
+        token = last_emailed_invite_token(context)
 
         repo: PasswordResetTokenRepository = context.injector.get(PasswordResetTokenRepository)
         stale = _unused_tokens_of(context, user_id)[0]
@@ -838,7 +846,7 @@ def test_adding_pending_user_without_a_token_issues_no_link():
 
             with then("a working link is minted"):
                 assert_that(resent.status_code, equal_to(status.HTTP_200_OK))
-                token = resent.json()["invite_link"].split("token=")[1]
+                token = last_emailed_invite_token(context)
                 assert_that(_set_password(context, token).status_code, equal_to(status.HTTP_200_OK))
 
 
@@ -852,7 +860,7 @@ def test_removing_pending_member_from_one_org_keeps_invite_for_another():
             headers=_auth(context),
         )
         member_id = first.json()["member"]["user_id"]
-        token = first.json()["invite_link"].split("token=")[1]
+        token = last_emailed_invite_token(context)
 
         context.client.post(
             _members_url(ORG2),
@@ -987,12 +995,10 @@ def test_resend_invite_for_pending_and_active_member():
                 f"{_members_url()}/{pending_id}/resend-invite",
                 headers=_auth(context),
             )
-            with then("a fresh invite link is returned"):
+            with then("a fresh invite link is emailed, never returned"):
                 assert_that(ok.status_code, equal_to(status.HTTP_200_OK))
-                assert_that(
-                    ok.json()["invite_link"],
-                    contains_string("/set-password?token="),
-                )
+                assert_that(ok.json()["invite_link"], is_(none()))
+                assert_that(context.invite_emails[-1][1], contains_string("/set-password?token="))
 
         with when("the owner resends an invite to an already-active member"):
             conflict = context.client.post(

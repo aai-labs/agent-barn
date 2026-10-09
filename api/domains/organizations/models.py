@@ -41,6 +41,9 @@ class Organization(BaseModel, table=True):
         index=True,
     )
     allowed_models: list[str] = Field(default_factory=list, sa_column=sa.Column(JSONB, server_default="[]"))
+    # Created by self-signup. A trial runs one Agent on a one-off spend limit until a
+    # Platform Administrator ends the trial.
+    is_trial: bool = Field(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
 
     # Platform-administered LLM spend ceiling. Always set: a new Organization starts at
     # the deployment default, and 0 is a real zero allowance. A float is enough here
@@ -102,6 +105,9 @@ class OrganizationRead(PydanticBaseModel):
     owner_email: str | None = None
     owner_name: str | None = None
     allowed_models: list[str] = Field(default_factory=list)
+    is_trial: bool = False
+    # How many Agents the trial may run; None for an Organization that is not a trial.
+    trial_agent_limit: int | None = None
 
 
 class PlatformOrganizationRead(PydanticBaseModel):
@@ -126,6 +132,7 @@ class PlatformOrganizationRead(PydanticBaseModel):
     llm_budget_duration: str | None = None
     # The Organization's own limit beneath the ceiling; None when it follows it.
     llm_own_budget_usd: float | None = None
+    is_trial: bool = False
 
 
 class OrganizationBudgetEmailReceipt(BaseModel, table=True):
@@ -224,6 +231,15 @@ class OrganizationLlmBudgetUpdate(PydanticBaseModel):
     # Omitted keeps the current window, so changing only the amount never reschedules
     # the Organization's renewal date.
     budget_duration: LlmBudgetWindow | None = None
+
+
+class OrganizationTrialEnd(PydanticBaseModel):
+    """The spend limit an Organization goes on to when its trial ends."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    budget_usd: float = PydanticField(ge=0, allow_inf_nan=False)
+    budget_duration: LlmBudgetWindow
 
 
 class OrganizationOwnLlmBudgetUpdate(PydanticBaseModel):

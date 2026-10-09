@@ -28,6 +28,18 @@ _Avoid_: budget, allowance, quota, cap
 The most an Organization may spend on model calls in one renewal period, set by a Platform Administrator. Every Organization has one, starting at the deployment default. The Organization may set a lower Model Spend Limit of its own, never a higher one, and lowering the ceiling beneath that limit pulls it down.
 _Avoid_: allowance, plan limit, platform budget
 
+**Trial Organization**:
+The one Organization a self-signed-up user gets; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A Platform Administrator ends the trial, choosing the spend limit it goes on to, after which it is an ordinary Organization.
+_Avoid_: free plan, trial account, demo org
+
+**Trial Credit**:
+The one-off Model Spend Limit a new Trial Organization starts with, set by Platform Administrators for trials created afterwards. When it is spent the trial's Agent stops; it never renews.
+_Avoid_: free credits, balance, allowance
+
+**Trial Onboarding**:
+The steps a self-signed-up user goes through after their first sign-in: their Agent is set up and started, they link Telegram to it, and they finish. Returning users who finished go straight to the dashboard.
+_Avoid_: signup wizard, setup flow
+
 **Spend Limit Coverage**:
 Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.
 _Avoid_: enrolment status, team membership

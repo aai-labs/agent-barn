@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
+from api.domains.agents.exceptions import TrialAgentLimitReached
 from api.domains.agents.models import (
     Agent,
     AgentAccess,
@@ -881,6 +882,7 @@ class AgentRepository:
         secrets: list[AgentSecret] | None = None,
         skills: list[AgentSkill] | None = None,
         actor_display: str | None = None,
+        agent_limit: int | None = None,
     ) -> AgentLifecycleEventResult:
         """Create an Agent and its initial resources in one transaction.
 
@@ -888,8 +890,23 @@ class AgentRepository:
         Keeping the Agent, access row, initial secrets, skills, and their outbox
         deliveries in one transaction means a failure cannot leave a persisted
         Agent pointing at a key that create-agent compensation has deleted.
+
+        With `agent_limit`, the Organization's live Agents are counted under a lock
+        held to commit, so two concurrent creates cannot both fit under it.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
+            if agent_limit is not None:
+                session.scalar(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+                    {"lock_key": f"agent-limit:{agent.organization_id}"},
+                )
+                live = session.scalar(
+                    select(func.count())
+                    .select_from(Agent)
+                    .where(col(Agent.organization_id) == agent.organization_id, col(Agent.deleted_at).is_(None))
+                )
+                if (live or 0) >= agent_limit:
+                    raise TrialAgentLimitReached(agent_limit)
             session.add(agent)
             session.flush()
             if membership_id is not None:
