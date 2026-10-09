@@ -164,8 +164,6 @@ class ProductAnalyticsHandler:
             groups[ORGANIZATION_GROUP] = str(organization_id)
             properties["organization_id"] = str(organization_id)
         properties["$groups"] = groups
-        if self.config.analytics_include_user_details:
-            properties["$set"] = {"email": user.email, "name": user.full_name}
         envelope = {"distinct_id": str(user.id), "timestamp": event.occurred_at.isoformat()}
         messages = [{**envelope, "event": event.event_name, "uuid": str(event.event_id), "properties": properties}]
         if not identify:

@@ -159,11 +159,10 @@ class Config(BaseSettings):
     agent_firecrawl_api_key: str = ""
 
     analytics_enabled: bool = True
-    analytics_include_user_details: bool = False
     analytics_posthog_host: str = DEFAULT_POSTHOG_HOST
     analytics_posthog_project_token: str = DEFAULT_POSTHOG_PROJECT_TOKEN
 
-    @field_validator("analytics_enabled", "analytics_include_user_details", mode="before")
+    @field_validator("analytics_enabled", mode="before")
     @classmethod
     def blank_switch_is_off(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():

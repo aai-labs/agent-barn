@@ -666,8 +666,8 @@ a user signing in or accepting an invite, and an hourly count of messages each
 agent received and sent. Each event carries random IDs (user, organisation, agent)
 and a name for your install, which defaults to your web app's host. It never
 carries agent or organisation names, prompts, message content, conversations,
-credentials, or changed values. User email and name are sent only if you set
-`ANALYTICS_INCLUDE_USER_DETAILS=true`.
+credentials, changed values, user email addresses, or full names. Users are
+identified by UUID, so the usage tracking is pseudonymous.
 
 To opt out, set `ANALYTICS_ENABLED=false` in `.env.deploy` and redeploy.
 The `WEB_APP_URL` hostname labels your install; its UUID remains stable when the

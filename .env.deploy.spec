@@ -89,8 +89,7 @@ SENDER_EMAIL=
 # On by default for deployment installs.
 # Set false to opt out. See docs/features/product-analytics.md for what is sent.
 ANALYTICS_ENABLED=true
-# Privacy: user email and name are omitted by default. Our prod/staging workflows enable them.
-# ANALYTICS_INCLUDE_USER_DETAILS=false
+# Privacy: user email and name are never sent.
 # The WEB_APP_URL hostname labels this install in PostHog.
 
 # ── Per-Agent email addresses ────────────────────────────────────────────────

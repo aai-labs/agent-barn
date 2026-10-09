@@ -20,7 +20,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 - **What an event carries.**
   - Only allowlisted identifiers and safe fields (see [Events](#events)).
   - Names, display snapshots, and changed values are never sent.
-  - User email and name are sent as person properties only when `ANALYTICS_INCLUDE_USER_DETAILS` is true. It defaults to false for privacy; our production and staging workflows explicitly enable it.
+  - User email and name are never sent. Human actors are identified only by their user UUID; there is no user-details setting.
 - **Installation name.** Every event carries `installation_name`. It is the hostname extracted from `WEB_APP_URL`, excluding credentials, port, path, query, and fragment. If the URL has no hostname, it uses the Installation id so it is never empty. Filter or break down by this event property to see one Installation's events (for example `installation_name = cloud.agentbarn.dev`); it needs no Group Analytics.
 - **Groups.** Every event belongs to the `installation` group, keyed by the Installation id and named with the same value as `installation_name`.
   - Organization-scoped events also belong to the `organization` group, keyed by the Organization id, and carry `organization_id`.
@@ -56,7 +56,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `user.logged_in` | `method` (`password`); platform-scoped, so installation group only. Failed logins, token refresh and API-key requests are not logins |
 | `user.signed_up` | none; platform-scoped. Public signup is disabled, so this is the first invite acceptance (`POST /auth/set-password` on a user whose email is not yet verified). Known gap: an invitee who first gets in through forgot-password never emits it |
 
-The common set is `source`, `installation_id`, `installation_name`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`. When user details are enabled, `$set` (email and name) is added.
+The common set is `source`, `installation_id`, `installation_name`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`.
 
 ## Message counts
 
@@ -79,7 +79,7 @@ The default `ANALYTICS_POSTHOG_PROJECT_TOKEN` is the Agent Barn PostHog project 
 
 ## Privacy
 
-Deleting a user in Agent Barn does not erase their PostHog person. With user details disabled, the person record holds only the user UUID.
+Human actors are identified by UUID, never by email or full name. UUID-based tracking is pseudonymous, not fully anonymous. Deleting a user in Agent Barn does not erase their PostHog person. Names and emails sent before user-detail collection was removed remain in PostHog until separately cleaned up; this change does not delete historical data.
 
 ## Source map
 

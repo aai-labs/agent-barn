@@ -9,7 +9,7 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Delivered: this change log, and the Installation identity. The `installation` table (migration `5a1e7c3b9d20`) holds one generated id, and `InstallationRepository.get_id()` in `api/domains/analytics/` returns it. If the row is missing, `get_id()` recreates it.
 - Also delivered: the analytics configuration in `api/core/config.py`.
   - `ANALYTICS_ENABLED` is on by default. Explicit false opts out; a blank value counts as off in Config.
-  - `ANALYTICS_INCLUDE_USER_DETAILS` defaults to false for privacy. Our production and staging workflows explicitly enable it.
+  - User-detail collection and its setting have been removed. User email and full name are never sent; UUID attribution remains.
   - `ANALYTICS_POSTHOG_HOST` defaults to PostHog Cloud EU.
   - `ANALYTICS_POSTHOG_PROJECT_TOKEN` defaults to the Agent Barn project token. Committing it is an approved exception to the AGENTS.md token rule, because PostHog project tokens are public by design.
   - The Installation label is the `WEB_APP_URL` hostname, falling back to the persisted Installation id when no hostname is available. There is no configurable name override.
@@ -23,13 +23,13 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - **What it sends:** one `/batch/` per event. The capture has `uuid` = `event_id` and `timestamp` = `occurred_at`. Each worker process names the installation group once, with a `$groupidentify` (deterministic `uuid5`) in its first successful batch, and again only if the name changes.
   - **Who it's attributed to:** `distinct_id` is the acting user's UUID. A member who removed themselves resolves through `payload.user_id`.
   - **Properties:** allowlisted fields only. `agent.updated` sends changed field names but never their values. Every event also gets `source`, `$geoip_disable`, `$lib`, and the installation and organization groups.
-  - **User details:** `$set` email and name are added only when `ANALYTICS_INCLUDE_USER_DETAILS` is true.
+  - **User privacy:** human actor captures contain no email or full name and no user `$set` properties.
   - **Skipped silently:** analytics disabled, non-human actors, and actors that can't be resolved.
   - **When PostHog fails:** an unreachable PostHog is retried on attempts 1 and 2, then dropped with a warning on attempt 3. A rejected batch dead-letters.
 - Also delivered: the nine slice-1 events now list `product_analytics.posthog` alongside their existing handlers. The behaviour contract is [`../product-analytics.md`](../product-analytics.md).
 - Also delivered: deployment wiring.
-  - The API chart renders `ANALYTICS_ENABLED`, which defaults to true in the chart and the Helmfile, and `ANALYTICS_INCLUDE_USER_DETAILS`. The Installation label is derived from `WEB_APP_URL`.
-  - `deploy.yml` enables analytics on `main` only, so staging sends nothing by default. User details are explicitly enabled on both `main` and `staging`. `deploy-public.yml` enables both.
+  - The API chart renders `ANALYTICS_ENABLED`, which defaults to true in the chart and the Helmfile, with no user-details setting. The Installation label is derived from `WEB_APP_URL`.
+  - `deploy.yml` enables analytics on `main` only, so staging sends nothing by default. `deploy-public.yml` enables analytics. Neither workflow configures user-detail collection.
   - `.env.deploy.spec` and customer release bundles ship analytics on. The local `.env.spec` explicitly disables it.
   - The opt-out is documented in `operations.md` and the README.
 - Also delivered: local end-to-end verification against a recording stub (see the 2026-10-06 entry). A one-off check against the real project from a local stack, labelled `local-dev-test` at the user's request, showed the events arriving in Live Events.
@@ -41,6 +41,15 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-09 — AF-357 — Remove user-detail collection
+
+- Delivered: analytics no longer sends user email or full name. Human actor attribution stays UUID-based; existing user-detail environment entries have no effect in updated processes.
+- Removed: the user-details configuration field and validator input, person-property sending branch, workflow overrides, Helm value and Secret entry, Helmfile wiring, and environment-spec suggestions. Installation count pseudo-person metadata remains content-free.
+- Changed: configuration, analytics handler, privacy regression tests, deployment wiring, README, operations guidance, and the analytics feature contract.
+- Verified before the removal: the legacy-setting regression failed with the old setting set to true because the capture contained user email and full name.
+- Verified after removal: all 60 focused configuration, handler, count, and wiring tests pass, including legacy-setting privacy regressions. Static checks, the migration-head check, whitespace checks, and deployment workflow/chart YAML parsing pass. Helm render checks remain unavailable because Helm is not installed.
+- Historical data: this change does not remove names or emails previously sent to PostHog.
 
 ### 2026-10-09 — AF-357 — Derive Installation labels from the app URL
 

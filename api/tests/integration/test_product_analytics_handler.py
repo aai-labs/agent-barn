@@ -1,3 +1,4 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Barrier, Event, Lock
@@ -5,7 +6,7 @@ from unittest.mock import patch
 from uuid import UUID, uuid4, uuid7
 
 import pytest
-from hamcrest import assert_that, equal_to, has_entries, has_key, is_not
+from hamcrest import assert_that, contains_string, equal_to, has_entries, has_key, is_not
 
 from api.domains.analytics.event_handlers import ProductAnalyticsHandler
 from api.domains.analytics.repository import InstallationRepository
@@ -49,14 +50,12 @@ def _given(
     posthog: MockPostHogModule,
     *,
     enabled: bool = True,
-    user_details: bool = False,
     web_app_url: str = "https://test-installation.example.com/app",
 ):
     return [
         set_env_variable(
             {
                 "ANALYTICS_ENABLED": str(enabled).lower(),
-                "ANALYTICS_INCLUDE_USER_DETAILS": str(user_details).lower(),
                 "WEB_APP_URL": web_app_url,
             }
         ),
@@ -363,23 +362,21 @@ def test_nothing_is_sent_while_analytics_is_disabled():
         assert_that(posthog.batches, equal_to([]))
 
 
-def test_user_details_are_left_out_by_default():
+@pytest.mark.parametrize("legacy_setting", ["false", "true"])
+def test_user_details_are_never_sent_even_with_a_legacy_setting(monkeypatch, legacy_setting):
+    monkeypatch.setenv("ANALYTICS_INCLUDE_USER_DETAILS", legacy_setting)
     posthog = MockPostHogModule()
     with given(_given(posthog)) as context:
         _handle(context, _agent_created(context))
 
-        assert_that(posthog.batches[0][0]["properties"], is_not(has_key("$set")))
-
-
-def test_user_details_are_set_when_enabled():
-    posthog = MockPostHogModule()
-    with given(_given(posthog, user_details=True)) as context:
-        _handle(context, _agent_created(context))
-
-        assert_that(
-            posthog.batches[0][0]["properties"]["$set"],
-            equal_to({"email": context.user.email, "name": context.user.full_name}),
-        )
+        messages = posthog.batches[0]
+        capture = messages[0]
+        assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
+        for message in messages:
+            assert_that(message["properties"], is_not(has_key("$set")))
+        serialized = json.dumps(messages)
+        assert_that(serialized, is_not(contains_string(context.user.email)))
+        assert_that(serialized, is_not(contains_string(context.user.full_name)))
 
 
 @pytest.mark.parametrize("attempt_count", [1, 2])
