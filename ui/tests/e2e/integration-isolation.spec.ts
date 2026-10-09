@@ -4,7 +4,7 @@ import { TEST_ORG_ID } from "../constants";
 import { MOCK_AGENT_ID, mockAgent, mockAgentAllowedActions } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 
-async function open(page: Page, options: { provider?: string; status?: string; actions?: string[]; fail?: boolean; supported?: boolean; desired?: boolean; lastVerified?: boolean; reconnectRequired?: boolean; source?: string; provisioning?: boolean } = {}) {
+async function open(page: Page, options: { provider?: string; status?: string; actions?: string[]; fail?: boolean; supported?: boolean; desired?: boolean; lastVerified?: boolean; reconnectRequired?: boolean; source?: string; provisioning?: boolean; updating?: boolean } = {}) {
   const data = new DataSupport(page);
   await data.auth.interceptRefreshRequest();
   await data.users.interceptGetUserContextRequest();
@@ -15,7 +15,7 @@ async function open(page: Page, options: { provider?: string; status?: string; a
   const provider = options.provider ?? "github";
   const google = provider === "google_workspace";
   const names: Record<string, string> = { github: "GitHub credential", google_workspace: "Google Workspace credential", sharepoint: "SharePoint credential", firecrawl: "Platform Firecrawl" };
-  let agent = { ...mockAgent, status: options.status ?? "STOPPED", allowed_actions: options.actions ?? mockAgentAllowedActions,
+  let agent = { ...mockAgent, update_in_progress: options.updating ?? false, status: options.status ?? "STOPPED", allowed_actions: options.actions ?? mockAgentAllowedActions,
     secrets: [{ provider, secret_name: names[provider], source: options.source ?? "agent_secret", isolation: {
       desired: options.desired ?? false, applied: options.status === "RUNNING" && !options.provisioning ? false : null,
       last_verified: options.lastVerified ?? null, reconnect_required: options.reconnectRequired ?? false,
@@ -68,6 +68,13 @@ test.describe("Credential isolation", () => {
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.locator("summary").filter({ hasText: "GitHub" }).click();
     await expect(page.getByText("Runtime mode has not been verified.", { exact: false })).toBeVisible();
+  });
+
+  test("managed update disables isolation apply", async ({ page }) => {
+    const requests = await open(page, { status: "RUNNING", updating: true });
+    await page.getByRole("switch").click();
+    await expect(page.getByRole("button", { name: "Apply & Restart", exact: true })).toBeDisabled();
+    expect(requests).toEqual([]);
   });
 
   test("cancel discards isolation without sending a request", async ({ page }) => {

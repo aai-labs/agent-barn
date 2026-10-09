@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import httpx
+from fastapi import HTTPException
 from injector import inject, singleton
 from pydantic import BaseModel, Field
 
@@ -24,6 +25,7 @@ from api.domains.agents.models import (
     decrypt_content,
     encrypt_content,
 )
+from api.domains.agents.sharepoint_service import SharePointService
 from api.domains.credential_gateway.aai_store import sharepoint_refresh_token
 from api.domains.credential_gateway.sharepoint_repository import (
     SharePointBrokerRepository,
@@ -49,6 +51,7 @@ class SharePointHandoff(BaseModel):
 class SharePointBroker:
     repository: SharePointBrokerRepository
     config: Config
+    selected_sites: SharePointService
 
     @contextmanager
     def _grant(
@@ -120,6 +123,8 @@ class SharePointBroker:
     def mint(self, agent_id: UUID, organization_id: UUID, generation: UUID | None) -> MintedToken:
         with self._grant(agent_id, organization_id, generation) as transaction:
             content = self._content(transaction.secret)
+            if content.mode == "selected_sites":
+                return self._selected_sites_token(agent_id)
             if content.broker_access_token and (content.broker_expires_at or 0) > time.time() + 300:
                 return MintedToken(
                     value=content.broker_access_token,
@@ -130,11 +135,31 @@ class SharePointBroker:
             transaction.save(encrypt_content(content, self.config.agent_token_encryption_key))
             return minted
 
+    def _selected_sites_token(self, agent_id: UUID) -> MintedToken:
+        try:
+            token = self.selected_sites.access_token(agent_id)
+        except HTTPException as exc:
+            raise UpstreamAuthenticationError("SharePoint selected-sites authentication failed") from exc
+        return MintedToken(
+            value=token.access_token,
+            expires_in=max(1, int(token.expires_at.timestamp() - time.time())),
+            scopes=frozenset({"Sites.Selected"}),
+        )
+
     def handoff(self, agent_id: UUID, organization_id: UUID, generation: UUID | None, data: SharePointHandoff) -> None:
         with self._grant(agent_id, organization_id, generation, handoff=True) as transaction:
             if transaction.binding.get("handoff_complete"):
                 return  # Pod boot retry, never import a second grant.
             content = self._content(transaction.secret)
+            if content.mode == "selected_sites":
+                # No delegated grant exists to import. Prove the existing app-only
+                # service flow before authorizing cleanup of any earlier PVC sign-in.
+                self._selected_sites_token(agent_id)
+                transaction.save(
+                    encrypt_content(content, self.config.agent_token_encryption_key), handoff_complete=True
+                )
+                return
+            assert content.sign_in_id is not None
             expected_marker = content.sign_in_id + (f":{content.store_revision}" if content.store_revision else "")
             if data.marker == expected_marker:
                 try:
@@ -172,6 +197,8 @@ class SharePointBroker:
         """After old-pod termination, force the next direct boot to import the latest DB grant."""
         with self.repository.locked(agent_id, organization_id, direct=True) as transaction:
             content = self._content(transaction.secret)
+            if content.mode == "selected_sites":
+                return
             content.store_revision = str(uuid4())
             content.broker_access_token = None
             content.broker_expires_at = None

@@ -538,6 +538,26 @@ class SharePointPlugin(AaiCliPlugin[SharePointContent]):
         "libraries and folders with `microsoft request get` — read `./skills/aai-microsoft/SKILL.md`"
     )
 
+    def aai_cli_selected_sites_profile_block(self, token_url: str | None) -> str:
+        if not token_url:
+            raise ValueError("Selected-sites SharePoint requires its platform token URL")
+        return (
+            f"[profiles.{self.aai_cli_slug}]\n"
+            'provider = "microsoft"\n'
+            'auth_type = "token_url"\n'
+            f"token_url = {quote(token_url)}\n"
+            'api_token_secret = "agentfarm.ingest_key"\n'
+        )
+
+    def aai_cli_capability_for(self, content: SharePointContent) -> str:
+        if content.mode == "selected_sites":
+            return (
+                "SharePoint, the granted sites only: files in their document libraries "
+                "(`microsoft sharepoint files` upload/download/delete), lists and list items; "
+                "find libraries and folders with `microsoft request get` — read `./skills/aai-microsoft/SKILL.md`"
+            )
+        return self.aai_cli_capability
+
     def aai_cli_profile_block(self, content: SharePointContent) -> str:
         scope = f"{GRAPH_SCOPE_PREFIX}{sharepoint_permission(content.read_only)} offline_access"
         return (
@@ -561,6 +581,13 @@ class SharePointPlugin(AaiCliPlugin[SharePointContent]):
 
     def aai_cli_context_line(self, content: SharePointContent) -> str:
         access = "read-only" if content.read_only else "read and write"
+        if content.mode == "selected_sites":
+            sites = ", ".join(site.url for site in content.sites)
+            return (
+                f"- **SharePoint** (`{self.aai_cli_slug}`): only these sites ({access}): {sites}. "
+                "Anything else is refused. Excel workbook commands aren't available here; "
+                "download, edit and upload the file instead"
+            )
         return (
             f"- **SharePoint** (`{self.aai_cli_slug}`): signed in as {content.email} ({access}) — SharePoint only: "
             "the sites, libraries and files that account can open; Outlook, Teams messages, To Do and "

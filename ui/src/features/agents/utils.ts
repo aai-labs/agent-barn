@@ -240,3 +240,15 @@ export function isShareDraftDirty(
 export function currentModelOf(agent: { runningModel: string; effectiveModel: string }) {
   return agent.runningModel || agent.effectiveModel;
 }
+
+export const QUIET_AFTER_DAYS = 14;
+
+/** An Agent that has talked before but not in the last {@link QUIET_AFTER_DAYS} days. */
+export function isQuiet(lastMessageAt: string | null | undefined, now = Date.now()) {
+  return !!lastMessageAt && now - new Date(lastMessageAt).getTime() >= QUIET_AFTER_DAYS * 86_400_000;
+}
+
+/** Last message within the past day. */
+export function isRecent(lastMessageAt: string | null | undefined, now = Date.now()) {
+  return !!lastMessageAt && now - new Date(lastMessageAt).getTime() < 86_400_000;
+}

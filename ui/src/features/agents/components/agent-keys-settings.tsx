@@ -8,6 +8,7 @@ import { IntegrationIsolationControl } from "./integration-isolation-control";
 import { useIntegrationIsolation } from "../hooks/use-integration-isolation";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { useStopAgent } from "../hooks/use-stop-agent";
+import { useSharePointAccess } from "../hooks/use-sharepoint-sign-in";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, AgentSecretRead } from "../schemas";
 import { coerceBooleanFields, expandGithubContent, getIntegrationProvider, hasIncompleteIntegration, isSignInOnlyProvider, type IntegrationDraft } from "../integrations";
@@ -41,6 +42,9 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const secrets = agent.secrets ?? [];
+  const sharepointAccess = useSharePointAccess(agent.id, {
+    enabled: editing && secrets.some((secret) => secret.provider === "sharepoint"),
+  });
   const removedProviders = secrets.filter((secret) => secret.source !== "platform_default" && !drafts.some((draft) => draft.provider === secret.provider)).map((secret) => secret.provider);
   const changedCredentials = drafts.filter((draft) => !draft.existing);
   function savedSecret(draft: IntegrationDraft) {
@@ -97,7 +101,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
     <AgentConfigurationSection title="Integrations" description="Runtime integration credentials are separate from communication connection credentials. Secret values remain write-only and encrypted at rest."
       canEdit={canEdit} editing={editing} onEdit={beginEditing} onApply={applyChanges}
       onCancel={() => { setDrafts(setupDrafts(agent)); setSaveError(null); onEdit(); }} onApplied={onEdit}
-      applyDisabled={!hasChanges || hasIncompleteIntegration(drafts) || pending || (restart && !canRestart)} restartOnApply={restart}>
+      applyDisabled={agent.updateInProgress || !hasChanges || hasIncompleteIntegration(drafts) || pending || (restart && !canRestart)} restartOnApply={restart}>
       {!editing || !canEdit ? (
         <div className="flex flex-col gap-3">
           {secrets.length > 0 ? secrets.map((secret) => (
@@ -112,6 +116,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
         {saveError && <p role="alert" className="m-0 text-sm" style={{ color: "var(--err)" }}>{saveError}</p>}
         <fieldset disabled={pending} className="m-0 min-w-0 border-0 p-0">
         <IntegrationsStep agentId={agent.id} integrations={drafts} onChange={(next) => setDrafts(next.map((draft) => ({ ...draft, isolated: draft.isolated ?? savedSecret(draft)?.isolation?.desired ?? false })))}
+          canRemoveProvider={(provider) => provider !== "sharepoint" || (!sharepointAccess.isPending && !sharepointAccess.isError && sharepointAccess.data?.mode !== "selected_sites")}
           renderIsolation={(draft) => <IntegrationIsolationControl agent={agent} secret={savedSecret(draft) ?? newSecret(draft.provider)}
             isolated={draft.isolated ?? false} onChange={(isolated) => setDrafts((current) => current.map((item) => item.provider === draft.provider ? { ...item, isolated } : item))} />} />
         </fieldset>

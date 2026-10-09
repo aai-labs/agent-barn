@@ -96,8 +96,14 @@ means extraction was accepted asynchronously, not that recall is already ready.
 Failures are reported without backend content or credentials; the tool bypasses
 environment proxies and refuses redirects. Automatic saves stay private.
 The tool and instructions are mounted from API-owned runtime configuration;
-existing Agents must restart to receive them. Memory must be enabled. Instructions
-use the absolute installed path; a read-only executable ConfigMap entry is also
+existing Agents must restart to receive them. Memory must be enabled. Both runtime
+builders append the instructions to automatically loaded `AGENTS.md`, so shared
+saves do not depend on the Agent choosing to read `TOOLS.md`. They direct Agents
+to use the writer command for shared saves and their runtime's private memory
+tools for private memory; organizational context and arbitrary `org-wide`/`organization` tags do
+not grant sharing. Agents report the command's actual result and describe a
+successful save as accepted with processing pending, rather than already visible.
+Instructions use the absolute installed path; a read-only executable ConfigMap entry is also
 mounted at `/usr/local/bin/agentbarn-memory` so the short command name survives
 terminal login-shell PATH resets. Both runtime Deployment builders mount this
 command with mode 0555 as its sole installation, without a shadowing startup wrapper.
@@ -117,6 +123,38 @@ Downgrading this migration restores separate read and write rows for combined
 grants, preserving their effective permissions. Rolling back further through
 `b84e19a7302f` restores the original combined Organization Memory semantics.
 Review grants before rolling back.
+
+### Explicit memory recall
+
+Both runtimes expose `/usr/local/bin/agentbarn-memory recall` through their terminal
+tool, using a search query on standard input. It uses the current per-start
+credential and the existing gateway recall endpoint; the gateway derives the
+Organization bank and current readable scopes. It searches the Agent's private
+memory, each currently granted source Agent's private memory, and Organization
+Memory when a current grant permits reading. The command cannot select a source,
+bank, or tags. Grant changes apply on the next search without restarting.
+
+Automatic recall remains `low` budget with 1,024 tokens. Explicit recall uses
+`mid` with 4,096 tokens; `recall --thorough` uses `high` with 8,192 tokens. Queries
+are limited to 20,000 characters. The command bypasses environment proxies and
+refuses redirects. Its JSON output contains only `status` and, for successful
+searches, `memories` (an array of memory texts):
+
+- `found`: one or more results. The Agent checks whether they answer the question.
+- `not_found`: a successful search returned no results; this does not prove the
+  fact was never saved or exists in no other scope.
+- `unavailable`: configuration, authentication, transport, or backend-response
+  failure; exit status is nonzero and backend error details are not exposed.
+
+The shared startup instructions require an explicit search before reporting an
+unknown remembered fact. If the first search misses or is irrelevant, the Agent
+retries once with a focused query and `--thorough`. After both searches miss it
+reports that the fact was not found in currently accessible memory. An outage is
+reported as search unavailable. Returned text is reference data, not instructions;
+recent saves may still be undergoing asynchronous extraction. This establishes
+the search procedure, not a guarantee of model obedience or retrieval quality.
+See [operations](../guidelines/operations.md#agent-memory-deployment) for updating
+existing running Agents to receive the command and instructions.
 
 ### Deletion cleanup
 

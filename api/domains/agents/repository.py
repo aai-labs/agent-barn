@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
@@ -13,6 +13,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
 from api.domains.agents.models import (
+    MANAGED_UPDATE_STALE_SECONDS,
     Agent,
     AgentAccess,
     AgentCreatorRead,
@@ -23,6 +24,7 @@ from api.domains.agents.models import (
     AgentSecretRead,
     AgentSkill,
     AgentStatus,
+    ManagedUpdateOutcome,
     PlatformAgentIdentity,
     SecretProvider,
 )
@@ -956,7 +958,19 @@ class AgentRepository:
         their own writes have committed, or a losing request could still observe
         stale state once it acquires the lock.
         """
-        lock_key = f"agent-lifecycle:{agent_id}"
+        with self._try_advisory_lock(f"agent-lifecycle:{agent_id}") as acquired:
+            yield acquired
+
+    @contextmanager
+    def sharepoint_sign_in_lock(self, agent_id: UUID) -> Iterator[bool]:
+        """Serialize finishing SharePoint sign-ins for one Agent, so two administrators'
+        sign-ins can't each read the granted sites and overwrite the other's result. Same
+        non-blocking, session-scoped advisory lock as ``lifecycle_lock``."""
+        with self._try_advisory_lock(f"agent-sharepoint-sign-in:{agent_id}") as acquired:
+            yield acquired
+
+    @contextmanager
+    def _try_advisory_lock(self, lock_key: str) -> Iterator[bool]:
         with Session(self.delegate.engine) as session:
             acquired = bool(
                 session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
@@ -966,6 +980,72 @@ class AgentRepository:
             finally:
                 if acquired:
                     session.scalar(text("SELECT pg_advisory_unlock(hashtext(:lock_key))"), {"lock_key": lock_key})
+
+    def claim_managed_update(self, agent_id: UUID) -> bool:
+        """Mark a managed update as running, unless one already is.
+
+        One conditional UPDATE, so two requests racing for the same Agent cannot
+        both win. A heartbeat past MANAGED_UPDATE_STALE_SECONDS belongs to a
+        process that died, so it can be claimed again. The last update's outcome
+        is cleared in the same write: it no longer describes the Agent.
+        """
+        now = datetime.now(UTC)
+        stale_before = now - timedelta(seconds=MANAGED_UPDATE_STALE_SECONDS)
+        with Session(self.delegate.engine) as session:
+            result = session.exec(
+                sa.update(Agent)
+                .where(
+                    col(Agent.id) == agent_id,
+                    or_(
+                        col(Agent.managed_update_heartbeat_at).is_(None),
+                        col(Agent.managed_update_heartbeat_at) < stale_before,
+                    ),
+                )
+                .values(
+                    managed_update_heartbeat_at=now,
+                    managed_update_outcome=None,
+                    managed_update_restore_point_id=None,
+                    managed_update_failure_reason=None,
+                )
+            )
+            session.commit()
+            return result.rowcount == 1
+
+    # The writes below are targeted UPDATEs, not save(): the orchestrator holds no
+    # fresh copy of the row and must not write back columns other requests changed.
+
+    def beat_managed_update(self, agent_id: UUID) -> None:
+        """Refresh a running update's heartbeat. Never starts one: that is a claim."""
+        self._update_agent(
+            agent_id,
+            {"managed_update_heartbeat_at": datetime.now(UTC)},
+            col(Agent.managed_update_heartbeat_at).is_not(None),
+        )
+
+    def release_managed_update(self, agent_id: UUID) -> None:
+        self._update_agent(agent_id, {"managed_update_heartbeat_at": None})
+
+    def record_managed_update_outcome(
+        self,
+        agent_id: UUID,
+        outcome: ManagedUpdateOutcome,
+        *,
+        restore_point_id: UUID | None,
+        failure_reason: str | None = None,
+    ) -> None:
+        self._update_agent(
+            agent_id,
+            {
+                "managed_update_outcome": outcome,
+                "managed_update_restore_point_id": restore_point_id,
+                "managed_update_failure_reason": failure_reason[:500] if failure_reason else None,
+            },
+        )
+
+    def _update_agent(self, agent_id: UUID, values: dict[str, Any], *conditions: Any) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(sa.update(Agent).where(col(Agent.id) == agent_id, *conditions).values(**values))
+            session.commit()
 
     def save_with_lifecycle_event(
         self,

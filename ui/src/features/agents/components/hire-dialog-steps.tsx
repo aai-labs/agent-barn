@@ -521,6 +521,7 @@ export function IntegrationsStep({
   credentialError,
   agentId,
   renderIsolation,
+  canRemoveProvider,
 }: {
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
@@ -529,6 +530,7 @@ export function IntegrationsStep({
   // connections can only be connected once it exists.
   agentId?: string;
   renderIsolation?: (draft: IntegrationDraft) => ReactNode;
+  canRemoveProvider?: (provider: string) => boolean;
 }) {
   const { switchToShared, switchToManual, handlePickShared } =
     useSharedManualSwitch(integrations, onChange);
@@ -615,6 +617,8 @@ export function IntegrationsStep({
                 type="button"
                 className="af-btn af-btn-ghost af-btn-icon"
                 hidden={draft.platformDefault}
+                disabled={canRemoveProvider?.(draft.provider) === false}
+                title={canRemoveProvider?.(draft.provider) === false ? "Remove all granted SharePoint sites first." : undefined}
                 onClick={(event) => { event.preventDefault(); removeProvider(draft.provider); }}
                 aria-label={`Remove ${provider.label}`}
               >
@@ -622,6 +626,9 @@ export function IntegrationsStep({
               </button>
             </summary>
             <div className="mt-3.5 flex flex-col gap-3.5">
+            {canRemoveProvider?.(draft.provider) === false && (
+              <p className="m-0 text-xs" style={{ color: "var(--ink-3)" }}>Remove all its sites first using SharePoint setup below. Site access must be verified before removing this integration.</p>
+            )}
             {draft.existing && (
               <div className="flex items-center justify-between gap-3">
                 <p className="m-0 text-xs" style={{ color: "var(--ink-3)" }}>{draft.platformDefault ? "Uses the operator's default Firecrawl credential." : "Credential configured · value hidden"}</p>
@@ -649,14 +656,15 @@ export function IntegrationsStep({
               />
             )}
 
-            {!draft.existing && provider.authMethod === "microsoft_sign_in" &&
+            {provider.authMethod === "microsoft_sign_in" &&
               (agentId ? (
                 <SharePointSignIn
                   agentId={agentId}
                   provider={provider}
                   draft={draft}
                   onFieldChange={(key, value) => setField(draft.provider, key, value)}
-                  onSignedIn={(patch) => setFields(draft.provider, patch)}
+                  onSignedIn={(patch) => onChange(integrations.map((item) => item.provider === draft.provider
+                    ? { ...item, existing: false, content: { ...item.content, ...patch } } : item))}
                 />
               ) : (
                 <p className="text-[0.75rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>

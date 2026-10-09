@@ -366,7 +366,7 @@ Each tile belongs to one endpoint. If an endpoint fails, only its tiles show "Un
 
 Each of these is an **undercount**, not a verdict on the Agent. The last one is a possible overcount.
 
-- **Only aai-cli and gog are counted.** Work an Agent does through other tools, other CLIs, or its own code is not a Business Action. gog Tool Calls stored before gog classification was deployed are counted only once the operator backfill has run.
+- **Only aai-cli and gog are counted.** Work an Agent does through other tools, other CLIs, or its own code is not a Business Action. gog Tool Calls stored before gog classification was deployed are counted once the deploy's backfill Job has run.
 - **gog failures are easier to hide than aai-cli failures.**
   - gog prints no error envelope, so nothing overrides an exit code that another command hides.
   - Observed on OpenClaw: an Agent appended `; echo "EXIT_CODE:$?"` on its own. That makes gog's exit status invisible to the Tool Call, so the action is `UNKNOWN` rather than `SUCCESS` or `ERROR`.
@@ -391,7 +391,7 @@ Each of these is an **undercount**, not a verdict on the Agent. The last one is 
   - deletes rows the catalogue no longer produces
 - Ordinals stay stable when a path becomes ignored, so the deletes remove exactly the stale rows and a now-ignored write stops being valued.
 - A Tool Call whose classification fails keeps its rows.
-- It is operator-run only (`make backfill-business-actions` locally, or `kubectl exec` in a deployment) and runs unscoped under the RBAC brief's background-work exception.
+- The `agentbarn-api` chart runs it as a Job on every install and upgrade. Locally, `make backfill-business-actions` runs it. It runs unscoped under the RBAC brief's background-work exception.
 
 How to run it is in [`../guidelines/operations.md`](../guidelines/operations.md#business-action-backfill).
 
@@ -418,7 +418,7 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 | Recorded gog command tree (pinned version) | `../../api/tests/fixtures/gog/command-tree.json` |
 | Classifier and status inference | `../../api/domains/business_value/classifier.py` |
 | Table and persistence | `../../api/domains/business_value/models.py`, `../../api/domains/business_value/repository.py`, migration `39ea6a8e2fe4` |
-| Operator backfill | `../../api/domains/business_value/backfill.py`, `make backfill-business-actions` |
+| Backfill | `../../api/domains/business_value/backfill.py`, `../../helm/agentbarn-api/templates/business-action-backfill-job.yaml`, `make backfill-business-actions` |
 | Ingest wiring and metric | `../../api/domains/ingest/service.py`, `../../api/core/metrics.py` (`agentbarn_business_actions`) |
 | Recorded runtime fixtures | `../../api/tests/fixtures/business_actions/` (aai-cli: `hermes.json`, `openclaw.json`; gog: `gog_hermes.json`, `gog_openclaw.json`, redacted) |
 | Value settings tables, DTOs, and bounds | `../../api/domains/business_value/models.py`, migration `1045836844da` |

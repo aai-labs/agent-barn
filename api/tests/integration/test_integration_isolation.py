@@ -12,8 +12,16 @@ from sqlalchemy import inspect
 from sqlmodel import Session, col, select
 
 from api.core.config import Config as AppConfig
-from api.domains.agents.models import Agent, AgentSecret, SecretProvider, SharePointContent, encrypt_content
+from api.domains.agents.models import (
+    Agent,
+    AgentSecret,
+    AgentStatus,
+    SecretProvider,
+    SharePointContent,
+    encrypt_content,
+)
 from api.domains.agents.repository import AgentRepository
+from api.domains.agents.service import AgentService
 from api.domains.credential_gateway.forwarding import UpstreamForwarder
 from api.domains.credential_gateway.models import GatewayToken
 from api.domains.credential_gateway.service import CredentialGatewayService, ForwardRequest, GatewayTokenRejected
@@ -114,6 +122,30 @@ def test_stopped_apply_does_not_start_and_preflight_has_no_runtime_side_effects(
         assert_that(bool(not cluster.create_deployment.called), is_(True))
         assert_that(bool(not cluster.delete_deployment.called), is_(True))
         assert_that(bool(context.injector.get(IntegrationRepository).runtime(context.agent.id) is None), is_(True))
+
+
+@pytest.mark.parametrize("agent_status", [AgentStatus.STOPPED, AgentStatus.RUNNING])
+@pytest.mark.parametrize("restart", [False, True])
+def test_managed_update_refuses_isolation_without_policy_or_runtime_changes(agent_status, restart):
+    with given(_GIVEN) as context:
+        _patch(context, {"secrets": [{"provider": "github", "content": _GITHUB}]})
+        assert_that(_apply(context, False).status_code, equal_to(200))
+        repository = context.injector.get(AgentRepository)
+        agent = repository.get_by_id(context.agent.id)
+        assert agent is not None
+        agent.status = agent_status
+        repository.save(agent)
+        repository.claim_managed_update(agent.id)
+        cluster = context.injector.get(KubernetesClient)
+        cluster.reset_mock()
+        service = context.injector.get(AgentService)
+        with patch.object(service, "_provision_and_start") as provision:
+            response = _apply(context, True, restart=restart)
+        assert_that(response.status_code, equal_to(409), response.text)
+        assert_that(bool(_require_policy(context).isolated), is_(False))
+        provision.assert_not_called()
+        cluster.create_deployment.assert_not_called()
+        cluster.delete_deployment.assert_not_called()
 
 
 def test_running_mode_changes_require_restart_and_rotate_source_bound_tokens():
@@ -888,6 +920,7 @@ def test_each_provider_applies_both_directions_in_each_runtime(runtime, provider
                 )
                 assert isinstance(current_grant, SharePointContent)
                 expected = current_grant.refresh_token
+            assert expected is not None
             assert_that(expected in str(environment), is_(not isolated))
 
 

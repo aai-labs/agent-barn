@@ -19,7 +19,7 @@ from api.domains.integrations.plugins.aai_cli_support import (
     secrets_dir,
 )
 from api.domains.integrations.plugins.base import EgressMode
-from api.domains.integrations.plugins.providers import AAI_CLI
+from api.domains.integrations.plugins.providers import AAI_CLI, SharePointPlugin
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 
 __all__ = [
@@ -68,6 +68,11 @@ PROFILE_SLUGS: dict[SecretProvider, str] = {p.provider: p.aai_cli_slug for p in 
 # build_setup_sh); rewriting the original on every boot would end access 90 days after sign-in.
 SHAREPOINT_REFRESH_TOKEN_SECRET = "microsoft.sharepoint_refresh_token"
 SHAREPOINT_SIGN_IN_ID_ENV = "AAI_SHAREPOINT_SIGN_IN_ID"
+
+# aai-cli secret-store name for the agent's platform key (its ingest key). A ``token_url``
+# profile presents it to fetch short-lived tokens from the API, so aai-cli holds no Microsoft
+# credential of its own. Used by SharePoint's selected-sites mode.
+PLATFORM_KEY_SECRET = "agentfarm.ingest_key"
 
 # Default config dir for OpenClaw (node user). Callers can pass a different home_dir for other
 # runtimes (e.g. Hermes runs as root -> home_dir="/root").
@@ -191,7 +196,7 @@ def build_integrations_policy_md(
         if content is None or plugin is None:
             continue
         line = plugin.aai_cli_policy_line(content)
-        capability = plugin.aai_cli_capability
+        capability = plugin.aai_cli_capability_for(content)
         lines.append(f"{line} — {capability}" if capability else line)
     return "\n".join(lines) + "\n"
 
@@ -202,13 +207,15 @@ def build_config_toml(
     *,
     gateway_base_url: str = "",
     store_dir: str | None = None,
+    sharepoint_token_url: str | None = None,
 ) -> str:
     """Render config.toml with one profile per provider present in ``decrypted``.
 
     Providers are emitted in a fixed (enum) order for deterministic output. Store-based providers
     reference their secret via ``*_secret``; env-based providers via ``*_env`` (token not injected).
     ``store_dir`` places the encrypted secret store (default: beside the config); it must survive
-    restarts for tokens aai-cli rotates itself.
+    restarts for tokens aai-cli rotates itself. ``sharepoint_token_url`` is where a selected-sites
+    SharePoint profile fetches its tokens.
     """
     blocks = [_header(store_dir or secrets_dir(home_dir))]
     for provider in SecretProvider:
@@ -216,7 +223,10 @@ def build_config_toml(
         plugin = _plugin_for(provider)
         if content is None or plugin is None:
             continue
-        if plugin.egress_mode is EgressMode.GATEWAY_PROXY:
+        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            assert isinstance(plugin, SharePointPlugin)
+            blocks.append(plugin.aai_cli_selected_sites_profile_block(sharepoint_token_url))
+        elif plugin.egress_mode is EgressMode.GATEWAY_PROXY:
             blocks.append(
                 plugin.aai_cli_gateway_profile_block(
                     content,
@@ -236,6 +246,7 @@ def build_setup_sh(
     store_dir: str | None = None,
     install_config: bool = True,
     isolated_providers: Iterable[SecretProvider] = (),
+    store_platform_key: bool = False,
 ) -> str:
     """Render the in-pod setup script: install config.toml, then `secrets set` per store secret.
 
@@ -245,6 +256,9 @@ def build_setup_sh(
     aai-cli rotates that token in the store, and a restart must not put the original back.
     Without SharePoint, a token left from an earlier sign-in is removed. ``install_config=False``
     is for an agent with no aai-cli profiles, which still needs that cleanup.
+    ``store_platform_key`` also stores the agent's ingest key, regenerated on every start, for a
+    ``token_url`` profile; stored rather than read from the environment at command time because a
+    runtime need not pass the pod's env to the tools it runs.
     """
     config_dir = f"{home_dir}/.config/aai-cli"
     config_path = f"{config_dir}/config.toml"
@@ -300,6 +314,10 @@ def build_setup_sh(
                 continue
             env = env_var_for(secret_name)
             lines.append(f"printf '%s' \"${env}\" | aai-cli --config {config_path} secrets set {secret_name}")
+    if store_platform_key:
+        lines.append(
+            f"printf '%s' \"$INGEST_API_KEY\" | aai-cli --config {config_path} secrets set {PLATFORM_KEY_SECRET}"
+        )
     marker = f"{store}/{SHAREPOINT_REFRESH_TOKEN_SECRET}.sign-in"
     if SecretProvider.SHAREPOINT in present:
         token_env = env_var_for(SHAREPOINT_REFRESH_TOKEN_SECRET)
@@ -332,9 +350,11 @@ def build_env(
     """
     env: dict[str, str] = {}
     for provider, content in store_decrypted.items():
+        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            continue
         for secret_name, attr in provider_secrets_map.get(provider.value, []):
             env[env_var_for(secret_name)] = getattr(content, attr)
-        if isinstance(content, SharePointContent):
+        if isinstance(content, SharePointContent) and content.refresh_token and content.sign_in_id:
             env[env_var_for(SHAREPOINT_REFRESH_TOKEN_SECRET)] = content.refresh_token
             env[SHAREPOINT_SIGN_IN_ID_ENV] = content.sign_in_id + (
                 f":{content.store_revision}" if content.store_revision else ""

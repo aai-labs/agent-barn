@@ -45,6 +45,13 @@ class Config(BaseSettings):
     restore_point_max_per_agent: int = Field(default=5, ge=1, le=50)
     restore_point_capture_timeout_seconds: int = Field(default=900, ge=60, le=7200)
     restore_point_restore_timeout_seconds: int = Field(default=1800, ge=60, le=7200)
+    # How long a managed update waits for the new pod to report ready before it
+    # rolls back, counted from when the start returns. It has to cover pulling
+    # an image the node has never seen, init, the start script's installs, and
+    # the probe's 30s initial delay. The readiness probe sets no upper bound of
+    # its own: failures only mark the pod unready and probing goes on.
+    agent_update_ready_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    agent_update_ready_poll_seconds: int = Field(default=5, ge=0, le=60)
 
     openclaw_image: str = ""
     hermes_image: str = ""

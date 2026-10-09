@@ -205,7 +205,10 @@ def test_sign_in_stores_the_credential_and_returns_only_who_signed_in() -> None:
 
         with then("only the account and access come back"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
-            assert_that(response.json(), equal_to({"email": SIGNED_IN_EMAIL, "read_only": False}))
+            assert_that(
+                response.json(),
+                equal_to({"email": SIGNED_IN_EMAIL, "read_only": False, "mode": "delegated", "sites": []}),
+            )
             assert_that(response.text, not_(contains_string("rt-from-exchange")))
 
         with then("the code was redeemed with the verifier, on the Teams app's tenant, without a secret"):
@@ -270,7 +273,10 @@ def test_signing_in_again_replaces_the_previous_sign_in() -> None:
             assert isinstance(content, SharePointContent)
             assert_that(content.refresh_token, equal_to("rt-second"))
             assert_that(content.sign_in_id, is_not(equal_to(first_content.sign_in_id)))
-            assert_that(response.json(), equal_to({"email": "other@contoso.com", "read_only": True}))
+            assert_that(
+                response.json(),
+                equal_to({"email": "other@contoso.com", "read_only": True, "mode": "delegated", "sites": []}),
+            )
             assert_that(
                 integrations.runtime(context.agent.id).bindings["sharepoint"]["reconnect_required"], equal_to(False)
             )

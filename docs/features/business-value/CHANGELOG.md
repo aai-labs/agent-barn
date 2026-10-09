@@ -29,6 +29,7 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: the KPIs page's value settings Sheet, which reads, edits, validates, resets, and discards (AF-348).
 - Also delivered: saving value settings from the KPIs page, which refreshes the value figures (AF-348).
 - Also delivered: the AF-348 KPIs dashboard, verified end to end on local k3d against the real API and database.
+- Also delivered: the backfill runs as a Job on every install and upgrade, so Organizations with spend from before classification was deployed get the value that matches it.
 - In transition: nothing.
 - Next: none. Every planned slice of the epic is delivered.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
@@ -38,6 +39,33 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 ### 2026-10-08 — Credential gateway staging merge
 
 - Changed: removed the retired Zoho Mail `email messages list/get` paths from the aai-cli catalogue, matching the credential-gateway branch's shipped skill bundle. These were reads and contributed no saved minutes; the remaining catalogue and drift coverage are preserved.
+
+### 2026-10-08 — Backfill runs on every deploy
+
+Why:
+- Value per dollar counted spend from before classification was deployed but no value for it, so the ratio was too low for existing Organizations. Live on local k3d: deleting an Organization's only Business Action took its ratio from $645.28 to $0.00 per $1, and the backfill restored $645.28.
+- The documented `kubectl exec deploy/agentbarn-api -c api` backfill OOM-killed the API container (512Mi) on local k3d. Client clusters cannot be reached to run it by hand at all.
+
+Changed:
+- `helm/agentbarn-api/templates/business-action-backfill-job.yaml`: a plain Job, `<release>-business-action-backfill-<revision>`, with `worker.resources`, `backoffLimit: 2`, and `businessValue.backfill.activeDeadlineSeconds` (3600). `businessValue.backfill.enabled` defaults to `true`.
+- `BACKFILL_BATCH_SIZE` drops from 500 to 50.
+- `operations.md`, `business-value.md`, and the RBAC brief's background-work exception now describe a deploy-run Job instead of `kubectl exec`.
+
+Verification, local k3d:
+- With a throwaway chart holding one plain Job, `helm upgrade --install --wait --timeout 30s` returned in about 1s under Helm 4.2.1 and Helm 3.18.4, for both a running and a failing Job. So did `helmfile sync --wait` (helmfile 1.7.1). The next upgrade deleted the previous revision's Job and its pod, including one still running.
+- `helm template` renders the Job with the release's image, pull secret, `agentbarn-api` secret, and resources, and renders nothing when `businessValue.backfill.enabled=false`. `helm lint` passes.
+- The rendered Job against the local database:
+  1. After the "KPI note check" Business Action was deleted, `GET /value` returned `value_to_spend_ratio` 0.0.
+  2. The Job logged `scanned=1 recorded=1 removed=0 failed=0`, and the ratio returned to 645.28. The API pod's restart count stayed at 2.
+  3. A second run logged `recorded=0`.
+- Memory, with 600 extra completed `terminal` Tool Calls of about 1MB result each (572MB in total):
+  - At batch size 500, all three attempts were OOMKilled. The Job failed, and the API was unaffected.
+  - At batch size 50, it completed with `scanned=601 failed=0`. Peak RSS was 314MB, against 171MB on the empty table.
+  - The seeded rows were then deleted.
+- `test_business_action_backfill.py`: 10 passed.
+
+Not verified:
+- The size of real stored Tool Call results on staging or production. Batch size 50 stays under 512Mi up to about 2.5MB of result per Tool Call on average, from the figures above.
 
 ### 2026-10-07 — AF-348 — Calculation hints and Value settings modal
 

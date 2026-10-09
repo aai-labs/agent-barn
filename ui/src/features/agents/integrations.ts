@@ -156,7 +156,7 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     label: "SharePoint",
     authMethod: "microsoft_sign_in",
     scopeNote:
-      "Signs in with Microsoft on the agent's Microsoft Teams app. The agent can open the sites and files the signed-in account can open.",
+      "Connects through the agent's Microsoft Teams app. The agent reaches only the sites an administrator grants it, or, if you choose, everything the person who signs in can open.",
     fields: [
       {
         key: "readOnly",

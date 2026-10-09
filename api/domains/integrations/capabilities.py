@@ -46,8 +46,8 @@ ISOLATION_CAPABILITIES = {
         "The stored Firecrawl API key stays outside this Agent; Agent Barn authenticates requests.",
     ),
     SecretProvider.SHAREPOINT: IsolationCapabilities(
-        "This Agent receives the SharePoint refresh token and manages its delegated sign-in.",
-        "This Agent receives expiring Microsoft Graph access tokens only; the SharePoint refresh token stays outside it. Switching does not cancel tokens previously received by this Agent.",
+        "Personal sign-in: this Agent receives the SharePoint refresh token. Selected sites: it uses Agent Barn to fetch app-only tokens; native Teams credentials remain in the Agent.",
+        "SharePoint uses expiring Microsoft Graph access tokens; a personal refresh token stays outside the Agent. Selected sites retains native Teams app credentials in the Agent. Switching does not cancel previously received tokens.",
     ),
 }
 

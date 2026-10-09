@@ -92,6 +92,9 @@ class AaiCliIntegration[ContentT: SecretContent]:
         """
         raise NotImplementedError
 
+    def aai_cli_capability_for(self, content: ContentT) -> str | None:
+        return self.aai_cli_capability
+
     def aai_cli_context_line(self, content: ContentT) -> str:
         """Line for the "Configured Integrations" block in tools_md.
 

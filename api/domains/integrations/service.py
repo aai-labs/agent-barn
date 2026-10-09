@@ -9,7 +9,7 @@ from injector import inject, singleton
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import AgentRead, AgentStatus, IntegrationIsolationUpdate, SecretProvider
 from api.domains.agents.repository import AgentRepository
-from api.domains.agents.service import AgentService
+from api.domains.agents.service import AgentService, _refuse_during_managed_update
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import resolve_actor_identity
 from api.domains.integrations.repository import IntegrationRepository
@@ -41,6 +41,7 @@ class IntegrationIsolationService:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
             current = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_SECRET_MANAGE)
             self.authorization.require_action_for_visible(context, current, PermissionKey.AGENT_UPDATE)
+            _refuse_during_managed_update(current)
             if self.agents.restore_points.has_blocking_operation(agent_id):
                 raise HTTPException(409, "An Agent restore operation is in progress")
             if self.agent_repository.get_secret(agent_id, provider) is None and (

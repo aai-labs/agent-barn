@@ -7,7 +7,7 @@ import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
 import { MessageCircleWarning, Plus } from "lucide-react";
 import { canAgent, currentModelOf, formatModelName } from "../utils";
 import { ModelSourceBadge } from "./model-source-badge";
-import { PendingModelNote } from "./pending-model-note";
+import { PendingModelBanner } from "./pending-model-note";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
@@ -19,7 +19,7 @@ import { AgentAvatar } from "./agent-avatar";
 import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
-import { AgentUpdateBanner } from "./agent-update-banner";
+import { AgentUpdateBanner, AgentUpdateOutcomeNote } from "./agent-update-banner";
 import { StatusLine } from "./status-line";
 import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
@@ -175,13 +175,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   {agent.name}
                 </h1>
                 {currentModelOf(agent) && (
-                  <>
-                    <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
-                      <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
-                      <ModelSourceBadge source={agent.modelSource} />
-                    </div>
-                    <PendingModelNote pendingModel={agent.pendingModel} />
-                  </>
+                  <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
+                    <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
+                    <ModelSourceBadge source={agent.modelSource} />
+                  </div>
                 )}
                 <AgentMetaBadges
                   agent={agent}
@@ -208,7 +205,17 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               </div>
             </div>
 
-            {canManageLifecycle && <AgentUpdateBanner agent={agent} />}
+            <PendingModelBanner agent={agent} canRestart={canManageLifecycle} />
+
+            {canManageLifecycle && (
+              <>
+                <AgentUpdateBanner agent={agent} />
+                <AgentUpdateOutcomeNote
+                  agent={agent}
+                  restorePointsHref={`${homeHref}/agents/${agent.id}/configuration?section=restore`}
+                />
+              </>
+            )}
 
             {/* The classified provisioning failure comes off the Agent itself, so
                 it renders on first paint and does not depend on health polling —

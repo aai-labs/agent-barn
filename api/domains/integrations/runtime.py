@@ -21,13 +21,19 @@ from api.domains.agents.gog_artifacts import (
     build_gog_shim_install_sh,
     build_gog_shim_sh,
 )
-from api.domains.agents.models import FirecrawlContent, GoogleWorkspaceContent, SecretContent, SecretProvider
+from api.domains.agents.models import (
+    FirecrawlContent,
+    GoogleWorkspaceContent,
+    SecretContent,
+    SecretProvider,
+    SharePointContent,
+)
 from api.domains.credential_gateway.models import gateway_token_env_var
 from api.domains.integrations.capabilities import ISOLATION_CAPABILITIES
 from api.domains.integrations.gog_direct import build_direct_gog_env, build_direct_gog_setup_sh
 from api.domains.integrations.plugins.aai_cli_support import AaiCliIntegration, secrets_dir
 from api.domains.integrations.plugins.base import EgressMode, RuntimeArtifacts
-from api.domains.integrations.plugins.providers import AAI_CLI, GOG, NO_TOOL
+from api.domains.integrations.plugins.providers import AAI_CLI, GOG, NO_TOOL, SharePointPlugin
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 
 
@@ -56,6 +62,7 @@ class RuntimeContext:
     gateway_base_url: str = ""
     gateway_tokens: Mapping[SecretProvider, str] = field(default_factory=dict, repr=False)
     store_dir: str | None = None
+    sharepoint_token_url: str | None = None
 
 
 class RuntimeToolAdapter(Protocol):
@@ -74,6 +81,7 @@ class AaiCliAdapter:
         ]
         direct: dict[SecretProvider, SecretContent] = {}
         decrypted: dict[SecretProvider, SecretContent] = {}
+        selected_sites = False
         for binding in bindings:
             plugin = INTEGRATION_PLUGINS.require(binding.provider)
             if not isinstance(plugin, AaiCliIntegration):
@@ -84,8 +92,13 @@ class AaiCliAdapter:
                 # Missing scoped Atlassian metadata must fail, not silently skip a profile.
                 if plugin.egress_mode == EgressMode.GATEWAY_PROXY:
                     plugin.upstream_base_url(binding.content)
-                blocks.append(cli_plugin.aai_cli_profile_block(binding.content))
-                direct[binding.provider] = binding.content
+                if isinstance(binding.content, SharePointContent) and binding.content.mode == "selected_sites":
+                    assert isinstance(plugin, SharePointPlugin)
+                    blocks.append(plugin.aai_cli_selected_sites_profile_block(context.sharepoint_token_url))
+                    selected_sites = True
+                else:
+                    blocks.append(cli_plugin.aai_cli_profile_block(binding.content))
+                    direct[binding.provider] = binding.content
             else:
                 blocks.append(
                     cli_plugin.aai_cli_gateway_profile_block(
@@ -104,6 +117,7 @@ class AaiCliAdapter:
                 context.home_dir,
                 store_dir=context.store_dir,
                 install_config=bool(bindings),
+                store_platform_key=selected_sites,
                 isolated_providers=[b.provider for b in bindings if b.mode != EgressMode.DIRECT],
             )
         }
