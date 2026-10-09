@@ -155,6 +155,16 @@ Representative sources:
 
 ## Runtime plugin tests
 
+Direct Google credential import is tested against the real pinned gog binary in
+both selected runtime images, with networking disabled. The contracts are
+`../../api/runtime_tests/test_hermes_gog_direct.py` and
+`../../api/runtime_tests/test_openclaw_gog_direct.py`; they run through
+`make test-api-runtime` with the corresponding image variable. They prove the
+generated client/token setup imports a grant that gog can decrypt from its
+file keyring, without contacting a live Google account.
+
+SharePoint contracts run the pinned patched aai-cli in both real images with external networking disabled. A loopback stub verifies POST token requests, dedicated-token failure without environment fallback, typed files/Excel auth, sign-in-marker continuity, failed handoff preservation, mixed provider cleanup and latest-grant handback. The API matrix covers both directions for every provider/runtime, legacy migration, source ownership, failure/retry/restore permissions, durable broker rotation/cache and reconnect. These tests use fixture grants only. Run `make test-api-runtime RUNTIME=hermes` with `HERMES_TEST_IMAGE`, or the OpenClaw equivalent with `OPENCLAW_TEST_IMAGE`. The image must be rebuilt after the pinned CLI/patch changes; an old local tag cannot prove this contract.
+
 Agent Memory gateway tests replay sanitized Hermes and OpenClaw request captures
 from `../../api/tests/fixtures/agent_memory/` through a real HTTP listener. They
 cover the outbound bank, forced tags, document/operation namespaces, lifecycle
@@ -217,8 +227,8 @@ hooks directly. Shared setup lives in
   `../../hermes-base/test-image.sh`, invoked by
   `../../.github/workflows/hermes-base.yml`. Both that workflow and
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
-  selects the matching workflow when base-image, builder, startup,
-  telemetry-plugin, or matching runtime-fixture paths change.
+  selects the matching workflow using the path triggers documented in
+  [CONTRIBUTING.md](../../CONTRIBUTING.md#open-a-pull-request).
 - `../../hermes-base/test-image.sh` and `../../openclaw-base/test-healthz-metrics.sh`
   run each healthz script in its pinned image under `--memory 1g --cpus 0.5`, as the
   image's own user, and check the CPU and memory it reports. Whether the cgroup files

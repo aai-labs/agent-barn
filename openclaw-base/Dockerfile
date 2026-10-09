@@ -20,7 +20,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN git clone --depth 1 https://github.com/aai-labs/aai-cli.git repo && \
+ARG AAI_CLI_COMMIT=fca39caf0f6f8ddac5a803218f274336fcf6c848
+COPY aai-token-url.patch /tmp/aai-token-url.patch
+RUN git init repo && \
+    git -C repo remote add origin https://github.com/aai-labs/aai-cli.git && \
+    git -C repo fetch --depth 1 origin "$AAI_CLI_COMMIT" && \
+    git -C repo checkout --detach FETCH_HEAD && \
+    git -C repo apply /tmp/aai-token-url.patch && \
     cargo install --path repo --root /out --locked
 
 FROM node:22-bookworm-slim
