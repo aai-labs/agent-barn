@@ -10,6 +10,9 @@ from hamcrest import (
 )
 
 from api.core.config import Config
+from api.domains.events.catalog import ORGANIZATION_CREATED, PRODUCT_ANALYTICS_HANDLER
+from api.domains.events.models import OutboxMessage
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.models import User
@@ -243,3 +246,27 @@ def test_deleted_organization_releases_creator_quota():
 
         with then("only non-deleted organizations count toward the limit"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_creating_an_organization_records_organization_created_by_its_creator():
+    with given(
+        [
+            *_GIVEN,
+            there_is_a_user(email="event-creator@example.com", organization_id=None),
+            there_is_an_access_token_for_user(),
+        ]
+    ) as context:
+        response = context.client.post(_SELF_SERVICE_ORGS, json={"name": "Event Org"}, headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        organization_id = UUID(response.json()["id"])
+        events = [
+            message
+            for message in context.postgres_delegate.find_all(OutboxMessage)
+            if message.event_name == ORGANIZATION_CREATED
+        ]
+        assert_that(len(events), equal_to(1))
+        assert_that(events[0].organization_id, equal_to(organization_id))
+        assert_that(events[0].actor, equal_to({"type": "USER", "id": str(context.user.id), "organization_id": None}))
+        deliveries = context.injector.get(OutboxMessageRepository).list_deliveries_for_event(events[0].event_id)
+        assert_that([delivery.handler_name for delivery in deliveries], equal_to([PRODUCT_ANALYTICS_HANDLER]))

@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException, status
 from hamcrest import (
     assert_that,
+    contains_inanyorder,
     contains_string,
     equal_to,
     greater_than,
@@ -42,6 +43,7 @@ from api.domains.conversations.models import MessageDirection
 from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
+    AGENT_LIFECYCLE_EMAIL_HANDLER,
     AGENT_SECRET_ADDED,
     AGENT_SECRET_REMOVED,
     AGENT_SECRET_UPDATED,
@@ -51,6 +53,8 @@ from api.domains.events.catalog import (
     AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
     AGENT_TEMPLATE_OVERRIDE_SELECTED,
     AGENT_UPDATED,
+    PRODUCT_ANALYTICS_HANDLER,
+    SECURITY_AUDIT_HANDLER,
 )
 from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.events.processor import EventDeliveryProcessor
@@ -1251,11 +1255,15 @@ def test_start_agent_emits_started_domain_event_and_delivery():
             deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
                 started_events[0].event_id
             )
-            assert_that(len(deliveries), equal_to(1))
+            assert_that(
+                [delivery.handler_name for delivery in deliveries],
+                contains_inanyorder(AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER),
+            )
             # Delivery is always persisted PENDING; the immediate enqueue attempt right
             # after is best-effort (falls back to background reconciliation on failure),
             # so whether it's already ENQUEUED here depends on Redis being reachable.
-            assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+            for delivery in deliveries:
+                assert_that(delivery.status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
 
 
 def test_start_agent_wires_telemetry_push_into_the_secret():
@@ -1550,11 +1558,15 @@ def test_stop_agent_emits_stopped_domain_event_and_delivery():
             deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
                 stopped_events[0].event_id
             )
-            assert_that(len(deliveries), equal_to(1))
+            assert_that(
+                [delivery.handler_name for delivery in deliveries],
+                contains_inanyorder(AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER),
+            )
             # Delivery is always persisted PENDING; the immediate enqueue attempt right
             # after is best-effort (falls back to background reconciliation on failure),
             # so whether it's already ENQUEUED here depends on Redis being reachable.
-            assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+            for delivery in deliveries:
+                assert_that(delivery.status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
 
 
 def test_update_agent_emits_updated_domain_event_with_field_changes():
@@ -1698,7 +1710,11 @@ def test_agent_updated_event_projects_to_durable_security_audit_record():
             outbox_repository = context.injector.get(OutboxMessageRepository)
             messages = _outbox_messages(context)
             updated_event = next(m for m in messages if m.event_name == AGENT_UPDATED)
-            delivery = outbox_repository.list_deliveries_for_event(updated_event.event_id)[0]
+            delivery = next(
+                delivery
+                for delivery in outbox_repository.list_deliveries_for_event(updated_event.event_id)
+                if delivery.handler_name == SECURITY_AUDIT_HANDLER
+            )
             outbox_repository.mark_delivery_enqueued(delivery.id)
             processed = context.injector.get(EventDeliveryProcessor).process(delivery.id)
 
