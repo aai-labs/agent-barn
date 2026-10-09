@@ -44,6 +44,7 @@ OPENCLAW_WORKSPACE_DIR = "/home/node/.openclaw/workspace"
 INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
+OPENCLAW_PLUGINS_SH: str = (_SCRIPTS / "plugins.sh").read_text()
 MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 LEGACY_WORKSPACE_MIGRATION_SH: str = (
     (_SCRIPTS / "legacy-workspace-migration.sh").read_text().replace("@OPENCLAW_WORKSPACE_DIR@", OPENCLAW_WORKSPACE_DIR)
@@ -353,6 +354,7 @@ def build_config_map(
         data["start.sh"] = START_SH
         data["memory-gateway-ready.py"] = MEMORY_GATEWAY_READY_PY
         data["legacy-workspace-migration.sh"] = LEGACY_WORKSPACE_MIGRATION_SH
+        data["openclaw-plugins.sh"] = OPENCLAW_PLUGINS_SH
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
         data["telemetry-push-package.json"] = TELEMETRY_PUSH_PACKAGE_JSON
         data["telemetry-push-plugin.json"] = TELEMETRY_PUSH_PLUGIN_JSON

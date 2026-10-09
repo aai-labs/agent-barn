@@ -15,6 +15,7 @@ from api.domains.agents.builders import (
 from api.domains.agents.builders.openclaw import (
     LEGACY_WORKSPACE_MIGRATION_SH,
     OPENCLAW_GATEWAY_PORT,
+    OPENCLAW_PLUGINS_SH,
     OPENCLAW_WORKSPACE_DIR,
 )
 from api.domains.communications.models import ConversationLocation
@@ -82,6 +83,14 @@ def test_config_map_ships_the_legacy_workspace_migration_script() -> None:
     )
 
     assert config_map.data["legacy-workspace-migration.sh"] == LEGACY_WORKSPACE_MIGRATION_SH
+    assert config_map.data["openclaw-plugins.sh"] == OPENCLAW_PLUGINS_SH
+
+
+def test_startup_sources_the_plugin_installer_before_installing_plugins() -> None:
+    """install_plugin, with its repair of half-installed plugins, lives in openclaw-plugins.sh."""
+    sourced = START_SH.index(". /app/config/openclaw-plugins.sh")
+
+    assert START_SH.index("OPENCLAW_VERSION=") < sourced < START_SH.index("install_plugin @openclaw/firecrawl-plugin")
 
 
 def test_gateway_config_has_no_command_approval_support() -> None:
