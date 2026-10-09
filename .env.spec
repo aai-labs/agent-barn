@@ -43,9 +43,9 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
-# Optional: product analytics (PostHog). Off unless set to true; leave it off locally
+# Product analytics (PostHog) defaults to on. Explicitly disable it locally
 # so development data never reaches the Agent Barn PostHog project.
-# ANALYTICS_ENABLED=false
+ANALYTICS_ENABLED=false
 # ANALYTICS_INCLUDE_USER_DETAILS=false
 # INSTALLATION_NAME=
 

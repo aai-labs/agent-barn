@@ -42,11 +42,10 @@ cloudflareAccountId: ""
 cloudflareApiToken: ""
 senderEmail: ""
 
-# Product analytics (PostHog). Off unless set: release bundles and AAI Labs production
-# deploys turn it on, so development installs never report. User email and name are sent
+# Product analytics (PostHog). On by default; set false to opt out. User email and name are sent
 # only when analyticsIncludeUserDetails is true. installationName labels this install in
 # PostHog; blank falls back to the webAppUrl host. See docs/features/product-analytics.md.
-analyticsEnabled: false
+analyticsEnabled: true
 analyticsIncludeUserDetails: false
 installationName: ""
 

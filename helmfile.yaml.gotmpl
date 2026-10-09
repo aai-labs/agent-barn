@@ -216,7 +216,7 @@ releases:
       - name: senderEmail
         value: {{ env "SENDER_EMAIL" | default "" | quote }}
       - name: analyticsEnabled
-        value: {{ env "ANALYTICS_ENABLED" | default "false" | quote }}
+        value: {{ env "ANALYTICS_ENABLED" | default "true" | quote }}
       - name: analyticsIncludeUserDetails
         value: {{ env "ANALYTICS_INCLUDE_USER_DETAILS" | default "false" | quote }}
       - name: installationName

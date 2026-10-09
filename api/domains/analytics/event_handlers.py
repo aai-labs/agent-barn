@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any, ClassVar
 from uuid import UUID, uuid5
 
@@ -81,6 +82,7 @@ class ProductAnalyticsHandler:
     user_repository: UserRepository
     posthog_client: PostHogClient
     _identified_installation_name: str | None = field(default=None, init=False)
+    _installation_naming_lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
 
     name: ClassVar[str] = PRODUCT_ANALYTICS_HANDLER
     supported_events: ClassVar[Sequence[SupportedEvent]] = tuple(
@@ -101,10 +103,8 @@ class ProductAnalyticsHandler:
             )
             return
 
-        installation_name = self.config.installation_display_name
-        identify = installation_name != self._identified_installation_name
         try:
-            self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify))
+            self._send_messages(event, user)
         except RetryablePostHogException as exc:
             if context.attempt_count < MAX_DELIVERY_ATTEMPTS:
                 raise RetryableEventHandlerError(str(exc)) from exc
@@ -117,9 +117,17 @@ class ProductAnalyticsHandler:
             )
         except TerminalPostHogException as exc:
             raise TerminalEventHandlerError(str(exc)) from exc
-        else:
-            if identify:
+
+    def _send_messages(self, event: DomainEventEnvelope, user: User) -> None:
+        # The singleton is shared by worker threads. Hold the lock through a
+        # naming send so another delivery cannot name the same Installation too.
+        with self._installation_naming_lock:
+            installation_name = self.config.installation_display_name
+            if installation_name != self._identified_installation_name:
+                self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify=True))
                 self._identified_installation_name = installation_name
+                return
+        self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify=False))
 
     def _resolve_user(self, event: DomainEventEnvelope, organization_id: UUID | None) -> User | None:
         actor_id = _as_uuid(event.actor.id)

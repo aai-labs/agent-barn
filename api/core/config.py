@@ -162,7 +162,7 @@ class Config(BaseSettings):
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
 
-    analytics_enabled: bool = False
+    analytics_enabled: bool = True
     analytics_include_user_details: bool = False
     analytics_posthog_host: str = DEFAULT_POSTHOG_HOST
     analytics_posthog_project_token: str = DEFAULT_POSTHOG_PROJECT_TOKEN

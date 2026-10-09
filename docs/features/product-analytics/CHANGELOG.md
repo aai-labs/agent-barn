@@ -8,8 +8,8 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 
 - Delivered: this change log, and the Installation identity. The `installation` table (migration `5a1e7c3b9d20`) holds one generated id, and `InstallationRepository.get_id()` in `api/domains/analytics/` returns it. If the row is missing, `get_id()` recreates it.
 - Also delivered: the analytics configuration in `api/core/config.py`.
-  - `ANALYTICS_ENABLED` is off by default. A blank value counts as off.
-  - `ANALYTICS_INCLUDE_USER_DETAILS` controls whether user email and name are sent.
+  - `ANALYTICS_ENABLED` is on by default. Explicit false opts out; a blank value counts as off in Config.
+  - `ANALYTICS_INCLUDE_USER_DETAILS` defaults to false for privacy. Our production and staging workflows explicitly enable it.
   - `ANALYTICS_POSTHOG_HOST` defaults to PostHog Cloud EU.
   - `ANALYTICS_POSTHOG_PROJECT_TOKEN` defaults to the Agent Barn project token. Committing it is an approved exception to the AGENTS.md token rule, because PostHog project tokens are public by design.
   - `INSTALLATION_NAME` falls back to the `WEB_APP_URL` host.
@@ -28,9 +28,9 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - **When PostHog fails:** an unreachable PostHog is retried on attempts 1 and 2, then dropped with a warning on attempt 3. A rejected batch dead-letters.
 - Also delivered: the nine slice-1 events now list `product_analytics.posthog` alongside their existing handlers. The behaviour contract is [`../product-analytics.md`](../product-analytics.md).
 - Also delivered: deployment wiring.
-  - The API chart renders `ANALYTICS_ENABLED`, which defaults to false in the chart and the Helmfile, and `ANALYTICS_INCLUDE_USER_DETAILS`. It renders `INSTALLATION_NAME` only when set.
-  - `deploy.yml` enables analytics and user details on `main` only, so staging is off. `deploy-public.yml` enables both.
-  - `.env.deploy.spec` ships analytics off, and `release-bundle.yml` turns it on in customer bundles.
+  - The API chart renders `ANALYTICS_ENABLED`, which defaults to true in the chart and the Helmfile, and `ANALYTICS_INCLUDE_USER_DETAILS`. It renders `INSTALLATION_NAME` only when set.
+  - `deploy.yml` enables analytics on `main` only, so staging sends nothing by default. User details are explicitly enabled on both `main` and `staging`. `deploy-public.yml` enables both.
+  - `.env.deploy.spec` and customer release bundles ship analytics on. The local `.env.spec` explicitly disables it.
   - The opt-out is documented in `operations.md` and the README.
 - Also delivered: local end-to-end verification against a recording stub (see the 2026-10-06 entry). A one-off check against the real project from a local stack, labelled `local-dev-test` at the user's request, showed the events arriving in Live Events.
 - In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle.
@@ -41,6 +41,20 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-09 — AF-357 — Synchronize Installation naming
+
+- Delivered: a per-handler lock protects the Installation naming check, batch send, and success update. Concurrent first deliveries send one group-identification capture; captures after successful naming can still send concurrently. Failed sends leave naming eligible for the next delivery.
+- Changed: the analytics handler, concurrent regression coverage, and the product analytics contract.
+- Verified before the fix: the concurrent regression failed at the naming-count assertion (expected one, received two), while both business captures were recorded.
+- Verified after the fix: all 73 focused analytics tests pass, including the concurrent regression and retry-after-failure coverage. Inverting the naming condition makes the concurrent test fail. `make check-api check-migrations` and diff whitespace checks pass.
+
+### 2026-10-09 — AF-357 — Enable analytics by default
+
+- Delivered: Config, Helm, Helmfile, and the deployment environment spec default analytics to on. Explicit false still opts out. Staging, tests, and the local development environment spec explicitly disable it.
+- Privacy: user email and name remain off by default through `ANALYTICS_INCLUDE_USER_DETAILS`. Production and staging workflows explicitly enable user details; staging analytics remains disabled. The deployment spec documents the privacy default.
+- Changed: analytics configuration and default/opt-out tests, deployment defaults, README, operations guidance, and the analytics feature contract.
+- Verified: 55 focused configuration, client, handler, and message-count tests pass; `make check-api check-migrations` and diff whitespace checks pass. Helm render checks were not rerun because Helm is unavailable in this environment.
 
 ### 2026-10-07 — AF-357 — organization.updated uses a User actor
 

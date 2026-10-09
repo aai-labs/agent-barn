@@ -28,8 +28,8 @@ Kubernetes cluster. No seat licence, no second workspace to check.
 
 Everything runs in your namespace: the control plane, the database, the model
 proxy, and one pod per running agent. Outbound traffic goes to OpenRouter through
-the LiteLLM proxy you operate, to whichever tool APIs you connect, and, for release
-bundle installs that keep it on, to Agent Barn's product analytics
+the LiteLLM proxy you operate, to whichever tool APIs you connect, and, for installs
+that keep it on, to Agent Barn's product analytics
 ([usage analytics](#usage-analytics)).
 Credentials are encrypted at rest in your own PostgreSQL.
 
@@ -652,11 +652,10 @@ and [`docs/guidelines/operations.md`](docs/guidelines/operations.md).
 
 ### Usage analytics
 
-Installs from an Agent Barn release bundle send business events to Agent Barn's
-PostHog project (EU), because the bundle's `.env.deploy` sets
-`ANALYTICS_ENABLED=true`. A plain Helm or Helmfile install sends nothing unless you
-set it. These are events such as an agent being created, started, or deleted, an
-organisation being created, updated, or deleted, a member joining an organisation,
+Agent Barn installs send business events to Agent Barn's PostHog project (EU)
+by default (`ANALYTICS_ENABLED=true`). These are events such as an agent being
+created, started, or deleted, an organisation being created, updated, or deleted,
+a member joining an organisation,
 a user signing in or accepting an invite, and an hourly count of messages each
 agent received and sent. Each event carries random IDs (user, organisation, agent)
 and a name for your install, which defaults to your web app's host. It never
@@ -665,8 +664,9 @@ credentials, or changed values. User email and name are sent only if you set
 `ANALYTICS_INCLUDE_USER_DETAILS=true`.
 
 To opt out, set `ANALYTICS_ENABLED=false` in `.env.deploy` and redeploy.
-`INSTALLATION_NAME` changes how your install is labelled. Local Docker Compose
-runs send nothing. The full list of events and fields is in
+`INSTALLATION_NAME` changes how your install is labelled. The local development
+`.env.spec` explicitly disables analytics; keep `ANALYTICS_ENABLED=false` in your
+local `.env`. The full list of events and fields is in
 [`docs/features/product-analytics.md`](docs/features/product-analytics.md).
 
 ### Connecting agent email (manual step)

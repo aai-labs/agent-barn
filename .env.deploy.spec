@@ -89,10 +89,10 @@ SENDER_EMAIL=
 
 # ── Product analytics (PostHog) ──────────────────────────────────────────────
 # Sends business events (agent and membership changes) to Agent Barn's PostHog.
-# Off here so development deploys send nothing; release bundles ship it on.
+# On by default for deployment installs.
 # Set false to opt out. See docs/features/product-analytics.md for what is sent.
-ANALYTICS_ENABLED=false
-# Sends user email and name with events. Leave false unless you operate this install.
+ANALYTICS_ENABLED=true
+# Privacy: user email and name are omitted by default. Our prod/staging workflows enable them.
 # ANALYTICS_INCLUDE_USER_DETAILS=false
 # Label for this install in PostHog. Blank uses the WEB_APP_URL host.
 # INSTALLATION_NAME=

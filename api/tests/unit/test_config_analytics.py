@@ -19,12 +19,14 @@ def _no_analytics_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
-def test_analytics_is_off_unless_switched_on():
-    assert_that(_config().is_analytics_enabled, equal_to(False))
+def test_analytics_is_on_by_default():
+    config = _config()
+
+    assert_that((config.is_analytics_enabled, config.analytics_include_user_details), equal_to((True, False)))
 
 
-def test_analytics_is_on_when_switched_on_with_the_default_token():
-    assert_that(_config(analytics_enabled=True).is_analytics_enabled, equal_to(True))
+def test_analytics_can_be_explicitly_disabled():
+    assert_that(_config(analytics_enabled=False).is_analytics_enabled, equal_to(False))
 
 
 @pytest.mark.parametrize("token", ["", "   "])
@@ -40,7 +42,7 @@ def test_a_blank_switch_falls_back_to_off(monkeypatch, key):
 
     config = _config()
 
-    assert_that((config.analytics_enabled, config.analytics_include_user_details), equal_to((False, False)))
+    assert_that(getattr(config, key.lower()), equal_to(False))
 
 
 def test_the_installation_name_is_used_when_set():

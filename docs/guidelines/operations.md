@@ -360,13 +360,13 @@ talks to the provider; `EmailService` above it is transport-agnostic.
 Business events go to the Agent Barn PostHog project (EU) through the `product_analytics.posthog` Event Handler. What is sent is defined in [`../features/product-analytics.md`](../features/product-analytics.md).
 
 - **`ANALYTICS_ENABLED`** flows through `helmfile.yaml.gotmpl` into the API chart's Secret. Every API process reads that Secret, the worker included.
-  - It is off unless it is explicitly set to `true`. The chart, the Helmfile and `Config` all default to off, and a blank value counts as off. Docker Compose, tests and developer installs send nothing.
+  - The chart, the Helmfile and `Config` default to on. Set `ANALYTICS_ENABLED=false` to opt out. A blank value counts as off in `Config`; Helmfile treats a blank as unset and uses its on default. The local development `.env.spec` and tests explicitly set false; keep it false in local development environments.
 - **Where it is on, and where it is off:**
   - `deploy.yml` sets it to `true` on `main` and `false` on `staging`.
   - `deploy-public.yml` sets it to `true`.
-  - `.env.deploy.spec` ships `false`. `release-bundle.yml` rewrites it to `true`, so customer bundles report.
-  - A customer who builds `.env.deploy` by hand from the spec, rather than using the bundle, stays off until they set `true`.
-- **`ANALYTICS_INCLUDE_USER_DETAILS`** adds user email and name as PostHog person properties. It is `true` only in our production deploys (`deploy.yml` on `main`, `deploy-public.yml`) and defaults to `false` everywhere else.
+  - `.env.deploy.spec` ships `true`, as do customer release bundles.
+  - Plain Helm and Helmfile installs also report by default.
+- **`ANALYTICS_INCLUDE_USER_DETAILS`** adds user email and name as PostHog person properties. It defaults to `false` to omit personal information from customer and local installs. Our production and staging workflows explicitly set it to `true` (`deploy.yml` on `main` and `staging`, and `deploy-public.yml`). Staging keeps `ANALYTICS_ENABLED=false`, so it still sends nothing unless analytics is separately enabled.
 - **`INSTALLATION_NAME`** labels the install's PostHog group. Unset, it falls back to the `WEB_APP_URL` host, which is what our deploys use.
 - **`ANALYTICS_POSTHOG_HOST`** and **`ANALYTICS_POSTHOG_PROJECT_TOKEN`** default to the EU host and the Agent Barn project token committed in `api/core/config.py`. Override them only to point an install at a test receiver. The project token is write-only and public by design; never commit a personal API key (`phx_`).
 - **Message counts CronJob.**

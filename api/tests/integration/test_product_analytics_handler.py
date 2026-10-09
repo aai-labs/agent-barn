@@ -1,4 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Barrier, Event, Lock
+from unittest.mock import patch
 from uuid import UUID, uuid4, uuid7
 
 import pytest
@@ -383,6 +386,53 @@ def test_the_installation_is_identified_once_per_process():
         first, second = posthog.batches
         assert_that([message["event"] for message in first], equal_to([AGENT_CREATED, "$groupidentify"]))
         assert_that([message["event"] for message in second], equal_to([AGENT_CREATED]))
+
+
+def test_concurrent_first_deliveries_identify_the_installation_only_once():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        handler = context.injector.get(ProductAnalyticsHandler)
+        events = [_agent_created(context), _agent_created(context)]
+        ready = Barrier(2)
+        second_send = Event()
+        first_send_started = Event()
+        send_lock = Lock()
+        send_batch = handler.posthog_client.send_batch
+        resolve_user = handler._resolve_user
+
+        def record_batch(messages):
+            with send_lock:
+                first_send = not first_send_started.is_set()
+                first_send_started.set()
+            if first_send:
+                # Keep the first capture in flight while the other delivery tries
+                # to send. With synchronization it waits until this send finishes.
+                second_send.wait(timeout=1)
+            else:
+                second_send.set()
+            send_batch(messages)
+
+        def resolve_when_ready(event, organization_id):
+            user = resolve_user(event, organization_id)
+            ready.wait(timeout=5)
+            return user
+
+        def deliver(event):
+            handler.handle(event, _delivery(event))
+
+        with (
+            patch.object(handler, "_resolve_user", side_effect=resolve_when_ready),
+            patch.object(handler.posthog_client, "send_batch", side_effect=record_batch),
+            ThreadPoolExecutor(max_workers=2) as pool,
+        ):
+            list(pool.map(deliver, events))
+
+        captures = [message for batch in posthog.batches for message in batch]
+        assert_that(
+            sorted(message["uuid"] for message in captures if message["event"] == AGENT_CREATED),
+            equal_to(sorted(str(event.event_id) for event in events)),
+        )
+        assert_that(sum(message["event"] == "$groupidentify" for message in captures), equal_to(1))
 
 
 def test_the_installation_is_identified_again_after_a_failed_send():

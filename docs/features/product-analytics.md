@@ -10,7 +10,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 ## Invariants
 
-- **On switch.** Analytics is off unless `ANALYTICS_ENABLED` is true and a project token is set. A blank `ANALYTICS_ENABLED` counts as off. When it is off, the handler completes every delivery without sending anything. Helm installs default it to off; release bundles and AAI Labs production deploys turn it on. Per-deployment defaults and the opt-out are in [`../guidelines/operations.md`](../guidelines/operations.md#product-analytics).
+- **On switch.** Analytics is on by default when a project token is set; `ANALYTICS_ENABLED=false` opts out. A blank `ANALYTICS_ENABLED` counts as off in Config; Helmfile treats blank as unset and uses the on default. When it is off, the handler completes every delivery without sending anything. Config, Helm, Helmfile, and deployment installs default it to on. Staging and the local development environment spec explicitly turn it off. Per-deployment defaults and the opt-out are in [`../guidelines/operations.md`](../guidelines/operations.md#product-analytics).
 - **Who an event is attributed to.**
   - Only events with a human actor (Membership or User) are sent. System and Runtime actors are skipped. The one exception is hourly message counts (see [Message counts](#message-counts)), which have no person and are attributed to the Installation.
   - `distinct_id` is the acting user's UUID.
@@ -20,13 +20,13 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 - **What an event carries.**
   - Only allowlisted identifiers and safe fields (see [Events](#events)).
   - Names, display snapshots, and changed values are never sent.
-  - User email and name are sent as person properties only when `ANALYTICS_INCLUDE_USER_DETAILS` is true.
+  - User email and name are sent as person properties only when `ANALYTICS_INCLUDE_USER_DETAILS` is true. It defaults to false for privacy; our production and staging workflows explicitly enable it.
 - **Groups.** Every event belongs to the `installation` group, keyed by the Installation id. It is named from `INSTALLATION_NAME`, or the `WEB_APP_URL` host when that is unset.
   - Organization-scoped events also belong to the `organization` group, keyed by the Organization id, and carry `organization_id`.
   - Platform-scoped events (`organization_id` is null) carry neither. They are sent only for a User Actor, because a Membership Actor cannot be resolved without an Organization.
 - **Labels and privacy flags.** Every event carries `source: agentbarn-api` and `$lib: agentbarn-api`, so app events can be separated from website events. It also carries `$geoip_disable: true`.
 - **Redelivery.** A redelivered event sends the same capture ids: the capture's `uuid` is the `event_id` and its timestamp is `occurred_at`. PostHog de-duplicates matching events eventually, not immediately.
-- **Installation naming.** Each worker process names the Installation group once, with a `$groupidentify` in the first batch it sends successfully. It names it again only if the name changes. A failed or dropped send does not count, so the next batch retries the naming.
+- **Installation naming.** Each worker process names the Installation group once, with a `$groupidentify` in the first batch it sends successfully. It names it again only if the name changes. The naming check, send, and successful update are synchronized across worker threads; captures for an already-named Installation can send concurrently. A failed or dropped send does not count, so the next batch retries the naming.
 - **Failure handling.**
   - An unreachable PostHog (transport error, 408, 429 or 5xx) is retried on delivery attempts 1 and 2, then dropped with a warning on attempt 3.
   - Any other rejection dead-letters the delivery.
