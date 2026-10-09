@@ -6,6 +6,7 @@ from injector import inject, singleton
 from sqlmodel import Session, col, select
 
 from api.domains.agent_settings.models import (
+    DEFAULT_AGENT_LLM_BUDGET_SETTING,
     DEFAULT_MODEL_SETTING,
     OrganizationAgentSettings,
 )
@@ -47,7 +48,59 @@ class AgentSettingsRepository:
         subject_display: str,
         correlation_id: UUID | None = None,
     ) -> AgentSettingsChangeResult:
-        """Persists the default model and stages its change Event atomically.
+        """Persists the default model and stages its change Event atomically."""
+        return self._set_with_event(
+            organization_id,
+            DEFAULT_MODEL_SETTING,
+            default_model,
+            previous=previous,
+            inheriting_agent_count=inheriting_agent_count,
+            actor=actor,
+            actor_display=actor_display,
+            subject_display=subject_display,
+            correlation_id=correlation_id,
+        )
+
+    def set_default_agent_llm_budget_with_event(
+        self,
+        organization_id: UUID,
+        amount_usd: float | None,
+        *,
+        previous: float | None,
+        inheriting_agent_count: int,
+        actor: ActorIdentity,
+        actor_display: str,
+        subject_display: str,
+        reason: str | None = None,
+    ) -> AgentSettingsChangeResult:
+        """Persists the default Agent spend limit and stages its change Event atomically."""
+        return self._set_with_event(
+            organization_id,
+            DEFAULT_AGENT_LLM_BUDGET_SETTING,
+            amount_usd,
+            previous=previous,
+            inheriting_agent_count=inheriting_agent_count,
+            actor=actor,
+            actor_display=actor_display,
+            subject_display=subject_display,
+            reason=reason,
+        )
+
+    def _set_with_event(
+        self,
+        organization_id: UUID,
+        setting: str,
+        value: str | float | None,
+        *,
+        previous: str | float | None,
+        inheriting_agent_count: int,
+        actor: ActorIdentity,
+        actor_display: str,
+        subject_display: str,
+        reason: str | None = None,
+        correlation_id: UUID | None = None,
+    ) -> AgentSettingsChangeResult:
+        """One setting column and its change Event, atomically.
 
         The settings row, the Outbox Message and its Event Deliveries share one
         session and one commit, so a settings change can never be visible without
@@ -62,7 +115,7 @@ class AgentSettingsRepository:
             ).first()
             if settings is None:
                 settings = OrganizationAgentSettings(organization_id=organization_id)
-            settings.default_model = default_model
+            setattr(settings, setting, value)
             settings.updated_at = datetime.now(UTC)
             session.add(settings)
             session.flush()
@@ -81,10 +134,11 @@ class AgentSettingsRepository:
                 correlation_id=correlation_id or uuid4(),
                 payload={
                     "organization_id": organization_id,
-                    "setting": DEFAULT_MODEL_SETTING,
+                    "setting": setting,
                     "previous": previous,
-                    "current": default_model,
+                    "current": value,
                     "inheriting_agent_count": inheriting_agent_count,
+                    "reason": reason,
                     "actor_display": actor_display,
                     "subject_display": subject_display,
                 },

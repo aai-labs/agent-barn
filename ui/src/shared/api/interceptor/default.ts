@@ -2,6 +2,8 @@ import { camelizeKeys, decamelizeKeys } from "humps";
 import { handleError } from "../error/error-handler";
 import { AxiosResponse, InternalAxiosRequestConfig } from "axios";
 
+const UPPER_SNAKE_KEY = /^[A-Z0-9_]+$/;
+
 function safeCamelizeKeys(obj: any) {
   return camelizeKeys(obj, (key, convert) => {
     if (key.includes("-")) return key;
@@ -11,7 +13,7 @@ function safeCamelizeKeys(obj: any) {
 
 function safeDecamelizeKeys(obj: any) {
   return decamelizeKeys(obj, (key, convert) => {
-    if (key.includes("-")) return key;
+    if (key.includes("-") || UPPER_SNAKE_KEY.test(key)) return key;
     return convert(key);
   });
 }

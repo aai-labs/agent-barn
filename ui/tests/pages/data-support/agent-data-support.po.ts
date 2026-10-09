@@ -112,9 +112,45 @@ export const mockAgent = {
   skills: [],
   configured_platform_keys: ["slack", "discord"],
   allowed_actions: mockAgentAllowedActions,
+  creator: { id: MOCK_MEMBER_USER_ID, full_name: "Tommy", email: "tommy@example.com" },
+  last_message_at: "2026-05-14T09:14:00Z",
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
 };
+
+export const mockAgentLlmBudget = {
+  limit_usd: 25,
+  own_limit_usd: null,
+  source: "default",
+  default_limit_usd: 25,
+  organization_limit_usd: 100,
+  window: "30d",
+  state: "ok",
+  spend_usd: 7.5,
+  renews_at: "2026-10-01T00:00:00Z",
+  can_manage: true,
+};
+
+export const mockAgentLlmBudgetRows = [
+  {
+    agent_id: "33333333-3333-4333-8333-333333333333",
+    agent_name: "Support Bot",
+    limit_usd: 25,
+    own_limit_usd: null,
+    source: "default",
+    state: "ok",
+    spend_usd: 7.5,
+  },
+  {
+    agent_id: "44444444-4444-4444-8444-000000000002",
+    agent_name: "Research Bot",
+    limit_usd: 60,
+    own_limit_usd: 60,
+    source: "agent",
+    state: "exhausted",
+    spend_usd: 60.2,
+  },
+];
 
 // --- Activity ---------------------------------------------------------------
 //
@@ -618,6 +654,64 @@ export class AgentDataSupport {
     );
   }
 
+  /** Serves the Agent's spend limit and captures what a PUT sent. The PUT answers
+   *  with `saved`, or the GET body adjusted to the requested amount. */
+  async interceptAgentLlmBudget({
+    agentId = MOCK_AGENT_ID,
+    budget,
+    saveStatus = 200,
+    saveDetail = "Unable to save the spend limit",
+  }: {
+    agentId?: string;
+    budget?: Record<string, unknown>;
+    saveStatus?: number;
+    saveDetail?: string;
+  } = {}) {
+    const requests: unknown[] = [];
+    let current: Record<string, unknown> = { ...mockAgentLlmBudget, ...(budget ?? {}) };
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/llm-budget`, async (route) => {
+      const method = route.request().method();
+      if (method === "PUT") {
+        const body = route.request().postDataJSON() as { budget_usd: number | null };
+        requests.push(body);
+        if (saveStatus >= 400) {
+          await route.fulfill({
+            status: saveStatus,
+            contentType: "application/json",
+            body: JSON.stringify({ detail: saveDetail }),
+          });
+          return;
+        }
+        const own = body.budget_usd;
+        current = {
+          ...current,
+          own_limit_usd: own,
+          limit_usd: own ?? current.default_limit_usd,
+          source: own == null ? "default" : "agent",
+        };
+      } else if (method !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) });
+    });
+    return requests;
+  }
+
+  async interceptAgentLlmBudgets({ rows }: { rows?: unknown[] } = {}) {
+    await this.page.route("**/api/v1/organizations/*/agents/llm-budgets", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(rows ?? mockAgentLlmBudgetRows),
+      });
+    });
+  }
+
   async interceptGetAgentConfigurationRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,
@@ -774,17 +868,20 @@ export class AgentDataSupport {
     status?: number;
     body?: unknown;
   } = {}) {
+    const requests = { count: 0 };
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/healthz`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();
         return;
       }
+      requests.count += 1;
       await route.fulfill({
         status,
         contentType: "application/json",
         body: JSON.stringify(body ?? { status: "ok" }),
       });
     });
+    return requests;
   }
 
   async interceptGetConversationChannelsRequest({

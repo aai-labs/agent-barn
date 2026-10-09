@@ -7,6 +7,14 @@ from kubernetes import client
 from api.domains.communications.models import ConversationLocation
 
 from .common import _labels, _resource_name, _setting_ids
+from .memory import (
+    MEMORY_COMMAND,
+    MEMORY_TOOL_INSTRUCTIONS,
+    MEMORY_WRITE_TOOL,
+    hermes_memory_settings,
+    memory_command_mount,
+    memory_command_volume,
+)
 
 # Matches OpenClaw, so limits.memory (100Gi quota) never binds before
 # requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
@@ -29,6 +37,8 @@ _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
+HERMES_MEMORY_SETUP_PY: str = (_SCRIPTS / "memory-setup.py").read_text()
+MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
 TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
@@ -36,6 +46,7 @@ TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
 
 
@@ -67,7 +78,6 @@ _HERMES_AUXILIARY_TASKS = (
     "background_review",
 )
 
-_MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 
 
@@ -150,11 +160,15 @@ def build_hermes_gateway_config(
     telegram_settings: dict | None = None,
     runtime_teams: bool = False,
     verbose_mode: bool = False,
+    memory_enabled: bool = False,
 ) -> dict:
-    plugins = ["telemetry-push", "agentbarn-messaging"]
+    plugins = ["telemetry-push"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams:
         plugins.append("agentbarn-observer")
     config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
+    config["memory"]["provider"] = "hindsight" if memory_enabled else ""
+    if memory_enabled:
+        config["memory"]["hindsight"] = hermes_memory_settings()
     if native_slack:
         config["slack"] = {
             "reply_in_thread": True,
@@ -229,11 +243,6 @@ def native_slack_env(
         "SLACK_REQUIRE_MENTION": "true",
         "SLACK_THREAD_REQUIRE_MENTION": "true" if settings.get("thread_mention_policy") != "start_only" else "false",
         "SLACK_DISABLE_DMS": "true" if settings.get("dm_policy", "off") == "off" else "false",
-        # Hermes delivers scheduled results itself, to their origin or the home
-        # channel, instead of bridging them through the Communications gateway.
-        # ponytail: disables the bridge for every origin, so Web Chat cron jobs go
-        # undelivered on native agents; route per origin once transport is per Connection.
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     if settings.get("group_policy", "allowlist") == "allowlist":
         env["SLACK_ALLOWED_CHANNELS"] = ",".join(settings.get("channel_ids") or [])
@@ -260,8 +269,6 @@ def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
     env = {
         "DISCORD_BOT_TOKEN": credentials["bot_token"],
         "DISCORD_ALLOW_ALL_USERS": "true" if settings.get("allow_all_users") else "false",
-        # Native Hermes delivers scheduled results to their origin or home.
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     for settings_key, env_key in (
         ("allowed_channel_ids", "DISCORD_ALLOWED_CHANNELS"),
@@ -289,8 +296,6 @@ def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
     env = {
         "TELEGRAM_BOT_TOKEN": credentials["bot_token"],
         "TELEGRAM_REQUIRE_MENTION": "true",
-        # Native Hermes delivers scheduled results to their origin.
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     if settings.get("group_policy", "allowlist") == "open":
         env["TELEGRAM_GROUP_ALLOWED_CHATS"] = "*"
@@ -322,7 +327,6 @@ def runtime_teams_env(settings: dict, credentials: dict) -> dict[str, str]:
         "TEAMS_TENANT_ID": credentials["tenant_id"],
         "TEAMS_ALLOW_ALL_USERS": "true",
         "TEAMS_PORT": "3978",
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     if home_channel_id := settings.get("home_channel_id"):
         env["TEAMS_HOME_CHANNEL"] = str(home_channel_id)
@@ -347,13 +351,16 @@ def build_hermes_config_map(
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
     skills_json: str | None = None,
+    memory_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
+        "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn-memory": MEMORY_COMMAND,
         "TOOLS.md": tools_md,
-        "AGENTS.md": agents_md,
+        "AGENTS.md": agents_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "HEARTBEAT.md": heartbeat_md,
         "hermes-config.yaml": yaml.dump(hermes_config, default_flow_style=False, sort_keys=False),
@@ -363,11 +370,12 @@ def build_hermes_config_map(
         "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
+        "memory-setup.py": HERMES_MEMORY_SETUP_PY,
+        "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
-        "agentbarn_message.py": (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text(),
-        "hermes-messaging.py": (_MESSAGE_SCRIPTS / "hermes-messaging.py").read_text(),
+        "retire-messaging.py": RETIRE_MESSAGING_PY,
         "boot-run.py": HERMES_BOOT_RUN_PY,
     }
     if aai_cli_config_toml is not None:
@@ -454,6 +462,7 @@ def build_hermes_deployment(
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
+                    automount_service_account_token=False,
                     image_pull_secrets=(
                         [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
                     ),
@@ -467,6 +476,10 @@ def build_hermes_deployment(
                                 "mkdir -p /opt/data/workspace && chown -R hermes:hermes /opt/data",
                             ],
                             security_context=client.V1SecurityContext(run_as_user=0),
+                            # A pod is charged the larger of its containers added up and its biggest
+                            # init container. With no block here the LimitRange fills one in, and it
+                            # is bigger than the agent's, so every agent would cost more than AGENT_RESOURCES.
+                            resources=AGENT_RESOURCES,
                             volume_mounts=[
                                 client.V1VolumeMount(name="data", mount_path="/opt/data"),
                             ],
@@ -509,6 +522,7 @@ def build_hermes_deployment(
                             ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
+                                memory_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -532,6 +546,7 @@ def build_hermes_deployment(
                         )
                     ],
                     volumes=[
+                        memory_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

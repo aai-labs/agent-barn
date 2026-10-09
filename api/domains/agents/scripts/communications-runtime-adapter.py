@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent / "messaging"))
 import json
 import os
 import re
@@ -13,8 +9,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-
-from agentbarn_message import bind_execution, unbind_execution  # ty: ignore[unresolved-import]
 
 COMMUNICATIONS_URL = os.environ["COMMUNICATIONS_URL"].rstrip("/")
 COMMUNICATIONS_API_KEY = os.environ["COMMUNICATIONS_API_KEY"]
@@ -198,11 +192,54 @@ def post_reply(delivery_id: str, text: str, *, suffix: str = "", approval: dict 
     )
 
 
+# Written by this container's LLM proxy when it refuses a model call for a reason the
+# runtime will not report faithfully (see healthz-server). Read when a turn fails, so
+# the person chatting is told the actual reason rather than the runtime's version.
+_LLM_ERROR_MARKER = os.environ.get("AGENTBARN_LLM_ERROR_MARKER", "/tmp/agentbarn-llm-terminal-error.json")
+_TURN_STARTED: dict[str, float] = {}
+
+
+def _mark_turn_started(delivery_id: str) -> None:
+    _TURN_STARTED[delivery_id] = time.time()
+
+
+def _terminal_llm_error(delivery_id: str) -> str | None:
+    """The code the proxy recorded during this delivery's turn, if any. A record from
+    before the turn began belongs to an earlier one and is ignored."""
+    started = _TURN_STARTED.get(delivery_id)
+    if started is None:
+        return None
+    try:
+        with open(_LLM_ERROR_MARKER) as handle:
+            recorded = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(recorded, dict):
+        return None
+    try:
+        recorded_at = float(recorded.get("at") or 0)
+    except (TypeError, ValueError):
+        # Anything the file can hold must leave the turn's own error standing.
+        return None
+    if recorded_at < started:
+        return None
+    code = recorded.get("code")
+    return code if isinstance(code, str) and code else None
+
+
+def _failure(delivery_id: str, error: Exception) -> dict:
+    return {
+        "succeeded": False,
+        "error_code": _terminal_llm_error(delivery_id) or type(error).__name__,
+        "error_message": str(error)[:500],
+    }
+
+
 def complete_delivery(delivery_id: str, *, succeeded: bool, error: Exception | None = None) -> None:
     completion: dict = {"succeeded": succeeded}
     if error is not None:
-        completion["error_code"] = type(error).__name__
-        completion["error_message"] = str(error)[:500]
+        completion = {**_failure(delivery_id, error), "succeeded": succeeded}
+    _TURN_STARTED.pop(delivery_id, None)
     http_request(
         "POST",
         f"{COMMUNICATIONS_URL}/agents/{AGENT_ID}/deliveries/{delivery_id}/complete",
@@ -265,7 +302,7 @@ def run_delivery_chat_completions(delivery: dict) -> None:
     envelope = delivery["envelope"]
     session_key = session_key_for(delivery)
     IN_FLIGHT.begin(delivery_id, session_key)
-    bind_execution(session_key, delivery)
+    _mark_turn_started(delivery_id)
     try:
         result = http_request(
             "POST",
@@ -290,11 +327,8 @@ def run_delivery_chat_completions(delivery: dict) -> None:
             post_reply(delivery_id, reply)
             completion = {"succeeded": True}
     except Exception as exc:
-        completion = {
-            "succeeded": False,
-            "error_code": type(exc).__name__,
-            "error_message": str(exc)[:500],
-        }
+        completion = _failure(delivery_id, exc)
+    _TURN_STARTED.pop(delivery_id, None)
     try:
         http_request(
             "POST",
@@ -304,7 +338,6 @@ def run_delivery_chat_completions(delivery: dict) -> None:
         )
     finally:
         IN_FLIGHT.clear(delivery_id)
-        unbind_execution(session_key)
 
 
 def iter_sse_events(response):
@@ -437,7 +470,7 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
         daemon=True,
     )
     heartbeat.start()
-    bind_execution(session_key, delivery)
+    _mark_turn_started(delivery_id)
     try:
         started = http_request(
             "POST",
@@ -456,7 +489,6 @@ def _run_and_drain(delivery: dict, session_key: str) -> None:
             _PENDING_APPROVALS.pop(session_key, None)
         complete_delivery(delivery_id, succeeded=False, error=exc)
     finally:
-        unbind_execution(session_key)
         heartbeat_stopped.set()
         with _ACTIVE_RUNS_LOCK:
             active = _ACTIVE_RUNS.get(session_key)

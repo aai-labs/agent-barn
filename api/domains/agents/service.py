@@ -1,9 +1,11 @@
 import datetime as dt
 import fnmatch
+import hashlib
 import json
 import logging
 import secrets
-from collections.abc import Collection, Iterator, Mapping
+import time
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -52,6 +54,7 @@ from api.domains.agents.builders import (
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentProvisioningPrecondition
 from api.domains.agents.gog_artifacts import build_gog_env, build_gog_policy_md, build_gog_setup_sh
+from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     Agent,
@@ -59,15 +62,18 @@ from api.domains.agents.models import (
     AgentConfigurationRead,
     AgentConfigurationVersionRead,
     AgentCreate,
+    AgentCreatorRead,
     AgentFilter,
     AgentHealthRead,
     AgentLogHistoryRead,
     AgentLogSnapshot,
     AgentLogsRead,
+    AgentManagedUpdateRead,
     AgentNameSuggestionRead,
     AgentOverrideAuthorRead,
     AgentProvisioningErrorRead,
     AgentRead,
+    AgentRestorePoint,
     AgentRuntimeDiagnosticsRead,
     AgentSecret,
     AgentSecretCreate,
@@ -92,10 +98,14 @@ from api.domains.agents.models import (
     FirecrawlContent,
     GoogleWorkspaceContent,
     JiraContent,
+    ManagedUpdateOutcome,
+    RestorePointStatus,
     SecretProvider,
+    SharePointContent,
     SkillVersionPin,
     decrypt_content,
     encrypt_content,
+    managed_update_in_flight,
     validate_content,
 )
 from api.domains.agents.naming import choose_first_name
@@ -115,8 +125,8 @@ from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
     build_file_delivery_policy_md,
-    build_messaging_policy_md,
     build_role_scope_policy_md,
+    build_scheduled_runs_policy_md,
 )
 from api.domains.agents.selection import (
     SelectionValidator,
@@ -124,10 +134,13 @@ from api.domains.agents.selection import (
     ensure_verbose_mode_supported,
     is_model_allowed,
 )
+from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
+from api.domains.conversations.repository import ConversationRepository
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -137,7 +150,13 @@ from api.domains.events.catalog import (
 )
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
-from api.domains.restore_points.service import RestorePointService
+from api.domains.restore_points.constants import RESTORE_POINT_POD_TERMINATION_POLL_SECONDS
+from api.domains.restore_points.models import AgentRestorePointCreate, AgentRestorePointRestore
+from api.domains.restore_points.service import (
+    MANAGED_UPDATE_IN_FLIGHT_DETAIL,
+    STILL_SHUTTING_DOWN_DETAIL,
+    RestorePointService,
+)
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
@@ -180,6 +199,11 @@ RESTORE_POINT_IN_FLIGHT_DETAIL = (
     "A restore point capture or restore is still running for this Agent. Wait for it to finish."
 )
 
+MANAGED_UPDATE_BACKUP_LABEL = "Automatic backup before managed update"
+# How long a managed update waits for the stopped pod to let go of the volume.
+# Capture and restore wait only the pod's default 30s grace period themselves.
+MANAGED_UPDATE_VOLUME_RELEASE_TIMEOUT_SECONDS = 120
+
 _PROVISIONING_FAILURE_STATUS: dict[AgentProvisioningErrorCategory, int] = {
     AgentProvisioningErrorCategory.QUOTA_EXHAUSTED: status.HTTP_503_SERVICE_UNAVAILABLE,
     AgentProvisioningErrorCategory.CLUSTER_PERMISSION_DENIED: status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -209,6 +233,22 @@ def _stored_provisioning_error(agent: Agent) -> NormalizedAgentProvisioningError
 def _provisioning_error_read(agent: Agent) -> AgentProvisioningErrorRead | None:
     normalized = _stored_provisioning_error(agent)
     return _provisioning_error_dto(normalized) if normalized is not None else None
+
+
+def _refuse_during_managed_update(agent: Agent) -> None:
+    if managed_update_in_flight(agent):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
+
+
+def _managed_update_failure_text(exc: Exception) -> str:
+    """Why a managed update's backup step failed, in words safe to show anyone.
+
+    An HTTPException carries our own copy (cluster text is already sanitized by
+    then). Anything else may quote the cluster, so it stays in the logs.
+    """
+    if isinstance(exc, HTTPException) and isinstance(exc.detail, str):
+        return exc.detail
+    return "The backup step failed unexpectedly. The API logs have the details."
 
 
 @dataclass(frozen=True)
@@ -274,8 +314,10 @@ class AgentService:
     organization_lookup: OrganizationLookupService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
+    agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
+    conversation_repository: ConversationRepository
     plugins: PlatformPluginRegistry
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -453,7 +495,7 @@ class AgentService:
     def _build_agent_read(
         self,
         agent: Agent,
-        secrets: list[AgentSecret] | None = None,
+        secrets: Sequence[AgentSecret | AgentSecretRead] | None = None,
         skills: list[PinnedSkill] | None = None,
         required_skill_map: Mapping[UUID, str | None | tuple[int, str | None]] | None = None,
         allowed_actions: list[PermissionKey] | None = None,
@@ -465,19 +507,21 @@ class AgentService:
         source_update_skill_ids: set[UUID] | None = None,
         effective_default_model: str = "",
         configured_platform_keys: list[str] | None = None,
+        creator: AgentCreatorRead | None = None,
+        last_message_at: dt.datetime | None = None,
+        shared_credential_names: Mapping[UUID, str] | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
-        shared_creds_by_id = {}
-        if shared_ids:
-            shared_creds = self.shared_credential_repository.get_by_ids_and_org(shared_ids, agent.organization_id)
-            shared_creds_by_id = {c.id: c for c in shared_creds}
+        credential_names = shared_credential_names if shared_credential_names is not None else {}
+        if shared_credential_names is None and shared_ids:
+            credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+                shared_ids, agent.organization_id
+            )
         secrets_read = []
         for secret in secrets or []:
             read = AgentSecretRead.model_validate(secret)
-            if secret.shared_credential_id and secret.shared_credential_id in shared_creds_by_id:
-                sc = shared_creds_by_id[secret.shared_credential_id]
-                read.shared_credential_id = sc.id
-                read.shared_credential_name = sc.name
+            if secret.shared_credential_id and secret.shared_credential_id in credential_names:
+                read.shared_credential_name = credential_names[secret.shared_credential_id]
             secrets_read.append(read)
         assigned_ids = {pinned.skill.id for pinned in (skills or [])}
         req_ids = effective_required_ids(required_skill_map or {}, assigned_ids)
@@ -530,10 +574,22 @@ class AgentService:
             # A running pod that started on something else is the only case a surface
             # must not report the resolved value as current.
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
+            # The recorded digest names the image the pod actually started on, so an
+            # Agent pinned behind the platform pin (rolled back) reports an update too.
             update_available=(
                 agent.status == AgentStatus.RUNNING
                 and agent.running_config_digest
                 != agent_runtime_config_digest(self.config.openclaw_image, self.config.hermes_image)
+            ),
+            update_in_progress=managed_update_in_flight(agent),
+            last_managed_update=(
+                AgentManagedUpdateRead(
+                    outcome=agent.managed_update_outcome,
+                    restore_point_id=agent.managed_update_restore_point_id,
+                    failure_reason=agent.managed_update_failure_reason,
+                )
+                if agent.managed_update_outcome is not None
+                else None
             ),
             # OpenClaw ignores approval_mode; report the effective AUTO default
             # instead of a stored value from before this became enforced, so
@@ -542,12 +598,15 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            memory_enabled=agent.memory_enabled,
             last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
             skills=skills_read,
             configured_platform_keys=configured_platform_keys or [],
-            native_platform_keys=sorted(self.config.native_platform_keys),
+            native_platform_keys=sorted(NATIVE_PLATFORM_KEYS),
             allowed_actions=allowed_actions or [],
+            creator=creator,
+            last_message_at=last_message_at,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
@@ -573,6 +632,10 @@ class AgentService:
             template_key = template.template_key
         read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
+        creators = self.repository.get_creators_for_agents([agent.id], read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            [agent.id], self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
         return self._build_agent_read(
             agent,
             secrets,
@@ -581,6 +644,8 @@ class AgentService:
             allowed_actions,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(agent.organization_id),
             configured_platform_keys=configured_platform_keys.get(agent.id, []),
+            creator=creators.get(agent.id),
+            last_message_at=message_times.get(agent.id),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
@@ -810,9 +875,17 @@ class AgentService:
         allocated_litellm_key: str | None = None
         try:
             if self.config.litellm_base_url and self.config.litellm_secret_name:
+                # A new Agent follows the default, so its key is capped from the first
+                # call — and a team created here carries the Organization's limit.
+                key_budget = self.agent_budgets.key_budget_for_new_agent(agent.organization_id)
                 try:
                     allocated_litellm_key = self.litellm.generate_key(
-                        str(agent.id), agent.name, str(agent.organization_id)
+                        str(agent.id),
+                        agent.name,
+                        str(agent.organization_id),
+                        max_budget=key_budget.agent_limit_usd,
+                        budget_duration=key_budget.window,
+                        team_budget=key_budget.organization_limit_usd,
                     )
                 except LiteLLMError as exc:
                     raise HTTPException(
@@ -854,6 +927,7 @@ class AgentService:
             template_key=template.template_key,
             template_version=template.version,
             effective_default_model=self.agent_settings_lookup.resolve_default_model(org_id),
+            creator=AgentCreatorRead.model_validate(context.user),
         )
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
@@ -1446,7 +1520,22 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, agents)
 
         agent_ids = [a.id for a in agents]
-        secrets_by_agent = self.repository.get_secrets_for_agents(agent_ids)
+        creators = self.repository.get_creators_for_agents(agent_ids, read_scope)
+        message_times = self.conversation_repository.latest_message_times_for_agents(
+            agent_ids, self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        )
+        secrets_by_agent = self.repository.get_secret_summaries_for_agents(agent_ids, read_scope)
+        shared_credential_ids = list(
+            {
+                secret.shared_credential_id
+                for secrets in secrets_by_agent.values()
+                for secret in secrets
+                if secret.shared_credential_id is not None
+            }
+        )
+        shared_credential_names = self.shared_credential_repository.get_names_by_ids_and_org(
+            shared_credential_ids, read_scope.organization_id
+        )
         skills_by_agent = self.skill_repository.get_skills_for_agents_with_versions(agent_ids)
         assigned_skill_ids = list(
             {pinned.skill.id for agent_skills in skills_by_agent.values() for pinned in agent_skills}
@@ -1480,6 +1569,9 @@ class AgentService:
                 source_update_skill_ids=source_update_skill_ids,
                 effective_default_model=effective_default_model,
                 configured_platform_keys=configured_platform_keys.get(agent.id, []),
+                creator=creators.get(agent.id),
+                last_message_at=message_times.get(agent.id),
+                shared_credential_names=shared_credential_names,
             )
             for agent in agents
         ]
@@ -1503,6 +1595,9 @@ class AgentService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
+
+        if SecretProvider.SHAREPOINT in (data.removed_secret_providers or []):
+            self._refuse_forgetting_granted_sites(agent.id)
 
         if "approval_mode" in updated:
             self._ensure_approval_mode_supported(agent.agent_type, updated["approval_mode"])
@@ -1760,6 +1855,7 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            _refuse_during_managed_update(current)
             if self.restore_points.has_blocking_operation(current.id):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -1774,7 +1870,7 @@ class AgentService:
         platform_key: str,
     ) -> _NativeConnectionConfiguration | None:
         """Load an enabled Connection configured for native runtime transport."""
-        if platform_key not in self.config.native_platform_keys:
+        if platform_key not in NATIVE_PLATFORM_KEYS:
             return None
         connection = self.connection_repository.get_active_by_platform_key(agent_id, platform_key)
         if connection is None or not connection.enabled:
@@ -1794,7 +1890,7 @@ class AgentService:
         if target:
             plugin = self.plugins.require("slack")
             try:
-                # Same resolution and allowlist policy as gateway-delivered sends.
+                # Resolve the native home target through the Connection recipient policy.
                 home_channel = plugin.resolve_outbound_target(
                     plugin.settings_model.model_validate(connection.settings),
                     plugin.credentials_model.model_validate(connection.credentials),
@@ -1840,6 +1936,14 @@ class AgentService:
             ),
             detail=_provisioning_error_dto(normalized).model_dump(mode="json"),
         )
+
+    def _platform_pin_for(self, agent: Agent) -> str:
+        """The platform-wide runtime image the Agent's flavor is pinned to."""
+        return self.config.hermes_image if agent.agent_type == AgentType.HERMES else self.config.openclaw_image
+
+    def _effective_runtime_image(self, agent: Agent) -> str:
+        """The image this Agent starts on: its own pin, else the platform pin."""
+        return agent.pinned_runtime_image or self._platform_pin_for(agent)
 
     def _provision_and_start(self, agent: Agent) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
@@ -1922,6 +2026,7 @@ class AgentService:
                 telegram_settings=native_telegram.settings if native_telegram else None,
                 runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,
+                memory_enabled=agent.memory_enabled,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -1946,7 +2051,7 @@ class AgentService:
                 agent.id,
                 org_id,
                 ns,
-                self.config.hermes_image,
+                self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
             )
         else:
@@ -1964,7 +2069,9 @@ class AgentService:
             if runtime_teams is not None:
                 native_credentials["msteams"] = runtime_teams.credentials
                 native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
-            overlay = build_openclaw_gateway_config(effective_model, llm_proxy_url, native_channels)
+            overlay = build_openclaw_gateway_config(
+                effective_model, llm_proxy_url, native_channels, memory_enabled=agent.memory_enabled
+            )
             hermes_cfg = None
             secret = build_secret_runtime(
                 agent.id,
@@ -1980,7 +2087,7 @@ class AgentService:
                 agent.id,
                 org_id,
                 ns,
-                self.config.openclaw_image,
+                self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
             )
 
@@ -2030,9 +2137,14 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
-        # SharePoint's refresh token goes through the store too, written only for a new sign-in.
+        # A delegated SharePoint refresh token goes through the store too, written only for a new
+        # sign-in. Selected sites keeps no token: the pod fetches one with its platform key.
+        sharepoint = decrypted.get(SecretProvider.SHAREPOINT)
+        selected_sites = isinstance(sharepoint, SharePointContent) and sharepoint.mode == "selected_sites"
         store = {
-            p: c for p, c in decrypted.items() if p.value in provider_secrets_map or p == SecretProvider.SHAREPOINT
+            p: c
+            for p, c in decrypted.items()
+            if p.value in provider_secrets_map or (p == SecretProvider.SHAREPOINT and not selected_sites)
         }
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         # The store must survive restarts: aai-cli rotates delegated Microsoft tokens in it.
@@ -2043,11 +2155,22 @@ class AgentService:
         # a config.toml holding nothing but the store header.
         has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
         aai_config_toml = (
-            build_config_toml(decrypted, home_dir=aai_home, store_dir=aai_store_dir) if has_aai_profiles else None
+            build_config_toml(
+                decrypted,
+                home_dir=aai_home,
+                store_dir=aai_store_dir,
+                sharepoint_token_url=f"{self.config.ingest_base_url}/agents/{agent.id}/integrations/sharepoint/token",
+            )
+            if has_aai_profiles
+            else None
         )
         # Always mounted, even without profiles, so a removed SharePoint sign-in is cleaned up.
         aai_setup_sh = build_setup_sh(
-            list(store), home_dir=aai_home, store_dir=aai_store_dir, install_config=has_aai_profiles
+            list(store),
+            home_dir=aai_home,
+            store_dir=aai_store_dir,
+            install_config=has_aai_profiles,
+            store_platform_key=selected_sites,
         )
         if store:
             secret.string_data.update(build_env(store))
@@ -2104,6 +2227,9 @@ class AgentService:
 
         ingest_key = secrets.token_urlsafe(32)
         communication_key = secrets.token_urlsafe(32)
+        memory_key = secrets.token_urlsafe(32) if agent.memory_enabled else None
+        if memory_key:
+            secret.string_data.update({"MEMORY_URL": self.config.memory_base_url, "MEMORY_API_KEY": memory_key})
         secret.string_data.update(
             {
                 "AGENT_ID": str(agent.id),
@@ -2176,7 +2302,7 @@ class AgentService:
             )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
-            + build_messaging_policy_md()
+            + build_scheduled_runs_policy_md()
         )
 
         if agent.agent_type == AgentType.HERMES:
@@ -2190,6 +2316,7 @@ class AgentService:
                 user_md=rendered.user_md,
                 tools_md=tools_md,
                 agents_md=agents_md,
+                memory_enabled=agent.memory_enabled,
                 boot_md=rendered.boot_md,
                 heartbeat_md=rendered.heartbeat_md,
                 hermes_config=hermes_cfg,
@@ -2208,6 +2335,7 @@ class AgentService:
                 user_md=rendered.user_md,
                 tools_md=tools_md,
                 agents_md=agents_md,
+                memory_enabled=agent.memory_enabled,
                 boot_md=rendered.boot_md,
                 bootstrap_md=rendered.bootstrap_md,
                 heartbeat_md=rendered.heartbeat_md,
@@ -2239,11 +2367,18 @@ class AgentService:
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
-        agent.running_config_digest = agent_runtime_config_digest(
-            self.config.openclaw_image,
-            self.config.hermes_image,
-        )
+        if agent.agent_type == AgentType.HERMES:
+            agent.running_config_digest = agent_runtime_config_digest(
+                self.config.openclaw_image,
+                self._effective_runtime_image(agent),
+            )
+        else:
+            agent.running_config_digest = agent_runtime_config_digest(
+                self._effective_runtime_image(agent),
+                self.config.hermes_image,
+            )
         agent.ingest_key_encrypted = encrypt_token(ingest_key, self.config.agent_token_encryption_key)
+        agent.memory_key_hash = hashlib.sha256(memory_key.encode()).hexdigest() if memory_key else None
         agent.communication_key_encrypted = encrypt_token(
             communication_key,
             self.config.agent_token_encryption_key,
@@ -2388,6 +2523,7 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            _refuse_during_managed_update(current)
             stopped = self._stop_agent_unchecked(current, actor)
         return self._get_agent_read(stopped, context)
 
@@ -2421,6 +2557,299 @@ class AgentService:
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
         return result.agent
 
+    # --- Managed updates (MDP-47 / AF-201) ----------------------------------
+
+    def managed_update(self, agent_id: UUID, context: CurrentUserContext, schedule: Callable[..., None]) -> AgentRead:
+        """One-click runtime update: capture, start on the new image, roll back on failure.
+
+        The orchestration runs as a scheduled background task; this call only
+        checks authority and preconditions, and marks the update as running so
+        every other lifecycle and restore point action is refused until it ends.
+        `schedule` is `BackgroundTasks.add_task`, passed in by the route so this
+        service keeps no FastAPI request-scoped dependency.
+        """
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+        # The rollback replays the recorded configuration, which restore authorizes
+        # as an Agent update. Settle that here: refused in the background task, it
+        # would only show up as an Agent left in ERROR.
+        self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_UPDATE)
+        if agent.status != AgentStatus.RUNNING:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A managed update applies to a running Agent.",
+            )
+        if self.restore_points.has_blocking_operation(agent.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
+        if not self.repository.claim_managed_update(agent.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
+        schedule(self._run_managed_update, agent.id, context)
+        # Re-read so the response already says the update is in progress.
+        return self._get_agent_read(self.repository.get_by_id(agent.id) or agent, context)
+
+    def _run_managed_update(self, agent_id: UUID, context: CurrentUserContext) -> None:
+        try:
+            self._update_or_roll_back(agent_id, context)
+        except Exception:
+            # Every step handles its own failures. This only catches a fault
+            # between them, so the task never dies without a trace.
+            logger.exception("Managed update for agent %s stopped unexpectedly", agent_id)
+        finally:
+            self.repository.release_managed_update(agent_id)
+
+    def _update_or_roll_back(self, agent_id: UUID, context: CurrentUserContext) -> None:
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.status != AgentStatus.RUNNING:
+            return
+        actor = resolve_actor_identity(context, agent.organization_id)
+        logger.info("Managed update started for agent %s", agent_id)
+
+        # 1-2. Stop, then capture the pre-update state. Nothing about the Agent
+        #      has changed yet, so a failure here only ends the update, saying why.
+        try:
+            previous_image = self._stop_for_update(agent_id, actor)
+            if previous_image is None:
+                return
+            backup = self._capture_for_update(agent_id, context)
+        except Exception as exc:
+            logger.exception("Managed update for agent %s could not take its backup", agent_id)
+            self.repository.record_managed_update_outcome(
+                agent_id,
+                ManagedUpdateOutcome.BACKUP_FAILED,
+                restore_point_id=None,
+                failure_reason=_managed_update_failure_text(exc),
+            )
+            return
+        if backup.status != RestorePointStatus.READY:
+            self.repository.record_managed_update_outcome(
+                agent_id,
+                ManagedUpdateOutcome.BACKUP_FAILED,
+                restore_point_id=backup.id,
+                failure_reason=backup.failure_reason,
+            )
+            return
+
+        # 3. Start on the platform image and watch it come up. A start that fails
+        #    to provision rolls back exactly like one that never becomes ready.
+        try:
+            self._start_for_update(agent_id, actor, pinned_image="")
+            healthy = self._wait_for_ready(
+                agent_id,
+                self.config.agent_update_ready_timeout_seconds,
+                poll_seconds=self.config.agent_update_ready_poll_seconds,
+            )
+        except Exception:
+            logger.exception("Managed update start failed for agent %s", agent_id)
+            healthy = False
+        if healthy:
+            logger.info("Managed update succeeded for agent %s", agent_id)
+            self.repository.record_managed_update_outcome(
+                agent_id, ManagedUpdateOutcome.SUCCEEDED, restore_point_id=backup.id
+            )
+            return
+
+        # 4. Roll back: free the volume, restore the archive and the recorded
+        #    configuration, then start the image the pod ran before.
+        self._rollback_managed_update(agent_id, backup.id, context, actor, previous_image)
+
+    def _stop_for_update(self, agent_id: UUID, actor: ActorIdentity) -> str | None:
+        """Stop the Agent and return the image its pod was running.
+
+        None means the Agent was not running after all, so there is nothing to do.
+        """
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent_id)
+            if current is None or current.status != AgentStatus.RUNNING:
+                return None
+            # What the pod proves it ran, not what the pin or the platform says:
+            # both can move underneath a long-running pod.
+            previous_image = self.k8s.get_pod_image(
+                f"agent-{agent_id}", self.config.k8s_namespace
+            ) or self._effective_runtime_image(current)
+            self._stop_agent_unchecked(current, actor)
+        return previous_image
+
+    def _capture_for_update(self, agent_id: UUID, context: CurrentUserContext) -> AgentRestorePoint:
+        self._wait_for_volume_release(agent_id)
+        backup = self.restore_points.create_restore_point(
+            agent_id,
+            AgentRestorePointCreate(label=MANAGED_UPDATE_BACKUP_LABEL),
+            context,
+            managed_update=True,
+        )
+        return self.restore_points.wait_until_terminal(
+            agent_id,
+            backup.id,
+            timeout_seconds=self.config.restore_point_capture_timeout_seconds,
+            on_poll=lambda: self.repository.beat_managed_update(agent_id),
+        )
+
+    def _start_for_update(self, agent_id: UUID, actor: ActorIdentity, *, pinned_image: str) -> None:
+        """Start the Agent on `pinned_image`; empty follows the platform pin.
+
+        The same checks `start_agent` makes, except the managed-update guard:
+        this is that update.
+        """
+        self.restore_points.reconcile_agent(agent_id)
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent_id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            if self.restore_points.has_blocking_operation(agent_id):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
+            current.pinned_runtime_image = pinned_image
+            self._start_agent_unchecked(self.repository.save(current), actor)
+
+    def _rollback_managed_update(
+        self,
+        agent_id: UUID,
+        backup_id: UUID,
+        context: CurrentUserContext,
+        actor: ActorIdentity,
+        previous_image: str,
+    ) -> None:
+        try:
+            self._free_volume_for_rollback(agent_id, actor)
+            restored = self.restore_points.restore_restore_point(
+                agent_id,
+                backup_id,
+                AgentRestorePointRestore(reapply_configuration=True),
+                context,
+                managed_update=True,
+            )
+            row = self.restore_points.wait_until_terminal(
+                agent_id,
+                restored.id,
+                timeout_seconds=self.config.restore_point_restore_timeout_seconds,
+                on_poll=lambda: self.repository.beat_managed_update(agent_id),
+            )
+            restored_ok = row.status == RestorePointStatus.READY
+        except Exception:
+            logger.exception("Managed update rollback could not restore agent %s", agent_id)
+            restored_ok = False
+        if not restored_ok:
+            # A restore that failed marks its target FAILED. This one ran without a
+            # safety copy, so the archive — mounted read-only, and kept — is the
+            # only way back: make it restorable again. A no-op for any other state.
+            self.restore_points.reopen_failed_restore(backup_id)
+            # Skip the restart: a pod on a runtime the volume may no longer match
+            # is worse than none.
+            self._mark_update_failed(agent_id, backup_id, previous_image)
+            return
+
+        try:
+            self._start_for_update(agent_id, actor, pinned_image=previous_image)
+            healthy = self._wait_for_ready(
+                agent_id,
+                self.config.agent_update_ready_timeout_seconds,
+                poll_seconds=self.config.agent_update_ready_poll_seconds,
+            )
+        except Exception:
+            logger.exception("Managed update rollback could not restart agent %s", agent_id)
+            healthy = False
+        if not healthy:
+            self._mark_update_failed(agent_id, backup_id, previous_image)
+            return
+        logger.info("Managed update rolled back for agent %s", agent_id)
+        self.repository.record_managed_update_outcome(
+            agent_id, ManagedUpdateOutcome.ROLLED_BACK, restore_point_id=backup_id
+        )
+
+    def _free_volume_for_rollback(self, agent_id: UUID, actor: ActorIdentity) -> None:
+        with self.repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent_id)
+            if current is not None and current.status == AgentStatus.RUNNING:
+                self._stop_agent_unchecked(current, actor)
+        # A start that failed to provision is in ERROR, not RUNNING, so the stop
+        # above skipped it — but it may have left its Deployment behind.
+        self._teardown_workload(agent_id)
+        self._wait_for_volume_release(agent_id)
+
+    def _mark_update_failed(self, agent_id: UUID, backup_id: UUID, previous_image: str) -> None:
+        """Leave the Agent in ERROR, ready for the user to restore the backup by hand.
+
+        Pinned to its previous image so the start after that restore lands on
+        the runtime that worked, and with no pod holding the volume, since a
+        restore refuses while one does.
+        """
+        try:
+            self._teardown_workload(agent_id)
+        except Exception:
+            logger.exception("Could not remove the workload of agent %s after a failed rollback", agent_id)
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None:
+            return
+        agent.status = AgentStatus.ERROR
+        agent.pinned_runtime_image = previous_image
+        self.repository.save(agent)
+        self.repository.record_managed_update_outcome(
+            agent_id, ManagedUpdateOutcome.ROLLBACK_FAILED, restore_point_id=backup_id
+        )
+
+    def _wait_for_ready(self, agent_id: UUID, timeout_seconds: int, poll_seconds: int = 5) -> bool:
+        """Poll the Deployment's newest pod until it is ready, fails for good, or time runs out."""
+        deployment = f"agent-{agent_id}"
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            self.repository.beat_managed_update(agent_id)
+            pod_status, reason = self.k8s.get_pod_readiness(deployment, self.config.k8s_namespace)
+            if pod_status == "ready":
+                return True
+            if pod_status == "crashed" and self._failed_for_good(deployment, reason):
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll_seconds)
+
+    def _failed_for_good(self, deployment: str, reason: str | None) -> bool:
+        """Whether a pod the readiness check calls 'crashed' will never become ready.
+
+        Image pull errors are not final: the kubelet keeps retrying, and one
+        registry blip must not roll an update back. The readiness window bounds
+        them instead. A crash loop is final once the container has failed twice,
+        so a crashing image does not burn the whole window before rolling back.
+        """
+        if reason == "CrashLoopBackOff":
+            return self.k8s.get_pod_restart_count(deployment, self.config.k8s_namespace) >= 2
+        return reason in ("CreateContainerConfigError", "CreateContainerError")
+
+    def _wait_for_volume_release(self, agent_id: UUID) -> None:
+        """Wait for the stopped pod to let go of the volume.
+
+        Capture and restore wait too, but only for the pod's default grace
+        period, and refuse after that so a person can try again. A managed
+        update has no one to retry it, so it waits longer here first.
+        """
+        deadline = time.monotonic() + MANAGED_UPDATE_VOLUME_RELEASE_TIMEOUT_SECONDS
+        while self.k8s.has_pods_for_deployment(f"agent-{agent_id}", self.config.k8s_namespace):
+            self.repository.beat_managed_update(agent_id)
+            if time.monotonic() >= deadline:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=STILL_SHUTTING_DOWN_DETAIL)
+            time.sleep(RESTORE_POINT_POD_TERMINATION_POLL_SECONDS)
+
+    def _teardown_workload(self, agent_id: UUID) -> None:
+        """Delete the Deployment so the RWO PVC is free for a restore Job.
+
+        A failed start leaves a (likely crash-looping) Deployment behind, and
+        `restore_restore_point` refuses while any pod holds the volume.
+        ConfigMap and Secret are left in place — `start_agent` rebuilds both.
+        """
+        self.k8s.delete_deployment(f"agent-{agent_id}", self.config.k8s_namespace)
+
     def rebuild_running_agents_for_maintenance(
         self, *, apply: bool
     ) -> tuple[list[Agent], list[tuple[Agent, Exception]]]:
@@ -2443,6 +2872,8 @@ class AgentService:
                     current = self.repository.get_by_id(agent.id)
                     if current is None:
                         raise RuntimeError(f"Agent {agent.id} not found")
+                    if managed_update_in_flight(current):
+                        raise RuntimeError(f"Agent {agent.id} has a managed update in progress")
                     stopped = self._stop_agent_unchecked(current, actor)
                     started = self._start_agent_unchecked(stopped, actor)
                 if started.status != AgentStatus.RUNNING:
@@ -2474,6 +2905,7 @@ class AgentService:
             current = self.repository.get_by_id(agent.id)
             if current is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            _refuse_during_managed_update(current)
             if self.restore_points.has_blocking_operation(current.id):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -2568,6 +3000,16 @@ class AgentService:
             if not content.client_secret:
                 content.client_secret = self.config.google_cloud_client_secret
 
+    def _refuse_forgetting_granted_sites(self, agent_id: UUID) -> None:
+        """Removing SharePoint would forget sites still granted to the Teams app, which its next
+        agent could reach; an administrator's removal sign-in revokes them and disconnects it."""
+        secret = self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT)
+        if secret is None or secret.content is None:
+            return
+        content = decrypt_content(SecretProvider.SHAREPOINT, secret.content, self.config.agent_token_encryption_key)
+        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SITES_STILL_GRANTED)
+
     def _validate_live_integration(self, provider: SecretProvider, content: Any) -> None:
         """Validate submitted credentials with the provider before they are persisted.
 
@@ -2655,17 +3097,33 @@ class AgentService:
     def get_agent_health(self, agent_id: UUID, context: CurrentUserContext) -> AgentHealthRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
 
-        if agent.status == AgentStatus.ERROR:
-            stored = _stored_provisioning_error(agent)
-            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
-
-        if agent.status != AgentStatus.RUNNING:
+        if agent.status not in (AgentStatus.ERROR, AgentStatus.RUNNING):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Agent {agent_id} is not running",
             )
 
-        name = f"agent-{agent_id}"
+        health = self.agent_health(agent)
+        if health is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"status": "error", "reason": "unreachable"},
+            )
+        return health
+
+    def agent_health(self, agent: Agent) -> AgentHealthRead | None:
+        """What the pod and the Agent's own healthz say, for an Agent already authorized.
+
+        The callers authorize: the Organization route requires `activity.read` on the Agent,
+        and the Platform resource usage page sits behind `require_platform_admin`. None means
+        the healthz server could not be reached, which the Organization route answers with a
+        503. A stopped Agent has no health and is not asked about.
+        """
+        if agent.status == AgentStatus.ERROR:
+            stored = _stored_provisioning_error(agent)
+            return AgentHealthRead(status="error", reason=stored.display_message if stored else None)
+
+        name = f"agent-{agent.id}"
         ns = self.config.k8s_namespace
 
         pod_status, pod_reason = self.k8s.get_pod_readiness(name, ns)
@@ -2678,7 +3136,21 @@ class AgentService:
             data = self.k8s.fetch_agent_healthz(name, ns)
             return AgentHealthRead.model_validate(data)
         except RuntimeError:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"status": "error", "reason": "unreachable"},
+            return None
+
+    def runtime_restarts(self, agent: Agent) -> AgentRuntimeDiagnosticsRead | None:
+        """Restarts and why the last one ended, without any log text.
+
+        For an Agent already authorized by a caller outside the activity log boundary (the
+        Platform view), so it never asks the cluster for logs. None when the cluster could
+        not be asked.
+        """
+        if agent.status != AgentStatus.RUNNING:
+            return AgentRuntimeDiagnosticsRead(observed_at=dt.datetime.now(dt.UTC))
+        try:
+            return AgentRuntimeDiagnosticsRead.model_validate(
+                self.k8s.get_runtime_diagnostics(f"agent-{agent.id}", self.config.k8s_namespace, include_logs=False)
             )
+        except Exception:
+            logger.exception("Runtime diagnostics unavailable for agent %s", agent.id)
+            return None

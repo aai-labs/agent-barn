@@ -19,9 +19,11 @@ export type AgentConfigurationSectionKey =
   | "channels"
   | "webhooks"
   | "skills"
+  | "memory"
   | "keys"
   | "override"
   | "restore"
+  | "spend"
   | "danger";
 
 export type AgentConfigurationSection = {
@@ -57,6 +59,11 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     description: "Assigned tools and the credentials they require.",
   },
   {
+    key: "memory",
+    label: "Memory",
+    description: "Long-term memory that adds to this Agent's own notes.",
+  },
+  {
     key: "keys",
     label: "Integrations",
     description: "Platform tokens and encrypted integration credentials.",
@@ -70,6 +77,11 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     key: "restore",
     label: "Restore points",
     description: "Capture and roll back the Agent's working files.",
+  },
+  {
+    key: "spend",
+    label: "Model spend limit",
+    description: "The most this Agent can spend on model calls.",
   },
   {
     key: "danger",

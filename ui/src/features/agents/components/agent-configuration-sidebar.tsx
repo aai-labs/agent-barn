@@ -1,4 +1,5 @@
 import {
+  Brain,
   FileCode2,
   History,
   KeyRound,
@@ -7,6 +8,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   UserRound,
+  Wallet,
   Webhook,
 } from "lucide-react";
 
@@ -22,9 +24,11 @@ const ICONS = {
   channels: MessageSquare,
   webhooks: Webhook,
   skills: Sparkles,
+  memory: Brain,
   keys: KeyRound,
   override: SlidersHorizontal,
   restore: History,
+  spend: Wallet,
   danger: ShieldAlert,
 } as const;
 

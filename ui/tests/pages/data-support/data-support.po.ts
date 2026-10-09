@@ -1,15 +1,19 @@
 import { Page } from "@playwright/test";
 
 import { AgentDataSupport } from "./agent-data-support.po";
+import { AgentMemoryDataSupport } from "./agent-memory-data-support.po";
 import { AgentWebhookDataSupport } from "./agent-webhook-data-support.po";
 import { AuthSupport } from "./auth-support.po";
 import { CommunicationConnectionDataSupport } from "./communication-connection-data-support.po";
 import { CostDataSupport } from "./cost-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
+import { KpisDataSupport } from "./kpis-data-support.po";
 import { OrganizationDataSupport } from "./organization-data-support.po";
 import { OrgTemplateDataSupport } from "./org-template-data-support.po";
+import { PlatformMemoryDataSupport } from "./platform-memory-data-support.po";
 import { PlatformStatsDataSupport } from "./platform-stats-data-support.po";
 import { PlatformTemplateDataSupport } from "./platform-template-data-support.po";
+import { ResourceUsageDataSupport } from "./resource-usage-data-support.po";
 import { SkillDataSupport } from "./skill-data-support.po";
 import { UserDataSupport } from "./user-data-support.po";
 
@@ -17,28 +21,36 @@ export class DataSupport {
   public auth: AuthSupport;
   public users: UserDataSupport;
   public agents: AgentDataSupport;
+  public agentMemory: AgentMemoryDataSupport;
   public agentWebhooks: AgentWebhookDataSupport;
   public communicationConnections: CommunicationConnectionDataSupport;
   public skills: SkillDataSupport;
   public organizations: OrganizationDataSupport;
   public costs: CostDataSupport;
   public eventDeliveries: EventDeliveryDataSupport;
+  public kpis: KpisDataSupport;
   public orgTemplates: OrgTemplateDataSupport;
   public platformTemplates: PlatformTemplateDataSupport;
+  public platformMemory: PlatformMemoryDataSupport;
   public platformStats: PlatformStatsDataSupport;
+  public resourceUsage: ResourceUsageDataSupport;
 
   constructor(page: Page) {
     this.auth = new AuthSupport(page);
     this.users = new UserDataSupport(page);
     this.agents = new AgentDataSupport(page);
+    this.agentMemory = new AgentMemoryDataSupport(page);
     this.agentWebhooks = new AgentWebhookDataSupport(page);
     this.communicationConnections = new CommunicationConnectionDataSupport(page);
     this.skills = new SkillDataSupport(page);
     this.organizations = new OrganizationDataSupport(page);
     this.costs = new CostDataSupport(page);
     this.eventDeliveries = new EventDeliveryDataSupport(page);
+    this.kpis = new KpisDataSupport(page);
     this.orgTemplates = new OrgTemplateDataSupport(page);
     this.platformTemplates = new PlatformTemplateDataSupport(page);
+    this.platformMemory = new PlatformMemoryDataSupport(page);
     this.platformStats = new PlatformStatsDataSupport(page);
+    this.resourceUsage = new ResourceUsageDataSupport(page);
   }
 }

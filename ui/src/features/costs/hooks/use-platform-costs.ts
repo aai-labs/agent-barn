@@ -20,6 +20,7 @@ import {
 import {
   COSTS_PAGE_SIZE,
   costFilterParams,
+  costsPollingOptions,
   mergePlatformCostPages,
   monthlyCostParams,
   platformCostKey,
@@ -40,6 +41,7 @@ export function usePlatformCostSummary(filters: CostFilters) {
       );
       return response.data;
     },
+    ...costsPollingOptions,
   });
 
   return {
@@ -70,6 +72,7 @@ export function usePlatformCosts(filters: CostFilters) {
         ? nextPage
         : undefined;
     },
+    ...costsPollingOptions,
   });
 
   return {
@@ -105,6 +108,7 @@ export function usePlatformCostOrganizations(filters: CostFilters) {
       );
       return response.data;
     },
+    ...costsPollingOptions,
   });
 
   return { organizations: query.data ?? [], isLoading: query.isPending };
@@ -165,6 +169,7 @@ export function usePlatformMonthlyCosts(filters: CostFilters) {
       );
       return response.data;
     },
+    ...costsPollingOptions,
   });
 
   return {

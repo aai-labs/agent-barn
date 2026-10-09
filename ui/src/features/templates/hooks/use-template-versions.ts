@@ -19,9 +19,18 @@ export function useTemplateVersions(
     queryFn: async () => {
       const response = await api.get<TemplateRead[]>(
         `${basePath}/${templateKey}/versions`,
-        { schema: TemplateReadSchema.array() },
+        {
+          schema: TemplateReadSchema.array(),
+          params: scope.kind === "organization" ? { include_platform: true } : undefined,
+        },
       );
-      return response.data;
+      if (scope.kind !== "organization") return response.data;
+      // Platform and Organization sequences are independently numbered.
+      return [...response.data].sort((a, b) =>
+        Date.parse(b.createdAt) - Date.parse(a.createdAt) ||
+        Number(b.organizationId !== null) - Number(a.organizationId !== null) ||
+        b.version - a.version,
+      );
     },
     enabled: Boolean(templateKey) && enabled,
   });

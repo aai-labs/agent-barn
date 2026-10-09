@@ -18,7 +18,7 @@ from api.domains.business_value.classifier import ClassifiedAction, classify
 from api.domains.business_value.repository import BusinessActionRepository
 from api.domains.tool_calls.models import ToolCall
 
-BACKFILL_BATCH_SIZE = 500
+BACKFILL_BATCH_SIZE = 50
 
 logger = logging.getLogger(__name__)
 

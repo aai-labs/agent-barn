@@ -7,6 +7,7 @@ from injector import inject, singleton
 
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import AgentRepository
+from api.domains.api_keys.models import ApiKeyAccessMode
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import (
     AGENT_OWNER_ROLE_ID,
@@ -23,6 +24,7 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
     PermissionKey.AGENT_LIFECYCLE_MANAGE,
     PermissionKey.AGENT_ACCESS_MANAGE,
     PermissionKey.AGENT_SECRET_MANAGE,
+    PermissionKey.AGENT_MEMORY_MANAGE,
     PermissionKey.ACTIVITY_READ,
     PermissionKey.COST_READ,
 )
@@ -130,6 +132,10 @@ class AgentAuthorization:
                 permission
                 for permission in _AGENT_ACTION_PERMISSIONS
                 if permission in permissions_by_agent.get(agent.id, set())
+                and (
+                    context.api_key_access_mode != ApiKeyAccessMode.READ_ONLY
+                    or permission in {PermissionKey.AGENT_READ, PermissionKey.ACTIVITY_READ, PermissionKey.COST_READ}
+                )
             ]
             for agent in agents
         }

@@ -1,10 +1,12 @@
 "use client";
 
-import { FileCode2, KeyRound, Sparkles, UserRound } from "lucide-react";
+import { Brain, FileCode2, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
+import { MemoryItemsViewer } from "@/features/agent-memory/components/memory-items-viewer";
+import { MemoryAccessPanel } from "@/features/agent-memory/components/memory-access-panel";
 import { AgentDefaultsPanel } from "@/features/agent-settings/components/agent-defaults-panel";
 import { TemplatesPanel } from "@/features/templates/components/templates-panel";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
@@ -15,16 +17,21 @@ import {
 } from "@/features/organizations/components/organization-settings-utils";
 import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
+import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limits-panel";
 
 const ICONS = {
   agents: UserRound,
+  "spend-limits": Wallet,
   templates: FileCode2,
   skills: Sparkles,
+  "memory-access": Brain,
+  "organization-memory": Brain,
   "shared-credentials": KeyRound,
 } as const;
 
 export default function SettingsPage() {
-  const { canManage, selectedOrganization } = useActiveOrgRole();
+  const { role, canManage, selectedOrganization } = useActiveOrgRole();
+  const isMembershipAdmin = role === "OWNER" || role === "ADMIN";
   const [activeSection, setActiveSection] = useQueryState(
     "tab",
     parseAsStringEnum<OrganizationSettingsSectionKey>(ORGANIZATION_SETTINGS_SECTION_KEYS)
@@ -32,7 +39,7 @@ export default function SettingsPage() {
       .withOptions({ scroll: false, history: "replace" }),
   );
 
-  const visibleSections = visibleOrganizationSettingsSections(canManage);
+  const visibleSections = visibleOrganizationSettingsSections(canManage, isMembershipAdmin);
   // A Member who deep-links to an admin-only section lands on the first one they can
   // see rather than an empty page.
   const section =
@@ -83,10 +90,13 @@ export default function SettingsPage() {
           description={section.description}
         >
           {section.key === "agents" && <AgentDefaultsPanel canEdit={canManage} />}
+          {section.key === "spend-limits" && <SpendLimitsPanel />}
           {section.key === "templates" && (
             <TemplatesPanel scope={{ kind: "organization" }} canManage={canManage} />
           )}
           {section.key === "skills" && <SkillsPanel scope={{ kind: "organization" }} canManage={canManage} />}
+          {section.key === "organization-memory" && <MemoryItemsViewer key={selectedOrganization?.id} enabled={isMembershipAdmin} />}
+          {section.key === "memory-access" && <MemoryAccessPanel canManage={isMembershipAdmin} />}
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
         </SettingsPageLayout>
       </main>

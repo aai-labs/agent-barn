@@ -21,11 +21,291 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 - Also delivered: gog (Google Workspace) commands are classified as Business Actions and valued like aai-cli ones. See the feature doc's [gog commands](../business-value.md#gog-commands) section.
 - Also delivered: review fixes. Value-settings saves are serialized under a row lock and record what they actually replaced, and the per-bucket Business Action query no longer builds an unused bucket spine.
 - Also delivered: `GET /organizations/{organization_id}/value/activity`, the Organization activity KPI. The feature doc's [Organization activity](../business-value.md#organization-activity) section is the contract. It rests on `ValueActivityRepository` and the two indexes of migration `45bcefcb0749`.
-- In transition: nothing. gog classification is deployed to local k3d and was verified live.
-- Next: the Stage 3 UI that renders value settings, the Organization value, and activity.
+- Also delivered: the KPIs page route and its Owner/Admin navigation entry (AF-348). The feature doc's [KPI dashboard](../business-value.md#kpi-dashboard) section is the contract.
+- Also delivered: the KPIs page's date range and six headline tiles, read from `GET /value` and `GET /value/activity` (AF-348).
+- Also delivered: the KPIs page's trend chart, with "Value vs spend" and "Requests" tabs (AF-348).
+- Also delivered: the KPIs page's per-Agent table and footnotes (AF-348).
+- Also delivered: the KPIs page's empty state and loading skeletons (AF-348).
+- Also delivered: the KPIs page's value settings Sheet, which reads, edits, validates, resets, and discards (AF-348).
+- Also delivered: saving value settings from the KPIs page, which refreshes the value figures (AF-348).
+- Also delivered: the AF-348 KPIs dashboard, verified end to end on local k3d against the real API and database.
+- Also delivered: the backfill runs as a Job on every install and upgrade, so Organizations with spend from before classification was deployed get the value that matches it.
+- In transition: nothing.
+- Next: none. Every planned slice of the epic is delivered.
 - Blockers: the product owner has not signed off the default minutes per Outcome Type. They are placeholders until then, and every value figure inherits them.
 
 ## Slice history
+
+### 2026-10-08 — Backfill runs on every deploy
+
+Why:
+- Value per dollar counted spend from before classification was deployed but no value for it, so the ratio was too low for existing Organizations. Live on local k3d: deleting an Organization's only Business Action took its ratio from $645.28 to $0.00 per $1, and the backfill restored $645.28.
+- The documented `kubectl exec deploy/agentbarn-api -c api` backfill OOM-killed the API container (512Mi) on local k3d. Client clusters cannot be reached to run it by hand at all.
+
+Changed:
+- `helm/agentbarn-api/templates/business-action-backfill-job.yaml`: a plain Job, `<release>-business-action-backfill-<revision>`, with `worker.resources`, `backoffLimit: 2`, and `businessValue.backfill.activeDeadlineSeconds` (3600). `businessValue.backfill.enabled` defaults to `true`.
+- `BACKFILL_BATCH_SIZE` drops from 500 to 50.
+- `operations.md`, `business-value.md`, and the RBAC brief's background-work exception now describe a deploy-run Job instead of `kubectl exec`.
+
+Verification, local k3d:
+- With a throwaway chart holding one plain Job, `helm upgrade --install --wait --timeout 30s` returned in about 1s under Helm 4.2.1 and Helm 3.18.4, for both a running and a failing Job. So did `helmfile sync --wait` (helmfile 1.7.1). The next upgrade deleted the previous revision's Job and its pod, including one still running.
+- `helm template` renders the Job with the release's image, pull secret, `agentbarn-api` secret, and resources, and renders nothing when `businessValue.backfill.enabled=false`. `helm lint` passes.
+- The rendered Job against the local database:
+  1. After the "KPI note check" Business Action was deleted, `GET /value` returned `value_to_spend_ratio` 0.0.
+  2. The Job logged `scanned=1 recorded=1 removed=0 failed=0`, and the ratio returned to 645.28. The API pod's restart count stayed at 2.
+  3. A second run logged `recorded=0`.
+- Memory, with 600 extra completed `terminal` Tool Calls of about 1MB result each (572MB in total):
+  - At batch size 500, all three attempts were OOMKilled. The Job failed, and the API was unaffected.
+  - At batch size 50, it completed with `scanned=601 failed=0`. Peak RSS was 314MB, against 171MB on the empty table.
+  - The seeded rows were then deleted.
+- `test_business_action_backfill.py`: 10 passed.
+
+Not verified:
+- The size of real stored Tool Call results on staging or production. Batch size 50 stays under 512Mi up to about 2.5MB of result per Tool Call on average, from the figures above.
+
+### 2026-10-07 — AF-348 — Calculation hints and Value settings modal
+
+- Delivered: clickable calculation hints on all six KPI cards, with estimated-hours wording and an explanation of each Value vs spend interval. They work with keyboard and touch as well as mouse.
+- Changed: Value settings now opens a centered modal with explanatory copy, a scrollable form, and a visible action footer. Validation, reset, save, and discard confirmation keep their existing contracts.
+- Fixed: a settings query refresh no longer changes the editing baseline and sends an untouched field back to an older value. Failed background reads preserve the draft.
+- Fixed: a failed KPI refetch clears that source's stale Agent-table figures, matching the tiles and chart.
+- Verification: browser regression probes reproduced both state failures before these changes; lint, typecheck, production build, and the KPI/Costs/navigation browser checks pass. Focused coverage includes calculation guidance, desktop/mobile modal layout, reconnect, and retry behavior. Removing the failed-refetch guard makes its regression test fail at the stale-value assertion.
+- Follow-up: no API, schema, migration, or release changes.
+
+### 2026-10-02 — AF-348 — Coverage wording for the handled rate and response time
+
+Changed:
+- The Handled tile's hint reads "based on X of Y requests routed through Agent Barn". The footnote says natively connected channels count as Requests but are not timed. Neither names channels any more.
+- `business-value.md` no longer lists the deployed native platforms. It points to `operations.md` instead.
+
+Why:
+- The ticket asked for "Web Chat and Email only". Which channels are covered depends on each environment's `COMMUNICATIONS_NATIVE_PLATFORMS`, so fixed channel names can be false.
+- Live on local k3d, with `COMMUNICATIONS_NATIVE_PLATFORMS=slack` set temporarily: native Slack messages from a Hermes Agent and an OpenClaw Agent were mirrored as Conversation Messages, so they count as Requests, but they created 0 Communication Deliveries. They are therefore outside the handled rate and the response time.
+- Not verified: the deployed value of the GitHub variable `COMMUNICATIONS_NATIVE_PLATFORMS`, which could not be read here. `operations.md` says `slack,discord`; the removed doc line said Slack, Discord, Telegram, and Teams.
+
+Coverage:
+- `kpis.spec.ts`: the headline test expects the new hint, the footnote test expects the new note, and a new test asserts that the page never says "Web Chat and Email". All three failed first on the old text.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 72 tests.
+
+Follow-up, timing native channels (not in AF-348):
+- Findings from the same local run, for the ticket:
+  - **Pairing works.** A request and its reply share `session_key`, which includes the Slack thread on both runtimes. OpenClaw leaves `thread_id` empty on outbound rows, so pairing must use `session_key`.
+  - **Hook times can understate the wait.** `occurred_at` is when a hook fired. A message sent while the OpenClaw Agent was restarting was answered 376 s later by Slack's own timestamps, but 15.8 s apart by recorded times.
+  - **Timestamps differ by runtime.** OpenClaw stores the Slack timestamp of both the request and the reply, as message ids. Hermes stores it only for the request; its reply id is `outbound:<hash>`.
+- Not verified: overlapping requests in one thread, multi-reply runs, approval prompts, verbose progress messages, and what a failed run leaves behind, which decides whether a native "handled" rate is measurable at all.
+
+### 2026-10-02 — AF-348 — Live end-to-end check (local k3d)
+
+Setup:
+- You redeployed local k3d from this branch: a fresh database at migration `45bcefcb0749`, and the UI and API images built from `AF-348-organization-kpi-board`.
+- The deployed UI bundle contains the `kpis` route and the UPPER_SNAKE exemption (`/^[A-Z0-9_]+$/`).
+- As `admin@local.dev`, a new Organization "AF-348 KPI live check" was created through the API, with its creator as Owner.
+- The KPIs page was driven in Chromium through the real login form at `https://agentfarm.local`.
+
+Empty Organization:
+- The nav reads Home, Costs, KPIs, Settings.
+- The window reads "last 30 days".
+- Value and Value per dollar read "— Set an hourly rate", with no `$0`.
+- Handled reads "not enough data · based on 0 of 0 requests".
+- The empty-state card shows, and both reads return 200.
+
+With traffic:
+- One Hermes Agent, "Tommy" (`general-purpose`), was hired and started.
+- Two Web Chat messages went through the real API. The second asked Tommy to run `aai-cli excel workbook create /tmp/af348-kpi-check.xlsx`, a local file in the Agent's pod.
+- Ingest recorded one Business Action: `excel workbook create`, `DOCUMENT_AUTHORED`, `SUCCESS`.
+- One cost-sync run was started by hand (`kubectl create job --from=cronjob/agentbarn-api-cost-sync af348-cost-sync-manual-1`). It attributed 12 rows, $0.0557970824, to the Organization.
+
+Every figure matched in independent SQL, the API, and the rendered page:
+
+| Figure | SQL | API | Page |
+|---|---|---|---|
+| Requests | 2 inbound messages + 0 webhooks | 2 | 2 |
+| Handled without failure | 2 SUCCEEDED, 0 failed | 1.0, coverage 2 | 100%, "based on 2 of 2 requests" |
+| Median response | `percentile_cont` 6.469045 s over 2 first attempts | 6.4690445 | "6.5 s · 2 reqs" |
+| LLM spend | $0.0557970824 | 0.0557970824 | $0.06 |
+| Cost per Request | $0.0557970824 ÷ 2 | 0.0278985412 | $0.03 |
+| Tool Calls per Request | 7 ÷ 2 | 3.5 | 3.5 |
+| Hours saved (default 20 min) | 1 successful `DOCUMENT_AUTHORED` | 20 minutes | "0.3 h", "1 successful write" |
+| Value (no rate) | — | null | "— Set an hourly rate" |
+
+Saving through the Sheet:
+- The rate was set to 60 and "Document authored" to 30 minutes.
+- The browser sent `{"hourly_rate_usd":60,"outcome_minutes":{"DOCUMENT_AUTHORED":30}}`, and the real API answered 200. The Outcome Type key arrived unmangled.
+- The Sheet closed. `/value-settings` and `/value` were read again, and `/value/activity` was not.
+- The earlier write was recalculated:
+  - Hours saved reads "0.5 h".
+  - Value reads "$30.00 at $60.00/h".
+  - Value per dollar reads "$537.66 per $1" (30 ÷ 0.0557970824 = 537.66).
+  - The Agents table and Top outcomes match.
+- Stored: `organization_value_settings.hourly_rate_usd = 60.00`, and `organization_outcome_minutes` `DOCUMENT_AUTHORED = 30`.
+- Exactly one `security_audit_record` row, `organization.value_settings.changed`, with `field_changes` `hourly_rate_usd: null → "60.00"` and `outcome_minutes.DOCUMENT_AUTHORED: null → "30"`.
+
+Final checks: `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 71 tests.
+
+Not verified live:
+- The Unattributed row, because the cost sync does not write such rows.
+- A Member's view, because there is no second local account and no real email is sent. Both are covered by `kpis.spec.ts`.
+- local k3d leaves `COMMUNICATIONS_NATIVE_PLATFORMS` empty, so the handled coverage here is not limited to Web Chat and Email the way it is in deployed environments.
+
+### 2026-10-02 — AF-348 — Saving value settings, and UPPER_SNAKE request keys
+
+Delivered:
+- `use-update-value-settings.ts` sends `PUT …/value-settings` through `@/shared/api`.
+  - On success it invalidates the Organization value family (`organizationValueKey.listScope({ organizationId })`) and the value settings detail. It never touches the activity family.
+  - On error it raises a `toastError`.
+- The Sheet's Save sends only the changed fields (`changesFrom`), closes on success, and stays open with the edits on failure.
+- `ui/src/shared/api/interceptor/default.ts` leaves UPPER_SNAKE request keys (`/^[A-Z0-9_]+$/`) unchanged, beside the existing `-` exemption.
+
+Defect found and fixed:
+- `humps.decamelizeKeys` split every capital letter, so `{ outcomeMinutes: { MESSAGE_SENT: 7 } }` was sent as `{ outcome_minutes: { m_e_s_s_a_g_e__s_e_n_t: 7 } }`.
+- The API rejects that key with 422, because `ValueSettingsUpdate` keys must be catalogue Outcome Types.
+- No request body sent ALL-CAPS keys before this, and no response carries them, so nothing else changes.
+- Docs: `docs/architecture/ui.md` (the transform invariant) and `docs/guidelines/webapp.md` (Schemas and API boundaries).
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`, with `interceptUpdateValueSettings` recording each `PUT` body:
+- an override save sends exactly `{"outcome_minutes":{"MESSAGE_SENT":7}}`, closes the Sheet, and the tiles show the recalculated figures;
+- a reset sends `{"outcome_minutes":{"MESSAGE_SENT":null}}`;
+- a rate is sent as `75.5`, and an emptied rate as `null`;
+- a failed save shows the server's message, keeps the Sheet open, and keeps the edit;
+- a save refetches `/value` and never `/value/activity`.
+
+Test-first:
+- All 5 failed first, because no request was sent.
+- With the save wired and the interceptor unchanged, the two override tests failed on the mangled key (`"m_e_s_s_a_g_e__s_e_n_t": 7`, and `: null`). The UPPER_SNAKE exemption turned them green.
+- The activity guard was shown to fail (`Expected: 1, Received: 2`) with an activity invalidation temporarily added, which was then removed.
+- `make lint-ui` and `make check-ui` pass.
+- `kpis.spec.ts`, `top-nav-responsive.spec.ts`, `costs.spec.ts`, and the request-body specs `settings-agent-defaults.spec.ts`, `organization-llm-budget.spec.ts`, and `agent-configuration-page.spec.ts` pass, 114 tests.
+
+### 2026-10-02 — AF-348 — KPIs value settings Sheet (read, edit, discard)
+
+Delivered:
+- `schemas.ts`: the value settings schema. `constants.ts`: `MAX_HOURLY_RATE_USD` and `MAX_OUTCOME_MINUTES`, mirroring `api/domains/business_value/models.py`.
+- `use-value-settings.ts` reads through `@/shared/api`, keyed by `createQueryKeyStructure("value-settings").detail(organizationId)`.
+- `value-settings-sheet.tsx` gives the panel described in the feature doc's [Value settings panel](../business-value.md#value-settings-panel).
+  - The dirty-close flow follows `templates/components/template-editor.tsx` (`requestClose`, then confirm).
+  - The draft is set from the stored settings when the form mounts, with no `useEffect`.
+- Save validates but sends nothing yet. Saving is the next slice.
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`, with `valueSettings()` and `interceptValueSettings` in `kpis-data-support.po.ts` (catalogue order from `catalogue.py:31-41`):
+- the rate and every row's minutes, with Default and Custom badges, the recalculation copy, and Save disabled while unchanged;
+- a three-decimal rate and zero minutes rejected inline, with Save disabled;
+- resetting an override;
+- closing with edits by the close button and by Escape: Cancel keeps the edits, Discard closes, and reopening shows the stored values;
+- closing without edits does not ask;
+- a failed read with Retry.
+
+Test-first:
+- All 6 tests failed first: no "Value settings" button existed.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 66 tests.
+
+### 2026-10-02 — AF-348 — KPIs empty state and loading skeletons
+
+Delivered:
+- `kpis-page.tsx`: the empty-state card replaces the chart and table when both responses list no Agents.
+- Local skeletons in the tiles (`kpi-tile-skeleton`), the chart (`kpi-chart-skeleton`), and the table (`kpi-table-skeleton`). The rules are in the feature doc's [Empty and loading states](../business-value.md#empty-and-loading-states).
+- The table waits for both endpoints to answer. While one was still loading, the table had shown "—", the same mark as a failed endpoint.
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`:
+- An empty period shows the explanation, with no chart or table, and the tiles still render.
+- With both reads held, all six tile skeletons, the chart skeleton, and the table skeleton show. Once released, the figures replace them.
+- The mocks gain `hold`, which holds a response until the test releases it, so the loading state is reached without timing.
+
+Test-first:
+- Both tests failed first: no empty state existed, and loading showed no skeletons.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 60 tests.
+
+### 2026-10-02 — AF-348 — KPIs Agents table and footnotes
+
+Delivered:
+- `agent-kpi-table.tsx`: the sortable per-Agent table, built like `costs/components/agents-by-spend.tsx` (the same sort state, header buttons, and `aria-sort`), with `Badge` for deleted Agents.
+- `kpi-footnotes.tsx`: Top outcomes, the unverified and unclassified counts, and the value note.
+- `utils.ts`: `mergeAgentRows` and `outcomeTypeLabel`. `format.ts`: `formatResponseTime` and `formatCount`.
+- The rules are in the feature doc's [Agents table](../business-value.md#agents-table) and [Footnotes](../business-value.md#footnotes).
+
+Decisions made while building, from the API contract:
+- "Unattributed" labels only a null `agent_id`. `agent_identity` (`service.py:106-114`) can return a null name for a hard-deleted Agent, which reads "Deleted agent".
+- An Agent missing from one response reads zero for that response's counts. The doc's row rules define both lists, so its absence means nothing to report there, not an unknown.
+- An empty Top outcomes list reads "No successful writes in this period."
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`:
+- rows merged from both reads and ranked by hours saved;
+- per-Agent value and activity figures, including coverage and minute-scale response times;
+- an activity-only Agent with zero value and "not enough data" rates;
+- the Unattributed row, and a hard-deleted Agent with its badge;
+- sorting, reversing, and unknowns last;
+- no rate set;
+- each endpoint failing alone, with Retry recovering;
+- Top outcomes, the counts, and the note.
+
+Test-first:
+- All 9 tests failed first, because no table or footnotes existed.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 58 tests.
+- At 1440px the ten-column table fits without scrolling.
+
+### 2026-10-02 — AF-348 — KPIs trend chart
+
+Delivered:
+- `ui/src/features/business-value/components/kpi-trend-chart.tsx` uses `@/components/ui/chart` (Recharts 3.10.1), with `Tabs` switching between "Value vs spend" and "Requests". The rules are in the feature doc's [Trend chart](../business-value.md#trend-chart).
+- It reuses `formatBucket`, `formatBucketLong`, `evenlySpacedTicks` (platform stats), and `formatSpendCompact` and `EmptyChart` (Costs).
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`:
+- The chart opens on "Value vs spend" with two series drawn; switching to "Requests" draws one, and the value chart is unmounted.
+- With no rate set, spend alone is drawn, with the note.
+- A failed `/value` keeps "Requests" working.
+- A failed `/value/activity` keeps "Value vs spend" working, and Retry recovers the "Requests" tab.
+
+Test-first:
+- All 4 tests failed first, because no chart existed.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 49 tests.
+
+### 2026-10-02 — AF-348 — KPIs data layer, date range, and headline tiles
+
+Delivered, in `ui/src/features/business-value/`:
+- `schemas.ts`: Zod schemas for the `/value` and `/value/activity` responses. `outcome_type` is a plain string, so a new catalogue Outcome Type cannot fail parsing.
+- `use-organization-value.ts` and `use-organization-activity.ts`, through `@/shared/api`.
+  - Keys are `createQueryKeyStructure("organization-value")` and `("organization-activity")`, with the Organization ID in the list scope, so `ORG_SCOPED_QUERY_KEYS` is unchanged.
+  - Both are disabled until an Organization is selected.
+- The page header with one `DateRangePicker`. `from`/`to` live in the URL through `useCostUrlFilters`, and the echoed window is shown.
+- Six tiles in one row at desktop width. The rules are in the feature doc's [Headline tiles](../business-value.md#headline-tiles).
+- `StatCard` gains an optional `children` slot for the spend link and the Retry button. Costs does not pass it, and `costs.spec.ts` still passes unchanged.
+
+Found and fixed during this slice:
+- At desktop width each tile is 177px wide, and the value line truncated "Set an hourly rate" to "Set an hourly…".
+- A test that checks the reason text is not cut off failed first (`"Set an hourly rate" is cut off in kpi-value`).
+- A missing figure now shows "—" with its reason on the wrapping line below.
+
+Coverage, `ui/tests/e2e/kpis.spec.ts`, with mocks in `ui/tests/pages/data-support/kpis-data-support.po.ts` (registered as `data.kpis`):
+- populated tiles with the coverage hint;
+- no rate: "Set an hourly rate" and no `$0`;
+- zero spend: "not enough data";
+- an unknown handled rate: not `0%`;
+- rounding edges: "<0.1 h" and 99.6%;
+- the default window: no params sent, and the echoed label;
+- a chosen range: in the URL and on both reads;
+- the spend link with and without a range;
+- each endpoint failing alone, with the other's tiles intact and Retry recovering;
+- a Member sends no value or activity read.
+
+Test-first:
+- The 11 tile tests failed first, because the tiles did not exist.
+- The Member-read test cannot fail while the gate holds. With the gate's early return removed, it failed by catching both reads, and the gate was then restored.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 45 tests.
+
+### 2026-10-02 — AF-348 — KPIs navigation, route, and access gate
+
+Delivered:
+- `ui/src/app/dashboard/[orgId]/kpis/page.tsx` renders `KpisPage` (`ui/src/features/business-value/components/kpis-page.tsx`), which gates with `useRequireOrgManager` before mounting the dashboard. The dashboard is only a heading so far.
+- `top-nav.tsx` lists "KPIs" right after Costs, inside the same `canManageMembers` spread, so the desktop row and the mobile drawer both hide it from Members.
+
+Coverage: `ui/tests/e2e/kpis.spec.ts`, with locators in `ui/tests/pages/kpis-page.po.ts`:
+- an Owner sees KPIs right after Costs, on desktop and in the drawer, and following it opens the page with the tab marked current;
+- a Member sees no KPIs entry, on desktop or in the drawer;
+- a Member who opens `/kpis` is redirected to the Organization home.
+
+Test-first:
+- The three Owner and redirect tests failed before the change: KPIs was missing from the nav, and `/kpis` did not redirect.
+- The two Member-entry tests cannot fail while no entry exists. They were shown to fail (`Expected: 0, Received: 1`) with the entry temporarily moved outside the role check, which was then restored.
+- `make lint-ui` and `make check-ui` pass. `kpis.spec.ts`, `top-nav-responsive.spec.ts`, and `costs.spec.ts` pass, 32 tests; the 27 existing tests passed before the change too.
 
 ### 2026-10-01 — AF-345 — Review fixes: serialized value-settings saves and a simpler bucket query
 

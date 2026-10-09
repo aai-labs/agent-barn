@@ -52,6 +52,20 @@ export class AgentDetailPage {
     await this.costsTab().click();
   }
 
+  resourceUsageTab(): Locator {
+    return this.page.getByRole("button", { name: "Resource usage", exact: true });
+  }
+
+  async gotoResourceUsage(agentId = "33333333-3333-4333-8333-333333333333", range?: string) {
+    const query = range ? `&range=${range}` : "";
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=resource-usage${query}`);
+  }
+
+  /** The labels of the tab bar, in the order they are drawn. */
+  tabLabels(): Promise<string[]> {
+    return this.page.locator("button.ap-tab").allTextContents();
+  }
+
   toolCallsTab(): Locator {
     return this.page.getByRole("button", { name: /tool calls/i });
   }
@@ -86,6 +100,18 @@ export class AgentDetailPage {
 
   updateButton(): Locator {
     return this.page.getByTestId("agent-update-button");
+  }
+
+  pendingModelBanner(): Locator {
+    return this.page.getByTestId("agent-pending-model-banner");
+  }
+
+  pendingModelRestartButton(): Locator {
+    return this.page.getByTestId("agent-pending-model-restart");
+  }
+
+  updateOutcome(): Locator {
+    return this.page.getByTestId("agent-update-outcome");
   }
 
   updateReleasesLink(): Locator {

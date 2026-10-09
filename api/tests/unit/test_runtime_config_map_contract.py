@@ -40,7 +40,7 @@ def _referenced_files(start_script: Path) -> set[str]:
     return names - _OPTIONAL
 
 
-def _hermes_config_map():
+def _hermes_config_map(memory_enabled=False):
     return build_hermes_config_map(
         _AGENT_ID,
         _ORG_ID,
@@ -53,10 +53,11 @@ def _hermes_config_map():
         "boot",
         "heartbeat",
         build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+        memory_enabled=memory_enabled,
     )
 
 
-def _openclaw_config_map():
+def _openclaw_config_map(memory_enabled=False):
     return build_config_map(
         _AGENT_ID,
         _ORG_ID,
@@ -69,6 +70,7 @@ def _openclaw_config_map():
         "boot",
         "bootstrap",
         "heartbeat",
+        memory_enabled=memory_enabled,
         openclaw_config_overlay=build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000"),
     )
 
@@ -94,3 +96,14 @@ def test_start_script_reads_only_files_the_config_map_ships(runtime, builder):
 def test_config_map_does_not_ship_the_other_runtime_plugin(runtime, builder, foreign):
     """A runtime's ConfigMap is mounted into its pod; the other runtime's plugin is dead weight."""
     assert foreign not in builder().data
+
+
+@pytest.mark.parametrize("builder", [_hermes_config_map, _openclaw_config_map])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_memory_writer_instructions_are_only_in_enabled_agents_startup_context(builder, enabled):
+    from api.domains.agents.builders.memory import MEMORY_TOOL_INSTRUCTIONS
+
+    data = builder(memory_enabled=enabled).data
+    assert (MEMORY_TOOL_INSTRUCTIONS in data["AGENTS.md"]) == enabled
+    assert data["AGENTS.md"].startswith("agents")
+    assert data["TOOLS.md"] == "tools"

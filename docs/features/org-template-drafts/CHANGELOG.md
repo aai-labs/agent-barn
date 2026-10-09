@@ -6,7 +6,7 @@ Related context: [`../templates-and-skills.md`](../templates-and-skills.md), [`.
 
 ## Current state
 
-- Delivered: Organization Templates are draft-gated end to end. `agent_template_draft` / `agent_template_draft_skill` hold one draft per `(organization_id, template_key)`; the draft endpoints create, read, edit, discard and publish it; `GET /{template_key}/lineages` backs the catalogue; version history is per-scope; the side drawer is gone, replaced by `settings/templates/{template_key}` and `settings/templates/new` rendered from the scope-parameterized `ui/src/features/templates/`; and `PATCH /{template_key}` is removed.
+- Delivered: Organization Templates are draft-gated end to end. `agent_template_draft` / `agent_template_draft_skill` hold one draft per `(organization_id, template_key)`; the draft endpoints create, read, edit, discard and publish it; `GET /{template_key}/lineages` backs the catalogue; version history is per-scope by default, with explicit cross-scope history for Built-in restore; the side drawer is gone, replaced by `settings/templates/{template_key}` and `settings/templates/new` rendered from the scope-parameterized `ui/src/features/templates/`; and `PATCH /{template_key}` is removed.
 - In transition: nothing. `PATCH /{template_key}` now returns 405 and no code path publishes an Organization version outside `POST /{template_key}/draft/publish` and `POST /{template_key}/platform-update`.
 - Next: none.
 - Blockers: none.
@@ -30,6 +30,12 @@ Each slice is independently deployable. The draft endpoints land additively befo
 Out of scope, by the rule that Organization Templates adopt only what Platform Templates already define: forks, `POST /{template_key}/platform-update`, lineage deletion, Domain Events, and Organization RBAC all keep their current behavior. They move from the drawer to the page unchanged.
 
 ## Changes
+
+### 2026-10-05 — [AF-360](https://aai-labs.atlassian.net/browse/AF-360)
+
+- Delivered: Organization forks can restore an explicitly selected Built-in snapshot into a draft and publish a new Organization version, preserving earlier edits and Agent pins.
+- Changed: opt-in cross-scope history, scoped draft sources, and a creation-time ordered picker with normal version labels and Built-in badges. Current behavior is defined in [Templates and Skills](../templates-and-skills.md).
+- Follow-up: none required for this recovery path.
 
 ### 2026-09-04 — AF-282-07
 

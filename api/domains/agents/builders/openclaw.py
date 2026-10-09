@@ -7,6 +7,15 @@ from kubernetes import client
 from api.domains.communications.models import ConversationLocation
 
 from .common import _labels, _resource_name, _setting_ids
+from .memory import (
+    MEMORY_COMMAND,
+    MEMORY_PLUGIN_PATH,
+    MEMORY_TOOL_INSTRUCTIONS,
+    MEMORY_WRITE_TOOL,
+    memory_command_mount,
+    memory_command_volume,
+    openclaw_memory_settings,
+)
 
 # Explicit so agents stop inheriting the namespace LimitRange default of
 # 512Mi request / 2Gi limit. requests.memory is the binding quota axis
@@ -36,6 +45,7 @@ INIT_OPENCLAW_JS: str = (_SCRIPTS / "init-openclaw.js").read_text()
 HEALTHZ_SERVER_JS: str = (_SCRIPTS / "healthz-server.js").read_text()
 START_SH: str = (_SCRIPTS / "start.sh").read_text()
 OPENCLAW_PLUGINS_SH: str = (_SCRIPTS / "plugins.sh").read_text()
+MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 LEGACY_WORKSPACE_MIGRATION_SH: str = (
     (_SCRIPTS / "legacy-workspace-migration.sh").read_text().replace("@OPENCLAW_WORKSPACE_DIR@", OPENCLAW_WORKSPACE_DIR)
 )
@@ -46,11 +56,8 @@ OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
 OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
 OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
+RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
-
-_MESSAGE_SCRIPTS = _COMMON_SCRIPTS / "messaging"
-AGENTBARN_MESSAGE_PY: str = (_MESSAGE_SCRIPTS / "agentbarn_message.py").read_text()
-OPENCLAW_MESSAGING_JS: str = (_MESSAGE_SCRIPTS / "openclaw-messaging.js").read_text()
 
 
 def _openclaw_config_core(
@@ -91,17 +98,15 @@ def _openclaw_config_core(
         # multi-user Agent would carry one person's private conversation into the next.
         "session": {"dmScope": "per-channel-peer"},
         "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-messaging"],
+            "allow": ["memory-core", "active-memory", "telemetry-push"],
             "load": {
                 "paths": [
                     "/home/node/.openclaw/local-plugins/telemetry-push",
-                    "/home/node/.openclaw/local-plugins/agentbarn-messaging",
                 ]
             },
             "slots": {"memory": "memory-core"},
             "entries": {
                 "memory-core": {"enabled": True},
-                "agentbarn-messaging": {"enabled": True},
                 "active-memory": {
                     "enabled": True,
                     "config": {
@@ -137,10 +142,18 @@ def build_openclaw_gateway_config(
     model: str,
     litellm_base_url: str,
     native_channels: dict[str, dict] | None = None,
+    memory_enabled: bool = False,
 ) -> dict:
     """``native_channels`` maps a Platform key to its OpenClaw ``channels.<key>`` block."""
     channels = native_channels or {}
     config = _openclaw_config_core(model, litellm_base_url, binding_channel=None, channels=channels)
+    config["plugins"]["entries"]["hindsight-openclaw"] = {"enabled": memory_enabled}
+    if memory_enabled:
+        config["plugins"]["allow"].append("hindsight-openclaw")
+        config["plugins"]["load"]["paths"].append(MEMORY_PLUGIN_PATH)
+        config["plugins"]["entries"]["hindsight-openclaw"].update(
+            {"config": openclaw_memory_settings(), "hooks": {"allowConversationAccess": True}}
+        )
     if channels:
         plugins = config["plugins"]
         plugins["allow"] += [*channels, "agentbarn-observer"]
@@ -288,8 +301,6 @@ def native_channel_env(credentials_by_platform: dict[str, dict]) -> dict[str, st
     """Secret entries for native channel tokens and the observer."""
     env = {
         "AGENTBARN_NATIVE_CHANNELS": ",".join(credentials_by_platform),
-        # The native gateway delivers scheduled results to their origin or defaultTo.
-        "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
     if slack := credentials_by_platform.get("slack"):
         env["SLACK_BOT_TOKEN"] = slack["bot_token"]
@@ -322,13 +333,16 @@ def build_config_map(
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
     skills_json: str | None = None,
+    memory_enabled: bool = False,
 ) -> client.V1ConfigMap:
     data = {
         "SOUL.md": soul_md,
         "IDENTITY.md": identity_md,
         "USER.md": user_md,
+        "agentbarn_memory.py": MEMORY_WRITE_TOOL,
+        "agentbarn-memory": MEMORY_COMMAND,
         "TOOLS.md": tools_md,
-        "AGENTS.md": agents_md,
+        "AGENTS.md": agents_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "BOOTSTRAP.md": bootstrap_md,
         "HEARTBEAT.md": heartbeat_md,
@@ -338,6 +352,7 @@ def build_config_map(
         data["init-openclaw.js"] = INIT_OPENCLAW_JS
         data["healthz-server.js"] = HEALTHZ_SERVER_JS
         data["start.sh"] = START_SH
+        data["memory-gateway-ready.py"] = MEMORY_GATEWAY_READY_PY
         data["legacy-workspace-migration.sh"] = LEGACY_WORKSPACE_MIGRATION_SH
         data["openclaw-plugins.sh"] = OPENCLAW_PLUGINS_SH
         data["telemetry-push-index.js"] = TELEMETRY_PUSH_INDEX_JS
@@ -348,8 +363,7 @@ def build_config_map(
         data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
-        data["agentbarn_message.py"] = AGENTBARN_MESSAGE_PY
-        data["openclaw-messaging.js"] = OPENCLAW_MESSAGING_JS
+        data["retire-messaging.py"] = RETIRE_MESSAGING_PY
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:
@@ -422,6 +436,7 @@ def build_deployment(
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels=labels),
                 spec=client.V1PodSpec(
+                    automount_service_account_token=False,
                     image_pull_secrets=(
                         [client.V1LocalObjectReference(name=image_pull_secret)] if image_pull_secret else None
                     ),
@@ -433,6 +448,8 @@ def build_deployment(
                             security_context=client.V1SecurityContext(
                                 run_as_user=0,
                             ),
+                            # See the same line in hermes.py: the pod is charged for its biggest container.
+                            resources=AGENT_RESOURCES,
                             volume_mounts=[
                                 client.V1VolumeMount(
                                     name="data",
@@ -458,6 +475,7 @@ def build_deployment(
                             ),
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
+                                memory_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -470,6 +488,7 @@ def build_deployment(
                         )
                     ],
                     volumes=[
+                        memory_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

@@ -9,7 +9,6 @@ from typing import Any
 
 import httpx
 from pydantic import ValidationError
-from websockets.exceptions import ConnectionClosed
 
 from api.domains.communications.models import CommunicationErrorCategory, CommunicationErrorDetails
 
@@ -34,6 +33,7 @@ _SAFE_ERROR_SUMMARIES = {
     "agent was not running when the message arrived": "Agent was not running when the message arrived",
     "communication connection is unavailable": "Communication Connection is unavailable",
     "communication connection was retired": "Communication Connection was retired",
+    "native chat gateway work was retired without replay.": "Native chat gateway work was retired without replay.",
     _REDACTED_ERROR_SUMMARY.casefold(): _REDACTED_ERROR_SUMMARY,
 }
 _ERROR_CODES = {
@@ -64,6 +64,15 @@ _SUMMARY_BY_PROVIDER_CODE = {
     "4014": (
         "Discord rejected a privileged gateway intent; enable Message Content Intent "
         "in the Discord Developer Portal, then reconnect"
+    ),
+}
+# Codes the Agent's own pod reports when it knows exactly why a turn stopped, and the
+# notice shown for each. They are read by the person chatting, so they are said
+# plainly: no "(HTTP ...)" qualifiers, and nothing about how it is enforced.
+_RUNTIME_CODES = {
+    "SPEND_LIMIT_REACHED": (
+        "A model spend limit has been reached, so this agent cannot reply right now. "
+        "Contact your administrator to raise it or wait for the limit to renew."
     ),
 }
 _SUMMARY_BY_HTTP_STATUS = {
@@ -124,13 +133,24 @@ def normalize_communication_error(
             details=None,
         )
 
+    if error_code in _RUNTIME_CODES:
+        # The pod already knows the reason; the runtime's free text (which may name
+        # a billing account the person chatting cannot see) is never consulted.
+        details = CommunicationErrorDetails(
+            category=CommunicationErrorCategory.PROVIDER_REJECTED,
+            operation=_safe_operation(operation),
+            provider_code=error_code,
+            retryable=False,
+        )
+        return NormalizedCommunicationError(
+            code=error_code, summary=error_summary_from_details(details), details=details
+        )
+
     raw_code = error_code or (type(error).__name__ if error is not None else None)
     raw_message = error_message if error_message is not None else (str(error) if error is not None else "")
     http_status, provider_code, retry_after_seconds, request_id = _http_metadata(error)
     if http_status is None:
         http_status = _http_status_from_message(raw_message)
-    if provider_code is None:
-        provider_code = _websocket_provider_code(error)
     if provider_code is None:
         provider_code = _safe_identifier(_provider_code_from_message(raw_message))
 
@@ -186,6 +206,8 @@ def error_summary_from_details(details: CommunicationErrorDetails | Mapping[str,
     safe_details = safe_error_details(details)
     if safe_details is None:
         return _REDACTED_ERROR_SUMMARY
+    if safe_details.provider_code in _RUNTIME_CODES:
+        return _RUNTIME_CODES[safe_details.provider_code]
     summary = _SUMMARY_BY_PROVIDER_CODE.get(
         safe_details.provider_code or "",
         _SUMMARY_BY_HTTP_STATUS.get(
@@ -350,16 +372,6 @@ def _http_status_from_message(value: str) -> int | None:
     # "rate-limited" — key that off the provider code if it shows up.
     match = _HTTP_STATUS_IN_MESSAGE.search(value)
     return int(match.group(1)) if match is not None else None
-
-
-def _websocket_provider_code(error: BaseException | None) -> str | None:
-    """Return only the numeric close code; never persist a provider reason."""
-    if not isinstance(error, ConnectionClosed):
-        return None
-    close = error.rcvd or error.sent
-    if close is None:
-        return None
-    return _safe_identifier(str(int(close.code)))
 
 
 def _safe_identifier(value: str | None) -> str | None:

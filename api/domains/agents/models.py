@@ -1,8 +1,8 @@
 import enum
 import json
 import re
-from datetime import datetime
-from typing import Any, Literal, Self
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, NamedTuple, Self
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -43,6 +43,18 @@ class RestorePointOrigin(str, enum.Enum):
     PRE_RESTORE = "PRE_RESTORE"
     PRE_RESET = "PRE_RESET"
     PRE_UPGRADE = "PRE_UPGRADE"
+
+
+class ManagedUpdateOutcome(str, enum.Enum):
+    """How an Agent's last managed update ended."""
+
+    SUCCEEDED = "SUCCEEDED"
+    # The automatic backup could not be taken. The Agent was stopped but not changed.
+    BACKUP_FAILED = "BACKUP_FAILED"
+    # The new version never became healthy; the backup and the old image are back.
+    ROLLED_BACK = "ROLLED_BACK"
+    # The rollback did not finish. The backup holds the pre-update state.
+    ROLLBACK_FAILED = "ROLLBACK_FAILED"
 
 
 class CommandApprovalMode(str, enum.Enum):
@@ -204,15 +216,33 @@ class GoogleWorkspaceContent(SecretContent):
         return self
 
 
-class SharePointContent(SecretContent):
-    """A SharePoint sign-in made on the agent's Microsoft Teams app.
+class GrantedSite(PydanticBaseModel):
+    """One SharePoint site the agent's Teams app was granted under ``Sites.Selected``."""
 
-    The sign-in is a public client (PKCE, no secret), so the refresh token here refreshes
-    without the Teams app's secret; aai-cli's ``microsoft_delegated`` profile does exactly
-    that and stores each rotated token itself. The Teams app's secret is never read for
-    SharePoint and cannot be stored here (``extra="forbid"`` on SecretContent).
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=1)
+    site_id: str = Field(min_length=1)
+    # The grant on the site, kept so a later administrator sign-in can revoke it.
+    permission_id: str = Field(min_length=1)
+
+
+class SharePointContent(SecretContent):
+    """SharePoint for an agent, on the agent's Microsoft Teams app. One of two modes.
+
+    ``delegated``: a person signed in as a public client (PKCE, no secret), so the refresh
+    token here refreshes without the Teams app's secret; aai-cli's ``microsoft_delegated``
+    profile does exactly that and stores each rotated token itself.
+
+    ``selected_sites``: an administrator signed in once to grant the Teams app access to
+    ``sites`` under ``Sites.Selected``. Nothing from that sign-in is kept; ``email`` is the
+    administrator's account. The pod fetches short-lived app-only tokens from the API, which
+    mints them with the Teams app's secret, read server-side.
+
+    Neither mode stores the Teams app's secret (``extra="forbid"`` on SecretContent).
     """
 
+    mode: Literal["delegated", "selected_sites"] = "delegated"
     # Strings rather than UUIDs: encrypt_content JSON-serialises model_dump(), which a UUID
     # object would break. Validated and normalised below.
     connection_id: str
@@ -221,15 +251,31 @@ class SharePointContent(SecretContent):
     email: str = Field(min_length=1)
     scopes: list[str] = Field(default_factory=list)
     read_only: bool = False
-    refresh_token: str = Field(min_length=1)
-    # New for every sign-in. The pod writes the refresh token into aai-cli's store only when
-    # this changes, so a restart keeps aai-cli's rotated token and a reconnect replaces it.
-    sign_in_id: str
+    refresh_token: str | None = Field(default=None, min_length=1)
+    # New for every delegated sign-in. The pod writes the refresh token into aai-cli's store
+    # only when this changes, so a restart keeps aai-cli's rotated token and a reconnect
+    # replaces it.
+    sign_in_id: str | None = None
+    sites: list[GrantedSite] = Field(default_factory=list)
 
     @field_validator("connection_id", "sign_in_id")
     @classmethod
-    def _validate_uuid(cls, value: str) -> str:
-        return str(UUID(value))
+    def _validate_uuid(cls, value: str | None) -> str | None:
+        return None if value is None else str(UUID(value))
+
+    @model_validator(mode="after")
+    def _validate_mode(self) -> Self:
+        if self.mode == "delegated":
+            if self.refresh_token is None or self.sign_in_id is None:
+                raise ValueError("a delegated SharePoint sign-in needs refresh_token and sign_in_id")
+            if self.sites:
+                raise ValueError("a delegated SharePoint sign-in holds no granted sites")
+        else:
+            if not self.sites:
+                raise ValueError("selected-sites SharePoint needs at least one granted site")
+            if self.refresh_token is not None or self.sign_in_id is not None:
+                raise ValueError("selected-sites SharePoint keeps no token from the administrator's sign-in")
+        return self
 
 
 class ZohoMailContent(SecretContent):
@@ -335,6 +381,7 @@ class Agent(BaseModel, table=True):
             "+ (agent_template_override_version_id IS NOT NULL)::integer = 1)",
             name="ck_agent_template_pin_state",
         ),
+        sa.CheckConstraint("llm_budget_usd IS NULL OR llm_budget_usd >= 0", name="check_agent_llm_budget_non_negative"),
     )
 
     organization_id: UUID = SqlField(foreign_key="organization.id", nullable=False, ondelete="CASCADE")
@@ -353,6 +400,8 @@ class Agent(BaseModel, table=True):
     )
     name: str = SqlField(nullable=False, max_length=255)
     litellm_key_encrypted: str = SqlField(nullable=False, default="")
+    # Only a digest is persisted; the fresh plaintext key belongs to the runtime Secret.
+    memory_key_hash: str | None = SqlField(default=None, nullable=True, max_length=64, unique=True, index=True)
     status: AgentStatus = SqlField(
         default=AgentStatus.STOPPED,
         sa_column=Column(Enum(AgentStatus), nullable=False, server_default="STOPPED"),
@@ -394,6 +443,31 @@ class Agent(BaseModel, table=True):
         default="",
         sa_column=Column(sa.String(64), nullable=False, server_default=""),
     )
+    # The exact runtime image this Agent starts on. Empty means "follow the
+    # platform pin" (config.openclaw_image / config.hermes_image). Only a
+    # managed update's rollback sets it, to the image the pod ran before the
+    # update, so the rolled-back Agent stays on the runtime that worked for it.
+    # The next managed update clears it again before starting the new image.
+    pinned_runtime_image: str = SqlField(
+        default="",
+        sa_column=Column(sa.String(255), nullable=False, server_default=""),
+    )
+    # Refreshed by a running managed update; NULL when none is running. A value
+    # older than MANAGED_UPDATE_STALE_SECONDS means the process running it died,
+    # so the Agent is no longer blocked. See `managed_update_in_flight`.
+    managed_update_heartbeat_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    # How the last managed update ended, the backup it took, and — for a backup
+    # that failed — why. Cleared when the next managed update starts.
+    managed_update_outcome: ManagedUpdateOutcome | None = SqlField(
+        default=None,
+        sa_column=Column(sa.String(20), nullable=True),
+    )
+    managed_update_restore_point_id: UUID | None = SqlField(default=None, nullable=True)
+    managed_update_failure_reason: str | None = SqlField(default=None, nullable=True, max_length=500)
     agent_type: AgentType = SqlField(
         default=AgentType.OPENCLAW,
         sa_column=Column(sa.String(20), nullable=False, server_default="openclaw"),
@@ -420,6 +494,43 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # Opt-in Agent Memory. Turning it off stops recall and retain but keeps stored memories.
+    memory_enabled: bool = SqlField(
+        default=False,
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
+    # The Agent's own spend limit (USD), enforced on its LiteLLM key. NULL follows the
+    # Organization's default Agent limit. Never above the Organization's own limit.
+    llm_budget_usd: float | None = SqlField(default=None, nullable=True)
+    # Spend snapshot and alert state, refreshed on a schedule — the same shape and
+    # reasoning as the Organization's: surfaces read this, never the proxy, and NULL
+    # spend means "not yet observed", never zero.
+    llm_spend_usd: float | None = SqlField(default=None, nullable=True)
+    llm_spend_observed_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    llm_budget_renews_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    llm_alerted_threshold: int | None = SqlField(default=None, nullable=True)
+    llm_alert_key: str | None = SqlField(default=None, nullable=True, max_length=128)
+
+
+# A managed update refreshes its heartbeat on every poll while it waits. It runs
+# as a background task in one API process; if that process dies, nothing clears
+# the heartbeat, so one this old is treated as no update at all. Long enough to
+# cover the slowest single step between beats (a stop or a start).
+MANAGED_UPDATE_STALE_SECONDS = 120
+
+
+def managed_update_in_flight(agent: Agent) -> bool:
+    """True while a managed update is running for this Agent."""
+    beat = agent.managed_update_heartbeat_at
+    return beat is not None and beat > datetime.now(UTC) - timedelta(seconds=MANAGED_UPDATE_STALE_SECONDS)
 
 
 class AgentAccess(BaseModel, table=True):
@@ -1270,6 +1381,16 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 AgentModelSource = Literal["default", "override"]
 
 
+class AgentManagedUpdateRead(PydanticBaseModel):
+    """How the Agent's last managed update ended."""
+
+    outcome: ManagedUpdateOutcome
+    #: The automatic backup the update took, when it got that far.
+    restore_point_id: UUID | None = None
+    #: Why the backup failed; set only for BACKUP_FAILED.
+    failure_reason: str | None = None
+
+
 class AgentProvisioningErrorRead(PydanticBaseModel):
     """A failed start, as shown to anyone who can read the Agent.
 
@@ -1283,6 +1404,14 @@ class AgentProvisioningErrorRead(PydanticBaseModel):
     category: AgentProvisioningErrorCategory
     summary: str
     detail: str | None = None
+
+
+class AgentCreatorRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    full_name: str | None
+    email: str
 
 
 class AgentRead(PydanticBaseModel):
@@ -1310,6 +1439,10 @@ class AgentRead(PydanticBaseModel):
     #: surface can say what a restart would switch it to without recomputing the rule.
     pending_model: str
     update_available: bool = False
+    #: A managed update is running. Lifecycle and restore point actions are
+    #: refused until it ends; a client polls until this goes back to false.
+    update_in_progress: bool = False
+    last_managed_update: AgentManagedUpdateRead | None = None
     secrets: list[AgentSecretRead] = Field(default_factory=list)
     skills: list[AgentAssignedSkillRead] = Field(default_factory=list)
     configured_platform_keys: list[str] = Field(default_factory=list)
@@ -1318,14 +1451,32 @@ class AgentRead(PydanticBaseModel):
     native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    memory_enabled: bool = False
     last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
+    creator: AgentCreatorRead | None = None
+    #: Latest recorded inbound or outbound message, withheld without activity.read.
+    last_message_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class AgentFilter(PydanticBaseModel):
     status: AgentStatus | None = None
+
+
+class PlatformAgentIdentity(NamedTuple):
+    """An Agent as the Platform view may name it: identity and lifecycle, nothing more.
+
+    A fixed column list rather than the Agent row, per the Platform oversight ADR's
+    explicit-allowlist rule.
+    """
+
+    id: UUID
+    name: str
+    status: AgentStatus
+    organization_id: UUID
+    organization_name: str
 
 
 class AgentRuntimeDiagnosticsRead(PydanticBaseModel):
@@ -1373,3 +1524,63 @@ class AgentLogHistoryRead(PydanticBaseModel):
     has_more: bool
     session_ended_at: datetime | None = None
     next_snapshot_id: UUID | None = None
+
+
+class AgentLlmBudgetState(str, enum.Enum):
+    OK = "ok"
+    WARNING = "warning"
+    EXHAUSTED = "exhausted"
+    # Spend has never been observed: we do not know it is fine, only that we have not
+    # looked yet.
+    UNKNOWN = "unknown"
+
+
+# Where an Agent's limit in force comes from: its own, the Organization's default for
+# Agents, or the Organization's own limit holding either of those down.
+AgentLlmBudgetSource = Literal["agent", "default", "organization"]
+
+
+class AgentLlmBudgetRead(PydanticBaseModel):
+    """An Agent's spend limit and what it has spent against it.
+
+    Readable by anyone who may read the Agent's costs (`cost.read` on the Agent).
+    """
+
+    # The limit in force on the Agent's key.
+    limit_usd: float
+    # The Agent's own limit, or None when it follows the Organization's default.
+    own_limit_usd: float | None = None
+    # Where `limit_usd` comes from: the Agent's own limit, or the default. A default
+    # or own limit above the Organization's is held to the Organization's instead.
+    source: AgentLlmBudgetSource
+    # What an Agent without a limit of its own gets, for "use default ($X)". Only for
+    # callers who may change the limit (`can_manage`); None otherwise.
+    default_limit_usd: float | None = None
+    # The ceiling an Agent's own limit may not exceed: the Organization's limit. Only
+    # for callers who may change the limit (`can_manage`); None otherwise.
+    organization_limit_usd: float | None = None
+    window: str
+    state: AgentLlmBudgetState
+    spend_usd: float | None = None
+    renews_at: datetime | None = None
+    can_manage: bool = False
+
+
+class AgentLlmBudgetListItem(PydanticBaseModel):
+    """One row of the Organization's Agent spend-limit overview."""
+
+    agent_id: UUID
+    agent_name: str
+    limit_usd: float
+    own_limit_usd: float | None = None
+    source: AgentLlmBudgetSource
+    state: AgentLlmBudgetState
+    spend_usd: float | None = None
+
+
+class AgentLlmBudgetUpdate(PydanticBaseModel):
+    """An Agent's own spend limit. Null follows the Organization's default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    budget_usd: float | None = Field(ge=0, allow_inf_nan=False)

@@ -30,6 +30,9 @@ spec:
         # Also roll on kubeconfig secret changes (mounted as a volume). The
         # litellm-api-key secret is created by a Job at runtime, so it has no
         # render-time content to checksum and is intentionally not tracked here.
+        {{- if .Values.memory.enabled }}
+        checksum/memory-settings-key: {{ .Values.memory.settingsKeyChecksum | quote }}
+        {{- end }}
         checksum/kubeconfig: {{ include (print $.Template.BasePath "/kubeconfig-secret.yaml") . | sha256sum }}
         # Roll the pods on every deploy of a new commit even when the image
         # tag itself is an unchanged moving tag (e.g. `latest`) — otherwise
@@ -51,12 +54,23 @@ spec:
               containerPort: 8000
             - name: ingest
               containerPort: {{ .Values.service.ingestPort }}
+            {{- if .Values.memory.enabled }}
+            - name: memory-settings
+              containerPort: 8004
+            {{- end }}
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
             - secretRef:
                 name: {{ .Values.litellmApiKeySecretName }}
           env:
+            {{- if .Values.memory.enabled }}
+            - name: MEMORY_RUNTIME_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.memory.hindsightSecretName }}
+                  key: AGENTBARN_MEMORY_SETTINGS_KEY
+            {{- end }}
             # The namespace this release runs in — the API creates agent
             # workloads (Deployments/Services/PVCs/Secrets) here. Without it the
             # app falls back to its hardcoded "agent-farm" default, so a staging
@@ -85,6 +99,10 @@ spec:
               value: "{{ .Values.agentModelAllowlist }}"
             - name: AGENT_FIRECRAWL_BASE_URL
               value: "{{ .Values.agentFirecrawlBaseUrl }}"
+            - name: PROMETHEUS_URL
+              value: {{ .Values.prometheus.url | quote }}
+            - name: PROMETHEUS_USERNAME
+              value: {{ .Values.prometheus.username | quote }}
             {{- if .Values.agentDefaultModel }}
             - name: AGENT_DEFAULT_MODEL
               value: "{{ .Values.agentDefaultModel }}"
@@ -110,6 +128,10 @@ spec:
             {{- if .Values.restorePoints.restoreTimeoutSeconds }}
             - name: RESTORE_POINT_RESTORE_TIMEOUT_SECONDS
               value: "{{ .Values.restorePoints.restoreTimeoutSeconds }}"
+            {{- end }}
+            {{- if .Values.managedUpdate.readyTimeoutSeconds }}
+            - name: AGENT_UPDATE_READY_TIMEOUT_SECONDS
+              value: "{{ .Values.managedUpdate.readyTimeoutSeconds }}"
             {{- end }}
           volumeMounts:
             - name: kubeconfig
