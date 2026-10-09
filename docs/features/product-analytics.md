@@ -22,8 +22,8 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
   - Names, display snapshots, and changed values are never sent.
   - User email and name are sent as person properties only when `ANALYTICS_INCLUDE_USER_DETAILS` is true. It defaults to false for privacy; our production and staging workflows explicitly enable it.
 - **Installation name and environment.** Every event carries `installation_name` and `installation_environment`, derived from `WEB_APP_URL` with no configuration:
-  - **remote** (a public domain): `installation_name` is the lowercased host, for example `app.agentbarn.dev`, and `installation_environment` is `remote`.
-  - **local** (an empty host, `localhost`, `*.localhost`, `*.local`, or a loopback, private or link-local IP): `installation_name` is `local-<first 8 characters of the Installation id>`, for example `local-02012e58`, and `installation_environment` is `local`.
+  - **local** (a developer machine: an empty or malformed host, `localhost`, `*.localhost`, or a loopback or unspecified IP such as `127.0.0.1`, `::1` or `0.0.0.0`): `installation_name` is `local-<first 8 characters of the Installation id>`, for example `local-02012e58`, and `installation_environment` is `local`.
+  - **remote** (every other host, including `*.local`, private IPs and intranet names): `installation_name` is the host, lowercased with any trailing dot removed, for example `app.agentbarn.dev`, `agentbarn.local` or `10.0.5.20`, and `installation_environment` is `remote`. So a customer on an internal network appears under its own name. A developer stack whose `WEB_APP_URL` is not localhost also appears as remote.
   - Filter or break down by these event properties without Group Analytics. For example, `installation_environment = remote` excludes every developer stack, and `installation_name = app.agentbarn.dev` shows one Installation.
 - **Groups.** Every event belongs to the `installation` group, keyed by the Installation id and named with the same value as `installation_name`.
   - Organization-scoped events also belong to the `organization` group, keyed by the Organization id, and carry `organization_id`.

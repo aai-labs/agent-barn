@@ -14,7 +14,8 @@ load_dotenv(ROOT_ENV_PATH, override=False)
 DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_AjhfVLSegE5yXsARYYJsGJDC3bwBPdKfUD3dLvoLjbw7"
 DEFAULT_POSTHOG_HOST = "https://eu.i.posthog.com"
 LOCAL_HOSTNAMES = frozenset({"localhost"})
-LOCAL_HOST_SUFFIXES = (".localhost", ".local")
+LOCAL_HOST_SUFFIXES = (".localhost",)
+URL_SCHEME_SEPARATOR = "://"
 
 
 class Config(BaseSettings):
@@ -179,7 +180,14 @@ class Config(BaseSettings):
 
     @property
     def web_app_host(self) -> str:
-        return (urlparse(self.web_app_url).hostname or "").lower()
+        url = self.web_app_url.strip()
+        if URL_SCHEME_SEPARATOR not in url:
+            url = f"//{url}"
+        try:
+            host = urlparse(url).hostname or ""
+        except ValueError:
+            return ""
+        return host.rstrip(".").lower()
 
     @property
     def is_local_installation(self) -> bool:
@@ -190,7 +198,9 @@ class Config(BaseSettings):
             address = ipaddress.ip_address(host)
         except ValueError:
             return False
-        return address.is_loopback or address.is_private or address.is_link_local
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return address.is_loopback or address.is_unspecified
 
     @model_validator(mode="after")
     def local_api_external_url(self) -> Self:

@@ -12,7 +12,7 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - `ANALYTICS_INCLUDE_USER_DETAILS` defaults to false for privacy. Our production and staging workflows explicitly enable it.
   - `ANALYTICS_POSTHOG_HOST` defaults to PostHog Cloud EU.
   - `ANALYTICS_POSTHOG_PROJECT_TOKEN` defaults to the Agent Barn project token. Committing it is an approved exception to the AGENTS.md token rule, because PostHog project tokens are public by design.
-  - `INSTALLATION_NAME` falls back to the `WEB_APP_URL` host.
+  - The Installation is named from `WEB_APP_URL`: its host for remote installs, `local-<short id>` for localhost and loopback (see the 2026-10-09 entries).
 - Also delivered: `PostHogClient.send_batch` in `api/infrastructure/posthog/`.
   - Makes one POST to `{host}/batch/` and waits at most 5 seconds.
   - A 408, a 429, a 5xx or a transport failure raises `RetryablePostHogException`. Any other non-200 status raises `TerminalPostHogException`.
@@ -28,7 +28,7 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - **When PostHog fails:** an unreachable PostHog is retried on attempts 1 and 2, then dropped with a warning on attempt 3. A rejected batch dead-letters.
 - Also delivered: the nine slice-1 events now list `product_analytics.posthog` alongside their existing handlers. The behaviour contract is [`../product-analytics.md`](../product-analytics.md).
 - Also delivered: deployment wiring.
-  - The API chart renders `ANALYTICS_ENABLED`, which defaults to true in the chart and the Helmfile, and `ANALYTICS_INCLUDE_USER_DETAILS`. It renders `INSTALLATION_NAME` only when set.
+  - The API chart renders `ANALYTICS_ENABLED`, which defaults to true in the chart and the Helmfile, and `ANALYTICS_INCLUDE_USER_DETAILS`.
   - `deploy.yml` enables analytics on `main` only, so staging sends nothing by default. User details are explicitly enabled on both `main` and `staging`. `deploy-public.yml` enables both.
   - `.env.deploy.spec` and customer release bundles ship analytics on. The local `.env.spec` explicitly disables it.
   - The opt-out is documented in `operations.md` and the README.
@@ -41,6 +41,23 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-09 — AF-357 — Only developer machines count as local
+
+- Delivered: following an independent audit, `installation_environment = local` now means an empty host, `localhost`, `*.localhost`, or a loopback or unspecified IP (including IPv4-mapped IPv6).
+  - `*.local` hosts, private, link-local and CGNAT IPs, and dotless intranet names are now `remote` and named by their host.
+  - The reason: the customer template ships `WEB_APP_URL=http://agentbarn.local`, and on-premises installs often use private IPs. Under the previous rule, both were hidden by the `remote` filter.
+- Fixed: a malformed `WEB_APP_URL` such as `http://[abc` made `urlparse` raise inside every analytics send. It now gives an empty host and counts as local.
+- Also fixed: a URL without a scheme now yields its host instead of nothing, and a trailing dot is stripped, so `app.example.com.` and `app.example.com` share one name.
+- Changed: `core/config.py` (`web_app_host`, `is_local_installation`), `product-analytics.md`, `operations.md`, and this file's Current state, which still described `INSTALLATION_NAME`.
+- Verified:
+  - The config unit tests cover:
+    - 14 local URLs
+    - 10 remote URLs
+    - 5 host normalisation cases, including credentials that never reach the name and the malformed URL
+  - 10 of them failed before the change, including the `Invalid IPv6 URL` crash.
+  - The config, handler and message-count suites pass (66).
+- Follow-up: the local end-to-end run, which also covers `agentbarn.local`, a private IP and a malformed URL.
 
 ### 2026-10-09 — AF-357 — Installation name from the domain, plus installation_environment
 
