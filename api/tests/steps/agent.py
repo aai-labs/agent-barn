@@ -49,6 +49,9 @@ class MockK8sModule(Module):
         # Every attribute is truthy by default, which would read as "a pod is still
         # terminating" and block every restore point operation in the suite.
         mock.has_pods_for_deployment.return_value = False
+        mock.get_pod_readiness.return_value = ("ready", None)
+        mock.runtime_has_exited.return_value = False
+
         # Same idea: "no pod to read" is the sane default, so a MagicMock never
         # reaches the pinned_runtime_image column.
         mock.get_pod_image.return_value = None

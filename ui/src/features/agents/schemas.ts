@@ -6,8 +6,24 @@ import { SkillScopeSchema } from "@/features/skills/schemas";
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
+  source: z.enum(["agent_secret", "shared_credential", "platform_default"]).optional(),
   sharedCredentialId: z.string().uuid().nullable().optional(),
   sharedCredentialName: z.string().nullable().optional(),
+  isolation: z
+    .object({
+      desired: z.boolean(),
+      supportedModes: z.array(z.enum(["direct", "isolated"])),
+      directDescription: z.string(),
+      isolatedDescription: z.string(),
+      switchAvailable: z.boolean(),
+      applied: z.boolean().nullable().optional(),
+      generation: z.string().uuid().nullable().optional(),
+      pending: z.boolean().optional(),
+      lastVerified: z.boolean().nullish(),
+      reconnectRequired: z.boolean().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const IntegrationValidationResultSchema = z.object({

@@ -58,12 +58,16 @@ for channel in $(echo "${AGENTBARN_NATIVE_CHANNELS:-}" | tr ',' ' '); do
   install_plugin "@openclaw/$channel"
 done
 
+# The gog wrapper installs here when Google Workspace is brokered through the
+# credential gateway. Ahead of /usr/local/bin so agent commands resolve it first.
+export PATH="/home/node/.local/bin:$PATH"
+
 if [ -f /app/config/aai-cli-setup.sh ]; then
-  sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
+  sh /app/config/aai-cli-setup.sh || exit $?
 fi
 
 if [ -f /app/config/gog-setup.sh ]; then
-  sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
+  sh /app/config/gog-setup.sh || exit $?
 fi
 if [ -n "${MEMORY_API_KEY:-}" ]; then
   python3 /app/config/memory-gateway-ready.py || true

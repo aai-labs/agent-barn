@@ -1456,7 +1456,9 @@ def test_concurrent_delete_while_starting_is_rejected_as_conflict():
 
         with then("the delete is rejected as a lifecycle conflict rather than tearing down the runtime mid-start"):
             assert_that(responses["delete"].status_code, equal_to(status.HTTP_409_CONFLICT))
-            k8s.delete_deployment.assert_not_called()
+            # Start reconciles a previous incomplete workload before provisioning;
+            # the concurrent delete must not add another teardown.
+            k8s.delete_deployment.assert_called_once()
 
         with then("the start request completes normally"):
             assert_that(responses["start"].status_code, equal_to(status.HTTP_200_OK))
@@ -4212,7 +4214,7 @@ def test_start_hermes_agent_with_platform_firecrawl():
             )
 
 
-def test_start_agent_per_agent_firecrawl_overrides_platform():
+def test_start_agent_per_agent_firecrawl_is_routed_through_the_gateway_not_the_platform_key():
     with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
@@ -4223,20 +4225,37 @@ def test_start_agent_per_agent_firecrawl_overrides_platform():
                 json={"secrets": [{"provider": "firecrawl", "content": {"api_key": "fc-my-key"}}]},
                 headers=_auth(context),
             )
+            from api.domains.integrations.repository import IntegrationRepository
+
+            context.injector.get(IntegrationRepository).set_policy(context.agent.id, SecretProvider.FIRECRAWL, True)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("the per-agent key is used instead of the platform key"):
+        with then("neither the real per-agent key nor the platform key reaches the pod"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             secret = k8s.create_secret.call_args.args[1]
-            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-my-key"))
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], is_not(equal_to("fc-my-key")))
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], is_not(equal_to("fc-platform-key")))
+
+        with then("the pod instead carries a Gateway Token and the forwarding URL"):
+            assert_that(
+                secret.string_data["FIRECRAWL_API_KEY"],
+                equal_to(secret.string_data["AF_GATEWAY_TOKEN_FIRECRAWL"]),
+            )
+            config_map = k8s.create_config_map.call_args.args[1]
+            overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
+            fc_cfg = overlay["plugins"]["entries"]["firecrawl"]["config"]
+            assert_that(fc_cfg["webSearch"]["baseUrl"], contains_string("/p/firecrawl"))
 
 
-def test_start_agent_per_agent_firecrawl_overrides_base_url():
+def test_start_agent_per_agent_firecrawl_ignores_a_stored_self_hosted_base_url():
+    # The gateway pins the upstream to api.firecrawl.dev regardless of what a stored
+    # credential's base_url says — that field could otherwise redirect the shared
+    # platform key to a host the credential's owner controls.
     with given([*_GIVEN_WITH_FIRECRAWL, there_is_an_agent()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
-        with when("I add a per-agent firecrawl secret with base_url and start"):
+        with when("I add a per-agent firecrawl secret naming a different base_url and start"):
             client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={
@@ -4245,26 +4264,27 @@ def test_start_agent_per_agent_firecrawl_overrides_base_url():
                             "provider": "firecrawl",
                             "content": {
                                 "api_key": "fc-cloud-key",
-                                "base_url": "https://api.firecrawl.dev",
+                                "base_url": "https://self-hosted.example.com",
                             },
                         }
                     ]
                 },
                 headers=_auth(context),
             )
+            from api.domains.integrations.repository import IntegrationRepository
+
+            context.injector.get(IntegrationRepository).set_policy(context.agent.id, SecretProvider.FIRECRAWL, True)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("both the key and base URL are overridden"):
+        with then("the pod still points at the gateway, not the stored base_url"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             secret = k8s.create_secret.call_args.args[1]
-            assert_that(secret.string_data["FIRECRAWL_API_KEY"], equal_to("fc-cloud-key"))
+            assert_that(secret.string_data["FIRECRAWL_API_KEY"], is_not(equal_to("fc-cloud-key")))
             config_map = k8s.create_config_map.call_args.args[1]
             overlay = json.loads(config_map.data["openclaw-config-overlay.json"])
             fc_cfg = overlay["plugins"]["entries"]["firecrawl"]["config"]
-            assert_that(
-                fc_cfg["webSearch"]["baseUrl"],
-                equal_to("https://api.firecrawl.dev"),
-            )
+            assert_that(fc_cfg["webSearch"]["baseUrl"], contains_string("/p/firecrawl"))
+            assert_that(fc_cfg["webSearch"]["baseUrl"], is_not(contains_string("self-hosted.example.com")))
 
 
 _GIVEN_WITHOUT_FIRECRAWL = [
@@ -5207,38 +5227,6 @@ def test_patch_agent_rejects_google_workspace_scopes_missing_selected_service():
             assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
 
 
-def test_start_agent_materializes_gog_env_and_setup_script():
-    import json as _json
-
-    with given([*_GIVEN, there_is_an_agent()]) as context:
-        client: TestClient = context.client
-        k8s: MagicMock = context.injector.get(KubernetesClient)
-
-        with when("I start an agent with a Google Workspace credential"):
-            _configure_gws(client, context)
-            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
-
-        with then("the pod secret carries everything gog needs to rebuild its state"):
-            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            secret = k8s.create_secret.call_args.args[1]
-            assert_that(secret.string_data["GOG_HOME"], equal_to("/home/node/.config/gogcli"))
-            assert_that(secret.string_data["GOG_KEYRING_BACKEND"], equal_to("file"))
-            assert_that(len(secret.string_data["GOG_KEYRING_PASSWORD"]), greater_than(0))
-            assert_that(secret.string_data["GOG_ACCOUNT_EMAIL"], equal_to("user@example.com"))
-            token = _json.loads(secret.string_data["GOG_TOKEN_JSON"])
-            assert_that(token["refresh_token"], equal_to("gws-refresh-token"))
-            assert_that(token["services"], equal_to(["gmail", "calendar"]))
-            client_json = _json.loads(secret.string_data["GOG_CLIENT_JSON"])
-            assert_that(client_json["web"]["client_id"], equal_to("client-id.apps.googleusercontent.com"))
-
-        with then("the setup script is mounted and the agent is told how to use gog"):
-            config_map = k8s.create_config_map.call_args.args[1]
-            assert_that(config_map.data, has_key("gog-setup.sh"))
-            assert_that(config_map.data["gog-setup.sh"], contains_string("gog auth tokens import -"))
-            assert_that(config_map.data["AGENTS.md"], contains_string("Google Workspace (gog)"))
-            assert_that(config_map.data["AGENTS.md"], contains_string("user@example.com"))
-
-
 def test_start_agent_gog_state_is_not_on_the_hermes_pvc():
     """Hermes' PVC is /opt/data (where aai-cli lives); gog's state is deliberately
     ephemeral, since it is rebuilt from the credential on every boot."""
@@ -5256,6 +5244,45 @@ def test_start_agent_gog_state_is_not_on_the_hermes_pvc():
             assert_that(secret.string_data["GOG_HOME"], equal_to("/home/hermes/.config/gogcli"))
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(config_map.data, has_key("gog-setup.sh"))
+
+
+def test_start_agent_brokered_google_workspace_leaves_no_renewable_credential_in_the_pod():
+    """The point of brokering: gog gets a token per invocation, not the grant itself."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent whose Google Workspace credential is brokered"):
+            _configure_gws(client, context)
+            from api.domains.integrations.repository import IntegrationRepository
+
+            context.injector.get(IntegrationRepository).set_policy(
+                context.agent.id, SecretProvider.GOOGLE_WORKSPACE, True
+            )
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the refresh token and OAuth client secret are absent from the pod Secret"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data, is_not(has_key("GOG_TOKEN_JSON")))
+            assert_that(secret.string_data, is_not(has_key("GOG_CLIENT_JSON")))
+            assert_that(secret.string_data, is_not(has_key("GOG_KEYRING_PASSWORD")))
+            assert_that(str(secret.string_data), is_not(contains_string("gws-refresh-token")))
+
+        with then("the pod instead carries its Gateway Token and the mint endpoint"):
+            assert_that(secret.string_data["GOG_HOME"], equal_to("/home/node/.config/gogcli"))
+            assert_that(secret.string_data["GOG_ACCOUNT_EMAIL"], equal_to("user@example.com"))
+            assert_that(len(secret.string_data["AF_GATEWAY_TOKEN_GOOGLE_WORKSPACE"]), greater_than(0))
+            assert_that(secret.string_data["AF_GATEWAY_TOKEN_URL"], contains_string("/token"))
+
+        with then("the shim is mounted instead of the credential-importing setup script"):
+            config_map = k8s.create_config_map.call_args.args[1]
+            assert_that(config_map.data, has_key("gog-shim.sh"))
+            assert_that(config_map.data["gog-shim.sh"], contains_string("exec /usr/local/bin/gog"))
+            assert_that(config_map.data["gog-setup.sh"], is_not(contains_string("gog auth tokens import")))
+            assert_that(config_map.data["gog-setup.sh"], contains_string(".local/bin/gog"))
+            assert_that(config_map.data["AGENTS.md"], contains_string("Google Workspace (gog)"))
+            assert_that(config_map.data["AGENTS.md"], contains_string("user@example.com"))
 
 
 def test_start_agent_without_google_workspace_has_no_gog_artifacts():
@@ -5996,6 +6023,19 @@ def test_agent_list_batches_shared_credential_labels(agent_count):
                             "secret_name": context.shared_credential.name,
                             "shared_credential_id": str(context.shared_credential.id),
                             "shared_credential_name": context.shared_credential.name,
+                            "isolation": {
+                                "desired": True,
+                                "supported_modes": ["direct", "isolated"],
+                                "direct_description": "This Agent receives the Jira credential and connects to Jira directly.",
+                                "isolated_description": "The Jira credential stays outside this Agent; Agent Barn authenticates requests.",
+                                "switch_available": True,
+                                "applied": None,
+                                "generation": None,
+                                "pending": True,
+                                "last_verified": None,
+                                "reconnect_required": False,
+                            },
+                            "source": "shared_credential",
                         }
                     ]
                 ),

@@ -369,8 +369,6 @@ _COMMAND_PATHS = {
     "posthog dashboards get": _READ,
     "posthog annotations list": _READ,
     "posthog annotations get": _READ,
-    "email messages list": _READ,
-    "email messages get": _READ,
 }
 
 CATALOGUE: dict[tuple[str, ...], CatalogueEntry] = {

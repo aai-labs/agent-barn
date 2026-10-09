@@ -6,6 +6,8 @@ Templates and Skills live beneath `/organizations/{organization_id}/templates` a
 
 Shared Credentials live beneath `/organizations/{organization_id}/shared-credentials`; credentials are never returned as plaintext. Agent-specific Secrets and integration configuration are controlled by Agent Permissions. Google authorization and token exchange use `/integrations/google/...`; callback navigation remains a browser/provider flow. Communications Connections are managed beneath each Agent's `/connections` routes.
 
+Optional credential isolation uses `PUT /organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/isolation`. Consult [OpenAPI](/api/v1/openapi.json) for request fields and recovery metadata. The response may describe a provisioned runtime awaiting readiness; consult the Agent's isolation metadata on subsequent reads.
+
 For exact field names and request bodies, consult [OpenAPI](/api/v1/openapi.json). In particular, the API field `agent_type` names the Agent Runtime (Hermes or OpenClaw).
 
 The deprecated `POST /api/v1/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/reconnect` route remains for compatibility and discovery. Authorized requests for an active Connection always return `409`; native transport recovery requires restarting the Agent. Authentication, Agent update permission, and tenant visibility checks still apply, so invalid credentials, insufficient permission, and concealed or missing resources retain their `401`, `403`, and `404` responses. The route creates no reconnect work.

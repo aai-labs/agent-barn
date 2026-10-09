@@ -118,6 +118,7 @@ services:
       # Agent pods run in k3d, outside this Compose network, so they reach the
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
+      CREDENTIAL_GATEWAY_BASE_URL: ${CREDENTIAL_GATEWAY_BASE_URL:-http://host.docker.internal:${GATEWAY_PORT:-8004}/gateway/v1}
       MEMORY_BASE_URL: ${MEMORY_BASE_URL:-http://host.docker.internal:${MEMORY_PORT:-8003}/memory/v1}
       MEMORY_VIEW_BASE_URL: ${MEMORY_VIEW_BASE_URL:-http://memory:8003/memory/view/v1}
       # The API container cannot resolve k3d cluster DNS, so runtime-owned Teams
@@ -286,6 +287,25 @@ services:
       - ./api:/app/api
     ports:
       - "${COMMUNICATIONS_PORT:-8002}:8002"
+
+  credential-gateway:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_credential_gateway
+    restart: unless-stopped
+    command: ["uvicorn", "api.gateway_main:app", "--host", "0.0.0.0", "--port", "8003", "--reload"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
+    ports:
+      - "${GATEWAY_PORT:-8004}:8003"
 
   ui:
     build:

@@ -2,11 +2,12 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from injector import inject, singleton
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentSecret
+from api.domains.integrations.models import AgentIntegrationIsolation
 from api.domains.shared_credentials.exceptions import SharedCredentialNameConflictHTTPException
 from api.domains.shared_credentials.models import (
     SharedCredential,
@@ -122,6 +123,13 @@ class SharedCredentialRepository:
             )
             rows = list(session.exec(orphaned).all())
             for row in rows:
+                session.exec(
+                    delete(AgentIntegrationIsolation).where(
+                        col(AgentIntegrationIsolation.agent_id) == row.agent_id,
+                        col(AgentIntegrationIsolation.provider) == row.provider,
+                        col(AgentIntegrationIsolation.source) == "agent_secret",
+                    )
+                )
                 session.delete(row)
             if rows:
                 session.commit()

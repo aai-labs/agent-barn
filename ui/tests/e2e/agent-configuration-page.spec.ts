@@ -1368,7 +1368,8 @@ test.describe("Agent configuration page", () => {
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
 
-      await expect(section.getByRole("button", { name: "Remove", exact: true })).toBeDisabled();
+      await section.locator("summary").filter({ hasText: "SharePoint" }).click();
+      await expect(section.getByRole("button", { name: "Remove SharePoint", exact: true })).toBeDisabled();
       await expect(section.getByText("Remove all its sites first", { exact: false })).toBeVisible();
     });
 

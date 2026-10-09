@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from api.infrastructure.kubernetes.client import KubernetesClient
 
@@ -11,7 +13,9 @@ _NEWER = _OLDER + timedelta(minutes=5)
 
 
 def _terminated_status(reason=None, exit_code=None):
-    return SimpleNamespace(state=SimpleNamespace(terminated=SimpleNamespace(reason=reason, exit_code=exit_code)))
+    return SimpleNamespace(
+        state=SimpleNamespace(waiting=None, terminated=SimpleNamespace(reason=reason, exit_code=exit_code))
+    )
 
 
 def _waiting_status(reason):
@@ -40,6 +44,44 @@ def _client_listing(*pods):
 
 def _readiness(*pods):
     return _client_listing(*pods).get_pod_readiness(_DEPLOYMENT, _NAMESPACE)
+
+
+def test_termination_wait_includes_pods_already_marked_for_deletion():
+    old = _pod("agent-old", "Running", created=_OLDER, deleting=True, ready=True)
+    k8s = _client_listing(old)
+    k8s._core_v1.list_namespaced_pod.side_effect = [SimpleNamespace(items=[old]), SimpleNamespace(items=[])]
+    with patch("api.infrastructure.kubernetes.client.time.sleep") as sleep:
+        k8s.wait_for_termination(_DEPLOYMENT, _NAMESPACE)
+    assert sleep.call_count == 1
+    assert k8s._core_v1.list_namespaced_pod.call_count == 2
+
+
+def test_termination_timeout_does_not_accept_a_still_live_old_pod():
+    old = _pod("agent-old", "Running", created=_OLDER, deleting=True, ready=True)
+    with pytest.raises(RuntimeError, match="still terminating"):
+        _client_listing(old).wait_for_termination(_DEPLOYMENT, _NAMESPACE, timeout=0)
+
+
+@pytest.mark.parametrize(
+    "reason", ["ErrImagePull", "ImagePullBackOff", "CreateContainerConfigError", "CreateContainerError"]
+)
+def test_image_and_container_configuration_failures_are_not_runtime_exits(reason):
+    pod = _pod("agent-new", "Pending", created=_NEWER, container_statuses=[_waiting_status(reason)])
+    k8s = _client_listing(pod)
+    assert k8s.get_pod_readiness(_DEPLOYMENT, _NAMESPACE) == ("crashed", reason)
+    assert not k8s.runtime_has_exited(_DEPLOYMENT, _NAMESPACE)
+
+
+def test_crash_loop_is_runtime_exit_evidence():
+    pod = _pod("agent-new", "Running", created=_NEWER, container_statuses=[_waiting_status("CrashLoopBackOff")])
+    assert _client_listing(pod).runtime_has_exited(_DEPLOYMENT, _NAMESPACE)
+
+
+def test_failed_pod_requires_a_terminated_runtime_container():
+    exited = _pod("agent-exited", "Failed", created=_NEWER, container_statuses=[_terminated_status("Error", 1)])
+    not_started = _pod("agent-unstarted", "Failed", created=_NEWER)
+    assert _client_listing(exited).runtime_has_exited(_DEPLOYMENT, _NAMESPACE)
+    assert not _client_listing(not_started).runtime_has_exited(_DEPLOYMENT, _NAMESPACE)
 
 
 def test_terminating_failed_pod_is_ignored_while_the_replacement_starts():

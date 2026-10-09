@@ -12,6 +12,7 @@ from hamcrest import assert_that, contains_string, equal_to, has_entries, has_ke
 from api.core.config import Config
 from api.domains.agents.models import SecretProvider, SharePointContent, decrypt_content
 from api.domains.agents.sharepoint_service import decode_sign_in_state
+from api.domains.integrations.repository import IntegrationRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -244,6 +245,18 @@ def test_signing_in_again_replaces_the_previous_sign_in() -> None:
         assert first is not None and first.content is not None
         first_content = decrypt_content(SecretProvider.SHAREPOINT, first.content, TEST_ENCRYPTION_KEY)
         assert isinstance(first_content, SharePointContent)
+        integrations = context.injector.get(IntegrationRepository)
+        integrations.begin(
+            context.agent.id,
+            {
+                "sharepoint": {
+                    "binding_id": str(first.id),
+                    "isolated": True,
+                    "handoff_complete": True,
+                    "reconnect_required": True,
+                }
+            },
+        )
         fake_identity(context).exchange_result = tokens(
             refresh_token="rt-second", scope="Sites.Read.All", email="other@contoso.com"
         )
@@ -263,6 +276,9 @@ def test_signing_in_again_replaces_the_previous_sign_in() -> None:
             assert_that(
                 response.json(),
                 equal_to({"email": "other@contoso.com", "read_only": True, "mode": "delegated", "sites": []}),
+            )
+            assert_that(
+                integrations.runtime(context.agent.id).bindings["sharepoint"]["reconnect_required"], equal_to(False)
             )
 
 

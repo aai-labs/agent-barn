@@ -13,7 +13,7 @@ from api.domains.business_value.catalogue import (
 
 _REFERENCE_NAME = "references/command-reference.md"
 _MICROSOFT_REFERENCE_DIR = "aai-microsoft"
-_EXPECTED_REFERENCE_COUNT = 12
+_EXPECTED_REFERENCE_COUNT = 11
 
 
 def _reference_files() -> dict[str, Path]:

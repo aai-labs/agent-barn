@@ -40,6 +40,9 @@ export interface IntegrationDraft {
   provider: string;
   content: Record<string, string | string[]>;
   sharedCredentialId?: string;
+  existing?: boolean;
+  platformDefault?: boolean;
+  isolated?: boolean;
 }
 
 const AUTO_CONFIGURED_PROVIDER_IDS = new Set<string>();
@@ -49,14 +52,6 @@ export function isAutoConfiguredProvider(providerId: string): boolean {
 }
 
 export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
-  {
-    id: "slack",
-    label: "Slack tool access",
-    scopeNote: "A tool credential is separate from Communication Connection credentials and is exposed only to the Agent's Slack skill.",
-    fields: [
-      { key: "token", label: "Bot or user token", type: "secret", required: true, placeholder: "xoxb-… or xoxp-…" },
-    ],
-  },
   {
     id: "github",
     label: "GitHub",
@@ -177,18 +172,6 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     ],
   },
   {
-    id: "zoho_mail",
-    label: "Zoho Mail",
-    scopeNote: "OAuth 2.0 client credentials with ZohoMail.messages.READ scope",
-    fields: [
-      { key: "email", label: "Email", type: "text", required: true, placeholder: "you@yourdomain.com", hint: "Zoho Mail account email address" },
-      { key: "accountId", label: "Account ID", type: "text", required: true, placeholder: "56218000000008002", hint: "Zoho Mail account ID (from API console)" },
-      { key: "clientId", label: "Client ID", type: "text", required: true, placeholder: "1000.…", hint: "Zoho OAuth 2.0 client ID" },
-      { key: "clientSecret", label: "Client secret", type: "secret", required: true, hint: "Zoho OAuth 2.0 client secret" },
-      { key: "refreshToken", label: "Refresh token", type: "secret", required: true, hint: "OAuth 2.0 refresh token for the Zoho Mail account" },
-    ],
-  },
-  {
     id: "firecrawl",
     label: "Firecrawl",
     scopeNote: "Optional — web search and scraping are built in, and agents use the platform's Firecrawl by default. Adding a key does not enable Firecrawl; it points this agent at your own instance instead, such as Firecrawl Cloud.",
@@ -206,19 +189,6 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "domain", label: "Company domain", type: "text", required: false, placeholder: "aai-labs", hint: "Subdomain only — the part before .pipedrive.com. Leave empty to use the default api.pipedrive.com endpoint." },
     ],
   },
-  // zoho_calendar disabled: not currently offered as an integration. Re-enable by
-  // uncommenting if needed again.
-  // {
-  //   id: "zoho_calendar",
-  //   label: "Zoho Calendar",
-  //   scopeNote: "App password from Zoho account security settings (two-factor must be enabled)",
-  //   fields: [
-  //     { key: "username", label: "Username", type: "text", required: true, placeholder: "you@zoho.com" },
-  //     { key: "email", label: "Email", type: "text", required: true, placeholder: "you@zoho.com" },
-  //     { key: "appPassword", label: "App password", type: "secret", required: true },
-  //     { key: "caldavUrl", label: "CalDAV URL", type: "text", required: true, placeholder: "https://calendar.zoho.com/caldav/..." },
-  //   ],
-  // },
 ];
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
@@ -267,7 +237,7 @@ export function isSignInOnlyProvider(providerId: string): boolean {
 // True if any added integration is missing a required field — used to gate "Hire".
 export function hasIncompleteIntegration(integrations: IntegrationDraft[]): boolean {
   return integrations.some((draft) => {
-    if (isAutoConfiguredProvider(draft.provider)) return false;
+    if (draft.existing || isAutoConfiguredProvider(draft.provider)) return false;
     if (draft.sharedCredentialId) return false;
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;

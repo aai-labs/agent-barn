@@ -89,6 +89,9 @@ class Config(BaseSettings):
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
+    # The credential gateway is a separate deployment because it sits on the request path
+    # of every agent tool call; agent workloads reach it by Service name in-namespace.
+    credential_gateway_base_url: str = "http://agentbarn-api-gateway:8003/gateway/v1"
     memory_base_url: str = "http://agentbarn-api-memory:8003/memory/v1"
     # Where the product API reaches the gateway's read-only viewer; Agents never use it.
     memory_view_base_url: str = "http://agentbarn-api-memory:8003/memory/view/v1"

@@ -92,6 +92,7 @@ deployment limits cannot change their expected budget contracts.
 | `make check-memory` | Rendered gateway/backend isolation and authentication contracts | Helm 3.19.0 |
 | `make test-api` | API unit and integration tests, excluding the Kubernetes client test | Docker for Testcontainers PostgreSQL and the pinned Prometheus image, plus Node.js for the OpenClaw plugin and healthz metrics tests |
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
+| `make test-integration-isolation RUNTIME=both` | Opt-in Secrets/PVC transition contracts in a new disposable k3d cluster | Docker, k3d, kubectl, locally built `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE`; no provider accounts |
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
 | `make coverage` | All API tests with terminal and XML coverage, including the Kubernetes client test | Docker, Node.js, and the Kubernetes prerequisites above |
 | `make lint-ui` | ESLint | None |
@@ -153,7 +154,70 @@ Representative sources:
 - Ingest/activity: `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_conversations.py`, `../../api/tests/integration/test_tool_calls.py`
 - Test application setup: `../../api/tests/conftest.py`, `../../api/tests/core/`
 
+## On-demand integration isolation verification
+
+Run the same deployment-boundary suite locally or manually in GitHub Actions.
+It is outside `api/tests/` and normal PR workflows, so `make test-api` does not
+collect it. The **Integration Isolation (on demand)** workflow
+(`../../.github/workflows/integration-isolation.yml`) accepts Hermes, OpenClaw,
+or both and builds the selected images from the chosen Git ref before testing.
+It publishes a JUnit report and never pushes images or deploys to an existing cluster.
+
+For local runs, reuse images built from the code under test:
+
+```bash
+docker build -t hermes-base:isolation hermes-base
+docker build -t openclaw-base:isolation openclaw-base
+HERMES_TEST_IMAGE=hermes-base:isolation \
+OPENCLAW_TEST_IMAGE=openclaw-base:isolation \
+make test-integration-isolation RUNTIME=both
+```
+
+Use `RUNTIME=hermes` or `RUNTIME=openclaw` and only its image variable to test
+one runtime. `RUNTIME` defaults to Hermes, consistently with the other runtime
+target. Install k3d (the CI/local bootstrap CLI pin is v5.8.3) and kubectl first;
+Docker must support privileged k3d node containers. The suite pins
+`rancher/k3s:v1.31.5-k3s1`, imports local images, creates its own uniquely named
+cluster and kubeconfig, and deletes that cluster on completion or test failure.
+It never uses the current Kubernetes context, application `.env` credentials,
+or an existing Agent PVC. A force-killed runner may leave an `isolation-*`
+cluster; inspect `k3d cluster list` and delete that specific test cluster.
+
+The contract runs generated setup and pinned CLI binaries as the images' own
+non-root users, with separate Jobs and Kubernetes Secrets for each phase and a
+shared PVC. It seeds direct credentials, rotates the PVC SharePoint grant,
+rejects a handoff and verifies preservation, applies isolation, repeats boot,
+and hands the newest service grant back to direct mode. It reads the actual
+isolated Secret and ConfigMap to check for embedded renewable credentials, verifies known CLI store
+entries are gone, exercises GitHub proxy and SharePoint token-url authentication,
+and checks that a missing dedicated token cannot use an unrelated environment token.
+A NetworkPolicy permits only cluster DNS and the in-cluster fixture
+boundary; each phase waits for policy enforcement, proves a second listening
+fixture port is unreachable, and confirms the allowed port is reachable before
+setup. Successful phases emit phase/uid metadata. Failure diagnostics may
+include fixture values; the suite uses no real credentials.
+The old Job pod and Secret are removed before the next phase starts. JUnit
+results are written to the ignored `.scratch/isolation-junit.xml`.
+
+This is a **runtime deployment contract**, not a complete application E2E test:
+it uses a fake provider/broker boundary and does not deploy the product API,
+real credential gateway, UI, LLM, or live provider accounts. API tests own actual
+gateway authorization/revocation, database rotation/cache, RBAC, tenancy,
+preflight and lifecycle error handling. Existing offline image contracts own
+typed Graph files/Excel and gog import. Keep those checks alongside this suite;
+a green cluster run alone does not prove their contracts.
+
 ## Runtime plugin tests
+
+Direct Google credential import is tested against the real pinned gog binary in
+both selected runtime images, with networking disabled. The contracts are
+`../../api/runtime_tests/test_hermes_gog_direct.py` and
+`../../api/runtime_tests/test_openclaw_gog_direct.py`; they run through
+`make test-api-runtime` with the corresponding image variable. They prove the
+generated client/token setup imports a grant that gog can decrypt from its
+file keyring, without contacting a live Google account.
+
+SharePoint contracts run the pinned patched aai-cli in both real images with external networking disabled. A loopback stub verifies POST token requests, dedicated-token failure without environment fallback, typed files/Excel auth, sign-in-marker continuity, failed handoff preservation, mixed provider cleanup and latest-grant handback. The API matrix covers both directions for every provider/runtime, legacy migration, source ownership, failure/retry/restore permissions, durable broker rotation/cache and reconnect. These tests use fixture grants only. Run `make test-api-runtime RUNTIME=hermes` with `HERMES_TEST_IMAGE`, or the OpenClaw equivalent with `OPENCLAW_TEST_IMAGE`. The image must be rebuilt after the pinned CLI/patch changes; an old local tag cannot prove this contract.
 
 Agent Memory gateway tests replay sanitized Hermes and OpenClaw request captures
 from `../../api/tests/fixtures/agent_memory/` through a real HTTP listener. They
@@ -225,8 +289,8 @@ hooks directly. Shared setup lives in
   `../../hermes-base/test-image.sh`, invoked by
   `../../.github/workflows/hermes-base.yml`. Both that workflow and
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI
-  selects the matching workflow when base-image, builder, startup,
-  telemetry-plugin, or matching runtime-fixture paths change.
+  selects the matching workflow using the path triggers documented in
+  [CONTRIBUTING.md](../../CONTRIBUTING.md#open-a-pull-request).
 - `../../hermes-base/test-image.sh` and `../../openclaw-base/test-healthz-metrics.sh`
   run each healthz script in its pinned image under `--memory 1g --cpus 0.5`, as the
   image's own user, and check the CPU and memory it reports. Whether the cgroup files

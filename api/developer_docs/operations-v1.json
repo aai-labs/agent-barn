@@ -1131,6 +1131,11 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/isolation",
+    "apply_integration_isolation_organizations__organization_id__agents__agent_id__integrations__provider__isolation_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/llm-budget",
     "set_agent_llm_budget_organizations__organization_id__agents__agent_id__llm_budget_put"
   ],
