@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException, status
 from hamcrest import (
     assert_that,
+    contains_inanyorder,
     contains_string,
     equal_to,
     greater_than,
@@ -42,6 +43,7 @@ from api.domains.conversations.models import MessageDirection
 from api.domains.events.catalog import (
     AGENT_CREATED,
     AGENT_DELETED,
+    AGENT_LIFECYCLE_EMAIL_HANDLER,
     AGENT_SECRET_ADDED,
     AGENT_SECRET_REMOVED,
     AGENT_SECRET_UPDATED,
@@ -51,6 +53,8 @@ from api.domains.events.catalog import (
     AGENT_TEMPLATE_OVERRIDE_PUBLISHED,
     AGENT_TEMPLATE_OVERRIDE_SELECTED,
     AGENT_UPDATED,
+    PRODUCT_ANALYTICS_HANDLER,
+    SECURITY_AUDIT_HANDLER,
 )
 from api.domains.events.models import EventDeliveryStatus, OutboxMessage
 from api.domains.events.processor import EventDeliveryProcessor
@@ -86,6 +90,7 @@ from api.tests.steps.agent import (
     use_org_for_auth,
 )
 from api.tests.steps.conversation import there_is_a_recorded_message
+from api.tests.steps.cost import cost_records_are_clean, there_are_cost_records
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization,
@@ -1251,11 +1256,15 @@ def test_start_agent_emits_started_domain_event_and_delivery():
             deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
                 started_events[0].event_id
             )
-            assert_that(len(deliveries), equal_to(1))
+            assert_that(
+                [delivery.handler_name for delivery in deliveries],
+                contains_inanyorder(AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER),
+            )
             # Delivery is always persisted PENDING; the immediate enqueue attempt right
             # after is best-effort (falls back to background reconciliation on failure),
             # so whether it's already ENQUEUED here depends on Redis being reachable.
-            assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+            for delivery in deliveries:
+                assert_that(delivery.status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
 
 
 def test_start_agent_wires_telemetry_push_into_the_secret():
@@ -1552,11 +1561,15 @@ def test_stop_agent_emits_stopped_domain_event_and_delivery():
             deliveries = context.injector.get(AgentRepository).outbox_repository.list_deliveries_for_event(
                 stopped_events[0].event_id
             )
-            assert_that(len(deliveries), equal_to(1))
+            assert_that(
+                [delivery.handler_name for delivery in deliveries],
+                contains_inanyorder(AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER),
+            )
             # Delivery is always persisted PENDING; the immediate enqueue attempt right
             # after is best-effort (falls back to background reconciliation on failure),
             # so whether it's already ENQUEUED here depends on Redis being reachable.
-            assert_that(deliveries[0].status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
+            for delivery in deliveries:
+                assert_that(delivery.status, is_in([EventDeliveryStatus.PENDING, EventDeliveryStatus.ENQUEUED]))
 
 
 def test_update_agent_emits_updated_domain_event_with_field_changes():
@@ -1700,7 +1713,11 @@ def test_agent_updated_event_projects_to_durable_security_audit_record():
             outbox_repository = context.injector.get(OutboxMessageRepository)
             messages = _outbox_messages(context)
             updated_event = next(m for m in messages if m.event_name == AGENT_UPDATED)
-            delivery = outbox_repository.list_deliveries_for_event(updated_event.event_id)[0]
+            delivery = next(
+                delivery
+                for delivery in outbox_repository.list_deliveries_for_event(updated_event.event_id)
+                if delivery.handler_name == SECURITY_AUDIT_HANDLER
+            )
             outbox_repository.mark_delivery_enqueued(delivery.id)
             processed = context.injector.get(EventDeliveryProcessor).process(delivery.id)
 
@@ -5932,11 +5949,50 @@ def test_agent_list_metadata_uses_latest_message_occurrence_across_connections(d
                 )
 
 
+def test_agent_list_last_activity_counts_background_model_calls_but_not_memory_or_failures():
+    message_at = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    call_at = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    with given([*_GIVEN, there_is_an_agent(), cost_records_are_clean()]) as context:
+        there_is_a_recorded_message(message_at)(context)
+        there_are_cost_records(occurred_at=call_at)(context)
+        # Neither a memory call nor a failed one is the Agent working.
+        there_are_cost_records(occurred_at=call_at + timedelta(days=1), is_memory=True)(context)
+        there_are_cost_records(occurred_at=call_at + timedelta(days=2), status="failure")(context)
+        for path in (_BASE, f"{_BASE}/{context.agent.id}"):
+            with when("the Agent metadata is read"):
+                result = context.client.get(path, headers={"Authorization": f"Bearer {context.access_token}"})
+                body = result.json()["items"][0] if path == _BASE else result.json()
+            with then("the message time is unchanged and the latest successful call is the activity time"):
+                assert_that(result.status_code, equal_to(200))
+                assert_that(
+                    body,
+                    has_entries(
+                        last_message_at=message_at.isoformat().replace("+00:00", "Z"),
+                        last_activity_at=call_at.isoformat().replace("+00:00", "Z"),
+                    ),
+                )
+
+
+def test_agent_list_last_activity_is_the_later_of_message_and_model_call():
+    message_at = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    with given([*_GIVEN, there_is_an_agent(), cost_records_are_clean()]) as context:
+        there_is_a_recorded_message(message_at)(context)
+        there_are_cost_records(occurred_at=message_at - timedelta(days=3))(context)
+        response = context.client.get(_BASE, headers={"Authorization": f"Bearer {context.access_token}"})
+        assert_that(
+            response.json()["items"][0],
+            has_entries(last_activity_at=message_at.isoformat().replace("+00:00", "Z")),
+        )
+
+
 def test_legacy_agent_list_metadata_does_not_guess_creator_or_message_time():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         response = context.client.get(_BASE, headers={"Authorization": f"Bearer {context.access_token}"})
         assert_that(response.status_code, equal_to(200))
-        assert_that(response.json()["items"][0], has_entries(creator=None, last_message_at=None))
+        assert_that(
+            response.json()["items"][0],
+            has_entries(creator=None, last_message_at=None, last_activity_at=None),
+        )
 
 
 @pytest.mark.parametrize("agent_count", [1, 20])

@@ -8,6 +8,10 @@ Agent Barn manages organization-owned AI agents that use a selected runtime and 
 The tenant boundary that owns agents, templates, skills, memberships, and organization-scoped activity.
 _Avoid_: workspace, tenant account
 
+**Installation**:
+One running Agent Barn deployment, identified by the single generated id in its database, such as the hosted cloud or a customer's self-hosted cluster. Product analytics reports it as a group. See [`product-analytics.md`](docs/features/product-analytics.md).
+_Avoid_: instance, tenant, environment
+
 **Organization Creator**:
 The user who originally created an Organization, retained as immutable provenance. Creation grants an Organization Owner Membership, but later ownership changes do not change the Organization Creator.
 _Avoid_: Organization Owner, current owner

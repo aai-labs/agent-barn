@@ -415,6 +415,28 @@ talks to the provider; `EmailService` above it is transport-agnostic.
   starve real invites.
 - Message size is capped at 5 MiB including attachments. The inline barn logo is sent as a base64 attachment with `disposition: "inline"` and a snake_case `content_id` matching the `cid:` reference in the MJML templates — `contentId` is the Workers binding's spelling and is not accepted by the REST API.
 
+## Product analytics
+
+Business events go to the Agent Barn PostHog project (EU) through the `product_analytics.posthog` Event Handler. What is sent is defined in [`../features/product-analytics.md`](../features/product-analytics.md).
+
+- **`ANALYTICS_ENABLED`** flows through `helmfile.yaml.gotmpl` into the API chart's Secret. Every API process reads that Secret, the worker included.
+  - The chart, the Helmfile and `Config` default to on. Set `ANALYTICS_ENABLED=false` to opt out. A blank value counts as off in `Config`; Helmfile treats a blank as unset and uses its on default. The local development `.env.spec` and tests explicitly set false; keep it false in local development environments.
+- **Where it is on, and where it is off:**
+  - `deploy.yml` sets it to `true` on `main` and `false` on `staging`.
+  - `deploy-public.yml` sets it to `true`.
+  - `.env.deploy.spec` ships `true`, as do customer release bundles.
+  - Plain Helm and Helmfile installs also report by default.
+- **User privacy.** Analytics never sends user email or full name. The former user-details setting has been removed; stale environment entries have no effect in updated processes. Previously sent personal details require separate PostHog cleanup.
+- **Installation label.** Events use the `WEB_APP_URL` hostname for remote installs, or `local-<first 8 UUID characters>` for localhost, loopback, unspecified IPs, or a missing host. The `installation_environment` property labels these as `remote` or `local`; it does not control telemetry. A developer stack with a custom domain is labelled remote. There is no name override, and URL changes preserve the Installation UUID. See [`../features/product-analytics.md`](../features/product-analytics.md).
+- **`ANALYTICS_POSTHOG_HOST`** and **`ANALYTICS_POSTHOG_PROJECT_TOKEN`** default to the EU host and the Agent Barn project token committed in `api/core/config.py`. Override them only to point an install at a test receiver. The project token is write-only and public by design; never commit a personal API key (`phx_`).
+- **Message counts CronJob.**
+  - `analytics-message-counts` runs at minute 15 each hour (`analyticsMessageCounts.schedule`). It sends the previous closed hour's counts.
+  - The chart renders it only when `analyticsEnabled` is `"true"`.
+  - Run the same pass by hand with `make report-message-counts`.
+  - It reads `ANALYTICS_*` from the API Secret only. A `kubectl set env` on the Deployments does not reach it, so override the CronJob itself when pointing a test stack at a recording endpoint.
+- **Outbox volume.** Every successful login writes one Outbox Message and one Event Delivery, and outbox rows are never pruned. Expect `user.logged_in` to dominate the Platform Event Delivery Monitor.
+- **Testing.** Never point a local or staging stack at the real project, because test events cannot be removed from it. For end-to-end checks, set `ANALYTICS_POSTHOG_HOST` to a local recording endpoint.
+
 ## Per-Agent email addresses
 
 Agents reachable by email get their own address on a dedicated subdomain, receive mail through a Cloudflare Email Worker, and reply through the same Email Sending path as transactional mail. Rationale for the Worker: [`../adr/2026-08-31-cloudflare-worker-for-inbound-email.md`](../adr/2026-08-31-cloudflare-worker-for-inbound-email.md).

@@ -10,7 +10,12 @@ from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
 from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
-from api.domains.events.catalog import EVENT_REGISTRY, ORGANIZATION_LLM_BUDGET_CHANGED
+from api.domains.events.catalog import (
+    EVENT_REGISTRY,
+    ORGANIZATION_CREATED,
+    ORGANIZATION_DELETED,
+    ORGANIZATION_LLM_BUDGET_CHANGED,
+)
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.exceptions import LlmBudgetAboveCeiling, OrganizationCreationLimitReached
 from api.domains.organizations.models import (
@@ -480,7 +485,8 @@ class OrganizationRepository:
         organization: Organization,
         creator_id: UUID,
         creation_limit: int,
-    ) -> Organization:
+        actor: ActorIdentity,
+    ) -> tuple[Organization, list[UUID]]:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             # Serialize creation attempts for one user. Without this lock, two
             # concurrent requests could both observe one remaining quota slot.
@@ -500,8 +506,29 @@ class OrganizationRepository:
                     role=OrganizationRole.OWNER,
                 )
             )
+            delivery_ids = self.stage_organization_created(session, organization, actor)
             session.commit()
-            return organization
+            return organization, delivery_ids
+
+    def stage_organization_created(
+        self, session: Session, organization: Organization, actor: ActorIdentity
+    ) -> list[UUID]:
+        event = EVENT_REGISTRY.build_event(
+            event_name=ORGANIZATION_CREATED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization.id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.ORGANIZATION,
+                id=organization.id,
+                organization_id=organization.id,
+            ),
+            correlation_id=uuid4(),
+            payload={"organization_id": organization.id, "created_by_user_id": organization.created_by_user_id},
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return self.outbox_repository.delivery_ids_for_event(session, event.event_id)
 
     def delete(self, organization_id: UUID, before_delete: Callable[[Session], None] | None = None) -> bool:
         with Session(self.delegate.engine) as session:
@@ -513,3 +540,37 @@ class OrganizationRepository:
             session.delete(organization)
             session.commit()
             return True
+
+    def delete_with_event(
+        self,
+        organization_id: UUID,
+        actor: ActorIdentity,
+        before_delete: Callable[[Session], None] | None = None,
+    ) -> list[UUID]:
+        with Session(self.delegate.engine) as session:
+            if before_delete:
+                before_delete(session)
+            organization = session.exec(
+                select(Organization).where(col(Organization.id) == organization_id).with_for_update()
+            ).first()
+            if organization is None:
+                return []
+            event = EVENT_REGISTRY.build_event(
+                event_name=ORGANIZATION_DELETED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION,
+                    id=organization_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={"organization_id": organization_id},
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = self.outbox_repository.delivery_ids_for_event(session, event.event_id)
+            session.delete(organization)
+            session.commit()
+            return delivery_ids

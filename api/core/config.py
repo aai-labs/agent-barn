@@ -1,6 +1,8 @@
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from typing import Self
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic import Field, PostgresDsn, field_validator, model_validator
@@ -8,6 +10,12 @@ from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(ROOT_ENV_PATH, override=False)
+
+DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_AjhfVLSegE5yXsARYYJsGJDC3bwBPdKfUD3dLvoLjbw7"
+DEFAULT_POSTHOG_HOST = "https://eu.i.posthog.com"
+LOCAL_HOSTNAMES = frozenset({"localhost"})
+LOCAL_HOST_SUFFIXES = (".localhost",)
+URL_SCHEME_SEPARATOR = "://"
 
 
 class Config(BaseSettings):
@@ -156,6 +164,45 @@ class Config(BaseSettings):
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
+
+    analytics_enabled: bool = True
+    analytics_posthog_host: str = DEFAULT_POSTHOG_HOST
+    analytics_posthog_project_token: str = DEFAULT_POSTHOG_PROJECT_TOKEN
+
+    @field_validator("analytics_enabled", mode="before")
+    @classmethod
+    def blank_switch_is_off(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return False
+        return value
+
+    @property
+    def is_analytics_enabled(self) -> bool:
+        return self.analytics_enabled and bool(self.analytics_posthog_project_token.strip())
+
+    @property
+    def web_app_host(self) -> str:
+        url = self.web_app_url.strip()
+        if URL_SCHEME_SEPARATOR not in url:
+            url = f"//{url}"
+        try:
+            host = urlparse(url).hostname or ""
+        except ValueError:
+            return ""
+        return host.rstrip(".").lower()
+
+    @property
+    def is_local_installation(self) -> bool:
+        host = self.web_app_host
+        if not host or host in LOCAL_HOSTNAMES or host.endswith(LOCAL_HOST_SUFFIXES):
+            return True
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return address.is_loopback or address.is_unspecified
 
     @model_validator(mode="after")
     def local_api_external_url(self) -> Self:

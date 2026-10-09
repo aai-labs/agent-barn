@@ -17,6 +17,7 @@ from api.domains.events.models import (
     SubjectIdentity,
     SubjectIdentityType,
 )
+from api.domains.events.repository import OutboxMessageRepository
 from api.infrastructure.email.client import EmailClient
 from api.infrastructure.email.models import Email
 from api.tests.core.givenpy import given
@@ -58,7 +59,13 @@ def _start_agent_and_get_delivery_id(context) -> tuple[DomainEventEnvelope, Even
         previous_status=AgentStatus.STOPPED.value,
         new_status=AgentStatus.RUNNING.value,
     )
-    delivery_id = result.delivery_ids[0]
+    outbox_repository: OutboxMessageRepository = context.injector.get(OutboxMessageRepository)
+    delivery_id = next(
+        delivery_id
+        for delivery_id in result.delivery_ids
+        if (delivery := outbox_repository.get_delivery(delivery_id)) is not None
+        and delivery.handler_name == AGENT_LIFECYCLE_EMAIL_HANDLER
+    )
 
     event = DomainEventEnvelope(
         event_name=AGENT_STARTED,

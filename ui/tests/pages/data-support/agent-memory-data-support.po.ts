@@ -5,11 +5,14 @@ import { MOCK_AGENT_ID, mockAgent } from "./agent-data-support.po";
 
 export const MOCK_READER_AGENT_ID = "aaaaaaaa-0000-4000-8000-0000000000a1";
 export const MOCK_SOURCE_AGENT_ID = "aaaaaaaa-0000-4000-8000-0000000000a2";
+export const MOCK_MEMORY_OFF_AGENT_ID = "aaaaaaaa-0000-4000-8000-0000000000a3";
 export const MOCK_GRANT_ID = "bbbbbbbb-0000-4000-8000-0000000000b1";
 
 export const mockMemoryAgents = [
-  { ...mockAgent, id: MOCK_READER_AGENT_ID, name: "Billing" },
-  { ...mockAgent, id: MOCK_SOURCE_AGENT_ID, name: "Triage" },
+  { ...mockAgent, id: MOCK_READER_AGENT_ID, name: "Billing", memory_enabled: true },
+  { ...mockAgent, id: MOCK_SOURCE_AGENT_ID, name: "Triage", memory_enabled: true },
+  // Memory is off, so it cannot receive a grant, but its saved memories can still be shared.
+  { ...mockAgent, id: MOCK_MEMORY_OFF_AGENT_ID, name: "Archivist", memory_enabled: false },
 ];
 
 export const mockMemoryGrant = {

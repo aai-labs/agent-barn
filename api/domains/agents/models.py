@@ -1456,6 +1456,9 @@ class AgentRead(PydanticBaseModel):
     creator: AgentCreatorRead | None = None
     #: Latest recorded inbound or outbound message, withheld without activity.read.
     last_message_at: datetime | None = None
+    #: Latest message or successful model call, so background-only work counts.
+    #: Withheld without activity.read.
+    last_activity_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

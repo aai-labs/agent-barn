@@ -4,7 +4,7 @@ RUNTIME ?= hermes
 .PHONY: \
 	setup run stop stop-clean test-api-runtime test-integration-isolation \
 	restart-ui \
-	dev-api dev-ingest dev-communications dev-gateway dev-memory dev-ui dev-worker dev-monitoring reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts backfill-business-actions forward-teams forward-triggers forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
+	dev-api dev-ingest dev-communications dev-gateway dev-memory dev-ui dev-worker dev-monitoring reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts report-message-counts backfill-business-actions forward-teams forward-triggers forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
 	db-up db-down db-logs db-restart redis-up redis-down redis-logs purge-agent-memory
 
 # One-command local dev: validates .env, brings up k3d + LiteLLM, loads agent
@@ -144,6 +144,11 @@ reconcile-llm-budgets:
 
 run-llm-budget-alerts:
 	cd api && uv run python -c "from api.domains.organizations.llm_budget_alerts import main; main()"
+
+# The hourly product analytics message counts, sent for the previous closed hour. Sends
+# nothing unless ANALYTICS_ENABLED is true; point ANALYTICS_POSTHOG_HOST at a test receiver.
+report-message-counts:
+	cd api && uv run python -c "from api.domains.analytics.message_counts import main; main()"
 
 # Operator-run, never scheduled: classifies stored shell Tool Calls into Business Actions
 # against whatever DB_CONNECTION_URL points at. Safe to re-run; a re-run re-maps changed

@@ -132,10 +132,14 @@ def test_file_delivery_policy_md_is_runtime_neutral():
 # --- build_scheduled_runs_policy_md --------------------------------------------
 
 
-def test_scheduled_runs_policy_md_keeps_the_silence_markers():
+def test_scheduled_runs_policy_md_names_no_reply_as_the_only_silence_marker():
+    """`NO_REPLY` is the one marker both runtimes suppress; OpenClaw posts `[SILENT]`
+    and Hermes posts `HEARTBEAT_OK` verbatim, so the rule must override them."""
     md = build_scheduled_runs_policy_md()
-    for marker in ("[SILENT]", "SILENT", "NO_REPLY", "NO REPLY", "HEARTBEAT_OK"):
-        assert marker in md
+    assert "must be exactly `NO_REPLY`" in md
+    assert "Use `NO_REPLY` even where other" in md
+    assert "`NO REPLY`" not in md
+    assert "`SILENT`" not in md
 
 
 def test_scheduled_runs_policy_md_does_not_route_sends_through_the_deprecated_client():

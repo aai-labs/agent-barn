@@ -1,11 +1,15 @@
 from dataclasses import dataclass
-from datetime import datetime
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 from injector import inject, singleton
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.domains.auth.models import PasswordResetToken, RefreshToken
+from api.domains.events.catalog import EVENT_REGISTRY, USER_SIGNED_UP
+from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
+from api.domains.events.repository import OutboxMessageRepository
+from api.domains.users.models import User
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -37,6 +41,52 @@ class RefreshTokenRepository:
 @dataclass
 class PasswordResetTokenRepository:
     delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
+
+    def redeem(
+        self,
+        token_id: UUID,
+        *,
+        hashed_password: str,
+        security_stamp: str,
+        mark_email_verified: bool,
+        full_name: str | None,
+    ) -> tuple[User, list[UUID]] | None:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            token = session.exec(
+                select(PasswordResetToken).where(col(PasswordResetToken.id) == token_id).with_for_update()
+            ).first()
+            if token is None or token.is_used:
+                return None
+            user = session.exec(select(User).where(col(User.id) == token.user_id).with_for_update()).first()
+            if user is None:
+                return None
+            signed_up = mark_email_verified and user.email_verified_at is None
+            user.hashed_password = hashed_password
+            user.security_stamp = security_stamp
+            if signed_up:
+                user.email_verified_at = datetime.now(UTC)
+            if full_name is not None:
+                user.full_name = full_name
+            token.is_used = True
+            session.add(user)
+            session.add(token)
+            delivery_ids: list[UUID] = []
+            if signed_up:
+                event = EVENT_REGISTRY.build_event(
+                    event_name=USER_SIGNED_UP,
+                    schema_version=1,
+                    occurred_at=datetime.now(UTC),
+                    organization_id=None,
+                    actor=ActorIdentity(type=ActorIdentityType.USER, id=user.id),
+                    subject=SubjectIdentity(type=SubjectIdentityType.USER, id=user.id),
+                    correlation_id=uuid4(),
+                    payload={"user_id": user.id},
+                )
+                self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+                delivery_ids = self.outbox_repository.delivery_ids_for_event(session, event.event_id)
+            session.commit()
+            return user, delivery_ids
 
     def get_unused_by_token_hash(self, token_hash: str) -> PasswordResetToken | None:
         return self.delegate.find_one(PasswordResetToken, token_hash=token_hash, is_used=False)
