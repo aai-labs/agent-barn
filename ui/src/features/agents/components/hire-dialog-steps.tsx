@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { PlusIcon, SearchIcon, XIcon } from "@/components/icons";
 import { SharedManualToggle } from "@/features/shared-credentials/components/shared-manual-toggle";
 import { useSharedManualSwitch } from "@/features/shared-credentials/hooks/use-shared-manual-switch";
@@ -520,6 +520,7 @@ export function IntegrationsStep({
   onChange,
   credentialError,
   agentId,
+  renderIsolation,
 }: {
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
@@ -527,18 +528,19 @@ export function IntegrationsStep({
   // The existing agent, when editing one. Providers that sign in on one of the agent's
   // connections can only be connected once it exists.
   agentId?: string;
+  renderIsolation?: (draft: IntegrationDraft) => ReactNode;
 }) {
   const { switchToShared, switchToManual, handlePickShared } =
     useSharedManualSwitch(integrations, onChange);
 
-  const usedProviders = new Set(integrations.map((i) => i.provider));
+  const usedProviders = new Set(integrations.filter((i) => !i.platformDefault).map((i) => i.provider));
   const available = INTEGRATION_PROVIDERS.filter(
     (p) => !usedProviders.has(p.id),
   );
   const firstCredentialProviderId = integrations[0]?.provider;
 
   function addProvider(id: string) {
-    onChange([...integrations, { provider: id, content: {} }]);
+    onChange([...integrations.filter((draft) => draft.provider !== id), { provider: id, content: {} }]);
   }
   function removeProvider(id: string) {
     onChange(integrations.filter((i) => i.provider !== id));
@@ -579,7 +581,7 @@ export function IntegrationsStep({
       >
         Connect external tools your agent can use. Credentials are encrypted in
         the key vault.
-        {" This step is optional — you can hire without any."}
+        {!agentId && " This step is optional — you can hire without any."}
       </p>
 
       {integrations.map((draft) => {
@@ -593,15 +595,16 @@ export function IntegrationsStep({
         );
 
         return (
-          <div
+          <details
             key={draft.provider}
-            className="flex flex-col gap-3.5 p-4 rounded-2xl"
+            open={!draft.existing}
+            className="p-4 rounded-2xl"
             style={{
               border: "1px solid var(--line)",
               background: "var(--bg-soft)",
             }}
           >
-            <div className="flex items-center justify-between">
+            <summary className="flex cursor-pointer items-center justify-between">
               <div
                 className="font-semibold text-[0.844rem]"
                 style={{ color: "var(--ink)" }}
@@ -611,14 +614,22 @@ export function IntegrationsStep({
               <button
                 type="button"
                 className="af-btn af-btn-ghost af-btn-icon"
-                onClick={() => removeProvider(draft.provider)}
+                hidden={draft.platformDefault}
+                onClick={(event) => { event.preventDefault(); removeProvider(draft.provider); }}
                 aria-label={`Remove ${provider.label}`}
               >
                 <XIcon size={15} />
               </button>
-            </div>
+            </summary>
+            <div className="mt-3.5 flex flex-col gap-3.5">
+            {draft.existing && (
+              <div className="flex items-center justify-between gap-3">
+                <p className="m-0 text-xs" style={{ color: "var(--ink-3)" }}>{draft.platformDefault ? "Uses the operator's default Firecrawl credential." : "Credential configured · value hidden"}</p>
+                {!draft.platformDefault && <button type="button" className="af-btn af-btn-sm" onClick={() => onChange(integrations.map((item) => item.provider === draft.provider ? { ...item, existing: false } : item))}>Replace credential</button>}
+              </div>
+            )}
 
-            {isSharedEligible && (
+            {!draft.existing && isSharedEligible && (
               <SharedManualToggle
                 provider={draft.provider}
                 useShared={useShared}
@@ -638,7 +649,7 @@ export function IntegrationsStep({
               />
             )}
 
-            {provider.authMethod === "microsoft_sign_in" &&
+            {!draft.existing && provider.authMethod === "microsoft_sign_in" &&
               (agentId ? (
                 <SharePointSignIn
                   agentId={agentId}
@@ -654,7 +665,7 @@ export function IntegrationsStep({
                 </p>
               ))}
 
-            {!useShared && provider.authMethod !== "microsoft_sign_in" && (
+            {!draft.existing && !useShared && provider.authMethod !== "microsoft_sign_in" && (
               <IntegrationFields
                 provider={provider}
                 draft={draft}
@@ -683,7 +694,9 @@ export function IntegrationsStep({
                 }}
               />
             )}
-          </div>
+            {renderIsolation?.(draft)}
+            </div>
+          </details>
         );
       })}
 

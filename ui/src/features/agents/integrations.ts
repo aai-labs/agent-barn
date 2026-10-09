@@ -40,6 +40,9 @@ export interface IntegrationDraft {
   provider: string;
   content: Record<string, string | string[]>;
   sharedCredentialId?: string;
+  existing?: boolean;
+  platformDefault?: boolean;
+  isolated?: boolean;
 }
 
 const AUTO_CONFIGURED_PROVIDER_IDS = new Set<string>();
@@ -234,7 +237,7 @@ export function isSignInOnlyProvider(providerId: string): boolean {
 // True if any added integration is missing a required field — used to gate "Hire".
 export function hasIncompleteIntegration(integrations: IntegrationDraft[]): boolean {
   return integrations.some((draft) => {
-    if (isAutoConfiguredProvider(draft.provider)) return false;
+    if (draft.existing || isAutoConfiguredProvider(draft.provider)) return false;
     if (draft.sharedCredentialId) return false;
     const provider = getIntegrationProvider(draft.provider);
     if (!provider) return true;

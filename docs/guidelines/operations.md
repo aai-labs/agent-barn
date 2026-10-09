@@ -437,6 +437,14 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 - **Agent mail draws on the same account-wide sending quota** as invites, password resets, and lifecycle notifications, across both environments. A chatty Agent can starve real user invites; see the quota note above.
 - Relevant limits: 200 routing rules per domain, 200 verified destination addresses per account, 30 domains per zone, 25 MiB inbound message size.
 
+## Optional integration isolation rollout
+
+The [integration contract](../features/integrations.md#optional-credential-isolation) owns mode defaults, source binding and recovery. Prepare new immutable base-image versions for both runtimes when releasing this change; rebuild and run their smoke/runtime suites before enabling isolated SharePoint. Publish no replacement under an existing `VERSION` tag. Deploy the expanded schema and matching API, gateway and UI together. Both API and gateway need the same encryption key and operator Firecrawl configuration. Application rollout preserves existing Agent pods/modes; explicitly restart selected Agents to apply the new generation and verify their Keys metadata.
+
+For a failed application, open the integration setup and Apply & Restart to retry, or select Restore previous mode and then Apply & Restart. A SharePoint reconnect-required message means the broker could not prove continuity; reconnect the sign-in before retrying. Preserve the aai-cli PVC store/key/marker until the handoff succeeds. Credential setup failures now stop startup; repair a corrupted store/key pair rather than booting with stale credentials. The gateway cache needs no separate service or replica affinity. Apply & Restart returns after provisioning; a slow image pull remains unverified and is not torn down on a readiness timeout. If an old pod stays Terminating past the termination budget, inspect its node and volume state before retrying; an operator must establish that the old process cannot run before forcing deletion. Preserve its gateway authorization until termination is established.
+
+Before rolling the application/schema back, apply direct SharePoint through the current API to hand back the latest service-side grant, then stop affected Agents. Do not downgrade while isolated SharePoint generations are live. The generation migration's downgrade requires `AGENT_TOKEN_ENCRYPTION_KEY` when SharePoint rows exist; it removes broker/cache metadata from encrypted payloads while preserving the latest refresh token so older strict schemas can decrypt them. It keeps the latest service-side refresh grant. Downgrade removes the revision marker metadata, so the older setup imports that DB grant again; it cannot capture any subsequent direct-PVC rotation. Keep the rollback interval short and reconnect if Microsoft refuses that grant. Default-source policy is discarded on schema downgrade because older applications have no such binding; restart Agents under the older application's routing after rollback. Keep a database backup and the PVC together; a mode change cannot revoke credentials already received by an Agent.
+
 ## Native runtime gateway rollout
 
 - Transport ownership is fixed by Platform under the [runtime ownership contract](../architecture/runtime-and-deployment.md#platform-plugin-boundary). Current Config, chart values/Helmfile, deployment workflows, and deployment spec no longer expose or forward `COMMUNICATIONS_NATIVE_PLATFORMS`/`communicationsNativePlatforms`. Stale environment values are ignored and cannot restore chat gateway transport. Retire externally managed GitHub variables and deployment overrides as an operator task after older releases no longer depend on them.
@@ -572,9 +580,10 @@ independent versions:
   image contents. Bump the matching file when its Dockerfile, upstream runtime
   pin, resolved `aai-cli` revision or other build dependency, or a file copied
   into the image changes.
-  The Dockerfiles currently resolve `aai-cli` from its public default branch,
-  so rebuilding after that branch moves is a content change and requires a new
-  runtime version. Workflow, smoke-test, and runtime-plugin-only changes do not
+  Both Dockerfiles pin the same `AAI_CLI_COMMIT` and apply matching
+  `aai-token-url.patch` files. The patch preserves delegated Excel support for
+  brokered Graph tokens and prevents unrelated environment-token fallback.
+  Changing either the commit or patch requires a new runtime version. Workflow, smoke-test, and runtime-plugin-only changes do not
   otherwise alter the image and need no version bump.
 
 Rules:
