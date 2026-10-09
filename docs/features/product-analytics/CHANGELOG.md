@@ -42,6 +42,26 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 
 ## Changes
 
+### 2026-10-09 — AF-357 — Installation name from the domain, plus installation_environment
+
+- Delivered: following team feedback, the Installation is named from `WEB_APP_URL` with no configuration. Every event, including message counts, also carries `installation_environment`.
+  - remote: the lowercased host
+  - local (empty, `localhost`, `*.localhost`, `*.local`, or a loopback, private or link-local IP): `local-<first 8 of the Installation id>`
+  - The `$groupidentify` name matches.
+  - `installation_environment = remote` filters out every developer stack.
+  - The `INSTALLATION_NAME` variable is removed everywhere, and a leftover one is ignored.
+- Changed: `core/config.py` (`web_app_host`, `is_local_installation`; removed `installation_name` and `installation_display_name`), `analytics/event_handlers.py` (`installation_name()`, `installation_environment()`), `analytics/message_counts.py`, the Helm values and Secret, Helmfile, `.env.spec`, `.env.deploy.spec`, `deploy.yml` and `deploy-public.yml` (the PR 16 names removed), `product-analytics.md`, `operations.md`, `README.md`.
+- Verified:
+  - The config, handler and message-count tests pass:
+    - local and remote hosts
+    - host normalisation
+    - a leftover variable is ignored
+    - remote and local naming, and the group name
+  - They failed before the change.
+  - The analytics suites pass (76).
+  - Render check 18 of 18: the Secret, Helmfile, specs and workflows carry no `INSTALLATION_NAME`. `helm lint` is clean, and the workflows parse.
+- Follow-up: local end-to-end check.
+
 ### 2026-10-09 — AF-357 — installation_name on every event
 
 - Delivered: every captured event, including hourly message counts, carries `installation_name`.

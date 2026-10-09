@@ -45,14 +45,38 @@ def test_a_blank_switch_falls_back_to_off(monkeypatch, key):
     assert_that(getattr(config, key.lower()), equal_to(False))
 
 
-def test_the_installation_name_is_used_when_set():
-    config = _config(installation_name="GG Group", web_app_url="https://agentbarn.gg-group.com")
+@pytest.mark.parametrize(
+    "web_app_url",
+    [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://10.0.0.5",
+        "http://192.168.1.2:8080",
+        "http://agentfarm.local",
+        "http://app.localhost",
+        "",
+    ],
+)
+def test_a_local_web_app_url_is_a_local_installation(web_app_url):
+    assert_that(_config(web_app_url=web_app_url).is_local_installation, equal_to(True))
 
-    assert_that(config.installation_display_name, equal_to("GG Group"))
+
+@pytest.mark.parametrize(
+    "web_app_url", ["https://app.agentbarn.dev", "https://cloud.agentbarn.dev/app", "http://8.8.8.8"]
+)
+def test_a_public_web_app_url_is_a_remote_installation(web_app_url):
+    assert_that(_config(web_app_url=web_app_url).is_local_installation, equal_to(False))
 
 
-@pytest.mark.parametrize("name", ["", "   "])
-def test_the_installation_name_falls_back_to_the_web_app_host(name):
-    config = _config(installation_name=name, web_app_url="https://agentbarn.gg-group.com/app")
+def test_the_web_app_host_is_the_lowercased_hostname_only():
+    config = _config(web_app_url="https://Agents.GG-Group.com:8443/app?x=1")
 
-    assert_that(config.installation_display_name, equal_to("agentbarn.gg-group.com"))
+    assert_that(config.web_app_host, equal_to("agents.gg-group.com"))
+
+
+def test_a_leftover_installation_name_variable_is_ignored(monkeypatch):
+    monkeypatch.setenv("INSTALLATION_NAME", "Old Name")
+
+    config = _config(web_app_url="https://app.agentbarn.dev")
+
+    assert_that(hasattr(config, "installation_name"), equal_to(False))

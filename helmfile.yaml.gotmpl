@@ -220,8 +220,6 @@ releases:
         value: {{ env "ANALYTICS_ENABLED" | default "true" | quote }}
       - name: analyticsIncludeUserDetails
         value: {{ env "ANALYTICS_INCLUDE_USER_DETAILS" | default "false" | quote }}
-      - name: installationName
-        value: {{ env "INSTALLATION_NAME" | default "" | quote }}
       - name: agentEmailDomain
         value: {{ env "AGENT_EMAIL_DOMAIN" | default "" | quote }}
       - name: emailInboundSecret

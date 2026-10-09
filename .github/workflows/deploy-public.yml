@@ -303,7 +303,6 @@ jobs:
           STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
           SENDER_EMAIL: ${{ vars.PUBLIC_SENDER_EMAIL }}
           ANALYTICS_ENABLED: "true"
-          INSTALLATION_NAME: cloud
           ANALYTICS_INCLUDE_USER_DETAILS: "true"
           AGENT_EMAIL_DOMAIN: ${{ vars.PUBLIC_AGENT_EMAIL_DOMAIN }}
           EMAIL_INBOUND_SECRET: ${{ secrets.PUBLIC_EMAIL_INBOUND_SECRET }}

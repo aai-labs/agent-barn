@@ -31,7 +31,7 @@ def _given(posthog: MockPostHogModule, *, enabled: bool = True):
         set_env_variable(
             {
                 "ANALYTICS_ENABLED": str(enabled).lower(),
-                "INSTALLATION_NAME": "test-installation",
+                "WEB_APP_URL": "https://app.example.com",
                 "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
             }
         ),
@@ -122,7 +122,8 @@ def test_sends_one_count_per_row_as_the_installation_with_distinct_ids():
                         "count": 2,
                         "organization_id": str(context.agent.organization_id),
                         "installation_id": str(installation_id),
-                        "installation_name": "test-installation",
+                        "installation_name": "app.example.com",
+                        "installation_environment": "remote",
                         "$groups": {
                             "installation": str(installation_id),
                             "organization": str(context.agent.organization_id),

@@ -1,3 +1,4 @@
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from typing import Self
@@ -12,6 +13,8 @@ load_dotenv(ROOT_ENV_PATH, override=False)
 
 DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_AjhfVLSegE5yXsARYYJsGJDC3bwBPdKfUD3dLvoLjbw7"
 DEFAULT_POSTHOG_HOST = "https://eu.i.posthog.com"
+LOCAL_HOSTNAMES = frozenset({"localhost"})
+LOCAL_HOST_SUFFIXES = (".localhost", ".local")
 
 
 class Config(BaseSettings):
@@ -162,7 +165,6 @@ class Config(BaseSettings):
     analytics_include_user_details: bool = False
     analytics_posthog_host: str = DEFAULT_POSTHOG_HOST
     analytics_posthog_project_token: str = DEFAULT_POSTHOG_PROJECT_TOKEN
-    installation_name: str = ""
 
     @field_validator("analytics_enabled", "analytics_include_user_details", mode="before")
     @classmethod
@@ -176,8 +178,19 @@ class Config(BaseSettings):
         return self.analytics_enabled and bool(self.analytics_posthog_project_token.strip())
 
     @property
-    def installation_display_name(self) -> str:
-        return self.installation_name.strip() or (urlparse(self.web_app_url).hostname or "")
+    def web_app_host(self) -> str:
+        return (urlparse(self.web_app_url).hostname or "").lower()
+
+    @property
+    def is_local_installation(self) -> bool:
+        host = self.web_app_host
+        if not host or host in LOCAL_HOSTNAMES or host.endswith(LOCAL_HOST_SUFFIXES):
+            return True
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        return address.is_loopback or address.is_private or address.is_link_local
 
     @model_validator(mode="after")
     def local_api_external_url(self) -> Self:

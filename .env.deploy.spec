@@ -91,8 +91,6 @@ SENDER_EMAIL=
 ANALYTICS_ENABLED=true
 # Privacy: user email and name are omitted by default. Our prod/staging workflows enable them.
 # ANALYTICS_INCLUDE_USER_DETAILS=false
-# Label for this install in PostHog. Blank uses the WEB_APP_URL host.
-# INSTALLATION_NAME=
 
 # ── Per-Agent email addresses ────────────────────────────────────────────────
 # Leave blank to keep the Email platform disabled; Agent Barn then refuses new Email
