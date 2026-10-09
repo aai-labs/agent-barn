@@ -101,6 +101,7 @@ from api.domains.agents.models import (
     ManagedUpdateOutcome,
     RestorePointStatus,
     SecretProvider,
+    SharePointContent,
     SkillVersionPin,
     decrypt_content,
     encrypt_content,
@@ -133,6 +134,7 @@ from api.domains.agents.selection import (
     ensure_verbose_mode_supported,
     is_model_allowed,
 )
+from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
@@ -1594,6 +1596,9 @@ class AgentService:
                 detail=f"Agent {agent_id} must be stopped before updating",
             )
 
+        if SecretProvider.SHAREPOINT in (data.removed_secret_providers or []):
+            self._refuse_forgetting_granted_sites(agent.id)
+
         if "approval_mode" in updated:
             self._ensure_approval_mode_supported(agent.agent_type, updated["approval_mode"])
 
@@ -2132,9 +2137,14 @@ class AgentService:
                     "Authenticate with Google, or configure google_cloud_client_id/secret."
                 ),
             )
-        # SharePoint's refresh token goes through the store too, written only for a new sign-in.
+        # A delegated SharePoint refresh token goes through the store too, written only for a new
+        # sign-in. Selected sites keeps no token: the pod fetches one with its platform key.
+        sharepoint = decrypted.get(SecretProvider.SHAREPOINT)
+        selected_sites = isinstance(sharepoint, SharePointContent) and sharepoint.mode == "selected_sites"
         store = {
-            p: c for p, c in decrypted.items() if p.value in provider_secrets_map or p == SecretProvider.SHAREPOINT
+            p: c
+            for p, c in decrypted.items()
+            if p.value in provider_secrets_map or (p == SecretProvider.SHAREPOINT and not selected_sites)
         }
         aai_home = "/opt/data" if agent.agent_type == AgentType.HERMES else "/home/node"
         # The store must survive restarts: aai-cli rotates delegated Microsoft tokens in it.
@@ -2145,11 +2155,22 @@ class AgentService:
         # a config.toml holding nothing but the store header.
         has_aai_profiles = bool(decrypted.keys() & set(PROFILE_SLUGS))
         aai_config_toml = (
-            build_config_toml(decrypted, home_dir=aai_home, store_dir=aai_store_dir) if has_aai_profiles else None
+            build_config_toml(
+                decrypted,
+                home_dir=aai_home,
+                store_dir=aai_store_dir,
+                sharepoint_token_url=f"{self.config.ingest_base_url}/agents/{agent.id}/integrations/sharepoint/token",
+            )
+            if has_aai_profiles
+            else None
         )
         # Always mounted, even without profiles, so a removed SharePoint sign-in is cleaned up.
         aai_setup_sh = build_setup_sh(
-            list(store), home_dir=aai_home, store_dir=aai_store_dir, install_config=has_aai_profiles
+            list(store),
+            home_dir=aai_home,
+            store_dir=aai_store_dir,
+            install_config=has_aai_profiles,
+            store_platform_key=selected_sites,
         )
         if store:
             secret.string_data.update(build_env(store))
@@ -2978,6 +2999,16 @@ class AgentService:
                 content.client_id = self.config.google_cloud_client_id
             if not content.client_secret:
                 content.client_secret = self.config.google_cloud_client_secret
+
+    def _refuse_forgetting_granted_sites(self, agent_id: UUID) -> None:
+        """Removing SharePoint would forget sites still granted to the Teams app, which its next
+        agent could reach; an administrator's removal sign-in revokes them and disconnects it."""
+        secret = self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT)
+        if secret is None or secret.content is None:
+            return
+        content = decrypt_content(SecretProvider.SHAREPOINT, secret.content, self.config.agent_token_encryption_key)
+        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SITES_STILL_GRANTED)
 
     def _validate_live_integration(self, provider: SecretProvider, content: Any) -> None:
         """Validate submitted credentials with the provider before they are persisted.

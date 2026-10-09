@@ -291,6 +291,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/integrations/sharepoint",
+    "sharepoint_current_organizations__organization_id__agents__agent_id__integrations_sharepoint_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/integrations/sharepoint/authorize-url",
     "sharepoint_authorize_url_organizations__organization_id__agents__agent_id__integrations_sharepoint_authorize_url_get"
   ],

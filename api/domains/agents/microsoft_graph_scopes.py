@@ -20,6 +20,14 @@ GRAPH_SCOPE_PREFIX = "https://graph.microsoft.com/"
 READ_PERMISSION = "Sites.Read.All"
 WRITE_PERMISSION = "Sites.ReadWrite.All"
 
+# Selected-sites mode. An administrator signs in with SITE_GRANT_PERMISSION, which can manage
+# a site's permissions, to grant the Teams app SELECTED_SITES_PERMISSION site by site. The
+# Teams app then gets app-only tokens for APP_ONLY_SCOPE, which carry the application
+# permissions an administrator consented to on it.
+SITE_GRANT_PERMISSION = "Sites.FullControl.All"
+SELECTED_SITES_PERMISSION = "Sites.Selected"
+APP_ONLY_SCOPE = f"{GRAPH_SCOPE_PREFIX}.default"
+
 # Requested alongside the resource scope. Not echoed back in the token response, so these
 # are never part of a granted-scope comparison.
 OFFLINE_ACCESS_SCOPE = "offline_access"
@@ -39,6 +47,15 @@ def sharepoint_scopes(read_only: bool) -> tuple[str, ...]:
         *IDENTITY_SCOPES,
     }
     return tuple(sorted(requested))
+
+
+def site_grant_scopes() -> tuple[str, ...]:
+    """Scopes for the administrator's grant sign-in, sorted for a deterministic authorize URL.
+
+    No ``offline_access``: Microsoft then issues no refresh token, so the sign-in grants the
+    sites and nothing able to manage them outlives it.
+    """
+    return tuple(sorted({f"{GRAPH_SCOPE_PREFIX}{SITE_GRANT_PERMISSION}", *IDENTITY_SCOPES}))
 
 
 def granted_permissions(scopes: list[str]) -> set[str]:
