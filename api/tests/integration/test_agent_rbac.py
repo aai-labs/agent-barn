@@ -938,12 +938,15 @@ def test_agent_message_metadata_respects_activity_permission(activity_access):
     from datetime import UTC, datetime
 
     from api.tests.steps.conversation import there_is_a_recorded_message
+    from api.tests.steps.cost import cost_records_are_clean, there_are_cost_records
 
     occurred_at = datetime(2026, 10, 6, 11, 28, tzinfo=UTC)
-    with given(_GIVEN) as context:
+    call_at = datetime(2026, 10, 7, 11, 28, tzinfo=UTC)
+    with given([*_GIVEN, cost_records_are_clean()]) as context:
         creator_id = context.user.id
         there_is_an_agent(created_by_user_id=creator_id)(context)
         there_is_a_recorded_message(occurred_at)(context)
+        there_are_cost_records(occurred_at=call_at)(context)
         _switch_to_member()(context)
         permissions = {PermissionKey.AGENT_READ}
         if activity_access:
@@ -958,6 +961,10 @@ def test_agent_message_metadata_respects_activity_permission(activity_access):
             assert_that(
                 body["last_message_at"],
                 equal_to(occurred_at.isoformat().replace("+00:00", "Z") if activity_access else None),
+            )
+            assert_that(
+                body["last_activity_at"],
+                equal_to(call_at.isoformat().replace("+00:00", "Z") if activity_access else None),
             )
 
 

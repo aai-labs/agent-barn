@@ -54,7 +54,7 @@ export class DashboardPage {
     }
   }
 
-  lastMessageTime(name: string): Locator {
+  lastActivityTime(name: string): Locator {
     return this.agentCard(name).locator("time");
   }
 

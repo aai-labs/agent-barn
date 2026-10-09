@@ -47,14 +47,15 @@ export function AgentCard({ agent, href }: AgentCardProps) {
   const presence = presenceOf(agent.status, health, hasActivityPermission);
   const creatorName = agent.creator?.fullName?.trim() || agent.creator?.email;
   const createdAt = new Date(agent.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-  const lastMessage = agent.lastMessageAt ? new Date(agent.lastMessageAt) : null;
-  const canReadActivity = hasActivityPermission && agent.lastMessageAt !== undefined;
+  // Any message or model call, so an Agent working only on schedules or webhooks is not read as dormant.
+  const lastActivity = agent.lastActivityAt ? new Date(agent.lastActivityAt) : null;
+  const canReadActivity = hasActivityPermission && agent.lastActivityAt !== undefined;
   const model = currentModelOf(agent);
   const idle = agent.status === "STOPPED";
 
   let recencyColor = "var(--ink-3)";
-  if (canReadActivity && (!lastMessage || isQuiet(agent.lastMessageAt))) recencyColor = "var(--warn)";
-  else if (isRecent(agent.lastMessageAt)) recencyColor = "var(--ink)";
+  if (canReadActivity && (!lastActivity || isQuiet(agent.lastActivityAt))) recencyColor = "var(--warn)";
+  else if (isRecent(agent.lastActivityAt)) recencyColor = "var(--ink)";
 
   return (
     <Link
@@ -107,26 +108,26 @@ export function AgentCard({ agent, href }: AgentCardProps) {
 
       <div className="mt-auto flex min-h-16 items-center justify-between gap-3 px-4.5 py-3" style={{ background: "var(--bg)", borderTop: "1px solid var(--line)" }}>
         {idle ? (
-          // A stopped Agent's last message says nothing new; its state is the news.
+          // A stopped Agent's last activity says nothing new; its state is the news.
           <div id={`${agent.id}-message`}>
             <div className="text-[0.68rem]" style={{ color: "var(--ink-4)" }}>Status</div>
             <div className="text-[0.95rem] font-semibold tracking-tight" style={{ color: "var(--ink-4)" }}>{presence.label}</div>
           </div>
         ) : (
           <div id={`${agent.id}-message`} className="min-w-0">
-            <div className="text-[0.68rem]" style={{ color: "var(--ink-4)" }}>Last message</div>
+            <div className="text-[0.68rem]" style={{ color: "var(--ink-4)" }}>Last active</div>
             <div className="flex min-w-0 items-baseline whitespace-nowrap">
               <span className="shrink-0 text-[0.95rem] font-semibold tracking-tight" style={{ color: recencyColor }}>
-                {!canReadActivity ? "Not available" : lastMessage ? formatDistanceToNowStrict(lastMessage, { addSuffix: true }) : "No messages yet"}
+                {!canReadActivity ? "Not available" : lastActivity ? formatDistanceToNowStrict(lastActivity, { addSuffix: true }) : "No activity yet"}
               </span>
-              {canReadActivity && lastMessage && (
+              {canReadActivity && lastActivity && (
                 <time
-                  dateTime={agent.lastMessageAt!}
-                  title={lastMessage.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}
+                  dateTime={agent.lastActivityAt!}
+                  title={lastActivity.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}
                   className="min-w-0 truncate text-xs opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
                   style={{ color: "var(--ink-4)" }}
                 >
-                  &nbsp;&nbsp;·&nbsp;&nbsp;{lastMessage.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })}
+                  &nbsp;&nbsp;·&nbsp;&nbsp;{lastActivity.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" })}
                 </time>
               )}
             </div>

@@ -55,8 +55,8 @@ before changing startup or restore behavior.
 
 ## Agent list metadata
 
-Organization Agent reads expose `creator` (User ID, full name, and email) and
-`last_message_at`. Creator identity is immutable provenance, displayed as
+Organization Agent reads expose `creator` (User ID, full name, and email),
+`last_message_at`, and `last_activity_at`. Creator identity is immutable provenance, displayed as
 “By <name>” on the team card, with email as the fallback when no name is set.
 Legacy or deleted-user provenance is null and displays “Creator not recorded”;
 the UI never guesses a creator from access assignments. The creation date is
@@ -65,21 +65,34 @@ labeled separately.
 `last_message_at` is the greatest recorded Conversation Message occurrence time
 across inbound and outbound directions and all Connections, including Web Chat
 and retired Connections. It is independent of runtime health and billed calls.
+`last_activity_at` is the later of `last_message_at` and the occurrence time of
+the Agent's latest successful, non-memory billed model call (`cost_record`). It
+exists because an Agent that only works on schedules, heartbeats, or Agent
+Webhooks may write no messages while plainly working; message recency alone
+reads it as dormant. Cost rows arrive through the sync CronJob, so the call
+side can lag the runtime by a sync interval. Failed calls and memory calls do
+not count: a failing loop or post-conversation memory extraction is not the
+Agent doing its job. Only a timestamp is exposed, never call content, spend, or
+tokens.
+
 Reads use the Agent visibility query and require `activity.read` for that
-Agent; without it the timestamp is null and the card says “Not available”. With
-permission, null means “No messages yet”. No message content is returned.
+Agent for both fields; without it the timestamps are null and the card says
+“Not available”. (The Activity cost endpoints additionally require `cost.read`
+because they return spend; this single timestamp does not.) With permission, a
+null `last_activity_at` means “No activity yet”. No message content is returned.
 An older API response that omits the field also displays “Not available”.
-The card shows relative recency; the exact timestamp in the reader's local time
-zone appears on hover or keyboard focus. A last message 14 or more days old, or
-no messages yet, is highlighted as quiet, and the dashboard header counts quiet
-Agents on the loaded page from this field alone, without further queries. Late
-ingestion uses occurrence time rather than insertion time.
+The card labels it “Last active” and shows relative recency; the exact timestamp
+in the reader's local time zone appears on hover or keyboard focus. A last
+activity 14 or more days old, or none yet, is highlighted as quiet, and the
+dashboard header counts quiet Agents on the loaded page from this field alone,
+without further queries. Late ingestion uses occurrence time rather than
+insertion time.
 
 Team cards are whole-card links with keyboard navigation and no separate Open
 button. A single “Hire a teammate” card follows the displayed teammates in the
 dashboard grid and opens the hiring dialog with a click or keyboard activation.
 It remains available when the team is empty or search has no matches. Teammate
-cards truncate long names to one line (the full name shows on hover), and their last-message footers stay at the bottom. Cards do not show a pending model; the Agent detail page does (see [Agent settings](agent-settings.md)). The
+cards truncate long names to one line (the full name shows on hover), and their last-active footers stay at the bottom. Cards do not show a pending model; the Agent detail page does (see [Agent settings](agent-settings.md)). The
 dashboard search filters the currently loaded page, and identifies that limit
 when more Agents exist than are loaded.
 
@@ -93,7 +106,7 @@ Agents with `activity.read`; without that permission, a running Agent is labeled
 “Running” without claiming a known health state. Each card shows its state as a
 presence dot on the avatar and a labeled badge (Working, Initializing,
 Disconnected, Needs attention, Running). A stopped Agent shows a muted Idle status in
-the card footer in place of the labeled last-message time, and is not counted as
+the card footer in place of the labeled last-active time, and is not counted as
 quiet.
 
 ## State model

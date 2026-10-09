@@ -12,6 +12,7 @@ export const agentListWithMetadata = {
       name: "Karl the Assistant with a longer name",
       creator: null,
       last_message_at: null,
+      last_activity_at: null,
       pending_model: "a-provider/a-longer-model-name-that-will-switch-on-restart",
     },
     {
@@ -21,6 +22,7 @@ export const agentListWithMetadata = {
       allowed_actions: ["agent.read"],
       creator: { ...mockAgent.creator, full_name: null },
       last_message_at: null,
+      last_activity_at: null,
     },
   ],
 };
@@ -29,7 +31,7 @@ export const agentListWithoutMetadata = {
   page: 1,
   page_size: 50,
   total: 1,
-  items: [{ ...mockAgent, creator: undefined, last_message_at: undefined }],
+  items: [{ ...mockAgent, creator: undefined, last_message_at: undefined, last_activity_at: undefined }],
 };
 
 export const agentListWithPollingStates = {

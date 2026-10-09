@@ -90,6 +90,7 @@ from api.tests.steps.agent import (
     use_org_for_auth,
 )
 from api.tests.steps.conversation import there_is_a_recorded_message
+from api.tests.steps.cost import cost_records_are_clean, there_are_cost_records
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import (
     there_is_an_organization,
@@ -5921,11 +5922,50 @@ def test_agent_list_metadata_uses_latest_message_occurrence_across_connections(d
                 )
 
 
+def test_agent_list_last_activity_counts_background_model_calls_but_not_memory_or_failures():
+    message_at = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+    call_at = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    with given([*_GIVEN, there_is_an_agent(), cost_records_are_clean()]) as context:
+        there_is_a_recorded_message(message_at)(context)
+        there_are_cost_records(occurred_at=call_at)(context)
+        # Neither a memory call nor a failed one is the Agent working.
+        there_are_cost_records(occurred_at=call_at + timedelta(days=1), is_memory=True)(context)
+        there_are_cost_records(occurred_at=call_at + timedelta(days=2), status="failure")(context)
+        for path in (_BASE, f"{_BASE}/{context.agent.id}"):
+            with when("the Agent metadata is read"):
+                result = context.client.get(path, headers={"Authorization": f"Bearer {context.access_token}"})
+                body = result.json()["items"][0] if path == _BASE else result.json()
+            with then("the message time is unchanged and the latest successful call is the activity time"):
+                assert_that(result.status_code, equal_to(200))
+                assert_that(
+                    body,
+                    has_entries(
+                        last_message_at=message_at.isoformat().replace("+00:00", "Z"),
+                        last_activity_at=call_at.isoformat().replace("+00:00", "Z"),
+                    ),
+                )
+
+
+def test_agent_list_last_activity_is_the_later_of_message_and_model_call():
+    message_at = datetime(2026, 10, 8, 9, 0, tzinfo=UTC)
+    with given([*_GIVEN, there_is_an_agent(), cost_records_are_clean()]) as context:
+        there_is_a_recorded_message(message_at)(context)
+        there_are_cost_records(occurred_at=message_at - timedelta(days=3))(context)
+        response = context.client.get(_BASE, headers={"Authorization": f"Bearer {context.access_token}"})
+        assert_that(
+            response.json()["items"][0],
+            has_entries(last_activity_at=message_at.isoformat().replace("+00:00", "Z")),
+        )
+
+
 def test_legacy_agent_list_metadata_does_not_guess_creator_or_message_time():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         response = context.client.get(_BASE, headers={"Authorization": f"Bearer {context.access_token}"})
         assert_that(response.status_code, equal_to(200))
-        assert_that(response.json()["items"][0], has_entries(creator=None, last_message_at=None))
+        assert_that(
+            response.json()["items"][0],
+            has_entries(creator=None, last_message_at=None, last_activity_at=None),
+        )
 
 
 @pytest.mark.parametrize("agent_count", [1, 20])
