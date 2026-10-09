@@ -60,7 +60,77 @@ test.describe("Platform trials", () => {
     await expect(page.getByRole("status")).toContainText("Trial settings saved.");
     await expect(page.getByTestId("saved-trial-credit")).toHaveText("$25.00");
     await expect(page.getByTestId("saved-trial-agent-limit")).toHaveText("3 agents");
-    expect(saved).toEqual([{ credit_usd: 25, agent_limit: 3 }]);
+    expect(saved).toEqual([{ credit_usd: 25, agent_limit: 3, max_active_trials: null }]);
+  });
+
+  test("a Platform Administrator caps the active trials", async ({ page }) => {
+    const data = await signInAsPlatformAdmin(page);
+    await data.platformMemory.intercept();
+    const saved: unknown[] = [];
+    await page.route(TRIAL_SETTINGS, async (route) => {
+      if (route.request().method() === "PUT") {
+        saved.push(route.request().postDataJSON());
+        return route.fulfill({
+          json: { credit_usd: 10, agent_limit: 1, max_active_trials: 20, active_trials: 3, updated_at: null },
+        });
+      }
+      return route.fulfill({
+        json: { credit_usd: 10, agent_limit: 1, max_active_trials: null, active_trials: 3, updated_at: null },
+      });
+    });
+
+    await page.goto("/dashboard/platform/settings");
+    await page.getByRole("button", { name: "Trials" }).click();
+
+    await expect(page.getByTestId("saved-trial-cap")).toHaveText("3 active, no cap");
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByLabel("Active trials at once").fill("20");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await expect(page.getByTestId("saved-trial-cap")).toHaveText("3 of 20 active");
+    expect(saved).toEqual([{ credit_usd: 10, agent_limit: 1, max_active_trials: 20 }]);
+  });
+
+  test("a Platform Administrator removes the cap on active trials", async ({ page }) => {
+    const data = await signInAsPlatformAdmin(page);
+    await data.platformMemory.intercept();
+    const saved: unknown[] = [];
+    await page.route(TRIAL_SETTINGS, async (route) => {
+      if (route.request().method() === "PUT") {
+        saved.push(route.request().postDataJSON());
+        return route.fulfill({
+          json: { credit_usd: 10, agent_limit: 1, max_active_trials: null, active_trials: 3, updated_at: null },
+        });
+      }
+      return route.fulfill({
+        json: { credit_usd: 10, agent_limit: 1, max_active_trials: 20, active_trials: 3, updated_at: null },
+      });
+    });
+
+    await page.goto("/dashboard/platform/settings");
+    await page.getByRole("button", { name: "Trials" }).click();
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByLabel("Active trials at once").fill("");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await expect(page.getByTestId("saved-trial-cap")).toHaveText("3 active, no cap");
+    expect(saved).toEqual([{ credit_usd: 10, agent_limit: 1, max_active_trials: null }]);
+  });
+
+  test("an invalid cap on active trials cannot be saved", async ({ page }) => {
+    const data = await signInAsPlatformAdmin(page);
+    await data.platformMemory.intercept();
+    await page.route(TRIAL_SETTINGS, (route) =>
+      route.fulfill({ json: { credit_usd: 10, agent_limit: 1, max_active_trials: null, active_trials: 0 } }),
+    );
+
+    await page.goto("/dashboard/platform/settings");
+    await page.getByRole("button", { name: "Trials" }).click();
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByLabel("Active trials at once").fill("0");
+
+    await expect(page.getByText("Enter a whole number from 1 to 100,000, or leave it empty.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
   });
 
   test("an out-of-range credit cannot be saved", async ({ page }) => {

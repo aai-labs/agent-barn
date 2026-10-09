@@ -84,6 +84,12 @@ export class OnboardingDataSupport {
     return calls;
   }
 
+  async interceptSetUpAgentFailure(status: number, detail: string) {
+    await this.page.route("**/api/v1/onboarding/agent", (route) =>
+      route.request().method() === "POST" ? route.fulfill({ status, json: { detail } }) : route.fallback(),
+    );
+  }
+
   async interceptCompleteOnboarding() {
     const calls: number[] = [];
     await this.page.route("**/api/v1/onboarding/complete", (route) => {

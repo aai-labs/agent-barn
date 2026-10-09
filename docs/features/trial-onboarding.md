@@ -53,13 +53,17 @@ self-signed-up user back to `/onboarding` until they finish.
 | One trial per email address, ever: signup records a hash of the lowercased address in `trial_grant`, kept when the account is deleted; a recorded address is refused (`?error=trial_used`) with nothing created | `../../api/domains/auth/google_sign_in.py`, `TrialSettingsService` |
 | A self-signed-up user creates no Organizations until a Platform Administrator has ended their trial (`user.trial_ended_at`), so deleting the trial unlocks nothing; nor does anyone owning an active Trial Organization (403; the selector hides the option) | `OrganizationService.create_organization_for_current_user` |
 | A Trial Organization runs at most the platform's trial agent limit, counted under a lock as an Agent is stored (409). The limit applies to existing trials at once; a trial over a lowered limit keeps its Agents but hires no more | `AgentRepository.create_with_creator_access`, `AgentService.create_agent` |
+| At most the platform's cap on active trials exist at once, counted under a lock at sign-up; a sign-up past it is refused (`?error=trials_full`) with nothing created or recorded, so the address can come back. Ending or deleting a trial frees its place; no cap is the default | `GoogleSignInService._sign_up`, `TrialSettingsService.trials_full` |
 | Trial Credit is a one-off Model Spend Limit | [Costs](costs.md#organization-llm-budgets) |
 | A Platform Administrator ends a trial, choosing the spend limit and renewal window it goes on to | `POST /platform/organizations/{id}/end-trial` with `{budget_usd, budget_duration}`, the platform Organization page |
 
-Platform Administrators set the Trial Credit for new trials and the trial agent limit on
-the platform settings page (`GET`/`PUT /platform/settings/trial`, a singleton row; each
-setting that moves is audited as `platform.trial_settings.changed`). Until the first save,
-`TRIAL_DEFAULT_CREDIT_USD` and a limit of one Agent apply. An existing trial's spend limit
+Platform Administrators set the Trial Credit for new trials, the trial agent limit and
+the cap on active trials on the platform settings page (`GET`/`PUT
+/platform/settings/trial`, a singleton row; each setting that moves is audited as
+`platform.trial_settings.changed`, a removed cap as `null`). The page also shows how many
+trials are active. Until the first save, `TRIAL_DEFAULT_CREDIT_USD`, a limit of one Agent
+and no cap apply. An active trial is any Organization still on a trial, including one
+whose credit is spent. An existing trial's spend limit
 is changed on its Organization page, like any other Organization's; the platform
 Organizations list marks trials.
 
@@ -78,8 +82,11 @@ spend so far counts against its first renewing period, for the team and its Agen
 alike, until their shared renewal (see [Costs](costs.md#organization-llm-budgets)). The
 owner is not notified, and a trial cannot be restarted.
 
-Signup is off unless `SELF_SIGNUP_ENABLED` is true (`?error=signup_closed`); existing
-users can always sign in with Google. The chart default is off; the deploy workflows
+Signup is off unless `SELF_SIGNUP_ENABLED` is true and the environment has Agent Barn's
+Telegram bot configured (`AGENTBARN_TELEGRAM_BOT_TOKEN` and `_USERNAME`), since a trial is
+used through it (`?error=signup_closed` otherwise); existing users can always sign in with
+Google. If setting up an Agent fails anyway (say the bot was removed later), onboarding
+shows the API's reason with "Try again", and the API logs it. The chart default is off; the deploy workflows
 read the `SELF_SIGNUP_ENABLED`, `STAGING_SELF_SIGNUP_ENABLED` and
 `PUBLIC_SELF_SIGNUP_ENABLED` GitHub Variables, an unset one meaning off.
 

@@ -53,6 +53,7 @@ test.describe("Trial sign-in", () => {
     ["unverified", /Google hasn.t verified the email address/],
     ["signup_closed", /Sign-up is closed right now/],
     ["trial_used", /This email has already had a free trial/],
+    ["trials_full", /We.ve reached our limit of free trials for now\. Try again later\./],
     // Not one of ours: falls back to the generic failure, never an empty alert.
     ["constructor", /Google sign-in didn.t work\. Nothing was created\./],
   ];
@@ -152,6 +153,20 @@ test.describe("Trial onboarding", () => {
 
     await expect(onboardingPage.openInTelegram()).toBeVisible();
     expect(setUps).toHaveLength(2);
+  });
+
+  test("a setup that fails says why", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    await data.onboarding.interceptSetUpAgentFailure(400, "Agent Barn Telegram is not available");
+    const onboardingPage = new OnboardingPage(page);
+
+    await onboardingPage.goto();
+
+    await expect(onboardingPage.alert()).toHaveText(
+      /We couldn.t set up your agent: Agent Barn Telegram is not available/,
+    );
+    await expect(onboardingPage.retryAction()).toBeVisible();
   });
 
   test("someone already linked goes straight to Continue", async ({ page }) => {

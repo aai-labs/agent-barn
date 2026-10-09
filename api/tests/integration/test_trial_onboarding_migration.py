@@ -32,6 +32,7 @@ AF368_COLUMNS = {
     ("user", "onboarding_completed_at"),
     ("organization", "is_trial"),
     ("platform_trial_settings", "agent_limit"),
+    ("platform_trial_settings", "max_active_trials"),
 }
 AF368_TABLES = {"platform_trial_settings", "trial_grant"}
 
@@ -127,6 +128,7 @@ def test_the_migrated_schema_matches_the_models_for_trial_onboarding():
                 "trial_settings",
                 "trial_grant",
                 "agent_limit",
+                "max_active_trials",
             )
         )
     ]

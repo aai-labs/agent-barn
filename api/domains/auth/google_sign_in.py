@@ -33,6 +33,7 @@ from api.domains.auth.hashing import hash_text
 from api.domains.auth.models import CredentialClass, TokenData
 from api.domains.auth.repository import PasswordResetTokenRepository
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM, AuthService
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import Organization
@@ -67,6 +68,7 @@ class SignInError(StrEnum):
     UNVERIFIED = "unverified"
     SIGNUP_CLOSED = "signup_closed"
     TRIAL_USED = "trial_used"
+    TRIALS_FULL = "trials_full"
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,7 @@ class GoogleSignInService:
     invite_tokens: PasswordResetTokenRepository
     trial_settings: TrialSettingsService
     llm_budgets: OrganizationLlmBudgetService
+    telegram: AgentBarnTelegramService
 
     def redirect_uri(self) -> str:
         # Must be registered on the Google client, and identical in the authorize request
@@ -194,7 +197,9 @@ class GoogleSignInService:
             user = self.user_repository.get_by_email_ignoring_case_for_update(identity.email, session)
             if user is not None:
                 return self._link(user, identity, session)
-            if not self.config.self_signup_enabled:
+            # A trial is used through Agent Barn's Telegram bot: without one, a new user
+            # could never finish onboarding.
+            if not self.config.self_signup_enabled or not self.telegram.is_offered():
                 raise _SignInRefused(SignInError.SIGNUP_CLOSED)
             user, organization = self._sign_up(identity, session)
         # With its limit already on it. Best effort: the Organization is committed, and
@@ -222,6 +227,9 @@ class GoogleSignInService:
         # One trial per address, even after its account is deleted.
         if self.trial_settings.has_had_trial(identity.email, session):
             raise _SignInRefused(SignInError.TRIAL_USED)
+        # Nothing is recorded for a refused address, so it can come back once a place frees.
+        if self.trial_settings.trials_full(session):
+            raise _SignInRefused(SignInError.TRIALS_FULL)
         now = datetime.now(UTC)
         user = User(
             email=identity.email,

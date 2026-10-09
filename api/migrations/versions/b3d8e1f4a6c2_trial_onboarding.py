@@ -34,11 +34,13 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("credit_usd", sa.Float(), nullable=False),
         sa.Column("agent_limit", sa.Integer(), server_default="1", nullable=False),
+        sa.Column("max_active_trials", sa.Integer(), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_by", sa.Uuid(), nullable=True),
         sa.CheckConstraint("id = 1", name="ck_platform_trial_settings_singleton"),
         sa.CheckConstraint("credit_usd >= 0", name="ck_platform_trial_settings_credit_non_negative"),
         sa.CheckConstraint("agent_limit >= 1", name="ck_platform_trial_settings_agent_limit_positive"),
+        sa.CheckConstraint("max_active_trials >= 1", name="ck_platform_trial_settings_max_active_trials_positive"),
         sa.ForeignKeyConstraint(["updated_by"], ["user.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
