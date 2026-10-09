@@ -50,15 +50,13 @@ def _given(
     *,
     enabled: bool = True,
     user_details: bool = False,
-    installation_name: str = "test-installation",
-    web_app_url: str = "http://localhost:3000",
+    web_app_url: str = "https://test-installation.example.com/app",
 ):
     return [
         set_env_variable(
             {
                 "ANALYTICS_ENABLED": str(enabled).lower(),
                 "ANALYTICS_INCLUDE_USER_DETAILS": str(user_details).lower(),
-                "INSTALLATION_NAME": installation_name,
                 "WEB_APP_URL": web_app_url,
             }
         ),
@@ -143,18 +141,38 @@ def test_a_platform_event_is_sent_with_only_the_installation_group():
         assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
         assert_that(capture["properties"]["$groups"], equal_to({"installation": installation_id}))
         assert_that(capture["properties"], is_not(has_key("organization_id")))
-        assert_that(capture["properties"]["installation_name"], equal_to("test-installation"))
+        assert_that(capture["properties"]["installation_name"], equal_to("test-installation.example.com"))
 
 
 def test_without_any_name_the_installation_is_named_by_its_id():
     posthog = MockPostHogModule()
-    with given(_given(posthog, installation_name="", web_app_url="")) as context:
+    with given(_given(posthog, web_app_url="")) as context:
         _handle(context, _agent_created(context))
 
         installation_id = str(context.injector.get(InstallationRepository).get_id())
         capture, group_identify = posthog.batches[0]
         assert_that(capture["properties"]["installation_name"], equal_to(installation_id))
         assert_that(group_identify["properties"]["$group_set"], equal_to({"name": installation_id}))
+
+
+def test_a_domain_change_renames_the_group_without_changing_installation_identity():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        handler = context.injector.get(ProductAnalyticsHandler)
+        _handle(context, _agent_created(context))
+        handler.config.web_app_url = "https://renamed.example.com:8443/app"
+
+        _handle(context, _agent_created(context))
+
+        first_capture, first_identify = posthog.batches[0]
+        second_capture, second_identify = posthog.batches[1]
+        assert_that(
+            second_capture["properties"]["installation_id"], equal_to(first_capture["properties"]["installation_id"])
+        )
+        assert_that(second_capture["properties"]["$groups"], equal_to(first_capture["properties"]["$groups"]))
+        assert_that(second_capture["properties"]["installation_name"], equal_to("renamed.example.com"))
+        assert_that(second_identify["properties"]["$group_key"], equal_to(first_identify["properties"]["$group_key"]))
+        assert_that(second_identify["properties"]["$group_set"], equal_to({"name": "renamed.example.com"}))
 
 
 def test_is_registered_in_the_application_handler_registry():
@@ -194,7 +212,7 @@ def test_sends_the_event_as_the_acting_user_with_installation_and_organization_g
                     "source": "agentbarn-api",
                     "organization_id": str(context.organization.id),
                     "installation_id": installation_id,
-                    "installation_name": "test-installation",
+                    "installation_name": "test-installation.example.com",
                     "$groups": {"installation": installation_id, "organization": str(context.organization.id)},
                     "$geoip_disable": True,
                     "$lib": "agentbarn-api",
@@ -209,7 +227,7 @@ def test_sends_the_event_as_the_acting_user_with_installation_and_organization_g
                 {
                     "$group_type": "installation",
                     "$group_key": installation_id,
-                    "$group_set": {"name": "test-installation"},
+                    "$group_set": {"name": "test-installation.example.com"},
                 }
             ),
         )

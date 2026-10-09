@@ -427,7 +427,7 @@ Business events go to the Agent Barn PostHog project (EU) through the `product_a
   - `.env.deploy.spec` ships `true`, as do customer release bundles.
   - Plain Helm and Helmfile installs also report by default.
 - **`ANALYTICS_INCLUDE_USER_DETAILS`** adds user email and name as PostHog person properties. It defaults to `false` to omit personal information from customer and local installs. Our production and staging workflows explicitly set it to `true` (`deploy.yml` on `main` and `staging`, and `deploy-public.yml`). Staging keeps `ANALYTICS_ENABLED=false`, so it still sends nothing unless analytics is separately enabled.
-- **`INSTALLATION_NAME`** is sent on every event as `installation_name` and names the install's PostHog group. Unset, it falls back to the `WEB_APP_URL` host, then to the Installation id.
+- **Installation label.** The hostname from `WEB_APP_URL` is sent on every event as `installation_name` and names the install's PostHog group. Only the hostname is sent, excluding credentials, port, path, query, and fragment. If the URL has no hostname, the label is the Installation id. There is no separate name override. URL changes rename the group while preserving its UUID identity.
   - Our deploys set it explicitly: `deploy.yml` uses `production` on `main` and `staging` on `staging`, and `deploy-public.yml` uses `cloud`.
   - Customer installs use their `WEB_APP_URL` host unless they set their own name.
 - **`ANALYTICS_POSTHOG_HOST`** and **`ANALYTICS_POSTHOG_PROJECT_TOKEN`** default to the EU host and the Agent Barn project token committed in `api/core/config.py`. Override them only to point an install at a test receiver. The project token is write-only and public by design; never commit a personal API key (`phx_`).

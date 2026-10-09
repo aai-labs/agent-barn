@@ -126,10 +126,10 @@ class ProductAnalyticsHandler:
         # The singleton is shared by worker threads. Hold the lock through a
         # naming send so another delivery cannot name the same Installation too.
         with self._installation_naming_lock:
-            installation_name = self.config.installation_display_name
-            if installation_name != self._identified_installation_name:
+            name = installation_name(self.config, self.installation_repository.get_id())
+            if name != self._identified_installation_name:
                 self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify=True))
-                self._identified_installation_name = installation_name
+                self._identified_installation_name = name
                 return
         self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify=False))
 

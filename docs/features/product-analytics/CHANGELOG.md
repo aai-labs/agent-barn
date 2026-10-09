@@ -12,7 +12,7 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - `ANALYTICS_INCLUDE_USER_DETAILS` defaults to false for privacy. Our production and staging workflows explicitly enable it.
   - `ANALYTICS_POSTHOG_HOST` defaults to PostHog Cloud EU.
   - `ANALYTICS_POSTHOG_PROJECT_TOKEN` defaults to the Agent Barn project token. Committing it is an approved exception to the AGENTS.md token rule, because PostHog project tokens are public by design.
-  - `INSTALLATION_NAME` falls back to the `WEB_APP_URL` host.
+  - The Installation label is the `WEB_APP_URL` hostname, falling back to the persisted Installation id when no hostname is available. There is no configurable name override.
 - Also delivered: `PostHogClient.send_batch` in `api/infrastructure/posthog/`.
   - Makes one POST to `{host}/batch/` and waits at most 5 seconds.
   - A 408, a 429, a 5xx or a transport failure raises `RetryablePostHogException`. Any other non-200 status raises `TerminalPostHogException`.
@@ -28,7 +28,7 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - **When PostHog fails:** an unreachable PostHog is retried on attempts 1 and 2, then dropped with a warning on attempt 3. A rejected batch dead-letters.
 - Also delivered: the nine slice-1 events now list `product_analytics.posthog` alongside their existing handlers. The behaviour contract is [`../product-analytics.md`](../product-analytics.md).
 - Also delivered: deployment wiring.
-  - The API chart renders `ANALYTICS_ENABLED`, which defaults to true in the chart and the Helmfile, and `ANALYTICS_INCLUDE_USER_DETAILS`. It renders `INSTALLATION_NAME` only when set.
+  - The API chart renders `ANALYTICS_ENABLED`, which defaults to true in the chart and the Helmfile, and `ANALYTICS_INCLUDE_USER_DETAILS`. The Installation label is derived from `WEB_APP_URL`.
   - `deploy.yml` enables analytics on `main` only, so staging sends nothing by default. User details are explicitly enabled on both `main` and `staging`. `deploy-public.yml` enables both.
   - `.env.deploy.spec` and customer release bundles ship analytics on. The local `.env.spec` explicitly disables it.
   - The opt-out is documented in `operations.md` and the README.
@@ -41,6 +41,13 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-09 — AF-357 — Derive Installation labels from the app URL
+
+- Delivered: Installation labels come from the `WEB_APP_URL` hostname, or the persisted UUID when no hostname is available. The label excludes URL credentials, port, path, query, and fragment. Changing the hostname renames the PostHog group while preserving its UUID key.
+- Removed: the `INSTALLATION_NAME` setting, Helm value, Secret entry, workflow overrides, and environment-spec suggestions. Business and hourly count events keep their `installation_name` property.
+- Changed: configuration, analytics naming synchronization, tests, Helm/Helmfile and deployment wiring, README, operations guidance, and the analytics feature contract.
+- Verified: 64 focused configuration, handler, count, identity, and wiring tests pass. Static checks, the single migration-head check, and whitespace checks pass. Deployment workflows and chart values parse as YAML with no name override; Helm render checks could not run because Helm is unavailable.
 
 ### 2026-10-09 — AF-357 — installation_name on every event
 

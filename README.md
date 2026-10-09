@@ -670,7 +670,8 @@ credentials, or changed values. User email and name are sent only if you set
 `ANALYTICS_INCLUDE_USER_DETAILS=true`.
 
 To opt out, set `ANALYTICS_ENABLED=false` in `.env.deploy` and redeploy.
-`INSTALLATION_NAME` changes how your install is labelled. The local development
+The `WEB_APP_URL` hostname labels your install; its UUID remains stable when the
+URL changes. The local development
 `.env.spec` explicitly disables analytics; keep `ANALYTICS_ENABLED=false` in your
 local `.env`. The full list of events and fields is in
 [`docs/features/product-analytics.md`](docs/features/product-analytics.md).

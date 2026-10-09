@@ -162,7 +162,6 @@ class Config(BaseSettings):
     analytics_include_user_details: bool = False
     analytics_posthog_host: str = DEFAULT_POSTHOG_HOST
     analytics_posthog_project_token: str = DEFAULT_POSTHOG_PROJECT_TOKEN
-    installation_name: str = ""
 
     @field_validator("analytics_enabled", "analytics_include_user_details", mode="before")
     @classmethod
@@ -177,7 +176,7 @@ class Config(BaseSettings):
 
     @property
     def installation_display_name(self) -> str:
-        return self.installation_name.strip() or (urlparse(self.web_app_url).hostname or "")
+        return urlparse(self.web_app_url).hostname or ""
 
     @model_validator(mode="after")
     def local_api_external_url(self) -> Self:

@@ -43,11 +43,10 @@ cloudflareApiToken: ""
 senderEmail: ""
 
 # Product analytics (PostHog). On by default; set false to opt out. User email and name are sent
-# only when analyticsIncludeUserDetails is true. installationName labels this install in
-# PostHog; blank falls back to the webAppUrl host. See docs/features/product-analytics.md.
+# only when analyticsIncludeUserDetails is true. The webAppUrl hostname labels this install
+# in PostHog. See docs/features/product-analytics.md.
 analyticsEnabled: true
 analyticsIncludeUserDetails: false
-installationName: ""
 
 # Hourly message counts per Agent, platform and direction (no content), sent for the
 # previous closed hour. The CronJob exists only while analyticsEnabled is "true".

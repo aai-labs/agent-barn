@@ -47,7 +47,6 @@ SENDER_EMAIL=
 # so development data never reaches the Agent Barn PostHog project.
 ANALYTICS_ENABLED=false
 # ANALYTICS_INCLUDE_USER_DETAILS=false
-# INSTALLATION_NAME=
 
 # Optional: per-Agent email addresses. Unset leaves the Email platform refusing new
 # Communication Connections; nothing else changes. Both are required on top of the three
