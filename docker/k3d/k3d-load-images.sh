@@ -119,13 +119,29 @@ build_image() {
 
 # ── skip check ────────────────────────────────────────────────────────────────
 
+# containerd stores Docker Hub shorthand fully qualified: openclaw-base:0.7.3 is
+# listed as docker.io/library/openclaw-base:0.7.3. A first component with a dot,
+# a port or "localhost" is a registry host and is kept as written.
+containerd_ref() {
+  local ref="$1" first="${1%%/*}"
+  if [[ "${ref}" != */* ]]; then
+    echo "docker.io/library/${ref}"
+  elif [[ "${first}" == *.* || "${first}" == *:* || "${first}" == localhost ]]; then
+    echo "${ref}"
+  else
+    echo "docker.io/${ref}"
+  fi
+}
+
 # Tags are pinned to the base image's VERSION file (asserted above), so a tag
 # already present in the node's containerd store is byte-for-byte what we'd
-# build again — safe to skip the (slow) build+import.
+# build again — safe to skip the (slow) build+import. Match the whole ref: a
+# substring match would take openclaw-base:0.7.3-merged for openclaw-base:0.7.3,
+# skip the import, and leave agent pods in ErrImagePull.
 image_loaded_in_cluster() {
   local tag="$1"
   docker exec "k3d-${CLUSTER}-server-0" ctr -n k8s.io images ls -q 2>/dev/null \
-    | grep -qF "${tag}"
+    | grep -qxF "$(containerd_ref "${tag}")"
 }
 
 # A tag already in the local Docker image store — built by hand, by a prior
