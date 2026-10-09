@@ -144,6 +144,7 @@ export const AgentSchema = z.object({
     email: z.string(),
   }).nullable().optional().default(null),
   lastMessageAt: z.string().datetime({ offset: true }).nullable().optional(),
+  lastActivityAt: z.string().datetime({ offset: true }).nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

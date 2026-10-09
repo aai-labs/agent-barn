@@ -15,6 +15,7 @@ from injector import inject, singleton
 from pydantic import ValidationError
 
 from api.core.config import Config
+from api.domains.activity.repository import ActivityRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.aai_cli_artifacts import (
     PROFILE_SLUGS,
@@ -318,6 +319,7 @@ class AgentService:
     selection: SelectionValidator
     connection_repository: CommunicationConnectionRepository
     conversation_repository: ConversationRepository
+    activity_repository: ActivityRepository
     plugins: PlatformPluginRegistry
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
@@ -509,6 +511,7 @@ class AgentService:
         configured_platform_keys: list[str] | None = None,
         creator: AgentCreatorRead | None = None,
         last_message_at: dt.datetime | None = None,
+        last_call_at: dt.datetime | None = None,
         shared_credential_names: Mapping[UUID, str] | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
@@ -607,6 +610,7 @@ class AgentService:
             allowed_actions=allowed_actions or [],
             creator=creator,
             last_message_at=last_message_at,
+            last_activity_at=max((t for t in (last_message_at, last_call_at) if t is not None), default=None),
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
@@ -633,9 +637,9 @@ class AgentService:
         read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         configured_platform_keys = self.repository.get_active_communication_platforms_for_agents([agent.id], read_scope)
         creators = self.repository.get_creators_for_agents([agent.id], read_scope)
-        message_times = self.conversation_repository.latest_message_times_for_agents(
-            [agent.id], self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
-        )
+        activity_scope = self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        message_times = self.conversation_repository.latest_message_times_for_agents([agent.id], activity_scope)
+        call_times = self.activity_repository.latest_call_times_for_agents([agent.id], activity_scope)
         return self._build_agent_read(
             agent,
             secrets,
@@ -646,6 +650,7 @@ class AgentService:
             configured_platform_keys=configured_platform_keys.get(agent.id, []),
             creator=creators.get(agent.id),
             last_message_at=message_times.get(agent.id),
+            last_call_at=call_times.get(agent.id),
             template_key=template_key,
             template_version=template.version if template else 0,
             template_pin_type=pin_type,
@@ -1521,9 +1526,9 @@ class AgentService:
 
         agent_ids = [a.id for a in agents]
         creators = self.repository.get_creators_for_agents(agent_ids, read_scope)
-        message_times = self.conversation_repository.latest_message_times_for_agents(
-            agent_ids, self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
-        )
+        activity_scope = self.authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
+        message_times = self.conversation_repository.latest_message_times_for_agents(agent_ids, activity_scope)
+        call_times = self.activity_repository.latest_call_times_for_agents(agent_ids, activity_scope)
         secrets_by_agent = self.repository.get_secret_summaries_for_agents(agent_ids, read_scope)
         shared_credential_ids = list(
             {
@@ -1571,6 +1576,7 @@ class AgentService:
                 configured_platform_keys=configured_platform_keys.get(agent.id, []),
                 creator=creators.get(agent.id),
                 last_message_at=message_times.get(agent.id),
+                last_call_at=call_times.get(agent.id),
                 shared_credential_names=shared_credential_names,
             )
             for agent in agents

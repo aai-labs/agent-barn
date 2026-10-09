@@ -28,7 +28,7 @@ Three reads nest, all driven by the same window, so drilling in is only ever a n
 
 ## Boundaries
 
-Costs owns the record, its attribution to an Agent, healing and the money. Conversations own message persistence. Activity owns only the read shapes above and reads both without writing either. It does not feed cost calculation, and it adds no field to the cost read models the Platform surface shares.
+Costs owns the record, its attribution to an Agent, healing and the money. Conversations own message persistence. Activity owns only the read shapes above and reads both without writing either. It does not feed cost calculation, and it adds no field to the cost read models the Platform surface shares. The one read it lends elsewhere is `ActivityRepository.latest_call_times_for_agents`, the latest successful non-memory call per visible Agent, which feeds `last_activity_at` on the Agent list ([Agent list metadata](agents.md#agent-list-metadata)).
 
 ## Known gaps
 

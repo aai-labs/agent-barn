@@ -54,17 +54,17 @@ test.describe("Dashboard Page", () => {
     expect(requests.map((request) => request.count)).toEqual([2, 0, 0]);
   });
 
-  test("shows creator and reveals the exact last-message time on hover", async ({ page }) => {
+  test("shows creator and reveals the exact last-activity time on hover", async ({ page }) => {
     await dashboardPage.goto();
     const card = dashboardPage.agentCard("Maya");
-    const time = dashboardPage.lastMessageTime("Maya");
+    const time = dashboardPage.lastActivityTime("Maya");
     await expect(card.getByText("By Tommy", { exact: true })).toBeVisible();
-    await expect(time).toHaveAttribute("datetime", mockAgent.last_message_at);
+    await expect(time).toHaveAttribute("datetime", mockAgent.last_activity_at);
     await expect(time).toHaveCSS("opacity", "0");
     await card.hover();
     await expect(time).toHaveCSS("opacity", "1");
     await expect(card.getByRole("button")).toHaveCount(0);
-    await expect(card).toHaveAccessibleDescription(/Working By Tommy .*Last message/);
+    await expect(card).toHaveAccessibleDescription(/Working By Tommy .*Last active/);
     await expect(page.getByText(/1 quiet for 2\+ weeks/)).toBeVisible();
   });
 
@@ -73,8 +73,8 @@ test.describe("Dashboard Page", () => {
     await dashboardPage.goto();
     const idleCard = dashboardPage.agentCard(agentListWithPollingStates.items[1].name);
     await expect(idleCard.getByText("Idle", { exact: true })).toHaveCount(1);
-    await expect(idleCard.getByText("Last message")).toHaveCount(0);
-    await expect(dashboardPage.agentCard("Maya").getByText("Last message")).toBeVisible();
+    await expect(idleCard.getByText("Last active")).toHaveCount(0);
+    await expect(dashboardPage.agentCard("Maya").getByText("Last active")).toBeVisible();
     await expect(dashboardPage.agentCard("Maya").getByText("Working", { exact: true })).toBeVisible();
   });
 
@@ -115,7 +115,7 @@ test.describe("Dashboard Page", () => {
       await dashboardPage.goto();
       const legacy = dashboardPage.agentCard("Karl the Assistant with a longer name");
       await expect(legacy.getByText("Creator not recorded", { exact: true })).toBeVisible();
-      await expect(legacy.getByText("No messages yet", { exact: true })).toBeVisible();
+      await expect(legacy.getByText("No activity yet", { exact: true })).toBeVisible();
       const restricted = dashboardPage.agentCard("Read-only metadata");
       await expect(restricted.getByText("Not available", { exact: true })).toBeVisible();
       await expect(restricted.getByText("By tommy@example.com", { exact: true })).toBeVisible();
