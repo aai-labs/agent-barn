@@ -1,0 +1,26 @@
+name: Affected projects
+
+# Read-only report: lists which projects (api, web, hermes-base, ...) a pull
+# request touches, and why, in the job summary. It does not build or test
+# anything and does not gate the other workflows.
+
+on:
+  pull_request:
+    branches:
+      - staging
+      - main
+
+concurrency:
+  group: affected-projects-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Detect affected projects
+        uses: Continuous-Actions/dynamic-monorepo@v1
