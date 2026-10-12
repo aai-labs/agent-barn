@@ -42,6 +42,11 @@ _set_default("PLATFORM_ADMIN_CREDENTIALS", "admin@example.com:StrongPass123")
 os.environ["CLOUDFLARE_ACCOUNT_ID"] = "test-account-id"
 os.environ["CLOUDFLARE_API_TOKEN"] = "test-api-token"
 os.environ["SENDER_EMAIL"] = "noreply@example.com"
+# Forced off for the same reason: with a developer's real shared bot in .env, any test
+# that starts the Communications app would poll Telegram and consume real users' updates.
+# Tests that need the bot set fake values through set_env_variable.
+os.environ["AGENTBARN_TELEGRAM_BOT_TOKEN"] = ""
+os.environ["AGENTBARN_TELEGRAM_BOT_USERNAME"] = ""
 
 alembic_dir = Path(__file__).resolve().parents[1]
 alembic_ini_path = alembic_dir / "alembic.ini"

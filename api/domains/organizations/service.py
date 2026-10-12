@@ -25,6 +25,7 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
 )
+from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import (
@@ -32,6 +33,7 @@ from api.domains.organizations.models import (
     OrganizationCreate,
     OrganizationFilter,
     OrganizationRead,
+    OrganizationTrialEnd,
     OrganizationUpdate,
     PlatformOrganizationRead,
 )
@@ -62,6 +64,7 @@ class OrganizationService:
     agent_settings_lookup: AgentSettingsLookupService
     agent_repository: AgentRepository
     memory_keys: MemoryKeyRepository
+    trial_settings: TrialSettingsService
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a platform administrator in explicit Organization context) may
@@ -74,6 +77,8 @@ class OrganizationService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
             )
+        if organization.is_trial:
+            organization.trial_agent_limit = self.trial_settings.agent_limit()
         return organization
 
     def get_platform_organization(self, organization_id: UUID) -> PlatformOrganizationRead:
@@ -182,6 +187,15 @@ class OrganizationService:
         data: OrganizationCreate,
         actor: CurrentUserContext,
     ) -> OrganizationRead:
+        still_on_trial = actor.user.signed_up_at is not None and actor.user.trial_ended_at is None
+        if still_on_trial or self.organization_repository.owns_active_trial(actor.user.id):
+            # Another Organization would be spend outside the trial's limits, including
+            # after deleting the trial. Once a Platform Administrator ends the trial, its
+            # owner is an ordinary user.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Trial accounts can't create more organizations.",
+            )
         config = get_config()
         allowed_models = [config.agent_default_model.removeprefix("litellm/openrouter/")]
 
@@ -213,6 +227,50 @@ class OrganizationService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to load organization",
+            )
+        return organization_read
+
+    def end_trial(
+        self, organization_id: UUID, data: OrganizationTrialEnd, context: CurrentUserContext
+    ) -> PlatformOrganizationRead:
+        """Make a trial an ordinary Organization on the spend limit the administrator chose.
+
+        The limit is stored through the ordinary spend-limit path. If the proxy cannot
+        take it yet, the limit is still saved for the reconciler, so the trial ends anyway
+        and the administrator gets the usual "saved, not applied yet" answer: a trial is
+        never left half-ended on a renewing budget.
+        """
+        context.require_platform_admin()
+        organization = self.organization_repository.get(organization_id)
+        if organization is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
+            )
+        if not organization.is_trial:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This organization isn't on a trial.")
+        not_yet_applied: HTTPException | None = None
+        try:
+            self.llm_budgets.set_llm_budget(organization_id, data.budget_usd, data.budget_duration, context)
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_502_BAD_GATEWAY:
+                raise
+            not_yet_applied = exc
+        result = self.organization_repository.end_trial_with_event(
+            organization_id,
+            actor=resolve_actor_identity(context, organization_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
+            )
+        self.event_delivery_dispatcher.enqueue_immediate(result[1])
+        if not_yet_applied is not None:
+            raise not_yet_applied
+        organization_read = self.organization_repository.get_platform_read(organization_id)
+        if organization_read is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
             )
         return organization_read
 

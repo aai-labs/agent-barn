@@ -176,6 +176,9 @@ releases:
         value: {{ env "ORGANIZATION_DEFAULT_LLM_BUDGET_USD" | quote }}
       - name: organizationLlmBudgets.defaultAgentUsd
         value: {{ env "AGENT_DEFAULT_LLM_BUDGET_USD" | quote }}
+      # Public trial signup stays off unless an environment opts in.
+      - name: selfSignupEnabled
+        value: {{ env "SELF_SIGNUP_ENABLED" | default "false" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
@@ -247,6 +250,10 @@ releases:
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist
         value: {{ env "AGENT_MODEL_ALLOWLIST" | default "" | quote }}
+      - name: agentbarnTelegramBotToken
+        value: {{ env "AGENTBARN_TELEGRAM_BOT_TOKEN" | default "" | quote }}
+      - name: agentbarnTelegramBotUsername
+        value: {{ env "AGENTBARN_TELEGRAM_BOT_USERNAME" | default "" | quote }}
       - name: registry.server
         value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" | quote }}
       - name: registry.username

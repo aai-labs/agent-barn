@@ -72,6 +72,11 @@ class Config(BaseSettings):
     # divides its own allowance among its Agents.
     organization_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
     agent_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
+    # Self-signup: a first Google sign-in creates the account and a trial Organization.
+    # Off (the default) turns new Google accounts away; existing users can still sign in.
+    self_signup_enabled: bool = False
+    # Trial credit (USD) until a Platform Administrator sets one on the platform settings page.
+    trial_default_credit_usd: float = Field(default=10.0, ge=0, allow_inf_nan=False)
     # The API's own public base URL, used to show callers where to reach an Agent
     # Webhook or a Teams Connection. Deployments set it from API_HOST; locally it is
     # derived below, because the host port is the only thing that makes it up.
@@ -116,6 +121,21 @@ class Config(BaseSettings):
     # Content-free Communication journal history is pruned by Communications
     # maintenance after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
+    # Agent Barn's own Telegram bot, shared by every Agent on the agentbarn_telegram
+    # Platform. The platform is offered only when both are set. The API reads only
+    # the bot's id from the token; the Communications process alone calls Telegram
+    # with it, and Agents get a per-Connection stand-in.
+    agentbarn_telegram_bot_token: str = ""
+    agentbarn_telegram_bot_username: str = ""
+    # Where the Communications process delivers a linked user's updates to their
+    # Agent's Telegram webhook. Local Docker/k3d cannot resolve cluster DNS.
+    agentbarn_telegram_runtime_webhook_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:8443/telegram"
+    # Calls per second Agents may make through the shared bot: in total, kept under
+    # Telegram's limit of about 30, and per Organization, so no one Organization can
+    # use up the bot for the others.
+    agentbarn_telegram_bot_rate_per_second: float = Field(default=25, gt=0)
+    agentbarn_telegram_organization_rate_per_second: float = Field(default=5, gt=0)
+
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.

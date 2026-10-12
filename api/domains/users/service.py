@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from fastapi import HTTPException, status
@@ -241,6 +242,13 @@ class UserService:
             setattr(user, key, value)
         user = self.user_repository.save(user)
         return self.to_user_read(user)
+
+    def complete_onboarding(self, user_id: UUID) -> None:
+        """Remember that the user finished onboarding. The first finish is the one kept."""
+        user = self.get_user(user_id)
+        if user.onboarding_completed_at is None:
+            user.onboarding_completed_at = datetime.now(UTC)
+            self.user_repository.save(user)
 
     def verify_user_password(self, user_id: UUID, password: str) -> None:
         user = self.get_user(user_id)

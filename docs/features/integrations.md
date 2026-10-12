@@ -42,6 +42,8 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 
 The flow serves Google Workspace, the only Google-backed provider. The authorize and exchange operations require an authenticated user. The caller names the provider and selects services plus read-only access; those choices are carried inside the signed state because Google's callback returns only the code and state. The callback accepts a signed, typed, short-lived state and forwards the authorization code to the web application; authenticated exchange returns a refresh token, the account email, and the granted scopes. Persistence then occurs through the normal Agent Secret create/update flow.
 
+The server-owned client (`GOOGLE_CLOUD_CLIENT_ID`/`SECRET`) also serves "Sign in with Google" for Agent Barn accounts, which asks only for identity and keeps no Google token; see [Identity and Organizations](identity-and-organizations.md#google-sign-in-and-self-signup). Both callbacks must be registered on that client.
+
 Scopes are derived per request from the selected services and access level rather than being fixed per provider. Stored services, read-only mode, and granted scopes are validated together before encryption. Google Workspace uses the gog CLI and its own credential materialization, separate from aai-cli. A user-supplied Web-application OAuth client is the expected setup; server-owned credentials remain supported where configured.
 
 ## SharePoint sign-in
