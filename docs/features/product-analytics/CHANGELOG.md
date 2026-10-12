@@ -29,8 +29,8 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: the nine slice-1 events now list `product_analytics.posthog` alongside their existing handlers. The behaviour contract is [`../product-analytics.md`](../product-analytics.md).
 - Also delivered: deployment wiring.
   - The API chart renders `ANALYTICS_ENABLED`, which defaults to true in the chart and the Helmfile, with no user-details setting. The Installation label is derived from `WEB_APP_URL`.
-  - `deploy.yml` enables analytics on `main` only, so staging sends nothing by default. `deploy-public.yml` enables analytics. Neither workflow configures user-detail collection.
-  - `.env.deploy.spec` and customer release bundles ship analytics on. The local `.env.spec` explicitly disables it.
+  - `deploy.yml` enables analytics on both `main` and `staging`; staging events carry the staging host as `installation_name`. `deploy-public.yml` enables analytics. Neither workflow configures user-detail collection.
+  - `.env.deploy.spec`, customer release bundles and the local `.env.spec` ship analytics on. Local stacks report as `installation_environment=local`.
   - The opt-out is documented in `operations.md` and the README.
 - Also delivered: local end-to-end verification against a recording stub (see the 2026-10-06 entry). A one-off check against the real project from a local stack, labelled `local-dev-test` at the user's request, showed the events arriving in Live Events.
 - In transition: nothing in code. Analytics starts sending on the next `main` deploy, the next public release, and the next customer bundle.
@@ -41,6 +41,14 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-12 — AF-357 — Staging and local stacks report analytics
+
+- Delivered: `deploy.yml` sets `ANALYTICS_ENABLED=true` for `staging` as well as `main`, at the user's request, so the merged events can be checked on staging. Staging was previously off by design, so starting an Agent there sent nothing.
+- Staging events go to the real Agent Barn project, labelled with the staging `WEB_APP_URL` host as `installation_name` (`installation_environment=remote`). Exclude that name to see production only.
+- Delivered: the local `.env.spec` ships `ANALYTICS_ENABLED=true`, so new local stacks report as `installation_environment=local` with a `local-<short id>` name. Tests still force it off.
+- Changed: `.github/workflows/deploy.yml`, `.env.spec`, `operations.md` (the per-environment list and the testing rule), `product-analytics.md`, `README.md`.
+- Verified: the workflow parses as YAML. Staging delivery is confirmed after the next staging deploy.
 
 ### 2026-10-09 — AF-357 — Integrate remote naming changes
 
