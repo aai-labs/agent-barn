@@ -114,6 +114,7 @@ export const mockAgent = {
   allowed_actions: mockAgentAllowedActions,
   creator: { id: MOCK_MEMBER_USER_ID, full_name: "Tommy", email: "tommy@example.com" },
   last_message_at: "2026-05-14T09:14:00Z",
+  last_activity_at: "2026-05-14T09:14:00Z",
   created_at: "2026-03-14T00:00:00Z",
   updated_at: "2026-05-14T09:14:00Z",
 };

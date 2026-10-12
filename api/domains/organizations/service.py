@@ -16,6 +16,8 @@ from api.domains.agents.selection import _OPENROUTER_MODEL_PREFIX, is_model_allo
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import (
+    ActorIdentity,
+    ActorIdentityType,
     EventDeliveryDispatcher,
     SubjectIdentity,
     SubjectIdentityType,
@@ -24,6 +26,7 @@ from api.domains.events import (
 from api.domains.events.catalog import (
     EVENT_REGISTRY,
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
+    ORGANIZATION_UPDATED,
 )
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
@@ -41,6 +44,8 @@ from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
+
+_TRACKED_ORGANIZATION_FIELDS = ("name", "description")
 
 
 def _and_list(items: list[str]) -> str:
@@ -194,16 +199,18 @@ class OrganizationService:
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
-            self.organization_repository.create_for_user(
+            _, delivery_ids = self.organization_repository.create_for_user(
                 organization,
                 actor.user.id,
                 config.organization_creation_limit,
+                ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id),
             )
         except OrganizationCreationLimitReached as error:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"You can create up to {error.limit} organizations",
             ) from error
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
         # With its limit already on it: a new Organization is capped from the start.
         # Best effort — creation is committed, and key generation provisions again.
@@ -307,12 +314,15 @@ class OrganizationService:
                     allowlist_changed = bool(added_models or removed_models)
                     flag_modified(organization, "allowed_models")
 
+            changed_fields = sorted(
+                key for key in _TRACKED_ORGANIZATION_FIELDS if key in dump and dump[key] != getattr(organization, key)
+            )
             for key, value in dump.items():
                 setattr(organization, key, value)
             session.flush()
+            actor = resolve_actor_identity(context, organization_id)
 
             if allowlist_changed:
-                actor = resolve_actor_identity(context, organization_id)
                 event = EVENT_REGISTRY.build_event(
                     event_name=ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
                     schema_version=1,
@@ -336,8 +346,29 @@ class OrganizationService:
                 self.organization_repository.outbox_repository.stage(
                     session=session, registry=EVENT_REGISTRY, event=event
                 )
-                delivery_ids = self.organization_repository.outbox_repository.delivery_ids_for_event(
+                delivery_ids += self.organization_repository.outbox_repository.delivery_ids_for_event(
                     session, event.event_id
+                )
+            if changed_fields:
+                updated = EVENT_REGISTRY.build_event(
+                    event_name=ORGANIZATION_UPDATED,
+                    schema_version=1,
+                    occurred_at=datetime.now(UTC),
+                    organization_id=organization_id,
+                    actor=ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
+                    subject=SubjectIdentity(
+                        type=SubjectIdentityType.ORGANIZATION,
+                        id=organization_id,
+                        organization_id=organization_id,
+                    ),
+                    correlation_id=uuid4(),
+                    payload={"organization_id": organization_id, "changed_fields": changed_fields},
+                )
+                self.organization_repository.outbox_repository.stage(
+                    session=session, registry=EVENT_REGISTRY, event=updated
+                )
+                delivery_ids += self.organization_repository.outbox_repository.delivery_ids_for_event(
+                    session, updated.event_id
                 )
 
             session.commit()
@@ -374,9 +405,12 @@ class OrganizationService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(f"Delete this organization's agents before deleting it ({active_agents} still active)."),
             )
-        self.organization_repository.delete(
-            organization.id, before_delete=lambda session: self.memory_keys.enqueue_deletion(organization.id, session)
+        delivery_ids = self.organization_repository.delete_with_event(
+            organization.id,
+            ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
+            before_delete=lambda session: self.memory_keys.enqueue_deletion(organization.id, session),
         )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         try:
             self.memory_keys.revoke_pending(self.llm_budgets.litellm.revoke_memory_key, organization_id=organization.id)
         except Exception as exc:

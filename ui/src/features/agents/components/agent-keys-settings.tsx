@@ -5,6 +5,7 @@ import { useState } from "react";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 import { IntegrationsStep } from "./hire-dialog-steps";
 import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
+import { useSharePointAccess } from "../hooks/use-sharepoint-sign-in";
 import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent } from "../schemas";
 import {
@@ -26,6 +27,11 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const [removedProviders, setRemovedProviders] = useState<string[]>([]);
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
   const configuredSecrets = agent.secrets ?? [];
+  const sharepointAccess = useSharePointAccess(agent.id, {
+    enabled: editing && configuredSecrets.some((secret) => secret.provider === "sharepoint"),
+  });
+  // Sites granted to the Teams app outlive the credential, so they are removed first.
+  const sharepointHoldsSites = sharepointAccess.data?.mode === "selected_sites";
   const credentialError = updateAgent.error instanceof Error
     ? updateAgent.error.message
     : updateAgent.error
@@ -91,13 +97,14 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
         <div className="flex flex-col gap-4">
           {configuredSecrets.map((secret) => {
             const removed = removedProviders.includes(secret.provider);
+            const locked = secret.provider === "sharepoint" && sharepointHoldsSites;
             return (
               <div key={secret.provider} className="flex items-center justify-between gap-3 rounded-xl px-3.5 py-3" style={{ border: removed ? "1px dashed var(--line)" : "1px solid var(--line)", opacity: removed ? 0.55 : 1 }}>
                 <div>
                   <div className="font-medium text-[0.86rem]" style={{ color: "var(--ink-2)" }}>{secret.secretName}</div>
-                  <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>{removed ? "Will be removed" : secret.sharedCredentialName ? `Shared · ${secret.sharedCredentialName}` : "Value hidden"}</div>
+                  <div className="text-[0.76rem]" style={{ color: "var(--ink-4)" }}>{removed ? "Will be removed" : locked ? "Remove all its sites first: select SharePoint below." : secret.sharedCredentialName ? `Shared · ${secret.sharedCredentialName}` : "Value hidden"}</div>
                 </div>
-                <button type="button" className="af-btn af-btn-sm af-btn-ghost" onClick={() => setRemovedProviders((current) => removed ? current.filter((provider) => provider !== secret.provider) : [...current, secret.provider])}>{removed ? "Undo" : "Remove"}</button>
+                <button type="button" className="af-btn af-btn-sm af-btn-ghost" disabled={locked && !removed} onClick={() => setRemovedProviders((current) => removed ? current.filter((provider) => provider !== secret.provider) : [...current, secret.provider])}>{removed ? "Undo" : "Remove"}</button>
               </div>
             );
           })}

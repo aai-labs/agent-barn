@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi_injector import Injected
 
+from api.domains.agents.sharepoint_service import SharePointService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.communications.models import (
@@ -136,7 +137,9 @@ def update_communication_connection(
     data: CommunicationConnectionUpdate,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+    sharepoint: Annotated[SharePointService, Injected(SharePointService)],
 ):
+    sharepoint.refuse_swapping_teams_app(agent_id, connection_id, data.credentials, context)
     return service.update_connection(agent_id, connection_id, data, context)
 
 
@@ -150,7 +153,9 @@ def retire_communication_connection(
     revision: Annotated[int, Query(ge=1)],
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[CommunicationsService, Injected(CommunicationsService)],
+    sharepoint: Annotated[SharePointService, Injected(SharePointService)],
 ) -> Response:
+    sharepoint.refuse_retiring_teams_app(agent_id, connection_id, context)
     service.retire_connection(agent_id, connection_id, revision, context)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

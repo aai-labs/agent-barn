@@ -415,6 +415,28 @@ talks to the provider; `EmailService` above it is transport-agnostic.
   starve real invites.
 - Message size is capped at 5 MiB including attachments. The inline barn logo is sent as a base64 attachment with `disposition: "inline"` and a snake_case `content_id` matching the `cid:` reference in the MJML templates — `contentId` is the Workers binding's spelling and is not accepted by the REST API.
 
+## Product analytics
+
+Business events go to the Agent Barn PostHog project (EU) through the `product_analytics.posthog` Event Handler. What is sent is defined in [`../features/product-analytics.md`](../features/product-analytics.md).
+
+- **`ANALYTICS_ENABLED`** flows through `helmfile.yaml.gotmpl` into the API chart's Secret. Every API process reads that Secret, the worker included.
+  - The chart, the Helmfile and `Config` default to on. Set `ANALYTICS_ENABLED=false` to opt out. A blank value counts as off in `Config`; Helmfile treats a blank as unset and uses its on default. The local development `.env.spec` ships true, so local stacks report as `installation_environment=local`; tests explicitly set false.
+- **Where it is on, and where it is off:**
+  - `deploy.yml` sets it to `true` on both `main` and `staging`. Staging events are labelled with the staging `WEB_APP_URL` host as `installation_name` (`installation_environment=remote`); exclude that name to see production only.
+  - `deploy-public.yml` sets it to `true`.
+  - `.env.deploy.spec` ships `true`, as do customer release bundles.
+  - Plain Helm and Helmfile installs also report by default.
+- **User privacy.** Analytics never sends user email or full name. The former user-details setting has been removed; stale environment entries have no effect in updated processes. Previously sent personal details require separate PostHog cleanup.
+- **Installation label.** Events use the `WEB_APP_URL` hostname for remote installs, or `local-<first 8 UUID characters>` for localhost, loopback, unspecified IPs, or a missing host. The `installation_environment` property labels these as `remote` or `local`; it does not control telemetry. A developer stack with a custom domain is labelled remote. There is no name override, and URL changes preserve the Installation UUID. See [`../features/product-analytics.md`](../features/product-analytics.md).
+- **`ANALYTICS_POSTHOG_HOST`** and **`ANALYTICS_POSTHOG_PROJECT_TOKEN`** default to the EU host and the Agent Barn project token committed in `api/core/config.py`. Override them only to point an install at a test receiver. The project token is write-only and public by design; never commit a personal API key (`phx_`).
+- **Message counts CronJob.**
+  - `analytics-message-counts` runs at minute 15 each hour (`analyticsMessageCounts.schedule`). It sends the previous closed hour's counts.
+  - The chart renders it only when `analyticsEnabled` is `"true"`.
+  - Run the same pass by hand with `make report-message-counts`.
+  - It reads `ANALYTICS_*` from the API Secret only. A `kubectl set env` on the Deployments does not reach it, so override the CronJob itself when pointing a test stack at a recording endpoint.
+- **Outbox volume.** Every successful login writes one Outbox Message and one Event Delivery, and outbox rows are never pruned. Expect `user.logged_in` to dominate the Platform Event Delivery Monitor.
+- **Testing.** Local and staging stacks report to the real project deliberately; filter `installation_environment = remote` and exclude the staging `installation_name` to see production only. Events cannot be removed from the project, so for end-to-end checks of analytics itself set `ANALYTICS_POSTHOG_HOST` to a local recording endpoint.
+
 ## Per-Agent email addresses
 
 Agents reachable by email get their own address on a dedicated subdomain, receive mail through a Cloudflare Email Worker, and reply through the same Email Sending path as transactional mail. Rationale for the Worker: [`../adr/2026-08-31-cloudflare-worker-for-inbound-email.md`](../adr/2026-08-31-cloudflare-worker-for-inbound-email.md).
@@ -686,16 +708,25 @@ Documentation-only changes do not change a service image and do not require a se
 
 Ingest records Business Actions only for Tool Calls it completes after the Business Value
 release (see [`../features/business-value.md`](../features/business-value.md)). The backfill
-classifies the history that already exists. It is operator-run and never scheduled: nothing
-calls it from a router, and no CronJob runs it.
+classifies the history that already exists. Nothing calls it from a router, and no CronJob
+runs it.
 
-- Run it against a deployed release from the API container, which holds the database
-  credentials:
-  `kubectl -n <namespace> exec deploy/<release> -c api -- python -c "from api.domains.business_value.backfill import main; main()"`.
-  Locally, `make backfill-business-actions` runs the same entry point against whatever
+- The `agentbarn-api` chart runs it on every install and upgrade, including a client's
+  `./deploy.sh`, as the plain Job `<release>-business-action-backfill-<revision>`
+  (`helm/agentbarn-api/templates/business-action-backfill-job.yaml`). It starts after the
+  `-migrate` hook, in its own pod with `worker.resources`, and stops after
+  `businessValue.backfill.activeDeadlineSeconds`.
+  - It is not a Helm hook, so `--wait` (Helm 3 and 4, and `helmfile sync --wait`) neither
+    waits for it nor fails the deploy when it fails.
+  - The next upgrade deletes the previous revision's Job, so the latest run's logs stay
+    readable: `kubectl -n <namespace> logs job/<release>-business-action-backfill-<revision>`.
+  - To re-run it, redeploy. `businessValue.backfill.enabled: false` turns it off.
+- Never run it with `kubectl exec` in the API container: on local k3d that OOM-killed the
+  API container at its 512Mi limit.
+- Locally, `make backfill-business-actions` runs the same entry point against whatever
   `DB_CONNECTION_URL` points at, so check that value before invoking it.
 - It walks completed `terminal` and `exec` Tool Calls in id order, `BACKFILL_BATCH_SIZE`
-  (500) per batch.
+  (50) per batch, because each row carries its full stored result.
   - It infers each action's status from the stored result, never from the Tool Call's own
     status.
   - It writes each batch in its own transaction, so an interrupted run keeps the batches it

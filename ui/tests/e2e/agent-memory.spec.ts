@@ -11,6 +11,7 @@ import {
 } from "../pages/data-support/agent-data-support.po";
 import {
   MOCK_READER_AGENT_ID,
+  MOCK_SOURCE_AGENT_ID,
   mockMemoryGrant,
   mockMemoryItems,
 } from "../pages/data-support/agent-memory-data-support.po";
@@ -254,6 +255,36 @@ test.describe("Memory access settings", () => {
     await expect(memory.sourceOptions().filter({ hasText: /^Billing$/ })).toHaveCount(0);
     await expect(memory.sourceOptions().filter({ hasText: /^Triage$/ })).toHaveCount(1);
     await expect(memory.sourceOptions().filter({ hasText: /^Organization Memory$/ })).toHaveCount(1);
+  });
+
+  test("offers only Agents with memory enabled to receive access, but any Agent as a source", async ({ page }) => {
+    const data = await signIn(page);
+    await data.agentMemory.interceptAgentOptions();
+    await data.agentMemory.interceptMemoryGrants();
+    const memory = new AgentMemoryPage(page);
+    await memory.gotoMemoryAccess();
+
+    await page.getByRole("combobox", { name: "Agent receiving access" }).click();
+    await expect(memory.sourceOptions().filter({ hasText: /^Billing$/ })).toHaveCount(1);
+    await expect(memory.sourceOptions().filter({ hasText: /^Triage$/ })).toHaveCount(1);
+    await expect(memory.sourceOptions().filter({ hasText: /^Archivist$/ })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await memory.chooseReader("Billing");
+    await memory.openSourceChoices();
+    await expect(memory.sourceOptions().filter({ hasText: /^Archivist$/ })).toHaveCount(1);
+  });
+
+  test("explains when no Agent has memory enabled", async ({ page }) => {
+    const data = await signIn(page);
+    await data.agentMemory.interceptAgentOptions({ agents: [{ ...mockAgent, id: MOCK_SOURCE_AGENT_ID, name: "Triage", memory_enabled: false }] });
+    await data.agentMemory.interceptMemoryGrants();
+    const memory = new AgentMemoryPage(page);
+    await memory.gotoMemoryAccess();
+
+    const reader = page.getByRole("combobox", { name: "Agent receiving access" });
+    await expect(reader).toBeDisabled();
+    await expect(reader).toContainText("No Agent has memory enabled");
   });
 
   test("shows the server's error when creating a grant is refused", async ({ page }) => {

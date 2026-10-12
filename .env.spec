@@ -43,6 +43,10 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
+# Product analytics (PostHog) defaults to on. Local stacks report as
+# installation_environment=local with a local-<id> name; set false to opt out.
+ANALYTICS_ENABLED=true
+
 # Optional: per-Agent email addresses. Unset leaves the Email platform refusing new
 # Communication Connections; nothing else changes. Both are required on top of the three
 # values above. AGENT_EMAIL_DOMAIN must be onboarded for BOTH Email Routing and Email
@@ -87,6 +91,11 @@ RESTORE_POINT_MAX_PER_AGENT=5
 # an extraction, so it is given longer.
 RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS=900
 RESTORE_POINT_RESTORE_TIMEOUT_SECONDS=1800
+# Managed updates: how long the new pod has to report ready before the update
+# rolls back to the captured restore point, and how often it is checked. The
+# window includes pulling the new image. Defaults to 600 and 5 when unset.
+# AGENT_UPDATE_READY_TIMEOUT_SECONDS=600
+# AGENT_UPDATE_READY_POLL_SECONDS=5
 
 # Agents
 # Full image ref for agent pods, e.g. {REGISTRY_URL}/agentbarn-openclaw-base:{VERSION}

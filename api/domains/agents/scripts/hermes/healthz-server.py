@@ -73,6 +73,52 @@ def _budget_message(body: bytes) -> str | None:
     return _BUDGET_EXHAUSTED
 
 
+def _spend_limit_completion(path: str, request_body: bytes | None) -> tuple[str, bytes] | None:
+    """An ordinary assistant reply carrying the spend-limit notice, in the request's format.
+
+    Native chat posts whatever the runtime answers, so a refused chat completion answered
+    as an error reaches the channel as the runtime's own billing text, or not at all. The
+    marker still lets the Web Chat adapter report the turn as SPEND_LIMIT_REACHED.
+    Requests that are not chat completions, or that cannot be read back, keep the 402.
+    """
+    if not path.split("?", 1)[0].endswith("/chat/completions") or not request_body:
+        return None
+    try:
+        request = json.loads(request_body)
+    except ValueError:
+        return None
+    if not isinstance(request, dict):
+        return None
+    completion_id = f"chatcmpl-agentbarn-spend-limit-{int(time.time() * 1000)}"
+    created = int(time.time())
+    model = request.get("model") if isinstance(request.get("model"), str) else "agentbarn-spend-limit"
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    if request.get("stream") is True:
+        base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+        chunks = [
+            {
+                **base,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": _BUDGET_EXHAUSTED}, "finish_reason": None}
+                ],
+            },
+            {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": usage},
+        ]
+        body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+        return "text/event-stream; charset=utf-8", body.encode()
+    body = {
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created,
+        "model": model,
+        "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": _BUDGET_EXHAUSTED}, "finish_reason": "stop"}
+        ],
+        "usage": usage,
+    }
+    return "application/json", json.dumps(body).encode()
+
+
 def _poll() -> None:
     api_key = os.environ.get("API_SERVER_KEY", "")
     while True:
@@ -331,6 +377,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     # indefinitely, so the person chatting would never hear back.
                     status = _BUDGET_EXHAUSTED_STATUS
                     _record_terminal_llm_error("SPEND_LIMIT_REACHED")
+                    completion = _spend_limit_completion(self.path, body)
+                    if completion is not None:
+                        content_type, completion_body = completion
+                        self.send_response(200)
+                        self.send_header("Content-Type", content_type)
+                        self.send_header("Content-Length", str(len(completion_body)))
+                        self.end_headers()
+                        headers_sent = True
+                        self.wfile.write(completion_body)
+                        return
 
             if clean_msg:
                 if buffered is None:

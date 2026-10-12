@@ -54,7 +54,12 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
     sourceId !== "" &&
     grants.some((grant) => grant.agentId === readerId && grant.sourceAgentId === sourceKey);
   const canSubmit = readerId !== "" && sourceId !== "" && !alreadyGranted && !createGrant.isPending;
+  // Turning memory off stops an Agent recalling, so a grant to it would do nothing. Sources stay
+  // unfiltered: a memory-off Agent's saved memories remain readable by Agents granted access.
+  const readerAgents = options.agents.filter((agent) => agent.memoryEnabled);
   const sourceAgents = options.agents.filter((agent) => agent.id !== readerId);
+  const readerPlaceholder =
+    !options.isLoading && options.agents.length > 0 && readerAgents.length === 0 ? "No Agent has memory enabled" : "Choose an Agent";
 
   async function submit() {
     try {
@@ -99,14 +104,14 @@ export function MemoryAccessPanel({ canManage }: { canManage: boolean }) {
                 if (value === sourceId) setSourceId("");
                 createGrant.reset();
               }}
-              disabled={options.isLoading || options.agents.length === 0}
+              disabled={options.isLoading || readerAgents.length === 0}
             >
               <SelectTrigger className="h-10 w-full" aria-label="Agent receiving access">
-                <SelectValue placeholder="Choose an Agent" />
+                <SelectValue placeholder={readerPlaceholder} />
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  {options.agents.map((agent) => (
+                  {readerAgents.map((agent) => (
                     <SelectItem key={agent.id} value={agent.id}>
                       {agent.name}
                     </SelectItem>

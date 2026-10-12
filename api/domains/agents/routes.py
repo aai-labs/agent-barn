@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
@@ -299,6 +299,25 @@ def stop_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.stop_agent(agent_id, context)
+
+
+@agents_router.post(
+    "/{agent_id}/managed-update",
+    response_model=AgentRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def managed_update(
+    agent_id: UUID,
+    background_tasks: BackgroundTasks,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    """Stop, capture, start on the new image, roll back if it never comes up.
+
+    The orchestration is scheduled, not awaited: the 202 means "accepted",
+    and the Agent's own status plus its restore points tell the story.
+    """
+    return service.managed_update(agent_id, context, background_tasks.add_task)
 
 
 @agents_router.get("/{agent_id}/diagnostics", response_model=AgentRuntimeDiagnosticsRead)

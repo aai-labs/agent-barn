@@ -146,6 +146,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         repository=MagicMock(),
         connection_repository=MagicMock(),
         conversation_repository=MagicMock(),
+        activity_repository=MagicMock(),
         plugins=MagicMock(),
         override_repository=MagicMock(),
         authorization=MagicMock(),

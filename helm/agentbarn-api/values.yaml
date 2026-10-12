@@ -42,6 +42,16 @@ cloudflareAccountId: ""
 cloudflareApiToken: ""
 senderEmail: ""
 
+# Product analytics (PostHog). On by default; set false to opt out. User email and name
+# are never sent. The webAppUrl hostname labels remote installs; local hosts use local-<short UUID>.
+# See docs/features/product-analytics.md.
+analyticsEnabled: true
+
+# Hourly message counts per Agent, platform and direction (no content), sent for the
+# previous closed hour. The CronJob exists only while analyticsEnabled is "true".
+analyticsMessageCounts:
+  schedule: "15 * * * *"
+
 # Per-Agent email addresses. Blank leaves the Email platform disabled — Agent Barn
 # refuses new Email Communication Connections and nothing else changes. Both are needed
 # on top of the three values above. agentEmailDomain must be onboarded for BOTH Email
@@ -120,6 +130,11 @@ restorePoints:
     # time to finish.
     schedule: "*/10 * * * *"
 
+# Managed updates (the Update button): how long the new pod has to report ready
+# before the update rolls back. Covers pulling an image the node has not seen.
+managedUpdate:
+  readyTimeoutSeconds: 600
+
 registry:
   server: ""
   username: ""
@@ -175,6 +190,11 @@ costs:
     # COST_SYNC_MAX_RUNTIME_SECONDS (api/domains/costs/constants.py) — the job runs
     # under concurrencyPolicy: Forbid, so an overrunning pass costs the next tick.
     schedule: "*/15 * * * *"
+
+businessValue:
+  backfill:
+    enabled: true
+    activeDeadlineSeconds: 3600
 
 organizationLlmBudgets:
   # Percentages at which an Organization is notified. Empty uses 80,100.

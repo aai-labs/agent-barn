@@ -948,14 +948,28 @@ test.describe("Agent configuration page", () => {
       redirect_uri: REDIRECT_URI,
       admin_consent_url: `https://login.microsoftonline.com/${TENANT_ID}/v2.0/adminconsent?client_id=${APP_ID}&scope=rw`,
       read_only_admin_consent_url: `https://login.microsoftonline.com/${TENANT_ID}/v2.0/adminconsent?client_id=${APP_ID}&scope=ro`,
+      app_permission_consent_url: `https://login.microsoftonline.com/${TENANT_ID}/v2.0/adminconsent?client_id=${APP_ID}&scope=app`,
     };
+    const FINANCE = "https://contoso.sharepoint.com/sites/finance";
+    const LEGAL = "https://contoso.sharepoint.com/sites/legal";
 
-    async function mockTeamsAndSetup(page: import("@playwright/test").Page, connections: unknown[]) {
+    async function mockTeamsAndSetup(
+      page: import("@playwright/test").Page,
+      connections: unknown[],
+      access: Record<string, unknown> | null = null,
+    ) {
       await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(connections) });
       });
       await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/setup*`, async (route) => {
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(setup) });
+      });
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint`, async (route) => {
+        await route.fulfill(
+          access
+            ? { status: 200, contentType: "application/json", body: JSON.stringify(access) }
+            : { status: 404, contentType: "application/json", body: JSON.stringify({ detail: "SharePoint isn't connected." }) },
+        );
       });
     }
 
@@ -963,6 +977,7 @@ test.describe("Agent configuration page", () => {
       page: import("@playwright/test").Page,
       connections: unknown[],
       agentBodies: Record<string, unknown>[] = [{ ...mockAgent, status: "STOPPED", skills: [] }],
+      access: Record<string, unknown> | null = null,
     ) {
       const dataSupport = new DataSupport(page);
       const configurationPage = new AgentConfigurationPage(page);
@@ -981,7 +996,7 @@ test.describe("Agent configuration page", () => {
       });
       await dataSupport.agents.interceptGetAgentConfigurationRequest();
       await dataSupport.skills.interceptGetAgentSkillsRequest({ body: [mockSharePointSkill] });
-      await mockTeamsAndSetup(page, connections);
+      await mockTeamsAndSetup(page, connections, access);
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
       await configurationPage.sectionButton("Skills").click();
@@ -1004,6 +1019,7 @@ test.describe("Agent configuration page", () => {
 
     test("walks through setting up the Teams app with direct links", async ({ page }) => {
       const section = await openSkillsWithSharePoint(page, [teamsConnection]);
+      await section.getByLabel("Everything the person signing in can open").check();
       const guide = section.getByRole("list", { name: "Set up the Microsoft Teams app" });
 
       await expect(guide.getByRole("link", { name: "Open the app in Microsoft Entra" })).toHaveAttribute(
@@ -1115,6 +1131,7 @@ test.describe("Agent configuration page", () => {
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(signedInAgent) });
       });
 
+      await section.getByLabel("Everything the person signing in can open").check();
       await section.getByLabel("Read-only", { exact: true }).check();
       await expect(
         section.getByText("Signing in saves SharePoint access for this agent straight away", { exact: false }),
@@ -1152,12 +1169,267 @@ test.describe("Agent configuration page", () => {
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
       await section.getByRole("button", { name: "SharePoint" }).click();
+      await section.getByLabel("Everything the person signing in can open").check();
 
       await expect(section.getByRole("list", { name: "Set up the Microsoft Teams app" })).toBeVisible();
       await expect(section.getByRole("button", { name: "Sign in with Microsoft" })).toBeDisabled();
       await section.getByLabel("Read and write", { exact: true }).check();
       await expect(section.getByRole("button", { name: "Sign in with Microsoft" })).toBeEnabled();
       await expect(section.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+    });
+
+    test("defaults to only the sites you choose", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(page, [teamsConnection]);
+
+      await expect(section.getByLabel("Only sites you choose")).toBeChecked();
+      await expect(section.getByLabel("SharePoint site address")).toBeVisible();
+      await expect(section.getByRole("button", { name: "Sign in as an administrator to grant sites" })).toBeVisible();
+      await expect(section.getByRole("button", { name: "Sign in with Microsoft" })).toHaveCount(0);
+    });
+
+    test("keeps an agent signed in as a person on that mode", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(
+        page,
+        [teamsConnection],
+        [{ ...mockAgent, status: "STOPPED", skills: [] }],
+        { email: "someone@contoso.com", read_only: false, mode: "delegated", sites: [] },
+      );
+
+      await expect(section.getByLabel("Everything the person signing in can open")).toBeChecked();
+      await expect(section.getByLabel("SharePoint site address")).toHaveCount(0);
+    });
+
+    test("sets up the Teams app for selected sites", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(page, [teamsConnection]);
+      await section.getByLabel("Only sites you choose").check();
+      const guide = section.getByRole("list", { name: "Set up the Microsoft Teams app" });
+
+      await expect(guide.getByText("Application permissions").first()).toBeVisible();
+      await expect(guide.getByText("Sites.Selected").first()).toBeVisible();
+      // The administrator's grant sign-in needs this one, as a delegated permission.
+      await expect(guide.getByText("Delegated permissions").first()).toBeVisible();
+      await expect(guide.getByText("Sites.FullControl.All").first()).toBeVisible();
+      await expect(guide.getByText("Sites.ReadWrite.All")).toHaveCount(0);
+      await expect(guide.getByText(REDIRECT_URI)).toBeVisible();
+      await expect(guide.getByRole("button", { name: "Approve as an administrator" })).toBeVisible();
+      // The app allows public client flows, so device code sign-in must be blocked for it.
+      await expect(guide.getByText("Block device code sign-in", { exact: false })).toBeVisible();
+      await expect(guide.getByText("only these permissions", { exact: false })).toBeVisible();
+    });
+
+    test("grants selected sites with an administrator's sign-in", async ({ page }) => {
+      const signedInAgent = {
+        ...mockAgent,
+        status: "STOPPED",
+        skills: [],
+        secrets: [{ provider: "sharepoint", secret_name: "SharePoint credential", shared_credential_id: null }],
+      };
+      const section = await openSkillsWithSharePoint(page, [teamsConnection], [
+        { ...mockAgent, status: "STOPPED", skills: [] },
+        signedInAgent,
+      ]);
+      let authorizeQuery: URLSearchParams | undefined;
+      await page.route(
+        `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/authorize-url*`,
+        async (route) => {
+          const url = new URL(route.request().url());
+          authorizeQuery = url.searchParams;
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              authorize_url: `${url.origin}/api/v1/integrations/microsoft/callback?code=the-code&state=the-state`,
+            }),
+          });
+        },
+      );
+      await page.context().route("**/api/v1/integrations/microsoft/callback*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: `<script>window.opener.postMessage({type: "microsoft-oauth", code: "the-code", state: "the-state"}, window.location.origin); window.close();</script>`,
+        });
+      });
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/sign-in`, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            email: "admin@contoso.com",
+            read_only: false,
+            mode: "selected_sites",
+            sites: [FINANCE, LEGAL],
+          }),
+        });
+      });
+
+      await section.getByLabel("Only sites you choose").check();
+      await section.getByLabel("Read and write", { exact: true }).check();
+      const grant = section.getByRole("button", { name: "Sign in as an administrator to grant sites" });
+      await expect(grant).toBeDisabled();
+
+      const siteInput = section.getByLabel("SharePoint site address");
+      await siteInput.fill(`${FINANCE}/Shared%20Documents/Forms/AllItems.aspx`);
+      await section.getByRole("button", { name: "Add site" }).click();
+      await siteInput.fill(LEGAL);
+      await siteInput.press("Enter");
+      await expect(section.getByText(FINANCE, { exact: true })).toBeVisible();
+      await expect(section.getByText("Not granted yet")).toHaveCount(2);
+
+      await grant.click();
+
+      await expect(section.getByText("Sites granted by admin@contoso.com")).toBeVisible();
+      await expect(section.getByText("Not granted yet")).toHaveCount(0);
+      expect(authorizeQuery?.get("mode")).toBe("selected_sites");
+      expect(authorizeQuery?.getAll("sites")).toEqual([FINANCE, LEGAL]);
+      expect(authorizeQuery?.get("read_only")).toBe("false");
+    });
+
+    test("can't switch to a person's sign-in until every site is removed", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(
+        page,
+        [teamsConnection],
+        [{ ...mockAgent, status: "STOPPED", skills: [] }],
+        { email: "admin@contoso.com", read_only: false, mode: "selected_sites", sites: [FINANCE] },
+      );
+
+      await expect(section.getByLabel("Everything the person signing in can open")).toBeDisabled();
+      await expect(section.getByText("To switch to a person's sign-in or remove SharePoint", { exact: false })).toBeVisible();
+      await expect(section.getByRole("button", { name: "Remove all sites" })).toBeVisible();
+    });
+
+    test("removes every site with an administrator's sign-in", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(
+        page,
+        [teamsConnection],
+        [{ ...mockAgent, status: "STOPPED", skills: [] }],
+        { email: "admin@contoso.com", read_only: false, mode: "selected_sites", sites: [FINANCE, LEGAL] },
+      );
+      let authorizeQuery: URLSearchParams | undefined;
+      await page.route(
+        `**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/authorize-url*`,
+        async (route) => {
+          const url = new URL(route.request().url());
+          authorizeQuery = url.searchParams;
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              authorize_url: `${url.origin}/api/v1/integrations/microsoft/callback?code=the-code&state=the-state`,
+            }),
+          });
+        },
+      );
+      await page.context().route("**/api/v1/integrations/microsoft/callback*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: `<script>window.opener.postMessage({type: "microsoft-oauth", code: "the-code", state: "the-state"}, window.location.origin); window.close();</script>`,
+        });
+      });
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/sharepoint/sign-in`, async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      });
+
+      await section.getByRole("button", { name: "Remove all sites" }).click();
+
+      await expect(section.getByText("Sites granted by admin@contoso.com")).toHaveCount(0);
+      await expect(section.getByText(FINANCE, { exact: true })).toHaveCount(0);
+      await expect(section.getByText(LEGAL, { exact: true })).toHaveCount(0);
+      await expect(section.getByLabel("Everything the person signing in can open")).toBeEnabled();
+      expect(authorizeQuery?.get("remove_all")).toBe("true");
+      expect(authorizeQuery?.get("mode")).toBe("selected_sites");
+      expect(authorizeQuery?.getAll("sites")).toEqual([]);
+    });
+
+    test("keeps SharePoint in the Integrations list until its sites are removed", async ({ page }) => {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({
+        body: {
+          ...mockAgent,
+          status: "STOPPED",
+          secrets: [{ provider: "sharepoint", secret_name: "SharePoint credential", shared_credential_id: null }],
+        },
+      });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      await mockTeamsAndSetup(page, [teamsConnection], {
+        email: "admin@contoso.com",
+        read_only: false,
+        mode: "selected_sites",
+        sites: [FINANCE],
+      });
+
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionButton("Integrations").click();
+      const section = page.locator('section[aria-label="Integrations"]');
+      await section.getByRole("button", { name: "Edit", exact: true }).click();
+
+      await expect(section.getByRole("button", { name: "Remove", exact: true })).toBeDisabled();
+      await expect(section.getByText("Remove all its sites first", { exact: false })).toBeVisible();
+    });
+
+    test("warns that sites stay granted when an agent with selected sites is retired", async ({ page }) => {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({
+        body: {
+          ...mockAgent,
+          status: "STOPPED",
+          secrets: [{ provider: "sharepoint", secret_name: "SharePoint credential", shared_credential_id: null }],
+        },
+      });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      await mockTeamsAndSetup(page, [teamsConnection], {
+        email: "admin@contoso.com",
+        read_only: false,
+        mode: "selected_sites",
+        sites: [FINANCE],
+      });
+
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionButton("Danger zone").click();
+      await page.getByRole("button", { name: "Retire Agent" }).click();
+
+      const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
+      await expect(dialog.getByText("stay granted to its Microsoft Teams app", { exact: false })).toBeVisible();
+    });
+
+    test("refuses an address that isn't a SharePoint site", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(page, [teamsConnection]);
+      await section.getByLabel("Only sites you choose").check();
+
+      await section.getByLabel("SharePoint site address").fill("https://example.com/sites/finance");
+      await section.getByRole("button", { name: "Add site" }).click();
+
+      await expect(section.getByText("That isn't a SharePoint site address", { exact: false })).toBeVisible();
+      await expect(section.getByText("https://example.com/sites/finance", { exact: true })).toHaveCount(0);
+    });
+
+    test("shows the granted sites and keeps a removed one until the next administrator sign-in", async ({ page }) => {
+      const section = await openSkillsWithSharePoint(
+        page,
+        [teamsConnection],
+        [{ ...mockAgent, status: "STOPPED", skills: [] }],
+        { email: "admin@contoso.com", read_only: false, mode: "selected_sites", sites: [FINANCE, LEGAL] },
+      );
+
+      await expect(section.getByLabel("Only sites you choose")).toBeChecked();
+      await expect(section.getByText(FINANCE, { exact: true })).toBeVisible();
+      await expect(section.getByText(LEGAL, { exact: true })).toBeVisible();
+      await expect(section.getByText("Sites granted by admin@contoso.com")).toBeVisible();
+
+      await section.getByRole("button", { name: `Remove ${LEGAL}` }).click();
+
+      await expect(section.getByText(LEGAL, { exact: true })).toBeVisible();
+      await expect(section.getByText("Access ends at the next administrator sign-in")).toBeVisible();
+      await expect(section.getByRole("button", { name: "Sign in as an administrator to grant sites" })).toBeEnabled();
     });
 
     test("explains what to check when the sign-in window closes early", async ({ page }) => {
@@ -1178,6 +1450,7 @@ test.describe("Agent configuration page", () => {
         await route.fulfill({ status: 200, contentType: "text/html", body: "<script>window.close();</script>" });
       });
 
+      await section.getByLabel("Everything the person signing in can open").check();
       await section.getByLabel("Read-only", { exact: true }).check();
       await section.getByRole("button", { name: "Sign in with Microsoft" }).click();
 

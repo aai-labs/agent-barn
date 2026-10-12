@@ -131,6 +131,20 @@ class OrganizationUserRepository:
             )
             return session.exec(query).first()
 
+    def get_member_with_user_by_membership_id(
+        self, membership_id: UUID, organization_id: UUID
+    ) -> tuple[OrganizationUser, User] | None:
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(OrganizationUser, User)
+                .join(User, col(User.id) == col(OrganizationUser.user_id))
+                .where(
+                    col(OrganizationUser.id) == membership_id,
+                    col(OrganizationUser.organization_id) == organization_id,
+                )
+            )
+            return session.exec(query).first()
+
     def get_members_with_users(
         self,
         organization_id: UUID,

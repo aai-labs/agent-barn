@@ -12,7 +12,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.password_validation import validate_strong_password
 from api.domains.auth.repository import RefreshTokenRepository
 from api.domains.auth.service import AuthService
-from api.domains.events import EventDeliveryDispatcher
+from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
@@ -82,7 +82,7 @@ class UserService:
         identity = data.full_name or str(data.email).split("@", maxsplit=1)[0]
         return f"{identity}'s Organization"
 
-    def create_platform_user(self, data: PlatformUserCreate) -> PlatformUserCreateResult:
+    def create_platform_user(self, data: PlatformUserCreate, actor: CurrentUserContext) -> PlatformUserCreateResult:
         with Session(self.user_repository.delegate.engine, expire_on_commit=False) as session:
             if self.user_repository.get_by_email_with_session(str(data.email), session) is not None:
                 raise HTTPException(
@@ -111,7 +111,11 @@ class UserService:
                 ),
                 session,
             )
+            delivery_ids = self.organization_repository.stage_organization_created(
+                session, organization, ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id)
+            )
             session.commit()
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
         # With its limit already on it: a new Organization is capped from the start.
         # Best effort — creation is committed, and key generation provisions again.

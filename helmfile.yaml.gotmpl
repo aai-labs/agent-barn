@@ -216,6 +216,8 @@ releases:
         value: {{ env "CLOUDFLARE_API_TOKEN" | default "" | quote }}
       - name: senderEmail
         value: {{ env "SENDER_EMAIL" | default "" | quote }}
+      - name: analyticsEnabled
+        value: {{ env "ANALYTICS_ENABLED" | default "true" | quote }}
       - name: agentEmailDomain
         value: {{ env "AGENT_EMAIL_DOMAIN" | default "" | quote }}
       - name: emailInboundSecret

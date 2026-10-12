@@ -4,7 +4,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from hamcrest import assert_that, equal_to, is_not, none
+from hamcrest import assert_that, contains_inanyorder, equal_to, is_not, none
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -784,8 +784,11 @@ def test_role_change_repository_operation_emits_audit_domain_event(
         assert_that(messages[0].payload["previous_role"], equal_to("MEMBER"))
         assert_that(messages[0].payload["new_role"], equal_to("ADMIN"))
         deliveries = repository.list_deliveries_for_event(messages[0].event_id)
-        assert_that([delivery.handler_name for delivery in deliveries], equal_to(["security_audit.projection"]))
-        assert_that(changed.delivery_ids, equal_to([deliveries[0].id]))
+        assert_that(
+            [delivery.handler_name for delivery in deliveries],
+            contains_inanyorder("security_audit.projection", "product_analytics.posthog"),
+        )
+        assert_that(changed.delivery_ids, contains_inanyorder(*[delivery.id for delivery in deliveries]))
 
 
 def test_member_removed_repository_operation_emits_audit_domain_event(
@@ -811,8 +814,11 @@ def test_member_removed_repository_operation_emits_audit_domain_event(
         assert_that(messages[0].event_name, equal_to("organization.member.removed"))
         assert_that(messages[0].payload["user_id"], equal_to(str(user.id)))
         deliveries = repository.list_deliveries_for_event(messages[0].event_id)
-        assert_that([delivery.handler_name for delivery in deliveries], equal_to(["security_audit.projection"]))
-        assert_that(delivery_ids, equal_to([deliveries[0].id]))
+        assert_that(
+            [delivery.handler_name for delivery in deliveries],
+            contains_inanyorder("security_audit.projection", "product_analytics.posthog"),
+        )
+        assert_that(delivery_ids, contains_inanyorder(*[delivery.id for delivery in deliveries]))
 
 
 def test_ownership_transfer_repository_operation_emits_audit_domain_event(
@@ -845,8 +851,11 @@ def test_ownership_transfer_repository_operation_emits_audit_domain_event(
         assert_that(messages[0].payload["previous_owner_user_id"], equal_to(str(owner_user.id)))
         assert_that(messages[0].payload["new_owner_user_id"], equal_to(str(new_owner_user.id)))
         deliveries = repository.list_deliveries_for_event(messages[0].event_id)
-        assert_that([delivery.handler_name for delivery in deliveries], equal_to(["security_audit.projection"]))
-        assert_that(delivery_ids, equal_to([deliveries[0].id]))
+        assert_that(
+            [delivery.handler_name for delivery in deliveries],
+            contains_inanyorder("security_audit.projection", "product_analytics.posthog"),
+        )
+        assert_that(delivery_ids, contains_inanyorder(*[delivery.id for delivery in deliveries]))
 
 
 def test_outbox_message_rows_are_immutable(

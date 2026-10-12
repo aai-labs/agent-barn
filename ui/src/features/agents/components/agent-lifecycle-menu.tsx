@@ -24,7 +24,8 @@ export function AgentLifecycleMenu({ agent }: { agent: Agent }) {
   const stopAgent = useStopAgent();
   const restartAgent = useRestartAgent();
 
-  const busy = startAgent.isPending || stopAgent.isPending || restartAgent.isPending;
+  // The server refuses lifecycle actions while a managed update runs.
+  const busy = startAgent.isPending || stopAgent.isPending || restartAgent.isPending || agent.updateInProgress;
 
   const start = () => void startAgent.mutateAsync(agent.id).catch(toastError);
   const pause = () => void stopAgent.mutateAsync(agent.id).catch(toastError);
