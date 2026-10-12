@@ -325,6 +325,40 @@ def test_a_running_agent_that_rejects_messages_is_not_described_as_waking_up() -
             assert_that(context.bot.sent, equal_to([]))
 
 
+def test_a_message_the_agent_keeps_refusing_is_dropped_so_later_ones_get_through() -> None:
+    with given(_given()) as context:
+        start = datetime.now(UTC)
+        refused = _queue(context, "malformed", received_at=start)
+        _queue(context, "second", received_at=start)
+        pod = Pod(400, 400, 400, 400, 400, 200)
+
+        with when("the agent's webhook refuses the first message on five passes, then the queue moves on"):
+            for minute in range(6):
+                _forward(context, pod, now=start + timedelta(minutes=minute))
+
+        with then("the refused message is dropped with one note and the next one is delivered"):
+            assert_that(pod.texts(), equal_to(["malformed"] * 5 + ["second"]))
+            assert_that(_row(context, refused).status, equal_to(AgentBarnTelegramUpdateStatus.DROPPED))
+            assert_that(
+                context.bot.sent,
+                equal_to([(_JANE, "Your agent couldn't accept one of your messages, so it wasn't delivered.")]),
+            )
+
+
+def test_an_agent_that_is_still_starting_does_not_use_up_a_messages_refusals() -> None:
+    with given(_given()) as context:
+        start = datetime.now(UTC)
+        update_id = _queue(context, "hello", received_at=start)
+        pod = Pod(503, 503, 503, 503, 503, 400)
+
+        with when("the pod is unreachable on five passes and then refuses the message once"):
+            for minute in range(6):
+                _forward(context, pod, now=start + timedelta(minutes=minute))
+
+        with then("the message is still waiting for its agent"):
+            assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))
+
+
 def test_messages_held_for_someone_since_unlinked_are_not_delivered() -> None:
     with given(_given(AgentStatus.STOPPED)) as context:
         update_id = _queue(context, "private note")

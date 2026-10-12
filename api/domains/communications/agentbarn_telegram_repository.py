@@ -509,6 +509,22 @@ class AgentBarnTelegramRepository:
             )  # type: ignore[call-overload]
             session.commit()
 
+    def record_rejection(self, update_id: int, *, retry_at: datetime) -> int:
+        """Count one refusal by the Agent's webhook and schedule a retry; the refusals so far."""
+        with Session(self.delegate.engine) as session:
+            rejected = session.exec(
+                sa.update(AgentBarnTelegramUpdate)
+                .where(col(AgentBarnTelegramUpdate.update_id) == update_id)
+                .values(
+                    attempt_count=AgentBarnTelegramUpdate.attempt_count + 1,  # type: ignore[operator]
+                    rejected_count=AgentBarnTelegramUpdate.rejected_count + 1,  # type: ignore[operator]
+                    next_attempt_at=retry_at,
+                )
+                .returning(col(AgentBarnTelegramUpdate.rejected_count))
+            ).first()  # type: ignore[call-overload]
+            session.commit()
+            return rejected[0] if rejected else 0
+
     def claim_notice(self, telegram_user_id: int, *, now: datetime) -> bool:
         """Record that the user was told their Agent is unavailable; False if already told."""
         with Session(self.delegate.engine) as session:

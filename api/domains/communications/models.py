@@ -441,6 +441,10 @@ class AgentBarnTelegramUpdate(BaseModel, table=True):
     )
     # Processing attempts while RECEIVED, then forwarding attempts while QUEUED.
     attempt_count: int = SqlField(default=0, sa_column=Column(sa.Integer(), nullable=False, server_default="0"))
+    # Forwarding attempts the Agent's webhook answered with a refusal, counted
+    # apart from a pod that is unreachable, so a message the Agent will never
+    # accept is dropped soon instead of holding back the sender for a day.
+    rejected_count: int = SqlField(default=0, sa_column=Column(sa.Integer(), nullable=False, server_default="0"))
     next_attempt_at: datetime | None = SqlField(
         default=None,
         nullable=True,

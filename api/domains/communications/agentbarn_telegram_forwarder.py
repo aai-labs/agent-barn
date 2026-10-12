@@ -40,6 +40,9 @@ _SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 # Settled rows only stop re-deliveries, which Telegram ends within a day; a week is ample.
 _SETTLED_RETENTION = timedelta(days=7)
 _PURGE_INTERVAL = timedelta(hours=1)
+# A webhook that refused an update this often will not take it; dropping it lets
+# the sender's later updates through instead of holding them for the whole window.
+_REJECTION_LIMIT = 5
 # Answers from the cluster or the pod while it is still coming up.
 _NOT_YET_SERVING = frozenset({502, 503, 504})
 
@@ -54,6 +57,7 @@ class _Delivery(enum.Enum):
 
 _WAKING_UP = "Your agent is waking up. I'll pass your message on in a moment."
 _OFFLINE = "This agent is offline right now. I'll pass your message on when it's back."
+_REFUSED = "Your agent couldn't accept one of your messages, so it wasn't delivered."
 
 
 def _dropped_notice(count: int) -> str:
@@ -162,8 +166,13 @@ class AgentBarnTelegramForwarder:
             and self.repository.claim_notice(update.telegram_user_id, now=now)
         ):
             self._reply(update.telegram_user_id, _WAKING_UP)
-        delay = min(2**update.attempt_count, _RETRY_MAX_SECONDS)
-        self.repository.schedule_retry(update.update_id, at=now + timedelta(seconds=delay))
+        retry_at = now + timedelta(seconds=min(2**update.attempt_count, _RETRY_MAX_SECONDS))
+        if delivery == _Delivery.REJECTED:
+            if self.repository.record_rejection(update.update_id, retry_at=retry_at) >= _REJECTION_LIMIT:
+                self.repository.drop(update.update_id)
+                self._reply(update.telegram_user_id, _REFUSED)
+            return False
+        self.repository.schedule_retry(update.update_id, at=retry_at)
         return False
 
     def _post(self, update: AgentBarnTelegramUpdate) -> _Delivery:
