@@ -15,11 +15,13 @@ import httpx
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.agents.authorization import AgentAuthorization
 from api.domains.communications.agentbarn_telegram_messages import file_ids
 from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
+from api.domains.rbac.catalog import PermissionKey
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +239,7 @@ class AgentBarnTelegramProxy:
     repository: AgentBarnTelegramRepository
     connection_secrets: AgentBarnTelegramService
     limits: AgentBarnTelegramRateLimits
+    authorization: AgentAuthorization
     client: httpx.Client = field(default_factory=lambda: httpx.Client(timeout=_TIMEOUT_SECONDS), init=False)
     _bot: dict[str, Any] | None = field(default=None, init=False)
     # File paths each Connection looked up with getFile, until their links expire.
@@ -267,7 +270,7 @@ class AgentBarnTelegramProxy:
             return _error(403, "Forbidden: business connections are not available")
         if name in _CHAT_SCOPED:
             chats = self._named_chats(params)
-            if not chats or not chats <= self.repository.linked_user_ids(connection_id):
+            if not chats or not self._may_reach(connection_id, chats):
                 return _error(403, "Forbidden: this chat is not linked to this agent")
             refused = self._refuse_others(connection_id, name, params)
             if refused is not None:
@@ -338,6 +341,24 @@ class AgentBarnTelegramProxy:
         ):
             return None
         return real_token, connection.organization_id
+
+    def _may_reach(self, connection_id: UUID, chats: set[int]) -> bool:
+        """Whether every chat is a user linked to the Connection by a Member who may still update its Agent.
+
+        Checked on every call, as the relay checks before every delivery, so an
+        Agent stops reaching a user, scheduled messages included, as soon as the
+        Member who linked them loses access. Losing it ends the link.
+        """
+        links = self.repository.active_links(connection_id, chats)
+        if {link.telegram_user_id for link in links} != chats:
+            return False
+        for link in links:
+            if not self.authorization.membership_has_permission(
+                link.linked_by_membership_id, link.agent_id, PermissionKey.AGENT_UPDATE
+            ):
+                self.repository.end_link_for_connection(connection_id, link.telegram_user_id, now=datetime.now(UTC))
+                return False
+        return True
 
     def _refuse_others(self, connection_id: UUID, name: str, params: dict[str, Any]) -> ProxyResponse | None:
         """Refuse a call naming a message or file that is not this Connection's.

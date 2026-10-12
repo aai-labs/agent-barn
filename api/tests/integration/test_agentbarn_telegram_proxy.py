@@ -12,16 +12,26 @@ import pytest
 from hamcrest import assert_that, contains_exactly, equal_to, has_entries, is_in
 from sqlmodel import Session, col, select
 
+from api.domains.agents.models import AgentAccess
 from api.domains.communications.agentbarn_telegram_proxy import AgentBarnTelegramProxy
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.agentbarn_telegram_service import hash_link_token
 from api.domains.communications.models import AgentBarnTelegramLink, CommunicationConnection
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
+from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_VIEWER_ROLE_ID
+from api.domains.users.organization_users.models import OrganizationRole
+from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.crypto import encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_communications_server, prepare_injector, set_env_variable
-from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
+from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
+    MockK8sModule,
+    MockLiteLLMModule,
+    there_is_agent_access,
+    there_is_an_agent,
+)
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 
@@ -838,3 +848,58 @@ def test_message_and_file_lists_that_could_be_read_two_ways_are_refused(method: 
 
         assert_that(response.status_code, is_in([400, 403]))
         assert_that(context.telegram.received, equal_to([]))
+
+
+def _linked_by_an_editor_of_the_sales_agent(context) -> None:
+    """The Member who linked Jane is an ordinary Member with Editor access to the sales agent."""
+    context.organization_user.role = OrganizationRole.MEMBER
+    context.injector.get(OrganizationUserRepository).save(context.organization_user)
+    there_is_agent_access(agent_id=context.sales.agent_id, access_role_id=AGENT_EDITOR_ROLE_ID)(context)
+
+
+def _make_viewer(context) -> None:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        access = session.exec(
+            select(AgentAccess).where(
+                col(AgentAccess.membership_id) == context.organization_user.id,
+                col(AgentAccess.agent_id) == context.sales.agent_id,
+            )
+        ).one()
+        access.access_role_id = AGENT_VIEWER_ROLE_ID
+        session.add(access)
+        session.commit()
+
+
+def _jane_is_linked_to_sales(context) -> bool:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        return (
+            session.exec(
+                select(AgentBarnTelegramLink).where(
+                    col(AgentBarnTelegramLink.telegram_user_id) == _JANE,
+                    col(AgentBarnTelegramLink.connection_id) == context.sales.id,
+                    col(AgentBarnTelegramLink.unlinked_at).is_(None),
+                )
+            ).first()
+            is not None
+        )
+
+
+def test_an_agent_can_message_a_user_linked_by_a_member_who_may_still_update_it() -> None:
+    with given([*_GIVEN, _linked_by_an_editor_of_the_sales_agent]) as context:
+        response = _call(context, "sendMessage", {"chat_id": _JANE, "text": "reminder"})
+
+        assert_that(response.status_code, equal_to(200))
+        assert_that(_jane_is_linked_to_sales(context), equal_to(True))
+
+
+def test_an_agent_stops_reaching_a_user_once_the_member_who_linked_them_loses_access() -> None:
+    with given([*_GIVEN, _linked_by_an_editor_of_the_sales_agent]) as context:
+        _make_viewer(context)
+
+        with when("the agent sends a scheduled message, with nothing new from Jane"):
+            response = _call(context, "sendMessage", {"chat_id": _JANE, "text": "reminder"})
+
+        with then("it is refused before reaching Telegram, and Jane's link ends"):
+            assert_that(response.status_code, equal_to(403))
+            assert_that(context.telegram.received, equal_to([]))
+            assert_that(_jane_is_linked_to_sales(context), equal_to(False))

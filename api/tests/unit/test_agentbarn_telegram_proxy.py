@@ -29,7 +29,11 @@ def _proxy(handler, *, connection_secret: str | None = _CONNECTION_SECRET) -> Ag
     repository.proxy_connection.return_value = SimpleNamespace(id=uuid4(), organization_id=uuid4())
     connection_secrets = Mock()
     connection_secrets.runtime_secret.return_value = connection_secret
-    repository.linked_user_ids.return_value = {5550001}
+    repository.active_links.return_value = [
+        SimpleNamespace(telegram_user_id=5550001, linked_by_membership_id=uuid4(), agent_id=uuid4())
+    ]
+    authorization = Mock()
+    authorization.membership_has_permission.return_value = True
     config = cast(
         Config,
         SimpleNamespace(
@@ -44,6 +48,7 @@ def _proxy(handler, *, connection_secret: str | None = _CONNECTION_SECRET) -> Ag
         repository=repository,
         connection_secrets=connection_secrets,
         limits=AgentBarnTelegramRateLimits(config),
+        authorization=authorization,
     )
     proxy.client = httpx.Client(transport=httpx.MockTransport(handler))
     return proxy

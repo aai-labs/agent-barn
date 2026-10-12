@@ -589,12 +589,14 @@ class AgentBarnTelegramRepository:
                 )
             ).one_or_none()
 
-    def linked_user_ids(self, connection_id: UUID) -> set[int]:
+    def active_links(self, connection_id: UUID, telegram_user_ids: Iterable[int]) -> list[AgentBarnTelegramLink]:
+        """The Connection's active links among these Telegram users."""
         with Session(self.delegate.engine) as session:
-            return set(
+            return list(
                 session.exec(
-                    select(AgentBarnTelegramLink.telegram_user_id).where(
+                    select(AgentBarnTelegramLink).where(
                         col(AgentBarnTelegramLink.connection_id) == connection_id,
+                        col(AgentBarnTelegramLink.telegram_user_id).in_(set(telegram_user_ids)),
                         col(AgentBarnTelegramLink.unlinked_at).is_(None),
                     )
                 )

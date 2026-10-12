@@ -101,7 +101,7 @@ _update_ids = count(20_000)
 
 def _link(context, user: int) -> None:
     repository = context.injector.get(AgentBarnTelegramRepository)
-    if user in repository.linked_user_ids(context.connection.id):
+    if repository.active_links(context.connection.id, [user]):
         return
     raw = f"link-{user}-{next(_update_ids)}"
     repository.create_link_token(
@@ -357,7 +357,7 @@ def test_messages_are_not_delivered_once_the_linking_member_lost_access() -> Non
             assert_that(pod.received, equal_to([]))
             assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.DROPPED))
             repository = context.injector.get(AgentBarnTelegramRepository)
-            assert_that(_JANE in repository.linked_user_ids(context.connection.id), equal_to(False))
+            assert_that(repository.active_links(context.connection.id, [_JANE]), equal_to([]))
 
 
 def test_users_waiting_on_a_retry_do_not_crowd_out_users_who_are_due() -> None:
