@@ -22,11 +22,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 ARG AAI_CLI_COMMIT=fca39caf0f6f8ddac5a803218f274336fcf6c848
 COPY aai-token-url.patch /tmp/aai-token-url.patch
+COPY aai-apollo-routing.patch /tmp/aai-apollo-routing.patch
 RUN git init repo && \
     git -C repo remote add origin https://github.com/aai-labs/aai-cli.git && \
     git -C repo fetch --depth 1 origin "$AAI_CLI_COMMIT" && \
     git -C repo checkout --detach FETCH_HEAD && \
     git -C repo apply /tmp/aai-token-url.patch && \
+    git -C repo apply /tmp/aai-apollo-routing.patch && \
     cargo install --path repo --root /out --locked
 
 FROM node:22-bookworm-slim

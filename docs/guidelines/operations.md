@@ -613,8 +613,10 @@ independent versions:
   pin, resolved `aai-cli` revision or other build dependency, or a file copied
   into the image changes.
   Both Dockerfiles pin the same `AAI_CLI_COMMIT` and apply matching
-  `aai-token-url.patch` files. The patch preserves delegated Excel support for
-  brokered Graph tokens and prevents unrelated environment-token fallback.
+  `aai-token-url.patch` and `aai-apollo-routing.patch` files. The former preserves
+  delegated Excel support for brokered Graph tokens and prevents unrelated
+  environment-token fallback; the latter keeps Apollo health requests on the
+  configured provider or gateway route.
   Changing either the commit or patch requires a new runtime version. Workflow, smoke-test, and runtime-plugin-only changes do not
   otherwise alter the image and need no version bump.
 

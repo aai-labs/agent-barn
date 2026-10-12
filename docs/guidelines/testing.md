@@ -221,6 +221,8 @@ backend: its login-shell snapshot must resolve the wrapper, and two service
 commands must each fetch a temporary token. It uses a fixture broker boundary
 and disables external networking.
 
+Apollo contracts run the patched aai-cli in both images against an offline loopback server. They check direct API-key profiles, isolated bearer profiles, typed and passthrough API paths, the separate health path, persistent-store cleanup when switching modes, and credential exclusion. Run the corresponding `test_*_apollo.py` contracts through `make test-api-runtime`; rebuild both images after changing `aai-apollo-routing.patch`.
+
 SharePoint contracts run the pinned patched aai-cli in both real images with external networking disabled. A loopback stub verifies POST token requests, dedicated-token failure without environment fallback, typed files/Excel auth, sign-in-marker continuity, failed handoff preservation, mixed provider cleanup and latest-grant handback. The API matrix covers both directions for every provider/runtime, legacy migration, source ownership, failure/retry/restore permissions, durable broker rotation/cache and reconnect. These tests use fixture grants only. Run `make test-api-runtime RUNTIME=hermes` with `HERMES_TEST_IMAGE`, or the OpenClaw equivalent with `OPENCLAW_TEST_IMAGE`. The image must be rebuilt after the pinned CLI/patch changes; an old local tag cannot prove this contract.
 
 Agent Memory gateway tests replay sanitized Hermes and OpenClaw request captures
