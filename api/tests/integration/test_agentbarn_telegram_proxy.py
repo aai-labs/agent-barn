@@ -1,5 +1,7 @@
 import asyncio
+import itertools
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from email import policy as email_policy
 from email.parser import BytesParser
@@ -35,10 +37,14 @@ class Telegram:
     def __init__(self) -> None:
         self.received: list[httpx.Request] = []
         self.answers: dict[str, tuple[int, dict]] = {}
+        # Something that happens while a call is with Telegram, run once.
+        self.during: dict[str, Callable[[], None]] = {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.received.append(request)
         method = request.url.path.rsplit("/", 1)[-1]
+        if method in self.during:
+            self.during.pop(method)()
         if method == "getMe":
             return httpx.Response(200, json={"ok": True, "result": _BOT})
         status_code, body = self.answers.get(method, (200, {"ok": True, "result": {"message_id": 77}}))
@@ -68,11 +74,15 @@ def _connection(key: str, connection_secret: str):
     return step
 
 
+_link_tokens = itertools.count()
+
+
 def _link(key: str, telegram_user_id: int):
     def step(context):
         connection = getattr(context, key)
         repository = context.injector.get(AgentBarnTelegramRepository)
-        raw = f"link-{key}-{telegram_user_id}"
+        # Unique per call, so a user can switch back to an Agent they were linked to before.
+        raw = f"link-{key}-{telegram_user_id}-{next(_link_tokens)}"
         repository.create_link_token(
             organization_id=connection.organization_id,
             agent_id=connection.agent_id,
@@ -83,6 +93,17 @@ def _link(key: str, telegram_user_id: int):
         )
         repository.consume_link_token(
             hash_link_token(raw), telegram_user_id=telegram_user_id, telegram_username=None, now=datetime.now(UTC)
+        )
+
+    return step
+
+
+def _owns(key: str, *, messages: tuple[int, ...] = (), files: tuple[str, ...] = ()):
+    """The agent already sent or was shown these messages in Jane's chat, and these files."""
+
+    def step(context):
+        context.injector.get(AgentBarnTelegramRepository).record_ownership(
+            getattr(context, key).id, messages=[(_JANE, message_id) for message_id in messages], files=files
         )
 
     return step
@@ -331,8 +352,8 @@ def test_a_file_upload_to_someone_not_linked_is_refused() -> None:
         assert_that(context.telegram.received, equal_to([]))
 
 
-def test_button_answers_and_file_lookups_need_no_chat() -> None:
-    with given(_GIVEN) as context:
+def test_button_answers_and_lookups_of_the_agents_own_files_need_no_chat() -> None:
+    with given([*_GIVEN, _owns("sales", files=("file-1",))]) as context:
         _call(context, "answerCallbackQuery", {"callback_query_id": "cb-1"})
         _call(context, "getFile", {"file_id": "file-1"})
 
@@ -360,7 +381,7 @@ def test_a_user_who_blocked_the_bot_is_unlinked_when_telegram_says_so() -> None:
 
 
 def test_query_string_parameters_are_checked_and_forwarded_like_a_body() -> None:
-    with given(_GIVEN) as context:
+    with given([*_GIVEN, _owns("sales", files=("file-1",))]) as context:
         with when("an agent passes parameters in the query string"):
             refused = context.communications_client.get(_url(context, "sendMessage"), params={"chat_id": _STRANGER})
             looked_up = context.communications_client.get(_url(context, "getFile"), params={"file_id": "file-1"})
@@ -389,7 +410,7 @@ def _fake_telegram_files(context) -> None:
 
 
 def test_an_agent_downloads_a_file_a_user_sent_through_the_real_bot() -> None:
-    with given([*_GIVEN, _telegram_with_files]) as context:
+    with given([*_GIVEN, _telegram_with_files, _owns("sales", files=("file_7",))]) as context:
         with when("the agent looks up a photo Jane sent, then downloads it"):
             _call(context, "getFile", {"file_id": "file_7"})
             response = _file(context, "sales", "photos/file_7.jpg")
@@ -564,8 +585,8 @@ def test_reply_parameters_text_that_could_be_read_two_ways_is_refused(reply_para
             assert_that(context.telegram.received, equal_to([]))
 
 
-def test_a_reply_may_quote_a_message_in_the_same_linked_chat() -> None:
-    with given(_GIVEN) as context:
+def test_a_reply_may_quote_one_of_the_agents_own_messages() -> None:
+    with given([*_GIVEN, _owns("sales", messages=(7,))]) as context:
         response = _call(
             context,
             "sendMessage",
@@ -610,7 +631,7 @@ def _file(context, key: str, file_path: str) -> httpx.Response:
 
 
 def test_an_agent_downloads_only_files_it_looked_up_itself() -> None:
-    with given([*_GIVEN, _telegram_with_files]) as context:
+    with given([*_GIVEN, _telegram_with_files, _owns("sales", files=("file_7",))]) as context:
         with when("the sales agent looks a file up, then both agents try to download it"):
             _call(context, "getFile", {"file_id": "file_7"})
             own = _file(context, "sales", "photos/file_7.jpg")
@@ -644,3 +665,176 @@ def test_proxy_work_runs_off_the_event_loop() -> None:
             _call(context, "sendChatAction", {"chat_id": _JANE, "action": "typing"})
 
         assert_that(seen, equal_to([False]))
+
+
+def _photo_message(message_id: int, file_id: str) -> tuple[int, dict]:
+    return (
+        200,
+        {
+            "ok": True,
+            "result": {
+                "message_id": message_id,
+                "chat": {"id": _JANE, "type": "private"},
+                "date": 0,
+                "photo": [{"file_id": file_id, "file_unique_id": f"unique-{file_id}", "width": 90, "height": 90}],
+            },
+        },
+    )
+
+
+def _jane_switches_from_support_to_sales(context) -> None:
+    """Jane talked to the support agent, which sent her photo file-A as message 7; then she linked sales,
+    which has since sent her message 77."""
+    _link("support", _JANE)(context)
+    context.telegram.answers["sendPhoto"] = _photo_message(7, "file-A")
+    assert _call(
+        context, "sendPhoto", {"chat_id": _JANE, "photo": "https://example.com/a.jpg"}, key="support"
+    ).is_success
+    _link("sales", _JANE)(context)
+    assert _call(context, "sendMessage", {"chat_id": _JANE, "text": "hello from sales"}).is_success
+    context.telegram.received.clear()
+    context.telegram.answers.clear()
+
+
+_GIVEN_SWITCHED = [
+    # These tests make more calls than the default per-Organization budget allows in a second.
+    set_env_variable({"AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND": "25"}),
+    *_GIVEN,
+    _jane_switches_from_support_to_sales,
+]
+
+
+@pytest.mark.parametrize(
+    ("method", "payload"),
+    [
+        ("editMessageText", {"chat_id": _JANE, "message_id": 7, "text": "changed"}),
+        ("editMessageCaption", {"chat_id": _JANE, "message_id": 7, "caption": "changed"}),
+        ("editMessageReplyMarkup", {"chat_id": _JANE, "message_id": 7}),
+        ("deleteMessage", {"chat_id": _JANE, "message_id": 7}),
+        ("deleteMessages", {"chat_id": _JANE, "message_ids": [77, 7]}),
+        ("forwardMessage", {"chat_id": _JANE, "from_chat_id": _JANE, "message_id": 7}),
+        ("forwardMessages", {"chat_id": _JANE, "from_chat_id": _JANE, "message_ids": [7]}),
+        ("copyMessage", {"chat_id": _JANE, "from_chat_id": _JANE, "message_id": 7}),
+        ("copyMessages", {"chat_id": _JANE, "from_chat_id": _JANE, "message_ids": "[7]"}),
+        ("setMessageReaction", {"chat_id": _JANE, "message_id": 7, "reaction": []}),
+        ("pinChatMessage", {"chat_id": _JANE, "message_id": 7}),
+        ("unpinChatMessage", {"chat_id": _JANE, "message_id": 7}),
+        ("unpinChatMessage", {"chat_id": _JANE}),
+        ("stopPoll", {"chat_id": _JANE, "message_id": 7}),
+        ("sendMessage", {"chat_id": _JANE, "text": "re", "reply_parameters": {"message_id": 7}}),
+        ("sendMessage", {"chat_id": _JANE, "text": "re", "reply_parameters": json.dumps({"message_id": 7})}),
+        ("sendMessage", {"chat_id": _JANE, "text": "re", "reply_to_message_id": 7}),
+    ],
+)
+def test_an_agent_cannot_touch_messages_from_before_the_user_switched_to_it(method: str, payload: dict) -> None:
+    with given(_GIVEN_SWITCHED) as context:
+        with when(f"the sales agent calls {method} on the support agent's message"):
+            response = _call(context, method, payload)
+
+        with then("it is refused before reaching Telegram"):
+            assert_that(response.status_code, equal_to(403))
+            assert_that(context.telegram.received, equal_to([]))
+
+
+@pytest.mark.parametrize(
+    ("method", "payload"),
+    [
+        ("getFile", {"file_id": "file-A"}),
+        ("sendPhoto", {"chat_id": _JANE, "photo": "file-A"}),
+        ("sendDocument", {"chat_id": _JANE, "document": "file-A"}),
+        ("sendVideo", {"chat_id": _JANE, "video": "https://example.com/v.mp4", "thumbnail": "file-A"}),
+        ("sendMediaGroup", {"chat_id": _JANE, "media": [{"type": "photo", "media": "file-A"}]}),
+        ("sendMediaGroup", {"chat_id": _JANE, "media": json.dumps([{"type": "photo", "media": "file-A"}])}),
+        (
+            "editMessageMedia",
+            {"chat_id": _JANE, "message_id": 77, "media": {"type": "photo", "media": "file-A"}},
+        ),
+    ],
+)
+def test_an_agent_cannot_download_or_resend_another_agents_file(method: str, payload: dict) -> None:
+    with given(_GIVEN_SWITCHED) as context:
+        with when(f"the sales agent uses the support agent's file in {method}"):
+            response = _call(context, method, payload)
+
+        with then("it is refused before reaching Telegram"):
+            assert_that(response.status_code, equal_to(403))
+            assert_that(context.telegram.received, equal_to([]))
+
+
+def test_the_agent_a_user_switched_to_has_full_use_of_its_own_messages_and_files() -> None:
+    with given(_GIVEN_SWITCHED) as context:
+        context.telegram.answers["sendPhoto"] = _photo_message(9, "file-B")
+
+        with when("the sales agent sends a photo, then works with that message and file"):
+            responses = [
+                _call(context, "sendPhoto", {"chat_id": _JANE, "photo": "https://example.com/b.jpg"}),
+                _call(context, "editMessageCaption", {"chat_id": _JANE, "message_id": 9, "caption": "b"}),
+                _call(context, "sendMessage", {"chat_id": _JANE, "text": "re", "reply_parameters": {"message_id": 9}}),
+                _call(context, "deleteMessages", {"chat_id": _JANE, "message_ids": [77, 9]}),
+                _call(context, "sendPhoto", {"chat_id": _JANE, "photo": "file-B"}),
+                _call(context, "sendMediaGroup", {"chat_id": _JANE, "media": [{"type": "photo", "media": "file-B"}]}),
+                _call(context, "getFile", {"file_id": "file-B"}),
+            ]
+
+        with then("every call reaches Telegram"):
+            assert_that([response.status_code for response in responses], equal_to([200] * 7))
+            assert_that(len(context.telegram.received), equal_to(7))
+
+
+def test_switching_back_gives_an_agent_back_only_its_own_messages_and_files() -> None:
+    with given(_GIVEN_SWITCHED) as context:
+        _link("support", _JANE)(context)
+
+        with when("Jane switches back to the support agent, which then uses old messages and files"):
+            own_message = _call(
+                context, "editMessageText", {"chat_id": _JANE, "message_id": 7, "text": "x"}, key="support"
+            )
+            own_file = _call(context, "getFile", {"file_id": "file-A"}, key="support")
+            sales_message = _call(
+                context, "editMessageText", {"chat_id": _JANE, "message_id": 77, "text": "x"}, key="support"
+            )
+
+        with then("its own still work, and the sales agent's message is refused"):
+            assert_that(
+                (own_message.status_code, own_file.status_code, sales_message.status_code), equal_to((200, 200, 403))
+            )
+
+
+def test_a_message_that_lands_after_the_user_switched_still_belongs_to_the_agent_that_sent_it() -> None:
+    with given(_GIVEN) as context:
+        context.telegram.answers["sendMessage"] = (
+            200,
+            {"ok": True, "result": {"message_id": 12, "chat": {"id": _JANE, "type": "private"}, "date": 0}},
+        )
+        context.telegram.during["sendMessage"] = lambda: _link("support", _JANE)(context)
+
+        with when("Jane switches to the support agent while the sales agent's message is on its way"):
+            sent = _call(context, "sendMessage", {"chat_id": _JANE, "text": "late"})
+            context.telegram.received.clear()
+            edited = _call(context, "editMessageText", {"chat_id": _JANE, "message_id": 12, "text": "x"}, key="support")
+
+        with then("the support agent cannot touch the message that arrived late"):
+            assert_that(sent.status_code, equal_to(200))
+            assert_that(edited.status_code, equal_to(403))
+            assert_that(context.telegram.received, equal_to([]))
+
+
+@pytest.mark.parametrize(
+    ("method", "payload"),
+    [
+        ("deleteMessages", {"chat_id": _JANE, "message_ids": "77,7"}),
+        ("deleteMessages", {"chat_id": _JANE, "message_ids": "[77, true]"}),
+        ("sendMediaGroup", {"chat_id": _JANE, "media": "not json"}),
+        ("deleteMessages", {"chat_id": _JANE, "message_ids": "77"}),
+        ("sendMessage", {"chat_id": _JANE, "text": "re", "reply_parameters": "[77]"}),
+        ("sendMediaGroup", {"chat_id": _JANE, "media": ["file-A"]}),
+        ("sendPhoto", {"chat_id": _JANE, "photo": 7}),
+        ("sendMediaGroup", {"chat_id": _JANE, "media": '[{"type": "photo", "media": "x", "media": "file-A"}]'}),
+    ],
+)
+def test_message_and_file_lists_that_could_be_read_two_ways_are_refused(method: str, payload: dict) -> None:
+    with given(_GIVEN_SWITCHED) as context:
+        response = _call(context, method, payload)
+
+        assert_that(response.status_code, is_in([400, 403]))
+        assert_that(context.telegram.received, equal_to([]))

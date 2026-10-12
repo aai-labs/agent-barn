@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from typing import cast
 
@@ -58,3 +59,18 @@ def test_the_bot_and_the_agents_share_one_budget() -> None:
     assert bot.limits.acquire_for_organization(None) == 0.0
 
     assert bot.send(1, "hi", essential=False) is False
+
+
+def test_a_button_is_answered_with_the_real_token_as_a_courtesy() -> None:
+    calls: list[httpx.Request] = []
+
+    def telegram(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"ok": True, "result": True})
+
+    bot = _bot(telegram, bot_per_second=1)
+
+    assert bot.answer_callback("cb-1", "This button is no longer active.") is True
+    assert bot.answer_callback("cb-2", "This button is no longer active.") is False
+    assert [request.url.path for request in calls] == [f"/bot{_TOKEN}/answerCallbackQuery"]
+    assert json.loads(calls[0].content) == {"callback_query_id": "cb-1", "text": "This button is no longer active."}

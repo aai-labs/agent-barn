@@ -29,12 +29,17 @@ _WEB_APP_URL = "https://app.agentbarn.test"
 class RecordingBot:
     def __init__(self, fail: bool = False) -> None:
         self.sent: list[tuple[int, str]] = []
+        self.answered: list[tuple[str, str]] = []
         self.fail = fail
 
     def send(self, chat_id: int, text: str, *, essential: bool = True) -> bool:
         if self.fail:
             raise RuntimeError("Telegram is down")
         self.sent.append((chat_id, text))
+        return True
+
+    def answer_callback(self, callback_query_id: str, text: str) -> bool:
+        self.answered.append((callback_query_id, text))
         return True
 
 
@@ -362,3 +367,158 @@ def test_a_stranger_gets_the_sign_up_reply_once_in_a_while_not_every_time() -> N
 
         with then("they get the sign-up reply once"):
             assert_that([chat for chat, _ in context.bot.sent], equal_to([7770007]))
+
+
+def _jane_message(message_id: int, **content) -> dict:
+    sender = {"id": _JANE, "is_bot": False, "first_name": "Jane", "username": "jane_doe"}
+    return {"message_id": message_id, "from": sender, "chat": {"id": _JANE, "type": "private"}, "date": 0, **content}
+
+
+def _bot_message(message_id: int, text: str) -> dict:
+    sender = {"id": 424242, "is_bot": True, "first_name": "Agent Barn"}
+    return {"message_id": message_id, "from": sender, "chat": {"id": _JANE, "type": "private"}, "date": 0, "text": text}
+
+
+def _jane_switches_from_support_to_sales(context) -> None:
+    """Jane sent the support agent message 40, which answered with message 41; then she linked sales."""
+    _issue(context, context.support, "token-support")
+    _receive(context, _private("/start token-support"))
+    _receive(context, {"message": _jane_message(40, text="Where is my order?")})
+    _repo(context).record_ownership(context.support.id, messages=[(_JANE, 41)])
+    _issue(context, context.sales, "token-sales")
+    _receive(context, _private("/start token-sales"))
+    context.bot.sent.clear()
+
+
+def _owns(context, connection: CommunicationConnection, *, messages=(), files=()) -> bool:
+    return _repo(context).owns_messages(connection.id, [(_JANE, m) for m in messages]) and _repo(context).owns_files(
+        connection.id, files
+    )
+
+
+def test_a_users_message_and_its_files_become_their_agents() -> None:
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-sales")
+        _receive(context, _private("/start token-sales"))
+
+        with when("Jane sends her agent a photo"):
+            photo = [{"file_id": "file-small", "file_unique_id": "s"}, {"file_id": "file-large", "file_unique_id": "l"}]
+            _receive(context, {"message": _jane_message(50, photo=photo, caption="receipt")})
+
+        with then("the message and both sizes of the photo are her agent's, and no one else's"):
+            assert_that(_owns(context, context.sales, messages=[50], files=["file-small", "file-large"]), is_(True))
+            assert_that(_owns(context, context.support, messages=[50]), is_(False))
+            assert_that(_owns(context, context.support, files=["file-large"]), is_(False))
+
+
+def test_a_button_under_a_previous_agents_message_is_not_passed_on() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        with when("Jane presses a button under the support agent's old reply"):
+            callback = {
+                "id": "cb-1",
+                "from": {"id": _JANE, "is_bot": False, "first_name": "Jane"},
+                "message": _bot_message(41, "Your order ships Monday."),
+                "data": "track",
+            }
+            update_id = _receive(context, {"callback_query": callback})
+
+        with then("it reaches no agent, and Telegram is told the button no longer works"):
+            assert_that(
+                _stored(context, update_id),
+                has_properties(status=AgentBarnTelegramUpdateStatus.HANDLED, payload=none()),
+            )
+            assert_that(context.bot.answered, contains_exactly(("cb-1", "This button is no longer active.")))
+            assert_that(context.bot.sent, equal_to([]))
+
+
+def test_a_button_under_the_current_agents_message_is_passed_on() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        _repo(context).record_ownership(context.sales.id, messages=[(_JANE, 60)])
+
+        with when("Jane presses a button under the sales agent's message"):
+            callback = {
+                "id": "cb-2",
+                "from": {"id": _JANE, "is_bot": False, "first_name": "Jane"},
+                "message": _bot_message(60, "Pick a plan"),
+                "data": "pro",
+            }
+            update_id = _receive(context, {"callback_query": callback})
+
+        with then("it is queued for the sales agent"):
+            assert_that(
+                _stored(context, update_id),
+                has_properties(status=AgentBarnTelegramUpdateStatus.QUEUED, connection_id=context.sales.id),
+            )
+            assert_that(context.bot.answered, equal_to([]))
+
+
+def test_an_edit_of_a_message_sent_to_a_previous_agent_is_not_passed_on() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        with when("Jane edits the message she sent the support agent"):
+            update_id = _receive(context, {"edited_message": _jane_message(40, text="Where is my refund?")})
+
+        with then("it reaches no agent, and the bot stays quiet"):
+            assert_that(
+                _stored(context, update_id),
+                has_properties(status=AgentBarnTelegramUpdateStatus.HANDLED, payload=none()),
+            )
+            assert_that(context.bot.sent, equal_to([]))
+
+
+def test_a_reply_to_a_previous_agents_message_reaches_the_new_agent_without_it() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        with when("Jane replies to the support agent's old message, quoting part of it"):
+            reply = _jane_message(
+                70,
+                text="Is this still true?",
+                reply_to_message=_bot_message(41, "Your order ships Monday."),
+                quote={"text": "ships Monday", "position": 11},
+            )
+            update_id = _receive(context, {"message": reply})
+
+        with then("the sales agent gets her words but not the support agent's message"):
+            stored = _stored(context, update_id)
+            assert_that(stored.status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))
+            assert_that(stored.payload, not_none())
+            assert stored.payload is not None
+            assert_that(stored.payload["message"], equal_to(_jane_message(70, text="Is this still true?")))
+
+
+def test_a_reply_to_the_current_agents_own_message_keeps_it() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        _repo(context).record_ownership(context.sales.id, messages=[(_JANE, 60)])
+
+        with when("Jane replies to the sales agent's message"):
+            reply = _jane_message(71, text="Yes", reply_to_message=_bot_message(60, "Shall I book it?"))
+            update_id = _receive(context, {"message": reply})
+
+        with then("the sales agent sees what she replied to"):
+            stored = _stored(context, update_id)
+            assert stored.payload is not None
+            assert_that(stored.payload["message"], equal_to(reply))
+
+
+def test_pinning_a_previous_agents_message_does_not_show_it_to_the_new_agent() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        with when("Jane pins the support agent's old message"):
+            pinned = _jane_message(72, pinned_message=_bot_message(41, "Your order ships Monday."))
+            update_id = _receive(context, {"message": pinned})
+
+        with then("the sales agent is not shown the pinned message"):
+            stored = _stored(context, update_id)
+            assert stored.payload is not None
+            assert_that(stored.payload["message"], equal_to(_jane_message(72)))
+
+
+def test_an_edit_of_a_message_sent_to_the_current_agent_is_passed_on() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        _receive(context, {"message": _jane_message(80, text="Book Tuesday")})
+
+        with when("Jane edits the message she sent the sales agent"):
+            update_id = _receive(context, {"edited_message": _jane_message(80, text="Book Wednesday")})
+
+        with then("it is queued for the sales agent"):
+            assert_that(
+                _stored(context, update_id),
+                has_properties(status=AgentBarnTelegramUpdateStatus.QUEUED, connection_id=context.sales.id),
+            )

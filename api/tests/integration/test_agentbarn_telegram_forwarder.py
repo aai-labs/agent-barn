@@ -132,7 +132,11 @@ def _queue(context, text: str, user: int = _JANE, *, received_at: datetime | Non
     repository = context.injector.get(AgentBarnTelegramRepository)
     repository.store_updates([update])
     repository.queue_update(
-        update_id, telegram_user_id=user, agent_id=context.agent.id, connection_id=context.connection.id
+        update_id,
+        telegram_user_id=user,
+        agent_id=context.agent.id,
+        connection_id=context.connection.id,
+        payload=update,
     )
     if received_at is not None:
         with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:

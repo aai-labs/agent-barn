@@ -15,6 +15,7 @@ import httpx
 from injector import inject, singleton
 
 from api.core.config import Config
+from api.domains.communications.agentbarn_telegram_messages import file_ids
 from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
@@ -88,6 +89,25 @@ _CHAT_SCOPED = frozenset(
 # Calls addressed by an id Telegram issued for the caller's own conversation.
 _UNSCOPED = frozenset({"answercallbackquery", "getfile"})
 _CHAT_FIELDS = ("chat_id", "from_chat_id")
+# Calls whose message ids are in `from_chat_id`'s chat rather than `chat_id`'s.
+_FROM_SOURCE_CHAT = frozenset({"copymessage", "copymessages", "forwardmessage", "forwardmessages"})
+# Without a message id Telegram picks one, which may not be the caller's.
+_NEEDS_MESSAGE_ID = frozenset({"unpinchatmessage"})
+# Parameters, of a call or of each `media` item, that Telegram reads as a file id
+# unless they hold a URL or name an uploaded part.
+_FILE_FIELDS = (
+    "photo",
+    "document",
+    "audio",
+    "voice",
+    "video",
+    "video_note",
+    "animation",
+    "sticker",
+    "thumbnail",
+    "cover",
+)
+_NOT_FILE_IDS = ("http://", "https://", "attach://")
 # Telegram keeps a getFile download link valid for at least an hour.
 _FILE_LINK_SECONDS = 3600
 
@@ -136,7 +156,7 @@ def _strict_json(text: str | bytes) -> Any:
 
 
 # Parameters the proxy reads inside of, which runtimes may send as JSON text.
-_CHECKED_JSON_TEXT = ("reply_parameters",)
+_CHECKED_JSON_TEXT = ("reply_parameters", "message_ids", "media")
 
 
 def parse_bot_api_request(
@@ -249,6 +269,9 @@ class AgentBarnTelegramProxy:
             chats = self._named_chats(params)
             if not chats or not chats <= self.repository.linked_user_ids(connection_id):
                 return _error(403, "Forbidden: this chat is not linked to this agent")
+            refused = self._refuse_others(connection_id, name, params)
+            if refused is not None:
+                return refused
             wait = self.limits.acquire_for_organization(organization_id)
             if wait > 0:
                 if name == "sendchataction":
@@ -264,12 +287,18 @@ class AgentBarnTelegramProxy:
                         "parameters": {"retry_after": retry_after},
                     },
                 )
+        elif name == "getfile":
+            refused = self._refuse_others(connection_id, name, params)
+            if refused is not None:
+                return refused
         elif name not in _UNSCOPED:
             return _error(403, "Forbidden: this method is not available")
 
         response = self._forward(real_token, method, request)
         if name == "getfile":
             self._remember_file(connection_id, response)
+        if name in _CHAT_SCOPED and response.status_code == 200 and response.body.get("ok"):
+            self._record_sent(connection_id, params, response.body.get("result"))
         if (
             name in _CHAT_SCOPED
             and response.status_code == 403
@@ -309,6 +338,37 @@ class AgentBarnTelegramProxy:
         ):
             return None
         return real_token, connection.organization_id
+
+    def _refuse_others(self, connection_id: UUID, name: str, params: dict[str, Any]) -> ProxyResponse | None:
+        """Refuse a call naming a message or file that is not this Connection's.
+
+        The user's chat with the shared bot outlives their link to any one Agent,
+        so the chat being linked does not make every message in it the caller's.
+        """
+        messages = _named_messages(name, params)
+        if messages is None or not self.repository.owns_messages(connection_id, messages):
+            return _error(403, "Forbidden: this message is not available to this agent")
+        files = _named_files(name, params)
+        if files is None or not self.repository.owns_files(connection_id, files):
+            return _error(403, "Forbidden: this file is not available to this agent")
+        return None
+
+    def _record_sent(self, connection_id: UUID, params: dict[str, Any], result: Any) -> None:
+        """Make what Telegram reports sending the caller's: the messages, and the files they carry."""
+        chat_id = _integer(params.get("chat_id"))
+        messages: set[tuple[int, int]] = set()
+        files: set[str] = set()
+        for sent in result if isinstance(result, list) else [result]:
+            if not isinstance(sent, dict) or not isinstance(sent.get("message_id"), int):
+                continue
+            # copyMessage(s) answer with bare message ids, in the chat the call named.
+            chat = sent.get("chat")
+            sent_chat_id = chat.get("id") if isinstance(chat, dict) else chat_id
+            if isinstance(sent_chat_id, int):
+                messages.add((sent_chat_id, sent["message_id"]))
+            files |= file_ids(sent)
+        if messages or files:
+            self.repository.record_ownership(connection_id, messages=messages, files=files)
 
     def _remember_file(self, connection_id: UUID, response: ProxyResponse) -> None:
         result = response.body.get("result") if response.status_code == 200 else None
@@ -385,3 +445,65 @@ class AgentBarnTelegramProxy:
         except ValueError:
             return _error(502, "Bad Gateway: unexpected answer from Telegram")
         return ProxyResponse(response.status_code, payload if isinstance(payload, dict) else {"ok": False})
+
+
+def _integer(value: Any) -> int | None:
+    if isinstance(value, bool) or not _CHAT_ID.fullmatch(str(value)):
+        return None
+    return int(value)
+
+
+def _loaded(value: Any) -> Any:
+    # Already read strictly by parse_bot_api_request when it arrived as JSON text.
+    return json.loads(value) if isinstance(value, str) else value
+
+
+def _named_messages(name: str, params: dict[str, Any]) -> set[tuple[int, int]] | None:
+    """Every message a call refers to as (chat, message id), or None when one cannot be read."""
+    target = _integer(params.get("chat_id"))
+    source = _integer(params.get("from_chat_id")) if name in _FROM_SOURCE_CHAT else target
+    ids = [params["message_id"]] if "message_id" in params else []
+    if "message_ids" in params:
+        listed = _loaded(params["message_ids"])
+        if not isinstance(listed, list):
+            return None
+        ids.extend(listed)
+    if name in _NEEDS_MESSAGE_ID and not ids:
+        return None
+    named = [(source, value) for value in ids]
+    if "reply_to_message_id" in params:
+        named.append((target, params["reply_to_message_id"]))
+    if "reply_parameters" in params:
+        reply = _loaded(params["reply_parameters"])
+        if not isinstance(reply, dict):
+            return None
+        if "message_id" in reply:
+            named.append((_integer(reply["chat_id"]) if "chat_id" in reply else target, reply["message_id"]))
+    messages: set[tuple[int, int]] = set()
+    for chat, value in named:
+        message_id = _integer(value)
+        if chat is None or message_id is None:
+            return None
+        messages.add((chat, message_id))
+    return messages
+
+
+def _named_files(name: str, params: dict[str, Any]) -> set[str] | None:
+    """Every Telegram file id a call uses, or None when one cannot be read."""
+    if name == "getfile":
+        file_id = params.get("file_id")
+        return {file_id} if isinstance(file_id, str) else None
+    values = [params[field] for field in _FILE_FIELDS if field in params]
+    if "media" in params:
+        media = _loaded(params["media"])
+        for item in media if isinstance(media, list) else [media]:
+            if not isinstance(item, dict):
+                return None
+            values.extend(item[field] for field in ("media", *_FILE_FIELDS) if field in item)
+    files: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            return None
+        if not value.startswith(_NOT_FILE_IDS):
+            files.add(value)
+    return files

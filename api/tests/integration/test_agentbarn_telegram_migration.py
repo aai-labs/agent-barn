@@ -21,7 +21,7 @@ import api.domains.communications.models  # noqa: F401
 from api.core.config import get_config
 
 PRE_AF367_REVISION = "6c311cb82f9a"
-AF367_HEAD = "164fb0fb6c2c"
+AF367_HEAD = "dfcfdf34eefa"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 AF367_TABLES = (
     "agentbarn_telegram_link",
@@ -29,6 +29,8 @@ AF367_TABLES = (
     "agentbarn_telegram_ingress_lease",
     "agentbarn_telegram_update",
     "agentbarn_telegram_connection_secret",
+    "agentbarn_telegram_message",
+    "agentbarn_telegram_file",
 )
 
 

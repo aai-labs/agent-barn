@@ -453,6 +453,43 @@ class AgentBarnTelegramUpdate(BaseModel, table=True):
     )
 
 
+class AgentBarnTelegramMessage(BaseModel, table=True):
+    """Which Connection a message in a shared-bot chat belongs to.
+
+    A Telegram user keeps one chat with the shared bot when they switch Agents,
+    so being linked to the chat does not make its earlier messages the Agent's.
+    A message belongs to the Connection the user's message was queued for, or
+    whose Agent sent it; only that Connection may refer to it.
+    """
+
+    __tablename__: str = "agentbarn_telegram_message"
+    __table_args__ = (
+        sa.UniqueConstraint("chat_id", "message_id", name="uq_agentbarn_telegram_message_chat_message"),
+        sa.Index("ix_agentbarn_telegram_message_connection", "connection_id"),
+    )
+
+    chat_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
+    message_id: int = SqlField(sa_column=Column(sa.BigInteger(), nullable=False))
+    connection_id: UUID = SqlField(foreign_key="communication_connection.id", nullable=False, ondelete="CASCADE")
+
+
+class AgentBarnTelegramFile(BaseModel, table=True):
+    """A file id a Connection was shown or sent, so it may download or send that file.
+
+    File ids work for every chat of the bot that issued them, so with a shared bot
+    one Agent could otherwise fetch or re-send a file from another Organization's
+    conversation. A file a user sends to two Agents belongs to both.
+    """
+
+    __tablename__: str = "agentbarn_telegram_file"
+    __table_args__ = (
+        sa.UniqueConstraint("connection_id", "file_id", name="uq_agentbarn_telegram_file_connection_file"),
+    )
+
+    connection_id: UUID = SqlField(foreign_key="communication_connection.id", nullable=False, ondelete="CASCADE")
+    file_id: str = SqlField(nullable=False, sa_type=sa.Text)
+
+
 class CommunicationDelivery(BaseModel, table=True):
     __tablename__: str = "communication_delivery"
     __table_args__ = (

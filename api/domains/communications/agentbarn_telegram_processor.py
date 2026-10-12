@@ -12,13 +12,14 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.communications.agentbarn_telegram_messages import file_ids
 from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
 from api.domains.communications.agentbarn_telegram_repository import (
     AgentBarnTelegramRepository,
     LinkTokenOutcome,
 )
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
-from api.domains.communications.models import AgentBarnTelegramUpdate
+from api.domains.communications.models import AgentBarnTelegramLink, AgentBarnTelegramUpdate
 from api.domains.rbac.catalog import PermissionKey
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,10 @@ _SIGN_UP_REPLY_COOLDOWN_SECONDS = 600
 # A message the bot must send waits at most this long for the shared budget.
 _ESSENTIAL_WAIT_SECONDS = 2.0
 _SEND_TIMEOUT_SECONDS = 5
+_STALE_BUTTON = "This button is no longer active."
+# Messages an incoming message may carry that are not the sender's own; each is kept
+# only while it belongs to the Agent the update goes to.
+_CARRIED_MESSAGES = {"reply_to_message": ("quote",), "pinned_message": ()}
 
 
 class UpdateKind(enum.Enum):
@@ -130,6 +135,15 @@ class AgentBarnTelegramBot:
         Courtesy messages are skipped while the budget is spent; essential ones
         (link confirmations, delivery notices) wait briefly for it.
         """
+        return self._call("sendMessage", {"chat_id": chat_id, "text": text}, essential=essential)
+
+    def answer_callback(self, callback_query_id: str, text: str) -> bool:
+        """Answer a button press so its spinner stops; a courtesy, skipped while the budget is spent."""
+        return self._call(
+            "answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text}, essential=False
+        )
+
+    def _call(self, method: str, payload: dict[str, Any], *, essential: bool) -> bool:
         wait = self.limits.acquire_for_organization(None)
         if wait > 0 and essential and wait <= _ESSENTIAL_WAIT_SECONDS:
             time.sleep(wait)
@@ -139,9 +153,7 @@ class AgentBarnTelegramBot:
             return False
         token = self.config.agentbarn_telegram_bot_token.strip()
         try:
-            response = self.client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text}
-            )
+            response = self.client.post(f"https://api.telegram.org/bot{token}/{method}", json=payload)
         except httpx.HTTPError as exc:
             # httpx errors carry the URL, and with it the token.
             logger.warning("Agent Barn Telegram bot message failed (%s)", type(exc).__name__)
@@ -218,7 +230,7 @@ class AgentBarnTelegramUpdateProcessor:
             classified.kind == UpdateKind.ROUTE
             and user_id is not None
             and chat_id is not None
-            and self._queue(update.update_id, user_id, chat_id)
+            and self._queue(update, user_id, chat_id)
         ):
             # Queued for the Agent; its content is kept until forwarded.
             return
@@ -254,15 +266,12 @@ class AgentBarnTelegramUpdateProcessor:
             f"Hi {classified.first_name or 'there'}! You're linked to {agent_name}. Send a message to get started.",
         )
 
-    def _queue(self, update_id: int, user_id: int, chat_id: int) -> bool:
+    def _queue(self, update: AgentBarnTelegramUpdate, user_id: int, chat_id: int) -> bool:
         link = self.repository.find_routable_link(user_id)
         if link is not None and self.authorization.membership_has_permission(
             link.linked_by_membership_id, link.agent_id, PermissionKey.AGENT_UPDATE
         ):
-            self.repository.queue_update(
-                update_id, telegram_user_id=user_id, agent_id=link.agent_id, connection_id=link.connection_id
-            )
-            return True
+            return self._queue_own_part(update, user_id, chat_id, link)
         if link is not None:
             # The Member who linked this account lost access to the Agent.
             self.repository.end_active_link(user_id, now=datetime.now(UTC))
@@ -273,6 +282,66 @@ class AgentBarnTelegramUpdateProcessor:
                 essential=False,
             )
         return False
+
+    def _queue_own_part(
+        self, update: AgentBarnTelegramUpdate, user_id: int, chat_id: int, link: AgentBarnTelegramLink
+    ) -> bool:
+        """Queue what of the update belongs to the linked Agent; False when none of it does.
+
+        The user's chat outlives their links, so it may hold another Agent's
+        messages: a button under one, an edit of one, or a reply quoting one.
+        """
+        payload = dict(update.payload or {})
+        connection_id = link.connection_id
+
+        def owned(message: Any) -> bool:
+            return isinstance(message, dict) and self.repository.owns_messages(
+                connection_id, [(chat_id, message.get("message_id"))]
+            )
+
+        callback = payload.get("callback_query")
+        if isinstance(callback, dict):
+            if not owned(callback.get("message")):
+                if isinstance(callback.get("id"), str):
+                    self._answer_stale_button(callback["id"])
+                return False
+            self.repository.queue_update(
+                update.update_id,
+                telegram_user_id=user_id,
+                agent_id=link.agent_id,
+                connection_id=connection_id,
+                payload=payload,
+            )
+            return True
+
+        edited = payload.get("edited_message")
+        if isinstance(edited, dict):
+            if not owned(edited):
+                return False
+            message = edited
+        else:
+            message = dict(payload["message"])
+            for carried, alongside in _CARRIED_MESSAGES.items():
+                if carried in message and not owned(message[carried]):
+                    for dropped in (carried, *alongside):
+                        message.pop(dropped, None)
+            payload["message"] = message
+        self.repository.queue_update(
+            update.update_id,
+            telegram_user_id=user_id,
+            agent_id=link.agent_id,
+            connection_id=connection_id,
+            payload=payload,
+            messages=[(chat_id, message["message_id"])] if isinstance(message.get("message_id"), int) else [],
+            files=file_ids(message),
+        )
+        return True
+
+    def _answer_stale_button(self, callback_query_id: str) -> None:
+        try:
+            self.bot.answer_callback(callback_query_id, _STALE_BUTTON)
+        except Exception as exc:
+            logger.warning("Agent Barn Telegram button answer failed (%s)", type(exc).__name__)
 
     def _sign_up_reply_due(self, user_id: int) -> bool:
         now = time.monotonic()
