@@ -1,6 +1,7 @@
 import json
 from unittest.mock import MagicMock
 
+import pytest
 import yaml
 from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_item, is_not
@@ -184,6 +185,50 @@ def test_without_the_shared_bot_an_existing_connection_is_left_out() -> None:
                 equal_to(False),
             )
             assert_that(ports, is_not(has_item("tg-webhook")))
+
+
+def _own_bot_connection(context) -> None:
+    context.connection = CommunicationConnection(
+        organization_id=context.agent.organization_id,
+        agent_id=context.agent.id,
+        platform_key="telegram",
+        display_name="Telegram",
+        settings={"dm_policy": "open"},
+        credentials_encrypted=encrypt_token(json.dumps({"bot_token": "777:the-orgs-own-bot"}), TEST_ENCRYPTION_KEY),
+    )
+    context.injector.get(PostgresRepositoryDelegate).save(context.connection)
+
+
+def _own_bot_telegram(agent_type: AgentType, *, bot_configured: bool) -> tuple[object, dict, bool]:
+    """What an Agent with its Organization's own bot is given for Telegram."""
+    with given(
+        [*_given(bot_configured=bot_configured), there_is_an_agent(agent_type=agent_type), _own_bot_connection]
+    ) as context:
+        assert_that(_start(context), equal_to(status.HTTP_200_OK))
+        config_map, secret, ports = _created(context)
+        if agent_type == AgentType.HERMES:
+            # Hermes takes its own bot from the environment, with no platform block unless one is needed.
+            channel = yaml.safe_load(config_map["hermes-config.yaml"]).get("platforms", {}).get("telegram")
+        else:
+            channel = json.loads(config_map["openclaw-config-overlay.json"])["channels"]["telegram"]
+        telegram_secrets = {key: value for key, value in secret.items() if "TELEGRAM" in key}
+        return channel, telegram_secrets, "tg-webhook" in ports
+
+
+@pytest.mark.parametrize("agent_type", [AgentType.HERMES, AgentType.OPENCLAW])
+def test_an_agent_on_its_own_bot_is_configured_the_same_whether_or_not_the_shared_bot_is(
+    agent_type: AgentType,
+) -> None:
+    with when("an Agent with its Organization's own Telegram bot starts with and without the shared bot"):
+        shared = _own_bot_telegram(agent_type, bot_configured=True)
+        alone = _own_bot_telegram(agent_type, bot_configured=False)
+
+    with then("its Telegram configuration is the same, talks to Telegram directly, and opens no webhook port"):
+        assert_that(shared, equal_to(alone))
+        channel, telegram_secrets, webhook_port = shared
+        assert_that(json.dumps(channel), is_not(contains_string("/communications/v1/telegram")))
+        assert_that(telegram_secrets["TELEGRAM_BOT_TOKEN"], equal_to("777:the-orgs-own-bot"))
+        assert_that(webhook_port, equal_to(False))
 
 
 def test_agents_report_agentbarn_telegram_as_runtime_owned() -> None:
