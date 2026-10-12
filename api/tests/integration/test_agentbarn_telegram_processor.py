@@ -1,9 +1,11 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from hamcrest import assert_that, contains_exactly, contains_string, equal_to, has_properties, is_, none, not_none
 from sqlmodel import Session, col, select
 
+from api.domains.communications.agentbarn_telegram_ingress import AgentBarnTelegramIngress
 from api.domains.communications.agentbarn_telegram_processor import AgentBarnTelegramUpdateProcessor
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.agentbarn_telegram_service import hash_link_token
@@ -311,8 +313,10 @@ def test_an_update_that_keeps_failing_is_given_up_after_a_few_tries() -> None:
         with patch.object(repository, "find_routable_link", side_effect=RuntimeError("database blip")):
             with when("the same update fails on every pass"):
                 update_id = _receive(context, _private("hello?", user=7770007))
-                for _ in range(10):
-                    context.injector.get(AgentBarnTelegramUpdateProcessor).process_pending()
+                for minutes in range(1, 11):
+                    context.injector.get(AgentBarnTelegramUpdateProcessor).process_pending(
+                        now=datetime.now(UTC) + timedelta(minutes=minutes)
+                    )
 
         with then("it is given up, without its content, instead of retrying forever"):
             assert_that(
@@ -343,16 +347,19 @@ def test_a_users_later_messages_wait_behind_one_that_failed() -> None:
         )
 
         with patch.object(repository, "find_routable_link", side_effect=fails_once):
-            with when("Jane's first message fails once"):
+            with when("Jane's first message fails once, and is retried once it is due"):
                 processor.process_pending()
                 after_failure = (_stored(context, first).status, _stored(context, second).status)
                 processor.process_pending()
+                before_due = (_stored(context, first).status, _stored(context, second).status)
+                processor.process_pending(now=datetime.now(UTC) + timedelta(minutes=1))
 
         with then("her second message waits behind it, then both are queued in order"):
             assert_that(
                 after_failure,
                 equal_to((AgentBarnTelegramUpdateStatus.RECEIVED, AgentBarnTelegramUpdateStatus.RECEIVED)),
             )
+            assert_that(before_due, equal_to(after_failure))
             assert_that(
                 (_stored(context, first).status, _stored(context, second).status),
                 equal_to((AgentBarnTelegramUpdateStatus.QUEUED, AgentBarnTelegramUpdateStatus.QUEUED)),
@@ -522,3 +529,65 @@ def test_an_edit_of_a_message_sent_to_the_current_agent_is_passed_on() -> None:
                 _stored(context, update_id),
                 has_properties(status=AgentBarnTelegramUpdateStatus.QUEUED, connection_id=context.sales.id),
             )
+
+
+_ADA = 7770007
+
+
+def _ingress_pass(context) -> None:
+    """One ingress cycle over what is stored, as the polling replica runs it."""
+    ingress = context.injector.get(AgentBarnTelegramIngress)
+    with patch.object(ingress, "poll_once", AsyncMock()), patch.object(ingress, "should_poll", return_value=True):
+        asyncio.run(ingress.cycle(Mock()))
+
+
+def test_one_users_failing_backlog_does_not_hold_up_another_user() -> None:
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-sales")
+        _receive(context, _private("/start token-sales"))
+        repository = _repo(context)
+        real_find = repository.find_routable_link
+
+        def fails_for_ada(user_id):
+            if user_id == _ADA:
+                raise RuntimeError("database blip")
+            return real_find(user_id)
+
+        ada = [next(_next_update_id) for _ in range(6)]
+        jane = next(_next_update_id)
+        repository.store_updates(
+            [
+                *({**_private(f"ada {n}", user=_ADA), "update_id": u} for n, u in enumerate(ada)),
+                {**_private("hi"), "update_id": jane},
+            ]
+        )
+
+        with patch.object(repository, "find_routable_link", side_effect=fails_for_ada):
+            with when("one ingress pass runs while every one of Ada's updates fails"):
+                _ingress_pass(context)
+
+        with then("Jane's later message is queued, and Ada's wait in order behind her first"):
+            assert_that(_stored(context, jane).status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))
+            assert_that(
+                [(_stored(context, u).status, _stored(context, u).attempt_count) for u in ada],
+                equal_to(
+                    [(AgentBarnTelegramUpdateStatus.RECEIVED, 1)] + [(AgentBarnTelegramUpdateStatus.RECEIVED, 0)] * 5
+                ),
+            )
+            assert_that(_stored(context, ada[0]).next_attempt_at, not_none())
+
+
+def test_a_failed_update_without_a_sender_waits_out_its_own_backoff() -> None:
+    with given(_GIVEN) as context:
+        repository = _repo(context)
+        processor = context.injector.get(AgentBarnTelegramUpdateProcessor)
+        update_id = next(_next_update_id)
+        repository.store_updates([{"update_id": update_id, "message": {"message_id": 1, "chat": {"id": -5}}}])
+
+        with patch.object(repository, "settle_update", side_effect=RuntimeError("database blip")):
+            with when("it fails, and the next pass runs straight away"):
+                processor.process_pending()
+                processor.process_pending()
+
+        with then("it was tried once"):
+            assert_that(_stored(context, update_id).attempt_count, equal_to(1))

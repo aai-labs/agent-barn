@@ -13,6 +13,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.communications.agentbarn_telegram_messages import sender_id
 from api.domains.communications.models import (
     AgentBarnTelegramConnectionSecret,
     AgentBarnTelegramFile,
@@ -270,7 +271,9 @@ class AgentBarnTelegramRepository:
     def store_updates(self, updates: list[dict[str, Any]]) -> int:
         """Store received updates once each and return how many were new."""
         rows = [
-            AgentBarnTelegramUpdate(update_id=update["update_id"], payload=update).model_dump()
+            AgentBarnTelegramUpdate(
+                update_id=update["update_id"], payload=update, telegram_user_id=sender_id(update)
+            ).model_dump()
             for update in updates
             if isinstance(update.get("update_id"), int)
         ]
@@ -287,13 +290,32 @@ class AgentBarnTelegramRepository:
             session.commit()
             return len(stored)
 
-    def received_updates(self, *, limit: int) -> list[AgentBarnTelegramUpdate]:
-        """Unprocessed updates in the order Telegram issued them."""
+    def received_updates(self, *, now: datetime, limit: int) -> list[AgentBarnTelegramUpdate]:
+        """Unprocessed updates in the order Telegram issued them, leaving out senders who must wait.
+
+        A sender waits while one of their updates is backing off after a failure;
+        all of theirs are left out, so their order is kept and nobody else waits.
+        """
+        waiting = select(AgentBarnTelegramUpdate.telegram_user_id).where(
+            col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.RECEIVED,
+            col(AgentBarnTelegramUpdate.telegram_user_id).is_not(None),
+            col(AgentBarnTelegramUpdate.next_attempt_at) > now,
+        )
         with Session(self.delegate.engine) as session:
             return list(
                 session.exec(
                     select(AgentBarnTelegramUpdate)
-                    .where(col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.RECEIVED)
+                    .where(
+                        col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.RECEIVED,
+                        sa.or_(
+                            col(AgentBarnTelegramUpdate.next_attempt_at).is_(None),
+                            col(AgentBarnTelegramUpdate.next_attempt_at) <= now,
+                        ),
+                        sa.or_(
+                            col(AgentBarnTelegramUpdate.telegram_user_id).is_(None),
+                            col(AgentBarnTelegramUpdate.telegram_user_id).not_in(waiting),
+                        ),
+                    )
                     .order_by(col(AgentBarnTelegramUpdate.update_id))
                     .limit(limit)
                 )
@@ -309,13 +331,16 @@ class AgentBarnTelegramRepository:
             )  # type: ignore[call-overload]
             session.commit()
 
-    def record_processing_failure(self, update_id: int) -> int:
-        """Count a failed processing pass for an update and return how many it has had."""
+    def record_processing_failure(self, update_id: int, *, retry_at: datetime) -> int:
+        """Count a failed processing pass, hold the update until `retry_at`, and return its attempts."""
         with Session(self.delegate.engine) as session:
             attempts = session.exec(
                 sa.update(AgentBarnTelegramUpdate)
                 .where(col(AgentBarnTelegramUpdate.update_id) == update_id)
-                .values(attempt_count=AgentBarnTelegramUpdate.attempt_count + 1)  # type: ignore[operator]
+                .values(
+                    attempt_count=AgentBarnTelegramUpdate.attempt_count + 1,  # type: ignore[operator]
+                    next_attempt_at=retry_at,
+                )
                 .returning(col(AgentBarnTelegramUpdate.attempt_count))
             ).first()  # type: ignore[call-overload]
             session.commit()
@@ -343,8 +368,9 @@ class AgentBarnTelegramRepository:
                     agent_id=agent_id,
                     connection_id=connection_id,
                     payload=payload,
-                    # Forwarding counts its own attempts from here.
+                    # Forwarding counts its own attempts, and sets its own retries, from here.
                     attempt_count=0,
+                    next_attempt_at=None,
                 )
             )  # type: ignore[call-overload]
             self._insert_ownership(session, connection_id, messages, files)

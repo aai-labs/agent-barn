@@ -429,7 +429,8 @@ class AgentBarnTelegramUpdate(BaseModel, table=True):
     )
     # none_as_null: clearing the content must leave SQL NULL, not a JSON null value.
     payload: dict[str, Any] | None = SqlField(default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True))
-    # Set when the update is queued for a linked user's Agent.
+    # The sender, recorded when the update is stored, so one sender's updates
+    # can be held back without holding back anyone else's.
     telegram_user_id: int | None = SqlField(default=None, sa_column=Column(sa.BigInteger(), nullable=True))
     agent_id: UUID | None = SqlField(default=None, nullable=True, foreign_key="agent.id", ondelete="CASCADE")
     connection_id: UUID | None = SqlField(
@@ -438,7 +439,7 @@ class AgentBarnTelegramUpdate(BaseModel, table=True):
         foreign_key="communication_connection.id",
         ondelete="CASCADE",
     )
-    # Forwarding state while QUEUED.
+    # Processing attempts while RECEIVED, then forwarding attempts while QUEUED.
     attempt_count: int = SqlField(default=0, sa_column=Column(sa.Integer(), nullable=False, server_default="0"))
     next_attempt_at: datetime | None = SqlField(
         default=None,

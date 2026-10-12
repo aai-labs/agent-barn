@@ -4,7 +4,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -30,6 +30,8 @@ _START_WITH_TOKEN = re.compile(r"^/start(?:@\w+)?\s+([A-Za-z0-9_-]{1,64})\s*$")
 _ROUTED_MESSAGE_KEYS = ("message", "edited_message")
 # An update that fails this many passes is given up rather than retried forever.
 _MAX_PROCESSING_ATTEMPTS = 5
+# A failed update, and its sender's later ones, wait this long before the next try, doubling up to the cap.
+_PROCESSING_RETRY_MAX_SECONDS = 60
 # Someone who is not linked hears how to sign up at most this often.
 _SIGN_UP_REPLY_COOLDOWN_SECONDS = 600
 # A message the bot must send waits at most this long for the shared budget.
@@ -183,34 +185,36 @@ class AgentBarnTelegramUpdateProcessor:
     _sign_up_replies: dict[int, float] = field(default_factory=dict, init=False)
     _sign_up_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
-    def process_pending(self, *, limit: int = 100) -> int:
-        """Process up to `limit` received updates; return how many were done with.
+    def process_pending(self, *, limit: int = 100, now: datetime | None = None) -> int:
+        """Process up to `limit` received updates; return how many were looked at.
 
-        Failed and held-back updates do not count, so a caller that keeps going
-        while a pass is full does not retry a failure straight away.
+        A failed update backs off and holds back its sender's later ones, in
+        this pass and until it is due again, so a caller that keeps going while
+        a pass is full moves on to other senders rather than retrying it.
         """
-        updates = self.repository.received_updates(limit=limit)
-        done = 0
-        # A user's later updates wait behind one of theirs that failed, keeping their order.
+        now = now or datetime.now(UTC)
+        updates = self.repository.received_updates(now=now, limit=limit)
         held_back: set[int] = set()
         for update in updates:
-            user_id = classify_update(update.payload or {}).telegram_user_id
+            user_id = update.telegram_user_id
             if user_id is not None and user_id in held_back:
                 continue
             try:
                 self._process(update)
-                done += 1
             except Exception as exc:
                 # Content stays out of the log.
                 logger.warning("Agent Barn Telegram update %s failed (%s)", update.update_id, type(exc).__name__)
                 if user_id is not None:
                     held_back.add(user_id)
-                self._record_failure(update)
-        return done
+                self._record_failure(update, now)
+        return len(updates)
 
-    def _record_failure(self, update: AgentBarnTelegramUpdate) -> None:
+    def _record_failure(self, update: AgentBarnTelegramUpdate, now: datetime) -> None:
         try:
-            attempts = self.repository.record_processing_failure(update.update_id)
+            delay = min(2 ** (update.attempt_count + 1), _PROCESSING_RETRY_MAX_SECONDS)
+            attempts = self.repository.record_processing_failure(
+                update.update_id, retry_at=now + timedelta(seconds=delay)
+            )
             if attempts >= _MAX_PROCESSING_ATTEMPTS:
                 logger.warning("Agent Barn Telegram update %s given up after %s attempts", update.update_id, attempts)
                 self.repository.settle_update(update.update_id)
