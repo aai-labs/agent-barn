@@ -102,3 +102,11 @@ def test_policy_md_forbids_browser_and_credential_prompts():
     md = build_gog_policy_md(_content())
     assert "never ask the user" in md.lower()
     assert "browser" in md
+
+
+def test_isolated_policy_explains_empty_auth_store_and_service_command_verification():
+    md = build_gog_policy_md(_content(), isolated=True)
+    assert "brokered automatically" in md
+    assert "can be empty even when access works" in md
+    assert "Do not import credentials" in md
+    assert "brokered automatically" not in build_gog_policy_md(_content())

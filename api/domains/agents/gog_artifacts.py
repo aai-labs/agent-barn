@@ -140,7 +140,7 @@ chmod 755 {bin_dir}/gog
 """
 
 
-def build_gog_policy_md(content: GoogleWorkspaceContent | None) -> str:
+def build_gog_policy_md(content: GoogleWorkspaceContent | None, *, isolated: bool = False) -> str:
     """Render the agents_md block for a configured Google Workspace credential.
 
     Both runtimes auto-load AGENTS.md into the startup prompt, and this block is the
@@ -175,6 +175,15 @@ def build_gog_policy_md(content: GoogleWorkspaceContent | None) -> str:
             "subcommands instead of guessing.\n"
         ),
     ]
+    if isolated:
+        lines.append(
+            "Authentication is brokered automatically on each `gog` invocation. "
+            "No OAuth client or refresh token is stored locally, so `gog auth list` "
+            "and `gog auth credentials list` can be empty even when access works. "
+            "Do not import credentials or inspect direct-mode credential environment "
+            "variables to diagnose this mode. Run the requested service command; "
+            "report a gateway authorization error if that command fails.\n"
+        )
     if content.read_only:
         lines.append(
             "**This credential is read-only.** Attempts to send, create, modify, or "

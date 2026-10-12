@@ -215,7 +215,11 @@ both selected runtime images, with networking disabled. The contracts are
 `../../api/runtime_tests/test_openclaw_gog_direct.py`; they run through
 `make test-api-runtime` with the corresponding image variable. They prove the
 generated client/token setup imports a grant that gog can decrypt from its
-file keyring, without contacting a live Google account.
+file keyring, without contacting a live Google account. The Hermes broker contract in
+`../../api/runtime_tests/test_hermes_gog_broker.py` also runs the real terminal
+backend: its login-shell snapshot must resolve the wrapper, and two service
+commands must each fetch a temporary token. It uses a fixture broker boundary
+and disables external networking.
 
 SharePoint contracts run the pinned patched aai-cli in both real images with external networking disabled. A loopback stub verifies POST token requests, dedicated-token failure without environment fallback, typed files/Excel auth, sign-in-marker continuity, failed handoff preservation, mixed provider cleanup and latest-grant handback. The API matrix covers both directions for every provider/runtime, legacy migration, source ownership, failure/retry/restore permissions, durable broker rotation/cache and reconnect. These tests use fixture grants only. Run `make test-api-runtime RUNTIME=hermes` with `HERMES_TEST_IMAGE`, or the OpenClaw equivalent with `OPENCLAW_TEST_IMAGE`. The image must be rebuilt after the pinned CLI/patch changes; an old local tag cannot prove this contract.
 

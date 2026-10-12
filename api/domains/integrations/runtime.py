@@ -146,7 +146,7 @@ class GogAdapter:
                 "gog-shim.sh": build_gog_shim_sh(),
             },
             env=build_gog_env(content, context.gog_home_dir, gateway_base_url=context.gateway_base_url),
-            policy_md=build_gog_policy_md(content),
+            policy_md=build_gog_policy_md(content, isolated=True),
         )
 
 

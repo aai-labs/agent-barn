@@ -107,6 +107,14 @@ def _hermes_config_core(
             "backend": "local",
             "cwd": HERMES_WORKSPACE_DIR,
             "timeout": 120,
+            # Hermes snapshots a login shell, which resets the inherited PATH.
+            # Keep its usual user init files, then restore our runtime tools.
+            "shell_init_files": [
+                "~/.profile",
+                "~/.bash_profile",
+                "~/.bashrc",
+                "/app/config/terminal-env.sh",
+            ],
         },
         "memory": {
             "memory_enabled": True,
@@ -374,6 +382,7 @@ def build_hermes_config_map(
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
         "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
+        "terminal-env.sh": 'export PATH="/home/hermes/.local/bin:$PATH"\n',
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
         "retire-messaging.py": RETIRE_MESSAGING_PY,
