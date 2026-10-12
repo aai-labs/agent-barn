@@ -451,3 +451,42 @@ def test_agentbarn_telegram_env_runs_hermes_in_webhook_mode_with_the_stand_in_to
         "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
         "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
+
+
+def test_first_conversation_enables_its_plugin_and_turns_off_hermes_profile_offer() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", first_conversation=True)
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-first-conversation"]
+    assert config["onboarding"] == {"profile_build": "off"}
+
+
+def test_gateway_config_without_a_first_conversation_leaves_hermes_onboarding_alone() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+
+    assert "agentbarn-first-conversation" not in config["plugins"]["enabled"]
+    assert "onboarding" not in config
+
+
+def _config_map_with(**kwargs):
+    return build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+        **kwargs,
+    )
+
+
+def test_config_map_ships_bootstrap_only_when_given() -> None:
+    assert _config_map_with(bootstrap_md="# First conversation\n\nGreet them.\n").data["BOOTSTRAP.md"] == (
+        "# First conversation\n\nGreet them.\n"
+    )
+    assert "BOOTSTRAP.md" not in _config_map_with().data
+    assert "BOOTSTRAP.md" not in _config_map_with(bootstrap_md=None).data

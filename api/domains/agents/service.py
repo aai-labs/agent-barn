@@ -168,7 +168,7 @@ from api.domains.restore_points.service import (
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
-from api.domains.templates.defaults import ONBOARDING_TEMPLATE_KEY, is_hidden_template_key
+from api.domains.templates.defaults import ONBOARDING_TEMPLATE_KEY, is_hidden_template_key, is_placeholder_bootstrap
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
@@ -2017,6 +2017,7 @@ class AgentService:
             )
         # Placeholders are kept raw in storage and rendered at seed time.
         rendered = render_template(template, agent.name)
+        first_conversation_md = None if is_placeholder_bootstrap(rendered.bootstrap_md) else rendered.bootstrap_md
         ns = self.config.k8s_namespace
 
         name = f"agent-{agent.id}"
@@ -2080,6 +2081,7 @@ class AgentService:
                 verbose_mode=agent.verbose_mode,
                 agentbarn_telegram=agentbarn_telegram,
                 memory_enabled=agent.memory_enabled,
+                first_conversation=first_conversation_md is not None,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -2371,6 +2373,7 @@ class AgentService:
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
                 skills_json=skills_json,
+                bootstrap_md=first_conversation_md,
             )
         else:
             config_map = build_config_map(

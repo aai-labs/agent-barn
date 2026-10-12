@@ -62,6 +62,7 @@ _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # that notice without accidentally making an arbitrary real channel the
 # destination for proactive messages.
 _NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
+FIRST_CONVERSATION_PLUGIN = "agentbarn-first-conversation"
 # Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
 _HERMES_AUXILIARY_TASKS = (
     "vision",
@@ -166,11 +167,16 @@ def build_hermes_gateway_config(
     verbose_mode: bool = False,
     agentbarn_telegram: AgentBarnTelegramRuntime | None = None,
     memory_enabled: bool = False,
+    first_conversation: bool = False,
 ) -> dict:
     plugins = ["telemetry-push"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
         plugins.append("agentbarn-observer")
+    if first_conversation:
+        plugins.append(FIRST_CONVERSATION_PLUGIN)
     config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
+    if first_conversation:
+        config["onboarding"] = {"profile_build": "off"}
     config["memory"]["provider"] = "hindsight" if memory_enabled else ""
     if memory_enabled:
         config["memory"]["hindsight"] = hermes_memory_settings()
@@ -393,6 +399,8 @@ def build_hermes_config_map(
     gog_setup_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
+    *,
+    bootstrap_md: str | None = None,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
@@ -419,6 +427,8 @@ def build_hermes_config_map(
         "retire-messaging.py": RETIRE_MESSAGING_PY,
         "boot-run.py": HERMES_BOOT_RUN_PY,
     }
+    if bootstrap_md is not None:
+        data["BOOTSTRAP.md"] = bootstrap_md
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:

@@ -36,6 +36,8 @@ For gateway-owned Web Chat/Email delivery, progress visibility (the persisted `v
 
 Hermes uses `/workspace` as its terminal working directory while its managed state remains under `/opt/data`. Agent Barn materializes assigned Skills under `/workspace/skills` and declares that directory in Hermes' `skills.external_dirs`, because the runtime's native discovery root is `/opt/data/skills`.
 
+A Hermes Agent whose rendered `bootstrap.md` is a real first-conversation script (not a placeholder; see [Templates and Skills](../features/templates-and-skills.md#template-invariants)) gets it in its ConfigMap as `BOOTSTRAP.md`. Its gateway config then enables the `agentbarn-first-conversation` plugin and sets `onboarding.profile_build: off`, so Hermes' own first-message offer to build a user profile cannot compete with the script. A placeholder ships no `BOOTSTRAP.md` and leaves the plugin list and Hermes onboarding exactly as before. OpenClaw Agents are unaffected. Because this changes the assembly path, every running Agent reports `update_available` once after the change deploys (see [Runtime configuration digest](#runtime-configuration-digest)).
+
 Opted-in Agent Memory configures each runtime's pinned Hindsight provider alongside native memory during assembly. Startup replaces stale provider settings and keeps the per-start credential in environment variables; a bounded authenticated health wait lets the API persist that credential before provider initialization. See [Agent Memory runtime integration](../features/agent-memory.md#runtime-integration) for plugin versions and behavior.
 
 ### Runtime configuration digest
