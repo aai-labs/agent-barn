@@ -671,9 +671,9 @@ identified by UUID, so the usage tracking is pseudonymous.
 
 To opt out, set `ANALYTICS_ENABLED=false` in `.env.deploy` and redeploy.
 Remote installs use the `WEB_APP_URL` hostname as their label; local installs use
-`local-<short UUID>`. The installation UUID remains stable when the URL changes. The local development
-`.env.spec` explicitly disables analytics; keep `ANALYTICS_ENABLED=false` in your
-local `.env`. The full list of events and fields is in
+`local-<short UUID>`. The installation UUID remains stable when the URL changes. Local
+development stacks report too, as `installation_environment=local`; set
+`ANALYTICS_ENABLED=false` in your local `.env` to opt out. The full list of events and fields is in
 [`docs/features/product-analytics.md`](docs/features/product-analytics.md).
 
 ### Connecting agent email (manual step)
