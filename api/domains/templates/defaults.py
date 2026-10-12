@@ -1,5 +1,5 @@
 ONBOARDING_TEMPLATE_KEY = "trial-onboarding"
-_HIDDEN_TEMPLATE_KEYS = frozenset({ONBOARDING_TEMPLATE_KEY})
+HIDDEN_TEMPLATE_KEYS = frozenset({ONBOARDING_TEMPLATE_KEY})
 
 DEFAULT_SOUL_MD = """\
 # SOUL.md - Who Am I?
@@ -187,4 +187,4 @@ DEFAULT_HEARTBEAT_MD = """\
 
 
 def is_hidden_template_key(template_key: str) -> bool:
-    return template_key in _HIDDEN_TEMPLATE_KEYS
+    return template_key in HIDDEN_TEMPLATE_KEYS
