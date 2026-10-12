@@ -15,6 +15,7 @@ from api.domains.agents.aai_cli_artifacts import (
     store_providers_for,
 )
 from api.domains.agents.models import (
+    ApolloContent,
     ConfluenceContent,
     FirecrawlContent,
     JiraContent,
@@ -23,7 +24,7 @@ from api.domains.agents.models import (
     SharePointContent,
     validate_content,
 )
-from api.domains.integrations.plugins.providers import ConfluencePlugin, JiraPlugin, PipedrivePlugin
+from api.domains.integrations.plugins.providers import ApolloPlugin, ConfluencePlugin, JiraPlugin, PipedrivePlugin
 
 _GITHUB = validate_content(
     SecretProvider.GITHUB,
@@ -62,7 +63,7 @@ _PIPEDRIVE_WITH_DOMAIN = cast(
     PipedriveContent,
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
 )
-_APOLLO = validate_content(SecretProvider.APOLLO, {"api_token": "apollo_key"})
+_APOLLO = cast(ApolloContent, validate_content(SecretProvider.APOLLO, {"api_token": "apollo_key"}))
 
 _SHAREPOINT = cast(
     SharePointContent,
@@ -221,8 +222,8 @@ def test_pipedrive_direct_profile_with_domain_emits_base_url():
     assert 'base_url = "https://aai-labs.pipedrive.com"' in block
 
 
-def test_config_toml_apollo_uses_api_key_profile():
-    toml = build_config_toml({SecretProvider.APOLLO: _APOLLO})
+def test_apollo_direct_profile_uses_api_key():
+    toml = ApolloPlugin().aai_cli_profile_block(_APOLLO)
     assert "[profiles.apollo-work]" in toml
     assert 'provider = "apollo"' in toml
     assert 'auth_type = "apollo_api_key"' in toml

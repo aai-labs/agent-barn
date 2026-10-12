@@ -35,8 +35,7 @@ ISOLATION_CAPABILITIES = {
     ),
     SecretProvider.APOLLO: IsolationCapabilities(
         "This Agent receives the Apollo API key and connects to Apollo directly.",
-        "Apollo credential isolation is not available yet.",
-        supports_isolated=False,
+        "The Apollo API key stays outside this Agent; Agent Barn authenticates requests.",
     ),
     SecretProvider.PIPEDRIVE: IsolationCapabilities(
         "This Agent receives the Pipedrive API token and connects to Pipedrive directly.",

@@ -14,15 +14,15 @@ async function open(page: Page, options: { provider?: string; status?: string; a
   await data.organizations.interceptGetOrganizationLlmBudget({ organizationId: TEST_ORG_ID });
   const provider = options.provider ?? "github";
   const google = provider === "google_workspace";
-  const names: Record<string, string> = { github: "GitHub credential", google_workspace: "Google Workspace credential", sharepoint: "SharePoint credential", firecrawl: "Platform Firecrawl" };
+  const names: Record<string, string> = { github: "GitHub credential", apollo: "Apollo credential", google_workspace: "Google Workspace credential", sharepoint: "SharePoint credential", firecrawl: "Platform Firecrawl" };
   let agent = { ...mockAgent, update_in_progress: options.updating ?? false, status: options.status ?? "STOPPED", allowed_actions: options.actions ?? mockAgentAllowedActions,
     secrets: [{ provider, secret_name: names[provider], source: options.source ?? "agent_secret", isolation: {
       desired: options.desired ?? false, applied: options.status === "RUNNING" && !options.provisioning ? false : null,
       last_verified: options.lastVerified ?? null, reconnect_required: options.reconnectRequired ?? false,
       generation: options.provisioning ? "44444444-4444-4444-8444-444444444444" : null, pending: options.provisioning || options.status !== "RUNNING", switch_available: options.supported ?? true,
       supported_modes: ["direct", "isolated"],
-      direct_description: google ? "This Agent receives the Google refresh token and OAuth client credentials and connects to Google directly." : "This Agent receives the GitHub token and connects to GitHub directly.",
-      isolated_description: google ? "This Agent receives expiring Google access tokens only; the refresh token and OAuth client secret stay outside it." : "The GitHub token stays outside this Agent; Agent Barn authenticates requests.",
+      direct_description: provider === "apollo" ? "This Agent receives the Apollo API key and connects to Apollo directly." : google ? "This Agent receives the Google refresh token and OAuth client credentials and connects to Google directly." : "This Agent receives the GitHub token and connects to GitHub directly.",
+      isolated_description: provider === "apollo" ? "The Apollo API key stays outside this Agent; Agent Barn authenticates requests." : google ? "This Agent receives expiring Google access tokens only; the refresh token and OAuth client secret stay outside it." : "The GitHub token stays outside this Agent; Agent Barn authenticates requests.",
     } }],
   };
   const requests: unknown[] = [];
@@ -47,7 +47,7 @@ async function open(page: Page, options: { provider?: string; status?: string; a
   await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration?section=keys`);
   await expect(page.getByRole("switch")).toHaveCount(0);
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page.locator("summary").filter({ hasText: google ? "Google Workspace" : provider === "sharepoint" ? "SharePoint" : provider === "firecrawl" ? "Firecrawl" : "GitHub" }).click();
+  await page.locator("summary").filter({ hasText: google ? "Google Workspace" : provider === "sharepoint" ? "SharePoint" : provider === "firecrawl" ? "Firecrawl" : provider === "apollo" ? "Apollo" : "GitHub" }).click();
   return requests;
 }
 
@@ -75,6 +75,18 @@ test.describe("Credential isolation", () => {
     await page.getByRole("switch").click();
     await expect(page.getByRole("button", { name: "Apply & Restart", exact: true })).toBeDisabled();
     expect(requests).toEqual([]);
+  });
+
+  test("Apollo saves isolation from expanded setup and keeps the list read-only", async ({ page }) => {
+    const requests = await open(page, { provider: "apollo" });
+    const control = page.getByRole("switch", { name: "Apollo credential isolation" });
+    await expect(control).not.toBeChecked();
+    await control.click();
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Apply", exact: true }).click();
+    expect(requests).toEqual([{ isolated: true, restart: false }]);
+    await expect(page.getByRole("switch")).toHaveCount(0);
+    await expect(page.getByText("Apollo credential", { exact: true })).toBeVisible();
   });
 
   test("cancel discards isolation without sending a request", async ({ page }) => {

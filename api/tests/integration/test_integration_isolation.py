@@ -523,7 +523,9 @@ def test_backfill_preserves_routes_shared_sources_and_gateway_tokens():
                 policies = session.exec(select(AgentIntegrationIsolation)).all()
                 assert_that(
                     {p.provider: p.isolated for p in policies},
-                    equal_to({p.value: p != SecretProvider.SHAREPOINT for p in SecretProvider}),
+                    equal_to(
+                        {p.value: p not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO} for p in SecretProvider}
+                    ),
                 )
                 assert_that(all(p.agent_id != deleted_agent_id for p in policies), is_(True))
                 assert_that([t.model_dump() for t in session.exec(select(GatewayToken)).all()], equal_to(token_before))
@@ -1008,3 +1010,37 @@ def test_sharepoint_import_rejects_another_account_without_replacing_the_grant()
         assert runtime is not None
         assert_that(runtime.bindings["sharepoint"]["reconnect_required"], is_(True))
         assert_that(gateway.resolve(f"Bearer {token}").provider, equal_to(SecretProvider.SHAREPOINT))
+
+
+@pytest.mark.parametrize("existing", [None, False, True])
+@pytest.mark.parametrize("deleted", [False, True])
+def test_apollo_upgrade_preserves_direct_bindings_and_explicit_choices(existing, deleted):
+    from api.tests.helpers.integration_credentials import credential_for
+
+    with given(_GIVEN) as context:
+        config = Config(Path(__file__).resolve().parents[2] / "alembic.ini")
+        try:
+            command.downgrade(config, "0c180f95890c")
+            context.postgres_delegate.save(
+                AgentSecret(
+                    agent_id=context.agent.id,
+                    provider=SecretProvider.APOLLO,
+                    secret_name="Apollo credential",
+                    content=encrypt_content(credential_for(SecretProvider.APOLLO), TEST_ENCRYPTION_KEY),
+                )
+            )
+            if existing is not None:
+                context.injector.get(IntegrationRepository).set_policy(
+                    context.agent.id, SecretProvider.APOLLO, existing, "agent_secret"
+                )
+            if deleted:
+                context.agent.deleted_at = datetime.now(UTC)
+                context.injector.get(AgentRepository).save(context.agent)
+            command.upgrade(config, "head")
+            policy = _policy(context)
+            if existing is None and deleted:
+                assert_that(policy, is_(none()))
+            else:
+                assert_that(_require_policy(context).isolated, equal_to(existing if existing is not None else False))
+        finally:
+            command.upgrade(config, "head")

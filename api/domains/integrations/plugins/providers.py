@@ -428,7 +428,7 @@ class PipedrivePlugin(AaiCliPlugin[PipedriveContent]):
 
 class ApolloPlugin(AaiCliPlugin[ApolloContent]):
     key = "apollo"
-    egress_mode = EgressMode.DIRECT
+    egress_mode = EgressMode.GATEWAY_PROXY
     provider = SecretProvider.APOLLO
     display_name = "Apollo credential"
     credentials_model = ApolloContent
@@ -445,6 +445,24 @@ class ApolloPlugin(AaiCliPlugin[ApolloContent]):
 
     def validate_external(self, content: ApolloContent) -> IntegrationValidationResult:
         return validate_apollo(content)
+
+    def upstream_base_url(self, content: ApolloContent) -> str:
+        # Typed API and health endpoints have different version prefixes.
+        return "https://api.apollo.io"
+
+    def apply_upstream_auth(self, content: ApolloContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers({"x-api-key": content.api_token}, sensitive=True)
+
+    def aai_cli_gateway_profile_block(self, content: ApolloContent, *, base_url: str, token_env: str) -> str:
+        return "".join(
+            [
+                f"[profiles.{self.aai_cli_slug}]\n",
+                'provider = "apollo"\n',
+                *_gateway_bearer_lines(
+                    endpoint_field="base_url", base_url=base_url.rstrip("/") + "/api/v1", token_env=token_env
+                ),
+            ]
+        )
 
     def aai_cli_profile_block(self, content: ApolloContent) -> str:
         return (

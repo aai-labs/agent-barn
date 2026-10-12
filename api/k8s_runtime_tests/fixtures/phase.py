@@ -77,6 +77,7 @@ else:
             "confluence.api_token",
             "bitbucket.api_token",
             "pipedrive.api_token",
+            "apollo.api_token",
         ):
             assert key not in keys, "Isolated boot retained a renewable credential entry"
         microsoft = [*cli, "--profile", "sharepoint-work", "microsoft", "auth", "status"]

@@ -16,6 +16,7 @@ from starlette.testclient import TestClient
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     AgentSecret,
+    ApolloContent,
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
@@ -203,6 +204,22 @@ _ALL_AAI_GIVEN[0] = set_env_variable(
             "https://api.bitbucket.org/2.0/repositories/acme/app/pullrequests",
             "Authorization",
             "Basic YmJAZXhhbXBsZS5jb206YmItcmVhbA==",
+        ),
+        (
+            SecretProvider.APOLLO,
+            ApolloContent(api_token="apollo-real"),
+            "api/v1/users/api_profile",
+            "https://api.apollo.io/api/v1/users/api_profile",
+            "x-api-key",
+            "apollo-real",
+        ),
+        (
+            SecretProvider.APOLLO,
+            ApolloContent(api_token="apollo-real"),
+            "v1/auth/health",
+            "https://api.apollo.io/v1/auth/health",
+            "x-api-key",
+            "apollo-real",
         ),
         (
             SecretProvider.PIPEDRIVE,
