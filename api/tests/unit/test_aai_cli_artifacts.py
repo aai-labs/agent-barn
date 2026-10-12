@@ -1,5 +1,7 @@
 from typing import cast
 
+import pytest
+
 from api.domains.agents.aai_cli_artifacts import (
     _INTEGRATION_LABELS,
     CONFIG_PATH,
@@ -90,6 +92,26 @@ _SHAREPOINT = cast(
     ),
 )
 _SHAREPOINT_READ_WRITE = _SHAREPOINT.model_copy(update={"read_only": False, "scopes": ["Sites.ReadWrite.All"]})
+
+_SELECTED_SITES = cast(
+    SharePointContent,
+    validate_content(
+        SecretProvider.SHAREPOINT,
+        {
+            "mode": "selected_sites",
+            "connection_id": "33333333-3333-4333-8333-333333333333",
+            "tenant_id": "22222222-2222-4222-8222-222222222222",
+            "client_id": "11111111-1111-4111-8111-111111111111",
+            "email": "admin@contoso.com",
+            "scopes": ["Sites.Selected"],
+            "sites": [
+                {"url": "https://contoso.sharepoint.com/sites/finance", "site_id": "s1", "permission_id": "p1"},
+                {"url": "https://contoso.sharepoint.com/sites/legal", "site_id": "s2", "permission_id": "p2"},
+            ],
+        },
+    ),
+)
+_TOKEN_URL = "http://agentbarn-api:8001/ingest/v1/agents/a1/integrations/sharepoint/token"
 
 
 def test_env_var_for():
@@ -786,6 +808,61 @@ def test_integrations_policy_points_sharepoint_at_the_microsoft_skill():
     assert "`--profile sharepoint-work`" in md
     assert "./skills/aai-microsoft/SKILL.md" in md
     assert "microsoft sharepoint files" in md
+
+
+def test_config_toml_selected_sites_fetches_tokens_from_the_platform():
+    toml = build_config_toml({SecretProvider.SHAREPOINT: _SELECTED_SITES}, sharepoint_token_url=_TOKEN_URL)
+    block = toml[toml.index("[profiles.sharepoint-work]") :]
+    assert block == (
+        "[profiles.sharepoint-work]\n"
+        'provider = "microsoft"\n'
+        'auth_type = "token_url"\n'
+        f'token_url = "{_TOKEN_URL}"\n'
+        'api_token_secret = "agentfarm.ingest_key"\n'
+    )
+
+
+def test_config_toml_selected_sites_needs_the_token_url():
+    with pytest.raises(ValueError):
+        build_config_toml({SecretProvider.SHAREPOINT: _SELECTED_SITES})
+
+
+def test_setup_sh_stores_the_platform_key_for_selected_sites():
+    script = build_setup_sh([], store_platform_key=True)
+    assert (
+        "printf '%s' \"$INGEST_API_KEY\" | aai-cli --config /home/node/.config/aai-cli/config.toml "
+        "secrets set agentfarm.ingest_key"
+    ) in script
+
+
+def test_setup_sh_selected_sites_removes_a_token_left_by_a_personal_sign_in():
+    # Switching to selected sites must not leave the earlier person's refresh token in the store.
+    script = build_setup_sh([], store_platform_key=True)
+    assert "secrets remove microsoft.sharepoint_refresh_token" in script
+
+
+def test_setup_sh_without_selected_sites_stores_no_platform_key():
+    assert "agentfarm.ingest_key" not in build_setup_sh([SecretProvider.SHAREPOINT])
+
+
+def test_build_env_carries_nothing_for_selected_sites():
+    assert build_env({SecretProvider.SHAREPOINT: _SELECTED_SITES}) == {}
+
+
+def test_tool_context_md_lists_the_granted_sites_and_what_is_unavailable():
+    md = build_tool_context_md({SecretProvider.SHAREPOINT: _SELECTED_SITES})
+    assert "https://contoso.sharepoint.com/sites/finance" in md
+    assert "https://contoso.sharepoint.com/sites/legal" in md
+    assert "read and write" in md
+    assert "Excel" in md
+    assert "admin@contoso.com" not in md
+
+
+def test_integrations_policy_for_selected_sites_does_not_claim_a_signed_in_account():
+    md = build_integrations_policy_md({SecretProvider.SHAREPOINT: _SELECTED_SITES})
+    assert "`--profile sharepoint-work`" in md
+    assert "signed-in account" not in md
+    assert "granted sites" in md
 
 
 def test_every_profile_provider_has_an_integration_label():

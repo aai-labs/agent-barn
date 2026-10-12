@@ -19,3 +19,11 @@ def test_openclaw_should_recall_and_retain_alongside_native_memory(openclaw_imag
 
 def test_openclaw_should_preserve_native_memory_when_disabled(openclaw_image: str, tmp_path: Path):
     memory_should_stop("openclaw", openclaw_image, tmp_path)
+
+
+def test_openclaw_reports_explicit_memory_search_unavailable(openclaw_image: str, tmp_path: Path):
+    memory_should_start("openclaw", openclaw_image, tmp_path, explicit_recall_status=503)
+
+
+def test_openclaw_reports_organization_memory_write_refusal(openclaw_image: str, tmp_path: Path):
+    memory_should_start("openclaw", openclaw_image, tmp_path, organization_write_status=403)

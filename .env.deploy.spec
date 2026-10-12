@@ -84,6 +84,14 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
+# ── Product analytics (PostHog) ──────────────────────────────────────────────
+# Sends business events (agent and membership changes) to Agent Barn's PostHog.
+# On by default for deployment installs.
+# Set false to opt out. See docs/features/product-analytics.md for what is sent.
+ANALYTICS_ENABLED=true
+# Privacy: user email and name are never sent.
+# The WEB_APP_URL hostname labels this install in PostHog.
+
 # ── Per-Agent email addresses ────────────────────────────────────────────────
 # Leave blank to keep the Email platform disabled; Agent Barn then refuses new Email
 # Communication Connections and nothing else changes. Both are required on top of the

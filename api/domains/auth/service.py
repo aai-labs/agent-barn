@@ -1,8 +1,9 @@
 import hashlib
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid7
+from uuid import UUID, uuid4, uuid7
 
 import jwt
 from fastapi import BackgroundTasks, HTTPException, status
@@ -10,7 +11,7 @@ from injector import inject, singleton
 from sqlmodel import Session
 
 from api.core.config import Config
-from api.domains.auth.hashing import hash_text
+from api.domains.auth.hashing import check_hash, hash_text
 from api.domains.auth.models import (
     AcceptInviteRequest,
     CredentialClass,
@@ -27,6 +28,15 @@ from api.domains.auth.repository import (
     PasswordResetTokenRepository,
     RefreshTokenRepository,
 )
+from api.domains.events import (
+    ActorIdentity,
+    ActorIdentityType,
+    EventDeliveryDispatcher,
+    SubjectIdentity,
+    SubjectIdentityType,
+)
+from api.domains.events.catalog import EVENT_REGISTRY, USER_LOGGED_IN
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.exceptions import EmailTakenHTTPException
@@ -43,6 +53,9 @@ DEFAULT_ACCESS_TOKEN_EXPIRE_MINUTES = 30
 DEFAULT_REFRESH_TOKEN_EXPIRE_DAYS = 15
 DEFAULT_PWD_RESET_TOKEN_EXPIRE_MINUTES = 60 * 24
 JWT_ENCODING_ALGORITHM = "HS256"
+PASSWORD_LOGIN_METHOD = "password"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,6 +80,40 @@ class AuthService:
     organization_repository: OrganizationRepository
     organization_user_repository: OrganizationUserRepository
     email_service: EmailService
+    outbox_repository: OutboxMessageRepository
+    event_delivery_dispatcher: EventDeliveryDispatcher
+
+    def login(self, email: str, password: str) -> Token:
+        user = self.user_repository.get_by_email(email)
+        if user is None or not check_hash(password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        token_pair = self.create_token_pair(
+            TokenData(user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION)
+        )
+        self._record_login(user.id)
+        return token_pair
+
+    def _record_login(self, user_id: UUID) -> None:
+        try:
+            event = EVENT_REGISTRY.build_event(
+                event_name=USER_LOGGED_IN,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=None,
+                actor=ActorIdentity(type=ActorIdentityType.USER, id=user_id),
+                subject=SubjectIdentity(type=SubjectIdentityType.USER, id=user_id),
+                correlation_id=uuid4(),
+                payload={"user_id": user_id, "method": PASSWORD_LOGIN_METHOD},
+            )
+            self.outbox_repository.create(event, EVENT_REGISTRY)
+            deliveries = self.outbox_repository.list_deliveries_for_event(event.event_id)
+            self.event_delivery_dispatcher.enqueue_immediate([delivery.id for delivery in deliveries])
+        except Exception:
+            logger.warning("Login event not recorded: user_id=%s", user_id, exc_info=True)
 
     @staticmethod
     def _default_organization_name(full_name: str | None) -> str:
@@ -230,21 +277,17 @@ class AuthService:
     ) -> User:
         validate_strong_password(reset_request.new_password)
         reset_token = self.verify_password_reset_token(reset_request.token)
-        user = self.user_repository.get(reset_token.user_id)
-        if not user:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-        user.hashed_password = hash_text(reset_request.new_password)
-        user.security_stamp = uuid7().hex
-        if mark_email_verified and user.email_verified_at is None:
-            user.email_verified_at = datetime.now(UTC)
-        # On invite acceptance the user provides their own (authoritative) name.
-        if full_name is not None:
-            user.full_name = full_name
-        self.user_repository.save(user)
-
-        reset_token.is_used = True
-        self.pwd_reset_token_repository.save(reset_token)
+        redeemed = self.pwd_reset_token_repository.redeem(
+            reset_token.id,
+            hashed_password=hash_text(reset_request.new_password),
+            security_stamp=uuid7().hex,
+            mark_email_verified=mark_email_verified,
+            full_name=full_name,
+        )
+        if redeemed is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
+        user, delivery_ids = redeemed
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         return user
 
     def reset_password(self, reset_request: PasswordResetRequest):

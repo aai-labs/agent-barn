@@ -70,15 +70,18 @@ def build_role_scope_policy_md() -> str:
 # delivers replies and scheduled runs itself. The policy that used to sit here routed explicit
 # sends through the deprecated `agentbarn-message` client and forbade the message tool in cron
 # runs; native agents read it as binding and refused work their gateway supports. Only the
-# runtime-neutral rule for an empty scheduled run remains.
+# runtime-neutral rule for an empty scheduled run remains. `NO_REPLY` is the only marker both
+# runtimes suppress: OpenClaw posts `[SILENT]` verbatim and Hermes posts `HEARTBEAT_OK`
+# verbatim, so the rule overrides whatever marker a template names.
 _SCHEDULED_RUNS_POLICY_MD = """
 ## Scheduled runs
 
 A scheduled run's final response is delivered to the job's destination. When a run
-has nothing worth sending, return exactly the silence marker your template already
-uses -- `[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, or `HEARTBEAT_OK`, in any case;
-each suppresses delivery. Any other text is delivered, so never return a status
-line, an acknowledgement, or a "nothing to report" sentence in its place.
+has nothing worth sending, its final response must be exactly `NO_REPLY` and
+nothing else; that suppresses delivery. Use `NO_REPLY` even where other
+instructions name `[SILENT]` or `HEARTBEAT_OK` for a scheduled run, because those
+are posted to the channel verbatim. Any other text is delivered, so never return
+a status line, an acknowledgement, or a "nothing to report" sentence in its place.
 
 Keep native scheduled delivery on the recorded origin or an explicitly configured
 native home target. At startup, select that home platform explicitly: the startup

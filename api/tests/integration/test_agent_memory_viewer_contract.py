@@ -101,6 +101,50 @@ def _setup(*steps):
     return agent_memory_api_setup(pinned_hindsight_is_running(), memory_viewer_is_served(), *steps)
 
 
+def test_explicit_recall_finds_another_agents_fact_only_while_its_grant_is_current():
+    with given(_setup(two_agents(), memory_is_enabled())) as context:
+        fact = "Billing invoices use EUR."
+        retain_in_bank(context, _bank(context), fact, [f"agent:{context.billing.id}"])
+        gateway = context.injector.get(MemoryGatewayService)
+
+        def recall():
+            access = gateway.authenticate(f"Bearer {context.memory_key}")
+            response = gateway.forward(
+                access,
+                "POST",
+                "v1/default/banks/agentbarn/memories/recall",
+                {
+                    "query": "Billing invoice currency",
+                    "budget": "mid",
+                    "max_tokens": 4096,
+                    "types": ["world", "experience", "observation"],
+                },
+            )
+            return json.loads(response.content)["results"]
+
+        with when("the reader searches before it has access to Billing's private memories"):
+            before = recall()
+        with then("the private fact is not returned"):
+            assert_that(before, empty())
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        grant = AgentMemoryGrant(
+            organization_id=context.organization.id,
+            agent_id=context.triage.id,
+            source_agent_id=context.billing.id,
+        )
+        delegate.save(grant)
+        with when("the reader searches with a current source-Agent grant"):
+            granted = recall()
+        with then("the real backend returns Billing's fact"):
+            assert_that(any("EUR" in row["text"] for row in granted), equal_to(True), str(granted))
+            assert_that(all(row["tags"] == [f"agent:{context.billing.id}"] for row in granted), equal_to(True))
+        delegate.delete(grant)
+        with when("the reader searches after the grant is revoked"):
+            revoked = recall()
+        with then("the same query no longer returns the private fact"):
+            assert_that(revoked, empty())
+
+
 def test_items_and_total_cover_private_and_currently_granted_organization_scopes():
     with given(_setup(two_agents(), _two_agents_share_a_bank())) as context:
         with when("each Agent's memories are viewed through both HTTP boundaries"):

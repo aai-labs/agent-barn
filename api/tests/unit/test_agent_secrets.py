@@ -129,6 +129,53 @@ def test_sharepoint_content_requires_its_fields(field):
         validate_content(SecretProvider.SHAREPOINT, payload)
 
 
+_SELECTED_SITES = {
+    "mode": "selected_sites",
+    "connection_id": "0199c2a4-7b1e-7c3d-9f00-1234567890ab",
+    "tenant_id": "b6f28f4f-97fe-41e6-903a-ff6cc7633ae3",
+    "client_id": "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9",
+    "email": "admin@contoso.com",
+    "sites": [
+        {
+            "url": "https://contoso.sharepoint.com/sites/finance",
+            "site_id": "contoso.sharepoint.com,aaa,bbb",
+            "permission_id": "perm-1",
+        }
+    ],
+}
+
+
+def test_sharepoint_content_defaults_to_delegated_for_existing_credentials():
+    content = validate_content(SecretProvider.SHAREPOINT, _SHAREPOINT)
+    assert isinstance(content, SharePointContent)
+    assert content.mode == "delegated"
+    assert content.sites == []
+
+
+def test_selected_sites_content_round_trips_through_encryption():
+    original = validate_content(SecretProvider.SHAREPOINT, _SELECTED_SITES)
+    assert isinstance(original, SharePointContent)
+    assert original.sites[0].permission_id == "perm-1"
+    assert decrypt_content(SecretProvider.SHAREPOINT, encrypt_content(original, _KEY), _KEY) == original
+
+
+def test_selected_sites_content_needs_at_least_one_site():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, {**_SELECTED_SITES, "sites": []})
+
+
+def test_selected_sites_content_never_keeps_the_administrators_token():
+    # The administrator's sign-in only creates the grants; holding on to a token that can
+    # manage every site's permissions would defeat the point of selecting sites.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, {**_SELECTED_SITES, "refresh_token": "rt"})
+
+
+def test_delegated_content_holds_no_sites():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.SHAREPOINT, {**_SHAREPOINT, "sites": _SELECTED_SITES["sites"]})
+
+
 def test_display_names_cover_every_provider():
     assert set(PROVIDER_DISPLAY_NAMES) == set(SecretProvider)
 

@@ -24,10 +24,10 @@ users_router = APIRouter(prefix="/platform/users", tags=["platform-users"])
 @users_router.post("", response_model=PlatformUserCreateResult, status_code=status.HTTP_201_CREATED)
 def create_user(
     data: PlatformUserCreate,
-    _: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     user_service: UserService = Injected(UserService),
 ):
-    return user_service.create_platform_user(data)
+    return user_service.create_platform_user(data, context)
 
 
 @users_router.get("", response_model=PaginatedItems[PlatformUserRead])

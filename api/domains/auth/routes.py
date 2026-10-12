@@ -14,7 +14,6 @@ from fastapi_injector import Injected
 from pydantic import BaseModel
 
 from api.core.config import Config
-from api.domains.auth.hashing import check_hash
 from api.domains.auth.models import (
     AcceptInviteRequest,
     CredentialClass,
@@ -68,27 +67,10 @@ def _set_refresh_token_cookie(response: Response, refresh_token: str, config: Co
 def login_for_access_token(
     response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    user_service: UserService = Injected(UserService),
     auth_service: AuthService = Injected(AuthService),
     config: Config = Injected(Config),
 ):
-    credential_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Incorrect email or password",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-    try:
-        user = user_service.get_user_by_email(form_data.username)
-    except HTTPException:
-        raise credential_exception
-    if not user or not check_hash(form_data.password, user.hashed_password):
-        raise credential_exception
-
-    token_data = TokenData(
-        user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION
-    )
-    token_pair = auth_service.create_token_pair(token_data)
+    token_pair = auth_service.login(form_data.username, form_data.password)
     _set_refresh_token_cookie(response, token_pair.refresh_token, config)
     return token_pair
 

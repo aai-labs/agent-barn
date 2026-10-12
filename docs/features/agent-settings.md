@@ -24,7 +24,7 @@ An Agent Setting is resolved, never snapshotted. That single decision is what th
 - Reading and writing Agent Settings requires the Organization Permission `organization.update` — fixed Owner and Admin roles. An Organization Member is refused with 403.
 - Changing a default emits `organization.agent_settings.changed` through the Domain Events outbox to the security-audit projection. Saving an unchanged value emits nothing.
 - Changing a default never restarts an Agent. A running Agent keeps serving the model baked into its ConfigMap at start and picks the new default up on its next start, consistent with the rest of the Agent configuration surface where restarts stay explicit.
-- Because of that, an Agent has two distinct model facts and a surface must not confuse them: `effective_model` is what it *would* start on now, while `running_model` records what its pod actually started on. `start_agent` writes the latter and `stop_agent` clears it; `pending_model` is set only when the two disagree, which is what lets a running Agent be shown as still serving the old model. Nothing recomputes this from Kubernetes — the runtime merges its config once at container start and never re-reads it.
+- Because of that, an Agent has two distinct model facts and a surface must not confuse them: `effective_model` is what it *would* start on now, while `running_model` records what its pod actually started on. `start_agent` writes the latter and `stop_agent` clears it; `pending_model` is set only when the two disagree, which is what lets a running Agent be shown as still serving the old model. The Agent detail page shows that state as a banner naming both models, with a Restart action for lifecycle managers; team cards do not show it. Nothing recomputes this from Kubernetes — the runtime merges its config once at container start and never re-reads it.
 - Agent counts exposed alongside the setting cover every non-deleted Agent in the Organization, not only those visible to the caller. They state how far a change reaches; they do not name Agents.
 
 ## Primary flows
@@ -57,7 +57,7 @@ A platform-administered layer of defaults does not exist. If one is added, it be
 | Cross-domain resolution seam              | `../../api/domains/agent_settings/lookup.py`                 |
 | HTTP routes                               | `../../api/domains/agent_settings/routes.py`                 |
 | Model resolution at Agent start           | `../../api/domains/agents/service.py`                       |
-| Running vs pending model on the read model | `../../api/domains/agents/service.py`, `../../ui/src/features/agents/components/pending-model-note.tsx` |
+| Running vs pending model on the read model | `../../api/domains/agents/service.py`, `../../ui/src/features/agents/components/pending-model-note.tsx` (note and detail-page banner) |
 | Inherit/override on the Agent read model  | `../../api/domains/agents/models.py`                        |
 | Inherit/override Agent counts             | `../../api/domains/agents/repository.py`                    |
 | Allowlist side of the invariant           | `../../api/domains/organizations/service.py`                |

@@ -28,7 +28,9 @@ Kubernetes cluster. No seat licence, no second workspace to check.
 
 Everything runs in your namespace: the control plane, the database, the model
 proxy, and one pod per running agent. Outbound traffic goes to OpenRouter through
-the LiteLLM proxy you operate, and to whichever tool APIs you connect.
+the LiteLLM proxy you operate, to whichever tool APIs you connect, and, for installs
+that keep it on, to Agent Barn's product analytics
+([usage analytics](#usage-analytics)).
 Credentials are encrypted at rest in your own PostgreSQL.
 
 ## Contents
@@ -37,7 +39,7 @@ Credentials are encrypted at rest in your own PostgreSQL.
 - [What ships in the box](#what-ships-in-the-box) — [agents](#agents), [skills](#skills), [runtimes](#runtimes)
 - [Capabilities](#capabilities)
 - [Development](#development) — [native](#native-non-docker-development), [k3d](#local-kubernetes-k3d), [migrations](#database-migrations), [tests](#tests-and-checks), [troubleshooting](#troubleshooting)
-- [Deploying to Kubernetes](#deploying-to-kubernetes) — [connecting agent email](#connecting-agent-email-manual-step)
+- [Deploying to Kubernetes](#deploying-to-kubernetes) — [usage analytics](#usage-analytics), [connecting agent email](#connecting-agent-email-manual-step)
 - [Repository layout](#repository-layout)
 - [Getting help and contributing](#getting-help-and-contributing)
 
@@ -653,6 +655,26 @@ reuses the explicitly tagged images already in the registry.
 Background:
 [`docs/architecture/runtime-and-deployment.md`](docs/architecture/runtime-and-deployment.md)
 and [`docs/guidelines/operations.md`](docs/guidelines/operations.md).
+
+### Usage analytics
+
+Agent Barn installs send business events to Agent Barn's PostHog project (EU)
+by default (`ANALYTICS_ENABLED=true`). These are events such as an agent being
+created, started, or deleted, an organisation being created, updated, or deleted,
+a member joining an organisation,
+a user signing in or accepting an invite, and an hourly count of messages each
+agent received and sent. Each event carries random IDs (user, organisation, agent)
+and a name for your install, which defaults to your web app's host. It never
+carries agent or organisation names, prompts, message content, conversations,
+credentials, changed values, user email addresses, or full names. Users are
+identified by UUID, so the usage tracking is pseudonymous.
+
+To opt out, set `ANALYTICS_ENABLED=false` in `.env.deploy` and redeploy.
+Remote installs use the `WEB_APP_URL` hostname as their label; local installs use
+`local-<short UUID>`. The installation UUID remains stable when the URL changes. The local development
+`.env.spec` explicitly disables analytics; keep `ANALYTICS_ENABLED=false` in your
+local `.env`. The full list of events and fields is in
+[`docs/features/product-analytics.md`](docs/features/product-analytics.md).
 
 ### Connecting agent email (manual step)
 

@@ -61,6 +61,46 @@ function budgetMessage(body) {
   }
 }
 
+// Native chat posts whatever the runtime answers, and OpenClaw answers any 402 with its
+// own "top up your API key" billing text. So a chat completion refused for a spent limit
+// is answered as an ordinary assistant reply carrying the notice instead; the marker
+// above still lets the Web Chat adapter report the turn as SPEND_LIMIT_REACHED.
+// Requests the proxy cannot read back fall through to the 402.
+const MAX_INSPECTED_REQUEST_BYTES = 8 * 1024 * 1024;
+
+function spendLimitCompletion(path, requestBody) {
+  if (!path.split('?')[0].endsWith('/chat/completions') || !requestBody) return null;
+  let request;
+  try {
+    request = JSON.parse(requestBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!request || typeof request !== 'object') return null;
+  const id = `chatcmpl-agentbarn-spend-limit-${Date.now()}`;
+  const created = Math.floor(Date.now() / 1000);
+  const model = typeof request.model === 'string' ? request.model : 'agentbarn-spend-limit';
+  const usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  if (request.stream === true) {
+    const chunk = (choice, extra = {}) =>
+      `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [choice], ...extra })}\n\n`;
+    const body =
+      chunk({ index: 0, delta: { role: 'assistant', content: BUDGET_EXHAUSTED }, finish_reason: null }) +
+      chunk({ index: 0, delta: {}, finish_reason: 'stop' }, { usage }) +
+      'data: [DONE]\n\n';
+    return { contentType: 'text/event-stream; charset=utf-8', body };
+  }
+  const body = JSON.stringify({
+    id,
+    object: 'chat.completion',
+    created,
+    model,
+    choices: [{ index: 0, message: { role: 'assistant', content: BUDGET_EXHAUSTED }, finish_reason: 'stop' }],
+    usage,
+  });
+  return { contentType: 'application/json', body };
+}
+
 // Native channel Connections have no supervisor session, so their health
 // transitions reach the Connection Journal from the gateway's own snapshot.
 // Content-free: provider error text (lastError) never leaves the pod.
@@ -284,6 +324,16 @@ if (LITELLM_PROXY_TARGET) {
   const targetPort = targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80);
 
   proxyServer = http.createServer((clientReq, clientRes) => {
+    // Kept only so a spent-limit refusal can answer in the request's own format.
+    const requestChunks = [];
+    let requestBytes = 0;
+    clientReq.on('data', (c) => {
+      requestBytes += c.length;
+      if (requestBytes <= MAX_INSPECTED_REQUEST_BYTES) requestChunks.push(c);
+    });
+    const requestBody = () =>
+      requestBytes <= MAX_INSPECTED_REQUEST_BYTES ? Buffer.concat(requestChunks) : null;
+
     const opts = {
       hostname: targetUrl.hostname,
       port: targetPort,
@@ -314,7 +364,18 @@ if (LITELLM_PROXY_TARGET) {
           // 429, which the runtime retries as a rate limit indefinitely, so the person
           // chatting would never hear back at all.
           const status = budget ? BUDGET_EXHAUSTED_STATUS : upstreamRes.statusCode;
-          if (budget) recordTerminalLlmError('SPEND_LIMIT_REACHED');
+          if (budget) {
+            recordTerminalLlmError('SPEND_LIMIT_REACHED');
+            const completion = spendLimitCompletion(clientReq.url, requestBody());
+            if (completion) {
+              clientRes.writeHead(200, {
+                'Content-Type': completion.contentType,
+                'Content-Length': Buffer.byteLength(completion.body),
+              });
+              clientRes.end(completion.body);
+              return;
+            }
+          }
           const body = JSON.stringify({
             error: { message: cleanMsg, type: null, param: null, code: String(status) }
           });

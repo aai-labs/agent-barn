@@ -13,7 +13,7 @@ microsoft auth login
 microsoft auth status
 ```
 
-`auth login` is only for a `microsoft_delegated` profile. It performs one device-code login and saves the refresh token encrypted. Normal commands, including `auth status`, are noninteractive. A `microsoft_client_credentials` profile uses its encrypted client secret on every run.
+`auth login` is only for a `microsoft_delegated` profile. It performs one device-code login and saves the refresh token encrypted. Normal commands, including `auth status`, are noninteractive. A `microsoft_client_credentials` profile uses its encrypted client secret on every run. A `token_url` profile fetches each token from the platform that configured it; `auth status` only confirms a token is available, and what the token can reach is decided by that platform.
 
 This CLI requires delegated auth for Microsoft To Do so its full list/task CRUD workflow uses one consistent identity model. Other typed commands work when the selected profile has the corresponding Graph application or delegated permissions.
 

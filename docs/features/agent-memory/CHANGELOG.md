@@ -32,6 +32,29 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-08 — shared-save instructions in startup context
+
+- Moved: opted-in Hermes and OpenClaw writer instructions from `TOOLS.md` to
+  automatically loaded `AGENTS.md`, preserving each Agent's template content.
+- Clarified: private retain success and arbitrary organizational tags do not
+  confirm a shared save; Agents must run the explicit writer and report its
+  actual result, including asynchronous acceptance or refusal.
+- Verified: the real Hermes first-prompt contract fails before the change and
+  passes afterward, alongside the installed writer's success and 403 refusal.
+- Rollout: existing Agents need updated runtime configuration and a restart;
+  existing private memories remain private.
+
+### 2026-10-08 — explicit recall for both runtimes
+
+- Added: `agentbarn-memory recall` with a `mid`/4,096-token search and
+  `--thorough` for a focused `high`/8,192-token retry. The existing gateway
+  derives all currently granted readable scopes; no new access is granted.
+- Clarified: startup instructions require searching before reporting an unknown
+  remembered fact and distinguish a search miss from search unavailability.
+- Verified: real Hermes terminal and OpenClaw command execution, OpenClaw's
+  actual bootstrap/system-prompt renderer, and pinned Hindsight recall of
+  another Agent's private fact before a grant, with it, and after revocation.
+
 ### 2026-10-05 — final review CI launcher correction
 
 - Fixed: the purge-launcher contract test runs its child process from the

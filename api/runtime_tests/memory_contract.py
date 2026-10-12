@@ -29,11 +29,17 @@ def runtime_should_have_started(context):
     assert_that(context.result["saved_credential"], is_(False))
 
 
-def memory_should_start(runtime: str, image: str, root: Path, *, organization_write_status: int = 202):
+def memory_should_start(
+    runtime: str, image: str, root: Path, *, organization_write_status: int = 202, explicit_recall_status: int = 200
+):
     with given(
         [
             runtime_is_present(runtime, image, root),
-            memory_http_boundary_is_ready(health_denials=3, organization_write_status=organization_write_status),
+            memory_http_boundary_is_ready(
+                health_denials=3,
+                organization_write_status=organization_write_status,
+                explicit_recall_status=explicit_recall_status,
+            ),
             stale_memory_settings_are_present(),
             runtime_memory_is_configured(enabled=True),
         ]
@@ -61,13 +67,46 @@ def memory_should_start(runtime: str, image: str, root: Path, *, organization_wr
             if runtime == "openclaw":
                 assert_that(context.result["providers"], has_item("memory-core"))
                 assert_that(context.result["plugin_errors"], equal_to([]))
-        with then("the first prompt should contain recalled memory"):
+        with then("the first prompt should contain recalled memory and the shared-save instructions"):
             if runtime == "hermes":
                 prompts = [request["payload"] for request in context.requests if "/llm/" in request["path"]]
                 assert_that(json.dumps(prompts), contains_string(RECALLED_FACT))
+                turns = [payload for payload in prompts if isinstance(payload, dict) and "messages" in payload]
+                system = "\n".join(
+                    message["content"] for message in turns[0]["messages"] if message["role"] == "system"
+                )
                 assert_that(context.result["response"], equal_to("Memory contract response."))
             else:
                 assert_that(context.result["recalled"], contains_string(RECALLED_FACT))
+                system = context.result["system_prompt"]
+            assert_that(system, contains_string("/usr/local/bin/agentbarn-memory remember-organization"))
+            assert_that(system, contains_string("A successful private retain does not confirm"))
+            assert_that(system, contains_string("/usr/local/bin/agentbarn-memory recall --thorough"))
+            assert_that(system, contains_string("other Agents' private"))
+        with then("explicit search distinguishes a miss from an outage and supports a focused retry"):
+            searches = context.result["explicit_recalls"]
+            if explicit_recall_status != 200:
+                assert_that(searches, equal_to([{"exit_code": 1, "outcome": {"status": "unavailable"}}]))
+            else:
+                assert_that(
+                    searches,
+                    equal_to(
+                        [
+                            {"exit_code": 0, "outcome": {"status": "not_found", "memories": []}},
+                            {"exit_code": 0, "outcome": {"status": "found", "memories": [RECALLED_FACT]}},
+                        ]
+                    ),
+                )
+                explicit = [
+                    request["payload"]
+                    for request in memory_requests(context)
+                    if request["method"] == "POST"
+                    and request["payload"].get("query") in {"Explicit release convention", "Focused release convention"}
+                ]
+                assert_that(
+                    [(payload["budget"], payload["max_tokens"]) for payload in explicit],
+                    equal_to([("mid", 4096), ("high", 8192)]),
+                )
         with then("the real plugin should send the completed turn to the gateway with its current credential"):
             requests = memory_requests(context)
             assert_that(context.health_denials, equal_to(0))
@@ -110,3 +149,8 @@ def memory_should_stop(runtime: str, image: str, root: Path):
                 assert_that(context.result["providers"], has_item("memory-core"))
         with then("the runtime should send no more memory requests"):
             assert_that(memory_requests(context), equal_to([]))
+            if runtime == "hermes":
+                prompts = [request["payload"] for request in context.requests if "/llm/" in request["path"]]
+                assert_that(json.dumps(prompts), not_(contains_string("remember-organization")))
+            else:
+                assert_that(context.result["system_prompt"], not_(contains_string("remember-organization")))
