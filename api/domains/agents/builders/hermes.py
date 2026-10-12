@@ -43,6 +43,7 @@ _FIRST_CONVERSATION = _SCRIPTS / "plugins" / "agentbarn-first-conversation"
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
 HERMES_MEMORY_SETUP_PY: str = (_SCRIPTS / "memory-setup.py").read_text()
+HERMES_FIRST_CONVERSATION_SEED_PY: str = (_SCRIPTS / "first-conversation-seed.py").read_text()
 MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
@@ -425,6 +426,7 @@ def build_hermes_config_map(
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
+        "first-conversation-seed.py": HERMES_FIRST_CONVERSATION_SEED_PY,
         "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,

@@ -7,6 +7,8 @@ python3 /app/config/agent-trigger-server.py &
 
 mkdir -p /opt/data/plugins/telemetry-push /opt/data/memories /workspace
 
+python3 /app/config/first-conversation-seed.py /app/config/BOOTSTRAP.md /opt/data/memories/USER.md /workspace/.agentbarn \
+    || echo "[first-conversation] seeding failed; continuing"
 
 if [ ! -f /opt/data/memories/USER.md ]; then
     cp /app/config/USER.md /opt/data/memories/USER.md
@@ -33,6 +35,9 @@ cp /app/config/telemetry-push-init.py /opt/data/plugins/telemetry-push/__init__.
 mkdir -p /opt/data/plugins/agentbarn-observer
 cp /app/config/agentbarn-observer-plugin.yaml /opt/data/plugins/agentbarn-observer/plugin.yaml
 cp /app/config/agentbarn-observer-init.py /opt/data/plugins/agentbarn-observer/__init__.py
+mkdir -p /opt/data/plugins/agentbarn-first-conversation
+cp /app/config/agentbarn-first-conversation-plugin.yaml /opt/data/plugins/agentbarn-first-conversation/plugin.yaml
+cp /app/config/agentbarn-first-conversation-init.py /opt/data/plugins/agentbarn-first-conversation/__init__.py
 
 for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
     cp /app/config/$f /workspace/$f
