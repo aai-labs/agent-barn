@@ -93,6 +93,7 @@ class SecretProvider(str, enum.Enum):
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
     SHAREPOINT = "sharepoint"
+    APOLLO = "apollo"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -113,6 +114,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
     SecretProvider.SHAREPOINT: "SharePoint credential",
+    SecretProvider.APOLLO: "Apollo credential",
 }
 
 
@@ -325,6 +327,12 @@ class PipedriveContent(SecretContent):
         return label
 
 
+class ApolloContent(SecretContent):
+    # No base URL: an Apollo API key is only ever sent to Apollo's own API host, so a
+    # configurable endpoint would only be a way to move the key somewhere else.
+    api_token: str = Field(min_length=1)
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
@@ -337,6 +345,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
     SecretProvider.SHAREPOINT: SharePointContent,
+    SecretProvider.APOLLO: ApolloContent,
 }
 
 

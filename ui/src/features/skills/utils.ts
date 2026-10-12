@@ -29,6 +29,7 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   zoho_calendar: "Zoho Calendar",
   slack: "Slack",
   pipedrive: "Pipedrive",
+  apollo: "Apollo",
 };
 
 export const ALL_PROVIDERS = Object.entries(SKILL_PROVIDER_LABELS).map(
