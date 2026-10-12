@@ -27,6 +27,7 @@ def credential_for(provider: SecretProvider) -> SecretContent:
             "email": "fixture@example.com",
             "api_token": "bitbucket-provider-secret",
         },
+        SecretProvider.APOLLO: {"api_token": "apollo-provider-secret"},
         SecretProvider.PIPEDRIVE: {"domain": "acme", "api_token": "pipedrive-provider-secret"},
         SecretProvider.GOOGLE_WORKSPACE: {
             "email": "fixture@example.com",

@@ -17,6 +17,7 @@ import httpx
 
 from api.domains.agents.microsoft_graph_scopes import GRAPH_SCOPE_PREFIX, sharepoint_permission
 from api.domains.agents.models import (
+    ApolloContent,
     BitbucketContent,
     ConfluenceContent,
     FirecrawlContent,
@@ -41,6 +42,7 @@ from api.domains.integrations.plugins.base import (
     TokenBrokerService,
     UpstreamAuthenticationError,
 )
+from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
@@ -424,6 +426,35 @@ class PipedrivePlugin(AaiCliPlugin[PipedriveContent]):
         )
 
 
+class ApolloPlugin(AaiCliPlugin[ApolloContent]):
+    key = "apollo"
+    egress_mode = EgressMode.DIRECT
+    provider = SecretProvider.APOLLO
+    display_name = "Apollo credential"
+    credentials_model = ApolloContent
+    bundled_skill_slugs = ("aai-apollo",)
+    aai_cli_slug = "apollo-work"
+    aai_cli_label = "Apollo"
+    aai_cli_capability = (
+        "people and organization search and enrichment, contacts, accounts, deals, sequences, "
+        "emails, tasks, calls, notes; a key reaches only the endpoints chosen when it was "
+        "created, and people and organization search and enrichment need a paid Apollo plan, "
+        "so a 403 means the key or plan lacks access to that endpoint, not that Apollo is unavailable"
+    )
+    aai_cli_secret_entries = (("apollo.api_token", "api_token"),)
+
+    def validate_external(self, content: ApolloContent) -> IntegrationValidationResult:
+        return validate_apollo(content)
+
+    def aai_cli_profile_block(self, content: ApolloContent) -> str:
+        return (
+            f"[profiles.{self.aai_cli_slug}]\n"
+            'provider = "apollo"\n'
+            'auth_type = "apollo_api_key"\n'
+            'api_token_secret = "apollo.api_token"\n'
+        )
+
+
 class GoogleWorkspacePlugin(IntegrationPlugin[GoogleWorkspaceContent]):
     """Google Workspace, reached by gog rather than aai-cli.
 
@@ -602,6 +633,7 @@ SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
     BitbucketPlugin(),
     FirecrawlPlugin(),
     PipedrivePlugin(),
+    ApolloPlugin(),
     GoogleWorkspacePlugin(),
     SharePointPlugin(),
 )

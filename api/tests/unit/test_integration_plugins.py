@@ -85,7 +85,18 @@ def test_plugin_bundled_skill_slugs_exist_in_the_seeded_bundle(plugin: Integrati
 
 def test_aai_cli_gateway_egress_preserves_native_sharepoint_sign_in():
     supported = [p.key for p in AAI_CLI_PLUGINS if p.egress_mode is EgressMode.GATEWAY_PROXY]
-    assert_that(supported, is_(equal_to([p.key for p in AAI_CLI_PLUGINS if p.provider != SecretProvider.SHAREPOINT])))
+    assert_that(
+        supported,
+        is_(
+            equal_to(
+                [
+                    p.key
+                    for p in AAI_CLI_PLUGINS
+                    if p.egress_mode != EgressMode.DIRECT and p.provider != SecretProvider.SHAREPOINT
+                ]
+            )
+        ),
+    )
 
 
 @pytest.mark.parametrize("plugin", AAI_CLI_PLUGINS, ids=_ids(AAI_CLI_PLUGINS))

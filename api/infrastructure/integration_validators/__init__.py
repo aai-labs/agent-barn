@@ -1,6 +1,7 @@
 from typing import Any
 
 from api.domains.agents.models import SecretProvider
+from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
@@ -16,6 +17,7 @@ PROVIDER_VALIDATORS: dict[SecretProvider, Any] = {
     SecretProvider.BITBUCKET: validate_bitbucket,
     SecretProvider.GOOGLE_WORKSPACE: validate_google_workspace,
     SecretProvider.PIPEDRIVE: validate_pipedrive,
+    SecretProvider.APOLLO: validate_apollo,
 }
 
 
@@ -38,6 +40,7 @@ __all__ = [
     "PROVIDER_VALIDATORS",
     "IntegrationValidationResult",
     "format_validation_result",
+    "validate_apollo",
     "validate_bitbucket",
     "validate_confluence",
     "validate_github",

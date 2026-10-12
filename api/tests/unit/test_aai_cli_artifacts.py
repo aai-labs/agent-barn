@@ -62,6 +62,7 @@ _PIPEDRIVE_WITH_DOMAIN = cast(
     PipedriveContent,
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
 )
+_APOLLO = validate_content(SecretProvider.APOLLO, {"api_token": "apollo_key"})
 
 _SHAREPOINT = cast(
     SharePointContent,
@@ -220,6 +221,17 @@ def test_pipedrive_direct_profile_with_domain_emits_base_url():
     assert 'base_url = "https://aai-labs.pipedrive.com"' in block
 
 
+def test_config_toml_apollo_uses_api_key_profile():
+    toml = build_config_toml({SecretProvider.APOLLO: _APOLLO})
+    assert "[profiles.apollo-work]" in toml
+    assert 'provider = "apollo"' in toml
+    assert 'auth_type = "apollo_api_key"' in toml
+    assert 'api_token_secret = "apollo.api_token"' in toml
+    # aai-cli's default is Apollo's public API; nothing may redirect the key elsewhere.
+    assert "base_url" not in toml
+    assert "apollo_key" not in toml
+
+
 def test_setup_sh_cp_always_and_secrets_set_per_store_provider():
     setup = build_setup_sh([SecretProvider.JIRA, SecretProvider.GITHUB])
     assert f"cp /app/config/aai-cli-config.toml {CONFIG_PATH}" in setup
@@ -236,6 +248,14 @@ def test_setup_sh_pipedrive_sets_secret():
     assert (
         f"printf '%s' \"$AAI_SECRET_PIPEDRIVE_API_TOKEN\" | "
         f"aai-cli --config {CONFIG_PATH} secrets set pipedrive.api_token" in setup
+    )
+
+
+def test_setup_sh_apollo_sets_secret():
+    setup = build_setup_sh([SecretProvider.APOLLO])
+    assert (
+        f"printf '%s' \"$AAI_SECRET_APOLLO_API_TOKEN\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set apollo.api_token" in setup
     )
 
 
@@ -332,6 +352,11 @@ def test_tool_context_md_empty_when_only_firecrawl():
 def test_tool_context_md_lists_pipedrive():
     md = build_tool_context_md({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
     assert "- **Pipedrive** (`pipedrive-work`)" in md
+
+
+def test_tool_context_md_lists_apollo():
+    md = build_tool_context_md({SecretProvider.APOLLO: _APOLLO})
+    assert "- **Apollo** (`apollo-work`)" in md
 
 
 def test_tool_context_md_never_leaks_tokens():
@@ -504,6 +529,16 @@ def test_integrations_policy_md_pipedrive_emits_profile_line():
     md = build_integrations_policy_md({SecretProvider.PIPEDRIVE: _PIPEDRIVE})
     assert "--profile pipedrive-work" in md
     assert "pd_tok" not in md
+
+
+def test_integrations_policy_md_apollo_names_profile_and_access_limits():
+    md = build_integrations_policy_md({SecretProvider.APOLLO: _APOLLO})
+    assert "- **Apollo**: `--profile apollo-work` — people and organization search" in md
+    # A key limited to some endpoints, or a Free plan, gets 403 on others; the agent must
+    # not read that as an outage.
+    assert "endpoints chosen when it was created" in md
+    assert "paid Apollo plan" in md
+    assert "apollo_key" not in md
 
 
 def test_profile_slugs_are_single_source_of_truth_for_jira():

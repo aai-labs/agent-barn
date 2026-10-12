@@ -15,8 +15,8 @@ from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 @pytest.mark.parametrize("provider", list(SecretProvider))
 def test_foundation_default_preserves_current_route(provider):
     read = isolation_read(provider, None)
-    assert_that(read.desired, is_(provider != SecretProvider.SHAREPOINT))
-    assert_that(read.switch_available, is_(True))
+    assert_that(read.desired, is_(provider not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO}))
+    assert_that(read.switch_available, is_(ISOLATION_CAPABILITIES[provider].supports_isolated))
     assert_that(read.applied, is_(none()))
     assert_that(default_isolation(provider), is_(False))
 

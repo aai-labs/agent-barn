@@ -10,6 +10,7 @@ from hamcrest import assert_that, contains_string, equal_to, is_, is_not
 
 from api.domains.agents.models import SecretProvider
 from api.domains.credential_gateway.models import gateway_token_env_var
+from api.domains.integrations.capabilities import ISOLATION_CAPABILITIES
 from api.domains.integrations.plugins.base import EgressMode
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.domains.integrations.runtime import (
@@ -46,7 +47,7 @@ def test_direct_mode_materializes_provider_credentials_only_in_secret_environmen
         assert_that(artifacts.files["aai-cli-config.toml"], is_not(contains_string("credential-gateway")))
 
 
-@pytest.mark.parametrize("provider", list(SecretProvider))
+@pytest.mark.parametrize("provider", [p for p in SecretProvider if ISOLATION_CAPABILITIES[p].supports_isolated])
 def test_isolated_mode_never_materializes_renewable_credentials(provider):
     artifacts = materialize_integrations([_binding(provider, True)], _CONTEXT)
     serialized = json.dumps({"env": artifacts.env, "files": artifacts.files, "policy": artifacts.policy_md})

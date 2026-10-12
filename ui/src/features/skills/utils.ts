@@ -26,6 +26,7 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   google_workspace: "Google Workspace",
   sharepoint: "SharePoint",
   pipedrive: "Pipedrive",
+  apollo: "Apollo",
 };
 
 export const ALL_PROVIDERS = Object.entries(SKILL_PROVIDER_LABELS).map(

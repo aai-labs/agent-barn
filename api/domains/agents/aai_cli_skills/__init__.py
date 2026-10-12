@@ -23,6 +23,7 @@ _BUNDLED_ROOT = Path(__file__).parent / "bundled" / "skills"
 # Display names remain friendly in the organization UI while the immutable slug and
 # runtime directory match aai-cli's published bundle names.
 _DISPLAY_NAMES = {
+    "aai-apollo": "Apollo",
     "aai-bitbucket": "Bitbucket",
     "aai-confluence": "Confluence",
     "aai-excel": "Excel",
@@ -37,6 +38,7 @@ _DISPLAY_NAMES = {
 }
 
 _COMMANDS = {
+    "aai-apollo": "apollo",
     "aai-bitbucket": "bitbucket",
     "aai-confluence": "confluence",
     "aai-excel": "excel",

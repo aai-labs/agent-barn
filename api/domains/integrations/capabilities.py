@@ -33,6 +33,11 @@ ISOLATION_CAPABILITIES = {
         "This Agent receives the Bitbucket credential and connects to Bitbucket directly.",
         "The Bitbucket credential stays outside this Agent; Agent Barn authenticates requests.",
     ),
+    SecretProvider.APOLLO: IsolationCapabilities(
+        "This Agent receives the Apollo API key and connects to Apollo directly.",
+        "Apollo credential isolation is not available yet.",
+        supports_isolated=False,
+    ),
     SecretProvider.PIPEDRIVE: IsolationCapabilities(
         "This Agent receives the Pipedrive API token and connects to Pipedrive directly.",
         "The Pipedrive API token stays outside this Agent; Agent Barn authenticates requests.",
