@@ -16,6 +16,7 @@ from api.infrastructure.telegram.client import validate_bot_token
 
 class TelegramValidationConfig(Protocol):
     skip_telegram_token_validation: bool
+    agentbarn_telegram_bot_token: str
 
 
 class TelegramSettings(PlatformSettings):
@@ -96,9 +97,19 @@ class TelegramPlatformPlugin(PlatformPlugin):
 
     def __init__(self, config: TelegramValidationConfig) -> None:
         self._skip_validation = config.skip_telegram_token_validation
+        self._shared_bot_token = config.agentbarn_telegram_bot_token
 
     def validate_external(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str | None:
         assert isinstance(credentials, TelegramCredentials)
+        # Telegram allows one consumer per bot, so a Connection on the deployment's shared
+        # bot would compete with Agent Barn Telegram for its updates. The bot id is the
+        # token's prefix and survives a token revoke, so it is what is compared.
+        shared_bot_id = self._shared_bot_token.strip().split(":", 1)[0]
+        if shared_bot_id and credentials.bot_token.strip().split(":", 1)[0] == shared_bot_id:
+            raise ValueError(
+                "This is Agent Barn's own Telegram bot. Create a bot of your own with @BotFather, "
+                "or use Agent Barn Telegram instead."
+            )
         if self._skip_validation:
             return "validation-skipped"
         ok, reason, bot_info = validate_bot_token(credentials.bot_token)
