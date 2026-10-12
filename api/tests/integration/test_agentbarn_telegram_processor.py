@@ -2,7 +2,18 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
-from hamcrest import assert_that, contains_exactly, contains_string, equal_to, has_properties, is_, none, not_none
+from hamcrest import (
+    assert_that,
+    contains_exactly,
+    contains_string,
+    equal_to,
+    has_item,
+    has_properties,
+    is_,
+    is_not,
+    none,
+    not_none,
+)
 from sqlmodel import Session, col, select
 
 from api.domains.communications.agentbarn_telegram_ingress import AgentBarnTelegramIngress
@@ -32,12 +43,16 @@ class RecordingBot:
     def __init__(self, fail: bool = False) -> None:
         self.sent: list[tuple[int, str]] = []
         self.answered: list[tuple[str, str]] = []
+        # The texts sent as courtesies, which give way when the shared budget is spent.
+        self.courtesies: list[str] = []
         self.fail = fail
 
     def send(self, chat_id: int, text: str, *, essential: bool = True) -> bool:
         if self.fail:
             raise RuntimeError("Telegram is down")
         self.sent.append((chat_id, text))
+        if not essential:
+            self.courtesies.append(text)
         return True
 
     def answer_callback(self, callback_query_id: str, text: str) -> bool:
@@ -189,6 +204,35 @@ def test_a_used_or_unknown_link_asks_for_a_fresh_one() -> None:
                     (_JANE, "This link has already been used or isn't valid. Go back to Agent Barn for a fresh one.")
                 ),
             )
+
+
+def test_someone_pressing_start_on_bad_links_hears_once_a_minute_and_as_a_courtesy() -> None:
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-old", expires_in=timedelta(seconds=-1))
+
+        with when("Jane presses Start on an expired link and then on links that were never issued"):
+            _receive(context, _private("/start token-old"))
+            _receive(context, _private("/start never-issued"))
+            _receive(context, _private("/start never-issued-either"))
+
+        with then("she gets one reply, which does not use the bot's reserved capacity"):
+            expired = "This link has expired. Go back to Agent Barn for a fresh one."
+            assert_that(context.bot.sent, contains_exactly((_JANE, expired)))
+            assert_that(context.bot.courtesies, contains_exactly(expired))
+
+
+def test_a_good_link_is_confirmed_even_right_after_a_bad_one() -> None:
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-sales")
+
+        with when("Jane presses Start on a bad link and then on her real one"):
+            _receive(context, _private("/start never-issued"))
+            _receive(context, _private("/start token-sales"))
+
+        with then("she is still told she is linked, as a message the bot must send"):
+            linked = "Hi Jane! You're linked to Sales Helper. Send a message to get started."
+            assert_that(context.bot.sent[-1], equal_to((_JANE, linked)))
+            assert_that(context.bot.courtesies, is_not(has_item(linked)))
 
 
 def test_a_stranger_is_pointed_to_sign_up_and_reaches_no_agent() -> None:

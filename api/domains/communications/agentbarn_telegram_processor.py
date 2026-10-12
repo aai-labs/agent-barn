@@ -34,6 +34,8 @@ _MAX_PROCESSING_ATTEMPTS = 5
 _PROCESSING_RETRY_MAX_SECONDS = 60
 # Someone who is not linked hears how to sign up at most this often.
 _SIGN_UP_REPLY_COOLDOWN_SECONDS = 600
+# Someone pressing Start on expired or unknown links hears about it at most this often.
+_BAD_LINK_REPLY_COOLDOWN_SECONDS = 60
 # A message the bot must send waits at most this long for the shared budget.
 _ESSENTIAL_WAIT_SECONDS = 2.0
 _SEND_TIMEOUT_SECONDS = 5
@@ -182,8 +184,9 @@ class AgentBarnTelegramUpdateProcessor:
     authorization: AgentAuthorization
     bot: AgentBarnTelegramBot
     # When each unlinked sender was last told how to sign up (per process).
-    _sign_up_replies: dict[int, float] = field(default_factory=dict, init=False)
-    _sign_up_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    # When each user may next get each kind of courtesy reply. Per process, like the rate limits.
+    _courtesy_due_at: dict[tuple[str, int], float] = field(default_factory=dict, init=False)
+    _courtesy_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def process_pending(self, *, limit: int = 100, now: datetime | None = None) -> int:
         """Process up to `limit` received updates; return how many were looked at.
@@ -245,13 +248,17 @@ class AgentBarnTelegramUpdateProcessor:
         result = self.links.consume_link_token(
             classified.link_token, telegram_user_id=user_id, telegram_username=classified.username
         )
-        if result.outcome == LinkTokenOutcome.EXPIRED:
-            self._reply(chat_id, "This link has expired. Go back to Agent Barn for a fresh one.")
-            return
         if result.outcome != LinkTokenOutcome.LINKED or result.link is None:
-            self._reply(
-                chat_id, "This link has already been used or isn't valid. Go back to Agent Barn for a fresh one."
-            )
+            # Anyone can send any token, so these replies are courtesies: they give
+            # way to link confirmations when the shared budget is spent.
+            if self._courtesy_due("bad_link", user_id, _BAD_LINK_REPLY_COOLDOWN_SECONDS):
+                self._reply(
+                    chat_id,
+                    "This link has expired. Go back to Agent Barn for a fresh one."
+                    if result.outcome == LinkTokenOutcome.EXPIRED
+                    else "This link has already been used or isn't valid. Go back to Agent Barn for a fresh one.",
+                    essential=False,
+                )
             return
         replaced = result.replaced_link
         names = self.repository.agent_names(
@@ -279,7 +286,7 @@ class AgentBarnTelegramUpdateProcessor:
         if link is not None:
             # The Member who linked this account lost access to the Agent.
             self.repository.end_active_link(user_id, now=datetime.now(UTC))
-        if self._sign_up_reply_due(user_id):
+        if self._courtesy_due("sign_up", user_id, _SIGN_UP_REPLY_COOLDOWN_SECONDS):
             self._reply(
                 chat_id,
                 f"Hi! To talk to an agent here, sign up at {self.config.web_app_url} and connect Telegram from there.",
@@ -347,18 +354,15 @@ class AgentBarnTelegramUpdateProcessor:
         except Exception as exc:
             logger.warning("Agent Barn Telegram button answer failed (%s)", type(exc).__name__)
 
-    def _sign_up_reply_due(self, user_id: int) -> bool:
+    def _courtesy_due(self, kind: str, user_id: int, cooldown_seconds: float) -> bool:
+        """Whether ``user_id`` may get a ``kind`` reply now; if so, the next one waits ``cooldown_seconds``."""
         now = time.monotonic()
-        with self._sign_up_lock:
-            last = self._sign_up_replies.get(user_id)
-            if last is not None and now - last < _SIGN_UP_REPLY_COOLDOWN_SECONDS:
+        with self._courtesy_lock:
+            due_at = self._courtesy_due_at.get((kind, user_id))
+            if due_at is not None and now < due_at:
                 return False
-            self._sign_up_replies = {
-                key: value
-                for key, value in self._sign_up_replies.items()
-                if now - value < _SIGN_UP_REPLY_COOLDOWN_SECONDS
-            }
-            self._sign_up_replies[user_id] = now
+            self._courtesy_due_at = {key: value for key, value in self._courtesy_due_at.items() if now < value}
+            self._courtesy_due_at[(kind, user_id)] = now + cooldown_seconds
             return True
 
     def _reply(self, chat_id: int, text: str, *, essential: bool = True) -> None:
