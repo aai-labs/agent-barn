@@ -207,6 +207,15 @@ def parse_bot_api_request(
 
 
 @dataclass(frozen=True)
+class ProxyCaller:
+    """A Connection that presented its own stand-in token, and what that resolves to."""
+
+    connection_id: UUID
+    organization_id: UUID
+    real_token: str
+
+
+@dataclass(frozen=True)
 class ProxyResponse:
     status_code: int
     body: dict[str, Any]
@@ -248,11 +257,9 @@ class AgentBarnTelegramProxy:
     _files: dict[tuple[UUID, str], float] = field(default_factory=dict, init=False)
     _files_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
-    def handle(self, connection_id: UUID, token: str, method: str, *, request: BotApiRequest) -> ProxyResponse:
-        authenticated = self._authenticate(connection_id, token)
-        if authenticated is None:
-            return _error(401, "Unauthorized")
-        real_token, organization_id = authenticated
+    def handle(self, caller: ProxyCaller, method: str, *, request: BotApiRequest) -> ProxyResponse:
+        """One Bot API call from an authenticated Connection."""
+        connection_id, organization_id, real_token = caller.connection_id, caller.organization_id, caller.real_token
         params = request.params
 
         name = method.lower()
@@ -313,10 +320,10 @@ class AgentBarnTelegramProxy:
 
     def download(self, connection_id: UUID, token: str, file_path: str) -> ProxyFile:
         """A file a linked user sent, from Telegram's file area, fetched with the real token."""
-        authenticated = self._authenticate(connection_id, token)
-        if authenticated is None:
+        caller = self.authenticate(connection_id, token)
+        if caller is None:
             return ProxyFile(401, b"", None)
-        real_token, _ = authenticated
+        real_token = caller.real_token
         if not _FILE_PATH.match(file_path) or not self._was_shown(connection_id, file_path):
             return ProxyFile(404, b"", None)
         try:
@@ -328,8 +335,8 @@ class AgentBarnTelegramProxy:
             return ProxyFile(response.status_code, b"", None)
         return ProxyFile(200, response.content, response.headers.get("Content-Type"))
 
-    def _authenticate(self, connection_id: UUID, token: str) -> tuple[str, UUID] | None:
-        """The real bot token and caller's Organization when ``token`` is this Connection's stand-in."""
+    def authenticate(self, connection_id: UUID, token: str) -> ProxyCaller | None:
+        """The caller when ``token`` is this Connection's stand-in, checked before its request is read."""
         connection = self.repository.proxy_connection(connection_id)
         real_token = self.config.agentbarn_telegram_bot_token.strip()
         if connection is None or not real_token:
@@ -340,7 +347,7 @@ class AgentBarnTelegramProxy:
             token, runtime_api_token(connection_secret, real_token)
         ):
             return None
-        return real_token, connection.organization_id
+        return ProxyCaller(connection.id, connection.organization_id, real_token)
 
     def _may_reach(self, connection_id: UUID, chats: set[int]) -> bool:
         """Whether every chat is a user linked to the Connection by a Member who may still update its Agent.

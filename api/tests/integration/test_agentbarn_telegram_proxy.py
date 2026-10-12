@@ -343,6 +343,57 @@ def test_a_file_upload_to_a_linked_user_is_forwarded_with_the_same_fields_and_fi
             )
 
 
+def test_a_call_with_a_wrong_token_is_refused_before_its_body_is_read() -> None:
+    with given(_GIVEN) as context:
+        response = context.communications_client.post(
+            _url(context, "sendMessage", token="424242:not-the-stand-in"),
+            content=b"{not json",
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert_that(response.status_code, equal_to(401))
+        assert_that(context.telegram.received, equal_to([]))
+
+
+def test_a_body_larger_than_any_bot_api_call_is_refused() -> None:
+    with given(_GIVEN) as context:
+        response = _call(context, "sendMessage", {"chat_id": _JANE, "text": "x" * (1024 * 1024)})
+
+        assert_that(response.status_code, equal_to(413))
+        assert_that(context.telegram.received, equal_to([]))
+
+
+def test_an_oversized_body_sent_without_a_length_is_refused_while_it_streams() -> None:
+    with given(_GIVEN) as context:
+        chunks = (b'{"chat_id": 5550001, "text": "' + b"x" * 65536 if i == 0 else b"x" * 65536 for i in range(20))
+
+        response = context.communications_client.post(
+            _url(context, "sendMessage"), content=chunks, headers={"Content-Type": "application/json"}
+        )
+
+        assert_that(response.status_code, equal_to(413))
+        assert_that(context.telegram.received, equal_to([]))
+
+
+def test_an_upload_over_telegrams_limit_is_refused() -> None:
+    with given(_GIVEN) as context:
+        request = httpx.Request(
+            "POST",
+            "http://test/upload",
+            data={"chat_id": str(_JANE)},
+            files={"document": ("big.bin", b"\0" * (51 * 1024 * 1024), "application/octet-stream")},
+        )
+
+        response = context.communications_client.post(
+            _url(context, "sendDocument"),
+            content=request.read(),
+            headers={"Content-Type": request.headers["Content-Type"]},
+        )
+
+        assert_that(response.status_code, equal_to(413))
+        assert_that(context.telegram.received, equal_to([]))
+
+
 def test_a_file_upload_to_someone_not_linked_is_refused() -> None:
     with given(_GIVEN) as context:
         request = httpx.Request(
