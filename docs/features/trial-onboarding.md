@@ -24,8 +24,12 @@ The web app shows three steps: **Sign in → Telegram → Done**.
    with nothing created.
 2. **Telegram** (`/onboarding`). On opening, onboarding asks the API to set up the
    trial's Agent (`POST /onboarding/agent`). Each call does only what is still missing:
-   - creates a Hermes Agent from the `general-purpose` template, named like the hire
-     dialog names one ("Ava the Assistant");
+   - creates a Hermes Agent from the hidden Onboarding Template (`trial-onboarding`,
+     through `AgentService.create_onboarding_agent`), named like the hire dialog names
+     one ("Ava the Assistant"). That template carries the first-conversation script the
+     Agent runs on the user's first messages (see
+     [Templates and Skills](templates-and-skills.md) and
+     [Runtime and Deployment](../architecture/runtime-and-deployment.md#agent-runtime-assembly));
    - gives it an enabled Agent Barn Telegram Connection — before starting it, because
      the runtime picks up its Connection when it starts;
    - starts it if it is stopped or failed. A failed start is recorded on the Agent and
@@ -105,12 +109,15 @@ own address, and a per-address limit would throttle everyone together.
 | --- | --- |
 | Onboarding status and Agent setup | `../../api/domains/onboarding/service.py`, `../../api/domains/onboarding/routes.py` |
 | Trial settings | `../../api/domains/onboarding/settings_service.py`, `../../api/domains/onboarding/repository.py` |
+| Onboarding Template and first-conversation script | `../../api/domains/templates/predefined/seeds/trial-onboarding/`, `../../api/domains/agents/scripts/hermes/plugins/agentbarn-first-conversation/` |
 | Onboarding UI | `../../ui/src/features/onboarding/`, `../../ui/src/app/onboarding/page.tsx`, `../../ui/src/app/(auth)/signup/page.tsx` |
 | Tests | `../../api/tests/integration/test_onboarding.py`, `../../api/tests/integration/test_trial_organizations.py`, `../../api/tests/integration/test_platform_trial_settings.py`, `../../ui/tests/e2e/trial-onboarding.spec.ts`, `../../ui/tests/e2e/platform-trials.spec.ts` |
 
 ## Change impact
 
-The Agent a trial gets is the hire dialog's choice made for the user: changing the template,
-runtime or naming here should stay consistent with it. Hermes and OpenClaw are both
-first-class; trials start on Hermes only because the Agent is created for the user, and the
-Agent Barn Telegram Connection works on both.
+The Agent a trial gets is named like a hire-dialog Agent, but its template is the Onboarding
+Template, which no Organization can choose: its script assumes a user who has just signed up
+and linked Telegram. Changing what a new trial user hears first means publishing a new
+version of that template from the Platform Templates catalogue, not changing this flow.
+Trials start on Hermes, and the first-conversation script runs only on Hermes; OpenClaw
+ignores bootstrap.md, as it does for every template.
