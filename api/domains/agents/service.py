@@ -168,6 +168,7 @@ from api.domains.restore_points.service import (
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
+from api.domains.templates.defaults import ONBOARDING_TEMPLATE_KEY, is_hidden_template_key
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
@@ -738,6 +739,16 @@ class AgentService:
         return AgentNameSuggestionRead(first_name=choose_first_name(self.repository.count_all_by_org(org_id)))
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
+        if is_hidden_template_key(data.template_key):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {data.template_key} not found")
+        return self._create_agent(data, context)
+
+    def create_onboarding_agent(self, name: str, context: CurrentUserContext) -> AgentRead:
+        return self._create_agent(
+            AgentCreate(name=name, agent_type=AgentType.HERMES, template_key=ONBOARDING_TEMPLATE_KEY), context
+        )
+
+    def _create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         self._ensure_model_allowed(data.model, org_id)
@@ -1635,6 +1646,7 @@ class AgentService:
         # validator guarantees both keys appear together.
         effective_template = None
         if "template_key" in updated:
+            self.selection.ensure_template_pinnable(agent, updated["template_key"])
             effective_template = self.template_repository.resolve_template(
                 org_id, updated["template_key"], updated["template_version"]
             )

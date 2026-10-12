@@ -20,6 +20,7 @@ from injector import inject, singleton
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agents.models import (
     Agent,
+    AgentTemplateOverrideVersion,
     AgentTemplateSelection,
     AgentType,
     CommandApprovalMode,
@@ -29,6 +30,7 @@ from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.skills.repository import SkillRepository
+from api.domains.templates.defaults import is_hidden_template_key
 from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.requirements import split_requirements
 
@@ -97,6 +99,17 @@ class SelectionValidator:
     skill_repository: SkillRepository
     organization_lookup: OrganizationLookupService
     agent_settings_lookup: AgentSettingsLookupService
+
+    def ensure_template_pinnable(self, agent: Agent, template_key: str) -> None:
+        if not is_hidden_template_key(template_key):
+            return
+        pinned = self.template_repository.get_pinned_template(agent)
+        if isinstance(pinned, AgentTemplateOverrideVersion):
+            pinned_key = pinned.source_template_key
+        else:
+            pinned_key = pinned.template_key if pinned is not None else None
+        if pinned_key != template_key:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {template_key} not found")
 
     def resolve_skill_pins(
         self,
@@ -315,7 +328,9 @@ class SelectionValidator:
                 detail=f"Model '{model}' is not in the allowed model list",
             )
 
-    def resolve(self, agent: Agent, data: AgentTemplateSelection, org_id: UUID) -> ResolvedSelection:
+    def resolve(
+        self, agent: Agent, data: AgentTemplateSelection, org_id: UUID, *, recorded: bool = False
+    ) -> ResolvedSelection:
         """Validate a selection completely, without writing any of it.
 
         Raises the same errors the write path raises, so a caller that resolves
@@ -329,6 +344,8 @@ class SelectionValidator:
 
         if data.selection_type == "platform":
             assert data.template_key is not None and data.template_version is not None
+            if not recorded:
+                self.ensure_template_pinnable(agent, data.template_key)
             platform = self.template_repository.get_platform_template_by_key_version(
                 data.template_key,
                 data.template_version,

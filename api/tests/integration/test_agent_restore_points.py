@@ -49,8 +49,10 @@ from api.domains.restore_points.models import AgentRestorePointCreate, AgentRest
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
+from api.domains.templates.defaults import ONBOARDING_TEMPLATE_KEY
 from api.domains.templates.models import AgentTemplate
 from api.domains.templates.repository import TemplateRepository
+from api.domains.templates.service import TemplateService
 from api.infrastructure.kubernetes import KubernetesClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -1104,6 +1106,25 @@ def test_applying_the_recorded_configuration_repins_the_agent():
             assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
             agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
             assert_that(agent["template_key"], equal_to(pinned.template_key))
+
+
+def test_applying_a_recorded_onboarding_template_configuration_repins_the_agent():
+    """The manifest is this Agent's own recorded history, so the hidden template it was on may come back."""
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        context.injector.get(TemplateService).seed_predefined_templates()
+        manifest = {
+            **_manifest_for(context, template_key=ONBOARDING_TEMPLATE_KEY),
+            "template_selection_type": "platform",
+        }
+        row = _seed_with_manifest(context, manifest)
+
+        with when("I apply a recorded configuration on the onboarding template"):
+            response = context.client.post(f"{_url(context)}/{row.id}/configuration", headers=_auth(context))
+
+        with then("it is applied"):
+            assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+            agent = context.client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
+            assert_that(agent["template_key"], equal_to(ONBOARDING_TEMPLATE_KEY))
 
 
 def test_applying_a_configuration_that_no_longer_resolves_is_refused():
