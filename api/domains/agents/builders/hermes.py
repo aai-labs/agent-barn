@@ -38,6 +38,7 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_FIRST_CONVERSATION = _SCRIPTS / "plugins" / "agentbarn-first-conversation"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
@@ -49,6 +50,8 @@ TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
+FIRST_CONVERSATION_PLUGIN_YAML: str = (_FIRST_CONVERSATION / "plugin.yaml").read_text()
+FIRST_CONVERSATION_PLUGIN_INIT: str = (_FIRST_CONVERSATION / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
@@ -417,6 +420,8 @@ def build_hermes_config_map(
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "agentbarn-observer-plugin.yaml": OBSERVER_PLUGIN_YAML,
         "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
+        "agentbarn-first-conversation-plugin.yaml": FIRST_CONVERSATION_PLUGIN_YAML,
+        "agentbarn-first-conversation-init.py": FIRST_CONVERSATION_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
