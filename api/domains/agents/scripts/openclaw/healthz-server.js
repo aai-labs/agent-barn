@@ -8,6 +8,7 @@ const PROXY_PORT = Number(process.env.LLM_PROXY_PORT || 8090);
 const PORT = parseInt(process.env.HEALTHZ_PORT || '8081', 10);
 // Test-only override; the builders never set it.
 const CGROUP_ROOT = process.env.HEALTHZ_CGROUP_ROOT || '/sys/fs/cgroup';
+const SETUP_READY_FILE = process.env.AGENT_RUNTIME_SETUP_READY_FILE || '/tmp/agentbarn-runtime-setup-ready';
 const CACHE_TTL_MS = 10_000;
 const LITELLM_PROXY_TARGET = process.env.LITELLM_PROXY_TARGET || '';
 
@@ -292,7 +293,8 @@ const server = http.createServer((req, res) => {
   if (req.method !== 'GET') { res.writeHead(404); res.end(); return; }
 
   if (req.url === '/ready') {
-    sendJson(res, 200, { ready: true });
+    const ready = fs.existsSync(SETUP_READY_FILE);
+    sendJson(res, ready ? 200 : 503, { ready });
   } else if (req.url === '/metrics') {
     // Prometheus exposition content type; canonical value lives in
     // api/core/metrics.py (standalone script, cannot share the constant).

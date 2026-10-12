@@ -79,7 +79,7 @@ class UpstreamForwarder:
 
         Redirects are followed here rather than handed back to the agent so credential
         handling stays inside the gateway. Credential headers are retained only while
-        the redirect stays on the same host: carrying one onto a host the provider
+        the redirect stays on the same origin (scheme, host and effective port): carrying one onto a host the provider
         redirected us to would hand it to whoever controls that host. Plugins identify
         provider-specific credential headers such as Pipedrive's ``x-api-token``. Agent
         internet access remains unrestricted; redirect handling does not rely on egress
@@ -89,7 +89,8 @@ class UpstreamForwarder:
             with httpx.Client(timeout=_TIMEOUT, follow_redirects=False) as client:
                 current_url = url
                 current_headers = dict(headers)
-                origin_host = httpx.URL(url).host
+                origin = httpx.URL(url)
+                origin_key = (origin.scheme, origin.host, origin.port)
                 for _ in range(_MAX_REDIRECTS + 1):
                     response = client.request(
                         method,
@@ -106,7 +107,8 @@ class UpstreamForwarder:
                             headers=sanitize_response_headers(dict(response.headers)),
                         )
                     current_url = str(httpx.URL(current_url).join(location))
-                    if httpx.URL(current_url).host != origin_host:
+                    target = httpx.URL(current_url)
+                    if (target.scheme, target.host, target.port) != origin_key:
                         current_headers = {
                             k: v for k, v in current_headers.items() if k.lower() not in sensitive_headers
                         }

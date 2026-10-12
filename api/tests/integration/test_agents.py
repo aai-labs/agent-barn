@@ -6105,3 +6105,27 @@ def test_agent_list_credential_projections_do_not_load_encrypted_contents():
         )
         assert_that("\n".join(statements), is_not(contains_string("agent_secret.content")))
         assert_that("\n".join(statements), is_not(contains_string("shared_credential.content")))
+
+
+def test_create_response_uses_committed_new_binding_isolation_policy():
+    with (
+        given(_GIVEN) as context,
+        patch(
+            "api.infrastructure.integration_validators.pipedrive.httpx.get",
+            return_value=httpx.Response(200, json={"data": {"email": "fixture@example.com"}}),
+        ),
+    ):
+        response = context.client.post(
+            _BASE,
+            headers=_auth(context),
+            json={
+                **_VALID_CREATE,
+                "secrets": [{"provider": "pipedrive", "content": {"api_token": "fixture", "domain": "acme"}}],
+            },
+        )
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+        created = response.json()
+        assert_that(created["secrets"][0]["isolation"]["desired"], equal_to(False))
+        fetched = context.client.get(f"{_BASE}/{created['id']}", headers=_auth(context))
+        assert_that(fetched.status_code, equal_to(200), fetched.text)
+        assert_that(created["secrets"], equal_to(fetched.json()["secrets"]))

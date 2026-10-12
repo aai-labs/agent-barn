@@ -1,5 +1,7 @@
 #!/bin/sh
 set -e
+export AGENT_RUNTIME_SETUP_READY_FILE=/tmp/agentbarn-runtime-setup-ready
+rm -f "$AGENT_RUNTIME_SETUP_READY_FILE"
 python3 /app/config/retire-messaging.py hermes /opt/data
 python3 /app/config/healthz-server.py &
 python3 /app/config/communications-runtime-adapter.py &
@@ -73,5 +75,6 @@ PYEOF
 fi
 
 # Pinned Hermes never runs BOOT.md; OpenClaw bundles a gateway:startup hook for it.
+touch "$AGENT_RUNTIME_SETUP_READY_FILE"
 python3 /app/config/boot-run.py &
 exec hermes gateway run

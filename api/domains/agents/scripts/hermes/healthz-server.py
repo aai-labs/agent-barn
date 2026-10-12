@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 PROXY_PORT = int(os.environ.get("LLM_PROXY_PORT", "8090"))
 PORT = int(os.environ.get("HEALTHZ_PORT", "8081"))
+SETUP_READY_FILE = os.environ.get("AGENT_RUNTIME_SETUP_READY_FILE", "/tmp/agentbarn-runtime-setup-ready")
 # Test-only override; the builders never set it.
 CGROUP_ROOT = os.environ.get("HEALTHZ_CGROUP_ROOT", "/sys/fs/cgroup")
 HERMES_URL = "http://127.0.0.1:8642/v1/models"
@@ -280,7 +281,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/ready":
-            self._send(200, {"ready": True})
+            ready = os.path.isfile(SETUP_READY_FILE)
+            self._send(200 if ready else 503, {"ready": ready})
         elif self.path == "/live":
             self._send(*_liveness_result())
         elif self.path == "/metrics":

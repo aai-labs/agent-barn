@@ -255,3 +255,34 @@ def test_an_upstream_error_status_is_returned_not_raised():
         result = UpstreamForwarder().send("GET", "https://api.github.com/a", headers={}, params={}, content=b"")
     assert_that(result.status_code, equal_to(404))
     assert_that(result.content, is_not(equal_to(b"")))
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "https://acme.pipedrive.com:8443/v1/export",
+        "http://acme.pipedrive.com/v1/export",
+    ],
+)
+def test_same_host_different_origin_strips_all_provider_credentials(target):
+    client = _client_returning(_response(302, location=target), _response(200, content=b"export"))
+    with patch("httpx.Client", return_value=client):
+        UpstreamForwarder().send(
+            "GET",
+            "https://acme.pipedrive.com/v1/export",
+            headers={"Authorization": "Bearer fixture", "X-API-Token": "fixture", "Accept": "application/json"},
+            params={},
+            content=b"",
+            sensitive_headers=frozenset({"authorization", "x-api-token"}),
+        )
+    headers = client.request.call_args_list[1].kwargs["headers"]
+    assert_that(headers, equal_to({"Accept": "application/json"}))
+
+
+def test_explicit_default_port_retains_same_origin_credentials():
+    client = _client_returning(_response(302, location="https://api.github.com:443/export"), _response(200))
+    with patch("httpx.Client", return_value=client):
+        UpstreamForwarder().send(
+            "GET", "https://api.github.com/export", headers={"Authorization": "Bearer fixture"}, params={}, content=b""
+        )
+    assert_that(client.request.call_args_list[1].kwargs["headers"]["Authorization"], equal_to("Bearer fixture"))

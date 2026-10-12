@@ -1,5 +1,7 @@
 #!/bin/sh
 set -e
+export AGENT_RUNTIME_SETUP_READY_FILE=/tmp/agentbarn-runtime-setup-ready
+rm -f "$AGENT_RUNTIME_SETUP_READY_FILE"
 node /app/config/init-openclaw.js
 python3 /app/config/retire-messaging.py openclaw /home/node/.openclaw
 node /app/config/healthz-server.js &
@@ -72,4 +74,5 @@ fi
 if [ -n "${MEMORY_API_KEY:-}" ]; then
   python3 /app/config/memory-gateway-ready.py || true
 fi
+touch "$AGENT_RUNTIME_SETUP_READY_FILE"
 exec openclaw gateway --allow-unconfigured

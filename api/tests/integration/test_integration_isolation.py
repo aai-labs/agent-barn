@@ -244,13 +244,27 @@ def test_slow_start_returns_provisioned_then_readiness_verifies_without_a_deadli
         assert_that(response.json()["secrets"][0]["isolation"]["applied"], is_(True))
 
 
-def test_crashed_startup_is_recorded_after_a_provisioned_response():
+@pytest.mark.parametrize("verified", [False, True])
+def test_crashed_startup_is_recorded_after_a_provisioned_response(verified):
     with given(_GIVEN) as context:
         _patch(context, {"secrets": [{"provider": "github", "content": _GITHUB}]})
         cluster = context.injector.get(KubernetesClient)
         cluster.get_pod_readiness.return_value = ("initializing", None)
         assert_that(_apply(context, True, restart=True).status_code, equal_to(200))
         token = cluster.create_secret.call_args.args[1].string_data["AF_GATEWAY_TOKEN_GITHUB"]
+        if verified:
+            cluster.get_pod_readiness.return_value = ("ready", None)
+            assert_that(context.client.get(_base(context), headers=_auth(context)).status_code, equal_to(200))
+            assert_that(context.injector.get(IntegrationRepository).runtime(context.agent.id).state, equal_to("ready"))
+            cluster.get_pod_readiness.return_value = ("crashed", "CrashLoopBackOff")
+            cluster.runtime_has_exited.return_value = True
+            cluster.get_pod_restart_count.return_value = 1
+            cluster.delete_deployment.reset_mock()
+            transient = context.client.get(_base(context), headers=_auth(context))
+            assert_that(transient.json()["status"], equal_to("RUNNING"))
+            assert_that(context.injector.get(IntegrationRepository).runtime(context.agent.id).state, equal_to("ready"))
+            cluster.delete_deployment.assert_not_called()
+            cluster.get_pod_restart_count.return_value = 2
         cluster.get_pod_readiness.return_value = ("crashed", "CrashLoopBackOff")
         cluster.runtime_has_exited.return_value = True
         cluster.delete_deployment.reset_mock()

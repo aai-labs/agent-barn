@@ -625,10 +625,15 @@ class AgentService:
 
     def _observe_integration_readiness(self, agent: Agent, readiness: str | None = None) -> None:
         runtime = self.integrations.runtime(agent.id)
-        if agent.status == AgentStatus.RUNNING and runtime is not None and runtime.state == "provisioned":
+        if (
+            agent.status == AgentStatus.RUNNING
+            and runtime is not None
+            and runtime.state in {"provisioned", "ready"}
+            and (runtime.state == "provisioned" or bool(runtime.bindings))
+        ):
             if readiness is None:
                 readiness, _ = self.k8s.get_pod_readiness(f"agent-{agent.id}", self.config.k8s_namespace)
-            if readiness == "ready" and runtime.authentication_complete:
+            if readiness == "ready" and runtime.state == "provisioned" and runtime.authentication_complete:
                 self.integrations.set_state(agent.id, "ready", runtime.generation, expected_state="provisioned")
             elif readiness == "crashed" and runtime.bindings:
                 # A stale observation must never delete a replacement generation.
@@ -643,15 +648,21 @@ class AgentService:
                         or managed_update_in_flight(current)
                         or latest is None
                         or latest.generation != runtime.generation
-                        or latest.state != "provisioned"
+                        or latest.state not in {"provisioned", "ready"}
                     ):
                         return
-                    observed, _ = self.k8s.get_pod_readiness(f"agent-{agent.id}", self.config.k8s_namespace)
+                    observed, reason = self.k8s.get_pod_readiness(f"agent-{agent.id}", self.config.k8s_namespace)
                     if observed != "crashed" or not self.k8s.runtime_has_exited(
                         f"agent-{agent.id}", self.config.k8s_namespace
                     ):
                         return
-                    self._record_provisioning_failure(current, RuntimeError("Agent runtime crashed during startup"))
+                    if (
+                        latest.state == "ready"
+                        and reason == "CrashLoopBackOff"
+                        and not self._failed_for_good(f"agent-{agent.id}", reason)
+                    ):
+                        return
+                    self._record_provisioning_failure(current, RuntimeError("Agent runtime exited"))
                     agent.status = current.status
                     agent.last_error = current.last_error
                     agent.last_error_code = current.last_error_code
@@ -1000,7 +1011,9 @@ class AgentService:
         allowed_actions = self.authorization.allowed_actions(context, [agent])[agent.id]
         return self._build_agent_read(
             agent,
-            prepared_secrets,
+            self.repository.get_secret_summaries_for_agents(
+                [agent.id], self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+            ).get(agent.id, []),
             skills_read_versions,
             required_map,
             allowed_actions,
