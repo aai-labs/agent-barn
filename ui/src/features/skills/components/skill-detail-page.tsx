@@ -482,6 +482,8 @@ export function SkillDetailPage({
 
       <PlaybookProvenance
         skillId={skillId}
+        skillName={detail.name}
+        publishedVersion={detail.version ?? null}
         enabled={scope.kind === "organization" && canEdit}
         hasDraft={detail.hasDraft}
       />
