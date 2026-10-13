@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
@@ -9,19 +10,28 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
-from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import (
     EVENT_REGISTRY,
+    ORGANIZATION_AGENT_LIMIT_CHANGED,
     ORGANIZATION_CREATED,
     ORGANIZATION_DELETED,
     ORGANIZATION_LLM_BUDGET_CHANGED,
     ORGANIZATION_TRIAL_ENDED,
+    ORGANIZATION_TRIAL_EXPIRED,
 )
 from api.domains.events.repository import OutboxMessageRepository
-from api.domains.organizations.exceptions import LlmBudgetAboveCeiling, OrganizationCreationLimitReached
+from api.domains.organizations.exceptions import (
+    LlmBudgetAboveCeiling,
+    OrganizationCreationLimitReached,
+    OrganizationNotOnCredit,
+)
 from api.domains.organizations.models import (
+    CreditGrantCreate,
+    CreditGrantKind,
     Organization,
     OrganizationBudgetEmailReceipt,
+    OrganizationCreditGrant,
     OrganizationFilter,
     OrganizationRead,
     PlatformOrganizationRead,
@@ -42,6 +52,24 @@ def _deduped_recipients(rows) -> list[tuple[str, str | None]]:
     for email, full_name in rows:
         seen.setdefault(str(email).lower(), (str(email), full_name))
     return list(seen.values())
+
+
+# The audit reason a ceiling moved because the Organization's credit did.
+_CREDIT_REASONS = {
+    CreditGrantKind.TRIAL: "Trial credit granted.",
+    CreditGrantKind.PURCHASE: "Credit purchased.",
+    CreditGrantKind.REFUND: "Purchase refunded.",
+    CreditGrantKind.CHARGEBACK: "Payment disputed.",
+    CreditGrantKind.ADJUSTMENT: "Credit adjusted.",
+}
+
+
+@dataclass(frozen=True)
+class CreditGrantResult:
+    organization: Organization
+    delivery_ids: list[UUID]
+    # False when the grant's external reference had already been granted.
+    applied: bool
 
 
 @inject
@@ -102,6 +130,8 @@ class OrganizationRepository:
                 col(Organization.llm_budget_duration).label("llm_budget_duration"),
                 col(Organization.llm_own_budget_usd).label("llm_own_budget_usd"),
                 col(Organization.is_trial).label("is_trial"),
+                col(Organization.trial_expired_at).label("trial_expired_at"),
+                col(Organization.agent_limit).label("agent_limit"),
             )
             .select_from(Organization)
             .outerjoin(
@@ -239,13 +269,23 @@ class OrganizationRepository:
             organization = self._locked(session, organization_id)
             if organization is None:
                 return None
-            own = organization.llm_own_budget_usd
+            window = window or organization.llm_budget_duration
+            on_credit = window == organization.llm_budget_duration and organization.runs_on_credit
+            if on_credit:
+                # The ledger must keep adding up to the ceiling, so the difference is
+                # recorded rather than the ceiling simply overwritten.
+                difference = Decimal(str(ceiling_usd)) - self._credit_total(session, organization_id)
+                if difference:
+                    self._add_credit_grant(
+                        session, organization_id, CreditGrantKind.ADJUSTMENT, difference, actor_display=actor_display
+                    )
+            own = None if on_credit else organization.llm_own_budget_usd
             lowered = own is not None and own > ceiling_usd
             return self._write_llm_budgets(
                 session,
                 organization,
                 ceiling_usd=ceiling_usd,
-                window=window or organization.llm_budget_duration,
+                window=window,
                 own_limit_usd=ceiling_usd if lowered else own,
                 actor=actor,
                 actor_display=actor_display,
@@ -283,6 +323,127 @@ class OrganizationRepository:
                 actor_display=actor_display,
                 reason=None,
             )
+
+    def grant_credit_with_event(
+        self,
+        organization_id: UUID,
+        grant: CreditGrantCreate,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> CreditGrantResult | None:
+        """Record a grant and set the ceiling to the sum of the ledger, with the audit
+        Event in the same commit. A grant whose external reference was already granted
+        changes nothing. None when the Organization does not exist.
+
+        The ceiling never goes below zero; the balance can, since spend is counted
+        against the ceiling, and the next grant pays that off first.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = self._locked(session, organization_id)
+            if organization is None:
+                return None
+            if not organization.runs_on_credit:
+                raise OrganizationNotOnCredit(organization_id)
+            if grant.external_ref is not None and self._already_granted(session, grant.external_ref):
+                return CreditGrantResult(organization, [], applied=False)
+            try:
+                self._add_credit_grant(
+                    session,
+                    organization_id,
+                    grant.kind,
+                    grant.credit_usd,
+                    actor_display=actor_display,
+                    amount_paid_usd=grant.amount_paid_usd,
+                    external_ref=grant.external_ref,
+                    note=grant.note,
+                )
+            except IntegrityError:
+                # The check above runs under this Organization's lock only; the unique
+                # constraint settles a reference granted at the same moment elsewhere.
+                session.rollback()
+                return CreditGrantResult(organization, [], applied=False)
+            stored, delivery_ids = self._write_llm_budgets(
+                session,
+                organization,
+                ceiling_usd=max(0.0, float(self._credit_total(session, organization_id))),
+                window=organization.llm_budget_duration,
+                own_limit_usd=None,
+                actor=actor,
+                actor_display=actor_display,
+                reason=_CREDIT_REASONS[grant.kind],
+            )
+            return CreditGrantResult(stored, delivery_ids, applied=True)
+
+    def record_opening_credit(self, organization_id: UUID, kind: CreditGrantKind, credit_usd: Decimal) -> None:
+        """Open the ledger of an Organization whose ceiling is already set to `credit_usd`."""
+        with Session(self.delegate.engine) as session:
+            self.record_opening_credit_with_session(session, organization_id, kind, credit_usd)
+            session.commit()
+
+    def record_opening_credit_with_session(
+        self, session: Session, organization_id: UUID, kind: CreditGrantKind, credit_usd: Decimal
+    ) -> None:
+        self._add_credit_grant(session, organization_id, kind, credit_usd, actor_display="Opening balance")
+
+    def list_credit_grants(self, organization_id: UUID) -> list[OrganizationCreditGrant]:
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(OrganizationCreditGrant)
+                    .where(col(OrganizationCreditGrant.organization_id) == organization_id)
+                    .order_by(col(OrganizationCreditGrant.created_at), col(OrganizationCreditGrant.id))
+                ).all()
+            )
+
+    def get_credit_grant_by_ref(self, external_ref: str) -> OrganizationCreditGrant | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(OrganizationCreditGrant).where(col(OrganizationCreditGrant.external_ref) == external_ref)
+            ).first()
+
+    @staticmethod
+    def _add_credit_grant(
+        session: Session,
+        organization_id: UUID,
+        kind: CreditGrantKind,
+        credit_usd: Decimal,
+        *,
+        actor_display: str,
+        amount_paid_usd: Decimal | None = None,
+        external_ref: str | None = None,
+        note: str | None = None,
+    ) -> None:
+        session.add(
+            OrganizationCreditGrant(
+                organization_id=organization_id,
+                kind=kind,
+                credit_usd=credit_usd,
+                amount_paid_usd=amount_paid_usd,
+                external_ref=external_ref,
+                actor_display=actor_display,
+                note=note,
+            )
+        )
+        session.flush()
+
+    @staticmethod
+    def _credit_total(session: Session, organization_id: UUID) -> Decimal:
+        total = session.scalar(
+            select(func.coalesce(func.sum(OrganizationCreditGrant.credit_usd), 0)).where(
+                col(OrganizationCreditGrant.organization_id) == organization_id
+            )
+        )
+        return Decimal(total or 0)
+
+    @staticmethod
+    def _already_granted(session: Session, external_ref: str) -> bool:
+        return (
+            session.exec(
+                select(OrganizationCreditGrant.id).where(col(OrganizationCreditGrant.external_ref) == external_ref)
+            ).first()
+            is not None
+        )
 
     @staticmethod
     def _locked(session: Session, organization_id: UUID) -> Organization | None:
@@ -362,9 +523,14 @@ class OrganizationRepository:
             return owned is not None
 
     def count_trials(self) -> int:
-        """Organizations still on a trial: ended trials and deleted Organizations don't count."""
+        """Organizations still on a trial: ended or expired trials and deleted Organizations
+        don't count."""
         with Session(self.delegate.engine) as session:
-            query = select(func.count()).select_from(Organization).where(col(Organization.is_trial).is_(True))
+            query = (
+                select(func.count())
+                .select_from(Organization)
+                .where(col(Organization.is_trial).is_(True), col(Organization.trial_expired_at).is_(None))
+            )
             return session.scalar(query) or 0
 
     def first_created_by(self, user_id: UUID) -> Organization | None:
@@ -374,6 +540,81 @@ class OrganizationRepository:
                 .where(col(Organization.created_by_user_id) == user_id)
                 .order_by(col(Organization.created_at))
             ).first()
+
+    def set_agent_limit_with_event(
+        self, organization_id: UUID, agent_limit: int | None, *, actor: ActorIdentity, actor_display: str
+    ) -> tuple[Organization, list[UUID]] | None:
+        """Set how many Agents the Organization may run, with its audit Event in the same
+        commit. No Event when nothing changed. None when the Organization does not exist."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = self._locked(session, organization_id)
+            if organization is None:
+                return None
+            previous = organization.agent_limit
+            if previous == agent_limit:
+                return organization, []
+            organization.agent_limit = agent_limit
+            organization.updated_at = datetime.now(UTC)
+            session.add(organization)
+            session.flush()
+            event = EVENT_REGISTRY.build_event(
+                event_name=ORGANIZATION_AGENT_LIMIT_CHANGED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION,
+                    id=organization_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "agent_limit": agent_limit,
+                    "previous_agent_limit": previous,
+                    "actor_display": actor_display,
+                    "subject_display": organization.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return organization, delivery_ids
+
+    def expire_trial_with_event(self, organization_id: UUID) -> list[UUID]:
+        """Mark a trial that has run out of credit as expired, with its audit Event in the
+        same commit. Nothing, and no Event, for an Organization that is not a trial or
+        has already expired."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = self._locked(session, organization_id)
+            if organization is None or not organization.is_trial or organization.trial_expired_at is not None:
+                return []
+            organization.trial_expired_at = datetime.now(UTC)
+            session.add(organization)
+            session.flush()
+            event = EVENT_REGISTRY.build_event(
+                event_name=ORGANIZATION_TRIAL_EXPIRED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=organization_id,
+                actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="trial-expiry"),
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION,
+                    id=organization_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "actor_display": "Trial credit used up",
+                    "subject_display": organization.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return delivery_ids
 
     def end_trial_with_event(
         self, organization_id: UUID, *, actor: ActorIdentity, actor_display: str
@@ -387,6 +628,7 @@ class OrganizationRepository:
             if not organization.is_trial:
                 return organization, []
             organization.is_trial = False
+            organization.trial_expired_at = None
             organization.updated_at = datetime.now(UTC)
             session.add(organization)
             # The trial's creator may now create Organizations of their own.

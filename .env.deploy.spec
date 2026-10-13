@@ -120,6 +120,21 @@ GOOGLE_CLOUD_CLIENT_SECRET=
 # deploy workflows read SELF_SIGNUP_ENABLED, STAGING_SELF_SIGNUP_ENABLED and
 # PUBLIC_SELF_SIGNUP_ENABLED (GitHub Variables) for their environments.
 SELF_SIGNUP_ENABLED=false
+# How many Agents an Organization that is not a trial may run, unless a Platform
+# Administrator sets its own. Empty means no limit. The deploy workflows read
+# ORGANIZATION_DEFAULT_AGENT_LIMIT, STAGING_ORGANIZATION_DEFAULT_AGENT_LIMIT and
+# PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT (GitHub Variables) for their environments.
+ORGANIZATION_DEFAULT_AGENT_LIMIT=
+# Buying credit with Stripe. Off unless true. The deploy workflows read the
+# PAYMENTS_ENABLED / STAGING_PAYMENTS_ENABLED / PUBLIC_PAYMENTS_ENABLED GitHub Variables
+# and the STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET GitHub Secrets (prefixed STAGING_ or
+# PUBLIC_ for those environments). The webhook endpoint is
+# <API host>/api/v1/billing/stripe/webhook, listening for checkout.session.completed,
+# checkout.session.async_payment_succeeded, refund.created, refund.failed,
+# charge.dispute.funds_withdrawn and charge.dispute.funds_reinstated.
+PAYMENTS_ENABLED=false
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
 
 # ── Ingress TLS ──────────────────────────────────────────────────────────────
 # cert-manager ClusterIssuer that signs the api/ui ingress certs. cert-manager

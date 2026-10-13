@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Brain, Sparkles } from "lucide-react";
+import { Brain, CreditCard, Sparkles } from "lucide-react";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { PlatformMemorySettings } from "@/features/agent-memory/components/platform-memory-settings";
+import { PlatformBillingSettings } from "@/features/billing/components/platform-billing-settings";
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
 
 const SECTIONS = {
@@ -18,6 +19,11 @@ const SECTIONS = {
     label: "Trials",
     icon: <Sparkles size={15} aria-hidden />,
     description: "What a new organization gets when someone signs themselves up.",
+  },
+  billing: {
+    label: "Billing",
+    icon: <CreditCard size={15} aria-hidden />,
+    description: "How organizations buy the credit their agents spend.",
   },
 } as const;
 
@@ -57,7 +63,9 @@ export function PlatformSettings() {
         heading={section.label}
         description={section.description}
       >
-        {active === "agent-memory" ? <PlatformMemorySettings /> : <PlatformTrialSettings />}
+        {active === "agent-memory" && <PlatformMemorySettings />}
+        {active === "trials" && <PlatformTrialSettings />}
+        {active === "billing" && <PlatformBillingSettings />}
       </SettingsPageLayout>
     </div>
   );

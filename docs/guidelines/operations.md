@@ -537,6 +537,15 @@ Agent Barn's own Telegram bot lets Organizations use Telegram without bringing a
 - Optional tunables, normally left unset: `AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL` (where linked users' messages are delivered to an Agent; defaults to its in-cluster Service on port 8443) and `AGENTBARN_TELEGRAM_BOT_RATE_PER_SECOND` / `AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND` (defaults 25 and 5).
 - Polling and proxying run on one Communications replica at a time (a database lease decides which). Rate limits are per process, which holds while `communications.replicaCount` is 1.
 
+## Payments (Stripe)
+
+Organizations on Credit buy more through Stripe Checkout (see `../features/credit.md`). Off unless an environment opts in.
+
+- **`PAYMENTS_ENABLED`** is a GitHub variable (`STAGING_` and `PUBLIC_` variants); unset means off, never another environment's setting. Off hides the Billing page and refuses checkout and the webhook (404).
+- **`STRIPE_SECRET_KEY`** and **`STRIPE_WEBHOOK_SECRET`** are GitHub secrets with the same prefixes, flowing through `helmfile.yaml.gotmpl` into the API chart's shared Secret. Give each environment its own: staging a Stripe sandbox, production the live account. The secret key may be a restricted key with write access to Customers and Checkout Sessions.
+- **Webhook endpoint:** in the Stripe Dashboard, point an endpoint at `https://<API host>/api/v1/billing/stripe/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `refund.created`, `refund.failed`, `charge.dispute.funds_withdrawn` and `charge.dispute.funds_reinstated`, and store its signing secret as `STRIPE_WEBHOOK_SECRET`. Locally, `stripe listen --forward-to localhost:<API port>/api/v1/billing/stripe/webhook` prints a `whsec_` to use instead.
+- Minimum and maximum purchase, credit rate and purchase fee are platform settings, edited on the platform settings page.
+
 ## Staging environment
 
 Staging is a fully separate stack in its own namespace (`agent-farm-staging`),
@@ -603,6 +612,8 @@ git push origin "$RELEASE_TAG"
 | `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
 | `PUBLIC_AGENT_EMAIL_DOMAIN` | `agents.agentbarn.dev`. Unset leaves agent email inert and skips the Worker publish |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME` | The public deployment's own bot, without `@`. Unset hides Agent Barn Telegram |
+| `PUBLIC_PAYMENTS_ENABLED` | `true` to let Organizations on Credit buy it. Unset is off |
+| `PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT` | How many Agents a non-trial Organization may run. Unset is no limit |
 | `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
 
 ### Public GitHub secrets
@@ -630,6 +641,7 @@ kubeconfig portably with
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 | `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
+| `PUBLIC_STRIPE_SECRET_KEY` / `PUBLIC_STRIPE_WEBHOOK_SECRET` | Required once `PUBLIC_PAYMENTS_ENABLED` is true. The live account's key and this deployment's webhook endpoint secret |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`, and

@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
-from api.domains.agents.exceptions import TrialAgentLimitReached
+from api.domains.agents.exceptions import AgentLimitReached
 from api.domains.agents.models import (
     MANAGED_UPDATE_STALE_SECONDS,
     Agent,
@@ -910,7 +910,7 @@ class AgentRepository:
                     .where(col(Agent.organization_id) == agent.organization_id, col(Agent.deleted_at).is_(None))
                 )
                 if (live or 0) >= agent_limit:
-                    raise TrialAgentLimitReached(agent_limit)
+                    raise AgentLimitReached(agent_limit)
             session.add(agent)
             session.flush()
             if membership_id is not None:

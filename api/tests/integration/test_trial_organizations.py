@@ -9,7 +9,7 @@ from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_entries, has_length, not_none
 from sqlmodel import Session, select
 
-from api.domains.agents.exceptions import TrialAgentLimitReached
+from api.domains.agents.exceptions import AgentLimitReached
 from api.domains.agents.models import Agent, AgentType
 from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
@@ -176,7 +176,7 @@ def test_two_hires_racing_for_a_trials_last_slot_cannot_both_win():
             try:
                 repository.create_with_creator_access(agent, None, actor=actor, agent_limit=1)
                 outcomes.append("hired")
-            except TrialAgentLimitReached:
+            except AgentLimitReached:
                 outcomes.append("refused")
 
         with when("two hires race for the trial's one slot"):
@@ -213,7 +213,7 @@ def test_the_organization_read_says_whether_it_is_a_trial():
     with given(_setup(the_organization_is_a_trial())) as context:
         response = context.client.get(f"/api/v1/organizations/{context.organization.id}", headers=auth(context))
 
-        assert_that(response.json(), has_entries(is_trial=True, trial_agent_limit=1))
+        assert_that(response.json(), has_entries(is_trial=True, agent_limit=1))
 
 
 # --- no further Organizations for self-signed-up users -----------------------------------

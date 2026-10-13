@@ -67,6 +67,14 @@ emailInboundSecret: ""
 googleCloudClientId: ""
 googleCloudClientSecret: ""
 
+# Buying credit with Stripe. Off by default; with it on, the API needs the account's
+# secret key and the signing secret of the webhook endpoint pointed at
+# "<API host>/api/v1/billing/stripe/webhook".
+paymentsEnabled: false
+stripe:
+  secretKey: ""
+  webhookSecret: ""
+
 # OpenRouter inference key (k8s Secret env var OPENROUTER_API_KEY), polled
 # via GET /key for the key's remaining credit limit metric. Same key litellm
 # uses; leave blank to skip the poll. The gauge reads +Inf until a credit
@@ -102,6 +110,10 @@ agentModelAllowlist: ""
 # Off by default so a rollout never opens public signup by accident; existing users
 # can always sign in with Google.
 selfSignupEnabled: false
+
+# How many Agents an Organization that is not a trial may run, unless a Platform
+# Administrator sets its own. Empty means no limit.
+organizationDefaultAgentLimit: ""
 
 # Agent Barn's own Telegram bot (token from @BotFather, and its @username without
 # the @). Empty hides the Agent Barn Telegram Platform. Use a separate bot per

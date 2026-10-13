@@ -51,7 +51,7 @@ from api.domains.agents.builders import (
     runtime_teams_env,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
-from api.domains.agents.exceptions import AgentProvisioningPrecondition, TrialAgentLimitReached
+from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -389,6 +389,11 @@ class AgentService:
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
         return "".join(derive_tools_pointer(s) for s in skills)
+
+    def _spend_limit_kind(self, organization_id: UUID) -> str:
+        limit = self.organization_lookup.get_llm_limit(organization_id)
+        on_credit = limit is not None and limit.runs_on_credit
+        return "credit" if on_credit and self.config.payments_enabled else "limit"
 
     def _auto_attached_aai_cli_skills(
         self,
@@ -862,9 +867,16 @@ class AgentService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
         # Checked again under a lock when the Agent is stored; checked here too so a
         # refused create never allocates a LiteLLM key.
-        agent_limit = self.trial_settings.agent_limit() if self.organization_lookup.is_trial(org_id) else None
+        limits = self.organization_lookup.get_agent_limit(org_id)
+        agent_limit = (
+            limits.in_force(
+                trial_limit=self.trial_settings.agent_limit, default=self.config.organization_default_agent_limit
+            )
+            if limits is not None
+            else None
+        )
         if agent_limit is not None and self.repository.count_active_by_org(org_id) >= agent_limit:
-            raise TrialAgentLimitReached(agent_limit)
+            raise AgentLimitReached(agent_limit)
 
         agent = Agent(
             organization_id=org_id,
@@ -2474,6 +2486,10 @@ class AgentService:
                 "AGENT_TRIGGER_PORT": "8082",
                 "LITELLM_PROXY_TARGET": self.config.agent_litellm_base_url,
                 "LLM_PROXY_PORT": str(AGENT_LLM_PROXY_PORT),
+                # What the in-pod proxy tells the person chatting when spend runs out:
+                # buy credit, or have a limit raised. Read at start, so a change of
+                # kind reaches a running Agent on its next restart.
+                "AGENTBARN_SPEND_LIMIT_KIND": self._spend_limit_kind(agent.organization_id),
             }
         )
 

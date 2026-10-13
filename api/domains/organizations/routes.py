@@ -8,6 +8,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import (
+    OrganizationAgentLimitUpdate,
     OrganizationCreate,
     OrganizationFilter,
     OrganizationLlmBudgetRead,
@@ -106,6 +107,17 @@ def set_organization_llm_budget(
     whole point of it as a cost control. It can only set a lower limit of its own.
     """
     return budget_service.set_llm_budget(organization_id, budget.budget_usd, budget.budget_duration, context)
+
+
+@platform_org_router.put("/{organization_id}/agent-limit", response_model=PlatformOrganizationRead)
+def set_organization_agent_limit(
+    organization_id: UUID,
+    data: OrganizationAgentLimitUpdate,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
+):
+    """Set how many Agents an Organization may run; null returns it to the default."""
+    return organization_service.set_agent_limit(organization_id, data.agent_limit, context)
 
 
 @platform_org_router.post("/{organization_id}/end-trial", response_model=PlatformOrganizationRead)

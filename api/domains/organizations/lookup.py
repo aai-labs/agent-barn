@@ -1,9 +1,11 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
 from injector import inject, singleton
 
+from api.domains.organizations.models import CreditGrantRead
 from api.domains.organizations.repository import OrganizationRepository
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 
@@ -31,6 +33,32 @@ class OrganizationLlmLimit:
         """Credit never renews, so any limit beneath it would be a lifetime cap that no
         top-up could lift: on credit the Organization's balance is the only limit."""
         return self.window == ONE_OFF_BUDGET_WINDOW
+
+
+@dataclass(frozen=True)
+class OrganizationCredit:
+    """An Organization's credit as of its last spend snapshot."""
+
+    name: str
+    runs_on_credit: bool
+    credit_usd: float
+    # None until spend has been observed.
+    spend_usd: float | None
+
+
+@dataclass(frozen=True)
+class OrganizationAgentLimit:
+    """An Organization's own Agent limit, and whether a trial's default applies."""
+
+    own: int | None
+    is_trial: bool
+
+    def in_force(self, *, trial_limit: Callable[[], int], default: int | None) -> int | None:
+        """Its own limit, else the trial setting for a trial, else the deployment's
+        default. None means no limit."""
+        if self.own is not None:
+            return self.own
+        return trial_limit() if self.is_trial else default
 
 
 @inject
@@ -71,6 +99,34 @@ class OrganizationLookupService:
     def is_trial(self, organization_id: UUID) -> bool:
         organization = self.repository.get(organization_id)
         return organization is not None and organization.is_trial
+
+    def get_agent_limit(self, organization_id: UUID) -> OrganizationAgentLimit | None:
+        """None when the Organization does not exist."""
+        organization = self.repository.get(organization_id)
+        if organization is None:
+            return None
+        return OrganizationAgentLimit(own=organization.agent_limit, is_trial=organization.is_trial)
+
+    def get_credit(self, organization_id: UUID) -> OrganizationCredit | None:
+        """None when the Organization does not exist."""
+        organization = self.repository.get(organization_id)
+        if organization is None:
+            return None
+        return OrganizationCredit(
+            name=organization.name,
+            runs_on_credit=organization.runs_on_credit,
+            credit_usd=organization.llm_budget_usd,
+            spend_usd=organization.llm_spend_usd,
+        )
+
+    def list_credit_grants(self, organization_id: UUID) -> list[CreditGrantRead]:
+        """Every change to the Organization's credit, oldest first."""
+        return [CreditGrantRead.model_validate(grant) for grant in self.repository.list_credit_grants(organization_id)]
+
+    def find_credit_grant(self, external_ref: str) -> CreditGrantRead | None:
+        """The grant recorded under a payment provider's reference, if any."""
+        grant = self.repository.get_credit_grant_by_ref(external_ref)
+        return CreditGrantRead.model_validate(grant) if grant is not None else None
 
     def get_llm_limit(self, organization_id: UUID) -> OrganizationLlmLimit | None:
         """None when the Organization does not exist."""

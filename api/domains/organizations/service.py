@@ -31,6 +31,7 @@ from api.domains.events.catalog import (
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
+from api.domains.organizations.lookup import OrganizationAgentLimit
 from api.domains.organizations.models import (
     Organization,
     OrganizationCreate,
@@ -82,8 +83,8 @@ class OrganizationService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
             )
-        if organization.is_trial:
-            organization.trial_agent_limit = self.trial_settings.agent_limit()
+        # The read carries the Organization's own limit; members see the one in force.
+        organization.agent_limit = self._agent_limit_in_force(organization.agent_limit, organization.is_trial)
         return organization
 
     def get_platform_organization(self, organization_id: UUID) -> PlatformOrganizationRead:
@@ -96,7 +97,13 @@ class OrganizationService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
             )
+        organization.agent_limit_in_force = self._agent_limit_in_force(organization.agent_limit, organization.is_trial)
         return organization
+
+    def _agent_limit_in_force(self, own: int | None, is_trial: bool) -> int | None:
+        return OrganizationAgentLimit(own=own, is_trial=is_trial).in_force(
+            trial_limit=self.trial_settings.agent_limit, default=get_config().organization_default_agent_limit
+        )
 
     @staticmethod
     def _bare_model(pattern: str) -> str:
@@ -236,6 +243,43 @@ class OrganizationService:
                 detail="Failed to load organization",
             )
         return organization_read
+
+    def set_agent_limit(
+        self, organization_id: UUID, agent_limit: int | None, context: CurrentUserContext
+    ) -> PlatformOrganizationRead:
+        """Set how many Agents an Organization may run; None returns it to the default.
+        Agents already running are kept: a lower limit only stops new hires."""
+        context.require_platform_admin()
+        result = self.organization_repository.set_agent_limit_with_event(
+            organization_id,
+            agent_limit,
+            actor=resolve_actor_identity(context, organization_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
+            )
+        self.event_delivery_dispatcher.enqueue_immediate(result[1])
+        return self.get_platform_organization(organization_id)
+
+    def convert_trial(self, organization_id: UUID, *, actor: ActorIdentity, actor_display: str) -> bool:
+        """Make a trial an ordinary Organization because it bought credit.
+
+        System-initiated, so no permission check. Unlike a Platform Administrator ending
+        it, the Organization stays on credit: its ledger and ceiling are untouched, and
+        an expired trial is expired no longer. False when it was not a trial.
+        """
+        organization = self.organization_repository.get(organization_id)
+        if organization is None or not organization.is_trial:
+            return False
+        result = self.organization_repository.end_trial_with_event(
+            organization_id, actor=actor, actor_display=actor_display
+        )
+        if result is None:
+            return False
+        self.event_delivery_dispatcher.enqueue_immediate(result[1])
+        return True
 
     def end_trial(
         self, organization_id: UUID, data: OrganizationTrialEnd, context: CurrentUserContext

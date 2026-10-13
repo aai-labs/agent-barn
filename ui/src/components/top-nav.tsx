@@ -15,6 +15,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { useOrganizationBilling } from "@/features/billing/hooks/use-organization-billing";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
@@ -37,7 +38,9 @@ export function TopNav({ onHire }: TopNavProps) {
   const isPlatformView = pathname?.startsWith(PLATFORM_BASE) ?? false;
 
   // Owners/admins (and platform admins) manage members and see org spend; plain members can't.
-  const { canManage: canManageMembers } = useActiveOrgRole();
+  const { canManage: canManageMembers, role } = useActiveOrgRole();
+  // Only the owner buys credit, and only where this organization can.
+  const { billing } = useOrganizationBilling(orgId, { enabled: role === "OWNER" && !isPlatformView });
 
   const navTabs = isPlatformView
     ? [
@@ -63,6 +66,7 @@ export function TopNav({ onHire }: TopNavProps) {
               { href: `${orgBase}/kpis`, label: "KPIs" },
             ]
           : []),
+        ...(billing?.available ? [{ href: `${orgBase}/billing`, label: "Billing" }] : []),
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
   // Platform view has nine tabs, and they do not fit inline until about 1300px: with the

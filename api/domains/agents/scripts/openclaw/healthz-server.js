@@ -27,6 +27,14 @@ const TERMINAL_LLM_ERRORS = {
 const BUDGET_EXHAUSTED =
   'A model spend limit has been reached, so this agent cannot reply right now. ' +
   'Contact your administrator to raise it or wait for the limit to renew.';
+// On credit (AGENTBARN_SPEND_LIMIT_KIND=credit) nothing sits beneath the Organization's
+// balance, so running out means buying more, and the notice says who can.
+const ON_CREDIT = process.env.AGENTBARN_SPEND_LIMIT_KIND === 'credit';
+const CREDIT_EXHAUSTED =
+  'This organization has used all its credit, so this agent cannot reply right now. ' +
+  "Ask the organization's owner to buy more credit in Billing.";
+const SPENT_MESSAGE = ON_CREDIT ? CREDIT_EXHAUSTED : BUDGET_EXHAUSTED;
+const SPENT_CODE = ON_CREDIT ? 'CREDIT_EXHAUSTED' : 'SPEND_LIMIT_REACHED';
 
 // An exhausted limit has been seen as a 400, is documented as a 429, and is a 422 by
 // default on LiteLLM releases after the pinned one, depending on which budget was hit
@@ -56,7 +64,7 @@ function recordTerminalLlmError(code) {
 function budgetMessage(body) {
   try {
     const { error } = JSON.parse(body.toString('utf8'));
-    return error && error.type === 'budget_exceeded' ? BUDGET_EXHAUSTED : null;
+    return error && error.type === 'budget_exceeded' ? SPENT_MESSAGE : null;
   } catch {
     return null;
   }
@@ -86,7 +94,7 @@ function spendLimitCompletion(path, requestBody) {
     const chunk = (choice, extra = {}) =>
       `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created, model, choices: [choice], ...extra })}\n\n`;
     const body =
-      chunk({ index: 0, delta: { role: 'assistant', content: BUDGET_EXHAUSTED }, finish_reason: null }) +
+      chunk({ index: 0, delta: { role: 'assistant', content: SPENT_MESSAGE }, finish_reason: null }) +
       chunk({ index: 0, delta: {}, finish_reason: 'stop' }, { usage }) +
       'data: [DONE]\n\n';
     return { contentType: 'text/event-stream; charset=utf-8', body };
@@ -96,7 +104,7 @@ function spendLimitCompletion(path, requestBody) {
     object: 'chat.completion',
     created,
     model,
-    choices: [{ index: 0, message: { role: 'assistant', content: BUDGET_EXHAUSTED }, finish_reason: 'stop' }],
+    choices: [{ index: 0, message: { role: 'assistant', content: SPENT_MESSAGE }, finish_reason: 'stop' }],
     usage,
   });
   return { contentType: 'application/json', body };
@@ -367,7 +375,7 @@ if (LITELLM_PROXY_TARGET) {
           // chatting would never hear back at all.
           const status = budget ? BUDGET_EXHAUSTED_STATUS : upstreamRes.statusCode;
           if (budget) {
-            recordTerminalLlmError('SPEND_LIMIT_REACHED');
+            recordTerminalLlmError(SPENT_CODE);
             const completion = spendLimitCompletion(clientReq.url, requestBody());
             if (completion) {
               clientRes.writeHead(200, {

@@ -22,7 +22,7 @@ from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
-from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
+from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler, OrganizationTrialExpiryHandler
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
@@ -81,6 +81,7 @@ class AppModule(Module):
         self,
         agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
         organization_budget_email_handler: OrganizationBudgetEmailHandler,
+        organization_trial_expiry_handler: OrganizationTrialExpiryHandler,
         agent_budget_email_handler: AgentBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
         product_analytics_handler: ProductAnalyticsHandler,
@@ -89,6 +90,7 @@ class AppModule(Module):
             [
                 agent_lifecycle_email_handler,
                 organization_budget_email_handler,
+                organization_trial_expiry_handler,
                 agent_budget_email_handler,
                 security_audit_projection,
                 product_analytics_handler,

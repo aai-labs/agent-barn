@@ -83,6 +83,14 @@ class Config(BaseSettings):
     # Self-signup: a first Google sign-in creates the account and a trial Organization.
     # Off (the default) turns new Google accounts away; existing users can still sign in.
     self_signup_enabled: bool = False
+    # Buying credit with Stripe. Off unless set: with it off, Organizations on credit
+    # can't buy more and the Stripe webhook isn't served.
+    payments_enabled: bool = False
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    # How many Agents an Organization that is not a trial may run, unless a Platform
+    # Administrator sets its own limit. Unset (or empty) means no limit.
+    organization_default_agent_limit: int | None = Field(default=None, ge=0)
     # Trial credit (USD) until a Platform Administrator sets one on the platform settings page.
     trial_default_credit_usd: float = Field(default=10.0, ge=0, allow_inf_nan=False)
     # The API's own public base URL, used to show callers where to reach an Agent
@@ -242,6 +250,12 @@ class Config(BaseSettings):
         if self.agent_default_llm_budget_usd > self.organization_default_llm_budget_usd:
             raise ValueError("AGENT_DEFAULT_LLM_BUDGET_USD must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD")
         return self
+
+    @field_validator("organization_default_agent_limit", mode="before")
+    @classmethod
+    def empty_agent_limit_is_none(cls, value: object) -> object:
+        """Deployments pass the variable through even when it is not set."""
+        return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator("organization_llm_budget_alert_thresholds", mode="before")
     @classmethod

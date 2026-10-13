@@ -39,6 +39,7 @@ from api.domains.organizations.lookup import ON_CREDIT_LIMIT_REFUSED
 from api.domains.organizations.models import (
     AgentLlmCoverageRead,
     AgentLlmEnrollment,
+    CreditGrantCreate,
     Organization,
     OrganizationLlmBudgetRead,
     OrganizationLlmBudgetState,
@@ -96,7 +97,7 @@ class OrganizationLlmBudgetService:
     memory_keys: MemoryKeyRepository
 
     def _proxy_limit(self, organization: Organization) -> float:
-        return max(0.0, organization.effective_llm_budget_usd - self.memory_accounting.legacy_spend(organization))
+        return max(0.0, organization.effective_llm_budget_usd - self.memory_accounting.spend_outside_team(organization))
 
     def ensure_memory_team(self, organization: Organization) -> None:
         renewal = self.litellm.apply_team_budget(
@@ -263,6 +264,48 @@ class OrganizationLlmBudgetService:
                 status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
             )
         stored, delivery_ids = result
+        if not self._apply_stored(stored, delivery_ids, before=before, actor=actor, actor_display=actor_display):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Spend limit saved, but it could not be applied yet. It will be retried automatically.",
+            )
+
+    def grant_credit(
+        self, organization_id: UUID, grant: CreditGrantCreate, *, actor: ActorIdentity, actor_display: str
+    ) -> bool:
+        """Add a grant to an Organization on credit and raise or lower its ceiling to match.
+
+        System-initiated (signup, a payment, a refund), so it checks no permission. A
+        grant already applied is not applied again: False. A proxy failure does not
+        fail the grant — the ledger is authoritative and the reconciler applies it.
+        """
+        before = self.agent_budgets.key_limits(organization_id)
+        result = self.organization_repository.grant_credit_with_event(
+            organization_id, grant, actor=actor, actor_display=actor_display
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
+            )
+        if not result.applied:
+            return False
+        self._apply_stored(
+            result.organization, result.delivery_ids, before=before, actor=actor, actor_display=actor_display
+        )
+        return True
+
+    def _apply_stored(
+        self,
+        stored: Organization,
+        delivery_ids: list[UUID],
+        *,
+        before: dict[UUID, tuple[float, str]],
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> bool:
+        """Bring everything beneath a stored Organization limit in line and push it to the
+        proxy. False when the proxy could not be written; the stored limit stands."""
+        organization_id = stored.id
         self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
         self.agent_settings.lower_default_agent_llm_budget(
             organization_id, stored.effective_llm_budget_usd, actor=actor, actor_display=actor_display
@@ -274,17 +317,15 @@ class OrganizationLlmBudgetService:
                 renews_at = self.litellm.apply_team_budget(
                     str(organization_id), self._proxy_limit(stored), stored.llm_budget_duration
                 )
-            except Exception as exc:
+            except Exception:
                 logger.exception("Failed to apply LLM budget for Organization %s", organization_id)
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Spend limit saved, but it could not be applied yet. It will be retried automatically.",
-                ) from exc
+                return False
             self._record_renewal(organization_id, renews_at)
         # Agents follow the Organization: every key whose limit or window moved is
         # rewritten. A key that cannot be updated now is left to the reconciler rather
         # than failing a change that is already saved.
         self.agent_budgets.fit_to_organization(organization_id, before=before, actor=actor, actor_display=actor_display)
+        return True
 
     def _record_renewal(self, organization_id: UUID, renews_at: object) -> None:
         """The team is read whenever its limit is written, so its renewal date is known
@@ -329,7 +370,7 @@ class OrganizationLlmBudgetService:
         limit = organization.effective_llm_budget_usd
         spend = organization.llm_spend_usd
         if spend is not None:
-            spend += self.memory_accounting.legacy_spend(organization)
+            spend += self.memory_accounting.spend_outside_team(organization)
         observed = spend is not None and organization.llm_spend_observed_at is not None
         if not observed:
             state = OrganizationLlmBudgetState.UNKNOWN
@@ -444,7 +485,7 @@ class OrganizationLlmBudgetService:
         organization.llm_spend_observed_at = datetime.now(UTC)
         organization.llm_budget_renews_at = _parse_timestamp(renews_at)
 
-        spend += self.memory_accounting.legacy_spend(organization)
+        spend += self.memory_accounting.spend_outside_team(organization)
 
         # The key spans the window and the limit, so both a renewal and a limit change
         # re-arm the thresholds rather than leaving the Organization permanently quiet.
@@ -527,7 +568,9 @@ class OrganizationLlmBudgetService:
                 uncovered.append(AgentLlmCoverageRead(agent_id=agent_id, agent_name=agent_name, status=status_))
         budget_status = self._team_budget_status(team_id)
         if budget_status.get("spend") is not None:
-            budget_status["spend"] += self.memory_accounting.legacy_spend(self._organization_or_404(organization_id))
+            budget_status["spend"] += self.memory_accounting.spend_outside_team(
+                self._organization_or_404(organization_id)
+            )
         return OrganizationLlmCoverageRead(
             total_agents=len(credentials),
             enrolled_agents=enrolled,

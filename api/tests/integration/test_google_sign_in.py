@@ -4,6 +4,7 @@ from with nothing created."""
 
 import threading
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from hamcrest import assert_that, empty, equal_to, has_entries, has_length, is_not, none, not_none
@@ -15,7 +16,7 @@ from api.domains.auth.repository import PasswordResetTokenRepository
 from api.domains.auth.service import AuthService
 from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.onboarding.settings_service import TrialSettingsService
-from api.domains.organizations.models import Organization
+from api.domains.organizations.models import CreditGrantKind, Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -139,6 +140,10 @@ def test_a_first_sign_in_creates_a_trial_organization_on_one_off_credit():
             assert_that(organization.name, equal_to("Jane's Organization"))
             assert_that(organization.llm_budget_usd, equal_to(7.5))
             assert_that(organization.llm_budget_duration, equal_to(ONE_OFF_BUDGET_WINDOW))
+
+        with then("the trial credit is the first grant on its ledger"):
+            grants = context.injector.get(OrganizationRepository).list_credit_grants(organization.id)
+            assert_that([(g.kind, g.credit_usd) for g in grants], equal_to([(CreditGrantKind.TRIAL, Decimal("7.5"))]))
 
 
 def test_the_trial_credit_is_the_one_platform_administrators_set():

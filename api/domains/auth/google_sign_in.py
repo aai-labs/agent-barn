@@ -18,6 +18,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from uuid import uuid7
 
@@ -36,7 +37,7 @@ from api.domains.auth.service import JWT_ENCODING_ALGORITHM, AuthService
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
-from api.domains.organizations.models import Organization
+from api.domains.organizations.models import CreditGrantKind, Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.exceptions import EmailTakenHTTPException
 from api.domains.users.models import User
@@ -252,6 +253,9 @@ class GoogleSignInService:
             llm_budget_duration=ONE_OFF_BUDGET_WINDOW,
         )
         self.organization_repository.save_with_session(organization, session)
+        self.organization_repository.record_opening_credit_with_session(
+            session, organization.id, CreditGrantKind.TRIAL, Decimal(str(credit))
+        )
         # The deployment's default Agent limit may be below the credit; the trial's
         # Agents may each use all of it, and the Organization's limit still binds.
         session.add(OrganizationAgentSettings(organization_id=organization.id, default_agent_llm_budget_usd=credit))

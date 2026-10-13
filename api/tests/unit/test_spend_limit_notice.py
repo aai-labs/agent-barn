@@ -215,6 +215,24 @@ def test_the_code_becomes_the_spend_limit_notice_and_is_not_retried():
     assert_that(normalized.details.retryable, is_(False))
 
 
+def test_running_out_of_credit_becomes_the_buy_credit_notice_and_is_not_retried():
+    normalized = normalize_communication_error(
+        error_code="CREDIT_EXHAUSTED",
+        error_message="HTTP 402: returned a billing error — your API key has run out of credits",
+        operation="runtime_processing",
+    )
+    assert_that(normalized.code, equal_to("CREDIT_EXHAUSTED"))
+    assert_that(
+        normalized.summary,
+        equal_to(
+            "This organization has used all its credit, so this agent cannot reply right now. "
+            "Ask the organization's owner to buy more credit in Billing."
+        ),
+    )
+    assert normalized.details is not None
+    assert_that(normalized.details.retryable, is_(False))
+
+
 def test_a_genuine_provider_billing_error_keeps_its_own_notice():
     normalized = normalize_communication_error(
         error_code="RuntimeError", error_message="HTTP 402: insufficient credits", operation="runtime_processing"
