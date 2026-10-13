@@ -220,6 +220,7 @@ jobs:
       ui_host: ${{ steps.resolve.outputs.ui_host }}
       web_app_url: ${{ steps.resolve.outputs.web_app_url }}
       api_image_tag: ${{ steps.image-versions.outputs.api_image_tag }}
+      api_moving_tag: ${{ steps.resolve.outputs.service_image_tag }}
       ui_image_tag: ${{ steps.image-versions.outputs.ui_image_tag }}
       openclaw_image_tag: ${{ steps.image-versions.outputs.openclaw_image_tag }}
       hermes_image_tag: ${{ steps.image-versions.outputs.hermes_image_tag }}
@@ -258,14 +259,43 @@ jobs:
               exit 1
               ;;
           esac
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ vars.REGISTRY_URL }}
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      # The API image is deployed by digest: `<tag>@sha256:...` is a valid
+      # reference whose tag is ignored, so the chart needs no change. A rebuilt
+      # image uses the digest push-api just produced. When the API was not
+      # rebuilt, the tag's current digest is pinned instead, so the rendered
+      # spec equals the running one and unrelated deploys do not roll the API.
+      # If that lookup fails the plain tag is used: a rollout, never a silent
+      # change of image.
       - name: Read image versions
         id: image-versions
         env:
           IMAGE_SUFFIX: ${{ steps.resolve.outputs.image_suffix }}
           SERVICE_IMAGE_TAG: ${{ steps.resolve.outputs.service_image_tag }}
+          API_IMAGE_DIGEST: ${{ needs.push-api.outputs.image_digest }}
+          API_IMAGE_REPOSITORY: ${{ vars.REGISTRY_URL }}/agentbarn-api
         run: |
+          digest="${API_IMAGE_DIGEST}"
+          if [ -z "$digest" ]; then
+            digest="$(docker buildx imagetools inspect \
+              "${API_IMAGE_REPOSITORY}:${SERVICE_IMAGE_TAG}" \
+              --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          fi
+          case "$digest" in
+            sha256:*) api_image_tag="${SERVICE_IMAGE_TAG}@${digest}" ;;
+            *)
+              echo "::warning::Could not resolve an API image digest; deploying the plain tag ${SERVICE_IMAGE_TAG}."
+              api_image_tag="${SERVICE_IMAGE_TAG}"
+              ;;
+          esac
           {
-            echo "api_image_tag=${SERVICE_IMAGE_TAG}"
+            echo "api_image_tag=${api_image_tag}"
             echo "ui_image_tag=${SERVICE_IMAGE_TAG}"
             echo "openclaw_image_tag=$(cat openclaw-base/VERSION)${IMAGE_SUFFIX}"
             echo "hermes_image_tag=$(cat hermes-base/VERSION)${IMAGE_SUFFIX}"
@@ -417,6 +447,39 @@ jobs:
           set +a
           # Hindsight already synced: do not rotate its key again in this run.
           helmfile -f helmfile.yaml.gotmpl -l name!=hindsight sync --wait
+
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 4b: Move the API image tag
+  # ═══════════════════════════════════════════════════════════════
+
+  # The cluster already runs the digest. This re-tags `latest`/`latest-staging`
+  # to it, a manifest-only copy that stores no new layers. It runs only after
+  # `deploy` succeeds, so a failed migration leaves the tag -- and every pod
+  # restart, CronJob and restore-point job that resolves it -- on the previous
+  # image. A failure here fails the run, which keeps it out of the change
+  # baseline, so the next deploy rebuilds the API rather than reverting it.
+  promote-api:
+    needs: [push-api, resolve-env, deploy]
+    if: ${{ needs.deploy.result == 'success' && needs.push-api.outputs.image_digest != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ vars.REGISTRY_URL }}
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Move the API image tag to the deployed digest
+        env:
+          REPOSITORY: ${{ vars.REGISTRY_URL }}/agentbarn-api
+          TAG: ${{ needs.resolve-env.outputs.api_moving_tag }}
+          DIGEST: ${{ needs.push-api.outputs.image_digest }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${REPOSITORY}:${TAG}" \
+            "${REPOSITORY}@${DIGEST}"
+          docker buildx imagetools inspect "${REPOSITORY}:${TAG}" --format '{{.Manifest.Digest}}'
 
   # ═══════════════════════════════════════════════════════════════
   # Phase 5: Publish the Cloudflare Email Worker
