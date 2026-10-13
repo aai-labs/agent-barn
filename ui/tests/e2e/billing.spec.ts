@@ -105,6 +105,29 @@ test.describe("Billing", () => {
     await expect(page.getByRole("status").filter({ hasText: "Payment received" })).toBeVisible();
   });
 
+  test("credit that arrives after the owner comes back from paying shows without a reload", async ({ page }) => {
+    await signedIn(page);
+    let current = billing();
+    await page.route(`**/api/v1/organizations/*/billing`, (route) => route.fulfill({ json: current }));
+    await page.goto(`${BILLING_URL}?checkout=success`);
+    const balance = page.getByRole("region", { name: "Balance" });
+    await expect(balance).toContainText("$7.50");
+
+    current = billing({ credit_usd: 30, balance_usd: 27.5 });
+
+    await expect(balance).toContainText("$27.50", { timeout: 15000 });
+  });
+
+  test("a balance that can't be read yet isn't shown as used up", async ({ page }) => {
+    await signedIn(page);
+    await interceptBilling(page, billing({ spend_usd: null, balance_usd: null }));
+    await page.goto(BILLING_URL);
+
+    const balance = page.getByRole("region", { name: "Balance" }).getByText("Not available yet").first();
+    await expect(balance).toBeVisible();
+    await expect(balance).not.toHaveAttribute("style", /--err/);
+  });
+
   test("the owner gets a Billing tab only when credit can be bought", async ({ page }) => {
     await signedIn(page);
     await interceptBilling(page, billing({ available: false }));

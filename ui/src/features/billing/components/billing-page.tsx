@@ -36,8 +36,10 @@ function signedUsd(value: number) {
 export function BillingPage() {
   const { selectedOrganization } = useOrganizationContext();
   const organizationId = selectedOrganization?.id;
-  const { billing, isLoading, error, refetch } = useOrganizationBilling(organizationId);
   const checkout = useSearchParams()?.get("checkout");
+  const { billing, isLoading, error, refetch } = useOrganizationBilling(organizationId, {
+    awaitingPayment: checkout === "success",
+  });
   const [buying, setBuying] = useState(false);
 
   return (
@@ -87,7 +89,9 @@ export function BillingPage() {
               <Fact label="Balance">
                 <span
                   className="text-[1.4rem] font-semibold"
-                  style={{ color: (billing.balanceUsd ?? 0) <= 0 ? "var(--err)" : "var(--ink)" }}
+                  style={{
+                    color: billing.balanceUsd != null && billing.balanceUsd <= 0 ? "var(--err)" : "var(--ink)",
+                  }}
                 >
                   {billing.balanceUsd == null ? "Not available yet" : formatUsd(billing.balanceUsd, 2)}
                 </span>
