@@ -24,12 +24,20 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 - Delivered: the pipeline — notes per conversation, the playbook step with long-term memories, the Skill Draft write, and usage recording.
 - Delivered: the UI — the Agent Playbooks tab, run history, the Playbook source banner on Organization Skill pages, and Platform Settings → Playbooks; `source_agent_name` on run reads.
 - Delivered: install shortcuts on a published playbook's Skill page — Add to Agents and Require on a Template — built on the existing Agent update and Template draft contracts.
+- Delivered: the role/conventions split — runs propose Organization Conventions kept apart from the role playbook, and people add reviewed rules to Template drafts' AGENTS.md.
 - In transition: nothing.
 - Next: none; every v1 slice is delivered. Closing the epic waits on review, merge, and tickets for the deferred items below.
 - Deferred: compiling playbooks into configuration, scheduled re-extraction, Connection exclusions, reading the Agent volume, automatic publication, and measuring playbook impact.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-14 — slice 7: Organization Conventions
+
+- Decided: a role playbook suits Agents in the same role, while firm-wide rules belong to every Agent; they go to Template AGENTS.md, which every Agent loads at startup, rather than a Skill an Agent opens only when its description matches.
+- Delivered: prompt `playbook-2026-10-14` with `conventions`, migration `cd4c6b9354f9` (`result_conventions`), `convention_count` and `conventions` on run reads, `POST .../templates/{template_key}/draft/conventions`, and the Review conventions dialog.
+- Verified: merge unit tests, endpoint and pipeline integration tests, and Playwright for reviewing, editing, and adding conventions.
+- Follow-up: none.
 
 ### 2026-10-13 — slice 6
 

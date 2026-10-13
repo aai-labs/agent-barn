@@ -75,6 +75,10 @@ An explicit `source_scope=organization` selects only Organization versions. Omit
 
 An Agent Override may show an update only from the direct Platform or Organization lineage of its Override Source Version. The user explicitly selects the complete newer source snapshot as the Agent's shared pin; a stopped Agent changes pins immediately and a running Agent uses Apply & Restart. Source updates never mutate or merge local Override Draft edits, never publish an Override Version, and an unavailable source does not invalidate an existing self-contained Override snapshot.
 
+### Add Organization Conventions to a Template
+
+`POST /organizations/{organization_id}/templates/{template_key}/draft/conventions` with `{"rules": [...]}` (1–30 rules of at most 500 characters) needs `template.manage`. It gets or starts the Organization draft, as editing does, and merges the rules into a marked section of the draft's AGENTS.md, between `<!-- agentbarn:organization-conventions:start -->` and `<!-- agentbarn:organization-conventions:end -->` under `## Organization conventions`; the section is added after the existing text when absent. Rules already listed there are skipped regardless of case, spacing, and a trailing full stop, and people may edit the section between the markers. A draft with only one marker, or the end before the start, is refused with `409`. Required Skills and the draft's other content are unchanged, and the response reports `added` and `already_present`. Runtimes write AGENTS.md from the Template, so the rules reach Agents pinned to a published version that contains them; Agents on an Agent Template Override keep their own snapshot. [Playbook Extractions](playbooks.md) propose these rules.
+
 ### Select a Template Version for an Agent
 
 The Agent configuration Template section sends the chosen version together with the required-Skill assignments and pins that version demands, so a Template Version that bumps a required Skill Version, or adds a requirement the Agent does not yet hold, applies in one request.

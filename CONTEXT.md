@@ -292,6 +292,10 @@ _Avoid_: training, compiled config, template
 One recorded run that reads a source Agent's Conversation Messages, Tool Calls, and long-term memories over a time window, asks a model for the recurring practices they show, and writes the result into an Organization Skill Draft for review. It is billed to the source Agent's model key and never publishes.
 _Avoid_: training job, sync, import
 
+**Organization Conventions**:
+Rules every Agent in an Organization should follow whatever its role, such as time zones, approval before changes, and message format. A Playbook Extraction proposes them; people review them and add them to a marked section of Organization Templates' AGENTS.md. They are not a Skill.
+_Avoid_: playbook, org prompt, global instructions
+
 **Agent Secret**:
 An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
 _Avoid_: skill, application secret
