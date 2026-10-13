@@ -83,6 +83,15 @@ Model failures map to stored codes: budget exceeded to `spend_limit_reached`, a 
 - A run calls `POST /chat/completions` on the LiteLLM proxy with the source Agent's own LiteLLM key, decrypted in the worker. The spend is therefore attributed to that Agent by cost sync, appears on its Costs tab, and counts against the Agent's and its Organization's LiteLLM budgets, which LiteLLM enforces. Agent keys allow every model, so no key allowlist changes.
 - The completion client sends no environment proxy or redirect, never stores or logs request or response content, and classifies failures as budget exceeded (a `400` or `429` whose error names a budget), key or model rejected (other `400`, `401`, `403`, `404`), unavailable (other statuses and transport errors), or a bad response (no text). Token usage comes from the response; cost comes from LiteLLM's `x-litellm-response-cost` header and is unknown rather than zero when absent.
 
+## User interface
+
+- Agent page → **Playbooks** (`?tab=playbooks`) appears only for people with `activity.read` on the Agent whose Organization Role is Owner or Admin; a Platform Administrator who is only a Member does not see it, and no playbook requests are sent for anyone else. It holds a create form and the Agent's runs.
+- The form writes to **a new playbook** (named `<Agent> playbook` by default) or **the next draft of a playbook**, offering the Skills earlier runs in the Organization wrote to. Period (7, 30, or 90 days) and conversation bound (10, 20, or 50) refresh the preview, which shows what the run would read, the estimated tokens, and the model. Create is disabled while a run is active or when the period has no conversations.
+- Runs list newest first, refreshing every three seconds while one is queued or running, with what each read, its tokens, cost, and model. A finished run links to **Review draft** on its Organization Skill page; a failed run explains its error code; a `draft_conflict` run offers **View playbook** to read the kept result; an active run can be cancelled after confirmation.
+- An Organization Skill page that a successful run wrote shows a **Playbook source** banner to people who can manage Skills: the source Agent, when and from how many conversations and memories it was extracted, and, while a draft exists, what to check before publishing — including that publishing makes it visible to every member.
+- Platform Settings → **Playbooks** (`/dashboard/platform/settings?section=playbooks`) holds the model setting; the model picker card is shared with Agent Memory.
+- Agent-level queries live under the Agent's query family; Organization-level run lists use the `playbook-extractions` family, which is evicted on an Organization switch and keyed by the Organization API base.
+
 ## Data contract
 
 `playbook_extraction` belongs to its Organization and source Agent through a composite foreign key, and is deleted with either. `requested_by_membership_id`, `requested_by_user_id`, and `skill_id` are set to `NULL` when what they reference is deleted. When the target Skill is deleted before the run writes, the run creates a new lineage named `skill_name` instead.
@@ -93,6 +102,7 @@ Each run records the window, session bound, model, prompt version, the selected 
 
 | Change | Also update |
 | --- | --- |
+| Who sees the Playbooks tab or provenance banner | `ui/src/features/agents/components/agent-detail-page.tsx`, `ui/src/features/playbooks/`, the e2e specs |
 | Who may start or read runs | This document, [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md), the worker authority check in `api/domains/playbooks/processor.py` |
 | Run schema or status values | Alembic migration, `api/domains/playbooks/models.py`, the UI schema |
 | Audit payload | `api/domains/events/catalog.py`, [`domain-events.md`](domain-events.md) |
@@ -109,8 +119,10 @@ Each run records the window, session bound, model, prompt version, the selected 
 - `api/domains/playbooks/platform_*.py`: the Platform model setting.
 - `api/infrastructure/litellm/completions.py`: chat completions billed to a supplied virtual key.
 - `api/worker_app.py`: the `playbook_extraction.process` Dramatiq actor on the `playbook_extraction` queue.
+- `ui/src/features/playbooks/`: the Agent tab, run list, provenance banner, and Platform setting; `ui/src/features/platform-settings/` composes the Platform Settings sections; `ui/src/components/settings/model-setting-card.tsx` is the shared model picker.
 - `api/domains/skills/service.py`: `require_playbook_target`, `require_available_organization_skill_name`, and `write_playbook_draft`.
 - `api/tests/integration/test_playbook_extractions.py`, `api/tests/steps/playbooks.py`: authorization, tenancy, conflicts, audit, cancellation, and the worker's claim and authority checks.
 - `api/tests/integration/test_playbook_pipeline.py`, `api/tests/helpers/litellm_proxy.py`: whole runs against a loopback LiteLLM proxy.
 - `api/tests/integration/test_platform_playbook_settings.py`, `api/tests/unit/test_litellm_completions.py`: the Platform setting and the completion client against a loopback proxy.
+- `ui/tests/e2e/agent-playbooks.spec.ts`, `ui/tests/e2e/settings-skill-detail-page.spec.ts`: the tab, run list, Platform setting, and provenance banner.
 - `api/tests/integration/test_playbook_extraction_preview.py`, `api/tests/unit/test_playbook_transcripts.py`: session selection, pairing, rendering bounds, and the estimate.

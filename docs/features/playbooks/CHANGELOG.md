@@ -22,14 +22,21 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 - Delivered: session assembly and the preview endpoint, which reports what a run would read and an estimated transcript token count.
 - Delivered: the Platform Playbook model setting with its audit event, and the LiteLLM completion client; the worker receives `LITELLM_BASE_URL`.
 - Delivered: the pipeline — notes per conversation, the playbook step with long-term memories, the Skill Draft write, and usage recording.
-- In transition: nothing; runs work end to end through the API. No UI yet.
+- Delivered: the UI — the Agent Playbooks tab, run history, the Playbook source banner on Organization Skill pages, and Platform Settings → Playbooks; `source_agent_name` on run reads.
+- In transition: nothing.
 - Next, in order:
-  5. UI: Create playbook on the Agent page, run history, the Platform setting, and a provenance banner on the Skill Draft.
   6. Install shortcuts: from a published playbook, assign it to Agents or require it on a Template.
 - Deferred: compiling playbooks into configuration, scheduled re-extraction, Connection exclusions, reading the Agent volume, automatic publication, and measuring playbook impact.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-13 — slice 5
+
+- Delivered: `ui/src/features/playbooks/` and the Agent page tab, the Skill page banner, and the Platform Settings section; Platform Settings now switches sections with `?section=`.
+- Changed: the Agent Memory model card moved into the shared `ModelSettingCard`, unchanged for users; run reads carry `source_agent_name`.
+- Verified: Playwright for the tab, run states, Member hiding, the Platform setting, and the banner; the existing Platform memory, Agent detail, Agent memory, RBAC, and Skill specs still pass.
+- Follow-up: slice 6, install shortcuts.
 
 ### 2026-10-13 — slice 4
 
