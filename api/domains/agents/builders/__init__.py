@@ -1,6 +1,7 @@
 from .common import build_pvc, build_service
 from .hermes import (
     HERMES_BOOTLOADER_FOOTER,
+    HERMES_DEFAULT_MAX_TURNS,
     HERMES_HEALTHZ_PY,
     HERMES_START_SH,
     HERMES_WORKSPACE_DIR,
@@ -61,6 +62,7 @@ __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not a
     "native_telegram_channel",
     "runtime_teams_channel",
     # hermes
+    "HERMES_DEFAULT_MAX_TURNS",
     "HERMES_BOOTLOADER_FOOTER",
     "HERMES_HEALTHZ_PY",
     "HERMES_START_SH",

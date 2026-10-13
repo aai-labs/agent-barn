@@ -104,6 +104,7 @@ export type SelectAgentTemplateData = {
   model?: string | null;
   approvalMode?: "manual" | "auto" | "off";
   verboseMode?: boolean;
+  maxTurns?: number | null;
 };
 
 export function useSelectAgentTemplate() {

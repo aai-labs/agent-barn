@@ -57,6 +57,12 @@ class ManagedUpdateOutcome(str, enum.Enum):
     ROLLBACK_FAILED = "ROLLBACK_FAILED"
 
 
+# Bounds for an Agent's own Hermes turn limit. The lower bound keeps a run able to
+# answer at all; the upper one keeps a runaway run inside one spend-limit window.
+MAX_TURNS_MIN = 1
+MAX_TURNS_MAX = 500
+
+
 class CommandApprovalMode(str, enum.Enum):
     MANUAL = "manual"
     AUTO = "auto"
@@ -482,6 +488,10 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # How many turns one Hermes run may take before the runtime stops it. NULL
+    # follows the platform default (builders/hermes.py). Hermes-only, like
+    # verbose_mode: OpenClaw has no equivalent runtime setting.
+    max_turns: int | None = SqlField(default=None, nullable=True)
     # Opt-in Agent Memory. Turning it off stops recall and retain but keeps stored memories.
     memory_enabled: bool = SqlField(
         default=False,
@@ -1015,6 +1025,8 @@ class AgentCreate(PydanticBaseModel):
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
     verbose_mode: bool = False
+    # None follows the platform default; see AgentRead.effective_max_turns.
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
@@ -1047,6 +1059,9 @@ class AgentUpdate(PydanticBaseModel):
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
+    # Unset leaves the limit alone; an explicit null returns the Agent to the
+    # platform default, as `model: null` does for the model.
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
     @model_validator(mode="before")
     @classmethod
@@ -1204,12 +1219,13 @@ class AgentTemplateSelection(PydanticBaseModel):
     removed_skill_ids: list[UUID] = Field(default_factory=list)
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
 
-    # Unset means "leave as it is"; a null model clears the override, as in AgentUpdate.
+    # Unset means "leave as it is"; a null model or max_turns clears the override, as in AgentUpdate.
     model: str | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
-    # These columns are not nullable; only `model` gives null a meaning.
+    # These columns are not nullable; only `model` and `max_turns` give null a meaning.
     @model_validator(mode="before")
     @classmethod
     def reject_null_approval_mode(cls, values: object) -> object:
@@ -1459,6 +1475,10 @@ class AgentRead(PydanticBaseModel):
     native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    #: The Agent's own turn limit; null when it follows the platform default.
+    max_turns: int | None = None
+    #: The limit a Hermes run actually gets: the Agent's own, or the platform default.
+    effective_max_turns: int
     memory_enabled: bool = False
     last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)

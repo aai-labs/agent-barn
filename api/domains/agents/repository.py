@@ -1146,6 +1146,7 @@ class AgentRepository:
         "model",
         "approval_mode",
         "verbose_mode",
+        "max_turns",
         "agent_template_id",
         "platform_template_id",
     )

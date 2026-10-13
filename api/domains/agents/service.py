@@ -24,6 +24,7 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
+    HERMES_DEFAULT_MAX_TURNS,
     HERMES_WORKSPACE_DIR,
     OPENCLAW_WORKSPACE_DIR,
     agentbarn_telegram_channel,
@@ -128,6 +129,7 @@ from api.domains.agents.runtime_policy import (
 from api.domains.agents.selection import (
     SelectionValidator,
     ensure_approval_mode_supported,
+    ensure_max_turns_supported,
     ensure_verbose_mode_supported,
     is_model_allowed,
 )
@@ -379,6 +381,10 @@ class AgentService:
         ensure_verbose_mode_supported(agent_type, verbose_mode)
 
     @staticmethod
+    def _ensure_max_turns_supported(agent_type: AgentType, max_turns: int | None) -> None:
+        ensure_max_turns_supported(agent_type, max_turns)
+
+    @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
         return "".join(derive_tools_pointer(s) for s in skills)
 
@@ -619,6 +625,13 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            # Same for max_turns: only the Hermes builder reads it.
+            max_turns=agent.max_turns if agent.agent_type == AgentType.HERMES else None,
+            effective_max_turns=(
+                agent.max_turns
+                if agent.agent_type == AgentType.HERMES and agent.max_turns is not None
+                else HERMES_DEFAULT_MAX_TURNS
+            ),
             memory_enabled=agent.memory_enabled,
             last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
@@ -834,6 +847,7 @@ class AgentService:
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
+        self._ensure_max_turns_supported(data.agent_type, data.max_turns)
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -853,6 +867,7 @@ class AgentService:
             agent_type=data.agent_type,
             approval_mode=data.approval_mode,
             verbose_mode=data.verbose_mode,
+            max_turns=data.max_turns,
         )
         self._set_pin(agent, template)
 
@@ -1747,6 +1762,9 @@ class AgentService:
         if "verbose_mode" in updated:
             self._ensure_verbose_mode_supported(agent.agent_type, updated["verbose_mode"])
 
+        if "max_turns" in updated:
+            self._ensure_max_turns_supported(agent.agent_type, updated["max_turns"])
+
         # Validate every requested skill pin before mutating the Agent, its
         # template pin, or any attached credential.
         current_skill_rows = self.repository.get_skills_for_agent(agent.id)
@@ -1789,6 +1807,10 @@ class AgentService:
 
         if "verbose_mode" in updated:
             agent.verbose_mode = updated["verbose_mode"]
+
+        if "max_turns" in updated:
+            # Nullable column: null is the Agent returning to the platform default.
+            agent.max_turns = updated["max_turns"]
 
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
@@ -2197,6 +2219,7 @@ class AgentService:
                 verbose_mode=agent.verbose_mode,
                 agentbarn_telegram=agentbarn_telegram,
                 memory_enabled=agent.memory_enabled,
+                max_turns=agent.max_turns,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
