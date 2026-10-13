@@ -128,6 +128,10 @@ _Avoid_: snapshot, backup, volume image, checkpoint
 Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, credentials, automatic Runtime use, and read-only viewing of an Agent's own and currently permitted Organization memories, an Owner/Admin Organization viewer, and asynchronous deletion purging are implemented. See [Agent Memory](docs/features/agent-memory.md).
 _Avoid_: MEMORY.md, Runtime memory, knowledge base
 
+**Built-in memory**:
+The memory a Runtime keeps itself on the Agent's disk (Hermes `MEMORY.md` and `USER.md`, OpenClaw's memory notes). It is always on, cannot be switched off from Agent Barn, and is not shown by the memory viewer. Agent Memory adds to it and never replaces it.
+_Avoid_: Agent Memory, Runtime memory, long-term memory
+
 **Organization Memory**:
 Agent Memory marked for sharing across one Organization. One Organization Memory grant gives an Agent either Read only access for recall or Read and write access for recall and explicit shared saves.
 _Avoid_: team memory, shared bank

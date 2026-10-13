@@ -29,6 +29,14 @@ export class AgentMemoryPage {
     return this.page.getByRole("region", { name: "Long-term memory" });
   }
 
+  builtInMemory(): Locator {
+    return this.page.getByRole("region", { name: "Built-in memory" });
+  }
+
+  comparisonToggle(): Locator {
+    return this.page.getByRole("button", { name: "How is this different from built-in memory?" });
+  }
+
   async editSetting() {
     await this.settingsSection().getByRole("button", { name: "Edit" }).click();
   }

@@ -1,15 +1,23 @@
 "use client";
 
+import Link from "next/link";
 import { useState, type FormEvent } from "react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Pagination } from "@/features/agents/components/pagination";
 import type { Agent } from "@/features/agents/schemas";
+import { canAgent } from "@/features/agents/utils";
 import { formatDate } from "@/shared/date";
 
 import { useMemoryItems } from "../hooks/use-memory-items";
 import type { MemoryItem } from "../schemas";
-import { MEMORY_ITEMS_PAGE_SIZE, MEMORY_TYPE_LABEL, ORGANIZATION_MEMORY_LABEL } from "../utils";
+import {
+  LONG_TERM_MEMORY_LABEL,
+  MEMORY_ITEMS_PAGE_SIZE,
+  MEMORY_TYPE_LABEL,
+  ORGANIZATION_MEMORY_LABEL,
+} from "../utils";
+import { BuiltInMemoryNotice, MemoryStateBadge } from "./memory-layers";
 
 function Pill({ children, tone = "plain" }: { children: string; tone?: "plain" | "shared" }) {
   return (
@@ -65,6 +73,11 @@ export function MemoryItemsViewer({ agent, enabled }: { agent?: Agent; enabled: 
   if (!enabled) return null;
 
   const totalPages = Math.max(1, Math.ceil(total / MEMORY_ITEMS_PAGE_SIZE));
+  // With long-term memory off and nothing saved there is nothing to search, and the
+  // viewer is mostly telling people where the Agent's memory actually lives.
+  const longTermIsOff = Boolean(agent) && !agent?.memoryEnabled;
+  const nothingSaved = !isLoading && !error && items.length === 0 && !search && page === 1;
+  const showFullBuiltInNotice = longTermIsOff && nothingSaved;
 
   function submitSearch(event: FormEvent) {
     event.preventDefault();
@@ -74,40 +87,55 @@ export function MemoryItemsViewer({ agent, enabled }: { agent?: Agent; enabled: 
 
   return (
     <section aria-label="Saved memories">
-      <p className="mb-4 mt-0 max-w-3xl text-[0.84rem] leading-relaxed" style={{ color: "var(--ink-3)" }}>
+      {agent && (
+        <div className="mb-5 flex flex-col gap-4">
+          <BuiltInMemoryNotice agent={agent} variant={showFullBuiltInNotice ? "card" : "line"} />
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="m-0 text-[0.9rem] font-semibold" style={{ color: "var(--ink)" }}>
+              {LONG_TERM_MEMORY_LABEL}
+            </h2>
+            <MemoryStateBadge label={agent.memoryEnabled ? "On" : "Off"} active={agent.memoryEnabled} />
+          </div>
+        </div>
+      )}
+      {!showFullBuiltInNotice && (
+        <p className="mb-4 mt-0 max-w-3xl text-[0.84rem] leading-relaxed" style={{ color: "var(--ink-3)" }}>
         {organization
           ? "Shared memories saved for this Organization by its Agents. Private Agent memories are excluded. Revoking an Agent's access keeps previously saved memories. This list is read-only."
           : `${agent.name}'s private memories, followed by Organization Memory when it has Read only or Read and write access. Revoking that permission hides all Organization Memory here, including its own shared contributions. Shared records remain on the Organization Memory page. This list is read-only.`}
         {!organization && !agent.memoryEnabled && " Saved history stays available while memory is off."}
       </p>
+      )}
 
-      <form className="mb-4 flex items-center gap-2.5" role="search" onSubmit={submitSearch}>
-        <input
-          className="af-input flex-1"
-          type="search"
-          placeholder="Search saved memories…"
-          aria-label="Search saved memories"
-          maxLength={200}
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
-        />
-        <button type="submit" className="af-btn">
-          Search
-        </button>
-        {search && (
-          <button
-            type="button"
-            className="af-btn af-btn-ghost"
-            onClick={() => {
-              setSearchInput("");
-              setSearch("");
-              setPage(1);
-            }}
-          >
-            Clear
+      {!showFullBuiltInNotice && (
+        <form className="mb-4 flex items-center gap-2.5" role="search" onSubmit={submitSearch}>
+          <input
+            className="af-input flex-1"
+            type="search"
+            placeholder="Search saved memories…"
+            aria-label="Search saved memories"
+            maxLength={200}
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+          />
+          <button type="submit" className="af-btn">
+            Search
           </button>
-        )}
-      </form>
+          {search && (
+            <button
+              type="button"
+              className="af-btn af-btn-ghost"
+              onClick={() => {
+                setSearchInput("");
+                setSearch("");
+                setPage(1);
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </form>
+      )}
 
       {isLoading && (
         <div className="py-8 text-center text-[13px]" style={{ color: "var(--ink-3)" }}>
@@ -134,7 +162,13 @@ export function MemoryItemsViewer({ agent, enabled }: { agent?: Agent; enabled: 
           style={{ border: "1px dashed var(--line-strong)", color: "var(--ink-3)" }}
         >
           <div className="mb-1 text-[0.9375rem] font-medium" style={{ color: "var(--ink)" }}>
-            {page > 1 ? "No memories on this page" : search ? "No saved memories match" : "Nothing saved yet"}
+            {page > 1
+              ? "No memories on this page"
+              : search
+                ? "No saved memories match"
+                : longTermIsOff
+                  ? "Long-term memory is off"
+                  : "Nothing saved yet"}
           </div>
           <div className="text-[0.844rem]">
             {page > 1
@@ -145,8 +179,16 @@ export function MemoryItemsViewer({ agent, enabled }: { agent?: Agent; enabled: 
                 ? "Agents with Read and write access can explicitly save Organization Memory."
                 : agent.memoryEnabled
                   ? `${agent.name} saves memories as it talks with people.`
-                  : "Long-term memory is off for this Agent, and it has not saved anything."}
+                  : `${agent.name} still remembers through its built-in memory. Turn on long-term memory to also save facts outside the Agent's disk, search them here, and share them with other Agents.`}
           </div>
+          {agent && longTermIsOff && !search && page === 1 && canAgent(agent, "agent.memory.manage") && (
+            <Link
+              href={`/dashboard/${agent.organizationId}/agents/${agent.id}/configuration?section=memory`}
+              className="af-btn af-btn-primary mt-4"
+            >
+              Turn on in Configuration
+            </Link>
+          )}
         </div>
       )}
 

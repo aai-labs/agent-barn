@@ -32,6 +32,17 @@ Related context: [`../agent-memory.md`](../agent-memory.md), [`../rbac/IMPLEMENT
 
 ## Changes
 
+### 2026-10-13 — built-in memory shown beside long-term memory
+
+- Added: the Agent Memory tab and Configuration → Memory state **Built-in memory** (the
+  Runtime's own notes) as always on, so an Agent with long-term memory off no longer
+  reads as having no memory.
+- Changed: with long-term memory off and nothing saved, the tab's empty state says
+  "Long-term memory is off", hides search, and links to Configuration for people with
+  `agent.memory.manage`. Configuration gains a collapsed comparison of the two layers.
+- Not changed: no API or permission change. The built-in notes' content is not viewable;
+  that needs a new read surface and its own RBAC decision.
+
 ### 2026-10-08 — shared-save instructions in startup context
 
 - Moved: opted-in Hermes and OpenClaw writer instructions from `TOOLS.md` to
