@@ -319,11 +319,7 @@ export class AgentDetailPage {
   }
 
   removeCredentialButton(): Locator {
-    return this.page.getByRole("button", { name: "Remove" });
-  }
-
-  undoCredentialButton(): Locator {
-    return this.page.getByRole("button", { name: "Undo" });
+    return this.page.getByRole("button", { name: "Remove GitHub", exact: true });
   }
 
   shareButton(): Locator {

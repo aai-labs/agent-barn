@@ -263,8 +263,11 @@ def scraped(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Scraped]:
     )
     ticker = _Ticker(cgroup)
     try:
+        # This fixture runs the metrics exporter without Agent credential setup.
+        # Runtime readiness is intentionally 503; only the scrape endpoint must be up.
         _wait_until(
-            lambda: urllib.request.urlopen(f"http://127.0.0.1:{port}/ready", timeout=1).status == 200, "healthz"
+            lambda: urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=1).status == 200,
+            "healthz metrics endpoint",
         )
 
         target = f"host.docker.internal:{port}"

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
     AgentCreate,
+    ApolloContent,
     BitbucketContent,
     FirecrawlContent,
     GithubContent,
@@ -15,8 +16,6 @@ from api.domains.agents.models import (
     PipedriveContent,
     SecretProvider,
     SharePointContent,
-    SlackContent,
-    ZohoMailContent,
     decrypt_content,
     encrypt_content,
     validate_content,
@@ -62,23 +61,6 @@ def test_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "secret-token" not in blob  # whole payload is ciphertext, not plaintext
     assert decrypt_content(SecretProvider.JIRA, blob, _KEY) == original
-
-
-def test_zoho_mail_content_validates_oauth_fields():
-    content = validate_content(
-        SecretProvider.ZOHO_MAIL,
-        {
-            "email": "u@z.com",
-            "account_id": "56218000000008002",
-            "client_id": "1000.CLIENTID",
-            "client_secret": "z_secret",
-            "refresh_token": "z_refresh",
-        },
-    )
-    assert isinstance(content, ZohoMailContent)
-    assert content.email == "u@z.com"
-    assert content.account_id == "56218000000008002"
-    assert content.client_id == "1000.CLIENTID"
 
 
 _SHAREPOINT = {
@@ -400,6 +382,37 @@ def test_pipedrive_content_normalizes_domain_to_its_subdomain_label(domain):
     assert content.domain == "aai-labs"
 
 
+# --- Apollo ---
+
+_APOLLO_BASE = {"api_token": "apollo-test-key"}
+
+
+def test_apollo_content_validates_api_token():
+    content = validate_content(SecretProvider.APOLLO, _APOLLO_BASE)
+    assert isinstance(content, ApolloContent)
+    assert content.api_token == "apollo-test-key"
+
+
+@pytest.mark.parametrize("raw", [{}, {"api_token": ""}])
+def test_apollo_content_rejects_missing_api_token(raw):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.APOLLO, raw)
+
+
+@pytest.mark.parametrize("field", ["base_url", "extra"])
+def test_apollo_content_rejects_extra_fields(field):
+    # A base_url would let a caller send the key to a host other than Apollo's API.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.APOLLO, {**_APOLLO_BASE, field: "https://evil.example"})
+
+
+def test_apollo_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.APOLLO, _APOLLO_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "apollo-test-key" not in blob
+    assert decrypt_content(SecretProvider.APOLLO, blob, _KEY) == original
+
+
 def test_retired_google_providers_are_gone():
     """The per-service Google providers were removed outright, rows and all (their
     secrets are deleted by migration). Nothing may resurrect them as a provider value:
@@ -407,34 +420,6 @@ def test_retired_google_providers_are_gone():
     for retired in ("gmail", "google_calendar", "google_sheets"):
         with pytest.raises(ValueError):
             SecretProvider(retired)
-
-
-# --- Slack (AF-209) ---
-
-_SLACK_BASE = {"token": "xoxb-test-token"}
-
-
-def test_slack_content_validates_token():
-    content = validate_content(SecretProvider.SLACK, _SLACK_BASE)
-    assert isinstance(content, SlackContent)
-    assert content.token == "xoxb-test-token"
-
-
-def test_slack_content_rejects_missing_token():
-    with pytest.raises(ValidationError):
-        validate_content(SecretProvider.SLACK, {})
-
-
-def test_slack_content_rejects_extra_fields():
-    with pytest.raises(ValidationError):
-        validate_content(SecretProvider.SLACK, {**_SLACK_BASE, "extra": "nope"})
-
-
-def test_slack_encrypt_decrypt_round_trip():
-    original = validate_content(SecretProvider.SLACK, _SLACK_BASE)
-    blob = encrypt_content(original, _KEY)
-    assert "xoxb-test-token" not in blob
-    assert decrypt_content(SecretProvider.SLACK, blob, _KEY) == original
 
 
 # --- google_workspace ---

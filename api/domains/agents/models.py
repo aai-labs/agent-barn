@@ -86,13 +86,11 @@ class SecretProvider(str, enum.Enum):
     JIRA = "jira"
     CONFLUENCE = "confluence"
     BITBUCKET = "bitbucket"
-    ZOHO_MAIL = "zoho_mail"
-    ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
-    SLACK = "slack"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
     SHAREPOINT = "sharepoint"
+    APOLLO = "apollo"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -106,13 +104,11 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira credential",
     SecretProvider.CONFLUENCE: "Confluence credential",
     SecretProvider.BITBUCKET: "Bitbucket credential",
-    SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
-    SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
-    SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
     SecretProvider.SHAREPOINT: "SharePoint credential",
+    SecretProvider.APOLLO: "Apollo credential",
 }
 
 
@@ -257,6 +253,10 @@ class SharePointContent(SecretContent):
     # replaces it.
     sign_in_id: str | None = None
     sites: list[GrantedSite] = Field(default_factory=list)
+    broker_access_token: str | None = Field(default=None, repr=False)
+    broker_expires_at: float | None = None
+    store_revision: str | None = None
+    subject_id: str | None = None
 
     @field_validator("connection_id", "sign_in_id")
     @classmethod
@@ -278,28 +278,12 @@ class SharePointContent(SecretContent):
         return self
 
 
-class ZohoMailContent(SecretContent):
-    email: str
-    account_id: str
-    client_id: str
-    client_secret: str
-    refresh_token: str
-
-
-class ZohoCalendarContent(SecretContent):
-    username: str
-    email: str
-    app_password: str
-    caldav_url: str
-
-
 class FirecrawlContent(SecretContent):
     api_key: str
+    # Self-hosted override. Kept for backward-compatible decryption of already-stored
+    # content (SecretContent forbids extra fields) but no longer read by anything —
+    # FirecrawlPlugin.upstream_base_url ignores it. See that plugin for why.
     base_url: str = ""
-
-
-class SlackContent(SecretContent):
-    token: str
 
 
 _PIPEDRIVE_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
@@ -325,18 +309,22 @@ class PipedriveContent(SecretContent):
         return label
 
 
+class ApolloContent(SecretContent):
+    # No base URL: an Apollo API key is only ever sent to Apollo's own API host, so a
+    # configurable endpoint would only be a way to move the key somewhere else.
+    api_token: str = Field(min_length=1)
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
     SecretProvider.CONFLUENCE: ConfluenceContent,
     SecretProvider.BITBUCKET: BitbucketContent,
-    SecretProvider.ZOHO_MAIL: ZohoMailContent,
-    SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
-    SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
     SecretProvider.SHAREPOINT: SharePointContent,
+    SecretProvider.APOLLO: ApolloContent,
 }
 
 
@@ -1307,6 +1295,24 @@ class AgentConfigurationRead(PydanticBaseModel):
     override_versions: list[AgentTemplateOverrideVersionRead] = Field(default_factory=list)
 
 
+class IntegrationIsolationRead(PydanticBaseModel):
+    desired: bool
+    supported_modes: list[Literal["direct", "isolated"]]
+    direct_description: str
+    isolated_description: str
+    switch_available: bool = False
+    applied: bool | None = None
+    generation: UUID | None = None
+    pending: bool = True
+    last_verified: bool | None = None
+    reconnect_required: bool = False
+
+
+class IntegrationIsolationUpdate(PydanticBaseModel):
+    isolated: bool
+    restart: bool = False
+
+
 class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
     model_config = ConfigDict(from_attributes=True)
 
@@ -1314,6 +1320,8 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
     secret_name: str
     shared_credential_id: UUID | None = None
     shared_credential_name: str | None = None
+    isolation: IntegrationIsolationRead | None = None
+    source: Literal["agent_secret", "shared_credential", "platform_default"] = "agent_secret"
 
 
 class AgentAccessRoleRead(PydanticBaseModel):

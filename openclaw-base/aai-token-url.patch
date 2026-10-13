@@ -1,0 +1,26 @@
+diff --git a/src/config.rs b/src/config.rs
+index ea6fb85..5be31ee 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -182,7 +182,7 @@ fn apply_env_overrides(profile: &mut Profile, profile_name: &str) {
+             .or_else(|| env_value("POSTHOG_API_KEY"))
+             .or_else(|| env_value("POSTHOG_PERSONAL_API_KEY"));
+     }
+-    if profile.api_token.is_none() {
++    if profile.api_token.is_none() && profile.auth_type.as_deref() != Some("token_url") {
+         profile.api_token = env_value(&format!("AAI_{}_API_TOKEN", normalized))
+             .or_else(|| env_value("AAI_API_TOKEN"))
+             .or_else(|| env_value("POSTHOG_API_KEY"))
+diff --git a/src/services/microsoft/excel.rs b/src/services/microsoft/excel.rs
+index 072d1f9..269a6f5 100644
+--- a/src/services/microsoft/excel.rs
++++ b/src/services/microsoft/excel.rs
+@@ -439,7 +439,7 @@ fn add_matrix(
+ }
+ 
+ fn ensure_delegated(ctx: &Context, operation: &'static str) -> Result<(), AppError> {
+-    if ctx.profile().auth_type.as_deref() == Some("microsoft_delegated") {
++    if matches!(ctx.profile().auth_type.as_deref(), Some("microsoft_delegated" | "token_url")) {
+         return Ok(());
+     }
+     Err(AppError::unsupported_auth(

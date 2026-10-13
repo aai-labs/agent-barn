@@ -1,0 +1,50 @@
+diff --git a/src/services/apollo.rs b/src/services/apollo.rs
+index 1d2399b..4985878 100644
+--- a/src/services/apollo.rs
++++ b/src/services/apollo.rs
+@@ -15,6 +15,16 @@ use crate::{
+
+ const SERVICE: &str = "apollo";
+ const HEALTH_URL: &str = "https://api.apollo.io/v1/auth/health";
++fn apollo_health_url(profile: &crate::config::Profile) -> String {
++    match profile.base_url.as_deref() {
++        None => HEALTH_URL.to_string(),
++        Some(base) => format!(
++            "{}/v1/auth/health",
++            base.trim_end_matches('/').trim_end_matches("/api/v1")
++        ),
++    }
++}
++
+ const PAGE_ARRAY_KEYS: &[&str] = &[
+     "people",
+     "organizations",
+@@ -43,7 +53,7 @@ pub(crate) async fn dispatch(
+                 ctx,
+                 "health",
+                 Method::GET,
+-                HEALTH_URL.to_string(),
++                apollo_health_url(ctx.profile()),
+                 None,
+             )
+             .await
+@@ -1492,6 +1502,19 @@ mod tests {
+     use super::*;
+     use crate::config::Profile;
+
++    #[test]
++    fn apollo_health_honors_profile_origin_and_gateway_prefix() {
++        assert_eq!(apollo_health_url(&Profile::default()), HEALTH_URL);
++        let profile = Profile {
++            base_url: Some("http://gateway/gateway/v1/p/apollo/api/v1/".to_string()),
++            ..Profile::default()
++        };
++        assert_eq!(
++            apollo_health_url(&profile),
++            "http://gateway/gateway/v1/p/apollo/v1/auth/health"
++        );
++    }
++
+     #[test]
+     fn apollo_base_defaults_to_api_v1() {
+         assert_eq!(

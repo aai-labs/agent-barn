@@ -11,7 +11,13 @@ from hamcrest import assert_that, contains_string, equal_to, is_not
 from api.domains.agents.models import AgentType
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given, then, when
-from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
+from api.tests.core.modules import (
+    create_test_client,
+    prepare_api_server,
+    prepare_gateway_server,
+    prepare_injector,
+    set_env_variable,
+)
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
@@ -169,3 +175,74 @@ def test_start_agent_with_selected_sites_fetches_tokens_from_the_platform(agent_
 
         with then("the agent is told which sites it can reach"):
             assert_that(config_map.data["TOOLS.md"], contains_string(_FINANCE))
+
+
+@pytest.mark.parametrize("agent_type", [AgentType.HERMES, AgentType.OPENCLAW])
+def test_selected_sites_isolation_uses_bound_gateway_and_preserves_app_only_sign_in(agent_type):
+    with given([*_given(agent_type, sites_are_granted(_FINANCE)), prepare_gateway_server()]) as context:
+        base = agent_base(context)
+        response = context.client.put(
+            f"{base}/integrations/sharepoint/isolation",
+            headers=auth(context),
+            json={"isolated": True, "restart": False},
+        )
+        assert response.status_code == 200, response.text
+        response = context.client.post(f"{base}/start", headers=auth(context))
+        assert response.status_code == 200, response.text
+        k8s = context.injector.get(KubernetesClient)
+        environment = k8s.create_secret.call_args.args[1].string_data
+        assert "AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN" not in environment
+        token = environment["AF_GATEWAY_TOKEN_SHAREPOINT"]
+        headers = {"Authorization": f"Bearer {token}"}
+        assert context.gateway_client.post("/gateway/v1/token", headers=headers).status_code == 403
+        # There is no delegated grant to import, even if an earlier PVC marker exists.
+        response = context.gateway_client.post(
+            "/gateway/v1/sharepoint/handoff",
+            headers=headers,
+            json={"store": "obsolete-delegated-store", "key": "obsolete-key", "marker": "earlier-sign-in"},
+        )
+        assert response.status_code == 204, response.text
+        repeat = context.gateway_client.post("/gateway/v1/sharepoint/handoff", headers=headers, json={})
+        assert repeat.status_code == 204
+        response = context.gateway_client.post("/gateway/v1/token", headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["access_token"]
+        response = context.client.put(
+            f"{base}/integrations/sharepoint/isolation",
+            headers=auth(context),
+            json={"isolated": False, "restart": True},
+        )
+        assert response.status_code == 200, response.text
+        assert context.gateway_client.post("/gateway/v1/token", headers=headers).status_code == 403
+        config = k8s.create_config_map.call_args.args[1].data["aai-cli-config.toml"]
+        assert 'api_token_secret = "agentfarm.ingest_key"' in config
+        assert "AAI_SECRET_MICROSOFT_SHAREPOINT_REFRESH_TOKEN" not in k8s.create_secret.call_args.args[1].string_data
+
+
+def test_selected_sites_refused_app_token_leaves_handoff_incomplete():
+    from api.domains.agents.microsoft_identity import MicrosoftIdentityUnavailable
+    from api.domains.integrations.repository import IntegrationRepository
+    from api.tests.steps.sharepoint import fake_identity
+
+    with given([*_given(AgentType.HERMES, sites_are_granted(_FINANCE)), prepare_gateway_server()]) as context:
+        base = agent_base(context)
+        response = context.client.put(
+            f"{base}/integrations/sharepoint/isolation",
+            headers=auth(context),
+            json={"isolated": True, "restart": False},
+        )
+        assert response.status_code == 200
+        response = context.client.post(f"{base}/start", headers=auth(context))
+        assert response.status_code == 200
+        k8s = context.injector.get(KubernetesClient)
+        token = k8s.create_secret.call_args.args[1].string_data["AF_GATEWAY_TOKEN_SHAREPOINT"]
+        fake_identity(context).app_token_result = MicrosoftIdentityUnavailable()
+        response = context.gateway_client.post(
+            "/gateway/v1/sharepoint/handoff",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        )
+        assert response.status_code == 502, response.text
+        runtime = context.injector.get(IntegrationRepository).runtime(context.agent.id)
+        assert runtime.authentication_complete is False
+        assert not runtime.bindings["sharepoint"].get("handoff_complete")

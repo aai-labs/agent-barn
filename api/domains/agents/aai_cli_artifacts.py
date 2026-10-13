@@ -2,56 +2,66 @@
 
 These are pure string/dict builders (no k8s types) consumed by ``start_agent`` to inject an
 agent's integration secrets into its pod so the baked-in ``aai-cli`` can use them.
+
+Per-provider behavior lives on the Integration Plugins
+(``api/domains/integrations/plugins/``), not here: this module is the aai-cli *adapter*,
+so it owns file layout, ordering, and the shared prose, while each provider owns its own
+profile block, secret-store entries, and agents_md lines.
 """
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
-from api.domains.agents.microsoft_graph_scopes import GRAPH_SCOPE_PREFIX, sharepoint_permission
-from api.domains.agents.models import (
-    BitbucketContent,
-    ConfluenceContent,
-    GithubContent,
-    JiraContent,
-    PipedriveContent,
-    SecretContent,
-    SecretProvider,
-    SharePointContent,
-    SlackContent,
-    ZohoCalendarContent,
-    ZohoMailContent,
+from api.domains.agents.models import SecretContent, SecretProvider, SharePointContent
+from api.domains.credential_gateway.models import gateway_token_env_var
+from api.domains.integrations.plugins.aai_cli_support import (
+    AaiCliPlugin,
+    env_var_for,
+    secrets_dir,
 )
+from api.domains.integrations.plugins.base import EgressMode
+from api.domains.integrations.plugins.providers import AAI_CLI, SharePointPlugin
+from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
+
+__all__ = [
+    "CONFIG_PATH",
+    "CREDENTIAL_FREE_TOOLS",
+    "PROFILE_SLUGS",
+    "SECRETS_DIR",
+    "build_config_toml",
+    "build_env",
+    "build_integrations_policy_md",
+    "build_local_tools_policy_md",
+    "build_setup_sh",
+    "build_tool_context_md",
+    "env_var_for",
+    "provider_secrets_map",
+    "store_providers_for",
+]
+
+
+def _aai_cli_plugins() -> tuple[AaiCliPlugin, ...]:
+    """Every aai-cli provider, in fixed SecretProvider order."""
+    return tuple(p for p in INTEGRATION_PLUGINS.for_tool(AAI_CLI) if isinstance(p, AaiCliPlugin))
+
+
+def _plugin_for(provider: SecretProvider) -> AaiCliPlugin | None:
+    """The aai-cli plugin for a provider, or None when another CLI reaches it."""
+    plugin = INTEGRATION_PLUGINS.require(provider)
+    return plugin if isinstance(plugin, AaiCliPlugin) else None
+
 
 # Maps each provider to its (secret_name, content_attr) pairs for the aai-cli encrypted
-# secret store. Each tuple: (secret_name referenced in config.toml, attr on the content model).
-# Providers not listed here don't use the store (env-based only, e.g. google-calendar).
+# secret store. Providers not listed here don't use the store. Derived from the plugins
+# so a new provider cannot forget to appear.
 provider_secrets_map: dict[str, list[tuple[str, str]]] = {
-    "github": [("github.token", "token")],
-    "jira": [("jira.api_token", "api_token")],
-    "confluence": [("confluence.api_token", "api_token")],
-    "bitbucket": [("bitbucket.api_token", "api_token")],
-    "zoho_mail": [
-        ("zoho.client_secret", "client_secret"),
-        ("zoho.mail_refresh_token", "refresh_token"),
-    ],
-    "slack": [("slack.token", "token")],
-    "pipedrive": [("pipedrive.api_token", "api_token")],
+    p.key: list(p.aai_cli_secret_entries) for p in _aai_cli_plugins() if p.aai_cli_secret_entries
 }
 
 # Canonical aai-cli --profile slug per provider — the single source of truth shared by the
 # config.toml profile builders (which emit `[profiles.<slug>]`) and the markdown that tells
 # the agent which --profile to pass. GitHub/Bitbucket use this as the base slug; each extra
-# configured repo appends -2, -3, ... via _profile_repo_pairs.
-PROFILE_SLUGS: dict[SecretProvider, str] = {
-    SecretProvider.GITHUB: "github-work",
-    SecretProvider.JIRA: "jira-work",
-    SecretProvider.CONFLUENCE: "confluence-work",
-    SecretProvider.BITBUCKET: "bitbucket-work",
-    SecretProvider.ZOHO_MAIL: "zoho-mail-rest",
-    SecretProvider.ZOHO_CALENDAR: "zoho-calendar-work",
-    SecretProvider.SLACK: "slack-work",
-    SecretProvider.PIPEDRIVE: "pipedrive-work",
-    SecretProvider.SHAREPOINT: "sharepoint-work",
-}
+# configured repo appends -2, -3, ... via profile_repo_pairs.
+PROFILE_SLUGS: dict[SecretProvider, str] = {p.provider: p.aai_cli_slug for p in _aai_cli_plugins()}
 
 # SharePoint uses aai-cli's own delegated Microsoft profile. aai-cli refreshes the token and
 # stores each rotated one under this name, so the pod writes it only for a new sign-in (see
@@ -65,204 +75,20 @@ SHAREPOINT_SIGN_IN_ID_ENV = "AAI_SHAREPOINT_SIGN_IN_ID"
 PLATFORM_KEY_SECRET = "agentfarm.ingest_key"
 
 # Default config dir for OpenClaw (node user). Callers can pass a different home_dir for other
-# runtimes (e.g. Hermes runs as root → home_dir="/root").
-SECRETS_DIR = "/home/node/.config/aai-cli"
+# runtimes (e.g. Hermes runs as root -> home_dir="/root").
+SECRETS_DIR = secrets_dir("/home/node")
 CONFIG_PATH = f"{SECRETS_DIR}/config.toml"
 
 
-def _header(secrets_dir: str) -> str:
-    return f'secrets_file = "{secrets_dir}/aai-secrets.enc.json"\nkey_file = "{secrets_dir}/key"\n'
-
-
-def env_var_for(secret_name: str) -> str:
-    """ "jira.api_token" -> "AAI_SECRET_JIRA_API_TOKEN"."""
-    return "AAI_SECRET_" + secret_name.upper().replace(".", "_")
-
-
-def _q(value: str) -> str:
-    """TOML-quote a string value, escaping backslashes and double quotes."""
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _profile_repo_pairs(base_name: str, repos: list[str]) -> list[tuple[str, str | None]]:
-    """Map a list of repo names to (profile_name, repo) pairs.
-
-    [] -> [(base_name, None)] (profile with no `repo =` line — aai-cli falls back to
-    a `--repo` CLI flag). [r1, r2, ...] -> [(base_name, r1), (f"{base_name}-2", r2), ...].
-    """
-    if not repos:
-        return [(base_name, None)]
-    return [(base_name if i == 0 else f"{base_name}-{i + 1}", repo) for i, repo in enumerate(repos)]
-
-
-# --- per-provider profile blocks (rendered from the decrypted content model) ---
-
-
-def _github_block(c: GithubContent) -> str:
-    blocks = []
-    for name, repo in _profile_repo_pairs(PROFILE_SLUGS[SecretProvider.GITHUB], c.repos):
-        lines = [
-            f"[profiles.{name}]\n",
-            'provider = "github"\n',
-            'auth_type = "bearer_token"\n',
-            'token_secret = "github.token"\n',
-            f"owner = {_q(c.owner)}\n",
-        ]
-        if repo is not None:
-            lines.append(f"repo = {_q(repo)}\n")
-        lines.append(f"org = {_q(c.org)}\n")
-        blocks.append("".join(lines))
-    return "\n".join(blocks)
-
-
-def _jira_block(c: JiraContent) -> str:
-    site_url = c.site_url
-    if c.use_scoped_token:
-        # Scoped tokens are still Basic Auth, but must go through the API Gateway
-        # (keyed by cloud_id) rather than the site URL directly.
-        # If cloud_id is missing, skip the profile — the user must re-save the integration.
-        if not c.cloud_id:
-            return "# jira-work profile skipped: cloud_id missing\n"
-        site_url = f"https://api.atlassian.com/ex/jira/{c.cloud_id}"
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.JIRA]}]\n"
-        'auth_type = "basic_api_token"\n'
-        f"site_url = {_q(site_url)}\n"
-        f"email = {_q(c.email)}\n"
-        'api_token_secret = "jira.api_token"\n'
-    )
-
-
-def _confluence_block(c: ConfluenceContent) -> str:
-    site_url = c.site_url
-    if c.use_scoped_token:
-        # Scoped tokens are still Basic Auth, but must go through the API Gateway
-        # (keyed by cloud_id) rather than the site URL directly.
-        # If cloud_id is missing, skip the profile — the user must re-save the integration.
-        if not c.cloud_id:
-            return "# confluence-work profile skipped: cloud_id missing\n"
-        site_url = f"https://api.atlassian.com/ex/confluence/{c.cloud_id}"
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.CONFLUENCE]}]\n"
-        'auth_type = "basic_api_token"\n'
-        f"site_url = {_q(site_url)}\n"
-        f"email = {_q(c.email)}\n"
-        'api_token_secret = "confluence.api_token"\n'
-    )
-
-
-def _bitbucket_block(c: BitbucketContent) -> str:
-    blocks = []
-    for name, repo in _profile_repo_pairs(PROFILE_SLUGS[SecretProvider.BITBUCKET], c.repos):
-        lines = [
-            f"[profiles.{name}]\n",
-            'auth_type = "basic_api_token"\n',
-            f"workspace = {_q(c.workspace)}\n",
-        ]
-        if repo is not None:
-            lines.append(f"repo = {_q(repo)}\n")
-        lines.append(f"email = {_q(c.email)}\n")
-        lines.append('api_token_secret = "bitbucket.api_token"\n')
-        blocks.append("".join(lines))
-    return "\n".join(blocks)
-
-
-def _zoho_mail_block(c: ZohoMailContent) -> str:
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.ZOHO_MAIL]}]\n"
-        'provider = "zoho"\n'
-        'auth_type = "zoho_oauth"\n'
-        f"email = {_q(c.email)}\n"
-        f"account_id = {_q(c.account_id)}\n"
-        f"client_id = {_q(c.client_id)}\n"
-        'client_secret_secret = "zoho.client_secret"\n'
-        'refresh_token_secret = "zoho.mail_refresh_token"\n'
-    )
-
-
-def _zoho_calendar_block(c: ZohoCalendarContent) -> str:
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.ZOHO_CALENDAR]}]\n"
-        'provider = "zoho"\n'
-        'transport = "caldav"\n'
-        'auth_type = "app_password"\n'
-        f"username = {_q(c.username)}\n"
-        f"email = {_q(c.email)}\n"
-        'password_env = "ZOHO_CALENDAR_APP_PASSWORD"\n'
-        f"caldav_url = {_q(c.caldav_url)}\n"
-    )
-
-
-def _slack_block(c: SlackContent) -> str:
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.SLACK]}]\n"
-        'provider = "slack"\n'
-        'auth_type = "bearer_token"\n'
-        'token_secret = "slack.token"\n'
-    )
-
-
-def _pipedrive_block(c: PipedriveContent) -> str:
-    lines = [
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.PIPEDRIVE]}]\n",
-        'auth_type = "pipedrive_personal_token"\n',
-    ]
-    if c.domain:
-        lines.append(f"base_url = {_q(f'https://{c.domain}.pipedrive.com')}\n")
-    lines.append('api_token_secret = "pipedrive.api_token"\n')
-    return "".join(lines)
-
-
-def _sharepoint_block(c: SharePointContent, token_url: str | None = None) -> str:
-    """aai-cli ``microsoft`` profile for SharePoint on the agent's Teams app.
-
-    Delegated: ``microsoft_delegated`` refreshes as a public client (no secret), which is how
-    the sign-in obtained the token. The scope is SharePoint only, whatever else the microsoft
-    commands cover.
-
-    Selected sites: ``token_url`` holds no credential; aai-cli presents the agent's platform key
-    to the API, which mints an app-only token reaching only the granted sites.
-    """
-    if c.mode == "selected_sites":
-        if token_url is None:
-            raise ValueError("a selected-sites SharePoint profile needs the agent's token URL")
-        return (
-            f"[profiles.{PROFILE_SLUGS[SecretProvider.SHAREPOINT]}]\n"
-            'provider = "microsoft"\n'
-            'auth_type = "token_url"\n'
-            f"token_url = {_q(token_url)}\n"
-            f"api_token_secret = {_q(PLATFORM_KEY_SECRET)}\n"
-        )
-    scope = f"{GRAPH_SCOPE_PREFIX}{sharepoint_permission(c.read_only)} offline_access"
-    return (
-        f"[profiles.{PROFILE_SLUGS[SecretProvider.SHAREPOINT]}]\n"
-        'provider = "microsoft"\n'
-        'auth_type = "microsoft_delegated"\n'
-        f"tenant_id = {_q(c.tenant_id)}\n"
-        f"client_id = {_q(c.client_id)}\n"
-        f"scope = {_q(scope)}\n"
-        f"refresh_token_secret = {_q(SHAREPOINT_REFRESH_TOKEN_SECRET)}\n"
-    )
-
-
-_PROFILE_BUILDERS: dict[SecretProvider, Callable[..., str]] = {
-    SecretProvider.GITHUB: _github_block,
-    SecretProvider.JIRA: _jira_block,
-    SecretProvider.CONFLUENCE: _confluence_block,
-    SecretProvider.BITBUCKET: _bitbucket_block,
-    SecretProvider.ZOHO_MAIL: _zoho_mail_block,
-    SecretProvider.ZOHO_CALENDAR: _zoho_calendar_block,
-    SecretProvider.SLACK: _slack_block,
-    SecretProvider.PIPEDRIVE: _pipedrive_block,
-}
+def _header(dir_path: str) -> str:
+    return f'secrets_file = "{dir_path}/aai-secrets.enc.json"\nkey_file = "{dir_path}/key"\n'
 
 
 # Every provider reachable through an aai-cli --profile gets a "Configured Integrations"
-# line. This was previously limited to the four repo/issue trackers, which left Slack,
-# Gmail, Zoho Mail, Pipedrive, and the calendars with no "credentials are already in
-# place" note at all — so those agents would tell the user they had no access, or ask for
-# a token that was already mounted. Keyed off PROFILE_SLUGS so a new provider is covered
-# the moment it gets a profile.
+# line. This was previously limited to the four repo/issue trackers, which left providers
+# such as Pipedrive with no "credentials are already in place" note at all — so those
+# agents would tell the user they had no access, or ask for a token that was already
+# mounted.
 _TOOL_CONTEXT_PROVIDERS = frozenset(PROFILE_SLUGS)
 
 
@@ -283,61 +109,12 @@ def build_tool_context_md(decrypted: Mapping[SecretProvider, SecretContent]) -> 
             "Do not ask the user to re-provide them.\n"
         ),
     ]
-    for provider in SecretProvider:
+    for provider in SecretProvider:  # fixed enum order for deterministic output
         content = decrypted.get(provider)
-        if content is None or provider not in PROFILE_SLUGS:
+        plugin = _plugin_for(provider)
+        if content is None or plugin is None:
             continue
-        if isinstance(content, GithubContent):
-            base = PROFILE_SLUGS[SecretProvider.GITHUB]
-            if content.repos:
-                pairs = "; ".join(
-                    f"`{name}`: {content.owner}/{repo}" for name, repo in _profile_repo_pairs(base, content.repos)
-                )
-                lines.append(f"- **GitHub**: {pairs}")
-            else:
-                lines.append(
-                    f"- **GitHub** (`{base}`): owner/org `{content.owner}` — "
-                    "no repository configured; pass --repo explicitly"
-                )
-        elif isinstance(content, JiraContent):
-            slug = PROFILE_SLUGS[SecretProvider.JIRA]
-            lines.append(f"- **Jira** (`{slug}`): {content.site_url} ({content.email})")
-        elif isinstance(content, ConfluenceContent):
-            slug = PROFILE_SLUGS[SecretProvider.CONFLUENCE]
-            lines.append(f"- **Confluence** (`{slug}`): {content.site_url} ({content.email})")
-        elif isinstance(content, BitbucketContent):
-            base = PROFILE_SLUGS[SecretProvider.BITBUCKET]
-            if content.repos:
-                pairs = "; ".join(
-                    f"`{name}`: {content.workspace}/{repo}" for name, repo in _profile_repo_pairs(base, content.repos)
-                )
-                lines.append(f"- **Bitbucket**: {pairs} ({content.email})")
-            else:
-                lines.append(
-                    f"- **Bitbucket** (`{base}`): workspace `{content.workspace}` "
-                    f"({content.email}) — no repository configured; pass --repo explicitly"
-                )
-        elif isinstance(content, SharePointContent) and content.mode == "selected_sites":
-            slug = PROFILE_SLUGS[SecretProvider.SHAREPOINT]
-            access = "read-only" if content.read_only else "read and write"
-            sites = ", ".join(site.url for site in content.sites)
-            lines.append(
-                f"- **SharePoint** (`{slug}`): only these sites ({access}): {sites}. Anything else is refused. "
-                "Excel workbook commands aren't available here; download, edit and upload the file instead"
-            )
-        elif isinstance(content, SharePointContent):
-            slug = PROFILE_SLUGS[SecretProvider.SHAREPOINT]
-            access = "read-only" if content.read_only else "read and write"
-            lines.append(
-                f"- **SharePoint** (`{slug}`): signed in as {content.email} ({access}) — SharePoint only: "
-                "the sites, libraries and files that account can open; Outlook, Teams messages, To Do and "
-                "Planner aren't authorised"
-            )
-        else:
-            # Providers with no site/repo metadata worth printing still belong here: the
-            # point of this block is "credentials are already in place", which is exactly
-            # what a Slack- or Gmail-only agent was missing.
-            lines.append(f"- **{_INTEGRATION_LABELS[provider]}** (`{PROFILE_SLUGS[provider]}`)")
+        lines.append(plugin.aai_cli_context_line(content))
     return "\n".join(lines) + "\n"
 
 
@@ -379,72 +156,6 @@ def build_local_tools_policy_md(mounted_skill_names: Iterable[str]) -> str:
     )
 
 
-# Display label per provider for the agents_md integrations block.
-_INTEGRATION_LABELS: dict[SecretProvider, str] = {
-    SecretProvider.GITHUB: "GitHub",
-    SecretProvider.JIRA: "Jira",
-    SecretProvider.CONFLUENCE: "Confluence",
-    SecretProvider.BITBUCKET: "Bitbucket",
-    SecretProvider.ZOHO_MAIL: "Zoho Mail",
-    SecretProvider.ZOHO_CALENDAR: "Zoho Calendar",
-    SecretProvider.SLACK: "Slack",
-    SecretProvider.PIPEDRIVE: "Pipedrive",
-    SecretProvider.SHAREPOINT: "SharePoint",
-}
-
-# One-clause summary of what each integration can actually do, appended to its agents_md
-# line. Without it the always-loaded context named a --profile slug and nothing else, so
-# an agent asked "are there files in this channel?" had no token in context linking the
-# question to `slack-work` and would answer that it had no access — the profile slug alone
-# never told it what the profile was *for*. Sourced from the command surface documented in
-# ``aai_cli_skills/bundled/skills/aai-<provider>/SKILL.md``; keep it in sync when
-# commands are added. Providers with no bundled aai-cli skill doc (the calendars)
-# are omitted and render as before.
-_INTEGRATION_CAPABILITIES: dict[SecretProvider, str] = {
-    SecretProvider.GITHUB: "PRs (diff, files, reviews, comments), issues, branches, repo source, Actions runs",
-    SecretProvider.JIRA: "issues (comments, attachments), sprints, boards, projects, users",
-    SecretProvider.CONFLUENCE: "pages (comments, attachments), spaces",
-    SecretProvider.BITBUCKET: "PRs (diff, comments), commits, branches, repo source, pipelines",
-    SecretProvider.ZOHO_MAIL: "read and search mail (read-only)",
-    SecretProvider.SLACK: (
-        "read channel data: list channels, list and download files and attachments, "
-        "read bookmarks, links, canvases (read-only)"
-    ),
-    SecretProvider.PIPEDRIVE: "deals, leads, persons, organizations, activities, notes, mailbox",
-    SecretProvider.SHAREPOINT: (
-        "SharePoint only, as the signed-in account: files in document libraries "
-        "(`microsoft sharepoint files` upload/download/delete), lists and list items; find sites, "
-        "libraries and folders with `microsoft request get` — read `./skills/aai-microsoft/SKILL.md`"
-    ),
-}
-
-
-def _repo_scoped_profile_line(label: str, base: str, scope: str, scope_kind: str, repos: list[str]) -> str:
-    """Render the agents_md line for a repo-scoped provider (GitHub/Bitbucket).
-
-    With repos configured, each --profile slug is mapped to the ``scope/repo`` it
-    targets (``github-work`` -> ``aai-labs/agent-farm``) so an agent with several repos
-    knows which profile is which. With none configured, the profile carries no ``repo``,
-    so aai-cli requires ``--repo`` at call time — the line says so, and names the
-    ``scope`` (owner/workspace). ``scope`` comes from the configured secret, so this
-    reflects whatever org/workspace the operator set up — nothing is hardcoded.
-    """
-    if repos:
-        segments = ", ".join(f"`--profile {name}` → {scope}/{repo}" for name, repo in _profile_repo_pairs(base, repos))
-        return f"- **{label}**: {segments}"
-    return (
-        f"- **{label}**: `--profile {base}` ({scope_kind} `{scope}` already set on the "
-        "profile; no repo configured — pass `--repo <repo>`)"
-    )
-
-
-_SELECTED_SITES_CAPABILITY = (
-    "SharePoint, the granted sites only: files in their document libraries "
-    "(`microsoft sharepoint files` upload/download/delete), lists and list items; find libraries "
-    "and folders with `microsoft request get` — read `./skills/aai-microsoft/SKILL.md`"
-)
-
-
 def build_integrations_policy_md(
     decrypted: Mapping[SecretProvider, SecretContent],
 ) -> str:
@@ -481,19 +192,11 @@ def build_integrations_policy_md(
     ]
     for provider in SecretProvider:  # fixed enum order for deterministic output
         content = decrypted.get(provider)
-        if content is None or provider not in PROFILE_SLUGS:
+        plugin = _plugin_for(provider)
+        if content is None or plugin is None:
             continue
-        base = PROFILE_SLUGS[provider]
-        if isinstance(content, GithubContent):
-            line = _repo_scoped_profile_line("GitHub", base, content.owner, "owner", content.repos)
-        elif isinstance(content, BitbucketContent):
-            line = _repo_scoped_profile_line("Bitbucket", base, content.workspace, "workspace", content.repos)
-        else:
-            line = f"- **{_INTEGRATION_LABELS[provider]}**: `--profile {base}`"
-        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
-            capability = _SELECTED_SITES_CAPABILITY
-        else:
-            capability = _INTEGRATION_CAPABILITIES.get(provider)
+        line = plugin.aai_cli_policy_line(content)
+        capability = plugin.aai_cli_capability_for(content)
         lines.append(f"{line} — {capability}" if capability else line)
     return "\n".join(lines) + "\n"
 
@@ -502,6 +205,7 @@ def build_config_toml(
     decrypted: Mapping[SecretProvider, SecretContent],
     home_dir: str = "/home/node",
     *,
+    gateway_base_url: str = "",
     store_dir: str | None = None,
     sharepoint_token_url: str | None = None,
 ) -> str:
@@ -513,13 +217,25 @@ def build_config_toml(
     restarts for tokens aai-cli rotates itself. ``sharepoint_token_url`` is where a selected-sites
     SharePoint profile fetches its tokens.
     """
-    blocks = [_header(store_dir or f"{home_dir}/.config/aai-cli")]
+    blocks = [_header(store_dir or secrets_dir(home_dir))]
     for provider in SecretProvider:
         content = decrypted.get(provider)
-        if isinstance(content, SharePointContent):
-            blocks.append(_sharepoint_block(content, sharepoint_token_url))
-        elif content is not None and provider in _PROFILE_BUILDERS:
-            blocks.append(_PROFILE_BUILDERS[provider](content))
+        plugin = _plugin_for(provider)
+        if content is None or plugin is None:
+            continue
+        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            assert isinstance(plugin, SharePointPlugin)
+            blocks.append(plugin.aai_cli_selected_sites_profile_block(sharepoint_token_url))
+        elif plugin.egress_mode is EgressMode.GATEWAY_PROXY:
+            blocks.append(
+                plugin.aai_cli_gateway_profile_block(
+                    content,
+                    base_url=f"{gateway_base_url.rstrip('/')}/p/{plugin.key}",
+                    token_env=gateway_token_env_var(provider),
+                )
+            )
+        else:
+            blocks.append(plugin.aai_cli_profile_block(content))
     return "\n".join(blocks)
 
 
@@ -529,6 +245,7 @@ def build_setup_sh(
     *,
     store_dir: str | None = None,
     install_config: bool = True,
+    isolated_providers: Iterable[SecretProvider] = (),
     store_platform_key: bool = False,
 ) -> str:
     """Render the in-pod setup script: install config.toml, then `secrets set` per store secret.
@@ -547,18 +264,54 @@ def build_setup_sh(
     config_path = f"{config_dir}/config.toml"
     store = store_dir or config_dir
     present = set(store_providers)
+    isolated = set(isolated_providers)
+    if present & isolated:
+        raise ValueError("Credential cleanup requires a supported isolated binding")
     lines = [
         "#!/bin/sh",
         "set -e",
+        "umask 077",
         f"export HOME={home_dir}",
         f"mkdir -p {config_dir}" if store == config_dir else f"mkdir -p {config_dir} {store}",
     ]
     if install_config:
         lines.append(f"cp /app/config/aai-cli-config.toml {config_path}")
+    if SecretProvider.SHAREPOINT in isolated:
+        # Old pod is terminated. Authenticate its last rotation before PVC cleanup.
+        # Read sensitive files through jq, never shell argv or diagnostic output.
+        lines += [
+            "handoff_store=$(mktemp)",
+            "handoff_key=$(mktemp)",
+            "handoff_marker=$(mktemp)",
+            'trap \'rm -f "$handoff_store" "$handoff_key" "$handoff_marker"\' EXIT HUP INT TERM',
+            f'if [ -f {store}/aai-secrets.enc.json ]; then cp {store}/aai-secrets.enc.json "$handoff_store"; fi',
+            f'if [ -f {store}/key ]; then cp {store}/key "$handoff_key"; fi',
+            f'if [ -f {store}/{SHAREPOINT_REFRESH_TOKEN_SECRET}.sign-in ]; then cp {store}/{SHAREPOINT_REFRESH_TOKEN_SECRET}.sign-in "$handoff_marker"; fi',
+            'jq -n --rawfile store "$handoff_store" --rawfile key "$handoff_key" --rawfile marker "$handoff_marker"',
+        ]
+        lines[-1] += (
+            ' \\\n  \'{store: $store, key: $key, marker: $marker}\' | \\\n  curl --fail --silent --show-error --connect-timeout 15 --max-time 60 \\\n    -H "Authorization: Bearer $AF_GATEWAY_TOKEN_SHAREPOINT" -H "Content-Type: application/json" \\\n    --data-binary @- "$AF_GATEWAY_URL/sharepoint/handoff" >/dev/null'
+        )
+        # The DB grant is now proven. Remove its marker before the token so a crash
+        # between cleanup steps makes the next generation use the durable DB copy.
+        lines.append(f"rm -f {store}/{SHAREPOINT_REFRESH_TOKEN_SECRET}.sign-in")
+    # Only explicit isolated bindings are eligible. These static credentials retain
+    # their encrypted service-side copy; delegated SharePoint grants are excluded.
+    for provider in SecretProvider:
+        if provider not in isolated:
+            continue
+        for secret_name, _ in provider_secrets_map.get(provider.value, []):
+            lines += [
+                f"if [ -f {store}/aai-secrets.enc.json ]; then",
+                f"  aai-cli --secrets-file {store}/aai-secrets.enc.json --key-file {store}/key secrets remove {secret_name}",
+                "fi",
+            ]
     for provider in SecretProvider:  # fixed order for determinism
         if provider not in present:
             continue
         for secret_name, _ in provider_secrets_map.get(provider.value, []):
+            if provider == SecretProvider.SHAREPOINT:
+                continue
             env = env_var_for(secret_name)
             lines.append(f"printf '%s' \"${env}\" | aai-cli --config {config_path} secrets set {secret_name}")
     if store_platform_key:
@@ -597,9 +350,33 @@ def build_env(
     """
     env: dict[str, str] = {}
     for provider, content in store_decrypted.items():
+        if isinstance(content, SharePointContent) and content.mode == "selected_sites":
+            continue
         for secret_name, attr in provider_secrets_map.get(provider.value, []):
             env[env_var_for(secret_name)] = getattr(content, attr)
         if isinstance(content, SharePointContent) and content.refresh_token and content.sign_in_id:
             env[env_var_for(SHAREPOINT_REFRESH_TOKEN_SECRET)] = content.refresh_token
-            env[SHAREPOINT_SIGN_IN_ID_ENV] = content.sign_in_id
+            env[SHAREPOINT_SIGN_IN_ID_ENV] = content.sign_in_id + (
+                f":{content.store_revision}" if content.store_revision else ""
+            )
     return env
+
+
+def store_providers_for(
+    decrypted: Mapping[SecretProvider, SecretContent],
+) -> dict[SecretProvider, SecretContent]:
+    """Narrow a provider map to the ones whose credential still belongs in the pod.
+
+    A provider routed through the gateway is excluded here, which is what actually keeps
+    its real credential out of the pod Secret and out of ``aai-secrets.enc.json`` — the
+    profile block alone would not.
+    """
+    keep: dict[SecretProvider, SecretContent] = {}
+    for provider, content in decrypted.items():
+        plugin = _plugin_for(provider)
+        if plugin is None or provider.value not in provider_secrets_map:
+            continue
+        if plugin.egress_mode is EgressMode.GATEWAY_PROXY:
+            continue
+        keep[provider] = content
+    return keep

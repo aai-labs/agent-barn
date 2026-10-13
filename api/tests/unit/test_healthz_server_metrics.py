@@ -1,4 +1,5 @@
 import ast
+import json
 import os
 import shutil
 import socket
@@ -102,6 +103,8 @@ def _ready(base: str) -> bool:
     try:
         urllib.request.urlopen(f"{base}/ready", timeout=1)
         return True
+    except urllib.error.HTTPError as error:
+        return error.code == 503
     except urllib.error.URLError, ConnectionError:
         return False
 
@@ -360,3 +363,19 @@ def test_launch_retries_with_a_fresh_port_when_the_server_exits_on_a_taken_port(
 
     assert_that(status, equal_to(200))
     assert_that(starts.read_text(), equal_to("xx"))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_runtime_readiness_requires_completed_setup_and_does_not_cache_marker(tmp_path, runtime):
+    marker = tmp_path / "setup-ready"
+    with _run_healthz_server(runtime, {"AGENT_RUNTIME_SETUP_READY_FILE": str(marker)}) as base:
+        status, _, body = _get(f"{base}/ready")
+        assert_that(status, equal_to(503))
+        assert_that(json.loads(body)["ready"], equal_to(False))
+        marker.touch()
+        status, _, body = _get(f"{base}/ready")
+        assert_that(status, equal_to(200))
+        assert_that(json.loads(body)["ready"], equal_to(True))
+        marker.unlink()
+        status, _, _ = _get(f"{base}/ready")
+        assert_that(status, equal_to(503))

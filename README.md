@@ -79,6 +79,7 @@ native `dev-*` targets, tests, and lint (see [Development](#development)).
 | `8001`  | Ingest (runtime telemetry) |
 | `8002`  | Communications gateway     |
 | `8003`  | Agent Memory gateway       |
+| `8004`  | Credential gateway         |
 | `16443` | k3d Kubernetes API         |
 
 Make sure these ports are free before starting the full stack. The configurable
@@ -247,8 +248,8 @@ Each template has a guided setup at
 
 Skills are what agents can actually do:
 
-Bitbucket · Confluence · Excel · GitHub · Google Drive · HubSpot · Jira ·
-OpenPanel · Pipedrive · PostHog · Zoho Mail
+Apollo · Bitbucket · Confluence · Excel · GitHub · Google Drive · HubSpot ·
+Jira · OpenPanel · Pipedrive · PostHog · Zoho Mail
 
 Each mounts documentation into the agent's workspace and is gated on the
 credential its provider needs, so an agent only gets a skill once the matching
@@ -309,11 +310,12 @@ separate terminals, alongside `make db-up`:
 make setup         # uv sync + pnpm install; creates .env from .env.spec if absent
 make db-up         # Postgres only
 make migrate       # apply migrations
-make dev-api       # API :8000, Ingest :8001, Communications :8002, Memory :8003
+make dev-api       # API :8000, Ingest :8001, Communications :8002, Memory :8003, Credentials :8004
 make dev-ui        # UI on :3000, hot reload
 make dev-worker    # Dramatiq worker, hot reload
 make dev-ingest    # Ingest only (normally started by dev-api)
 make dev-communications  # Communications only (normally started by dev-api)
+make dev-gateway   # Credential gateway only (normally started by dev-api)
 make dev-memory    # Memory gateway only (normally started by dev-api)
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 ```
@@ -322,7 +324,7 @@ make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 The worker and reconciliation command also need a Redis server reachable at the
 `REDIS_URL` in `.env`. The Compose Redis service does not publish a host port,
 so `make redis-up` alone cannot serve those host-run processes. This path uses
-host ports `3000`, `8000`, `8001`, `8002`, and `8003`, so don't run it alongside
+host ports `3000`, `8000`, `8001`, `8002`, `8003`, and `8004`, so don't run it alongside
 `./run.sh`'s containers.
 
 Two gotchas specific to this path:
@@ -636,7 +638,7 @@ cp .env.deploy.spec .env.deploy
 
 Helmfile brings up PostgreSQL (one instance each for the app, LiteLLM, and
 Firecrawl, and Hindsight), Redis, the LiteLLM proxy, Firecrawl, Hindsight, the API
-with its worker, communications gateway, and memory gateway, the UI, and a
+with its worker, communications gateway, memory gateway, and credential gateway, the UI, and a
 namespace-scoped Prometheus and Grafana. Hindsight's Helm hook generates its
 LiteLLM key automatically, using the same pattern as the application key; see
 [Agent Memory deployment](docs/guidelines/operations.md#agent-memory-deployment).
@@ -671,9 +673,9 @@ identified by UUID, so the usage tracking is pseudonymous.
 
 To opt out, set `ANALYTICS_ENABLED=false` in `.env.deploy` and redeploy.
 Remote installs use the `WEB_APP_URL` hostname as their label; local installs use
-`local-<short UUID>`. The installation UUID remains stable when the URL changes. The local development
-`.env.spec` explicitly disables analytics; keep `ANALYTICS_ENABLED=false` in your
-local `.env`. The full list of events and fields is in
+`local-<short UUID>`. The installation UUID remains stable when the URL changes. Local
+development stacks report too, as `installation_environment=local`; set
+`ANALYTICS_ENABLED=false` in your local `.env` to opt out. The full list of events and fields is in
 [`docs/features/product-analytics.md`](docs/features/product-analytics.md).
 
 ### Connecting agent email (manual step)

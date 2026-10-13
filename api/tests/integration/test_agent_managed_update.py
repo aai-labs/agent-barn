@@ -175,6 +175,30 @@ def test_wait_for_ready_gives_up_after_the_timeout():
             assert_that(_k8s(context).get_pod_readiness.call_count > 1, equal_to(True))
 
 
+def test_managed_update_readiness_requires_completed_sharepoint_handoff():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        service = context.injector.get(AgentService)
+        service.integrations.begin(context.agent.id, {"sharepoint": {"isolated": True}})
+        _k8s(context).get_pod_readiness.return_value = _READY
+        assert service._wait_for_ready(context.agent.id, 0, poll_seconds=0) is False
+
+
+def test_detail_read_does_not_tear_down_a_managed_updates_crashing_pod():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        service = context.injector.get(AgentService)
+        runtime = service.integrations.begin(context.agent.id, {"github": {"isolated": False}})
+        service.integrations.set_state(context.agent.id, "provisioned", runtime.generation)
+        context.injector.get(AgentRepository).claim_managed_update(context.agent.id)
+        k8s = _k8s(context)
+        k8s.get_pod_readiness.return_value = _CRASH_LOOP
+        k8s.runtime_has_exited.return_value = True
+        body = _read_agent(context)
+        assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
+        assert_that(body["update_in_progress"], equal_to(True))
+        k8s.delete_deployment.assert_not_called()
+        assert_that(service.integrations.runtime(context.agent.id).state, equal_to("provisioned"))
+
+
 def test_teardown_workload_deletes_only_the_deployment():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         service = context.injector.get(AgentService)
@@ -444,7 +468,9 @@ def test_a_managed_update_rolls_back_when_the_start_itself_fails():
         real_provision = service._provision_and_start
         starts = {"count": 0}
 
-        def flaky_provision(agent):
+        def flaky_provision(agent, **kwargs):
+            if kwargs.get("preflight"):
+                return real_provision(agent, **kwargs)
             starts["count"] += 1
             if starts["count"] == 1:
                 raise RuntimeError("cluster rejected the new image")

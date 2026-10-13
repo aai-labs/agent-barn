@@ -1,8 +1,9 @@
 name: Hermes Base
 
 on:
-  # Reusable only -- called by deploy.yml (staging/main, push_image: true)
-  # and ci.yml (other branches/PRs, push_image: false).
+  # Reusable only -- called by deploy.yml (staging/main, push_image: true;
+  # run_checks: false when the commit already passed CI as a pull request) and
+  # ci.yml (pull requests and manual runs, push_image: false).
   workflow_call:
     inputs:
       push_image:
@@ -10,9 +11,17 @@ on:
         required: false
         type: boolean
         default: false
+      run_checks:
+        description: >-
+          Whether to run lint, tests, and the validation build. deploy.yml sets
+          this to false for commits that already passed CI as a pull request.
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   build:
+    if: inputs.run_checks
     name: Build
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +61,10 @@ jobs:
 
   push:
     name: Push
-    if: inputs.push_image
+    # Not gated on the check jobs succeeding by `needs` alone: when run_checks is
+    # false they are skipped, which would skip this job too. A failed check
+    # still blocks the push.
+    if: ${{ inputs.push_image && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     needs: [build]
     runs-on: ubuntu-latest
     steps:
@@ -101,10 +113,12 @@ jobs:
           no-cache-filters: rust-build
           cache-from: type=gha
       - name: Image contract tests
+        if: inputs.run_checks
         run: |
           sh hermes-base/test-image.sh \
             ${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }}
       - name: API runtime tests
+        if: inputs.run_checks
         run: |
           HERMES_TEST_IMAGE=${{ vars.REGISTRY_URL }}/agentbarn-hermes-base:${{ steps.tag.outputs.value }} \
             make test-api-runtime

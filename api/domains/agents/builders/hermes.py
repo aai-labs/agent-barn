@@ -111,6 +111,14 @@ def _hermes_config_core(
             "backend": "local",
             "cwd": HERMES_WORKSPACE_DIR,
             "timeout": 120,
+            # Hermes snapshots a login shell, which resets the inherited PATH.
+            # Keep its usual user init files, then restore our runtime tools.
+            "shell_init_files": [
+                "~/.profile",
+                "~/.bash_profile",
+                "~/.bashrc",
+                "/app/config/terminal-env.sh",
+            ],
         },
         "memory": {
             "memory_enabled": True,
@@ -391,6 +399,7 @@ def build_hermes_config_map(
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
+    gog_shim_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
 ) -> client.V1ConfigMap:
@@ -414,6 +423,7 @@ def build_hermes_config_map(
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
         "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
+        "terminal-env.sh": 'export PATH="/home/hermes/.local/bin:$PATH"\n',
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
         "retire-messaging.py": RETIRE_MESSAGING_PY,
@@ -425,6 +435,10 @@ def build_hermes_config_map(
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
     if gog_setup_sh is not None:
         data["gog-setup.sh"] = gog_setup_sh
+    if gog_shim_sh is not None:
+        # Installed onto PATH by gog-setup.sh; start.sh puts that directory ahead of
+        # /usr/local/bin so every agent command resolves the wrapper first.
+        data["gog-shim.sh"] = gog_shim_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(
