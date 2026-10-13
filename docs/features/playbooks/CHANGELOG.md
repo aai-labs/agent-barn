@@ -18,9 +18,9 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 ## Current state
 
 - Delivered: the decisions above and the glossary terms **Playbook** and **Playbook Extraction** in `CONTEXT.md`.
-- In transition: nothing.
+- Delivered: Playbook Extraction runs — the `playbook_extraction` table, start/list/detail/cancel APIs, the `playbook.extraction.requested` audit event, the `playbook_extraction` worker queue, and the worker's claim and authority re-check. The contract is [`../playbooks.md`](../playbooks.md).
+- In transition: the pipeline is a stub, so every run the worker starts fails with `pipeline_unavailable` until slice 4.
 - Next, in order:
-  1. Domain skeleton: the `playbooks` domain, the `playbook_extraction` table, create/list/detail/cancel endpoints, authorization, the audit Domain Event, and a worker actor that re-checks the requester's authority.
   2. Session assembly: bounded transcript reads for one Agent and a preview endpoint with an estimated input token count.
   3. Model setting and completion client: the Platform Playbook model setting and a LiteLLM chat-completion client using the source Agent's key.
   4. Pipeline: per-session notes, one combining call with long-term memories, writing the Skill Draft, and recording usage.
@@ -30,6 +30,12 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-13 — slice 1
+
+- Delivered: the `playbooks` domain, migration `5ae205b73312`, the product APIs under `/organizations/{organization_id}/agents/{agent_id}/playbook-extractions` and `/organizations/{organization_id}/playbook-extractions`, the audit event, and the worker actor.
+- Changed: the RBAC brief, Domain Events, system map, runtime and deployment, Templates and Skills, and INDEX docs.
+- Follow-up: slice 2, session assembly and the preview endpoint.
 
 ### 2026-10-13 — slice 0
 
