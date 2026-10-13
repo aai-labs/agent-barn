@@ -23,13 +23,19 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 - Delivered: the Platform Playbook model setting with its audit event, and the LiteLLM completion client; the worker receives `LITELLM_BASE_URL`.
 - Delivered: the pipeline — notes per conversation, the playbook step with long-term memories, the Skill Draft write, and usage recording.
 - Delivered: the UI — the Agent Playbooks tab, run history, the Playbook source banner on Organization Skill pages, and Platform Settings → Playbooks; `source_agent_name` on run reads.
+- Delivered: install shortcuts on a published playbook's Skill page — Add to Agents and Require on a Template — built on the existing Agent update and Template draft contracts.
 - In transition: nothing.
-- Next, in order:
-  6. Install shortcuts: from a published playbook, assign it to Agents or require it on a Template.
+- Next: none; every v1 slice is delivered. Closing the epic waits on review, merge, and tickets for the deferred items below.
 - Deferred: compiling playbooks into configuration, scheduled re-extraction, Connection exclusions, reading the Agent volume, automatic publication, and measuring playbook impact.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-13 — slice 6
+
+- Delivered: `PlaybookInstallActions` in the Playbook source banner; no API change.
+- Verified: Playwright for adding to and repinning Agents with a per-Agent refusal, adding to a Template draft while keeping other requirements, an already-required Template, and an unpublished playbook.
+- Follow-up: none in this epic; see Deferred.
 
 ### 2026-10-13 — slice 5
 
