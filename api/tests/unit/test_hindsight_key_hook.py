@@ -1,6 +1,7 @@
 """Exercise the shipped hook's generate, rotate, and Secret-update protocol."""
 
 import base64
+import hashlib
 import io
 import json
 import runpy
@@ -23,6 +24,7 @@ def setup_test_database():
 @pytest.fixture
 def hook(monkeypatch):
     state: dict[str, Any] = {"secrets": {}, "keys": {}, "generated": 0, "operations": []}
+    monkeypatch.delenv("MEMORY_FIRST_DEPLOYMENT", raising=False)
     for name, value in {
         "LITELLM_MASTER_KEY": "test-master",
         "KEY_SECRET_NAME": "hindsight-litellm-key",
@@ -46,6 +48,8 @@ def hook(monkeypatch):
             assert request.get_header("Authorization") == "Bearer test-sa-token"
             name = url.rsplit("/", 1)[1]
             if method == "GET":
+                if state.get("deny_secret_reads"):
+                    raise urllib.error.HTTPError(url, 403, "forbidden", Message(), None)
                 if name not in state["secrets"]:
                     raise urllib.error.HTTPError(url, 404, "missing", Message(), None)
                 response = state["secrets"][name]
@@ -104,3 +108,20 @@ def test_hook_generates_key_then_rotates_and_updates_secrets(hook, capsys):
     assert any(method == "PUT" for method, _, _ in hook["operations"])
     output = capsys.readouterr()
     assert all(key not in output.out + output.err for key in [*first.values(), *second.values(), "test-master"])
+
+
+@pytest.mark.parametrize("bootstrap", [False, True])
+def test_first_deployment_bootstrap_with_secret_reads_denied(hook, monkeypatch, bootstrap):
+    hook["deny_secret_reads"] = True
+    if bootstrap:
+        monkeypatch.setenv("MEMORY_FIRST_DEPLOYMENT", "true")
+        run_hook()
+        key = decode(hook["secrets"]["hindsight-litellm-key"])["LITELLM_API_KEY"]
+        hashes = decode(hook["secrets"]["hindsight-litellm-hashes"])
+        active = hashlib.sha256(key.encode()).hexdigest()
+        assert hashes["MEMORY_LITELLM_ACTIVE_KEY_HASH"] == active
+        assert set(hashes["MEMORY_LITELLM_KEY_HASHES"].split(",")) == {active, "a" * 64}
+    else:
+        with pytest.raises(SystemExit, match="Hindsight key provisioning failed"):
+            run_hook()
+        assert hook["secrets"] == {} and hook["generated"] == 0

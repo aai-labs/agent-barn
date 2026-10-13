@@ -43,6 +43,7 @@ releases:
           model: {{ env "MEMORY_DEFAULT_MODEL" | default "openrouter/openai/gpt-4.1-mini" | quote }}
           retiredKeyHashes: {{ env "MEMORY_LITELLM_KEY_HASHES" | default "" | quote }}
         litellmKeyServiceAccountName: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
+        firstDeployment: {{ env "MEMORY_FIRST_DEPLOYMENT" | default "false" | quote }}
   - name: postgres-app
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
