@@ -18,6 +18,13 @@ on:
         required: false
         type: boolean
         default: true
+    outputs:
+      image_digest:
+        description: >-
+          Digest (sha256:...) of the pushed image, empty when nothing was pushed.
+          The image is pushed without a tag; deploy.yml deploys this exact
+          digest and moves the environment tag only after the deploy succeeds.
+        value: ${{ jobs.push.outputs.digest }}
 
 jobs:
   lint:
@@ -114,28 +121,29 @@ jobs:
     if: ${{ inputs.push_image && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     needs: [lint, test, test-k8s, build]
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v5
+      # A docker-container builder: pushing by digest needs the image exporter,
+      # which the default docker driver does not provide.
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to registry
         uses: docker/login-action@v4
         with:
           registry: ${{ vars.REGISTRY_URL }}
           username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Resolve image tag
-        id: tag
-        run: |
-          if [ "${{ github.ref_name }}" = "staging" ]; then
-            echo "value=latest-staging" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=latest" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Build and push
+      # Pushed by digest, with no tag. The API migrates its schema in a Helm
+      # pre-upgrade hook, so moving `latest`/`latest-staging` here would let any
+      # pod restart pull new code onto the old schema when the hook fails.
+      # deploy.yml deploys this digest and re-tags only after a successful sync.
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
           file: api/Dockerfile
-          push: true
-          tags: ${{ vars.REGISTRY_URL }}/agentbarn-api:${{ steps.tag.outputs.value }}
+          outputs: type=image,name=${{ vars.REGISTRY_URL }}/agentbarn-api,push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha
 
