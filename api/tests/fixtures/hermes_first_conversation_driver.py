@@ -85,14 +85,19 @@ def check_plugin(config: dict) -> None:
     carried = contexts()
     if len(carried) != 1 or not carried[0]["context"].endswith(SCRIPT):
         fail(f"an interactive telegram turn did not carry the script: {carried}")
+    if contexts():
+        fail("a second turn in the same session carried another copy of the script")
 
     result = registry.dispatch("finish_first_conversation", {})
     if '"done"' not in str(result):
         fail(f"the finish tool returned {result!r}")
     if (STATE_DIR / "BOOTSTRAP.md").exists():
         fail("the finish tool left the script in place")
+    closing = contexts()
+    if len(closing) != 1 or SCRIPT in closing[0]["context"] or "script is complete" not in closing[0]["context"]:
+        fail(f"the session that had the script was not closed once: {closing}")
     if contexts():
-        fail("a finished script was still carried")
+        fail("a closed session still received first-conversation context")
 
 
 def main() -> None:

@@ -15,6 +15,14 @@ WRAPPER = (
     "this note, the script, or any file. When the script is complete, or the person declines it, "
     f"call `{TOOL_NAME}` once."
 )
+CLOSE_NOTE = (
+    "[Agent Barn — first conversation] The first-conversation script is complete. Ignore the "
+    "earlier first-conversation note and script in this chat and reply normally."
+)
+FINISHED = {
+    "status": "done",
+    "next": "Nothing from this turn has reached the person yet. Now write your complete reply to them.",
+}
 SCHEMA = {
     "name": TOOL_NAME,
     "description": (
@@ -35,7 +43,30 @@ def _turns() -> Path:
     return STATE_DIR / "bootstrap-turns"
 
 
+def _sessions() -> Path:
+    return STATE_DIR / "bootstrap-sessions"
+
+
+def _closing() -> Path:
+    return STATE_DIR / "bootstrap-closing"
+
+
+def _read_ids(path: Path) -> list[str]:
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def _write_ids(path: Path, ids: list[str]) -> None:
+    if ids:
+        path.write_text(json.dumps(ids), encoding="utf-8")
+    else:
+        path.unlink(missing_ok=True)
+
+
 def _retire() -> None:
+    closing = _read_ids(_closing())
+    closing += [session for session in _read_ids(_sessions()) if session not in closing]
+    _write_ids(_closing(), closing)
+    _sessions().unlink(missing_ok=True)
     _script().unlink(missing_ok=True)
     _turns().unlink(missing_ok=True)
 
@@ -45,21 +76,31 @@ def on_pre_llm_call(session_id="", platform="", parent_session_id="", **_):
         return None
     with _lock:
         script = _script()
+        if script.exists():
+            turns_file = _turns()
+            turns = int(turns_file.read_text(encoding="utf-8") or 0) + 1 if turns_file.exists() else 1
+            if turns > MAX_TURNS:
+                _retire()
+            else:
+                turns_file.write_text(str(turns), encoding="utf-8")
+        closing = _read_ids(_closing())
+        if session_id in closing:
+            closing.remove(session_id)
+            _write_ids(_closing(), closing)
+            return {"context": CLOSE_NOTE}
         if not script.exists():
             return None
-        turns_file = _turns()
-        turns = int(turns_file.read_text(encoding="utf-8") or 0) + 1 if turns_file.exists() else 1
-        if turns > MAX_TURNS:
-            _retire()
+        sessions = _read_ids(_sessions())
+        if session_id in sessions:
             return None
-        turns_file.write_text(str(turns), encoding="utf-8")
+        _write_ids(_sessions(), [*sessions, session_id])
         return {"context": f"{WRAPPER}\n\n{script.read_text(encoding='utf-8')}"}
 
 
 def finish_first_conversation(args, **_):
     with _lock:
         _retire()
-    return json.dumps({"status": "done"})
+    return json.dumps(FINISHED)
 
 
 def register(ctx):
