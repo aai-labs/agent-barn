@@ -616,6 +616,11 @@
   ],
   [
     "GET",
+    "/platform/billing/credit-history",
+    "read_credit_history_platform_billing_credit_history_get"
+  ],
+  [
+    "GET",
     "/platform/costs",
     "list_platform_costs_platform_costs_get"
   ],

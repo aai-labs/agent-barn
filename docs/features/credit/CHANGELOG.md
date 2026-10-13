@@ -39,7 +39,8 @@ Related context: [Credit](../credit.md), [Costs](../costs.md), [Trial onboarding
 
 - Delivered: the Owner's Billing tab and page (balance, buy credit, history with who
   bought each purchase; it re-reads for a minute after a payment); a Billing
-  section on the platform settings page; the spend-limit banner speaks of credit and
+  section on the platform settings page; a platform Billing page listing every
+  Organization's credit history (`GET /platform/billing/credit-history`); the spend-limit banner speaks of credit and
   links the Owner to buy more.
 - Changed: UI (`ui/src/features/billing/`, top nav, spend-limit banner, platform
   settings); docs (`credit.md`).

@@ -49,6 +49,7 @@ export function TopNav({ onHire }: TopNavProps) {
         { href: "/dashboard/platform/organizations", label: "Organizations" },
         { href: "/dashboard/platform/event-deliveries", label: "Event Deliveries" },
         { href: "/dashboard/platform/costs", label: "Costs" },
+        { href: "/dashboard/platform/billing", label: "Billing" },
         { href: "/dashboard/platform/resource-usage", label: "Resources" },
         { href: "/dashboard/platform/templates", label: "Templates" },
         { href: "/dashboard/platform/skills", label: "Skills" },

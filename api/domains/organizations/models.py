@@ -171,6 +171,12 @@ class CreditGrantRead(PydanticBaseModel):
     created_at: datetime
 
 
+class PlatformCreditGrantRead(CreditGrantRead):
+    """A Credit Grant with the Organization it belongs to, for the platform's view."""
+
+    organization_name: str
+
+
 class CreditGrantCreate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 

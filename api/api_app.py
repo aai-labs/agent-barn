@@ -30,7 +30,12 @@ from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.api_keys.routes import router as api_keys_router
 from api.domains.auth.routes import auth_router
-from api.domains.billing.routes import billing_router, platform_billing_settings_router, stripe_webhook_router
+from api.domains.billing.routes import (
+    billing_router,
+    platform_billing_router,
+    platform_billing_settings_router,
+    stripe_webhook_router,
+)
 from api.domains.business_value.routes import business_value_router
 from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.operations import CommunicationOperationalRepository
@@ -135,6 +140,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(onboarding_router)
     subapi.include_router(billing_router)
     subapi.include_router(platform_billing_settings_router)
+    subapi.include_router(platform_billing_router)
     subapi.include_router(stripe_webhook_router)
     subapi.include_router(agent_memory_router)
     subapi.include_router(memory_grants_router)

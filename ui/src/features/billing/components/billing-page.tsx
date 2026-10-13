@@ -9,28 +9,9 @@ import { formatUsage, formatUsd } from "@/features/organizations/spend-limit";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { Fact } from "@/features/spend-limits/components/fact";
 
+import { formatDate, KIND_LABEL, signedUsd } from "../format";
 import { useOrganizationBilling } from "../hooks/use-organization-billing";
-import type { CreditHistoryItem } from "../schemas";
 import { BuyCreditDialog } from "./buy-credit-dialog";
-
-const KIND_LABEL: Record<CreditHistoryItem["kind"], string> = {
-  trial: "Trial credit",
-  purchase: "Purchase",
-  refund: "Refund",
-  chargeback: "Disputed payment",
-  adjustment: "Adjustment",
-};
-
-function formatDate(iso: string) {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
-    ? iso
-    : date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-}
-
-function signedUsd(value: number) {
-  return `${value < 0 ? "−" : "+"}${formatUsd(Math.abs(value), 2)}`;
-}
 
 /** The organization's credit: what's left, buying more, and every change to it. */
 export function BillingPage() {

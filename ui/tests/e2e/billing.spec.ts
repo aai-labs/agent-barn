@@ -268,3 +268,85 @@ test.describe("Platform · Billing settings", () => {
     await expect(page.getByText("This deployment doesn't take payments.")).toBeVisible();
   });
 });
+
+test.describe("Platform · Billing", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  function record(overrides: Record<string, unknown> = {}) {
+    return {
+      organization_id: TEST_ORG_ID,
+      organization_name: "Acme",
+      kind: "purchase",
+      credit_usd: 20,
+      amount_paid_usd: 21.1,
+      by: "Jane Owner",
+      reference: "pi_123",
+      created_at: "2026-10-02T09:00:00Z",
+      ...overrides,
+    };
+  }
+
+  async function platformAdmin(page: Page, pages: Record<string, unknown>[][]) {
+    const data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetOrganizationsRequest();
+    const requests: URLSearchParams[] = [];
+    await page.route("**/api/v1/platform/billing/credit-history**", (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      requests.push(params);
+      const pageNumber = Number(params.get("page") ?? "1");
+      const total = pages.reduce((sum, items) => sum + items.length, 0);
+      return route.fulfill({
+        json: { page: pageNumber, page_size: pages[0].length, total, items: pages[pageNumber - 1] ?? [] },
+      });
+    });
+    return requests;
+  }
+
+  test("a Platform Administrator sees every organization's purchases, refunds and credit", async ({ page }) => {
+    await platformAdmin(page, [
+      [
+        record(),
+        record({ organization_name: "Beta", kind: "refund", credit_usd: -5, amount_paid_usd: null, by: "Stripe", reference: "re_9" }),
+      ],
+    ]);
+    await page.goto("/dashboard/platform/billing");
+
+    await expect(page.getByRole("heading", { name: "Billing", exact: true })).toBeVisible();
+    const rows = page.getByRole("table").getByRole("row");
+    await expect(rows.filter({ hasText: "Acme" })).toContainText("Purchase");
+    await expect(rows.filter({ hasText: "Acme" })).toContainText("Jane Owner");
+    await expect(rows.filter({ hasText: "Acme" })).toContainText("$21.10");
+    await expect(rows.filter({ hasText: "Acme" })).toContainText("pi_123");
+    await expect(rows.filter({ hasText: "Beta" })).toContainText("−$5.00");
+  });
+
+  test("the list narrows to one kind", async ({ page }) => {
+    const requests = await platformAdmin(page, [[record()]]);
+    await page.goto("/dashboard/platform/billing");
+    await expect(page.getByRole("table")).toContainText("Acme");
+
+    await page.getByLabel("Kind").selectOption({ label: "Refunds" });
+
+    await expect.poll(() => requests.at(-1)?.get("kind")).toBe("refund");
+  });
+
+  test("more is loaded on request", async ({ page }) => {
+    await platformAdmin(page, [[record()], [record({ organization_name: "Older Org" })]]);
+    await page.goto("/dashboard/platform/billing");
+    await expect(page.getByRole("table")).toContainText("Acme");
+
+    await page.getByRole("button", { name: "Load more" }).click();
+
+    await expect(page.getByRole("table")).toContainText("Older Org");
+    await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
+  });
+
+  test("the platform overview links to it", async ({ page }) => {
+    await platformAdmin(page, [[record()]]);
+    await page.goto("/dashboard/platform");
+
+    await expect(page.getByRole("link", { name: /Billing/ }).first()).toHaveAttribute("href", "/dashboard/platform/billing");
+  });
+});

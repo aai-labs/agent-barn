@@ -95,6 +95,21 @@ class CreditHistoryItem(BaseModel):
     created_at: datetime
 
 
+class PlatformCreditRecordRead(BaseModel):
+    """One change to an Organization's credit, in the platform's view of all of them."""
+
+    organization_id: UUID
+    organization_name: str
+    kind: str
+    credit_usd: float
+    amount_paid_usd: float | None = None
+    # Who made the change: the buyer, a Platform Administrator, or the payment provider.
+    by: str
+    # The payment provider's reference (payment, refund or dispute), when there is one.
+    reference: str | None = None
+    created_at: datetime
+
+
 class OrganizationBillingRead(BaseModel):
     # Whether this Organization can buy credit: payments are on and it runs on credit.
     available: bool

@@ -67,13 +67,17 @@ and only for an Organization on Credit, by its Owner (`billing.manage`):
 - `GET`/`PUT /platform/settings/billing` — Platform Administrators set the minimum and
   maximum purchase, the credit rate (1.0: credit at cost) and the purchase fee percent;
   each change is audited as `platform.billing_settings.changed`.
+- `GET /platform/billing/credit-history?kind=&organization_id=&page=&page_size=` —
+  Platform Administrators read every Organization's Credit Grants, newest first, with
+  the Organization, who made each change and the Stripe reference.
 
 In the web app, the Owner of an Organization that can buy credit gets a Billing tab
 (`/dashboard/[orgId]/billing`): the balance, a "Buy credit" dialog that previews the
 charge and sends them to Stripe, and the credit history. The spend-limit banner says when
 an Organization on Credit has used it all and links the Owner to buy more. Platform
 Administrators edit the billing settings in a Billing section of the platform settings
-page. On Credit, the Spend limits settings show the credit without any limit to set
+page, and read every Organization's credit history on the platform Billing page
+(`/dashboard/platform/billing`), filtered by kind or Organization. On Credit, the Spend limits settings show the credit without any limit to set
 beneath it.
 
 When an Organization on Credit runs out with payments on, its Agents' reply says so and

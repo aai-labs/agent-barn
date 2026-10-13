@@ -5,9 +5,10 @@ from uuid import UUID
 
 from injector import inject, singleton
 
-from api.domains.organizations.models import CreditGrantRead
+from api.domains.organizations.models import CreditGrantKind, CreditGrantRead, PlatformCreditGrantRead
 from api.domains.organizations.repository import OrganizationRepository
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 # Refusing a limit beneath an Organization's balance. No straight apostrophes: settings
 # surfaces render a single-quoted run of an error detail as a code identifier.
@@ -122,6 +123,16 @@ class OrganizationLookupService:
     def list_credit_grants(self, organization_id: UUID) -> list[CreditGrantRead]:
         """Every change to the Organization's credit, oldest first."""
         return [CreditGrantRead.model_validate(grant) for grant in self.repository.list_credit_grants(organization_id)]
+
+    def list_all_credit_grants(
+        self,
+        pagination: Pagination,
+        *,
+        kind: CreditGrantKind | None = None,
+        organization_id: UUID | None = None,
+    ) -> PaginatedItems[PlatformCreditGrantRead]:
+        """Every Organization's changes to its credit, newest first."""
+        return self.repository.list_all_credit_grants(pagination, kind=kind, organization_id=organization_id)
 
     def find_credit_grant(self, external_ref: str) -> CreditGrantRead | None:
         """The grant recorded under a payment provider's reference, if any."""

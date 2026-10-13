@@ -34,6 +34,7 @@ from api.domains.organizations.models import (
     OrganizationCreditGrant,
     OrganizationFilter,
     OrganizationRead,
+    PlatformCreditGrantRead,
     PlatformOrganizationRead,
 )
 from api.domains.users.models import User
@@ -401,6 +402,39 @@ class OrganizationRepository:
             return session.exec(
                 select(OrganizationCreditGrant).where(col(OrganizationCreditGrant.external_ref) == external_ref)
             ).first()
+
+    def list_all_credit_grants(
+        self,
+        pagination: Pagination,
+        *,
+        kind: CreditGrantKind | None = None,
+        organization_id: UUID | None = None,
+    ) -> PaginatedItems[PlatformCreditGrantRead]:
+        """Every Organization's Credit Grants, newest first."""
+        conditions = []
+        if kind is not None:
+            conditions.append(col(OrganizationCreditGrant.kind) == kind)
+        if organization_id is not None:
+            conditions.append(col(OrganizationCreditGrant.organization_id) == organization_id)
+        with Session(self.delegate.engine) as session:
+            total = session.scalar(select(func.count()).select_from(OrganizationCreditGrant).where(*conditions)) or 0
+            rows = session.exec(
+                select(OrganizationCreditGrant, Organization.name)
+                .join(Organization, col(Organization.id) == col(OrganizationCreditGrant.organization_id))
+                .where(*conditions)
+                .order_by(col(OrganizationCreditGrant.created_at).desc(), col(OrganizationCreditGrant.id).desc())
+                .offset((pagination.page - 1) * pagination.size)
+                .limit(pagination.size)
+            ).all()
+            return PaginatedItems(
+                page=pagination.page,
+                page_size=pagination.size,
+                total=total,
+                items=[
+                    PlatformCreditGrantRead.model_validate({**grant.model_dump(), "organization_name": name})
+                    for grant, name in rows
+                ],
+            )
 
     @staticmethod
     def _add_credit_grant(

@@ -25,6 +25,7 @@ from api.domains.billing.models import (
     CheckoutRead,
     CreditHistoryItem,
     OrganizationBillingRead,
+    PlatformCreditRecordRead,
 )
 from api.domains.billing.repository import BillingCustomerRepository, BillingSettingsRepository
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher
@@ -37,6 +38,7 @@ from api.domains.platform_admin.service import PlatformAdminService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.users.service import UserService
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 from api.infrastructure.stripe.client import StripeGateway
 
 logger = logging.getLogger(__name__)
@@ -87,6 +89,41 @@ class BillingService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         self.dispatcher.enqueue_immediate(delivery_ids)
         return stored.model_copy(update={"payments_enabled": self.config.payments_enabled})
+
+    def list_credit_history(
+        self,
+        context: CurrentUserContext,
+        *,
+        page: int,
+        page_size: int,
+        kind: str | None = None,
+        organization_id: UUID | None = None,
+    ) -> PaginatedItems[PlatformCreditRecordRead]:
+        """Every Organization's changes to its credit, newest first."""
+        self.authority.require_platform_admin(context.user)
+        grants = self.organizations.list_all_credit_grants(
+            Pagination(page=page, size=page_size),
+            kind=CreditGrantKind(kind) if kind else None,
+            organization_id=organization_id,
+        )
+        return PaginatedItems(
+            page=grants.page,
+            page_size=grants.page_size,
+            total=grants.total,
+            items=[
+                PlatformCreditRecordRead(
+                    organization_id=grant.organization_id,
+                    organization_name=grant.organization_name,
+                    kind=grant.kind.value,
+                    credit_usd=float(grant.credit_usd),
+                    amount_paid_usd=None if grant.amount_paid_usd is None else float(grant.amount_paid_usd),
+                    by=grant.actor_display,
+                    reference=grant.external_ref,
+                    created_at=grant.created_at,
+                )
+                for grant in grants.items
+            ],
+        )
 
     def _settings(self) -> BillingSettingsRead:
         return self.settings.read().model_copy(update={"payments_enabled": self.config.payments_enabled})

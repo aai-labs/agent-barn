@@ -1,7 +1,7 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi_injector import Injected
 from starlette.concurrency import run_in_threadpool
 
@@ -13,14 +13,17 @@ from api.domains.billing.models import (
     CheckoutCreate,
     CheckoutRead,
     OrganizationBillingRead,
+    PlatformCreditRecordRead,
 )
 from api.domains.billing.service import BillingService
+from api.infrastructure.shared.models import PaginatedItems
 
 # Stripe's events are a few kilobytes; anything far larger isn't one.
 MAX_STRIPE_EVENT_BYTES = 256 * 1024
 
 billing_router = APIRouter(prefix="/organizations/{organization_id}/billing", tags=["billing"])
 platform_billing_settings_router = APIRouter(prefix="/platform/settings/billing", tags=["platform-settings"])
+platform_billing_router = APIRouter(prefix="/platform/billing", tags=["platform-billing"])
 stripe_webhook_router = APIRouter(prefix="/billing/stripe", tags=["billing"])
 
 
@@ -60,6 +63,21 @@ def update_billing_settings(
     service: Annotated[BillingService, Injected(BillingService)],
 ):
     return service.update_settings(data, context)
+
+
+@platform_billing_router.get("/credit-history", response_model=PaginatedItems[PlatformCreditRecordRead])
+def read_credit_history(
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[BillingService, Injected(BillingService)],
+    kind: Literal["trial", "purchase", "refund", "chargeback", "adjustment"] | None = None,
+    organization_id: UUID | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 50,
+):
+    """Every Organization's purchases, refunds, chargebacks, adjustments and trial credit."""
+    return service.list_credit_history(
+        context, page=page, page_size=page_size, kind=kind, organization_id=organization_id
+    )
 
 
 @stripe_webhook_router.post("/webhook", status_code=status.HTTP_200_OK)
