@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ExternalLink, FileText, Loader2 } from "lucide-react";
+import { ExternalLink, FileText, Loader2, ScrollText } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Badge, type BadgeVariant } from "@/components/badge";
@@ -23,6 +23,7 @@ import { usePlaybookRun } from "../hooks/use-agent-playbook-runs";
 import { useCancelPlaybookExtraction } from "../hooks/use-playbook-run-actions";
 import type { PlaybookExtraction, PlaybookExtractionStatus } from "../schemas";
 import { STATUS_LABEL, errorMessage, isActive } from "../utils";
+import { ConventionsReviewDialog } from "./conventions-review-dialog";
 
 const STATUS_VARIANT: Record<PlaybookExtractionStatus, BadgeVariant> = {
   QUEUED: "neutral",
@@ -109,6 +110,7 @@ export function PlaybookRunList({
   const cancel = useCancelPlaybookExtraction(agentId);
   const [cancelTarget, setCancelTarget] = useState<PlaybookExtraction | null>(null);
   const [viewingRunId, setViewingRunId] = useState<string | null>(null);
+  const [conventionsRunId, setConventionsRunId] = useState<string | null>(null);
 
   async function confirmCancel() {
     if (!cancelTarget) return;
@@ -178,6 +180,11 @@ export function PlaybookRunList({
                     <ExternalLink size={13} aria-hidden /> Review draft
                   </Link>
                 )}
+                {run.status === "SUCCEEDED" && run.conventionCount > 0 && (
+                  <button type="button" className="af-btn af-btn-sm" onClick={() => setConventionsRunId(run.id)}>
+                    <ScrollText size={13} aria-hidden /> Review conventions ({run.conventionCount})
+                  </button>
+                )}
                 {run.errorCode === "draft_conflict" && (
                   <button type="button" className="af-btn af-btn-sm" onClick={() => setViewingRunId(run.id)}>
                     <FileText size={13} aria-hidden /> View playbook
@@ -207,6 +214,7 @@ export function PlaybookRunList({
         variant="destructive"
       />
       <GeneratedPlaybookDialog agentId={agentId} runId={viewingRunId} onClose={() => setViewingRunId(null)} />
+      <ConventionsReviewDialog agentId={agentId} runId={conventionsRunId} onClose={() => setConventionsRunId(null)} />
     </section>
   );
 }

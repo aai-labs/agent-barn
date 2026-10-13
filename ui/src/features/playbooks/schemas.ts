@@ -39,13 +39,26 @@ export const PlaybookExtractionSchema = z.object({
   // Decimals arrive as strings.
   costUsd: z.coerce.number().nullable(),
   requestedByUserId: z.string().uuid().nullable(),
+  conventionCount: z.number().int().default(0),
   createdAt: z.string(),
   startedAt: z.string().nullable(),
   finishedAt: z.string().nullable(),
 });
 
+export const PlaybookConventionSchema = z.object({
+  rule: z.string(),
+  conversations: z.number().int(),
+});
+
 export const PlaybookExtractionDetailSchema = PlaybookExtractionSchema.extend({
   resultMarkdown: z.string().nullable(),
+  conventions: z.array(PlaybookConventionSchema).default([]),
+});
+
+export const ConventionsAppliedSchema = z.object({
+  templateKey: z.string(),
+  added: z.number().int(),
+  alreadyPresent: z.number().int(),
 });
 
 export const PaginatedPlaybookExtractionsSchema = z.object({
@@ -82,6 +95,8 @@ export type PlaybookExtractionStatus = z.infer<typeof PlaybookExtractionStatusSc
 export type PlaybookExtractionError = z.infer<typeof PlaybookExtractionErrorSchema>;
 export type PlaybookExtraction = z.infer<typeof PlaybookExtractionSchema>;
 export type PlaybookExtractionDetail = z.infer<typeof PlaybookExtractionDetailSchema>;
+export type PlaybookConvention = z.infer<typeof PlaybookConventionSchema>;
+export type ConventionsApplied = z.infer<typeof ConventionsAppliedSchema>;
 export type PaginatedPlaybookExtractions = z.infer<typeof PaginatedPlaybookExtractionsSchema>;
 export type PlaybookExtractionPreview = z.infer<typeof PlaybookExtractionPreviewSchema>;
 export type PlaybookExtractionCreate = z.infer<typeof PlaybookExtractionCreateSchema>;

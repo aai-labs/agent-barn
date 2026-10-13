@@ -77,9 +77,9 @@ export function PlaybookExtractionForm({ agent, hasActiveRun }: { agent: Agent; 
         <div className="min-w-0">
           <h3 className="m-0 text-[0.95rem] font-semibold">Create a playbook from this Agent</h3>
           <p className="mb-0 mt-1 text-[0.84rem] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-            Reads this Agent&apos;s recent conversations, tool calls, and long-term memories and drafts an Organization
-            Skill describing how it works. Nothing is published: you review the draft, then publish it and add it to
-            other Agents or Templates.
+            Reads this Agent&apos;s recent conversations, tool calls, and long-term memories. It drafts an Organization
+            Skill describing how this role works, and proposes organization conventions that apply to every Agent.
+            Nothing is published: you review the draft and the conventions, then put them to use.
           </p>
         </div>
       </div>

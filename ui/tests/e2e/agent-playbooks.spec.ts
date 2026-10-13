@@ -10,6 +10,7 @@ import {
   mockSucceededRun,
 } from "../pages/data-support/playbook-data-support.po";
 import { TEST_ORG_ID } from "../constants";
+import { MOCK_ORG_TEMPLATE_KEY } from "../pages/data-support/org-template-data-support.po";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -169,4 +170,54 @@ test("a Platform Administrator chooses the playbook extraction model", async ({ 
 
   await expect(page.getByRole("status")).toContainText("Playbook extraction model saved");
   expect(settings.writes).toEqual([{ model: "openrouter/anthropic/claude-sonnet" }]);
+});
+
+test("proposed organization conventions are reviewed and added to a Template's AGENTS.md", async ({ page }) => {
+  const run = mockSucceededRun({
+    convention_count: 3,
+    conventions: [
+      { rule: "Use Vilnius time for dates and deadlines.", conversations: 4 },
+      { rule: "Ask before changing records.", conversations: 2 },
+      { rule: "Tag sales owners by Slack ID.", conversations: 1 },
+    ],
+  });
+  const { playbooks } = await open(page, { runs: [run] });
+  const data = new DataSupport(page);
+  await data.orgTemplates.interceptGetLineages();
+  const posted = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" && request.url().endsWith(`/templates/${MOCK_ORG_TEMPLATE_KEY}/draft/conventions`),
+  );
+  await page.route(`**/templates/${MOCK_ORG_TEMPLATE_KEY}/draft/conventions`, (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ template_key: MOCK_ORG_TEMPLATE_KEY, added: 1, already_present: 1 }),
+    }),
+  );
+
+  await playbooks.runs().first().getByRole("button", { name: "Review conventions (3)" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Seen in 4 conversations");
+  await dialog.getByRole("checkbox", { name: "Include convention 3" }).click();
+  await dialog.getByRole("textbox", { name: "Convention 2" }).fill("Ask for approval before changing records.");
+  await dialog.getByRole("checkbox", { name: "My Custom" }).click();
+  await dialog.getByRole("button", { name: "Add 2 to 1 Template" }).click();
+
+  expect((await posted).postDataJSON()).toEqual({
+    rules: ["Use Vilnius time for dates and deadlines.", "Ask for approval before changing records."],
+  });
+  await expect(dialog.getByRole("list", { name: "Results" })).toContainText(
+    "My Custom: 1 added to the draft, 1 already there",
+  );
+  await expect(dialog.getByRole("link", { name: "Open Template" })).toHaveAttribute(
+    "href",
+    `/dashboard/${TEST_ORG_ID}/settings/templates/${MOCK_ORG_TEMPLATE_KEY}`,
+  );
+});
+
+test("a run that proposed no conventions offers no review", async ({ page }) => {
+  const { playbooks } = await open(page, { runs: [mockSucceededRun({ convention_count: 0 })] });
+
+  await expect(playbooks.runs().first()).toContainText("Draft ready");
+  await expect(playbooks.runs().first().getByRole("button", { name: /Review conventions/ })).toHaveCount(0);
 });
