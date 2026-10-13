@@ -460,7 +460,9 @@ jobs:
   # baseline, so the next deploy rebuilds the API rather than reverting it.
   promote-api:
     needs: [push-api, resolve-env, deploy]
-    if: ${{ needs.deploy.result == 'success' && needs.push-api.outputs.image_digest != '' }}
+    # Override implicit success(): optional upstream jobs may be skipped even
+    # when the API push and deployment succeed.
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && needs.push-api.outputs.image_digest != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: docker/setup-buildx-action@v4
