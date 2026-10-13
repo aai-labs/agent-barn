@@ -18,6 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+import { PlaybookProvenance } from "@/features/playbooks/components/playbook-provenance";
+
 import { useSkillDraft } from "../hooks/use-skill-draft";
 import { useSkillFiles } from "../hooks/use-skill-files";
 import { useSkillVersions } from "../hooks/use-skill-versions";
@@ -477,6 +479,12 @@ export function SkillDetailPage({
           ) : null}
         </div>
       </div>
+
+      <PlaybookProvenance
+        skillId={skillId}
+        enabled={scope.kind === "organization" && canEdit}
+        hasDraft={detail.hasDraft}
+      />
 
       <div className="flex gap-8 items-start flex-col lg:flex-row">
         <SkillDetailSidebar activeSection={section} onSectionChange={setSection} />
