@@ -16,6 +16,24 @@ as in the README setup; native transport dependencies belong to the runtime imag
 
 ## Database migrations
 
+Migration `b91a73e42c60` removes the unused global `aai-zoho-mail` built-in Skill
+left behind by Zoho provider retirement. It runs automatically on upgrade and
+does nothing on installations without that lineage (including new installs).
+It preserves custom Skills and any built-in lineage still referenced by Agent
+pins, Template/Override requirements, or fork provenance. The deleted retired
+content is not recreated on downgrade.
+
+The following migration, `c42e91b7a603`, removes only `zoho_mail`, `zoho_calendar`,
+and `slack` from `required_providers` on all retained Skill lineages, published
+versions, and drafts in every scope. This is a repair to historical provider
+metadata after tool-provider retirement: content, assignments, version numbers,
+fork provenance, timestamps, and other provider requirements remain unchanged.
+It does not enable retired tool integrations or affect runtime-owned Slack
+Communication Connections. Already-clean installations require no changes;
+downgrade does not reconstruct removed requirements. These migrations complement
+the credential cleanup in `a85f48650d6a`; removing a provider from code alone
+does not retire database Skill metadata.
+
 ```bash
 make migrate          # upgrade the configured database to head
 make makemigrations   # autogenerate a revision after prompting for its message
@@ -629,6 +647,8 @@ Rules:
 - API and UI image tags are explicit deployment inputs (`API_IMAGE_TAG`, `UI_IMAGE_TAG`), not chart metadata.
 - Bump chart versions late, ideally immediately before the PR, to reduce merge conflicts, when chart packaging actually changed.
 - `../../.github/workflows/deploy.yml` builds API and UI images under moving environment tags and passes those tags into Helm via `API_IMAGE_TAG` and `UI_IMAGE_TAG`: `latest` on `main`, `latest-staging` on `staging`. Branch deploys no longer depend on chart `appVersion` bumps.
+- **The API image is deployed by digest.** `api.yml` pushes it without a tag; `deploy.yml` passes `API_IMAGE_TAG=<moving tag>@sha256:<digest>` (a valid reference whose tag is ignored), runs the migration hook and rollout against that digest, and only then re-tags `latest`/`latest-staging` to it in `promote-api`. A failed migration therefore leaves the moving tag, and every pod restart, CronJob and restore-point job that resolves it, on the previous image. The re-tag copies a manifest and stores no layers; no per-deploy tag is created. When the API was not rebuilt, `resolve-env` pins the moving tag's current digest so the rendered spec matches the running one. If that lookup fails the plain tag is used, which rolls the API but never changes its image silently. The UI and the Hermes/OpenClaw base images keep their moving tags: the UI has no schema coupling, and the base images carry `VERSION` tags consumed by API-created pods. Rationale: [`../adr/2026-10-13-deploy-api-image-by-digest.md`](../adr/2026-10-13-deploy-api-image-by-digest.md).
+- A run that fails after `deploy` but before `promote-api` is not a successful deploy, so it stays out of the change-detection baseline and the next run rebuilds the API. Re-run the failed run, or dispatch `deploy.yml`, to move the tag.
 - Public hosted deploys (`../../.github/workflows/deploy-public.yml`) pin API/UI to the git tag (`vX.Y.Z`) on `registry.agentbarn.dev`. They never move k3s `latest` tags.
 - Runtime `VERSION` tags MUST NOT be reused for different image contents:
   local loading skips a tag already present in k3d, and release workflows
