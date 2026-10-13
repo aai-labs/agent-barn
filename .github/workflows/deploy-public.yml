@@ -287,7 +287,6 @@ jobs:
           NAMESPACE: agent-farm
           ENVIRONMENT: public
           LITELLM_KEY_SERVICE_ACCOUNT: agent-farm-user
-          MEMORY_FIRST_DEPLOYMENT: ${{ vars.PUBLIC_MEMORY_FIRST_DEPLOYMENT || 'false' }}
           API_IMAGE_TAG: ${{ needs.resolve.outputs.api_image_tag }}
           UI_IMAGE_TAG: ${{ needs.resolve.outputs.ui_image_tag }}
           OPENCLAW_IMAGE_TAG: ${{ needs.resolve.outputs.openclaw_image_tag }}

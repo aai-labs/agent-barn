@@ -22,8 +22,6 @@ spec:
             - secretRef:
                 name: {{ .Values.litellmSecretName }}
           env:
-            - name: MEMORY_FIRST_DEPLOYMENT
-              value: {{ .Values.firstDeployment | toString | quote }}
             - name: KEY_SECRET_NAME
               value: {{ .Values.llm.keySecretName | quote }}
             - name: HASHES_SECRET_NAME

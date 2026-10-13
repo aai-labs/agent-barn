@@ -166,16 +166,6 @@ the Hindsight backend references it. The hook uses the existing LiteLLM Secret
 and selected tenant ServiceAccount, which needs Secret `get`/`create`/`update`.
 The runner no longer generates LiteLLM keys or executes code inside its pod.
 
-Temporary public-cluster bootstrap: set GitHub variable
-`PUBLIC_MEMORY_FIRST_DEPLOYMENT=true` only for the first Hindsight deployment
-while its hash-Secret read grant is pending. The public workflow passes
-`MEMORY_FIRST_DEPLOYMENT` through Helmfile to the key hook, which skips reading
-existing hashes but still writes the generated key and its hashes. This defaults
-to false; enabling it on an existing deployment discards previously retained
-hashes unless supplied through `PUBLIC_MEMORY_LITELLM_KEY_HASHES`. After the
-first successful deployment, delete the variable and remove this temporary
-wiring. Subsequent deployments require the normal Secret read grant.
-
 The key is recreated on every Hindsight install or upgrade, including a repeated
 deployment of the same commit. A release-revision annotation rolls the backend
 to load the new key. It has no Organization team, never expires, and has

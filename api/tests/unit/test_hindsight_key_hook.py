@@ -1,7 +1,6 @@
 """Exercise the shipped hook's generate, rotate, and Secret-update protocol."""
 
 import base64
-import hashlib
 import io
 import json
 import runpy
@@ -24,7 +23,6 @@ def setup_test_database():
 @pytest.fixture
 def hook(monkeypatch):
     state: dict[str, Any] = {"secrets": {}, "keys": {}, "generated": 0, "operations": []}
-    monkeypatch.delenv("MEMORY_FIRST_DEPLOYMENT", raising=False)
     for name, value in {
         "LITELLM_MASTER_KEY": "test-master",
         "KEY_SECRET_NAME": "hindsight-litellm-key",
@@ -110,18 +108,8 @@ def test_hook_generates_key_then_rotates_and_updates_secrets(hook, capsys):
     assert all(key not in output.out + output.err for key in [*first.values(), *second.values(), "test-master"])
 
 
-@pytest.mark.parametrize("bootstrap", [False, True])
-def test_first_deployment_bootstrap_with_secret_reads_denied(hook, monkeypatch, bootstrap):
+def test_hook_refuses_to_rotate_key_when_secret_reads_are_denied(hook):
     hook["deny_secret_reads"] = True
-    if bootstrap:
-        monkeypatch.setenv("MEMORY_FIRST_DEPLOYMENT", "true")
+    with pytest.raises(SystemExit, match="Hindsight key provisioning failed"):
         run_hook()
-        key = decode(hook["secrets"]["hindsight-litellm-key"])["LITELLM_API_KEY"]
-        hashes = decode(hook["secrets"]["hindsight-litellm-hashes"])
-        active = hashlib.sha256(key.encode()).hexdigest()
-        assert hashes["MEMORY_LITELLM_ACTIVE_KEY_HASH"] == active
-        assert set(hashes["MEMORY_LITELLM_KEY_HASHES"].split(",")) == {active, "a" * 64}
-    else:
-        with pytest.raises(SystemExit, match="Hindsight key provisioning failed"):
-            run_hook()
-        assert hook["secrets"] == {} and hook["generated"] == 0
+    assert hook["secrets"] == {} and hook["generated"] == 0

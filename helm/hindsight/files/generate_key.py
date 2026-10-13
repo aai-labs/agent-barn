@@ -76,11 +76,7 @@ def main():
     else:
         raise SystemExit("LiteLLM did not become ready after 3 minutes")
 
-    # Temporary cloud bootstrap while the hash-Secret read grant is pending.
-    first_deployment = os.environ.get("MEMORY_FIRST_DEPLOYMENT", "false").lower() == "true"
-    if first_deployment:
-        print("First-deployment bootstrap: skipping existing key-hash read", flush=True)
-    previous = {} if first_deployment else read_hashes()
+    previous = read_hashes()
     try:
         request(litellm_url + "/key/delete", litellm_headers, {"key_aliases": [alias]})
     except urllib.error.HTTPError as error:

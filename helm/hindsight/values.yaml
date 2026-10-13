@@ -24,4 +24,3 @@ runtimeServiceKey: ""
 
 litellmSecretName: litellm
 litellmKeyServiceAccountName: agent-farm-user
-firstDeployment: "false"
