@@ -764,6 +764,32 @@ class SkillService:
         )
         return self._to_read(skill, version=None, has_draft=True)
 
+    def require_playbook_target(self, org_id: UUID, skill_id: UUID) -> Skill:
+        """An Organization-owned custom Skill whose next draft a Playbook Extraction may write.
+
+        Callers have already enforced ``skill.manage``. A pending draft is refused so a
+        run never overwrites a person's unpublished edits.
+        """
+        skill = self._get_or_404(skill_id, org_id)
+        if skill.organization_id != org_id or skill.agent_id is not None or skill.source == SkillSource.AAI_CLI:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Playbooks can only refresh organization-owned custom Skills",
+            )
+        if self.repository.get_draft(skill.id) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This Skill has an unpublished draft. Publish or discard it before extracting a new playbook.",
+            )
+        return skill
+
+    def require_available_organization_skill_name(self, org_id: UUID, name: str) -> None:
+        if name in {s.name for s in self.repository.find_org_scoped(org_id)}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A skill with this name already exists in this organization",
+            )
+
     def fork_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillDetailRead:
         """Create an independent Organization Skill draft from a visible source version."""
         org_id = self._org_id(context)

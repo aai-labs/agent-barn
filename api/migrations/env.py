@@ -22,6 +22,7 @@ import api.domains.events.models
 import api.domains.events.security_audit
 import api.domains.integrations.models
 import api.domains.organizations.models
+import api.domains.playbooks.models
 import api.domains.rbac.models
 import api.domains.shared_credentials.models
 import api.domains.skills.models

@@ -29,6 +29,7 @@ AGENT_MEMORY_ENABLED = "agent.memory.enabled"
 AGENT_MEMORY_DISABLED = "agent.memory.disabled"
 AGENT_MEMORY_GRANT_CREATED = "agent.memory_grant.created"
 AGENT_MEMORY_GRANT_REVOKED = "agent.memory_grant.revoked"
+PLAYBOOK_EXTRACTION_REQUESTED = "playbook.extraction.requested"
 TEMPLATE_CREATED = "template.created"
 TEMPLATE_UPDATED = "template.updated"
 TEMPLATE_DELETED = "template.deleted"
@@ -267,6 +268,26 @@ class AgentMemoryGrantPayload(BaseModel):
     source_display: str
     # Absent in original combined grants; "write" preserves historical split-grant events.
     access: Literal["read", "read_write", "write"] | None = None
+    actor_display: str
+    subject_display: str
+
+
+class PlaybookExtractionRequestedPayload(BaseModel):
+    """The Subject is the source Agent whose transcripts and memories the run reads.
+
+    skill_id is None when the run creates a new playbook; skill_name is the target's
+    name at request time. Never carries transcript or playbook content.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    extraction_id: UUID
+    agent_id: UUID
+    skill_id: UUID | None
+    skill_name: str
+    window_days: int
+    max_sessions: int
     actor_display: str
     subject_display: str
 
@@ -686,6 +707,15 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLAYBOOK_EXTRACTION_REQUESTED,
+            schema_version=1,
+            payload_model=PlaybookExtractionRequestedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
     for event_name in (ORGANIZATION_MEMBER_ADDED, ORGANIZATION_MEMBER_REMOVED):
         registry.register(
             DomainEventDefinition(
