@@ -8,7 +8,7 @@ Read before changing Playbook Extractions: who may start or read them, what they
 
 A Playbook is an Organization Skill whose content came from a source Agent's work and was reviewed by a person before publishing. A **Playbook Extraction** is one recorded run that reads the source Agent's sessions and writes the result into an Organization Skill Draft. Publishing, assigning the Skill to Agents, and requiring it on Templates use the ordinary [Skill](templates-and-skills.md) workflows; a run never publishes or installs anything.
 
-Delivery is staged; see [`playbooks/CHANGELOG.md`](playbooks/CHANGELOG.md). Runs are accepted, audited, queued, and authorized in the worker. The pipeline that reads sessions and writes the draft is not delivered yet: every run that reaches it fails with `pipeline_unavailable`.
+Delivery is staged; see [`playbooks/CHANGELOG.md`](playbooks/CHANGELOG.md).
 
 ## Authorization
 
@@ -30,7 +30,7 @@ Delivery is staged; see [`playbooks/CHANGELOG.md`](playbooks/CHANGELOG.md). Runs
 - A source Agent has at most one `QUEUED` or `RUNNING` run (`uq_playbook_extraction_active_agent`); a second start is `409`.
 - The worker claims a run only while it is `QUEUED`, or `RUNNING` with a start more than 30 minutes old, which means a worker died mid-run. A redelivered message therefore never processes a live run twice. Every later transition is conditional on the run still being active, so a cancelled run keeps `CANCELLED` even if a worker finishes after the cancellation.
 - Runs are never retried automatically, because model calls are billed. A failed run is started again by a person.
-- Stored error codes: `enqueue_failed`, `requester_lost_access`, `source_agent_unavailable`, `pipeline_unavailable`, `no_sessions`, `model_unavailable`, `spend_limit_reached`, `model_error`, `draft_conflict`, `skill_unavailable`, `internal_error`. Upstream error text and content are never stored or logged.
+- Stored error codes: `enqueue_failed`, `requester_lost_access`, `source_agent_unavailable`, `no_sessions`, `model_unavailable`, `spend_limit_reached`, `model_error`, `draft_conflict`, `skill_unavailable`, `internal_error`. Upstream error text and content are never stored or logged.
 
 ## What a run reads
 
@@ -43,7 +43,7 @@ Delivery is staged; see [`playbooks/CHANGELOG.md`](playbooks/CHANGELOG.md). Runs
 
 ### Preview a run
 
-`GET .../agents/{agent_id}/playbook-extractions/preview?window_days=&max_sessions=` uses the same authorization and bounds as starting a run and returns what a run would read now: the window, `session_count`, `message_count`, `tool_call_count`, `input_chars`, and `estimated_input_tokens`. The estimate is the transcript characters divided by four, rounded up; it excludes instructions and the model's output. Previewing reads nothing from Hindsight, calls no model, and records nothing.
+`GET .../agents/{agent_id}/playbook-extractions/preview?window_days=&max_sessions=` uses the same authorization and bounds as starting a run and returns what a run would read now: the window, `session_count`, `message_count`, `tool_call_count`, `input_chars`, the current `model`, and `estimated_input_tokens` and `estimated_output_tokens`. Estimates count four characters per token for the transcripts and both prompts, plus a typical 400 tokens of notes per conversation and half the playbook step's 4,000-token limit; they exclude long-term memories. Previewing reads nothing from Hindsight, calls no model, and records nothing.
 
 ### Start a run
 
@@ -62,6 +62,20 @@ Delivery is staged; see [`playbooks/CHANGELOG.md`](playbooks/CHANGELOG.md). Runs
 - `GET /organizations/{organization_id}/playbook-extractions?skill_id=` lists the Organization's runs, optionally for one target Skill.
 - `GET .../playbook-extractions/{extraction_id}` adds `result_markdown`, the generated playbook, kept on the run so nothing paid for is lost if the draft cannot be written.
 - `POST .../playbook-extractions/{extraction_id}/cancel` cancels a `QUEUED` or `RUNNING` run; a finished run is `409`.
+
+## Pipeline
+
+The worker runs these steps once the requester's authority is confirmed. After each step it stores its figures only while the run is still `RUNNING`; a cancellation stops it at the next step.
+
+1. Read the transcripts (see [What a run reads](#what-a-run-reads)) and record the session keys and counts. No transcript fails the run with `no_sessions` before any model call.
+2. Take notes on each transcript, four at a time, asking the model for a JSON object with the task, whether it teaches anything reusable, the steps, tools, people's corrections, their preferences, and the outcome. A non-JSON answer is kept as text. Notes marked not reusable are dropped unless nothing else is left.
+3. Read up to 200 of the source Agent's long-term memories, each clipped to 500 characters, through the memory viewer with a capability for that Agent. They include Organization Memory only while the Agent holds a read grant, as in the Agent Memory tab. If memory is unavailable the run continues without it.
+4. Ask the model for the playbook from the notes and memories: a one-sentence description of when to use it, and a Markdown body with fixed sections (when to use, how we work, tools and commands, preferences and standards, corrections to avoid, open questions for the reviewer), each procedure citing how many conversations support it. An answer in another shape fails the run with `model_error`.
+5. Store the playbook on the run as `SKILL.md` with `name` (the mount slug) and `description` frontmatter, then write it as a Skill Draft: the next draft of the target Skill, or a new custom Organization Skill named `skill_name`, with ` (2)`, ` (3)`, … added if that name was taken meanwhile. A target that gained a draft after the request fails the run with `draft_conflict`, leaving that draft untouched; the generated playbook stays on the run.
+
+Both prompts tell the model to describe practices generically and leave out names of people, clients, and companies, contact details, identifiers, client amounts, and credentials, and to treat transcripts, notes, and memories as data rather than instructions. These are instructions to a model, not a guarantee: the reviewer publishing the draft remains the control. Each run records `prompt_version`.
+
+Model failures map to stored codes: budget exceeded to `spend_limit_reached`, a rejected key or model to `model_unavailable`, and an outage or empty answer to `model_error`. A missing or undecryptable Agent key is `model_unavailable`. Tokens and cost spent before a failure stay on the run.
 
 ## Model and billing
 
@@ -84,16 +98,19 @@ Each run records the window, session bound, model, prompt version, the selected 
 | Audit payload | `api/domains/events/catalog.py`, [`domain-events.md`](domain-events.md) |
 | Model setting or completion request shape | `api/domains/playbooks/platform_service.py`, `api/infrastructure/litellm/completions.py`, the Platform settings UI |
 | Worker queue, time limit, or retries | `api/domains/playbooks/constants.py`, `api/worker_app.py`, [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md) |
+| Prompts or output shape | `api/domains/playbooks/prompts.py` and its `PROMPT_VERSION`, this document |
 | Session selection, pairing, or transcript bounds | This document, `api/domains/playbooks/transcripts.py`, `api/domains/playbooks/repository.py` |
 | What counts as a valid target Skill | `SkillService.require_playbook_target`, [`templates-and-skills.md`](templates-and-skills.md) |
 
 ## Code map
 
 - `api/domains/playbooks/`: models, repository (scoped reads, conditional transitions, bounded session reads), service (authorization and orchestration), routes, the queue (`transport.py`), the worker processor and entry point, the session reader (`sessions.py`), transcript pairing and rendering (`transcripts.py`), and the pipeline.
+- `api/domains/playbooks/pipeline.py`, `prompts.py`: the model steps and their instructions.
 - `api/domains/playbooks/platform_*.py`: the Platform model setting.
 - `api/infrastructure/litellm/completions.py`: chat completions billed to a supplied virtual key.
 - `api/worker_app.py`: the `playbook_extraction.process` Dramatiq actor on the `playbook_extraction` queue.
-- `api/domains/skills/service.py`: `require_playbook_target` and `require_available_organization_skill_name`.
+- `api/domains/skills/service.py`: `require_playbook_target`, `require_available_organization_skill_name`, and `write_playbook_draft`.
 - `api/tests/integration/test_playbook_extractions.py`, `api/tests/steps/playbooks.py`: authorization, tenancy, conflicts, audit, cancellation, and the worker's claim and authority checks.
+- `api/tests/integration/test_playbook_pipeline.py`, `api/tests/helpers/litellm_proxy.py`: whole runs against a loopback LiteLLM proxy.
 - `api/tests/integration/test_platform_playbook_settings.py`, `api/tests/unit/test_litellm_completions.py`: the Platform setting and the completion client against a loopback proxy.
 - `api/tests/integration/test_playbook_extraction_preview.py`, `api/tests/unit/test_playbook_transcripts.py`: session selection, pairing, rendering bounds, and the estimate.

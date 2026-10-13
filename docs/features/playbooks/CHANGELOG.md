@@ -21,15 +21,22 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 - Delivered: Playbook Extraction runs — the `playbook_extraction` table, start/list/detail/cancel APIs, the `playbook.extraction.requested` audit event, the `playbook_extraction` worker queue, and the worker's claim and authority re-check. The contract is [`../playbooks.md`](../playbooks.md).
 - Delivered: session assembly and the preview endpoint, which reports what a run would read and an estimated transcript token count.
 - Delivered: the Platform Playbook model setting with its audit event, and the LiteLLM completion client; the worker receives `LITELLM_BASE_URL`.
-- In transition: the pipeline is a stub, so every run the worker starts fails with `pipeline_unavailable` until slice 4.
+- Delivered: the pipeline — notes per conversation, the playbook step with long-term memories, the Skill Draft write, and usage recording.
+- In transition: nothing; runs work end to end through the API. No UI yet.
 - Next, in order:
-  4. Pipeline: per-session notes, one combining call with long-term memories, writing the Skill Draft, and recording usage.
   5. UI: Create playbook on the Agent page, run history, the Platform setting, and a provenance banner on the Skill Draft.
   6. Install shortcuts: from a published playbook, assign it to Agents or require it on a Template.
 - Deferred: compiling playbooks into configuration, scheduled re-extraction, Connection exclusions, reading the Agent volume, automatic publication, and measuring playbook impact.
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-13 — slice 4
+
+- Delivered: `PlaybookPipeline`, its prompts (`playbook-2026-10-13`), `SkillService.write_playbook_draft`, and output-token and model fields on the preview.
+- Removed: the transitional `pipeline_unavailable` error code.
+- Changed: the Compose worker receives `MEMORY_VIEW_BASE_URL`; Helm already supplies it through the API Secret.
+- Follow-up: slice 5, the UI.
 
 ### 2026-10-13 — slice 3
 
