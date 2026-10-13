@@ -5,11 +5,13 @@ from uuid import UUID, uuid4
 
 from injector import inject, singleton
 from sqlalchemy import func, or_, update
+from sqlalchemy import select as sql_select
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.conversations.models import AgentChatMessage
 from api.domains.events.catalog import EVENT_REGISTRY, PLAYBOOK_EXTRACTION_REQUESTED
 from api.domains.events.models import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.repository import OutboxMessageRepository
@@ -23,9 +25,21 @@ from api.domains.playbooks.models import (
     PlaybookExtractionRead,
     PlaybookExtractionStatus,
 )
+from api.domains.playbooks.transcripts import (
+    MAX_MESSAGES_PER_SESSION,
+    MAX_TOOL_CALLS_PER_SESSION,
+    ConversationSpan,
+    MessageRow,
+    ToolCallRow,
+    ToolSessionSpan,
+)
 from api.domains.rbac.policy import AuthorizationScope
+from api.domains.tool_calls.models import ToolCall
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+# Bounds the pairing scan; a window busier than this pairs only its latest sessions.
+MAX_TOOL_SESSIONS = 2_000
 
 
 class ActiveExtractionExists(Exception):
@@ -245,3 +259,178 @@ class PlaybookExtractionRepository:
             if updated_id is None:
                 return None
             return session.get(PlaybookExtraction, updated_id)
+
+
+@inject
+@singleton
+@dataclass
+class PlaybookSessionRepository:
+    """Bounded reads of one visible Agent's conversations and Tool Calls in a time window."""
+
+    delegate: PostgresRepositoryDelegate
+
+    def conversation_spans(
+        self,
+        agent_id: UUID,
+        authorization_scope: AuthorizationScope,
+        window_start: datetime,
+        window_end: datetime,
+        limit: int,
+    ) -> list[ConversationSpan]:
+        """The most recently active conversations in the window, newest first."""
+        last_activity = func.max(AgentChatMessage.occurred_at)
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(AgentChatMessage.session_key, func.min(AgentChatMessage.occurred_at), last_activity)
+                .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+                .where(
+                    col(AgentChatMessage.agent_id) == agent_id,
+                    col(AgentChatMessage.occurred_at) >= window_start,
+                    col(AgentChatMessage.occurred_at) < window_end,
+                    *agent_scope_predicates(authorization_scope),
+                )
+                .group_by(col(AgentChatMessage.session_key))
+                .order_by(last_activity.desc(), col(AgentChatMessage.session_key))
+                .limit(limit)
+            ).all()
+        return [ConversationSpan(session_key=key, started_at=start, ended_at=end) for key, start, end in rows]
+
+    def messages(
+        self,
+        agent_id: UUID,
+        authorization_scope: AuthorizationScope,
+        session_keys: list[str],
+        window_start: datetime,
+        window_end: datetime,
+    ) -> list[MessageRow]:
+        """Each conversation's latest messages in the window, oldest first."""
+        if not session_keys:
+            return []
+        position = (
+            func.row_number()
+            .over(
+                partition_by=col(AgentChatMessage.session_key),
+                order_by=(col(AgentChatMessage.occurred_at).desc(), col(AgentChatMessage.id).desc()),
+            )
+            .label("position")
+        )
+        with Session(self.delegate.engine) as session:
+            ranked = (
+                sql_select(
+                    col(AgentChatMessage.session_key),
+                    col(AgentChatMessage.direction),
+                    col(AgentChatMessage.sender_name),
+                    col(AgentChatMessage.content),
+                    col(AgentChatMessage.occurred_at),
+                    position,
+                )
+                .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+                .where(
+                    col(AgentChatMessage.agent_id) == agent_id,
+                    col(AgentChatMessage.session_key).in_(session_keys),
+                    col(AgentChatMessage.occurred_at) >= window_start,
+                    col(AgentChatMessage.occurred_at) < window_end,
+                    *agent_scope_predicates(authorization_scope),
+                )
+                .subquery()
+            )
+            # Core execution: the per-session cap needs more columns than SQLModel's select types.
+            rows = (
+                session.connection()
+                .execute(
+                    sql_select(ranked)
+                    .where(ranked.c.position <= MAX_MESSAGES_PER_SESSION)
+                    .order_by(ranked.c.occurred_at)
+                )
+                .all()
+            )
+        return [
+            MessageRow(
+                session_key=key, direction=direction, sender_name=sender, content=content, occurred_at=occurred_at
+            )
+            for key, direction, sender, content, occurred_at, _position in rows
+        ]
+
+    def tool_session_spans(
+        self,
+        agent_id: UUID,
+        authorization_scope: AuthorizationScope,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> list[ToolSessionSpan]:
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(ToolCall.session_id, func.min(ToolCall.occurred_at), func.max(ToolCall.occurred_at))
+                .join(Agent, col(Agent.id) == col(ToolCall.agent_id))
+                .where(
+                    col(ToolCall.agent_id) == agent_id,
+                    col(ToolCall.occurred_at) >= window_start,
+                    col(ToolCall.occurred_at) < window_end,
+                    *agent_scope_predicates(authorization_scope),
+                )
+                .group_by(col(ToolCall.session_id))
+                .order_by(func.max(ToolCall.occurred_at).desc())
+                .limit(MAX_TOOL_SESSIONS)
+            ).all()
+        return [ToolSessionSpan(session_id=key, started_at=start, ended_at=end) for key, start, end in rows]
+
+    def tool_calls(
+        self,
+        agent_id: UUID,
+        authorization_scope: AuthorizationScope,
+        session_ids: list[str],
+        window_start: datetime,
+        window_end: datetime,
+    ) -> list[ToolCallRow]:
+        """Each runtime session's first Tool Calls in the window, oldest first."""
+        if not session_ids:
+            return []
+        position = (
+            func.row_number()
+            .over(
+                partition_by=col(ToolCall.session_id),
+                order_by=(col(ToolCall.occurred_at), col(ToolCall.id)),
+            )
+            .label("position")
+        )
+        with Session(self.delegate.engine) as session:
+            ranked = (
+                sql_select(
+                    col(ToolCall.session_id),
+                    col(ToolCall.tool_name),
+                    col(ToolCall.arguments),
+                    col(ToolCall.result),
+                    col(ToolCall.status),
+                    col(ToolCall.occurred_at),
+                    position,
+                )
+                .join(Agent, col(Agent.id) == col(ToolCall.agent_id))
+                .where(
+                    col(ToolCall.agent_id) == agent_id,
+                    col(ToolCall.session_id).in_(session_ids),
+                    col(ToolCall.occurred_at) >= window_start,
+                    col(ToolCall.occurred_at) < window_end,
+                    *agent_scope_predicates(authorization_scope),
+                )
+                .subquery()
+            )
+            rows = (
+                session.connection()
+                .execute(
+                    sql_select(ranked)
+                    .where(ranked.c.position <= MAX_TOOL_CALLS_PER_SESSION)
+                    .order_by(ranked.c.occurred_at)
+                )
+                .all()
+            )
+        return [
+            ToolCallRow(
+                session_id=session_id,
+                tool_name=tool_name,
+                arguments=arguments,
+                result=result,
+                status=getattr(call_status, "value", str(call_status)),
+                occurred_at=occurred_at,
+            )
+            for session_id, tool_name, arguments, result, call_status, occurred_at, _position in rows
+        ]

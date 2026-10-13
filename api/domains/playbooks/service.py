@@ -16,9 +16,12 @@ from api.domains.playbooks.models import (
     PlaybookExtractionDetailRead,
     PlaybookExtractionError,
     PlaybookExtractionFilter,
+    PlaybookExtractionPreview,
     PlaybookExtractionRead,
 )
 from api.domains.playbooks.repository import ActiveExtractionExists, PlaybookExtractionRepository
+from api.domains.playbooks.sessions import PlaybookSessionReader
+from api.domains.playbooks.transcripts import estimated_tokens
 from api.domains.playbooks.transport import PlaybookExtractionQueue
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
@@ -47,6 +50,25 @@ class PlaybookExtractionService:
     skills: SkillService
     queue: PlaybookExtractionQueue
     event_delivery_dispatcher: EventDeliveryDispatcher
+    sessions: PlaybookSessionReader
+
+    def preview(
+        self, agent_id: UUID, window_days: int, max_sessions: int, context: CurrentUserContext
+    ) -> PlaybookExtractionPreview:
+        agent, scope = self._require_extractor(context, agent_id)
+        window_end = datetime.now(UTC)
+        window_start = window_end - timedelta(days=window_days)
+        transcripts = self.sessions.read(agent.id, scope, window_start, window_end, max_sessions)
+        input_chars = sum(len(transcript.text) for transcript in transcripts)
+        return PlaybookExtractionPreview(
+            window_start=window_start,
+            window_end=window_end,
+            session_count=len(transcripts),
+            message_count=sum(transcript.message_count for transcript in transcripts),
+            tool_call_count=sum(transcript.tool_call_count for transcript in transcripts),
+            input_chars=input_chars,
+            estimated_input_tokens=estimated_tokens(input_chars),
+        )
 
     def create(
         self, agent_id: UUID, data: PlaybookExtractionCreate, context: CurrentUserContext

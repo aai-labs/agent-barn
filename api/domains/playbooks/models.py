@@ -167,5 +167,17 @@ class PlaybookExtractionDetailRead(PlaybookExtractionRead):
     result_markdown: str | None
 
 
+class PlaybookExtractionPreview(PydanticBaseModel):
+    """What a run with these settings would read now, before anything is billed."""
+
+    window_start: datetime
+    window_end: datetime
+    session_count: int
+    message_count: int
+    tool_call_count: int
+    input_chars: int
+    estimated_input_tokens: int
+
+
 class PlaybookExtractionFilter(PydanticBaseModel):
     skill_id: UUID | None = None

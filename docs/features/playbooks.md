@@ -32,7 +32,18 @@ Delivery is staged; see [`playbooks/CHANGELOG.md`](playbooks/CHANGELOG.md). Runs
 - Runs are never retried automatically, because model calls are billed. A failed run is started again by a person.
 - Stored error codes: `enqueue_failed`, `requester_lost_access`, `source_agent_unavailable`, `pipeline_unavailable`, `no_sessions`, `model_unavailable`, `spend_limit_reached`, `model_error`, `draft_conflict`, `skill_unavailable`, `internal_error`. Upstream error text and content are never stored or logged.
 
+## What a run reads
+
+- The source Agent's conversations, by Conversation Message `session_key`, whose messages fall inside the window: the most recently active first, up to the run's session bound. Each conversation contributes at most its latest 200 messages in the window. Web Chat conversations are included.
+- The Tool Calls its runtime made in those conversations. Runtimes report Tool Calls under their own runtime session ID, which never matches the conversation's `session_key`, so each runtime session is paired with the conversation whose time span, widened by 30 seconds on each side, contains it; among several, the shortest span wins. Runtime sessions that no selected conversation contains, such as startup and internal maintenance work, are not read. A paired runtime session contributes at most its first 300 Tool Calls.
+- Each conversation becomes one plain-text transcript, with messages and Tool Calls in time order. Messages are clipped at 4,000 characters, Tool Call arguments at 1,000, and results at 1,500. A transcript over 40,000 characters is rendered again with arguments and results clipped at 300, and cut at 40,000 if still too long.
+- All reads join the source Agent through the caller's visibility scope; in the worker that is the requesting Membership's scope.
+
 ## Primary flows
+
+### Preview a run
+
+`GET .../agents/{agent_id}/playbook-extractions/preview?window_days=&max_sessions=` uses the same authorization and bounds as starting a run and returns what a run would read now: the window, `session_count`, `message_count`, `tool_call_count`, `input_chars`, and `estimated_input_tokens`. The estimate is the transcript characters divided by four, rounded up; it excludes instructions and the model's output. Previewing reads nothing from Hindsight, calls no model, and records nothing.
 
 ### Start a run
 
@@ -66,11 +77,13 @@ Each run records the window, session bound, model, prompt version, the selected 
 | Run schema or status values | Alembic migration, `api/domains/playbooks/models.py`, the UI schema |
 | Audit payload | `api/domains/events/catalog.py`, [`domain-events.md`](domain-events.md) |
 | Worker queue, time limit, or retries | `api/domains/playbooks/constants.py`, `api/worker_app.py`, [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md) |
+| Session selection, pairing, or transcript bounds | This document, `api/domains/playbooks/transcripts.py`, `api/domains/playbooks/repository.py` |
 | What counts as a valid target Skill | `SkillService.require_playbook_target`, [`templates-and-skills.md`](templates-and-skills.md) |
 
 ## Code map
 
-- `api/domains/playbooks/`: models, repository (scoped reads, conditional transitions), service (authorization and orchestration), routes, the queue (`transport.py`), the worker processor and entry point, and the pipeline.
+- `api/domains/playbooks/`: models, repository (scoped reads, conditional transitions, bounded session reads), service (authorization and orchestration), routes, the queue (`transport.py`), the worker processor and entry point, the session reader (`sessions.py`), transcript pairing and rendering (`transcripts.py`), and the pipeline.
 - `api/worker_app.py`: the `playbook_extraction.process` Dramatiq actor on the `playbook_extraction` queue.
 - `api/domains/skills/service.py`: `require_playbook_target` and `require_available_organization_skill_name`.
 - `api/tests/integration/test_playbook_extractions.py`, `api/tests/steps/playbooks.py`: authorization, tenancy, conflicts, audit, cancellation, and the worker's claim and authority checks.
+- `api/tests/integration/test_playbook_extraction_preview.py`, `api/tests/unit/test_playbook_transcripts.py`: session selection, pairing, rendering bounds, and the estimate.

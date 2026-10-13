@@ -6,10 +6,17 @@ from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.domains.playbooks.constants import (
+    DEFAULT_MAX_SESSIONS,
+    DEFAULT_WINDOW_DAYS,
+    MAX_SESSIONS_LIMIT,
+    MAX_WINDOW_DAYS,
+)
 from api.domains.playbooks.models import (
     PlaybookExtractionCreate,
     PlaybookExtractionDetailRead,
     PlaybookExtractionFilter,
+    PlaybookExtractionPreview,
     PlaybookExtractionRead,
 )
 from api.domains.playbooks.service import PlaybookExtractionService
@@ -42,6 +49,18 @@ def list_agent_playbook_extractions(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     return service.list_for_agent(agent_id, Pagination(page=page, size=page_size), context)
+
+
+# Registered before /{extraction_id}, which would otherwise reject "preview" as an ID.
+@agent_playbook_extractions_router.get("/preview", response_model=PlaybookExtractionPreview)
+def preview_playbook_extraction(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[PlaybookExtractionService, Injected(PlaybookExtractionService)],
+    window_days: Annotated[int, Query(ge=1, le=MAX_WINDOW_DAYS)] = DEFAULT_WINDOW_DAYS,
+    max_sessions: Annotated[int, Query(ge=1, le=MAX_SESSIONS_LIMIT)] = DEFAULT_MAX_SESSIONS,
+):
+    return service.preview(agent_id, window_days, max_sessions, context)
 
 
 @agent_playbook_extractions_router.get("/{extraction_id}", response_model=PlaybookExtractionDetailRead)
