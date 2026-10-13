@@ -46,13 +46,12 @@ def upgrade() -> None:
                 sa.text(f"SELECT EXISTS (SELECT 1 FROM {table} WHERE {column} = :id)"),
                 {"id": skill_id},
             ).scalar_one():
-                raise RuntimeError(
-                    f"Retired Zoho Mail Skill {skill_id} is still referenced by {table}. "
-                    "Remove its assignments, Template/Override requirements, or fork-source "
-                    "references before retrying the upgrade; no Skill content was deleted."
-                )
-        # Only this unused built-in lineage and its owned versions/files/draft cascade.
-        connection.execute(sa.text("DELETE FROM skill WHERE id = :id"), {"id": skill_id})
+                # Keep referenced content and pins. The next migration repairs its
+                # retired provider metadata without deleting the lineage.
+                break
+        else:
+            # Only this unused built-in lineage and its owned versions/files/draft cascade.
+            connection.execute(sa.text("DELETE FROM skill WHERE id = :id"), {"id": skill_id})
 
 
 def downgrade() -> None:

@@ -19,11 +19,20 @@ as in the README setup; native transport dependencies belong to the runtime imag
 Migration `b91a73e42c60` removes the unused global `aai-zoho-mail` built-in Skill
 left behind by Zoho provider retirement. It runs automatically on upgrade and
 does nothing on installations without that lineage (including new installs).
-It preserves custom Skills and refuses to delete a lineage still referenced by
-Agent pins, Template/Override requirements, or fork provenance; resolve the
-references named by its error before retrying. The deleted retired content is
-not recreated on downgrade. This complements the credential cleanup in
-`a85f48650d6a`; removing a provider from code alone does not retire database Skills.
+It preserves custom Skills and any built-in lineage still referenced by Agent
+pins, Template/Override requirements, or fork provenance. The deleted retired
+content is not recreated on downgrade.
+
+The following migration, `c42e91b7a603`, removes only `zoho_mail`, `zoho_calendar`,
+and `slack` from `required_providers` on all retained Skill lineages, published
+versions, and drafts in every scope. This is a repair to historical provider
+metadata after tool-provider retirement: content, assignments, version numbers,
+fork provenance, timestamps, and other provider requirements remain unchanged.
+It does not enable retired tool integrations or affect runtime-owned Slack
+Communication Connections. Already-clean installations require no changes;
+downgrade does not reconstruct removed requirements. These migrations complement
+the credential cleanup in `a85f48650d6a`; removing a provider from code alone
+does not retire database Skill metadata.
 
 ```bash
 make migrate          # upgrade the configured database to head
