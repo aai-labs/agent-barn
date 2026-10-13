@@ -2,7 +2,7 @@ name: Hermes Base
 
 on:
   # Reusable only -- called by deploy.yml (staging/main, push_image: true)
-  # and ci.yml (other branches/PRs, push_image: false).
+  # and ci.yml (pull requests and manual runs, push_image: false).
   workflow_call:
     inputs:
       push_image:

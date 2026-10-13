@@ -126,7 +126,8 @@ discussion, list the checks you ran, call out migrations and breaking changes,
 and explain why any new dependency is needed. Include screenshots for visible UI
 changes.
 
-CI is path-aware. It runs API linting, migration checks, tests, and image builds
+CI runs once per pull request and is path-aware; a branch without a pull request
+is not checked until you open one (a draft is enough). It runs API linting, migration checks, tests, and image builds
 for API changes; ESLint, TypeScript, Playwright, and an image build for UI changes;
 the matching Hermes or OpenClaw base-image workflow for base-image, runtime
 builder/startup, telemetry-plugin, shared messaging, or runtime-fixture changes;
