@@ -37,7 +37,8 @@ Related context: [Credit](../credit.md), [Costs](../costs.md), [Trial onboarding
 
 ### 2026-10-13 — AF-381 — Billing UI (PR pending)
 
-- Delivered: the Owner's Billing tab and page (balance, buy credit, history); a Billing
+- Delivered: the Owner's Billing tab and page (balance, buy credit, history with who
+  bought each purchase; it re-reads for a minute after a payment); a Billing
   section on the platform settings page; the spend-limit banner speaks of credit and
   links the Owner to buy more.
 - Changed: UI (`ui/src/features/billing/`, top nav, spend-limit banner, platform

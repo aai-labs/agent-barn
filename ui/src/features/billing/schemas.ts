@@ -4,6 +4,8 @@ export const CreditHistoryItemSchema = z.object({
   kind: z.enum(["trial", "purchase", "refund", "chargeback", "adjustment"]),
   creditUsd: z.number(),
   amountPaidUsd: z.number().nullable().optional(),
+  // Who bought it, for a purchase.
+  purchasedBy: z.string().nullable().optional(),
   createdAt: z.string(),
 });
 

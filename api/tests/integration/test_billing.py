@@ -29,6 +29,7 @@ from api.domains.billing.repository import BillingSettingsRepository
 from api.domains.organizations.models import CreditGrantKind
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import OrganizationRole
+from api.domains.users.repository import UserRepository
 from api.infrastructure.stripe.client import CheckoutSession, StripeGateway
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -153,7 +154,12 @@ def deliver(context, event_type: str, data: dict, *, secret: str = WEBHOOK_SECRE
     )
 
 
-def paid_session(context, *, credit="20", amount_cents=2000, intent="pi_1", payment_status="paid") -> dict:
+def paid_session(
+    context, *, credit="20", amount_cents=2000, intent="pi_1", payment_status="paid", buyer: str | None = None
+) -> dict:
+    metadata = {"organization_id": str(context.organization.id), "credit_usd": credit}
+    if buyer is not None:
+        metadata["purchased_by_user_id"] = buyer
     return {
         "id": "cs_test",
         "object": "checkout.session",
@@ -161,7 +167,7 @@ def paid_session(context, *, credit="20", amount_cents=2000, intent="pi_1", paym
         "payment_intent": intent,
         "amount_total": amount_cents,
         "client_reference_id": str(context.organization.id),
-        "metadata": {"organization_id": str(context.organization.id), "credit_usd": credit},
+        "metadata": metadata,
     }
 
 
@@ -308,6 +314,7 @@ def test_an_owner_is_sent_to_stripe_to_pay_for_the_credit_they_chose():
                     organization_id=context.organization.id,
                     credit_usd=Decimal(20),
                     amount_cents=2000,
+                    purchased_by_user_id=context.user.id,
                 ),
             )
             assert_that(
@@ -357,6 +364,30 @@ def test_a_paid_checkout_grants_the_credit_and_ends_the_trial():
             organization = stored(context)
             assert_that((organization.llm_budget_usd, organization.is_trial), equal_to((30.0, False)))
             assert_that(events_named(context, "organization.trial.ended"), has_length(1))
+
+
+def test_the_history_says_who_bought_the_credit():
+    with given(_setup(an_owner_on_credit())) as context:
+        users = context.injector.get(UserRepository)
+        owner = users.get(context.user.id)
+        owner.full_name = "Jane Owner"
+        users.save(owner)
+
+        deliver(context, "checkout.session.completed", paid_session(context, buyer=str(context.user.id)))
+
+        history = context.client.get(
+            BILLING.format(organization_id=context.organization.id), headers=auth(context)
+        ).json()["history"]
+        assert_that(history[0], has_entries(kind="purchase", purchased_by="Jane Owner"))
+        assert_that(history[1], has_entries(kind="trial", purchased_by=None))
+
+
+def test_a_purchase_by_someone_no_longer_here_still_grants_the_credit():
+    with given(_setup(an_owner_on_credit())) as context:
+        response = deliver(context, "checkout.session.completed", paid_session(context, buyer=str(uuid7())))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(ledger(context)[-1], equal_to((CreditGrantKind.PURCHASE, Decimal(20))))
 
 
 def test_a_redelivered_payment_is_granted_once():

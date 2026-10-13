@@ -36,6 +36,7 @@ from api.domains.organizations.service import OrganizationService
 from api.domains.platform_admin.service import PlatformAdminService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.domains.users.service import UserService
 from api.infrastructure.stripe.client import StripeGateway
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,7 @@ class BillingService:
     organizations: OrganizationLookupService
     budgets: OrganizationLlmBudgetService
     organization_service: OrganizationService
+    users: UserService
 
     # --- platform settings ----------------------------------------------------------
 
@@ -114,6 +116,7 @@ class BillingService:
                     kind=grant.kind.value,
                     credit_usd=float(grant.credit_usd),
                     amount_paid_usd=None if grant.amount_paid_usd is None else float(grant.amount_paid_usd),
+                    purchased_by=grant.actor_display if grant.kind is CreditGrantKind.PURCHASE else None,
                     created_at=grant.created_at,
                 )
                 for grant in reversed(grants)
@@ -166,6 +169,7 @@ class BillingService:
         session = await self.stripe.create_checkout_session(
             customer_id=customer_id,
             organization_id=organization_id,
+            purchased_by_user_id=context.user.id,
             credit_usd=data.credit_usd,
             amount_cents=charge_cents(data.credit_usd, settings),
             success_url=f"{billing_url}?checkout=success",
@@ -218,8 +222,9 @@ class BillingService:
             amount_paid_usd=Decimal(session["amount_total"]) / 100,
             external_ref=session["payment_intent"],
         )
+        actor, actor_display = self._buyer(metadata.get("purchased_by_user_id"))
         try:
-            self.budgets.grant_credit(organization_id, grant, actor=_STRIPE, actor_display=_STRIPE_DISPLAY)
+            self.budgets.grant_credit(organization_id, grant, actor=actor, actor_display=actor_display)
         except OrganizationNotOnCredit:
             # Paid for, but no longer on credit (a Platform Administrator moved it onto a
             # renewing limit meanwhile). Acknowledged so Stripe stops retrying; someone has
@@ -233,6 +238,17 @@ class BillingService:
         # Also on a redelivery: a first delivery that granted the credit but failed to
         # convert the trial must not leave it a trial for good.
         self.organization_service.convert_trial(organization_id, actor=_STRIPE, actor_display="Credit purchase")
+
+    def _buyer(self, user_id: str | None) -> tuple[ActorIdentity, str]:
+        """Who bought the credit, or Stripe when they can't be named (an older session, or
+        an account deleted since): the payment stands either way."""
+        try:
+            user = self.users.get_user(UUID(user_id)) if user_id else None
+        except ValueError, HTTPException:
+            user = None
+        if user is None:
+            return _STRIPE, _STRIPE_DISPLAY
+        return ActorIdentity(type=ActorIdentityType.USER, id=user.id), user.full_name or user.email
 
     def _take_back(self, kind: CreditGrantKind, reference: str, payment_intent: str | None, cents: int) -> None:
         """Take back the share of a purchase's credit that `cents` of its payment bought."""

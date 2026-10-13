@@ -56,15 +56,20 @@ class StripeGateway:
         *,
         customer_id: str,
         organization_id: UUID,
+        purchased_by_user_id: UUID,
         credit_usd: Decimal,
         amount_cents: int,
         success_url: str,
         cancel_url: str,
     ) -> CheckoutSession:
-        """A one-off payment of `amount_cents` for `credit_usd` of credit. The credit and the
-        Organization travel in the session's metadata, which only we write, so the webhook
-        grants exactly what was bought."""
-        metadata = {"organization_id": str(organization_id), "credit_usd": str(credit_usd)}
+        """A one-off payment of `amount_cents` for `credit_usd` of credit. The credit, the
+        Organization and who is buying travel in the session's metadata, which only we
+        write, so the webhook grants exactly what was bought."""
+        metadata = {
+            "organization_id": str(organization_id),
+            "credit_usd": str(credit_usd),
+            "purchased_by_user_id": str(purchased_by_user_id),
+        }
         session = await self._stripe().v1.checkout.sessions.create_async(
             params={
                 "mode": "payment",

@@ -89,8 +89,9 @@ class BillingSettingsUpdate(BaseModel):
 class CreditHistoryItem(BaseModel):
     kind: str
     credit_usd: float
-    # What was charged for it, for a purchase.
+    # What was charged for it, and who bought it, for a purchase.
     amount_paid_usd: float | None = None
+    purchased_by: str | None = None
     created_at: datetime
 
 

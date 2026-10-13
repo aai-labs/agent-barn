@@ -68,6 +68,30 @@ test.describe("Billing", () => {
     await expect(page.getByRole("table")).toContainText("Trial credit");
   });
 
+  test("the history says who bought each purchase", async ({ page }) => {
+    await signedIn(page);
+    await interceptBilling(
+      page,
+      billing({
+        history: [
+          {
+            kind: "purchase",
+            credit_usd: 20,
+            amount_paid_usd: 20,
+            purchased_by: "Jane Owner",
+            created_at: "2026-10-02T09:00:00Z",
+          },
+          { kind: "trial", credit_usd: 10, amount_paid_usd: null, purchased_by: null, created_at: "2026-10-01T09:00:00Z" },
+        ],
+      }),
+    );
+    await page.goto(BILLING_URL);
+
+    const rows = page.getByRole("table").getByRole("row");
+    await expect(rows.filter({ hasText: "Purchase" })).toContainText("Jane Owner");
+    await expect(rows.filter({ hasText: "Trial credit" })).not.toContainText("Jane Owner");
+  });
+
   test("the owner buys credit and is sent to pay for it", async ({ page }) => {
     await signedIn(page);
     const checkouts = await interceptBilling(page, billing({ purchase_fee_percent: 5.5 }));

@@ -18,17 +18,19 @@ def gateway(secret_key="sk_test_x", webhook_secret="whsec_x") -> StripeGateway:
     return StripeGateway(MagicMock(stripe_secret_key=secret_key, stripe_webhook_secret=webhook_secret))
 
 
-def test_a_credit_purchase_is_a_one_off_payment_carrying_the_organization_and_credit():
+def test_a_credit_purchase_is_a_one_off_payment_carrying_the_organization_credit_and_buyer():
     stripe = gateway()
     client = MagicMock()
     client.v1.checkout.sessions.create_async = AsyncMock(return_value=MagicMock(id="cs_1", url="https://pay"))
     organization_id = uuid4()
+    buyer_id = uuid4()
 
     with patch.object(StripeGateway, "_stripe", return_value=client):
         session = asyncio.run(
             stripe.create_checkout_session(
                 customer_id="cus_1",
                 organization_id=organization_id,
+                purchased_by_user_id=buyer_id,
                 credit_usd=Decimal(20),
                 amount_cents=2110,
                 success_url="https://app/ok",
@@ -39,7 +41,7 @@ def test_a_credit_purchase_is_a_one_off_payment_carrying_the_organization_and_cr
     call = client.v1.checkout.sessions.create_async.await_args
     assert call is not None
     params = call.kwargs["params"]
-    metadata = {"organization_id": str(organization_id), "credit_usd": "20"}
+    metadata = {"organization_id": str(organization_id), "credit_usd": "20", "purchased_by_user_id": str(buyer_id)}
     assert_that((session.id, session.url), equal_to(("cs_1", "https://pay")))
     assert_that(
         params,

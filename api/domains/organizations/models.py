@@ -167,6 +167,7 @@ class CreditGrantRead(PydanticBaseModel):
     credit_usd: Decimal
     amount_paid_usd: Decimal | None = None
     external_ref: str | None = None
+    actor_display: str
     created_at: datetime
 
 

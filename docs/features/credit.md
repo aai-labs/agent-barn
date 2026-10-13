@@ -50,14 +50,17 @@ Only with `PAYMENTS_ENABLED` on (see [operations](../guidelines/operations.md#pa
 and only for an Organization on Credit, by its Owner (`billing.manage`):
 
 - `GET /organizations/{id}/billing` — whether it can buy credit, its credit, spend and
-  balance, the platform's purchase bounds, and its credit history, newest first.
+  balance, the platform's purchase bounds, and its credit history, newest first, with
+  who bought each purchase.
 - `POST /organizations/{id}/billing/checkout {credit_usd}` — within the platform's
   minimum and maximum; returns a Stripe Checkout URL. The charge is the credit divided
   by the credit rate, plus the purchase fee, rounded up to the cent. Each Organization
-  pays as one Stripe Customer, created on its first purchase. Nothing is granted here.
+  pays as one Stripe Customer, created on its first purchase. The buyer's user id goes
+  in the session's metadata with the Organization and the credit. Nothing is granted here.
 - `POST /billing/stripe/webhook` — Stripe's signed events; unsigned or wrongly signed
   ones are refused (400). A paid Checkout Session grants the credit in its metadata
-  (keyed by the payment intent) and converts a trial. A refund or a dispute's withdrawn
+  (keyed by the payment intent), recorded as the buyer's (or Stripe's, when the buyer's
+  account is gone), and converts a trial. A refund or a dispute's withdrawn
   funds take back the share of that purchase's credit the amount bought (keyed by the
   refund or dispute id); a failed refund or reinstated funds give it back. Events that
   aren't ours are acknowledged and ignored.

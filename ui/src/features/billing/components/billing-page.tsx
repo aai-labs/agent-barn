@@ -112,6 +112,7 @@ export function BillingPage() {
                 <tr style={{ color: "var(--ink-4)" }}>
                   <th className="px-4 py-2 text-left font-medium">Date</th>
                   <th className="px-4 py-2 text-left font-medium">What</th>
+                  <th className="px-4 py-2 text-left font-medium">By</th>
                   <th className="px-4 py-2 text-right font-medium">Credit</th>
                   <th className="px-4 py-2 text-right font-medium">Paid</th>
                 </tr>
@@ -121,6 +122,7 @@ export function BillingPage() {
                   <tr key={`${item.createdAt}-${index}`} style={{ borderTop: "1px solid var(--line)" }}>
                     <td className="px-4 py-2">{formatDate(item.createdAt)}</td>
                     <td className="px-4 py-2">{KIND_LABEL[item.kind]}</td>
+                    <td className="px-4 py-2">{item.purchasedBy ?? "—"}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{signedUsd(item.creditUsd)}</td>
                     <td className="px-4 py-2 text-right tabular-nums">
                       {item.amountPaidUsd == null ? "—" : formatUsd(item.amountPaidUsd, 2)}
