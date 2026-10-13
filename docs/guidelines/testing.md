@@ -129,6 +129,20 @@ pnpm test:debug
 
 Choose commands for the touched area. Full Kubernetes or browser suites are required when the changed contract depends on those environments, not for unrelated documentation-only changes.
 
+### When CI runs
+
+`../../.github/workflows/ci.yml` runs once per pull request, on the
+`pull_request` event, against the merge result. It does not listen to `push`:
+doing so ran every commit on a PR branch twice. A branch without a pull request
+is not checked automatically; open a draft pull request, or start **CI** from the
+Actions tab with `workflow_dispatch`, which checks every component.
+
+CI selects components by changed path and finishes with a single `ci-gate` job.
+`ci-gate` passes when every selected component passed or was skipped, and fails
+on any failure or cancellation. It is the check to require on `staging` and
+`main`; the per-component jobs are skipped when their paths are untouched, so
+requiring them by name is unreliable.
+
 ## API tests
 
 API behavior changes MUST cover:
