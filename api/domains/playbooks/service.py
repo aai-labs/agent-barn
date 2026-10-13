@@ -19,9 +19,10 @@ from api.domains.playbooks.models import (
     PlaybookExtractionPreview,
     PlaybookExtractionRead,
 )
+from api.domains.playbooks.platform_service import PlatformPlaybookService
+from api.domains.playbooks.prompts import estimated_usage
 from api.domains.playbooks.repository import ActiveExtractionExists, PlaybookExtractionRepository
 from api.domains.playbooks.sessions import PlaybookSessionReader
-from api.domains.playbooks.transcripts import estimated_tokens
 from api.domains.playbooks.transport import PlaybookExtractionQueue
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope, PermissionPolicy
@@ -51,6 +52,7 @@ class PlaybookExtractionService:
     queue: PlaybookExtractionQueue
     event_delivery_dispatcher: EventDeliveryDispatcher
     sessions: PlaybookSessionReader
+    settings: PlatformPlaybookService
 
     def preview(
         self, agent_id: UUID, window_days: int, max_sessions: int, context: CurrentUserContext
@@ -60,6 +62,7 @@ class PlaybookExtractionService:
         window_start = window_end - timedelta(days=window_days)
         transcripts = self.sessions.read(agent.id, scope, window_start, window_end, max_sessions)
         input_chars = sum(len(transcript.text) for transcript in transcripts)
+        input_tokens, output_tokens = estimated_usage(transcripts)
         return PlaybookExtractionPreview(
             window_start=window_start,
             window_end=window_end,
@@ -67,7 +70,9 @@ class PlaybookExtractionService:
             message_count=sum(transcript.message_count for transcript in transcripts),
             tool_call_count=sum(transcript.tool_call_count for transcript in transcripts),
             input_chars=input_chars,
-            estimated_input_tokens=estimated_tokens(input_chars),
+            estimated_input_tokens=input_tokens,
+            estimated_output_tokens=output_tokens,
+            model=self.settings.current_model(),
         )
 
     def create(

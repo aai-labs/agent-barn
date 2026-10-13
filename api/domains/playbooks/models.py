@@ -38,7 +38,6 @@ class PlaybookExtractionError(str, enum.Enum):
     ENQUEUE_FAILED = "enqueue_failed"
     REQUESTER_LOST_ACCESS = "requester_lost_access"
     SOURCE_AGENT_UNAVAILABLE = "source_agent_unavailable"
-    PIPELINE_UNAVAILABLE = "pipeline_unavailable"
     NO_SESSIONS = "no_sessions"
     MODEL_UNAVAILABLE = "model_unavailable"
     SPEND_LIMIT_REACHED = "spend_limit_reached"
@@ -177,6 +176,8 @@ class PlaybookExtractionPreview(PydanticBaseModel):
     tool_call_count: int
     input_chars: int
     estimated_input_tokens: int
+    estimated_output_tokens: int
+    model: str
 
 
 class PlaybookExtractionFilter(PydanticBaseModel):

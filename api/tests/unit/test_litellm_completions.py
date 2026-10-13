@@ -1,12 +1,6 @@
 """The completion client against a loopback stand-in for the LiteLLM proxy."""
 
-import json
-import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass, field
 from decimal import Decimal
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -19,48 +13,7 @@ from api.infrastructure.litellm.completions import (
     CompletionResult,
     LiteLLMCompletionClient,
 )
-
-
-@dataclass
-class StubProxy:
-    status: int = 200
-    body: Any = field(default_factory=dict)
-    headers: dict[str, str] = field(default_factory=dict)
-    requests: list[dict[str, Any]] = field(default_factory=list)
-
-
-@contextmanager
-def litellm_proxy(stub: StubProxy) -> Iterator[str]:
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            length = int(self.headers.get("Content-Length", "0"))
-            stub.requests.append(
-                {
-                    "path": self.path,
-                    "authorization": self.headers.get("Authorization"),
-                    "json": json.loads(self.rfile.read(length)),
-                }
-            )
-            payload = json.dumps(stub.body).encode()
-            self.send_response(stub.status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            for name, value in stub.headers.items():
-                self.send_header(name, value)
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, format: str, *args: Any) -> None:
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}"
-    finally:
-        server.shutdown()
-        server.server_close()
+from api.tests.helpers.litellm_proxy import StubProxy, litellm_proxy
 
 
 def _client(base_url: str) -> LiteLLMCompletionClient:

@@ -7,7 +7,7 @@ Calls are paired to the conversation whose time span contains their runtime sess
 from datetime import UTC, datetime, timedelta
 
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_entries
+from hamcrest import assert_that, equal_to, greater_than, has_entries
 
 from api.domains.conversations.models import MessageDirection
 from api.domains.rbac.catalog import AGENT_OWNER_ROLE_ID
@@ -64,7 +64,9 @@ def test_the_preview_counts_conversations_with_their_paired_tool_calls():
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             body = response.json()
             assert_that(body, has_entries(session_count=2, message_count=5, tool_call_count=3))
-            assert_that(body["estimated_input_tokens"], equal_to(-(-body["input_chars"] // 4)))
+            assert_that(body["estimated_input_tokens"], greater_than(body["input_chars"] // 4))
+            assert_that(body["estimated_output_tokens"], greater_than(0))
+            assert_that(body["model"], equal_to("openrouter/openai/gpt-4.1-mini"))
 
 
 def test_the_preview_reads_only_the_most_recent_conversations_inside_the_window():

@@ -10,6 +10,7 @@ from api.domains.playbooks.models import PlaybookExtraction, PlaybookExtractionE
 from api.domains.playbooks.pipeline import PlaybookExtractionFailed, PlaybookPipeline
 from api.domains.playbooks.repository import PlaybookExtractionRepository
 from api.domains.rbac.catalog import PermissionKey, organization_role_allows
+from api.domains.rbac.policy import AuthorizationScope
 
 logger = logging.getLogger(__name__)
 
@@ -35,29 +36,32 @@ class PlaybookExtractionProcessor:
         if extraction is None:
             return
         try:
-            self._require_authority(extraction)
-            self.pipeline.run(extraction)
+            self.pipeline.run(extraction, self._require_authority(extraction))
         except PlaybookExtractionFailed as exc:
-            self.repository.fail(extraction.id, exc.error)
+            self.repository.fail(extraction.id, exc.error, **exc.values)
             logger.info("Playbook extraction %s failed: %s", extraction.id, exc.error.value)
         except Exception as exc:
             # Exception text can quote transcripts or model output; log only its type.
             logger.error("Playbook extraction %s failed unexpectedly: %s", extraction.id, type(exc).__name__)
             self.repository.fail(extraction.id, PlaybookExtractionError.INTERNAL_ERROR)
 
-    def _require_authority(self, extraction: PlaybookExtraction) -> None:
+    def _require_authority(self, extraction: PlaybookExtraction) -> AuthorizationScope:
+        """The requester's Agent visibility scope, if they still hold both Permissions."""
         agent = self.agents.get_by_id(extraction.source_agent_id)
         if agent is None or agent.organization_id != extraction.organization_id:
             raise PlaybookExtractionFailed(PlaybookExtractionError.SOURCE_AGENT_UNAVAILABLE)
         membership_id = extraction.requested_by_membership_id
         found = self.agents.find_membership_with_user(membership_id) if membership_id else None
+        scope = (
+            self.authorization.membership_scope(found[0].id, PermissionKey.ACTIVITY_READ)
+            if found is not None and found[0].organization_id == extraction.organization_id
+            else None
+        )
         if (
             found is None
-            or found[1] is None
-            or found[0].organization_id != extraction.organization_id
+            or scope is None
             or not organization_role_allows(found[0].role, PermissionKey.SKILL_MANAGE)
-            or not self.authorization.membership_has_permission(
-                found[0].id, extraction.source_agent_id, PermissionKey.ACTIVITY_READ
-            )
+            or self.agents.get_active_in_scope(extraction.source_agent_id, scope) is None
         ):
             raise PlaybookExtractionFailed(PlaybookExtractionError.REQUESTER_LOST_ACCESS)
+        return scope
