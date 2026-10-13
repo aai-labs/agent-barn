@@ -63,6 +63,12 @@ Delivery is staged; see [`playbooks/CHANGELOG.md`](playbooks/CHANGELOG.md). Runs
 - `GET .../playbook-extractions/{extraction_id}` adds `result_markdown`, the generated playbook, kept on the run so nothing paid for is lost if the draft cannot be written.
 - `POST .../playbook-extractions/{extraction_id}/cancel` cancels a `QUEUED` or `RUNNING` run; a finished run is `409`.
 
+## Model and billing
+
+- Platform Administrators choose the extraction model at `GET/PUT /api/v1/platform/settings/playbooks`; `GET .../models` lists the OpenRouter catalogue's text models as `openrouter/<id>`. Organization roles confer no authority on these routes, and Organization model allowlists do not apply. Without a saved choice, `PLAYBOOK_DEFAULT_MODEL` (default `openrouter/openai/gpt-4.1-mini`) applies. A saved model must be in the catalogue; an unavailable catalogue is `503` and changes nothing. A change and its Platform-scoped `platform.playbook_model.changed` audit event commit together in `platform_playbook_settings`; saving the current choice records nothing. A run uses the model in force when it starts.
+- A run calls `POST /chat/completions` on the LiteLLM proxy with the source Agent's own LiteLLM key, decrypted in the worker. The spend is therefore attributed to that Agent by cost sync, appears on its Costs tab, and counts against the Agent's and its Organization's LiteLLM budgets, which LiteLLM enforces. Agent keys allow every model, so no key allowlist changes.
+- The completion client sends no environment proxy or redirect, never stores or logs request or response content, and classifies failures as budget exceeded (a `400` or `429` whose error names a budget), key or model rejected (other `400`, `401`, `403`, `404`), unavailable (other statuses and transport errors), or a bad response (no text). Token usage comes from the response; cost comes from LiteLLM's `x-litellm-response-cost` header and is unknown rather than zero when absent.
+
 ## Data contract
 
 `playbook_extraction` belongs to its Organization and source Agent through a composite foreign key, and is deleted with either. `requested_by_membership_id`, `requested_by_user_id`, and `skill_id` are set to `NULL` when what they reference is deleted. When the target Skill is deleted before the run writes, the run creates a new lineage named `skill_name` instead.
@@ -76,6 +82,7 @@ Each run records the window, session bound, model, prompt version, the selected 
 | Who may start or read runs | This document, [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md), the worker authority check in `api/domains/playbooks/processor.py` |
 | Run schema or status values | Alembic migration, `api/domains/playbooks/models.py`, the UI schema |
 | Audit payload | `api/domains/events/catalog.py`, [`domain-events.md`](domain-events.md) |
+| Model setting or completion request shape | `api/domains/playbooks/platform_service.py`, `api/infrastructure/litellm/completions.py`, the Platform settings UI |
 | Worker queue, time limit, or retries | `api/domains/playbooks/constants.py`, `api/worker_app.py`, [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md) |
 | Session selection, pairing, or transcript bounds | This document, `api/domains/playbooks/transcripts.py`, `api/domains/playbooks/repository.py` |
 | What counts as a valid target Skill | `SkillService.require_playbook_target`, [`templates-and-skills.md`](templates-and-skills.md) |
@@ -83,7 +90,10 @@ Each run records the window, session bound, model, prompt version, the selected 
 ## Code map
 
 - `api/domains/playbooks/`: models, repository (scoped reads, conditional transitions, bounded session reads), service (authorization and orchestration), routes, the queue (`transport.py`), the worker processor and entry point, the session reader (`sessions.py`), transcript pairing and rendering (`transcripts.py`), and the pipeline.
+- `api/domains/playbooks/platform_*.py`: the Platform model setting.
+- `api/infrastructure/litellm/completions.py`: chat completions billed to a supplied virtual key.
 - `api/worker_app.py`: the `playbook_extraction.process` Dramatiq actor on the `playbook_extraction` queue.
 - `api/domains/skills/service.py`: `require_playbook_target` and `require_available_organization_skill_name`.
 - `api/tests/integration/test_playbook_extractions.py`, `api/tests/steps/playbooks.py`: authorization, tenancy, conflicts, audit, cancellation, and the worker's claim and authority checks.
+- `api/tests/integration/test_platform_playbook_settings.py`, `api/tests/unit/test_litellm_completions.py`: the Platform setting and the completion client against a loopback proxy.
 - `api/tests/integration/test_playbook_extraction_preview.py`, `api/tests/unit/test_playbook_transcripts.py`: session selection, pairing, rendering bounds, and the estimate.

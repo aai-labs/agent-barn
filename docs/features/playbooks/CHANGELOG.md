@@ -20,9 +20,9 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 - Delivered: the decisions above and the glossary terms **Playbook** and **Playbook Extraction** in `CONTEXT.md`.
 - Delivered: Playbook Extraction runs — the `playbook_extraction` table, start/list/detail/cancel APIs, the `playbook.extraction.requested` audit event, the `playbook_extraction` worker queue, and the worker's claim and authority re-check. The contract is [`../playbooks.md`](../playbooks.md).
 - Delivered: session assembly and the preview endpoint, which reports what a run would read and an estimated transcript token count.
+- Delivered: the Platform Playbook model setting with its audit event, and the LiteLLM completion client; the worker receives `LITELLM_BASE_URL`.
 - In transition: the pipeline is a stub, so every run the worker starts fails with `pipeline_unavailable` until slice 4.
 - Next, in order:
-  3. Model setting and completion client: the Platform Playbook model setting and a LiteLLM chat-completion client using the source Agent's key.
   4. Pipeline: per-session notes, one combining call with long-term memories, writing the Skill Draft, and recording usage.
   5. UI: Create playbook on the Agent page, run history, the Platform setting, and a provenance banner on the Skill Draft.
   6. Install shortcuts: from a published playbook, assign it to Agents or require it on a Template.
@@ -30,6 +30,12 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 - Blockers: none.
 
 ## Changes
+
+### 2026-10-13 — slice 3
+
+- Delivered: `GET/PUT /api/v1/platform/settings/playbooks` and `/models`, migration `a77ac74c3fad`, the `platform.playbook_model.changed` event, and `LiteLLMCompletionClient`.
+- Changed: the worker Deployment and Compose service receive `LITELLM_BASE_URL`; `PLAYBOOK_DEFAULT_MODEL` is optional.
+- Follow-up: slice 4, the pipeline.
 
 ### 2026-10-13 — slice 2
 

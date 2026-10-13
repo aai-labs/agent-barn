@@ -32,6 +32,9 @@ See [Agent Memory](../agent-memory.md#platform-memory-processing-model) for the
 Platform Admin settings and separate backend-service credential contract.
 Organization roles confer no authority on these Platform routes.
 
+The Platform Playbook Extraction model (`/platform/settings/playbooks`) follows the
+same rule; see [Playbooks](../playbooks.md#model-and-billing).
+
 ### Organization Roles
 
 | Role                | Authority                                                                                                                          |
