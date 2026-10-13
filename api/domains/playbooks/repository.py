@@ -151,7 +151,7 @@ class PlaybookExtractionRepository:
                 or 0
             )
             rows = session.exec(
-                select(PlaybookExtraction)
+                select(PlaybookExtraction, Agent.name)
                 .join(Agent, col(Agent.id) == col(PlaybookExtraction.source_agent_id))
                 .where(*scoped)
                 .order_by(col(PlaybookExtraction.created_at).desc(), col(PlaybookExtraction.id).desc())
@@ -162,7 +162,7 @@ class PlaybookExtractionRepository:
             page=pagination.page,
             page_size=pagination.size,
             total=total,
-            items=[PlaybookExtractionRead.model_validate(row) for row in rows],
+            items=[PlaybookExtractionRead.from_row(row, agent_name) for row, agent_name in rows],
         )
 
     def get_in_scope(

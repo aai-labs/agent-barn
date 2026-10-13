@@ -138,6 +138,7 @@ class PlaybookExtractionRead(PydanticBaseModel):
     id: UUID
     organization_id: UUID
     source_agent_id: UUID
+    source_agent_name: str
     skill_id: UUID | None
     skill_name: str
     status: PlaybookExtractionStatus
@@ -158,6 +159,10 @@ class PlaybookExtractionRead(PydanticBaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+    @classmethod
+    def from_row(cls, row: PlaybookExtraction, source_agent_name: str) -> Self:
+        return cls.model_validate({**row.model_dump(), "source_agent_name": source_agent_name})
 
 
 class PlaybookExtractionDetailRead(PlaybookExtractionRead):

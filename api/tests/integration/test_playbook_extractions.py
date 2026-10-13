@@ -67,6 +67,7 @@ def test_an_owner_starts_a_run_that_is_queued_for_the_worker():
                 has_entries(
                     status="QUEUED",
                     source_agent_id=str(context.agent.id),
+                    source_agent_name="Billing",
                     skill_id=None,
                     skill_name="Billing playbook",
                     max_sessions=10,

@@ -122,7 +122,7 @@ class PlaybookExtractionService:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="The playbook extraction could not be started. Try again later.",
             ) from None
-        return PlaybookExtractionRead.model_validate(created.extraction)
+        return PlaybookExtractionRead.from_row(created.extraction, agent.name)
 
     def list_for_agent(
         self, agent_id: UUID, pagination: Pagination, context: CurrentUserContext
@@ -140,7 +140,7 @@ class PlaybookExtractionService:
 
     def get(self, agent_id: UUID, extraction_id: UUID, context: CurrentUserContext) -> PlaybookExtractionDetailRead:
         agent, scope = self._require_extractor(context, agent_id)
-        return PlaybookExtractionDetailRead.model_validate(self._get_or_404(extraction_id, agent.id, scope))
+        return PlaybookExtractionDetailRead.from_row(self._get_or_404(extraction_id, agent.id, scope), agent.name)
 
     def cancel(self, agent_id: UUID, extraction_id: UUID, context: CurrentUserContext) -> PlaybookExtractionRead:
         agent, scope = self._require_extractor(context, agent_id)
@@ -151,7 +151,7 @@ class PlaybookExtractionService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This playbook extraction has already finished.",
             )
-        return PlaybookExtractionRead.model_validate(cancelled)
+        return PlaybookExtractionRead.from_row(cancelled, agent.name)
 
     def _require_extractor(self, context: CurrentUserContext, agent_id: UUID) -> tuple[Agent, AuthorizationScope]:
         agent = self.authorization.require_action(
