@@ -14,6 +14,11 @@ spec:
     - name: ingest
       port: {{ .Values.service.ingestPort }}
       targetPort: {{ .Values.service.ingestPort }}
+    {{- if .Values.memory.enabled }}
+    - name: memory-runtime
+      port: 8004
+      targetPort: 8004
+    {{- end }}
   selector:
     {{- include "agentbarn-api.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: api

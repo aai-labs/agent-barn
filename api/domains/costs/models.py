@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field
-from sqlmodel import Column
+from sqlmodel import Column, SQLModel
 from sqlmodel import Field as SqlField
 
 from api.domains.platform_admin.models import StatsGranularity, StatsPeriod
@@ -32,6 +32,15 @@ class CostRecordSource(str, enum.Enum):
 
 
 COST_RECORD_STATUS_SUCCESS = "success"
+
+
+class CostSyncState(SQLModel, table=True):
+    """Successful spend-log sync heartbeat, even when no model calls occurred."""
+
+    __tablename__: str = "cost_sync_state"
+    source: str = SqlField(primary_key=True, max_length=32)
+    completed_at: datetime = SqlField(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+
 
 # Rows the healing pass tries to recover: the proxy recorded no money for a
 # request that plainly consumed tokens. Kept in sync with the partial index on
@@ -59,6 +68,12 @@ class CostRecord(BaseModel, table=True):
     __table_args__ = (
         sa.UniqueConstraint("request_id", name="uq_cost_record_request_id"),
         sa.Index("ix_cost_record_org_occurred", "organization_id", "occurred_at"),
+        sa.Index(
+            "ix_cost_record_memory_org_occurred",
+            "organization_id",
+            "occurred_at",
+            postgresql_where=sa.text("is_memory IS TRUE"),
+        ),
         sa.Index("ix_cost_record_agent_occurred", "agent_id", "occurred_at"),
         sa.Index("ix_cost_record_occurred_at", "occurred_at"),
         sa.Index(
@@ -98,6 +113,7 @@ class CostRecord(BaseModel, table=True):
     organization_id: UUID | None = SqlField(default=None, nullable=True)
     agent_name: str | None = SqlField(default=None, nullable=True, max_length=255)
     organization_name: str | None = SqlField(default=None, nullable=True, max_length=255)
+    is_memory: bool = SqlField(default=False, nullable=False)
 
     source: CostRecordSource = SqlField(
         default=CostRecordSource.LITELLM_LIVE,

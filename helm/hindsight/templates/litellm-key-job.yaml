@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-litellm-key
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      serviceAccountName: {{ .Values.litellmKeyServiceAccountName }}
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      containers:
+        - name: generate-key
+          image: python:3.12-alpine
+          command: ["python3", "/scripts/generate_key.py"]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.litellmSecretName }}
+          env:
+            - name: KEY_SECRET_NAME
+              value: {{ .Values.llm.keySecretName | quote }}
+            - name: HASHES_SECRET_NAME
+              value: {{ .Values.llm.hashesSecretName | quote }}
+            - name: RETIRED_KEY_HASHES
+              value: {{ .Values.llm.retiredKeyHashes | quote }}
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: {{ .Release.Name }}-litellm-key-script

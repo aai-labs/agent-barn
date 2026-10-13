@@ -1,0 +1,46 @@
+{{- if .Values.memory.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-memory-purge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-purge
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 280
+      template:
+        metadata:
+          labels:
+            {{- include "agentbarn-api.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: memory-purge
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: memory-purge
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python", "-c", "from api.domains.agent_memory.purge import main; main()"]
+              env:
+                - name: DB_CONNECTION_URL
+                  valueFrom:
+                    secretKeyRef: {name: {{ .Values.secretName }}, key: DB_CONNECTION_URL}
+                - name: HINDSIGHT_BASE_URL
+                  value: {{ .Values.memory.hindsightBaseUrl | quote }}
+                - name: HINDSIGHT_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.memory.hindsightSecretName }}
+                      key: HINDSIGHT_API_TENANT_API_KEY
+              resources:
+                {{- toYaml .Values.memory.resources | nindent 16 }}
+{{- end }}

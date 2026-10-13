@@ -12,6 +12,7 @@ from hamcrest import (
     contains_string,
     equal_to,
     has_item,
+    has_key,
     has_length,
     is_not,
     none,
@@ -28,6 +29,7 @@ from api.domains.agents.models import AgentRestorePoint, AgentStatus, RestorePoi
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTORE_FAILED
 from api.domains.agents.service import AgentService
+from api.domains.auth.models import CurrentUserContext
 from api.domains.events.catalog import (
     AGENT_RESTORE_POINT_CREATED,
     AGENT_RESTORE_POINT_DELETED,
@@ -43,6 +45,7 @@ from api.domains.restore_points.constants import (
     RESTORE_POINT_RECONCILIATION_MISSING_VOLUME_LIMIT,
     RESTORE_POINT_RECONCILIATION_STALE_SECONDS,
 )
+from api.domains.restore_points.models import AgentRestorePointCreate, AgentRestorePointRestore
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
@@ -673,7 +676,9 @@ def _restore_failed(context, *, pod=True, exit_code=None, logs=None, deadline=Fa
     context.client.post(_restore_url(context, target.id), headers=_auth(context))
     conditions = [V1JobCondition(type="Failed", status="True", reason="DeadlineExceeded")] if deadline else None
     k8s = context.injector.get(KubernetesClient)
-    k8s.get_job.return_value = V1Job(status=V1JobStatus(failed=1, conditions=conditions))
+    # The Job the service built, so the reconciler sees it ran a safety copy first.
+    created = k8s.create_job.call_args.args[1]
+    k8s.get_job.return_value = V1Job(spec=created.spec, status=V1JobStatus(failed=1, conditions=conditions))
     k8s.get_pod_name_for_job.return_value = "rp-res-pod" if pod else None
     k8s.get_job_exit_code.return_value = exit_code
     k8s.read_job_logs.return_value = logs
@@ -1675,3 +1680,153 @@ def test_capture_proceeds_once_the_pod_has_gone():
         with then("the capture is accepted rather than refused"):
             assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
             assert_that(k8s.create_job.called, equal_to(True))
+
+
+def test_get_by_id_returns_the_row():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _seed(context, label="before update")
+
+        with when("I read the row straight from the repository"):
+            repository = context.injector.get(RestorePointRepository)
+            row = repository.get_by_id(seeded.id)
+
+        with then("the row is found without a scope"):
+            assert_that(row, not_none())
+            assert_that(str(row.id), equal_to(str(seeded.id)))
+            assert_that(row.label, equal_to("before update"))
+
+
+def test_get_by_id_returns_none_for_an_unknown_row():
+    with given(_GIVEN) as context:
+        with when("I read a restore point that does not exist"):
+            repository = context.injector.get(RestorePointRepository)
+            row = repository.get_by_id(uuid.uuid4())
+
+        with then("there is nothing there"):
+            assert_that(row, none())
+
+
+def test_wait_until_terminal_returns_a_ready_row():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"succeeded": 1})
+        k8s.read_job_logs.return_value = '{"bytes": 4096, "file_count": 12}\n'
+        service = context.injector.get(RestorePointService)
+
+        with when("I wait for the capture to resolve"):
+            row = service.wait_until_terminal(context.agent.id, seeded.id, timeout_seconds=30, poll_seconds=0)
+
+        with then("the row is ready"):
+            assert_that(row.status, equal_to(RestorePointStatus.READY))
+            assert_that(row.archive_bytes, equal_to(4096))
+
+
+def test_wait_until_terminal_returns_a_failed_row():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"failed": 1})
+        k8s.read_job_logs.return_value = "capture failed"
+        service = context.injector.get(RestorePointService)
+
+        with when("I wait for a capture whose job failed"):
+            row = service.wait_until_terminal(context.agent.id, seeded.id, timeout_seconds=30, poll_seconds=0)
+
+        with then("the failed row is returned, not raised"):
+            assert_that(row.status, equal_to(RestorePointStatus.FAILED))
+
+
+def test_wait_until_terminal_times_out_when_the_job_never_finishes():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"active": 1})
+        service = context.injector.get(RestorePointService)
+
+        with when("I wait on a job that never finishes"):
+
+            def wait():
+                service.wait_until_terminal(context.agent.id, seeded.id, timeout_seconds=1, poll_seconds=0)
+
+        with then("it gives up with 504"):
+            with pytest.raises(HTTPException) as exc_info:
+                wait()
+            assert_that(exc_info.value.status_code, equal_to(504))
+
+
+def test_a_managed_update_capture_is_recorded_as_pre_upgrade():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        service = context.injector.get(RestorePointService)
+        user_context = CurrentUserContext(
+            user=context.user,
+            organization_ids=[context.organization.id],
+            user_organization_map={context.organization.id: context.organization_user},
+            current_user_organization=context.organization_user,
+        )
+
+        with when("a managed update captures its own Agent"):
+            read = service.create_restore_point(
+                context.agent.id,
+                AgentRestorePointCreate(label="Automatic backup before managed update"),
+                user_context,
+                managed_update=True,
+            )
+
+        with then("the row is a pre-upgrade backup"):
+            assert_that(read.origin, equal_to(RestorePointOrigin.PRE_UPGRADE.value))
+            assert_that(read.label, equal_to("Automatic backup before managed update"))
+
+
+def _managed_update_restore_failed(context, *, exit_code, logs):
+    """A managed-update rollback's restore — no safety copy — whose Job then failed."""
+    target = _seed(context, status_value=RestorePointStatus.READY)
+    service = context.injector.get(RestorePointService)
+    service.restore_restore_point(
+        context.agent.id,
+        target.id,
+        AgentRestorePointRestore(),
+        CurrentUserContext(
+            user=context.user,
+            organization_ids=[context.organization.id],
+            user_organization_map={context.organization.id: context.organization_user},
+            current_user_organization=context.organization_user,
+        ),
+        managed_update=True,
+    )
+    k8s = context.injector.get(KubernetesClient)
+    created = k8s.create_job.call_args.args[1]
+    k8s.get_job.return_value = V1Job(spec=created.spec, status=V1JobStatus(failed=1))
+    k8s.get_pod_name_for_job.return_value = "rp-res-pod"
+    k8s.get_job_exit_code.return_value = exit_code
+    k8s.read_job_logs.return_value = logs
+    return target
+
+
+def test_a_restore_without_a_safety_copy_killed_before_any_output_fails_its_target():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _managed_update_restore_failed(context, exit_code=137, logs="")
+
+        with when("the Job was killed and printed nothing"):
+            rows = _rows_by_origin(context)
+
+        with then("nothing proves the volume untouched, so the target is failed, not ready"):
+            assert_that(rows[RestorePointOrigin.MANUAL.value]["status"], equal_to(RestorePointStatus.FAILED.value))
+            assert_that(rows, is_not(has_key(RestorePointOrigin.PRE_RESTORE.value)))
+
+
+def test_a_failed_restore_target_can_be_reopened_with_its_archive_kept():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        target = _managed_update_restore_failed(context, exit_code=EXIT_RESTORE_FAILED, logs="restore failed")
+        _rows_by_origin(context)  # reconcile: the target fails
+        k8s = context.injector.get(KubernetesClient)
+        k8s.delete_pvc.reset_mock()
+
+        with when("the archive is made restorable again"):
+            reopened = context.injector.get(RestorePointService).reopen_failed_restore(target.id)
+
+        with then("the row is ready, and its volume was never released"):
+            assert_that(reopened, equal_to(True))
+            row = _rows_by_origin(context)[RestorePointOrigin.MANUAL.value]
+            assert_that(row["status"], equal_to(RestorePointStatus.READY.value))
+            assert_that(k8s.delete_pvc.called, equal_to(False))

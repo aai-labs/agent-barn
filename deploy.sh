@@ -14,7 +14,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-for bin in helmfile kubectl; do
+for bin in helmfile kubectl base64; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     echo "error: $bin not found on PATH." >&2
     exit 1
@@ -41,4 +41,9 @@ export POD_KUBECONFIG_B64
 # Idempotent — a no-op on clusters where it already exists.
 kubectl apply -f k8s/agent-farm-user.yaml
 
-helmfile -f helmfile.yaml.gotmpl sync --wait
+# Hindsight's pre-install/pre-upgrade hook generates its LiteLLM key first.
+helmfile -f helmfile.yaml.gotmpl -l name=hindsight sync --include-transitive-needs --wait
+MEMORY_LITELLM_KEY_HASHES="$(kubectl -n "${NAMESPACE:-agent-farm}" get secret hindsight-litellm-hashes -o jsonpath='{.data.MEMORY_LITELLM_KEY_HASHES}' | base64 -d)"
+MEMORY_LITELLM_ACTIVE_KEY_HASH="$(kubectl -n "${NAMESPACE:-agent-farm}" get secret hindsight-litellm-hashes -o jsonpath='{.data.MEMORY_LITELLM_ACTIVE_KEY_HASH}' | base64 -d)"
+export MEMORY_LITELLM_KEY_HASHES MEMORY_LITELLM_ACTIVE_KEY_HASH
+helmfile -f helmfile.yaml.gotmpl -l name!=hindsight sync --wait

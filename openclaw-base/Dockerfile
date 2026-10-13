@@ -20,7 +20,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN git clone --depth 1 https://github.com/aai-labs/aai-cli.git repo && \
+ARG AAI_CLI_COMMIT=fca39caf0f6f8ddac5a803218f274336fcf6c848
+COPY aai-token-url.patch /tmp/aai-token-url.patch
+COPY aai-apollo-routing.patch /tmp/aai-apollo-routing.patch
+RUN git init repo && \
+    git -C repo remote add origin https://github.com/aai-labs/aai-cli.git && \
+    git -C repo fetch --depth 1 origin "$AAI_CLI_COMMIT" && \
+    git -C repo checkout --detach FETCH_HEAD && \
+    git -C repo apply /tmp/aai-token-url.patch && \
+    git -C repo apply /tmp/aai-apollo-routing.patch && \
     cargo install --path repo --root /out --locked
 
 FROM node:22-bookworm-slim
@@ -105,8 +113,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     fi
 
 RUN mkdir -p /opt/openclaw-preinstalled/npm && \
-    npm install --prefix /opt/openclaw-preinstalled/npm @openclaw/msteams@2026.8.2 && \
+    npm install --prefix /opt/openclaw-preinstalled/npm \
+      @openclaw/msteams@2026.8.2 \
+      @vectorize-io/hindsight-openclaw@0.13.0 \
+      @vectorize-io/hindsight-client@0.8.6 && \
     chown -R node:node /opt/openclaw-preinstalled
+
+COPY patch-hindsight-manifest.mjs /tmp/patch-hindsight-manifest.mjs
+RUN node /tmp/patch-hindsight-manifest.mjs \
+      /opt/openclaw-preinstalled/npm/node_modules/@vectorize-io/hindsight-openclaw/openclaw.plugin.json && \
+    rm /tmp/patch-hindsight-manifest.mjs
 
 USER node
 

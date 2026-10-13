@@ -7,24 +7,26 @@ import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
 import { MessageCircleWarning, Plus } from "lucide-react";
 import { canAgent, currentModelOf, formatModelName } from "../utils";
 import { ModelSourceBadge } from "./model-source-badge";
-import { PendingModelNote } from "./pending-model-note";
+import { PendingModelBanner } from "./pending-model-note";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
 import { ChevLeftIcon, CogIcon, ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
+import { AgentResourceUsageTab } from "@/features/resource-usage/components/agent-resource-usage-tab";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
-import { AgentUpdateBanner } from "./agent-update-banner";
+import { AgentUpdateBanner, AgentUpdateOutcomeNote } from "./agent-update-banner";
 import { StatusLine } from "./status-line";
 import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
 import { ActivityTab } from "./activity-tab";
+import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
@@ -38,16 +40,20 @@ type Tab =
   | "conversations"
   | "tool-calls"
   | "logs"
+  | "memory"
   | "activity"
   | "costs"
+  | "resource-usage"
   | "about";
 const VALID_TABS: Tab[] = [
   "chat",
   "conversations",
   "tool-calls",
   "logs",
+  "memory",
   "activity",
   "costs",
+  "resource-usage",
   "about",
 ];
 
@@ -70,11 +76,17 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     "channel",
     parseAsString.withOptions({ history: "replace" }),
   );
+  const [, setUsageRange] = useQueryState(
+    "range",
+    parseAsString.withOptions({ history: "replace" }),
+  );
 
   function selectTab(next: Tab) {
     void setTab(next);
     // channel is only meaningful on the conversations tab; drop it elsewhere
     if (next !== "conversations") void setChannel(null);
+    // likewise the time range, which only the resource usage tab reads
+    if (next !== "resource-usage") void setUsageRange(null);
   }
 
   const tabs: [Tab, string][] = [
@@ -84,6 +96,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["conversations", "Conversations"],
           ["tool-calls", "Tool calls"],
           ["logs", "Logs"],
+          // Memory content is conversation content, so it follows activity.read.
+          ["memory", "Memory"],
         ] as [Tab, string][])
       : []),
     // Every part of Activity needs activity.read: the runtime diagnostics on
@@ -95,6 +109,11 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     // the only tab that surfaces cost.read on its own — Activity's usage section
     // needs activity.read too.
     ...(canReadCosts ? ([["costs", "Costs"]] as [Tab, string][]) : []),
+    // How the container is doing, so it follows Activity's gate rather than Costs':
+    // the same activity.read that guards runtime diagnostics and health.
+    ...(canReadActivity
+      ? ([["resource-usage", "Resource usage"]] as [Tab, string][])
+      : []),
     ["about", "About"],
   ];
   const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
@@ -156,13 +175,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   {agent.name}
                 </h1>
                 {currentModelOf(agent) && (
-                  <>
-                    <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
-                      <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
-                      <ModelSourceBadge source={agent.modelSource} />
-                    </div>
-                    <PendingModelNote pendingModel={agent.pendingModel} />
-                  </>
+                  <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
+                    <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
+                    <ModelSourceBadge source={agent.modelSource} />
+                  </div>
                 )}
                 <AgentMetaBadges
                   agent={agent}
@@ -189,7 +205,17 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               </div>
             </div>
 
-            {canManageLifecycle && <AgentUpdateBanner agent={agent} />}
+            <PendingModelBanner agent={agent} canRestart={canManageLifecycle} />
+
+            {canManageLifecycle && (
+              <>
+                <AgentUpdateBanner agent={agent} />
+                <AgentUpdateOutcomeNote
+                  agent={agent}
+                  restorePointsHref={`${homeHref}/agents/${agent.id}/configuration?section=restore`}
+                />
+              </>
+            )}
 
             {/* The classified provisioning failure comes off the Agent itself, so
                 it renders on first paint and does not depend on health polling —
@@ -298,8 +324,17 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             )}
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
+            {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
             {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}
+            {resolvedTab === "resource-usage" && (
+              <AgentResourceUsageTab
+                agent={agent}
+                onOpenActivity={() => {
+                  selectTab("activity");
+                }}
+              />
+            )}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
           </>
         )}

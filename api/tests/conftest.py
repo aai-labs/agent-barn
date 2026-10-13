@@ -14,6 +14,7 @@ from api.core.config import get_config
 from api.infrastructure.openrouter.client import clear_models_cache
 from api.infrastructure.slack.client import clear_directory_cache
 from api.tests.mocks.email import make_email_blocking_post
+from api.tests.mocks.posthog import make_posthog_blocking_post
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -32,8 +33,9 @@ def _set_default(key: str, value: str) -> None:
 
 os.environ["ENVIRONMENT"] = "test"
 _set_default("SECRET_SIGNING_KEY", "test-secret-key")
-_set_default("ORGANIZATION_DEFAULT_LLM_BUDGET_USD", "100")
-_set_default("AGENT_DEFAULT_LLM_BUDGET_USD", "25")
+# Budget contract tests use fixed defaults, independent of developer deployment values.
+os.environ["ORGANIZATION_DEFAULT_LLM_BUDGET_USD"] = "100"
+os.environ["AGENT_DEFAULT_LLM_BUDGET_USD"] = "25"
 _set_default("PLATFORM_ADMIN_CREDENTIALS", "admin@example.com:StrongPass123")
 # Forced, not defaulted: a developer's real Cloudflare credentials in .env would otherwise
 # win and the suite would send live email to fixture addresses, burning sending quota and
@@ -41,6 +43,7 @@ _set_default("PLATFORM_ADMIN_CREDENTIALS", "admin@example.com:StrongPass123")
 os.environ["CLOUDFLARE_ACCOUNT_ID"] = "test-account-id"
 os.environ["CLOUDFLARE_API_TOKEN"] = "test-api-token"
 os.environ["SENDER_EMAIL"] = "noreply@example.com"
+os.environ["ANALYTICS_ENABLED"] = "false"
 
 alembic_dir = Path(__file__).resolve().parents[1]
 alembic_ini_path = alembic_dir / "alembic.ini"
@@ -82,5 +85,14 @@ def block_outbound_email():
     with patch(
         "api.infrastructure.email.client.httpx.post",
         new=make_email_blocking_post(httpx.post),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def block_outbound_analytics():
+    with patch(
+        "api.infrastructure.posthog.client.httpx.post",
+        new=make_posthog_blocking_post(httpx.post),
     ):
         yield

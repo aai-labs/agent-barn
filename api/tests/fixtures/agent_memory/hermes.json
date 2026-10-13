@@ -1,0 +1,152 @@
+[
+  {
+    "method": "GET",
+    "path": "/version",
+    "user_agent": "Python-urllib/3.13",
+    "body": null
+  },
+  {
+    "method": "POST",
+    "path": "/v1/default/banks/org-capture/memories",
+    "user_agent": "hindsight-client-python/0.6.1",
+    "body": {
+      "items": [
+        {
+          "content": "The sample customer pays invoices monthly.",
+          "context": "Sample conversation",
+          "metadata": {
+            "retained_at": "sample",
+            "message_count": "sample",
+            "turn_index": "sample",
+            "session_id": "sample",
+            "platform": "sample",
+            "user_id": "sample",
+            "user_name": "sample",
+            "agent_identity": "sample"
+          },
+          "document_id": "sample-session",
+          "tags": [
+            "agent:billing",
+            "session:sess-1"
+          ],
+          "observation_scopes": "per_tag",
+          "update_mode": "append",
+          "timestamp": null,
+          "entities": null,
+          "strategy": null
+        }
+      ],
+      "async": true,
+      "document_tags": null
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/v1/default/banks/org-capture/memories",
+    "user_agent": "hindsight-client-python/0.6.1",
+    "body": {
+      "items": [
+        {
+          "content": "The sample customer pays invoices monthly.",
+          "context": "Sample conversation",
+          "metadata": {
+            "retained_at": "sample",
+            "message_count": "sample",
+            "turn_index": "sample",
+            "session_id": "sample",
+            "platform": "sample",
+            "user_id": "sample",
+            "user_name": "sample",
+            "agent_identity": "sample"
+          },
+          "document_id": "sample-session",
+          "tags": [
+            "agent:billing",
+            "session:sess-1"
+          ],
+          "observation_scopes": "per_tag",
+          "update_mode": "append",
+          "timestamp": null,
+          "entities": null,
+          "strategy": null
+        }
+      ],
+      "async": true,
+      "document_tags": null
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/v1/default/banks/org-capture/memories",
+    "user_agent": "hindsight-client-python/0.6.1",
+    "body": {
+      "items": [
+        {
+          "content": "The sample customer pays invoices monthly.",
+          "metadata": {
+            "retained_at": "sample",
+            "message_count": "sample",
+            "turn_index": "sample",
+            "session_id": "sample",
+            "platform": "sample",
+            "user_id": "sample",
+            "user_name": "sample",
+            "agent_identity": "sample"
+          },
+          "tags": [
+            "agent:billing",
+            "scope:team"
+          ],
+          "observation_scopes": "per_tag",
+          "timestamp": null,
+          "context": null,
+          "document_id": null,
+          "entities": null,
+          "strategy": null,
+          "update_mode": null
+        }
+      ],
+      "async": false,
+      "document_tags": null
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/v1/default/banks/org-capture/memories/recall",
+    "user_agent": "hindsight-client-python/0.6.1",
+    "body": {
+      "query": "What is the sample fact?",
+      "types": [
+        "observation"
+      ],
+      "budget": "mid",
+      "max_tokens": 4096,
+      "trace": false,
+      "include": {
+        "entities": null,
+        "chunks": null,
+        "source_facts": null
+      },
+      "tags_match": "any",
+      "query_timestamp": null,
+      "tags": null,
+      "tag_groups": null
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/v1/default/banks/org-capture/reflect",
+    "user_agent": "hindsight-client-python/0.6.1",
+    "body": {
+      "query": "What is the sample fact?",
+      "budget": "mid",
+      "tags_match": "any",
+      "context": null,
+      "response_schema": null,
+      "tags": null,
+      "tag_groups": null,
+      "fact_types": null,
+      "exclude_mental_model_ids": null
+    }
+  }
+]

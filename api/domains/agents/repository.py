@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
@@ -11,15 +11,21 @@ from sqlalchemy import exists, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
+from api.domains.agent_memory.repository import stage_agent_memory_cleanup
 from api.domains.agents.models import (
+    MANAGED_UPDATE_STALE_SECONDS,
     Agent,
     AgentAccess,
+    AgentCreatorRead,
     AgentFilter,
     AgentLifecycleEmailReceipt,
     AgentLogSnapshot,
     AgentSecret,
+    AgentSecretRead,
     AgentSkill,
     AgentStatus,
+    ManagedUpdateOutcome,
+    PlatformAgentIdentity,
     SecretProvider,
 )
 from api.domains.communications.email_address_repository import release_agent_email_addresses
@@ -44,6 +50,9 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.integrations.isolation import default_isolation, isolation_read
+from api.domains.integrations.models import AgentIntegrationIsolation, AgentIntegrationRuntime
+from api.domains.organizations.models import Organization
 from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.catalog import (
     AGENT_OWNER_ROLE_ID,
@@ -522,8 +531,14 @@ class AgentRepository:
         self,
         authorization_scope: AuthorizationScope,
         agent_filter: AgentFilter,
-        pagination: Pagination,
+        pagination: Pagination | None,
     ) -> tuple[list[Agent], int]:
+        """Agents the scope may read, oldest first, and how many there are in all.
+
+        `pagination=None` returns every one of them, for a caller that has to rank before
+        it cuts (the agents overview), where a page taken in creation order would drop the
+        very Agents the ranking is meant to find.
+        """
         with Session(self.delegate.engine) as session:
             visibility = agent_scope_predicates(authorization_scope)
             query = select(Agent).where(*visibility)
@@ -535,12 +550,28 @@ class AgentRepository:
                 count_query = count_query.where(status_filter)
 
             total = session.scalar(count_query) or 0
-            query = (
-                query.order_by(col(Agent.created_at).asc())
-                .offset((pagination.page - 1) * pagination.size)
-                .limit(pagination.size)
-            )
+            query = query.order_by(col(Agent.created_at).asc())
+            if pagination is not None:
+                query = query.offset((pagination.page - 1) * pagination.size).limit(pagination.size)
             return list(session.exec(query).all()), total
+
+    def get_creators_for_agents(
+        self,
+        agent_ids: list[UUID],
+        authorization_scope: AuthorizationScope,
+    ) -> dict[UUID, AgentCreatorRead]:
+        if not agent_ids:
+            return {}
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, User.id, User.full_name, User.email)
+                .join(User, col(User.id) == col(Agent.created_by_user_id))
+                .where(col(Agent.id).in_(agent_ids), *agent_scope_predicates(authorization_scope))
+            ).all()
+        return {
+            agent_id: AgentCreatorRead(id=user_id, full_name=full_name, email=email)
+            for agent_id, user_id, full_name, email in rows
+        }
 
     def get_active_communication_platforms_for_agents(
         self,
@@ -927,7 +958,19 @@ class AgentRepository:
         their own writes have committed, or a losing request could still observe
         stale state once it acquires the lock.
         """
-        lock_key = f"agent-lifecycle:{agent_id}"
+        with self._try_advisory_lock(f"agent-lifecycle:{agent_id}") as acquired:
+            yield acquired
+
+    @contextmanager
+    def sharepoint_sign_in_lock(self, agent_id: UUID) -> Iterator[bool]:
+        """Serialize finishing SharePoint sign-ins for one Agent, so two administrators'
+        sign-ins can't each read the granted sites and overwrite the other's result. Same
+        non-blocking, session-scoped advisory lock as ``lifecycle_lock``."""
+        with self._try_advisory_lock(f"agent-sharepoint-sign-in:{agent_id}") as acquired:
+            yield acquired
+
+    @contextmanager
+    def _try_advisory_lock(self, lock_key: str) -> Iterator[bool]:
         with Session(self.delegate.engine) as session:
             acquired = bool(
                 session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
@@ -937,6 +980,72 @@ class AgentRepository:
             finally:
                 if acquired:
                     session.scalar(text("SELECT pg_advisory_unlock(hashtext(:lock_key))"), {"lock_key": lock_key})
+
+    def claim_managed_update(self, agent_id: UUID) -> bool:
+        """Mark a managed update as running, unless one already is.
+
+        One conditional UPDATE, so two requests racing for the same Agent cannot
+        both win. A heartbeat past MANAGED_UPDATE_STALE_SECONDS belongs to a
+        process that died, so it can be claimed again. The last update's outcome
+        is cleared in the same write: it no longer describes the Agent.
+        """
+        now = datetime.now(UTC)
+        stale_before = now - timedelta(seconds=MANAGED_UPDATE_STALE_SECONDS)
+        with Session(self.delegate.engine) as session:
+            result = session.exec(
+                sa.update(Agent)
+                .where(
+                    col(Agent.id) == agent_id,
+                    or_(
+                        col(Agent.managed_update_heartbeat_at).is_(None),
+                        col(Agent.managed_update_heartbeat_at) < stale_before,
+                    ),
+                )
+                .values(
+                    managed_update_heartbeat_at=now,
+                    managed_update_outcome=None,
+                    managed_update_restore_point_id=None,
+                    managed_update_failure_reason=None,
+                )
+            )
+            session.commit()
+            return result.rowcount == 1
+
+    # The writes below are targeted UPDATEs, not save(): the orchestrator holds no
+    # fresh copy of the row and must not write back columns other requests changed.
+
+    def beat_managed_update(self, agent_id: UUID) -> None:
+        """Refresh a running update's heartbeat. Never starts one: that is a claim."""
+        self._update_agent(
+            agent_id,
+            {"managed_update_heartbeat_at": datetime.now(UTC)},
+            col(Agent.managed_update_heartbeat_at).is_not(None),
+        )
+
+    def release_managed_update(self, agent_id: UUID) -> None:
+        self._update_agent(agent_id, {"managed_update_heartbeat_at": None})
+
+    def record_managed_update_outcome(
+        self,
+        agent_id: UUID,
+        outcome: ManagedUpdateOutcome,
+        *,
+        restore_point_id: UUID | None,
+        failure_reason: str | None = None,
+    ) -> None:
+        self._update_agent(
+            agent_id,
+            {
+                "managed_update_outcome": outcome,
+                "managed_update_restore_point_id": restore_point_id,
+                "managed_update_failure_reason": failure_reason[:500] if failure_reason else None,
+            },
+        )
+
+    def _update_agent(self, agent_id: UUID, values: dict[str, Any], *conditions: Any) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(sa.update(Agent).where(col(Agent.id) == agent_id, *conditions).values(**values))
+            session.commit()
 
     def save_with_lifecycle_event(
         self,
@@ -987,6 +1096,7 @@ class AgentRepository:
             persisted.last_error_code = agent.last_error_code
             persisted.last_error_detail = agent.last_error_detail
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
+            persisted.memory_key_hash = agent.memory_key_hash
             persisted.running_model = agent.running_model
             persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
@@ -1107,8 +1217,10 @@ class AgentRepository:
                 return AgentLifecycleEventResult(agent=agent, delivery_ids=[])
             now = datetime.now(UTC)
             persisted.deleted_at = now
+            persisted.memory_key_hash = None
             session.add(persisted)
             session.flush()
+            stage_agent_memory_cleanup(session, persisted.id, persisted.organization_id, now)
             # Agent deletion is a soft delete, so the database FK cascade does
             # not retire the Agent-owned Communication Connections. Release
             # their provider credentials in this same transaction so retired
@@ -1124,11 +1236,8 @@ class AgentRepository:
                     enabled=False,
                     observed_status=None,
                     credentials_encrypted="",
-                    driver_key_encrypted="",
                     credential_fingerprint=None,
                     credential_scope_key=None,
-                    ingress_lease_owner=None,
-                    ingress_lease_expires_at=None,
                     retired_at=now,
                     updated_at=now,
                     revision=col(CommunicationConnection.revision) + 1,
@@ -1191,8 +1300,37 @@ class AgentRepository:
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
         """Stage one AgentSecret and its audit event in an existing transaction."""
+        if secret.provider == SecretProvider.SHAREPOINT:
+            # Reconnect clears its warning atomically. Preserve broker lock order:
+            # runtime first, then credential, so an in-flight handoff cannot deadlock.
+            runtime = session.exec(
+                select(AgentIntegrationRuntime)
+                .where(AgentIntegrationRuntime.agent_id == secret.agent_id)
+                .with_for_update()
+            ).first()
+            if runtime and runtime.bindings.get("sharepoint", {}).get("binding_id") == str(secret.id):
+                runtime.bindings = {
+                    **runtime.bindings,
+                    "sharepoint": {**runtime.bindings["sharepoint"], "reconnect_required": False},
+                }
+                session.add(runtime)
         session.add(secret)
         session.flush()
+        policy = session.exec(
+            select(AgentIntegrationIsolation).where(
+                col(AgentIntegrationIsolation.agent_id) == secret.agent_id,
+                col(AgentIntegrationIsolation.provider) == secret.provider,
+                col(AgentIntegrationIsolation.source) == "agent_secret",
+            )
+        ).first()
+        if policy is None:
+            session.add(
+                AgentIntegrationIsolation(
+                    agent_id=secret.agent_id,
+                    provider=SecretProvider(secret.provider),
+                    isolated=default_isolation(SecretProvider(secret.provider)),
+                )
+            )
         event = EVENT_REGISTRY.build_event(
             event_name=event_name,
             schema_version=1,
@@ -1273,6 +1411,13 @@ class AgentRepository:
                 return []
             record_id, label, shared_reference_id = secret.id, secret.secret_name, secret.shared_credential_id
             session.delete(secret)
+            session.exec(
+                sa.delete(AgentIntegrationIsolation).where(
+                    col(AgentIntegrationIsolation.agent_id) == agent_id,
+                    col(AgentIntegrationIsolation.provider) == provider,
+                    col(AgentIntegrationIsolation.source) == "agent_secret",
+                )
+            )
             session.flush()
             event = EVENT_REGISTRY.build_event(
                 event_name=AGENT_SECRET_REMOVED,
@@ -1394,6 +1539,26 @@ class AgentRepository:
             )
             return list(session.exec(query).all())
 
+    def find_live_for_platform_usage(self) -> list[PlatformAgentIdentity]:
+        """Every live Agent on the platform, with its Organization's name.
+
+        Platform-wide by design, for the Platform resource usage page behind
+        `require_platform_admin`. Only identity and lifecycle columns are read.
+        """
+        query = (
+            sa.select(
+                col(Agent.id),
+                col(Agent.name),
+                col(Agent.status),
+                col(Agent.organization_id),
+                col(Organization.name),
+            )
+            .join(Organization, col(Organization.id) == col(Agent.organization_id))
+            .where(col(Agent.deleted_at).is_(None))
+        )
+        with self.delegate.engine.connect() as connection:
+            return [PlatformAgentIdentity(*row) for row in connection.execute(query).all()]
+
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""
         with Session(self.delegate.engine) as session:
@@ -1428,14 +1593,79 @@ class AgentRepository:
             query = select(AgentSecret).where(col(AgentSecret.agent_id) == agent_id)
             return list(session.exec(query).all())
 
-    def get_secrets_for_agents(self, agent_ids: list[UUID]) -> dict[UUID, list[AgentSecret]]:
+    def get_secret_summaries_for_agents(
+        self, agent_ids: list[UUID], authorization_scope: AuthorizationScope
+    ) -> dict[UUID, list[AgentSecretRead]]:
         if not agent_ids:
             return {}
         with Session(self.delegate.engine) as session:
-            query = select(AgentSecret).where(col(AgentSecret.agent_id).in_(agent_ids))
-            result: dict[UUID, list[AgentSecret]] = {}
-            for secret in session.exec(query).all():
-                result.setdefault(secret.agent_id, []).append(secret)
+            query = (
+                sa.select(
+                    col(AgentSecret.agent_id),
+                    col(AgentSecret.provider),
+                    col(AgentSecret.secret_name),
+                    col(AgentSecret.shared_credential_id),
+                    col(AgentIntegrationIsolation.isolated),
+                    col(AgentIntegrationRuntime.bindings),
+                    col(AgentIntegrationRuntime.previous_bindings),
+                    col(AgentIntegrationRuntime.generation),
+                    col(AgentIntegrationRuntime.state),
+                    col(Agent.status),
+                    col(AgentSecret.id),
+                )
+                .join(Agent, col(Agent.id) == col(AgentSecret.agent_id))
+                .outerjoin(
+                    AgentIntegrationIsolation,
+                    (col(AgentIntegrationIsolation.agent_id) == col(AgentSecret.agent_id))
+                    & (col(AgentIntegrationIsolation.provider) == col(AgentSecret.provider))
+                    & (col(AgentIntegrationIsolation.source) == "agent_secret"),
+                )
+                .where(col(AgentSecret.agent_id).in_(agent_ids), *agent_scope_predicates(authorization_scope))
+                .outerjoin(AgentIntegrationRuntime, col(AgentIntegrationRuntime.agent_id) == col(Agent.id))
+            )
+            result: dict[UUID, list[AgentSecretRead]] = {}
+            for (
+                agent_id,
+                provider,
+                name,
+                credential_id,
+                isolated,
+                bindings,
+                previous_bindings,
+                generation,
+                state,
+                agent_status,
+                binding_id,
+            ) in session.connection().execute(query).all():
+                metadata = isolation_read(SecretProvider(provider), isolated)
+                verified = (previous_bindings or {}).get(provider, {})
+                if (
+                    verified.get("binding_id") == str(binding_id)
+                    and verified.get("source", "agent_secret") == "agent_secret"
+                ):
+                    metadata.last_verified = verified.get("isolated")
+                applied = (bindings or {}).get(provider)
+                if applied and applied.get("binding_id") == str(binding_id):
+                    metadata.reconnect_required = bool(applied.get("reconnect_required"))
+                    metadata.generation = generation
+                if (
+                    state == "ready"
+                    and agent_status == AgentStatus.RUNNING
+                    and applied
+                    and applied["binding_id"] == str(binding_id)
+                ):
+                    metadata.applied = applied["isolated"]
+                    metadata.generation = generation
+                    metadata.pending = metadata.desired != metadata.applied
+                result.setdefault(agent_id, []).append(
+                    AgentSecretRead(
+                        provider=SecretProvider(provider),
+                        secret_name=name,
+                        shared_credential_id=credential_id,
+                        isolation=metadata,
+                        source="shared_credential" if credential_id else "agent_secret",
+                    )
+                )
             return result
 
     # --- Skills ---

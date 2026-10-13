@@ -4,6 +4,7 @@ import http.client
 import json
 import os
 import tempfile
+import time
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -184,6 +185,13 @@ class KubernetesClient:
 
     def delete_deployment(self, name: str, namespace: str) -> None:
         self._delete_ignoring_not_found(self._apps_v1.delete_namespaced_deployment, name, namespace)
+
+    def wait_for_termination(self, name: str, namespace: str, timeout: float = 60) -> None:
+        deadline = time.monotonic() + timeout
+        while self.has_pods_for_deployment(name, namespace):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Previous Agent runtime is still terminating")
+            time.sleep(0.5)
 
     def get_deployment(self, name: str, namespace: str) -> client.V1Deployment | None:
         return self._get_or_none(self._apps_v1.read_namespaced_deployment, name, namespace)
@@ -384,11 +392,50 @@ class KubernetesClient:
             return "initializing", None
         return None, None
 
-    def get_runtime_diagnostics(self, deployment_name: str, namespace: str) -> dict[str, object]:
+    def runtime_has_exited(self, deployment_name: str, namespace: str) -> bool:
+        """Runtime exit evidence, excluding retryable image/configuration failures."""
+        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        if pod is None:
+            return False
+        containers = pod.status.container_statuses or []
+        if pod.status.phase == "Failed" and any(cs.state and cs.state.terminated for cs in containers):
+            return True
+        return any(cs.state and cs.state.waiting and cs.state.waiting.reason == "CrashLoopBackOff" for cs in containers)
+
+    def get_pod_image(self, deployment_name: str, namespace: str) -> str | None:
+        """The runtime image the Agent's newest pod is actually running, if any.
+
+        An Agent's "previous runtime" during a managed update is what its pod
+        proves it ran — not what the platform pin or the pin column says —
+        because both can move underneath a long-running pod.
+        """
+        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        if pod is None:
+            return None
+        for container in pod.spec.containers or []:
+            if container.name == "agent":
+                return container.image
+        return None
+
+    def get_pod_restart_count(self, deployment_name: str, namespace: str) -> int:
+        """How many times the newest pod's agent container has restarted; 0 if unknown."""
+        pod = self._newest_pod(f"app={deployment_name}", namespace)
+        if pod is None:
+            return 0
+        for container_status in pod.status.container_statuses or []:
+            if container_status.name == "agent":
+                return container_status.restart_count or 0
+        return 0
+
+    def get_runtime_diagnostics(
+        self, deployment_name: str, namespace: str, *, include_logs: bool = True
+    ) -> dict[str, object]:
         """Bounded evidence from the newest non-deleting pod, including failed pods.
 
         Container messages and cluster exception bodies are deliberately excluded.
         Log text follows the existing activity-authorized Agent log boundary.
+        `include_logs=False` skips the log reads entirely, for callers outside that
+        boundary (the Platform view), which want only restarts and why the last one ended.
         """
         result: dict[str, object] = {"observed_at": datetime.now(UTC), "available": False}
         pods = self._core_v1.list_namespaced_pod(
@@ -424,6 +471,8 @@ class KubernetesClient:
                 finished_at=terminated.finished_at,
             )
         for previous, key in ((False, "current"), (True, "previous")):
+            if not include_logs:
+                break
             if previous and not container.restart_count:
                 continue
             try:

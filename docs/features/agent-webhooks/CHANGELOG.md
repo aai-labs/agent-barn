@@ -6,7 +6,7 @@ Related context: [`../agent-webhooks.md`](../agent-webhooks.md), [`../../archite
 
 - Delivered: independent Agent Webhook configuration and signed ingress, idempotent Webhook Invocations, direct native Agent Trigger Job submission for Hermes/OpenClaw, bounded submission retries, explicit failed-submission retry, and the webhook-specific UI.
 - Removed: the unreleased Communications-backed webhook Platform, event-specific Communication Delivery behavior, and their tests and UI filtering. See the [Communications change log](../communications/CHANGELOG.md).
-- Preserved: released Communications behavior is unchanged, and the runtime protocol is back to its released version 2 while still accepting the staging-only version 3.
+- Preserved: Web Chat/Email gateway behavior and the shared runtime protocol remain supported. The adapter uses version 2; version 1 and staging-only version 3 remain accepted for existing consumers. Native chat follows the [fixed transport contract](../../architecture/runtime-and-deployment.md#platform-plugin-boundary).
 - Next: nothing outstanding; per-webhook channel selection stays deferred.
 - Blockers: none.
 

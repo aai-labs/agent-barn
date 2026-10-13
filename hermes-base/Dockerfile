@@ -16,7 +16,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-RUN git clone --depth 1 https://github.com/aai-labs/aai-cli.git repo && \
+ARG AAI_CLI_COMMIT=fca39caf0f6f8ddac5a803218f274336fcf6c848
+COPY aai-token-url.patch /tmp/aai-token-url.patch
+COPY aai-apollo-routing.patch /tmp/aai-apollo-routing.patch
+RUN git init repo && \
+    git -C repo remote add origin https://github.com/aai-labs/aai-cli.git && \
+    git -C repo fetch --depth 1 origin "$AAI_CLI_COMMIT" && \
+    git -C repo checkout --detach FETCH_HEAD && \
+    git -C repo apply /tmp/aai-token-url.patch && \
+    git -C repo apply /tmp/aai-apollo-routing.patch && \
     cargo install --path repo --root /out --locked
 
 FROM nousresearch/hermes-agent:v2026.8.19
@@ -24,9 +32,8 @@ ARG APT_MIRROR
 
 ENV HERMES_WRITE_SAFE_ROOT=/opt/data:/workspace
 
-# Route scheduled completions through the durable bridge instead of native transports.
-COPY patch-agent-message-completions.py /tmp/patch-agent-message-completions.py
-RUN python3 /tmp/patch-agent-message-completions.py && rm /tmp/patch-agent-message-completions.py
+# The gateway contract captures this client; memory must not install dependencies at boot.
+RUN uv pip install --python /opt/hermes/.venv/bin/python 'hindsight-client==0.6.1'
 
 # Keep /v1/runs approvals while explicitly resuming durable DM/thread history.
 COPY patch-run-session-history.py /tmp/patch-run-session-history.py

@@ -32,6 +32,9 @@ Optional additions include `providers/`, `stores/`, `constants.ts`, and a small 
 - Route ordinary app HTTP calls through `../../ui/src/shared/api`, reusing its
   snake_case/camelCase transformations; do not add ad hoc fetch wrappers or
   Axios instances.
+- A request body that uses enum codes as map keys, such as
+  `{ outcomeMinutes: { MESSAGE_SENT: 5 } }`, can pass them as-is: the request
+  transform leaves UPPER_SNAKE keys unchanged (see `../architecture/ui.md`).
 - Supply a Zod schema to the API client for important responses.
 - Keep the SSE log proxy as an explicit streaming exception; do not generalize it into the normal request pattern.
 

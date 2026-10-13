@@ -1,6 +1,8 @@
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from typing import Self
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic import Field, PostgresDsn, field_validator, model_validator
@@ -8,6 +10,12 @@ from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(ROOT_ENV_PATH, override=False)
+
+DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_AjhfVLSegE5yXsARYYJsGJDC3bwBPdKfUD3dLvoLjbw7"
+DEFAULT_POSTHOG_HOST = "https://eu.i.posthog.com"
+LOCAL_HOSTNAMES = frozenset({"localhost"})
+LOCAL_HOST_SUFFIXES = (".localhost",)
+URL_SCHEME_SEPARATOR = "://"
 
 
 class Config(BaseSettings):
@@ -45,6 +53,13 @@ class Config(BaseSettings):
     restore_point_max_per_agent: int = Field(default=5, ge=1, le=50)
     restore_point_capture_timeout_seconds: int = Field(default=900, ge=60, le=7200)
     restore_point_restore_timeout_seconds: int = Field(default=1800, ge=60, le=7200)
+    # How long a managed update waits for the new pod to report ready before it
+    # rolls back, counted from when the start returns. It has to cover pulling
+    # an image the node has never seen, init, the start script's installs, and
+    # the probe's 30s initial delay. The readiness probe sets no upper bound of
+    # its own: failures only mark the pod unready and probing goes on.
+    agent_update_ready_timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    agent_update_ready_poll_seconds: int = Field(default=5, ge=0, le=60)
 
     openclaw_image: str = ""
     hermes_image: str = ""
@@ -74,6 +89,23 @@ class Config(BaseSettings):
     # Agent workloads and the API run in the same namespace, so the short Service
     # name is portable between staging and production.
     ingest_base_url: str = "http://agentbarn-api:8001/ingest/v1"
+    # The credential gateway is a separate deployment because it sits on the request path
+    # of every agent tool call; agent workloads reach it by Service name in-namespace.
+    credential_gateway_base_url: str = "http://agentbarn-api-gateway:8003/gateway/v1"
+    memory_base_url: str = "http://agentbarn-api-memory:8003/memory/v1"
+    # Where the product API reaches the gateway's read-only viewer; Agents never use it.
+    memory_view_base_url: str = "http://agentbarn-api-memory:8003/memory/view/v1"
+    # Non-secret SHA-256 hashes of current and retired Hindsight LiteLLM keys.
+    memory_litellm_key_hashes: str = ""
+
+    memory_runtime_service_key: str = ""
+
+    memory_default_model: str = "openrouter/openai/gpt-4.1-mini"
+    memory_litellm_active_key_hash: str = ""
+
+    hindsight_base_url: str = ""
+    hindsight_api_key: str = ""
+    hindsight_request_timeout_seconds: int = Field(default=120, ge=1, le=600)
     communications_base_url: str = (
         "http://agentbarn-api-communications.agent-farm.svc.cluster.local:8002/communications/v1"
     )
@@ -92,20 +124,9 @@ class Config(BaseSettings):
     teams_privacy_url: str = "https://aai-labs.com/privacy"
     teams_terms_url: str = "https://aai-labs.com/terms"
     slack_directory_cache_ttl_seconds: int = 600
-    # Content-free Communication journal history is pruned by the gateway
-    # supervisor after this many days.
+    # Content-free Communication journal history is pruned by Communications
+    # maintenance after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
-    # Native gateway spike (ADR 2026-09-16): comma-separated Platform keys whose
-    # Connections run inside the Agent runtime's own gateway instead of the
-    # Communications supervisor, for Hermes and OpenClaw alike. Replaced by a
-    # per-Connection transport once the spike is accepted.
-    communications_native_platforms: str = ""
-
-    @property
-    def native_platform_keys(self) -> frozenset[str]:
-        """Platforms whose Agent Connections run in the runtime's native gateway."""
-        return frozenset(key.strip() for key in self.communications_native_platforms.split(",") if key.strip())
-
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.
@@ -117,6 +138,15 @@ class Config(BaseSettings):
     # TTL for the credits poll behind agentbarn_openrouter_credits_remaining
     # (GET /key with the inference key above; no management key involved).
     openrouter_credits_cache_ttl_seconds: int = 300
+
+    # The in-namespace Prometheus (helm/monitoring) that stores each Agent's CPU and
+    # memory. Empty means resource usage reports "not configured", which is the normal
+    # local state until `make dev-monitoring`. Prometheus requires basic auth; the
+    # password is the monitoring release's MONITORING_WEB_PASSWORD.
+    prometheus_url: str = ""
+    prometheus_username: str = "monitoring"
+    prometheus_password: str = ""
+    prometheus_timeout_seconds: float = Field(default=5, gt=0, le=30)
 
     redis_url: str = "redis://localhost:6379/0"
 
@@ -134,6 +164,45 @@ class Config(BaseSettings):
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
+
+    analytics_enabled: bool = True
+    analytics_posthog_host: str = DEFAULT_POSTHOG_HOST
+    analytics_posthog_project_token: str = DEFAULT_POSTHOG_PROJECT_TOKEN
+
+    @field_validator("analytics_enabled", mode="before")
+    @classmethod
+    def blank_switch_is_off(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return False
+        return value
+
+    @property
+    def is_analytics_enabled(self) -> bool:
+        return self.analytics_enabled and bool(self.analytics_posthog_project_token.strip())
+
+    @property
+    def web_app_host(self) -> str:
+        url = self.web_app_url.strip()
+        if URL_SCHEME_SEPARATOR not in url:
+            url = f"//{url}"
+        try:
+            host = urlparse(url).hostname or ""
+        except ValueError:
+            return ""
+        return host.rstrip(".").lower()
+
+    @property
+    def is_local_installation(self) -> bool:
+        host = self.web_app_host
+        if not host or host in LOCAL_HOSTNAMES or host.endswith(LOCAL_HOST_SUFFIXES):
+            return True
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return address.is_loopback or address.is_unspecified
 
     @model_validator(mode="after")
     def local_api_external_url(self) -> Self:
@@ -178,6 +247,10 @@ class Config(BaseSettings):
     def llm_budget_alert_thresholds(self) -> list[int]:
         """Sorted and de-duplicated by the validator above."""
         return [int(part) for part in self.organization_llm_budget_alert_thresholds.split(",")]
+
+    @property
+    def memory_cost_key_hashes(self) -> frozenset[str]:
+        return frozenset(part.strip() for part in self.memory_litellm_key_hashes.split(",") if part.strip())
 
     @property
     def is_email_delivery_enabled(self) -> bool:

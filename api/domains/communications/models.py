@@ -35,7 +35,6 @@ class CommunicationPlatform(str, enum.Enum):
 
 
 class PlatformCapability(str, enum.Enum):
-    AGENT_INITIATED_DELIVERY = "agent_initiated_delivery"
     DIRECTORY_DISCOVERY = "directory_discovery"
     APPLICATION_PROVISIONING = "application_provisioning"
     INSTALL_LINK = "install_link"
@@ -44,16 +43,7 @@ class PlatformCapability(str, enum.Enum):
     ATTACHMENTS = "attachments"
     THREADS = "threads"
     MENTIONS = "mentions"
-    PROCESSING_FEEDBACK = "processing_feedback"
-    SUPERVISED_INGRESS = "supervised_ingress"
     INTERACTIVE_COMPONENTS = "interactive_components"
-
-
-class ProcessingFeedbackStage(str, enum.Enum):
-    ACCEPTED = "accepted"
-    CLAIMED = "claimed"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
 
 
 class CredentialUniquenessScope(str, enum.Enum):
@@ -210,7 +200,6 @@ class CommunicationConnection(BaseModel, table=True):
         sa_column=Column(sa.JSON(), nullable=False, server_default="{}"),
     )
     credentials_encrypted: str = SqlField(nullable=False, sa_type=sa.Text)
-    driver_key_encrypted: str = SqlField(nullable=False, sa_type=sa.Text)
     external_identity: str | None = SqlField(default=None, nullable=True, max_length=512)
     credential_fingerprint: str | None = SqlField(default=None, nullable=True, max_length=128)
     credential_scope_key: str | None = SqlField(default=None, nullable=True, max_length=128)
@@ -228,12 +217,6 @@ class CommunicationConnection(BaseModel, table=True):
     last_error_details: dict[str, Any] | None = SqlField(
         default=None,
         sa_column=Column(JSONB, nullable=True),
-    )
-    ingress_lease_owner: str | None = SqlField(default=None, nullable=True, max_length=64)
-    ingress_lease_expires_at: datetime | None = SqlField(
-        default=None,
-        nullable=True,
-        sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
     revision: int = SqlField(
         default=1,
@@ -569,11 +552,6 @@ class CommunicationDiagnosticsRead(PydanticBaseModel):
     window_end: datetime
 
 
-class CommunicationReconnectRead(PydanticBaseModel):
-    connection: CommunicationConnectionRead
-    requested_at: datetime
-
-
 class CommunicationRetryRead(PydanticBaseModel):
     delivery_id: UUID
     status: CommunicationDeliveryStatus
@@ -588,7 +566,6 @@ class RuntimeDeliveryRead(PydanticBaseModel):
     attempt_count: int
     envelope: NormalizedCommunicationEnvelope
     progress_updates: bool = True
-    execution_token: str | None = None
 
 
 class RuntimeDeliveryResult(PydanticBaseModel):
@@ -651,76 +628,6 @@ class OutboundTargetRequest(PydanticBaseModel):
     thread_id: str | None = Field(default=None, min_length=1, max_length=512, title="Thread (optional)")
 
 
-class DefaultMessageDestination(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["default"] = "default"
-
-
-class ExplicitMessageDestination(PydanticBaseModel):
-    """An Agent names where to send, never which Connection carries it.
-
-    Connection identity is infrastructure: it changes when an operator recreates a
-    Connection, so it must not live in a prompt. Communications resolves the route.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["explicit"] = "explicit"
-    target: OutboundTargetRequest
-
-
-class OriginMessageDestination(PydanticBaseModel):
-    """The conversation a scheduled job was created from, recorded by the trusted adapter.
-
-    Not model-chosen: the runtime derives this from the session key Communications
-    minted for an inbound delivery that already passed inbound admission. Every field
-    is still verified against the Agent's own Connections and history on arrival.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["origin"] = "origin"
-    connection_id: UUID
-    channel_id: str = Field(min_length=1, max_length=512)
-    thread_id: str | None = Field(default=None, min_length=1, max_length=512)
-
-
-class ScheduledMessageContext(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["scheduled"] = "scheduled"
-    run_id: str = Field(min_length=1, max_length=256)
-
-
-class InteractiveMessageContext(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    kind: Literal["interactive"] = "interactive"
-    execution_token: str = Field(min_length=1, max_length=256)
-
-
-class AgentMessageCreate(PydanticBaseModel):
-    model_config = ConfigDict(extra="forbid")
-    text: str = Field(min_length=1, max_length=100_000)
-    idempotency_key: str = Field(min_length=1, max_length=512)
-    destination: DefaultMessageDestination | ExplicitMessageDestination | OriginMessageDestination = Field(
-        discriminator="kind"
-    )
-    context: ScheduledMessageContext | InteractiveMessageContext = Field(discriminator="kind")
-
-    # A scheduled run may reach its configured default or the conversation that created
-    # it, never a destination the model named. An interactive run has a live execution
-    # that authorizes an explicit send on the inbound Connection only.
-    _ALLOWED_DESTINATIONS = {"scheduled": {"default", "origin"}, "interactive": {"explicit"}}
-
-    @model_validator(mode="after")
-    def validate_context(self) -> AgentMessageCreate:
-        if self.destination.kind not in self._ALLOWED_DESTINATIONS[self.context.kind]:
-            raise ValueError(f"A {self.context.kind} execution may not use a {self.destination.kind} destination")
-        return self
-
-
-class AgentMessageRead(PydanticBaseModel):
-    delivery_id: UUID
-    status: CommunicationDeliveryStatus
-
-
 class ResolvedOutboundTarget(PydanticBaseModel):
     location: ConversationLocation
     provider_metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
@@ -728,6 +635,7 @@ class ResolvedOutboundTarget(PydanticBaseModel):
 
 class PlatformDescriptorRead(PydanticBaseModel):
     key: str
+    transport: Literal["gateway", "native"]
     display_name: str
     schema_version: int
     capabilities: list[PlatformCapability]
@@ -793,6 +701,8 @@ class CommunicationConnectionRead(PydanticBaseModel):
     platform_key: str
     display_name: str
     enabled: bool
+    transport: Literal["gateway", "native"] = "gateway"
+    recovery_actions: list[Literal["retry_delivery"]] = Field(default_factory=list)
     schema_version: int
     settings: dict[str, Any]
     external_identity: str | None

@@ -1,0 +1,120 @@
+[
+  {
+    "method": "GET",
+    "path": "/health",
+    "user_agent": "hindsight-openclaw/0.13.0",
+    "body": null
+  },
+  {
+    "method": "GET",
+    "path": "/version",
+    "user_agent": "hindsight-openclaw/0.13.0",
+    "body": null
+  },
+  {
+    "method": "GET",
+    "path": "/health",
+    "user_agent": "hindsight-openclaw/0.13.0",
+    "body": null
+  },
+  {
+    "method": "GET",
+    "path": "/version",
+    "user_agent": "hindsight-openclaw/0.13.0",
+    "body": null
+  },
+  {
+    "method": "POST",
+    "path": "/v1/default/banks/org-capture/memories/recall",
+    "user_agent": "hindsight-client-typescript/0.8.6",
+    "body": {
+      "query": "What is the sample fact?",
+      "types": [
+        "observation"
+      ],
+      "prefer_observations": false,
+      "max_tokens": 1024,
+      "budget": "mid",
+      "include": {}
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/v1/default/banks/org-capture/memories",
+    "user_agent": "hindsight-client-typescript/0.8.6",
+    "body": {
+      "items": [
+        {
+          "content": "The sample customer pays invoices monthly.",
+          "context": "Sample conversation",
+          "metadata": {
+            "retained_at": "sample",
+            "message_count": "sample",
+            "source": "sample",
+            "retention_scope": "sample",
+            "turn_index": "sample",
+            "session_key": "sample",
+            "agent_id": "sample",
+            "provider": "sample",
+            "channel_type": "sample",
+            "sender_id": "sample"
+          },
+          "document_id": "sample-session",
+          "tags": [
+            "agent:ops"
+          ],
+          "update_mode": "append"
+        }
+      ],
+      "async": true,
+      "operation_id": "5c1dbc62-21e4-4e31-beb6-bcb7232b7b68"
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/v1/default/banks/org-capture/memories/recall",
+    "user_agent": "hindsight-client-typescript/0.8.6",
+    "body": {
+      "query": "What is the sample fact?",
+      "types": [
+        "observation"
+      ],
+      "prefer_observations": false,
+      "max_tokens": 1024,
+      "budget": "mid",
+      "include": {}
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/v1/default/banks/org-capture/memories",
+    "user_agent": "hindsight-client-typescript/0.8.6",
+    "body": {
+      "items": [
+        {
+          "content": "The sample customer pays invoices monthly.",
+          "context": "Sample conversation",
+          "metadata": {
+            "retained_at": "sample",
+            "message_count": "sample",
+            "source": "sample",
+            "retention_scope": "sample",
+            "turn_index": "sample",
+            "session_key": "sample",
+            "agent_id": "sample",
+            "provider": "sample",
+            "channel_type": "sample",
+            "sender_id": "sample"
+          },
+          "document_id": "sample-session",
+          "tags": [
+            "agent:ops"
+          ],
+          "update_mode": "append"
+        }
+      ],
+      "async": true,
+      "operation_id": "e64b7f69-8c86-4843-a401-23d36df1155c"
+    }
+  }
+]

@@ -6,6 +6,7 @@ const PERMISSION_PHRASE: [AgentPermissionKey, string][] = [
   ["agent.update", "Edit"],
   ["agent.lifecycle.manage", "Start/stop"],
   ["agent.secret.manage", "Manage secrets"],
+  ["agent.memory.manage", "Manage memory"],
   ["agent.delete", "Delete"],
   ["agent.access.manage", "Manage access"],
   ["activity.read", "See activity"],

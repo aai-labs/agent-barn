@@ -4,6 +4,7 @@ import { agentColor, agentInitials } from "../utils";
 interface AgentAvatarProps {
   agent: Pick<Agent, "id" | "name">;
   size?: "xs" | "sm" | "md" | "lg" | "xl";
+  tone?: "vivid" | "soft";
 }
 
 const sizeClasses = {
@@ -14,11 +15,19 @@ const sizeClasses = {
   xl: "w-18 h-18 text-[1.375rem]",
 };
 
-export function AgentAvatar({ agent, size = "md" }: AgentAvatarProps) {
+const softColors = [
+  ["var(--accent-soft)", "var(--accent-ink)"],
+  ["var(--ok-soft)", "var(--ok)"],
+  ["var(--warn-soft)", "var(--warn)"],
+  ["var(--bg-soft)", "var(--ink-2)"],
+];
+
+export function AgentAvatar({ agent, size = "md", tone = "vivid" }: AgentAvatarProps) {
+  const softColor = tone === "soft" ? softColors[parseInt(agent.id.slice(-8), 16) % softColors.length] : null;
   return (
     <div
       className={`${sizeClasses[size]} rounded-full grid place-items-center font-mono font-semibold text-white flex-shrink-0`}
-      style={{ background: agentColor(agent.id) }}
+      style={softColor ? { background: softColor[0], color: softColor[1] } : { background: agentColor(agent.id) }}
     >
       {agentInitials(agent.name)}
     </div>

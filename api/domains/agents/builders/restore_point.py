@@ -207,11 +207,24 @@ def build_restore_job(
     image: str,
     runtime: str,
     agent_pvc: str,
-    backup_pvc: str,
+    backup_pvc: str | None,
     archive_pvc: str,
     timeout_seconds: int,
     image_pull_secret: str | None = None,
 ) -> client.V1Job:
+    env = {
+        ENV_MODE: MODE_RESTORE,
+        ENV_RUNTIME: runtime,
+        ENV_TARGET: TARGET_MOUNT_PATH,
+        ENV_ARCHIVE: ARCHIVE_MOUNT_PATH,
+    }
+    volumes = [("target", agent_pvc, TARGET_MOUNT_PATH, False), ("archive", archive_pvc, ARCHIVE_MOUNT_PATH, True)]
+    # No backup volume means the Job skips the pre-restore capture entirely —
+    # the archive is trusted to be the state the caller wants (managed-update
+    # rollback), so there is nothing to keep safe.
+    if backup_pvc is not None:
+        env[ENV_BACKUP] = BACKUP_MOUNT_PATH
+        volumes.insert(1, ("backup", backup_pvc, BACKUP_MOUNT_PATH, False))
     return _build_job(
         job_name=job_name,
         restore_point_id=restore_point_id,
@@ -219,18 +232,8 @@ def build_restore_job(
         org_id=org_id,
         namespace=namespace,
         image=image,
-        env={
-            ENV_MODE: MODE_RESTORE,
-            ENV_RUNTIME: runtime,
-            ENV_TARGET: TARGET_MOUNT_PATH,
-            ENV_BACKUP: BACKUP_MOUNT_PATH,
-            ENV_ARCHIVE: ARCHIVE_MOUNT_PATH,
-        },
-        volumes=[
-            ("target", agent_pvc, TARGET_MOUNT_PATH, False),
-            ("backup", backup_pvc, BACKUP_MOUNT_PATH, False),
-            ("archive", archive_pvc, ARCHIVE_MOUNT_PATH, True),
-        ],
+        env=env,
+        volumes=volumes,
         timeout_seconds=timeout_seconds,
         backoff_limit=_RESTORE_BACKOFF_LIMIT,
         image_pull_secret=image_pull_secret,

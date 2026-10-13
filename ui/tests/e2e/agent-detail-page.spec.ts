@@ -6,6 +6,7 @@ import {
   COMMUNICATION_DELIVERY_ID,
   mockCommunicationConnection,
   mockCommunicationPlatforms,
+  mockDeadLetteredCommunicationDeliveryJournalPage,
   SAFE_ERROR_DETAILS,
   SAFE_PROVIDER_ERROR,
 } from "../fixtures/communication-connections";
@@ -815,7 +816,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
     expect(widths.alert).toBeCloseTo(widths.content, 0);
   });
 
-  test("shows delivery activity, lets an operator copy an error, and confirms a reconnect request", async ({ context }) => {
+  test("shows native delivery history and lets an operator copy an error", async ({ context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     // Delivery transitions are the primary activity surface. Connection
     // failures are explained inline from the diagnostics read model.
@@ -883,12 +884,36 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
     await connectionDetailPage.failedOnlyCheckbox().uncheck();
 
-    const reconnect = connectionDetailPage.waitForReconnectRequest();
-    await connectionDetailPage.reconnectButton().click();
-    await expect(connectionDetailPage.reconnectDialog()).toBeVisible();
-    await connectionDetailPage.confirmReconnectButton().click();
-    await reconnect;
+    await expect(connectionDetailPage.reconnectButton()).toHaveCount(0);
+    await expect(connectionDetailPage.nativeRecoveryGuidance()).toBeVisible();
   });
+
+  for (const recovery of [
+    { name: "native transport", transport: "native", recovery_actions: [], canRetry: false },
+    { name: "gateway without a provider session", transport: "gateway", recovery_actions: ["retry_delivery"], canRetry: true },
+    { name: "an older API without recovery metadata", transport: undefined, recovery_actions: undefined, canRetry: false },
+  ]) {
+    test(`keeps historical deliveries readable with supported recovery for ${recovery.name}`, async () => {
+      await dataSupportPage.communicationConnections.interceptChannelsRequests({
+        agentId: MOCK_AGENT_ID,
+        connection: { transport: recovery.transport, recovery_actions: recovery.recovery_actions },
+        deliveryJournal: mockDeadLetteredCommunicationDeliveryJournalPage,
+      });
+      await connectionDetailPage.goto(MOCK_AGENT_ID, COMMUNICATION_CONNECTION_ID);
+
+      await expect(connectionDetailPage.pipelineSummary()).toBeVisible();
+      await expect(connectionDetailPage.reconnectButton()).toHaveCount(0);
+      if (recovery.transport === "native") {
+        await expect(connectionDetailPage.nativeRecoveryGuidance()).toBeVisible();
+      }
+      await connectionDetailPage.deliveryTransitionRow(/dead lettered/i).click();
+      await expect(connectionDetailPage.retryDeliveryButton()).toHaveCount(recovery.canRetry ? 1 : 0);
+
+      await connectionDetailPage.deliveryTimelineButton().click();
+      await expect(connectionDetailPage.timelineStage("reply queued")).toBeVisible();
+      await expect(connectionDetailPage.timelineStage("provider delivered")).toBeVisible();
+    });
+  }
 
   test("drills down into a Delivery's full lifecycle from a transition row", async () => {
     await agentDetailPage.connectionDetailsLink().click();
@@ -1044,14 +1069,14 @@ test.describe("Agent Detail Page — Channels tab", () => {
     settings: { channel_ids: ["C1"], dm_user_ids: [] },
   };
 
-  async function serveSavedSlackConnection(page: Page) {
+  async function serveSavedSlackConnection(page: Page, overrides: Partial<typeof savedSlackConnection> = {}) {
     // Registered after the shared intercepts, and the last matching route wins.
     await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([savedSlackConnection]),
+        body: JSON.stringify([{ ...savedSlackConnection, ...overrides }]),
       });
     });
     // Re-run the beforeEach navigation so the list refetches through the new route.
@@ -1089,7 +1114,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
   test("restarts a running Agent to apply a change to a Connection its runtime runs", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, agent_type: "hermes", native_platform_keys: ["slack"] },
+      body: { ...mockAgent, agent_type: "hermes", native_platform_keys: [] },
     });
     await dataSupportPage.agents.interceptStopAgentRequest();
     await dataSupportPage.agents.interceptStartAgentRequest();
@@ -1103,7 +1128,7 @@ test.describe("Agent Detail Page — Channels tab", () => {
       if (request.method() === "POST" && /\/(stop|start)$/.test(url)) calls.push(url.endsWith("/stop") ? "stop" : "start");
       if (request.method() === "PATCH" && url.includes("/connections/")) calls.push("update");
     });
-    await serveSavedSlackConnection(page);
+    await serveSavedSlackConnection(page, { transport: "native", recovery_actions: [] });
 
     await agentDetailPage.editConnectionButton("Team Slack").click();
     await expect(agentDetailPage.saveConnectionButton()).toHaveCount(0);
@@ -1116,6 +1141,21 @@ test.describe("Agent Detail Page — Channels tab", () => {
 
     await expect(dialog).toBeHidden();
     expect(calls).toEqual(["stop", "update", "start"]);
+  });
+
+  test("requires lifecycle permission to apply a native Connection change using server ownership", async ({ page }) => {
+    await dataSupportPage.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "RUNNING",
+        native_platform_keys: [],
+        allowed_actions: mockAgentAllowedActions.filter((action) => action !== "agent.lifecycle.manage"),
+      },
+    });
+    await serveSavedSlackConnection(page, { transport: "native", recovery_actions: [] });
+    await agentDetailPage.editConnectionButton("Team Slack").click();
+
+    await expect(page.getByRole("button", { name: "Save & Restart", exact: true })).toBeDisabled();
   });
 
   test("browses a saved Connection's own directory when editing it", async ({ page }) => {
@@ -1699,11 +1739,12 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.keysTab().click();
     await agentDetailPage.editButton().click();
 
-    await expect(page.getByText("Value hidden")).toBeVisible();
+    await page.locator("summary").filter({ hasText: "GitHub" }).click();
+    await expect(page.getByText("Credential configured · value hidden", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
   });
 
-  test("clicking Remove shows credential as pending removal with Undo", async ({ page }) => {
+  test("removing a credential stages its deletion until Apply", async () => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1714,12 +1755,11 @@ test.describe("Agent Detail Page — Keys tab", () => {
 
     await agentDetailPage.removeCredentialButton().click();
 
-    await expect(page.getByText("Will be removed")).toBeVisible();
-    await expect(agentDetailPage.undoCredentialButton()).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toHaveCount(0);
     await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
   });
 
-  test("clicking Undo reverts credential to normal state", async ({ page }) => {
+  test("Cancel discards a staged credential removal", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1730,14 +1770,18 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeCredentialButton().click();
-    await agentDetailPage.undoCredentialButton().click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByText("github-secret", { exact: true })).toBeVisible();
+    await expect(page.getByRole("switch")).toHaveCount(0);
+    await agentDetailPage.editButton().click();
 
-    await expect(page.getByText("Value hidden")).toBeVisible();
+    await page.locator("summary").filter({ hasText: "GitHub" }).click();
+    await expect(page.getByText("Credential configured · value hidden", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
     await expect(agentDetailPage.saveIntegrationsButton()).toBeDisabled();
   });
 
-  test("when integrations save fails, the pending removal and error remain visible", async ({ page }) => {
+  test("failed removal keeps the draft and error available for retry", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1761,7 +1805,8 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await expect(
       page.locator('section[aria-label="Integrations"]').getByText("Secret is used by a skill"),
     ).toBeVisible();
-    await expect(page.getByText("Will be removed")).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toHaveCount(0);
+    await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
   });
 
 });

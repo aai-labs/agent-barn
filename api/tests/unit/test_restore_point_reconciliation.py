@@ -19,8 +19,11 @@ from api.domains.restore_points.reconciliation import (
 )
 
 _NAMESPACE = "agent-farm"
+# Older only gets older, so a timestamp taken at import stays old however long the suite runs.
+# There is deliberately no import-time "recent" one: pytest imports every test file before it
+# runs any, and the reconciler measures age when the test runs, so a "recent" timestamp taken
+# at import is past the minimum age once the suite has run that long (a slow CI run did).
 _OLD = datetime.now(UTC) - timedelta(seconds=RESTORE_POINT_ORPHAN_MIN_AGE_SECONDS * 2)
-_RECENT = datetime.now(UTC)
 
 
 class FakeRow:
@@ -255,7 +258,7 @@ def test_jobs_are_deleted_before_volumes_so_no_pod_still_holds_one():
 
 
 def test_a_resource_younger_than_the_minimum_age_is_left_alone():
-    cluster = FakeCluster(pvcs=[_resource("restore-point-new", created=_RECENT)])
+    cluster = FakeCluster(pvcs=[_resource("restore-point-new", created=datetime.now(UTC))])
 
     result = _reconciler(FakeRepository(), cluster=cluster).run_once()
 

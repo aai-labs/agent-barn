@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import NamedTuple
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -22,11 +23,75 @@ from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
+class MessageCount(NamedTuple):
+    agent_id: UUID
+    organization_id: UUID
+    platform: str
+    direction: MessageDirection
+    count: int
+
+
 @inject
 @singleton
 @dataclass
 class ConversationRepository:
     delegate: PostgresRepositoryDelegate
+
+    def hourly_message_counts(self, hour_start: datetime) -> list[MessageCount]:
+        query = (
+            sa.select(
+                col(AgentChatMessage.agent_id),
+                col(Agent.organization_id),
+                col(CommunicationConnection.platform_key),
+                col(AgentChatMessage.direction),
+                sa.func.count(),
+            )
+            .join(Agent, col(Agent.id) == col(AgentChatMessage.agent_id))
+            .join(CommunicationConnection, col(CommunicationConnection.id) == col(AgentChatMessage.connection_id))
+            .where(
+                col(AgentChatMessage.created_at) >= hour_start,
+                col(AgentChatMessage.created_at) < hour_start + timedelta(hours=1),
+            )
+            .group_by(
+                col(AgentChatMessage.agent_id),
+                col(Agent.organization_id),
+                col(CommunicationConnection.platform_key),
+                col(AgentChatMessage.direction),
+            )
+        )
+        with self.delegate.engine.connect() as connection:
+            return [MessageCount(*row) for row in connection.execute(query).all()]
+
+    def latest_message_times_for_agents(
+        self,
+        agent_ids: list[UUID],
+        authorization_scope: AuthorizationScope,
+    ) -> dict[UUID, datetime]:
+        """Latest occurrence across directions and Connections, including Web Chat."""
+        if not agent_ids:
+            return {}
+        # Each direction uses the existing (agent_id, direction, occurred_at)
+        # index to read one row instead of aggregating the full message history.
+        latest_by_direction = [
+            select(AgentChatMessage.occurred_at)
+            .where(
+                col(AgentChatMessage.agent_id) == col(Agent.id),
+                col(AgentChatMessage.direction) == direction,
+            )
+            .order_by(col(AgentChatMessage.occurred_at).desc())
+            .limit(1)
+            .correlate(Agent)
+            .scalar_subquery()
+            for direction in MessageDirection
+        ]
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, sa.func.greatest(*latest_by_direction)).where(
+                    col(Agent.id).in_(agent_ids),
+                    *agent_scope_predicates(authorization_scope),
+                )
+            ).all()
+        return {agent_id: occurred_at for agent_id, occurred_at in rows if occurred_at is not None}
 
     def upsert_messages(self, messages: list[AgentChatMessage]) -> None:
         if not messages:

@@ -362,7 +362,6 @@ def _native_slack_connection():
             platform_key="slack",
             display_name="Native Slack",
             credentials_encrypted="test-credentials",
-            driver_key_encrypted="test-driver-key",
         )
         delegate.save(context.connection)
 

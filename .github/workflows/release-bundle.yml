@@ -39,9 +39,9 @@ jobs:
           mkdir -p "$root"
           cp -r helm k8s helmfile.yaml.gotmpl deploy.sh "$root"/
 
-          # Generate .env.deploy from the spec: retarget to the client registry
-          # and pin image tags. Credentials are intentionally left blank for the
-          # client to fill in.
+          # Generate .env.deploy from the spec: retarget to the client registry,
+          # pin image tags, and turn product analytics on (clients may opt out).
+          # Credentials are intentionally left blank for the client to fill in.
           sed \
             -e 's|^REGISTRY_PREFIX=.*|REGISTRY_PREFIX=clients.registry.k8s.aai-labs.com/agent-barn|' \
             -e 's|^REGISTRY_SERVER=.*|REGISTRY_SERVER=clients.registry.k8s.aai-labs.com|' \
@@ -53,6 +53,7 @@ jobs:
             -e 's|^UI_IMAGE_TAG=.*|UI_IMAGE_TAG=${{ steps.ver.outputs.ui }}|' \
             -e 's|^HERMES_IMAGE_TAG=.*|HERMES_IMAGE_TAG=${{ steps.ver.outputs.hermes }}|' \
             -e 's|^OPENCLAW_IMAGE_TAG=.*|OPENCLAW_IMAGE_TAG=${{ steps.ver.outputs.openclaw }}|' \
+            -e 's|^ANALYTICS_ENABLED=.*|ANALYTICS_ENABLED=true|' \
             .env.deploy.spec > "$root/.env.deploy"
 
           tar -czf "agent-barn-deploy-${{ inputs.tag }}.tar.gz" "$root"

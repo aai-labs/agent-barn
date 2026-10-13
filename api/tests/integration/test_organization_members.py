@@ -26,6 +26,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_MEMBER_ADDED,
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_OWNERSHIP_TRANSFERRED,
+    SECURITY_AUDIT_HANDLER,
 )
 from api.domains.events.models import OutboxMessage
 from api.domains.events.processor import EventDeliveryProcessor
@@ -1099,7 +1100,11 @@ def test_member_removed_event_projects_to_durable_security_audit_record():
             outbox_repository = context.injector.get(OutboxMessageRepository)
             messages = _outbox_messages(context)
             removed_event = next(m for m in messages if m.event_name == ORGANIZATION_MEMBER_REMOVED)
-            delivery = outbox_repository.list_deliveries_for_event(removed_event.event_id)[0]
+            delivery = next(
+                delivery
+                for delivery in outbox_repository.list_deliveries_for_event(removed_event.event_id)
+                if delivery.handler_name == SECURITY_AUDIT_HANDLER
+            )
             outbox_repository.mark_delivery_enqueued(delivery.id)
             processed = context.injector.get(EventDeliveryProcessor).process(delivery.id)
 

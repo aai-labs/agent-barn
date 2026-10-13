@@ -1,15 +1,12 @@
 #!/bin/sh
 set -e
-export PYTHONPATH="/app/config${PYTHONPATH:+:$PYTHONPATH}"
-mkdir -p /tmp/agentbarn-bin
-printf '#!/bin/sh\nexec python3 /app/config/agentbarn_message.py "$@"\n' > /tmp/agentbarn-bin/agentbarn-message
-chmod 755 /tmp/agentbarn-bin/agentbarn-message
-export PATH="/tmp/agentbarn-bin:$PATH"
-
+export AGENT_RUNTIME_SETUP_READY_FILE=/tmp/agentbarn-runtime-setup-ready
+rm -f "$AGENT_RUNTIME_SETUP_READY_FILE"
+node /app/config/init-openclaw.js
+python3 /app/config/retire-messaging.py openclaw /home/node/.openclaw
 node /app/config/healthz-server.js &
 python3 /app/config/communications-runtime-adapter.py &
 python3 /app/config/agent-trigger-server.py &
-node /app/config/init-openclaw.js
 
 PLUGIN_DIR="/home/node/.openclaw/local-plugins/telemetry-push"
 mkdir -p "$PLUGIN_DIR"
@@ -22,13 +19,6 @@ mkdir -p "$OBSERVER_DIR"
 cp /app/config/agentbarn-observer-index.js "$OBSERVER_DIR/index.js"
 cp /app/config/agentbarn-observer-package.json "$OBSERVER_DIR/package.json"
 cp /app/config/agentbarn-observer-plugin.json "$OBSERVER_DIR/openclaw.plugin.json"
-# Every plugins.load.paths entry must exist before any openclaw CLI call validates the config.
-MESSAGE_PLUGIN_DIR="/home/node/.openclaw/local-plugins/agentbarn-messaging"
-mkdir -p "$MESSAGE_PLUGIN_DIR"
-cp /app/config/openclaw-messaging.js "$MESSAGE_PLUGIN_DIR/index.js"
-printf '{"name":"agentbarn-messaging","type":"module","openclaw":{"extensions":["./index.js"]}}' > "$MESSAGE_PLUGIN_DIR/package.json"
-printf '{"id":"agentbarn-messaging","name":"Agent Barn messaging","configSchema":{"type":"object","additionalProperties":false,"properties":{}}}' > "$MESSAGE_PLUGIN_DIR/openclaw.plugin.json"
-
 sh /app/config/legacy-workspace-migration.sh || echo "[start] legacy workspace migration failed; continuing"
 
 # Official plugins install from npm at the core's version: OpenClaw only grants plugin
@@ -70,17 +60,19 @@ for channel in $(echo "${AGENTBARN_NATIVE_CHANNELS:-}" | tr ',' ' '); do
   install_plugin "@openclaw/$channel"
 done
 
+# The gog wrapper installs here when Google Workspace is brokered through the
+# credential gateway. Ahead of /usr/local/bin so agent commands resolve it first.
+export PATH="/home/node/.local/bin:$PATH"
+
 if [ -f /app/config/aai-cli-setup.sh ]; then
-  sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
+  sh /app/config/aai-cli-setup.sh || exit $?
 fi
 
 if [ -f /app/config/gog-setup.sh ]; then
-  sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
+  sh /app/config/gog-setup.sh || exit $?
 fi
-export AGENTBARN_MESSAGE_SPOOL=/home/node/.openclaw/agentbarn-messages.sqlite3
-# Native channel agents set 0 in their Secret so OpenClaw delivers cron results itself.
-export AGENTBARN_SCHEDULED_DELIVERY="${AGENTBARN_SCHEDULED_DELIVERY:-1}"
-if [ "${AGENTBARN_SCHEDULED_DELIVERY}" = "1" ]; then
-  python3 /app/config/agentbarn_message.py drain &
+if [ -n "${MEMORY_API_KEY:-}" ]; then
+  python3 /app/config/memory-gateway-ready.py || true
 fi
+touch "$AGENT_RUNTIME_SETUP_READY_FILE"
 exec openclaw gateway --allow-unconfigured

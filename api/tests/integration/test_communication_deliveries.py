@@ -1,5 +1,4 @@
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
 from uuid import UUID
 
 import pytest
@@ -11,7 +10,6 @@ from hamcrest import (
     equal_to,
     greater_than,
     has_entries,
-    has_length,
     is_,
     none,
     not_,
@@ -25,14 +23,11 @@ from api.domains.communications.delivery_repository import (
     CommunicationDeliveryRepository,
 )
 from api.domains.communications.error_details import normalize_communication_error
-from api.domains.communications.gateway_service import CommunicationsGatewayService
 from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationDelivery,
     CommunicationDeliveryStatus,
     CommunicationJournalEntry,
-    CommunicationJournalStage,
-    CommunicationPolicyDisposition,
     CommunicationSender,
     ConnectionObservedStatus,
     ConversationLocation,
@@ -57,6 +52,7 @@ from api.tests.steps.agent import (
     there_is_an_agent,
     use_org_for_auth,
 )
+from api.tests.steps.communication import there_is_an_outbound_delivery
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 
@@ -88,21 +84,17 @@ def _auth(context) -> dict[str, str]:
 def _create_connection(
     context,
     bot_token: str = "gateway-token",
-    display_name: str = "Gateway Discord",
+    display_name: str = "Web Chat",
 ) -> UUID:
-    client: TestClient = context.client
-    response = client.post(
-        f"/api/v1/organizations/{context.organization.id}/agents/{context.agent.id}/connections",
-        json={
-            "platform_key": "discord",
-            "display_name": display_name,
-            "settings": {"allowed_channel_ids": ["channel-one"]},
-            "credentials": {"bot_token": bot_token},
-        },
-        headers=_auth(context),
+    connection = CommunicationConnection(
+        organization_id=context.agent.organization_id,
+        agent_id=context.agent.id,
+        platform_key="web",
+        display_name=display_name,
+        credentials_encrypted="unused",
     )
-    assert_that(response.status_code, equal_to(201))
-    return UUID(response.json()["id"])
+    context.injector.get(PostgresRepositoryDelegate).save(connection)
+    return connection.id
 
 
 def _envelope(message_id: str) -> NormalizedCommunicationEnvelope:
@@ -186,7 +178,6 @@ def test_runtime_claim_skips_native_platform_deliveries() -> None:
             platform_key="slack",
             display_name="Native Slack",
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
         delegate.save(native_connection)
         gateway_connection_id = _create_connection(context)
@@ -202,7 +193,6 @@ def test_runtime_claim_skips_native_platform_deliveries() -> None:
 
         claimed = repository.claim_next_inbound(
             agent_id=context.agent.id,
-            excluded_platform_keys=frozenset({"slack"}),
         )
 
         assert_that(claimed.delivery_id if claimed else None, equal_to(gateway.delivery_id))
@@ -218,13 +208,12 @@ def test_outbound_claim_skips_native_platform_deliveries() -> None:
             platform_key="slack",
             display_name="Native Slack",
             credentials_encrypted="unused",
-            driver_key_encrypted="unused",
         )
         delegate.save(native_connection)
         gateway_connection_id = _create_connection(context)
         repository = context.injector.get(CommunicationDeliveryRepository)
 
-        native_source = repository.accept_inbound(
+        repository.accept_inbound(
             connection_id=native_connection.id,
             envelope=_envelope("native-source"),
         )
@@ -235,20 +224,17 @@ def test_outbound_claim_skips_native_platform_deliveries() -> None:
         repository.claim_next_inbound(agent_id=context.agent.id)
         repository.claim_next_inbound(
             agent_id=context.agent.id,
-            excluded_platform_keys=frozenset({"slack"}),
         )
-        native_reply_id = repository.enqueue_runtime_reply(
-            agent_id=context.agent.id,
-            source_delivery_id=native_source.delivery_id,
-            reply=RuntimeReplyCreate(idempotency_key="native-reply", text="native reply"),
-        )
+        context.connection = native_connection
+        there_is_an_outbound_delivery(status=CommunicationDeliveryStatus.PENDING)(context)
+        native_reply_id = context.outbound_delivery_id
         gateway_reply_id = repository.enqueue_runtime_reply(
             agent_id=context.agent.id,
             source_delivery_id=gateway_source.delivery_id,
             reply=RuntimeReplyCreate(idempotency_key="gateway-reply", text="gateway reply"),
         )
 
-        claimed = repository.claim_next_outbound(native_platform_keys=frozenset({"slack"}))
+        claimed = repository.claim_next_outbound()
 
         assert_that(claimed.id if claimed else None, equal_to(gateway_reply_id))
         assert_that(_delivery(context, native_reply_id).status, equal_to(CommunicationDeliveryStatus.PENDING))
@@ -449,41 +435,6 @@ def test_runtime_can_renew_its_live_inbound_delivery_lease() -> None:
             assert_that(delivery.lease_expires_at, greater_than(datetime.now(UTC) + timedelta(seconds=100)))
 
 
-def test_thread_state_is_durable_and_connection_scoped() -> None:
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        connection_id = _create_connection(context, bot_token="gateway-token-one")
-        second_connection = CommunicationConnection(
-            organization_id=context.agent.organization_id,
-            agent_id=context.agent.id,
-            platform_key="telegram",
-            display_name="Gateway Telegram",
-            credentials_encrypted="unused",
-            driver_key_encrypted="unused",
-        )
-        context.injector.get(PostgresRepositoryDelegate).save(second_connection)
-        second_connection_id = second_connection.id
-        repository = context.injector.get(CommunicationDeliveryRepository)
-        envelope = _envelope("provider-owned")
-
-        repository.accept_inbound(connection_id=connection_id, envelope=envelope)
-
-        with then("only the accepted Connection owns the persisted thread"):
-            assert_that(
-                repository.thread_has_agent_state(connection_id=connection_id, location=envelope.location), is_(True)
-            )
-            assert_that(
-                repository.thread_has_agent_state(connection_id=second_connection_id, location=envelope.location),
-                is_(False),
-            )
-            assert_that(
-                repository.thread_has_agent_state(
-                    connection_id=connection_id,
-                    location=ConversationLocation(id="other-channel", type="CHANNEL", thread_id="thread-one"),
-                ),
-                is_(False),
-            )
-
-
 def test_message_for_intentionally_stopped_agent_is_terminally_unavailable() -> None:
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         connection_id = _create_connection(context)
@@ -658,79 +609,6 @@ def test_diagnostics_reports_pipeline_transitions_without_message_content() -> N
             assert_that(repr(body), not_(contains_string("private response")))
             assert_that(repr(journal.json()), not_(contains_string("message provider-1")))
             assert_that(repr(journal.json()), not_(contains_string("private response")))
-
-
-def test_gateway_records_typed_admission_and_only_accepted_messages_enter_the_pipeline() -> None:
-    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        connection_id = _create_connection(context)
-        gateway = context.injector.get(CommunicationsGatewayService)
-        accepted_payload = {
-            "t": "MESSAGE_CREATE",
-            "agentbarn_bot_user_id": "bot-1",
-            "d": {
-                "id": "provider-accepted",
-                "guild_id": "guild-one",
-                "channel_id": "channel-one",
-                "timestamp": "2026-08-28T10:00:00+00:00",
-                "content": "hello",
-                "author": {"id": "person-one", "username": "Person One", "bot": False},
-                "member": {"roles": []},
-                "mentions": [{"id": "bot-1"}],
-            },
-        }
-        denied_payload = {
-            **accepted_payload,
-            "d": {**accepted_payload["d"], "id": "provider-denied", "mentions": []},
-        }
-
-        with patch("api.domains.communications.plugins.discord.DiscordClient") as client_type:
-            client_type.return_value.get_channel_display_name.return_value = None
-            with when("the provider emits one admitted and one mention-gated event"):
-                accepted = gateway.accept_plugin_payload(connection_id, accepted_payload)
-                denied = gateway.accept_plugin_payload(connection_id, denied_payload)
-
-        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
-            journal = list(
-                session.exec(
-                    select(CommunicationJournalEntry)
-                    .where(CommunicationJournalEntry.connection_id == connection_id)
-                    .order_by(col(CommunicationJournalEntry.occurred_at), col(CommunicationJournalEntry.id))
-                ).all()
-            )
-            deliveries = list(
-                session.exec(
-                    select(CommunicationDelivery).where(CommunicationDelivery.connection_id == connection_id)
-                ).all()
-            )
-
-        with then("only the accepted event is queued and both policy outcomes are journaled"):
-            assert_that(accepted, has_length(1))
-            assert_that(denied, equal_to([]))
-            assert_that(deliveries, has_length(1))
-            policy_entries = [
-                entry
-                for entry in journal
-                if entry.stage in (CommunicationJournalStage.POLICY_ADMITTED, CommunicationJournalStage.POLICY_REJECTED)
-            ]
-            assert_that(
-                {entry.disposition for entry in policy_entries},
-                equal_to(
-                    {
-                        CommunicationPolicyDisposition.ACCEPTED,
-                        CommunicationPolicyDisposition.MENTION_REQUIRED,
-                    }
-                ),
-            )
-            # The rejected event lands on its own stage so the pipeline funnel
-            # can show drop-off between provider_observed and policy_admitted.
-            assert_that(
-                [
-                    entry.disposition
-                    for entry in policy_entries
-                    if entry.stage == CommunicationJournalStage.POLICY_ADMITTED
-                ],
-                equal_to([CommunicationPolicyDisposition.ACCEPTED]),
-            )
 
 
 def test_dead_letter_retry_reuses_one_delivery_and_is_idempotent() -> None:

@@ -2,8 +2,9 @@ import argparse
 import hashlib
 import logging
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
@@ -64,13 +65,14 @@ class CostSyncResult:
 
 @dataclass(frozen=True)
 class Attribution:
-    agent_id: UUID
+    agent_id: UUID | None
     agent_name: str
     organization_id: UUID
     organization_name: str | None
 
 
 class CostSyncRepository(Protocol):
+    def record_sync_completion(self, completed_at: datetime) -> None: ...
     def upsert_many(self, records: list[CostRecord]) -> int: ...
     def latest_occurred_at(self) -> datetime | None: ...
     def find_heal_candidates(self, limit: int) -> list[CostRecord]: ...
@@ -123,10 +125,15 @@ class CostSynchronizer:
     spend_logs: CostSyncSpendLogSource
     generations: CostSyncGenerationSource
     encryption_key: str
+    memory_key_hashes: frozenset[str] = frozenset()
+    memory_key_source: Callable[[], dict[str, UUID]] | None = None
+    memory_organization_keys: dict[str, UUID] = field(default_factory=dict, init=False)
 
     def run_once(self) -> CostSyncResult:
         started = time.monotonic()
         result = self._sync(started)
+        if not result.truncated:
+            self.repository.record_sync_completion(datetime.now(UTC))
         result = self._heal(result, started)
         self._log_summary(result)
         return result
@@ -134,7 +141,9 @@ class CostSynchronizer:
     # --- Phase 1: sync -----------------------------------------------------
 
     def _sync(self, started: float) -> CostSyncResult:
-        attributions = self._build_attribution_map()
+        self.memory_organization_keys = self.memory_key_source() if self.memory_key_source else {}
+        organization_names = self.repository.find_organization_names()
+        attributions = self._build_attribution_map(organization_names)
         start_date, end_date = self._window()
         logger.info(
             "Cost sync reading %s -> %s with %s attributable key(s)",
@@ -173,11 +182,11 @@ class CostSynchronizer:
 
             records = []
             for row in rows:
-                record = self._to_record(row, attributions)
+                record = self._to_record(row, attributions, organization_names)
                 if record is None:
                     skipped += 1
                     continue
-                if record.agent_id is None:
+                if record.organization_id is None:
                     unattributed += 1
                 else:
                     attributed += 1
@@ -228,14 +237,15 @@ class CostSynchronizer:
             end.strftime(LITELLM_SPEND_LOG_DATETIME_FORMAT),
         )
 
-    def _build_attribution_map(self) -> dict[str, Attribution]:
+    def _build_attribution_map(self, organization_names: dict[UUID, str] | None = None) -> dict[str, Attribution]:
         """SHA-256 of each agent's LiteLLM key -> who to bill it to.
 
         LiteLLM cannot answer this itself: on production's 40,674 rows its own
         `agent_id` is NULL on every one and `organization_id` is an empty string on
         every one. The mapping has to come from our agent table.
         """
-        organization_names = self.repository.find_organization_names()
+        if organization_names is None:
+            organization_names = self.repository.find_organization_names()
         attributions: dict[str, Attribution] = {}
         undecryptable = 0
 
@@ -262,7 +272,9 @@ class CostSynchronizer:
             )
         return attributions
 
-    def _to_record(self, row: dict, attributions: dict[str, Attribution]) -> CostRecord | None:
+    def _to_record(
+        self, row: dict, attributions: dict[str, Attribution], organization_names: dict[UUID, str] | None = None
+    ) -> CostRecord | None:
         """Project one spend-log row through the allowlist. None means unusable."""
         data = {field: row.get(field) for field in _SPEND_LOG_ALLOWLIST}
 
@@ -275,6 +287,28 @@ class CostSynchronizer:
 
         key_hash = str(data["api_key"] or "")
         attribution = attributions.get(key_hash)
+        is_memory = key_hash in self.memory_key_hashes or key_hash in self.memory_organization_keys
+        if is_memory:
+            # Trust only our backend key. Never store arbitrary end_user values or
+            # use an Agent key's client-supplied user field to select tenancy.
+            attribution = None
+            organization_id = self.memory_organization_keys.get(key_hash)
+            if organization_id is None:
+                bank = row.get("end_user")
+                if isinstance(bank, str) and bank.startswith("org-"):
+                    try:
+                        organization_id = UUID(bank[4:])
+                    except ValueError:
+                        organization_id = None
+                    if organization_id is not None and bank != f"org-{organization_id}":
+                        organization_id = None
+            if organization_id is not None and organization_id in (organization_names or {}):
+                attribution = Attribution(
+                    agent_id=None,
+                    agent_name="Agent Memory",
+                    organization_id=organization_id,
+                    organization_name=(organization_names or {})[organization_id],
+                )
 
         return CostRecord(
             request_id=str(request_id),
@@ -297,6 +331,7 @@ class CostSynchronizer:
             agent_name=attribution.agent_name if attribution else None,
             organization_name=attribution.organization_name if attribution else None,
             source=CostRecordSource.LITELLM_LIVE,
+            is_memory=is_memory,
         )
 
     # --- Phase 2: heal -----------------------------------------------------
@@ -450,9 +485,22 @@ def build_synchronizer() -> CostSynchronizer:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync LiteLLM spend into cost_record and heal missing costs.")
-    parser.parse_args()
+    parser.add_argument(
+        "--watch", action="store_true", help="Sync immediately and every 15 minutes for local development."
+    )
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    build_synchronizer().run_once()
+    while True:
+        started = time.monotonic()
+        try:
+            build_synchronizer().run_once()
+        except Exception:
+            if not args.watch:
+                raise
+            logger.exception("Local cost sync failed; retrying on the next interval.")
+        if not args.watch:
+            return
+        time.sleep(max(0, 900 - (time.monotonic() - started)))
 
 
 if __name__ == "__main__":

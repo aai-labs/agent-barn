@@ -1,19 +1,15 @@
-import json
 import time
 from unittest.mock import MagicMock, patch
 
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
-from hamcrest import assert_that, equal_to, none
+from hamcrest import assert_that, equal_to
 
 from api.infrastructure.msteams import client
 from api.infrastructure.msteams.client import (
     TeamsAuthError,
-    TeamsDeliveryError,
     acquire_token,
-    list_team_channels,
-    send_activity,
     verify_inbound_jwt,
 )
 from api.infrastructure.shared.cache import clear_cache
@@ -172,65 +168,3 @@ def test_a_token_response_without_an_access_token_raises_an_auth_error(mock_requ
 
     with pytest.raises(TeamsAuthError):
         acquire_token("tenant-1", _APP_ID, "secret-1")
-
-
-@patch("api.infrastructure.msteams.client.resilient_request")
-def test_the_default_general_channel_keeps_its_null_name_for_the_caller_to_localize(mock_request) -> None:
-    response = MagicMock(status_code=200)
-    response.json.return_value = {"conversations": [{"id": _TEAM_ID}, {"id": "19:abc@thread.tacv2", "name": "ops"}]}
-    mock_request.return_value = response
-
-    channels = list_team_channels(_SERVICE_URL, _TEAM_ID, "bot-token")
-
-    assert_that(channels["19:abc@thread.tacv2"], equal_to("ops"))
-    assert_that(channels[_TEAM_ID], none())
-
-
-@patch("api.infrastructure.msteams.client.resilient_request")
-def test_two_connections_never_share_a_cached_channel_name(mock_request) -> None:
-    first_response = MagicMock(status_code=200)
-    first_response.json.return_value = {"conversations": [{"id": "19:abc@thread.tacv2", "name": "one"}]}
-    second_response = MagicMock(status_code=200)
-    second_response.json.return_value = {"conversations": [{"id": "19:abc@thread.tacv2", "name": "two"}]}
-    mock_request.side_effect = [first_response, second_response]
-
-    first = list_team_channels(_SERVICE_URL, _TEAM_ID, "bot-token-one")
-    second = list_team_channels(_SERVICE_URL, _TEAM_ID, "bot-token-two")
-
-    assert_that(first["19:abc@thread.tacv2"], equal_to("one"))
-    assert_that(second["19:abc@thread.tacv2"], equal_to("two"))
-
-
-@patch("api.infrastructure.msteams.client.resilient_request")
-def test_send_activity_carries_the_provider_idempotency_key(mock_request):
-    response = MagicMock(status_code=200)
-    response.json.return_value = {"id": "activity-1"}
-    mock_request.return_value = response
-
-    activity_id = send_activity(
-        _SERVICE_URL,
-        "conversation-1",
-        {"type": "message", "text": "reply"},
-        "access-value",
-        idempotency_key="provider-key",
-    )
-
-    assert_that(activity_id, equal_to("activity-1"))
-    assert_that(mock_request.call_args.kwargs["headers"]["Idempotency-Key"], equal_to("provider-key"))
-    assert_that(json.loads(mock_request.call_args.kwargs["content"])["text"], equal_to("reply"))
-
-
-@pytest.mark.parametrize("body", [{}, {"id": "   "}])
-@patch("api.infrastructure.msteams.client.resilient_request")
-def test_send_activity_rejects_a_success_without_an_activity_id(mock_request, body):
-    response = MagicMock(status_code=200)
-    response.json.return_value = body
-    mock_request.return_value = response
-
-    with pytest.raises(TeamsDeliveryError, match="no activity id"):
-        send_activity(
-            _SERVICE_URL,
-            "conversation-1",
-            {"type": "message", "text": "reply"},
-            "access-value",
-        )

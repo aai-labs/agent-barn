@@ -6,8 +6,24 @@ import { SkillScopeSchema } from "@/features/skills/schemas";
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
+  source: z.enum(["agent_secret", "shared_credential", "platform_default"]).optional(),
   sharedCredentialId: z.string().uuid().nullable().optional(),
   sharedCredentialName: z.string().nullable().optional(),
+  isolation: z
+    .object({
+      desired: z.boolean(),
+      supportedModes: z.array(z.enum(["direct", "isolated"])),
+      directDescription: z.string(),
+      isolatedDescription: z.string(),
+      switchAvailable: z.boolean(),
+      applied: z.boolean().nullable().optional(),
+      generation: z.string().uuid().nullable().optional(),
+      pending: z.boolean().optional(),
+      lastVerified: z.boolean().nullish(),
+      reconnectRequired: z.boolean().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const IntegrationValidationResultSchema = z.object({
@@ -55,6 +71,7 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.lifecycle.manage",
   "agent.access.manage",
   "agent.secret.manage",
+  "agent.memory.manage",
   "activity.read",
   "cost.read",
 ]);
@@ -95,6 +112,12 @@ export const AgentProvisioningErrorSchema = z.object({
   detail: z.string().nullish(),
 });
 
+export const AgentManagedUpdateSchema = z.object({
+  outcome: z.enum(["SUCCEEDED", "BACKUP_FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"]),
+  restorePointId: z.string().uuid().nullish(),
+  failureReason: z.string().nullish(),
+});
+
 export const AgentSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
@@ -117,8 +140,13 @@ export const AgentSchema = z.object({
   pendingModel: z.string().default(""),
   /** True when a running Agent's pod was built from older platform code or images. */
   updateAvailable: z.boolean().default(false),
+  /** A managed update is running; lifecycle actions are refused until it ends. */
+  updateInProgress: z.boolean().default(false),
+  /** How the last managed update ended; cleared when the next one starts. */
+  lastManagedUpdate: AgentManagedUpdateSchema.nullish(),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  memoryEnabled: z.boolean().default(false),
   lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
   skills: z.array(AgentAssignedSkillSchema).default([]),
@@ -126,6 +154,13 @@ export const AgentSchema = z.object({
   /** Platforms whose Connections this Agent's runtime runs itself; changing one requires a restart. */
   nativePlatformKeys: z.array(z.string()).default([]),
   allowedActions: z.array(AgentPermissionKeySchema).default([]),
+  creator: z.object({
+    id: z.string().uuid(),
+    fullName: z.string().nullable(),
+    email: z.string(),
+  }).nullable().optional().default(null),
+  lastMessageAt: z.string().datetime({ offset: true }).nullable().optional(),
+  lastActivityAt: z.string().datetime({ offset: true }).nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -370,6 +405,7 @@ export type CommandApprovalMode = "manual" | "auto" | "off";
 export type AgentPermissionKey = z.infer<typeof AgentPermissionKeySchema>;
 export type Agent = z.infer<typeof AgentSchema>;
 export type AgentProvisioningError = z.infer<typeof AgentProvisioningErrorSchema>;
+export type AgentManagedUpdate = z.infer<typeof AgentManagedUpdateSchema>;
 export type AgentAssignedSkill = z.infer<typeof AgentAssignedSkillSchema>;
 export type TemplateRequiredSkill = z.infer<typeof TemplateRequiredSkillSchema>;
 export type AgentHealth = z.infer<typeof AgentHealthSchema>;

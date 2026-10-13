@@ -43,6 +43,10 @@ CLOUDFLARE_ACCOUNT_ID=
 CLOUDFLARE_API_TOKEN=
 SENDER_EMAIL=
 
+# Product analytics (PostHog) defaults to on. Local stacks report as
+# installation_environment=local with a local-<id> name; set false to opt out.
+ANALYTICS_ENABLED=true
+
 # Optional: per-Agent email addresses. Unset leaves the Email platform refusing new
 # Communication Connections; nothing else changes. Both are required on top of the three
 # values above. AGENT_EMAIL_DOMAIN must be onboarded for BOTH Email Routing and Email
@@ -87,6 +91,11 @@ RESTORE_POINT_MAX_PER_AGENT=5
 # an extraction, so it is given longer.
 RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS=900
 RESTORE_POINT_RESTORE_TIMEOUT_SECONDS=1800
+# Managed updates: how long the new pod has to report ready before the update
+# rolls back to the captured restore point, and how often it is checked. The
+# window includes pulling the new image. Defaults to 600 and 5 when unset.
+# AGENT_UPDATE_READY_TIMEOUT_SECONDS=600
+# AGENT_UPDATE_READY_POLL_SECONDS=5
 
 # Agents
 # Full image ref for agent pods, e.g. {REGISTRY_URL}/agentbarn-openclaw-base:{VERSION}
@@ -156,3 +165,42 @@ INGEST_PORT=
 # Optional. Host port for the Communications gateway. Agent pods reach it
 # through host.docker.internal; defaults to 8002.
 COMMUNICATIONS_PORT=
+
+# Credential gateway. Integration Plugins decide how each provider is routed.
+# Agent pods in local k3d reach it through this distinct host-published port.
+GATEWAY_PORT=8004
+CREDENTIAL_GATEWAY_BASE_URL=http://host.docker.internal:8004/gateway/v1
+# Optional. Local Prometheus for the Resource usage views. `make dev-monitoring`
+# generates PROMETHEUS_PASSWORD here; once it is set the API in Docker looks for
+# Prometheus on the host at PROMETHEUS_PORT (default 9090), which is where
+# `make forward-prometheus` publishes it. Leave all three empty to run without it:
+# the views then say resource usage is not configured.
+PROMETHEUS_PASSWORD=
+PROMETHEUS_PORT=
+# Overrides the URL the API container uses, e.g. for a Prometheus somewhere else. A
+# host-run API (`make dev-api`) does not use compose, so set PROMETHEUS_URL instead,
+# e.g. http://localhost:9090.
+API_PROMETHEUS_URL=
+
+# Memory gateway. Choose a port distinct from API_PORT and other local services.
+# The backend is configured
+# separately; its shared key must never be injected into Agent runtime Secrets.
+MEMORY_PORT=8003
+# Optional. How the Docker-run product API reaches the gateway's read-only memory
+# viewer; defaults to the compose service (http://memory:8003/memory/view/v1).
+MEMORY_VIEW_BASE_URL=
+HINDSIGHT_BASE_URL=
+HINDSIGHT_API_KEY=
+# Internal model/key settings credential; generate separately from Hindsight API auth.
+MEMORY_RUNTIME_SERVICE_KEY=
+MEMORY_LITELLM_KEY_HASHES=
+# Optional initial model; shared by the API default and Hindsight startup.
+# MEMORY_DEFAULT_MODEL=openrouter/openai/gpt-4.1-mini
+# Active key SHA-256 hash when several attribution hashes are retained.
+# Compose infers it for one hash; enabled Helmfile derives it from the current key.
+# MEMORY_LITELLM_ACTIVE_KEY_HASH=
+# Optional local backend (COMPOSE_PROFILES=local-hindsight). Use generated
+# URL-safe database/auth secrets and a dedicated, budgeted LiteLLM virtual key.
+# HINDSIGHT_BASE_URL=http://hindsight:8888 when this profile is enabled.
+COMPOSE_PROFILES=
+HINDSIGHT_DB_PASSWORD=

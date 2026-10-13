@@ -633,3 +633,22 @@ def test_platform_admin_without_membership_cannot_manage_shared_credentials():
             assert_that(update_resp.status_code, equal_to(status.HTTP_403_FORBIDDEN))
             assert_that(delete_resp.status_code, equal_to(status.HTTP_403_FORBIDDEN))
             assert_that(validate_resp.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_shared_credential_name_projection_excludes_other_organizations():
+    from api.domains.shared_credentials.repository import SharedCredentialRepository
+    from api.tests.steps.agent import there_is_a_shared_credential
+    from api.tests.steps.organization import there_is_an_organization
+
+    with given([*_GIVEN, there_is_a_shared_credential()]) as context:
+        organization_id = context.organization.id
+        visible = context.shared_credential
+        there_is_an_organization(name="Other organization")(context)
+        there_is_a_shared_credential()(context)
+        hidden = context.shared_credential
+        repository = context.injector.get(SharedCredentialRepository)
+
+        names = repository.get_names_by_ids_and_org([visible.id, hidden.id], organization_id)
+
+        assert_that(names, equal_to({visible.id: visible.name}))
+        assert_that(repository.get_names_by_ids_and_org([], organization_id), equal_to({}))

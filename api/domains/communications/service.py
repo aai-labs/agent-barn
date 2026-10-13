@@ -1,9 +1,8 @@
 import json
-import secrets
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import NoReturn
+from typing import Literal, NoReturn
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -36,7 +35,6 @@ from api.domains.communications.models import (
     CommunicationInstallLinkRead,
     CommunicationJournalEntryRead,
     CommunicationJournalStage,
-    CommunicationReconnectRead,
     CommunicationRetryRead,
     ConnectionObservedStatus,
     PlatformCapability,
@@ -48,6 +46,7 @@ from api.domains.communications.repository import (
     CommunicationConnectionConflictError,
     CommunicationConnectionRepository,
 )
+from api.domains.communications.transport import NATIVE_PLATFORM_KEYS, platform_transport
 from api.domains.events import resolve_actor_identity
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
@@ -78,6 +77,16 @@ class TeamsAppIdentity:
 
     app_id: str
     tenant_id: str
+
+
+@dataclass(frozen=True)
+class TeamsAppCredentials:
+    """The Microsoft app behind a Teams connection, secret included, for server-side use only."""
+
+    app_id: str
+    tenant_id: str
+    # Kept out of repr so it can't end up in a log line or traceback.
+    app_password: str = field(repr=False)
 
 
 @inject
@@ -216,10 +225,6 @@ class CommunicationsService:
             schema_version=plugin.schema_version,
             settings=validated.settings,
             credentials_encrypted=self._encrypt_credentials(validated.credentials),
-            driver_key_encrypted=encrypt_token(
-                secrets.token_urlsafe(32),
-                self.config.agent_token_encryption_key,
-            ),
             external_identity=validated.external_identity,
             credential_fingerprint=validated.credential_fingerprint,
             credential_scope_key=validated.credential_scope_key,
@@ -433,27 +438,13 @@ class CommunicationsService:
         agent_id: UUID,
         connection_id: UUID,
         context: CurrentUserContext,
-    ) -> CommunicationReconnectRead:
-        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+    ) -> NoReturn:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
         connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
         if connection is None:
             self._raise_not_found(connection_id)
-        if not connection.enabled:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Enable the Communication Connection before reconnecting it",
-            )
-        updated = self.repository.request_reconnect(
-            connection_id,
-            actor=resolve_actor_identity(context, agent.organization_id),
-        )
-        if updated is None:
-            self._raise_not_found(connection_id)
-        return CommunicationReconnectRead(
-            connection=self._read(updated),
-            requested_at=datetime.now(UTC),
-        )
+        self._raise_recovery_conflict(connection)
 
     def retry_delivery(
         self,
@@ -464,8 +455,10 @@ class CommunicationsService:
     ) -> CommunicationRetryRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         action_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
-        if self.repository.get_active_in_scope(connection_id, agent_id, action_scope) is None:
+        connection = self.repository.get_active_in_scope(connection_id, agent_id, action_scope)
+        if connection is None:
             self._raise_not_found(connection_id)
+        self._require_recovery_action(connection, "retry_delivery")
         if self.delivery_repository is None:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Recovery is unavailable")
         try:
@@ -594,6 +587,30 @@ class CommunicationsService:
         public client, so it needs only these two public values; the app's secret stays in
         this domain. No user context: callers authorize before calling.
         """
+        credentials = self._teams_app(agent_id, connection_id)
+        return TeamsAppIdentity(app_id=credentials["app_id"], tenant_id=credentials["tenant_id"])
+
+    def get_teams_app_credentials(self, agent_id: UUID, connection_id: UUID) -> TeamsAppCredentials:
+        """Decrypted app credentials of one agent's active, enabled Teams connection.
+
+        A deliberate, narrow exception to connection credentials staying inside this domain:
+        SharePoint's selected-sites mode mints app-only tokens with the same Microsoft app as
+        the agent's Teams bot. Teams only, one agent, three fields — never a generic "decrypt
+        any connection".
+
+        No user context: callers authorize before calling (the pod token endpoint through the
+        agent's ingest key). The result must stay server-side — never returned from a route,
+        never put in a pod, where the secret would let an agent act as its bot outside the
+        connection's channel and direct-message policies.
+        """
+        credentials = self._teams_app(agent_id, connection_id)
+        return TeamsAppCredentials(
+            app_id=credentials["app_id"],
+            tenant_id=credentials["tenant_id"],
+            app_password=credentials["app_password"],
+        )
+
+    def _teams_app(self, agent_id: UUID, connection_id: UUID) -> dict:
         connection = self.repository.get_active(connection_id)
         if connection is None or connection.agent_id != agent_id or connection.platform_key != "teams":
             raise HTTPException(
@@ -606,8 +623,7 @@ class CommunicationsService:
                 detail="The Microsoft Teams connection is turned off. Turn it on to use SharePoint.",
             )
         plugin = self._require_plugin(connection.platform_key)
-        credentials = self._decrypt_credentials(plugin, connection.credentials_encrypted)
-        return TeamsAppIdentity(app_id=credentials["app_id"], tenant_id=credentials["tenant_id"])
+        return self._decrypt_credentials(plugin, connection.credentials_encrypted)
 
     def _decrypt_credentials(self, plugin, ciphertext: str) -> dict:
         try:
@@ -642,6 +658,8 @@ class CommunicationsService:
         safe_details = CommunicationOperationalRepository.safe_error_details(connection.last_error_details)
         return read.model_copy(
             update={
+                "transport": platform_transport(connection.platform_key),
+                "recovery_actions": self._recovery_actions(connection),
                 "last_error_code": CommunicationOperationalRepository.safe_error_code(read.last_error_code),
                 "last_error_message": CommunicationOperationalRepository.safe_error_summary(
                     read.last_error_message,
@@ -652,6 +670,26 @@ class CommunicationsService:
                 "managed_address": managed_address,
             }
         )
+
+    def _recovery_actions(self, connection: CommunicationConnection) -> list[Literal["reconnect", "retry_delivery"]]:
+        if connection.platform_key in NATIVE_PLATFORM_KEYS:
+            return []
+        return ["retry_delivery"]
+
+    def _require_recovery_action(
+        self, connection: CommunicationConnection, action: Literal["reconnect", "retry_delivery"]
+    ) -> None:
+        if action in self._recovery_actions(connection):
+            return
+        self._raise_recovery_conflict(connection)
+
+    def _raise_recovery_conflict(self, connection: CommunicationConnection) -> NoReturn:
+        detail = (
+            "This Connection uses native transport; restart the Agent to recover it"
+            if connection.platform_key in NATIVE_PLATFORM_KEYS
+            else "This Connection has no gateway provider session to reconnect"
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
     @staticmethod
     def _raise_not_found(connection_id: UUID) -> NoReturn:

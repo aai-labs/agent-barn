@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -23,10 +23,7 @@ from api.domains.communications.models import (
     ConnectionObservedStatus,
 )
 from api.domains.communications.operations import CommunicationOperationalRepository
-from api.domains.events.catalog import (
-    COMMUNICATION_CONNECTION_HEALTH_CHANGED,
-    COMMUNICATION_CONNECTION_RECONNECT_REQUESTED,
-)
+from api.domains.events.catalog import COMMUNICATION_CONNECTION_HEALTH_CHANGED
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -114,36 +111,6 @@ class CommunicationConnectionRepository:
                 )
             ).one_or_none()
 
-    def runtime_default(self, agent_id: UUID, organization_id: UUID) -> CommunicationConnection | None:
-        """The Agent's one designated default, disabled ones included.
-
-        A disabled Connection is returned so callers report an unavailable default
-        rather than an absent one. Matches uq_communication_connection_default_target,
-        which keeps this to at most one row.
-        """
-        with Session(self.delegate.engine) as session:
-            return session.exec(
-                self._runtime_query(agent_id, organization_id).where(
-                    sa.text("settings->>'default_delivery_target' IS NOT NULL")
-                )
-            ).one_or_none()
-
-    def runtime_connection(
-        self, agent_id: UUID, organization_id: UUID, connection_id: UUID
-    ) -> CommunicationConnection | None:
-        with Session(self.delegate.engine) as session:
-            return session.exec(
-                self._runtime_query(agent_id, organization_id).where(col(CommunicationConnection.id) == connection_id)
-            ).one_or_none()
-
-    @staticmethod
-    def _runtime_query(agent_id: UUID, organization_id: UUID) -> Any:
-        return select(CommunicationConnection).where(
-            col(CommunicationConnection.agent_id) == agent_id,
-            col(CommunicationConnection.organization_id) == organization_id,
-            col(CommunicationConnection.retired_at).is_(None),
-        )
-
     def get_active_by_platform_key(self, agent_id: UUID, platform_key: str) -> CommunicationConnection | None:
         with Session(self.delegate.engine) as session:
             return session.exec(
@@ -154,32 +121,50 @@ class CommunicationConnectionRepository:
                 )
             ).one_or_none()
 
-    def list_enabled(self, native_platform_keys: frozenset[str] = frozenset()) -> list[CommunicationConnection]:
-        """Enabled Connections, less those the Agent runtime's native gateway runs itself."""
+    def list_enabled_email_page(
+        self, *, after_id: UUID | None = None, limit: int = 100
+    ) -> list[CommunicationConnection]:
+        """Scan only active Email configuration in bounded, stable pages."""
+        if limit < 1:
+            raise ValueError("Email page size must be positive")
         with Session(self.delegate.engine) as session:
-            return list(
-                session.exec(
-                    select(CommunicationConnection)
-                    .where(
-                        col(CommunicationConnection.enabled).is_(True),
-                        col(CommunicationConnection.retired_at).is_(None),
-                        col(CommunicationConnection.platform_key).not_in(native_platform_keys),
-                    )
-                    .order_by(col(CommunicationConnection.id))
-                ).all()
+            query = select(CommunicationConnection).where(
+                col(CommunicationConnection.platform_key) == "email",
+                col(CommunicationConnection.enabled).is_(True),
+                col(CommunicationConnection.retired_at).is_(None),
             )
+            if after_id is not None:
+                query = query.where(col(CommunicationConnection.id) > after_id)
+            return list(session.exec(query.order_by(col(CommunicationConnection.id)).limit(limit)).all())
 
     def record_health(
         self,
         connection_id: UUID,
         status: ConnectionObservedStatus,
         *,
+        expected_revision: int | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
         error_details: CommunicationErrorDetails | dict[str, Any] | None = None,
     ) -> None:
+        """Record observer health, or revision-guarded active Email configuration health."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            connection = session.get(CommunicationConnection, connection_id)
+            if expected_revision is None:
+                connection = session.get(CommunicationConnection, connection_id)
+            else:
+                # Serialize maintenance replicas and ignore configuration changed
+                # or disabled while its validation was in flight.
+                connection = session.exec(
+                    select(CommunicationConnection)
+                    .where(
+                        col(CommunicationConnection.id) == connection_id,
+                        col(CommunicationConnection.platform_key) == "email",
+                        col(CommunicationConnection.enabled).is_(True),
+                        col(CommunicationConnection.retired_at).is_(None),
+                        col(CommunicationConnection.revision) == expected_revision,
+                    )
+                    .with_for_update()
+                ).one_or_none()
             if connection is None or connection.retired_at is not None:
                 return
             previous_status = connection.observed_status
@@ -188,13 +173,22 @@ class CommunicationConnectionRepository:
                 safe_details
             )
             safe_message = CommunicationOperationalRepository.safe_error_summary(error_message, details=safe_details)
+            serialized_details = safe_details.model_dump(mode="json", exclude_none=True) if safe_details else None
+            if (
+                expected_revision is not None
+                and connection.observed_status == status
+                and connection.last_error_code == safe_code
+                and connection.last_error_message == safe_message
+                and connection.last_error_details == serialized_details
+            ):
+                # Email configuration health is stable until configuration changes.
+                # Keep native observer heartbeat timestamps refreshing independently.
+                return
             connection.observed_status = status
             connection.last_health_at = datetime.now(UTC)
             connection.last_error_code = safe_code
             connection.last_error_message = safe_message
-            connection.last_error_details = (
-                safe_details.model_dump(mode="json", exclude_none=True) if safe_details is not None else None
-            )
+            connection.last_error_details = serialized_details
             session.add(connection)
             if previous_status != status and self.operations is not None:
                 stage_by_status = {
@@ -219,7 +213,10 @@ class CommunicationConnectionRepository:
                         session=session,
                         event_name=COMMUNICATION_CONNECTION_HEALTH_CHANGED,
                         organization_id=connection.organization_id,
-                        actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="communications-supervisor"),
+                        actor=ActorIdentity(
+                            type=ActorIdentityType.SYSTEM,
+                            id="communications-maintenance" if expected_revision is not None else "runtime-observer",
+                        ),
                         subject=SubjectIdentity(
                             type=SubjectIdentityType.AGENT,
                             id=connection.agent_id,
@@ -236,140 +233,12 @@ class CommunicationConnectionRepository:
                             "error_details": safe_details.model_dump(mode="json", exclude_none=True)
                             if safe_details is not None
                             else None,
-                            "actor_display": "Communications Supervisor",
+                            "actor_display": "Communications Maintenance"
+                            if expected_revision is not None
+                            else "Runtime Observer",
                             "subject_display": connection.display_name,
                         },
                     )
-            session.commit()
-
-    def request_reconnect(
-        self,
-        connection_id: UUID,
-        *,
-        actor: ActorIdentity,
-    ) -> CommunicationConnection | None:
-        requested_at = datetime.now(UTC)
-        with Session(self.delegate.engine, expire_on_commit=False) as session:
-            connection = session.exec(
-                select(CommunicationConnection)
-                .where(
-                    col(CommunicationConnection.id) == connection_id,
-                    col(CommunicationConnection.retired_at).is_(None),
-                )
-                .with_for_update()
-            ).one_or_none()
-            if connection is None:
-                return None
-            previous_status = connection.observed_status
-            connection.revision += 1
-            connection.updated_at = requested_at
-            if connection.enabled:
-                connection.observed_status = ConnectionObservedStatus.CONNECTING
-                connection.last_health_at = requested_at
-            connection.last_error_code = None
-            connection.last_error_message = None
-            connection.last_error_details = None
-            session.add(connection)
-            if self.operations is not None:
-                if connection.enabled and previous_status != ConnectionObservedStatus.CONNECTING:
-                    self.operations.stage_journal(
-                        session=session,
-                        organization_id=connection.organization_id,
-                        agent_id=connection.agent_id,
-                        connection_id=connection.id,
-                        stage=CommunicationJournalStage.CONNECTION_CONNECTING,
-                        occurred_at=requested_at,
-                    )
-                    self.operations.stage_event(
-                        session=session,
-                        event_name=COMMUNICATION_CONNECTION_HEALTH_CHANGED,
-                        organization_id=connection.organization_id,
-                        actor=actor,
-                        subject=SubjectIdentity(
-                            type=SubjectIdentityType.AGENT,
-                            id=connection.agent_id,
-                            organization_id=connection.organization_id,
-                        ),
-                        payload={
-                            "organization_id": connection.organization_id,
-                            "agent_id": connection.agent_id,
-                            "connection_id": connection.id,
-                            "previous_status": self._status_value(previous_status),
-                            "new_status": ConnectionObservedStatus.CONNECTING.value,
-                            "error_code": None,
-                            "error_summary": None,
-                            "actor_display": self._actor_display(actor),
-                            "subject_display": connection.display_name,
-                        },
-                        occurred_at=requested_at,
-                    )
-                self.operations.stage_journal(
-                    session=session,
-                    organization_id=connection.organization_id,
-                    agent_id=connection.agent_id,
-                    connection_id=connection.id,
-                    stage=CommunicationJournalStage.RECONNECT_REQUESTED,
-                )
-                self.operations.stage_event(
-                    session=session,
-                    event_name=COMMUNICATION_CONNECTION_RECONNECT_REQUESTED,
-                    organization_id=connection.organization_id,
-                    actor=actor,
-                    subject=SubjectIdentity(
-                        type=SubjectIdentityType.AGENT,
-                        id=connection.agent_id,
-                        organization_id=connection.organization_id,
-                    ),
-                    payload={
-                        "organization_id": connection.organization_id,
-                        "agent_id": connection.agent_id,
-                        "connection_id": connection.id,
-                        "actor_display": self._actor_display(actor),
-                        "subject_display": connection.display_name,
-                    },
-                    occurred_at=requested_at,
-                )
-            session.commit()
-            session.refresh(connection)
-            from api.domains.communications.metrics import record_reconnect
-
-            record_reconnect()
-            return connection
-
-    def claim_ingress_lease(self, connection_id: UUID, owner: str, *, lease_seconds: int = 15) -> bool:
-        now = datetime.now(UTC)
-        with Session(self.delegate.engine) as session:
-            claimed = session.exec(
-                sa.update(CommunicationConnection)
-                .where(
-                    col(CommunicationConnection.id) == connection_id,
-                    col(CommunicationConnection.enabled).is_(True),
-                    col(CommunicationConnection.retired_at).is_(None),
-                    sa.or_(
-                        col(CommunicationConnection.ingress_lease_owner) == owner,
-                        col(CommunicationConnection.ingress_lease_expires_at).is_(None),
-                        col(CommunicationConnection.ingress_lease_expires_at) < now,
-                    ),
-                )
-                .values(
-                    ingress_lease_owner=owner,
-                    ingress_lease_expires_at=now + timedelta(seconds=lease_seconds),
-                )
-                .returning(sa.column("id"))
-            ).first()
-            session.commit()
-            return claimed is not None
-
-    def release_ingress_lease(self, connection_id: UUID, owner: str) -> None:
-        with Session(self.delegate.engine) as session:
-            session.exec(
-                sa.update(CommunicationConnection)
-                .where(
-                    col(CommunicationConnection.id) == connection_id,
-                    col(CommunicationConnection.ingress_lease_owner) == owner,
-                )
-                .values(ingress_lease_owner=None, ingress_lease_expires_at=None)
-            )
             session.commit()
 
     def create(
@@ -437,8 +306,6 @@ class CommunicationConnectionRepository:
                         "created_at",
                         "updated_at",
                         "revision",
-                        "ingress_lease_owner",
-                        "ingress_lease_expires_at",
                     },
                 )
                 for field, value in values.items():
@@ -468,11 +335,8 @@ class CommunicationConnectionRepository:
             connection.enabled = False
             connection.observed_status = None
             connection.credentials_encrypted = ""
-            connection.driver_key_encrypted = ""
             connection.credential_fingerprint = None
             connection.credential_scope_key = None
-            connection.ingress_lease_owner = None
-            connection.ingress_lease_expires_at = None
             connection.retired_at = now
             connection.updated_at = now
             connection.revision += 1

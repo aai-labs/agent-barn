@@ -641,7 +641,7 @@ def test_event_types_endpoint_excludes_handlerless_event_definitions():
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         event_names = [entry["event_name"] for entry in response.json()]
         # organization.role.changed has a registered handler and must be offered as a
-        # filter option; agent.created has zero handlers and can never produce an
-        # Event Delivery, so it must not appear.
+        # filter option; agent.restore_point.created has zero handlers and can never
+        # produce an Event Delivery, so it must not appear.
         assert_that(event_names, has_item("organization.role.changed"))
-        assert_that("agent.created" in event_names, equal_to(False))
+        assert_that("agent.restore_point.created" in event_names, equal_to(False))

@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
@@ -29,16 +29,29 @@ from api.domains.agents.models import (
     AgentTemplateOverrideVersionRead,
     AgentTemplateSelection,
     AgentUpdate,
+    IntegrationIsolationUpdate,
     SecretProvider,
     get_agent_filter,
 )
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
+from api.domains.integrations.service import IntegrationIsolationService
 from api.domains.templates.models import TemplateRead
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 agents_router = APIRouter(prefix="/organizations/{organization_id}/agents", tags=["agents"])
+
+
+@agents_router.put("/{agent_id}/integrations/{provider}/isolation", response_model=AgentRead)
+def apply_integration_isolation(
+    agent_id: UUID,
+    provider: SecretProvider,
+    data: IntegrationIsolationUpdate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[IntegrationIsolationService, Injected(IntegrationIsolationService)],
+) -> AgentRead:
+    return service.apply(agent_id, provider, data, context)
 
 
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
@@ -299,6 +312,25 @@ def stop_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.stop_agent(agent_id, context)
+
+
+@agents_router.post(
+    "/{agent_id}/managed-update",
+    response_model=AgentRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def managed_update(
+    agent_id: UUID,
+    background_tasks: BackgroundTasks,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    """Stop, capture, start on the new image, roll back if it never comes up.
+
+    The orchestration is scheduled, not awaited: the 202 means "accepted",
+    and the Agent's own status plus its restore points tell the story.
+    """
+    return service.managed_update(agent_id, context, background_tasks.add_task)
 
 
 @agents_router.get("/{agent_id}/diagnostics", response_model=AgentRuntimeDiagnosticsRead)

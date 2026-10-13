@@ -1,5 +1,6 @@
 import argparse
 import logging
+import time
 from collections.abc import Callable
 
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
@@ -19,6 +20,18 @@ def run(description: str, operation: Callable[[OrganizationLlmBudgetService], ob
     They keep separate modules because the chart names each one directly, but the
     bodies were identical apart from the description and the method called.
     """
-    argparse.ArgumentParser(description=description).parse_args()
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--watch", action="store_true", help="Run immediately and every five minutes locally.")
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    operation(build_service())
+    while True:
+        started = time.monotonic()
+        try:
+            operation(build_service())
+        except Exception:
+            if not args.watch:
+                raise
+            logger.exception("Local budget refresh failed; retrying on the next interval.")
+        if not args.watch:
+            return
+        time.sleep(max(0, 300 - (time.monotonic() - started)))

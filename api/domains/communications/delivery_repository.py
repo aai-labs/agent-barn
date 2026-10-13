@@ -26,6 +26,7 @@ from api.domains.communications.models import (
     RuntimeReplyCreate,
 )
 from api.domains.communications.operations import CommunicationOperationalRepository
+from api.domains.communications.transport import GATEWAY_PLATFORM_KEYS, require_gateway_transport
 from api.domains.conversations.models import (
     AgentChatMessage,
     ConversationType,
@@ -171,13 +172,11 @@ class CommunicationDeliveryRepository:
         lease_seconds: int = 120,
         max_attempts: int = 5,
         reclaim_expired: bool = True,
-        excluded_platform_keys: frozenset[str] = frozenset(),
     ) -> RuntimeDeliveryRead | None:
         if reclaim_expired:
             self.reclaim_expired_inbound(
                 agent_id=agent_id,
                 max_attempts=max_attempts,
-                excluded_platform_keys=excluded_platform_keys,
             )
         now = datetime.now(UTC)
         active_ordering = aliased(CommunicationDelivery)
@@ -198,11 +197,12 @@ class CommunicationDeliveryRepository:
                     col(active_ordering.awaiting_input).is_(False),
                 ),
             )
-            if excluded_platform_keys:
-                query = query.join(
-                    CommunicationConnection,
-                    col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
-                ).where(col(CommunicationConnection.platform_key).not_in(excluded_platform_keys))
+            query = query.join(
+                CommunicationConnection,
+                col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
+            ).where(
+                col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
+            )
             query = (
                 query.order_by(
                     col(CommunicationDelivery.available_at).asc(),
@@ -321,7 +321,6 @@ class CommunicationDeliveryRepository:
         *,
         agent_id: UUID,
         max_attempts: int = 5,
-        excluded_platform_keys: frozenset[str] = frozenset(),
     ) -> list[RuntimeDeliveryRead]:
         """Reclaim stale runtime leases and return newly terminal deliveries."""
         now = datetime.now(UTC)
@@ -334,11 +333,12 @@ class CommunicationDeliveryRepository:
                 col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
                 col(CommunicationDelivery.lease_expires_at) < now,
             )
-            if excluded_platform_keys:
-                query = query.join(
-                    CommunicationConnection,
-                    col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
-                ).where(col(CommunicationConnection.platform_key).not_in(excluded_platform_keys))
+            query = query.join(
+                CommunicationConnection,
+                col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id),
+            ).where(
+                col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
+            )
             expired = session.exec(query.with_for_update(skip_locked=True)).all()
             for stale in expired:
                 self._apply_completion(
@@ -386,7 +386,11 @@ class CommunicationDeliveryRepository:
         with Session(self.delegate.engine) as session:
             delivery = session.exec(
                 select(CommunicationDelivery)
+                .join(
+                    CommunicationConnection, col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id)
+                )
                 .where(
+                    col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
                     col(CommunicationDelivery.id) == delivery_id,
                     col(CommunicationDelivery.agent_id) == agent_id,
                     col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
@@ -402,33 +406,6 @@ class CommunicationDeliveryRepository:
             session.add(delivery)
             session.commit()
             return True
-
-    def thread_has_agent_state(
-        self,
-        *,
-        connection_id: UUID,
-        location: ConversationLocation,
-    ) -> bool:
-        """Return whether this Connection has persisted state for a thread.
-
-        A thread becomes Agent-owned only after an inbound or outbound
-        Communication message has been persisted for this exact Connection and
-        provider location. This deliberately avoids process-local ownership
-        caches, which would diverge across Communications replicas.
-        """
-        if not location.thread_id:
-            return False
-        with Session(self.delegate.engine) as session:
-            message = session.exec(
-                select(AgentChatMessage.id)
-                .where(
-                    col(AgentChatMessage.connection_id) == connection_id,
-                    col(AgentChatMessage.channel_id) == location.id,
-                    col(AgentChatMessage.thread_id) == location.thread_id,
-                )
-                .limit(1)
-            ).one_or_none()
-            return message is not None
 
     def enqueue_runtime_reply(
         self,
@@ -450,6 +427,10 @@ class CommunicationDeliveryRepository:
             ).one_or_none()
             if source is None:
                 raise LookupError("Source Communication Delivery not found")
+            connection = session.get(CommunicationConnection, source.connection_id)
+            if connection is None:
+                raise LookupError("Communication Connection not found")
+            require_gateway_transport(connection.platform_key)
             if source.cancel_requested_at is not None or source.status == CommunicationDeliveryStatus.CANCELLED:
                 raise CommunicationDeliveryCancelledError("Source Communication Delivery was cancelled")
             existing = session.exec(
@@ -518,7 +499,6 @@ class CommunicationDeliveryRepository:
         self,
         *,
         lease_seconds: int = 120,
-        native_platform_keys: frozenset[str] = frozenset(),
     ) -> CommunicationDelivery | None:
         now = datetime.now(UTC)
         earlier_outbound = aliased(CommunicationDelivery)
@@ -528,11 +508,10 @@ class CommunicationDeliveryRepository:
                 col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
                 col(CommunicationDelivery.lease_expires_at) < now,
             )
-            if native_platform_keys:
-                native_connection_ids = select(CommunicationConnection.id).where(
-                    col(CommunicationConnection.platform_key).in_(native_platform_keys)
-                )
-                reclaim = reclaim.where(col(CommunicationDelivery.connection_id).not_in(native_connection_ids))
+            gateway_connection_ids = select(CommunicationConnection.id).where(
+                col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
+            )
+            reclaim = reclaim.where(col(CommunicationDelivery.connection_id).in_(gateway_connection_ids))
             session.exec(
                 reclaim.values(status=CommunicationDeliveryStatus.PENDING, claimed_at=None, lease_expires_at=None)
             )
@@ -567,8 +546,9 @@ class CommunicationDeliveryRepository:
                     ),
                 )
             )
-            if native_platform_keys:
-                query = query.where(col(CommunicationConnection.platform_key).not_in(native_platform_keys))
+            query = query.where(
+                col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
+            )
             delivery = session.exec(
                 query.order_by(
                     col(CommunicationDelivery.available_at).asc(),
@@ -599,31 +579,6 @@ class CommunicationDeliveryRepository:
             session.commit()
             return delivery
 
-    def get_inbound_runtime_delivery(
-        self,
-        delivery_id: UUID,
-        *,
-        agent_id: UUID,
-    ) -> RuntimeDeliveryRead | None:
-        """Load a claimed inbound delivery for lifecycle feedback context."""
-        with Session(self.delegate.engine) as session:
-            delivery = session.exec(
-                select(CommunicationDelivery).where(
-                    col(CommunicationDelivery.id) == delivery_id,
-                    col(CommunicationDelivery.agent_id) == agent_id,
-                    col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
-                )
-            ).one_or_none()
-            if delivery is None:
-                return None
-            return RuntimeDeliveryRead(
-                delivery_id=delivery.id,
-                message_id=delivery.message_id,
-                connection_id=delivery.connection_id,
-                attempt_count=delivery.attempt_count,
-                envelope=NormalizedCommunicationEnvelope.model_validate(delivery.envelope),
-            )
-
     @staticmethod
     def select_inbound(source_id: UUID, agent_id: UUID) -> Any:
         """The one way to address an Agent's inbound delivery by id."""
@@ -632,30 +587,6 @@ class CommunicationDeliveryRepository:
             col(CommunicationDelivery.agent_id) == agent_id,
             col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,
         )
-
-    def source_is_cancelled(self, source_id: UUID, *, agent_id: UUID) -> bool:
-        with Session(self.delegate.engine) as session:
-            source = session.exec(self.select_inbound(source_id, agent_id)).one_or_none()
-            return (
-                source is None
-                or source.cancel_requested_at is not None
-                or source.status == CommunicationDeliveryStatus.CANCELLED
-            )
-
-    def delivery_status(
-        self,
-        delivery_id: UUID,
-        *,
-        direction: CommunicationDirection,
-    ) -> CommunicationDeliveryStatus | None:
-        with Session(self.delegate.engine) as session:
-            status = session.exec(
-                select(CommunicationDelivery.status).where(
-                    col(CommunicationDelivery.id) == delivery_id,
-                    col(CommunicationDelivery.direction) == direction,
-                )
-            ).one_or_none()
-            return CommunicationDeliveryStatus(status) if status is not None else None
 
     def complete_outbound(
         self,
@@ -671,7 +602,11 @@ class CommunicationDeliveryRepository:
         with Session(self.delegate.engine) as session:
             delivery = session.exec(
                 select(CommunicationDelivery)
+                .join(
+                    CommunicationConnection, col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id)
+                )
                 .where(
+                    col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
                     col(CommunicationDelivery.id) == delivery_id,
                     col(CommunicationDelivery.direction) == CommunicationDirection.OUTBOUND,
                     col(CommunicationDelivery.status) == CommunicationDeliveryStatus.PROCESSING,
@@ -711,7 +646,11 @@ class CommunicationDeliveryRepository:
         with Session(self.delegate.engine) as session:
             delivery = session.exec(
                 select(CommunicationDelivery)
+                .join(
+                    CommunicationConnection, col(CommunicationConnection.id) == col(CommunicationDelivery.connection_id)
+                )
                 .where(
+                    col(CommunicationConnection.platform_key).in_(GATEWAY_PLATFORM_KEYS),
                     col(CommunicationDelivery.id) == delivery_id,
                     col(CommunicationDelivery.agent_id) == agent_id,
                     col(CommunicationDelivery.direction) == CommunicationDirection.INBOUND,

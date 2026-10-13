@@ -10,6 +10,8 @@ from injector import inject, singleton
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, SQLModel, col, select
 
+from api.domains.agents.models import Agent
+from api.domains.agents.repository import agent_scope_predicates
 from api.domains.costs.constants import COST_HISTOGRAM_BOUNDS, TOP_AGENTS_IN_SERIES
 from api.domains.costs.models import (
     COST_RECORD_STATUS_SUCCESS,
@@ -17,14 +19,23 @@ from api.domains.costs.models import (
     CostRecord,
     CostRecordSource,
     CostSortDirection,
+    CostSyncState,
     MonthlyWindow,
 )
 from api.domains.organizations.models import Organization
 from api.domains.platform_admin.models import StatsWindow
+from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AgentSpendTotals:
+    spend: Decimal
+    calls: int
+    last_call_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -80,6 +91,7 @@ _REFRESHABLE_COLUMNS = (
     "request_duration_ms",
     "agent_id",
     "organization_id",
+    "is_memory",
 )
 
 
@@ -88,6 +100,21 @@ _REFRESHABLE_COLUMNS = (
 @dataclass
 class CostRepository:
     delegate: PostgresRepositoryDelegate
+
+    def record_sync_completion(self, completed_at: datetime) -> None:
+        table = SQLModel.metadata.tables["cost_sync_state"]
+        statement = pg_insert(table).values(source="litellm", completed_at=completed_at)
+        statement = statement.on_conflict_do_update(
+            index_elements=[table.c.source], set_={"completed_at": statement.excluded.completed_at}
+        )
+        with Session(self.delegate.engine) as session:
+            session.exec(statement)  # type: ignore[call-overload]
+            session.commit()
+
+    def last_sync_completed_at(self) -> datetime | None:
+        with Session(self.delegate.engine) as session:
+            state = session.get(CostSyncState, "litellm")
+            return state.completed_at if state else None
 
     def upsert_many(self, records: list[CostRecord]) -> int:
         """Insert or refresh cost rows, keyed on request_id. Returns rows written.
@@ -143,6 +170,25 @@ class CostRepository:
         """
         with Session(self.delegate.engine) as session:
             return session.exec(select(sa.func.max(col(CostRecord.occurred_at)))).one()
+
+    def memory_spend(
+        self, organization_id: UUID, start: datetime, end: datetime, *, key_hashes: frozenset[str] | None = None
+    ) -> Decimal:
+        """Organization Memory model charges within one renewal window, including healed costs."""
+        if key_hashes is not None and not key_hashes:
+            return Decimal(0)
+        with Session(self.delegate.engine) as session:
+            predicates = [col(CostRecord.litellm_key_hash).in_(key_hashes)] if key_hashes is not None else []
+            value = session.exec(
+                select(sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0)).where(
+                    col(CostRecord.organization_id) == organization_id,
+                    col(CostRecord.is_memory).is_(True),
+                    col(CostRecord.occurred_at) >= start,
+                    col(CostRecord.occurred_at) < end,
+                    *predicates,
+                )
+            ).one()
+            return Decimal(str(value))
 
     def find_heal_candidates(self, limit: int) -> list[CostRecord]:
         """Rows that recorded no money for a call that plainly consumed tokens.
@@ -633,6 +679,42 @@ class CostRepository:
         with self.delegate.engine.connect() as connection:
             rows = connection.execute(query).all()
         return [(row[0], row[1], Decimal(str(row[2])), int(row[3]), int(row[4]), int(row[5])) for row in rows]
+
+    def spend_for_agents(
+        self,
+        window: StatsWindow,
+        authorization_scope: AuthorizationScope,
+        agent_ids: list[UUID],
+    ) -> dict[UUID, AgentSpendTotals]:
+        """Spend for exactly these Agents, and only those the scope can see.
+
+        Reads the same `_predicates` as every other cost read, so a figure here matches
+        the Agent's own Costs tab for the same window. The scope join is the
+        authorization: an id the caller cannot see is absent from the result, and an
+        Agent with no calls in the window is absent too (the caller reads that as zero).
+        """
+        if not agent_ids:
+            return {}
+        query = (
+            sa.select(
+                col(CostRecord.agent_id),
+                sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0),
+                sa.func.count(),
+                sa.func.max(col(CostRecord.occurred_at)),
+            )
+            .join(Agent, col(Agent.id) == col(CostRecord.agent_id))
+            .where(
+                *self._predicates(window, CostFilter(organization_id=authorization_scope.organization_id)),
+                col(CostRecord.agent_id).in_(agent_ids),
+                *agent_scope_predicates(authorization_scope),
+            )
+            .group_by(col(CostRecord.agent_id))
+        )
+        with self.delegate.engine.connect() as connection:
+            rows = connection.execute(query).all()
+        return {
+            row[0]: AgentSpendTotals(spend=Decimal(str(row[1])), calls=int(row[2]), last_call_at=row[3]) for row in rows
+        }
 
     def unattributed_totals(self, window: StatsWindow, filters: CostFilter) -> tuple[Decimal, int]:
         """Spend that resolved to no agent — the honest gap in attribution.

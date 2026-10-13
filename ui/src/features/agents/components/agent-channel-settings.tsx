@@ -811,7 +811,10 @@ export function AgentChannelSettings({
   /** The runtime runs this platform's Connections itself and reads them only at start,
    * so a change to one on a running Agent is applied by restarting it. */
   function restartsAgent(key: string | undefined) {
-    return agent.status === "RUNNING" && Boolean(key) && agent.nativePlatformKeys.includes(key!);
+    const transport = connections.data?.find((connection) => connection.platformKey === key)?.transport
+      ?? platforms.data?.find((platform) => platform.key === key)?.transport;
+    return agent.status === "RUNNING" && (transport === "native"
+      || (transport === undefined && Boolean(key) && agent.nativePlatformKeys.includes(key!)));
   }
 
   function applyChange(key: string, confirmLabel: string, change: () => Promise<void>) {

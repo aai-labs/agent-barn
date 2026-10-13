@@ -1,21 +1,14 @@
 import hashlib
-import json
-import logging
 import threading
 import time
-from typing import Any
 from urllib.parse import quote
 
 import jwt
 from jwt import PyJWKClient
 
 from api.infrastructure.http import resilient_request
-from api.infrastructure.shared.cache import cached as _cached
-
-logger = logging.getLogger(__name__)
 
 _LOGIN_BASE = "https://login.microsoftonline.com"
-_CHANNEL_CACHE_TTL_SECONDS = 600
 _BOT_SCOPE = "https://api.botframework.com/.default"
 _JWKS_URL = "https://login.botframework.com/v1/.well-known/keys"
 _EXPECTED_ISSUER = "https://api.botframework.com"
@@ -31,10 +24,6 @@ _jwk_lock = threading.Lock()
 
 class TeamsAuthError(ValueError):
     """Raised when Teams credentials or an inbound webhook token are rejected."""
-
-
-class TeamsDeliveryError(RuntimeError):
-    """Raised when Teams does not return a durable identifier for a sent activity."""
 
 
 def acquire_token(tenant_id: str, app_id: str, app_password: str) -> str:
@@ -71,66 +60,6 @@ def acquire_token(tenant_id: str, app_id: str, app_password: str) -> str:
     with _token_lock:
         _token_cache[key] = (token, now + max(expires_in - _TOKEN_EXPIRY_MARGIN_SECONDS, 0))
     return token
-
-
-def send_activity(
-    service_url: str,
-    conversation_id: str,
-    activity: dict[str, Any],
-    token: str,
-    *,
-    idempotency_key: str | None = None,
-) -> str:
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    if idempotency_key:
-        # Bot Framework does not expose a provider-native idempotency field;
-        # preserve the stable delivery key for an idempotency-aware connector
-        # or egress proxy without putting it in message content.
-        headers["Idempotency-Key"] = idempotency_key
-    response = resilient_request(
-        "POST",
-        f"{service_url.rstrip('/')}/v3/conversations/{quote(conversation_id, safe='')}/activities",
-        headers=headers,
-        content=json.dumps(activity).encode(),
-        timeout=_TIMEOUT_SECONDS,
-        label="Teams send",
-        retry_server_errors=True,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    activity_id = str(payload.get("id") or "").strip() if isinstance(payload, dict) else ""
-    if not activity_id:
-        raise TeamsDeliveryError("Teams send returned no activity id")
-    return activity_id
-
-
-def list_team_channels(service_url: str, team_id: str, token: str) -> dict[str, str | None]:
-    """Map a team's channel ids to names via the Bot Framework Teams extension.
-
-    Uses the agent's own bot credentials, so no Microsoft Graph consent is
-    involved. Requires the bot to be installed at team scope. Teams returns a
-    null name for the default General channel so callers can localize it.
-    """
-    cache_key = f"msteams:channels:{hashlib.sha256(token.encode()).hexdigest()}:{team_id}"
-    return _cached(cache_key, lambda: _fetch_team_channels(service_url, team_id, token), ttl=_CHANNEL_CACHE_TTL_SECONDS)
-
-
-def _fetch_team_channels(service_url: str, team_id: str, token: str) -> dict[str, str | None]:
-    response = resilient_request(
-        "GET",
-        f"{service_url.rstrip('/')}/v3/teams/{quote(team_id, safe='')}/conversations",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=_TIMEOUT_SECONDS,
-        label="Teams channels",
-        retry_server_errors=True,
-    )
-    response.raise_for_status()
-    conversations = response.json().get("conversations") or []
-    return {
-        str(item["id"]): (str(item["name"]) if item.get("name") else None)
-        for item in conversations
-        if isinstance(item, dict) and item.get("id")
-    }
 
 
 def verify_inbound_jwt(authorization: str, app_id: str, *, service_url: str) -> None:

@@ -554,6 +554,23 @@ def test_upgrade_leaves_existing_agents_restricted(legacy_database):
     assert_that(set(pinned_keys), equal_to({"legacy"}))
 
 
+def test_agent_memory_migration_leaves_existing_agents_opted_out(legacy_database):
+    command.upgrade(legacy_database.config, "heads")
+    with legacy_database.engine.connect() as connection:
+        settings = connection.execute(text("SELECT memory_enabled FROM agent")).scalars().all()
+        keys = connection.execute(text("SELECT memory_key_hash FROM agent")).scalars().all()
+        column = connection.execute(
+            text(
+                "SELECT is_nullable, column_default FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'agent' AND column_name = 'memory_enabled'"
+            )
+        ).one()
+
+    assert_that(settings, equal_to([False, False, False]))
+    assert_that(keys, equal_to([None, None, None]))
+    assert_that(column, equal_to(("NO", "false")))
+
+
 def test_general_access_role_rejects_referenced_role_deletion(legacy_database):
     command.upgrade(legacy_database.config, "heads")
     custom_role_id = _insert_custom_agent_access_role(
@@ -787,3 +804,149 @@ def test_downgrade_preserves_organization_role_enum(legacy_database):
             }
         ),
     )
+
+
+def test_memory_cost_origin_upgrade_defaults_existing_rows_and_can_roll_back(fresh_database):
+    config = _alembic_config()
+    command.downgrade(config, "d7f4a92c1e83")
+    with fresh_database.engine.begin() as connection:
+        connection.execute(
+            text("""
+            INSERT INTO cost_record (id, created_at, updated_at, request_id, litellm_key_hash,
+                occurred_at, spend, prompt_tokens, completion_tokens, total_tokens, model, status, source)
+            VALUES (:id, now(), now(), 'existing-cost', 'old-key', now(), 1.25, 10, 2, 12,
+                'test', 'success', 'litellm_live')
+        """),
+            {"id": uuid7()},
+        )
+    command.upgrade(config, "e4c9b72a6f10")
+    with fresh_database.engine.connect() as connection:
+        value = connection.execute(
+            text("SELECT is_memory FROM cost_record WHERE request_id = 'existing-cost'")
+        ).scalar_one()
+    assert_that(value, equal_to(False))
+    command.downgrade(config, "d7f4a92c1e83")
+    with fresh_database.engine.connect() as connection:
+        columns = (
+            connection.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name = 'cost_record'")
+            )
+            .scalars()
+            .all()
+        )
+    assert_that("is_memory" in columns, equal_to(False))
+
+
+def test_cost_sync_heartbeat_upgrade_and_rollback_preserve_cost_history(fresh_database):
+    config = _alembic_config()
+    command.downgrade(config, "e4c9b72a6f10")
+    command.upgrade(config, "f2a8d41b9c63")
+    with fresh_database.engine.begin() as connection:
+        connection.execute(text("INSERT INTO cost_sync_state VALUES ('litellm', now())"))
+        assert_that(connection.execute(text("SELECT count(*) FROM cost_sync_state")).scalar_one(), equal_to(1))
+    command.downgrade(config, "e4c9b72a6f10")
+    with fresh_database.engine.connect() as connection:
+        assert_that(connection.execute(text("SELECT to_regclass('cost_sync_state')")).scalar_one(), none())
+        assert_that(connection.execute(text("SELECT to_regclass('cost_record')")).scalar_one(), equal_to("cost_record"))
+
+
+def test_memory_purge_migration_backfills_deleted_agents_and_removes_only_their_grants(legacy_database):
+    db = legacy_database
+    command.upgrade(db.config, "f2a8d41b9c63")
+    with db.engine.begin() as connection:
+        connection.execute(
+            text("UPDATE agent SET memory_key_hash = :hash WHERE id = :id"),
+            {"hash": "a" * 64, "id": db.deleted_agent_a},
+        )
+        for reader, source in [(db.deleted_agent_a, None), (db.agent_a, db.deleted_agent_a), (db.agent_a, None)]:
+            connection.execute(
+                text("""INSERT INTO agent_memory_grant
+                (id, created_at, updated_at, organization_id, agent_id, source_agent_id)
+                VALUES (:id, now(), now(), :org, :reader, :source)"""),
+                {"id": uuid7(), "org": db.org_a, "reader": reader, "source": source},
+            )
+    command.upgrade(db.config, "a63e8c941d20")
+    with db.engine.connect() as connection:
+        assert_that(
+            connection.execute(text("SELECT agent_id, organization_id FROM agent_memory_purge")).all(),
+            equal_to([(db.deleted_agent_a, db.org_a)]),
+        )
+        assert_that(
+            connection.execute(text("SELECT agent_id, source_agent_id FROM agent_memory_grant")).all(),
+            equal_to([(db.agent_a, None)]),
+        )
+        assert_that(
+            connection.execute(
+                text("SELECT memory_key_hash FROM agent WHERE id = :id"), {"id": db.deleted_agent_a}
+            ).scalar_one(),
+            none(),
+        )
+    command.downgrade(db.config, "f2a8d41b9c63")
+    with db.engine.connect() as connection:
+        assert_that(connection.execute(text("SELECT to_regclass('agent_memory_purge')")).scalar_one(), none())
+        assert_that(connection.execute(text("SELECT count(*) FROM agent")).scalar_one(), equal_to(3))
+
+
+def test_split_memory_access_preserves_old_combined_grants_and_rollback(legacy_database):
+    db = legacy_database
+    command.upgrade(db.config, "a63e8c941d20")
+    with db.engine.begin() as connection:
+        connection.execute(
+            text("""INSERT INTO agent_memory_grant
+            (id, created_at, updated_at, organization_id, agent_id, source_agent_id)
+            VALUES (:id, now(), now(), :org, :agent, NULL)"""),
+            {"id": uuid7(), "org": db.org_a, "agent": db.agent_a},
+        )
+    command.upgrade(db.config, "b84e19a7302f")
+    with db.engine.connect() as connection:
+        assert_that(
+            connection.execute(text("SELECT access FROM agent_memory_grant ORDER BY access")).scalars().all(),
+            equal_to(["read", "write"]),
+        )
+    command.downgrade(db.config, "a63e8c941d20")
+    with db.engine.connect() as connection:
+        assert_that(connection.execute(text("SELECT count(*) FROM agent_memory_grant")).scalar_one(), equal_to(1))
+
+
+@pytest.mark.parametrize(
+    "accesses,expected", [(["read"], "read"), (["write"], "read_write"), (["read", "write"], "read_write")]
+)
+def test_combined_memory_permissions_migrate_and_rollback(legacy_database, accesses, expected):
+    db = legacy_database
+    command.upgrade(db.config, "b84e19a7302f")
+    ids = {}
+    with db.engine.begin() as connection:
+        for access in accesses:
+            ids[access] = uuid7()
+            connection.execute(
+                text("""INSERT INTO agent_memory_grant
+                (id, created_at, updated_at, organization_id, agent_id, source_agent_id, access)
+                VALUES (:id, now(), now(), :org, :agent, NULL, :access)"""),
+                {"id": ids[access], "org": db.org_a, "agent": db.agent_a, "access": access},
+            )
+        connection.execute(
+            text("""INSERT INTO agent_memory_grant
+            (id, created_at, updated_at, organization_id, agent_id, source_agent_id, access)
+            VALUES (:id, now(), now(), :org, :agent, :source, 'read')"""),
+            {"id": uuid7(), "org": db.org_a, "agent": db.agent_a, "source": db.deleted_agent_a},
+        )
+    command.upgrade(db.config, "c95f20b8413a")
+    with db.engine.connect() as connection:
+        rows = connection.execute(text("SELECT id, access FROM agent_memory_grant WHERE source_agent_id IS NULL")).all()
+        assert_that(rows, equal_to([(ids.get("write", ids.get("read")), expected)]))
+        assert_that(
+            connection.execute(
+                text("SELECT access FROM agent_memory_grant WHERE source_agent_id IS NOT NULL")
+            ).scalar_one(),
+            equal_to("read"),
+        )
+    command.downgrade(db.config, "b84e19a7302f")
+    with db.engine.connect() as connection:
+        assert_that(
+            connection.execute(
+                text("SELECT access FROM agent_memory_grant WHERE source_agent_id IS NULL ORDER BY access")
+            )
+            .scalars()
+            .all(),
+            equal_to(["read"] if expected == "read" else ["read", "write"]),
+        )

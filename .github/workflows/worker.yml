@@ -1,7 +1,7 @@
 name: Email inbound Worker
 
 on:
-  # Reusable only -- called by ci.yml (PRs/branches, deploy: false), by
+  # Reusable only -- called by ci.yml (pull requests, deploy: false), by
   # deploy.yml (staging only, deploy: true), and by deploy-public.yml (release
   # tags, deploy: true). Each publish runs after its own cluster deploy, so the
   # cluster already holds the secret the Worker is about to present.
