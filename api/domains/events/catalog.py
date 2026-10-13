@@ -43,6 +43,7 @@ ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
 PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
+PLATFORM_PLAYBOOK_MODEL_CHANGED = "platform.playbook_model.changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
@@ -268,6 +269,14 @@ class AgentMemoryGrantPayload(BaseModel):
     source_display: str
     # Absent in original combined grants; "write" preserves historical split-grant events.
     access: Literal["read", "read_write", "write"] | None = None
+    actor_display: str
+    subject_display: str
+
+
+class PlatformPlaybookModelChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    previous: str
+    current: str
     actor_display: str
     subject_display: str
 
@@ -802,6 +811,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_MEMORY_MODEL_CHANGED,
             schema_version=1,
             payload_model=PlatformMemoryModelChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_PLAYBOOK_MODEL_CHANGED,
+            schema_version=1,
+            payload_model=PlatformPlaybookModelChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )
