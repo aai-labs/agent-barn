@@ -35,6 +35,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED,
 )
 from api.domains.organizations.exceptions import LlmBudgetAboveCeiling
+from api.domains.organizations.lookup import ON_CREDIT_LIMIT_REFUSED
 from api.domains.organizations.models import (
     AgentLlmCoverageRead,
     AgentLlmEnrollment,
@@ -198,6 +199,8 @@ class OrganizationLlmBudgetService:
             detail="You don't have permission to change this organization's spend limit.",
         )
         organization = self._organization_or_404(organization_id)
+        if budget_usd is not None and organization.runs_on_credit:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=ON_CREDIT_LIMIT_REFUSED)
         if budget_usd != organization.llm_own_budget_usd:
             try:
                 self._store_and_apply(
@@ -340,7 +343,7 @@ class OrganizationLlmBudgetService:
             state=state,
             limit_usd=limit,
             ceiling_usd=organization.llm_budget_usd,
-            own_limit_usd=organization.llm_own_budget_usd,
+            own_limit_usd=organization.own_llm_budget_in_force_usd,
             window=organization.llm_budget_duration,
             spend_usd=spend if observed else None,
             renews_at=organization.llm_budget_renews_at,

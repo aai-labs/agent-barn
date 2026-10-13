@@ -197,17 +197,14 @@ class OrganizationRepository:
 
     def list_budget_policies(self) -> list[tuple[UUID, float, str]]:
         """System-only inventory of the limit each team should carry: the
-        Organization's own where it set one, else the ceiling. Never exposed through
-        a route."""
+        Organization's own where one is in force, else the ceiling. Never exposed
+        through a route."""
         with Session(self.delegate.engine) as session:
-            rows = session.exec(
-                select(
-                    Organization.id,
-                    func.coalesce(col(Organization.llm_own_budget_usd), col(Organization.llm_budget_usd)),
-                    Organization.llm_budget_duration,
-                )
-            ).all()
-            return [(row[0], float(row[1]), row[2]) for row in rows]
+            organizations = session.exec(select(Organization)).all()
+            return [
+                (organization.id, float(organization.effective_llm_budget_usd), organization.llm_budget_duration)
+                for organization in organizations
+            ]
 
     def set_llm_budget_renews_at(self, organization_id: UUID, renews_at: datetime) -> None:
         """When the Organization's window renews, as the proxy reported it. Written on

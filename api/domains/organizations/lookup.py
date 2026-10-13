@@ -5,6 +5,11 @@ from uuid import UUID
 from injector import inject, singleton
 
 from api.domains.organizations.repository import OrganizationRepository
+from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
+
+# Refusing a limit beneath an Organization's balance. No straight apostrophes: settings
+# surfaces render a single-quoted run of an error detail as a code identifier.
+ON_CREDIT_LIMIT_REFUSED = "This organization runs on credit, so its balance is its only spend limit."
 
 
 @dataclass(frozen=True)
@@ -20,6 +25,12 @@ class OrganizationLlmLimit:
     # When the Organization's window next renews — and so every Agent key's, since
     # they share it. None until the proxy has reported one.
     renews_at: datetime | None = None
+
+    @property
+    def runs_on_credit(self) -> bool:
+        """Credit never renews, so any limit beneath it would be a lifetime cap that no
+        top-up could lift: on credit the Organization's balance is the only limit."""
+        return self.window == ONE_OFF_BUDGET_WINDOW
 
 
 @inject

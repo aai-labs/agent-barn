@@ -13,6 +13,7 @@ from sqlmodel import CheckConstraint, Field
 from sqlmodel import Field as SqlField
 
 from api.core.config import get_config
+from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 from api.infrastructure.postgres.models import BaseModel
 
 # The windows LiteLLM snaps to calendar boundaries (next midnight, next Monday, the
@@ -89,9 +90,22 @@ class Organization(BaseModel, table=True):
     )
 
     @property
+    def runs_on_credit(self) -> bool:
+        """A one-off limit is credit: everything granted, spent down and never renewed."""
+        return self.llm_budget_duration == ONE_OFF_BUDGET_WINDOW
+
+    @property
+    def own_llm_budget_in_force_usd(self) -> float | None:
+        """The Organization's own limit, unless it runs on credit. There it would be a
+        lifetime cap that no top-up could lift, so the balance is the only limit; a
+        value left from before is kept but not applied."""
+        return None if self.runs_on_credit else self.llm_own_budget_usd
+
+    @property
     def effective_llm_budget_usd(self) -> float:
         """The limit the proxy enforces on the Organization's team."""
-        return self.llm_own_budget_usd if self.llm_own_budget_usd is not None else self.llm_budget_usd
+        own = self.own_llm_budget_in_force_usd
+        return own if own is not None else self.llm_budget_usd
 
 
 class OrganizationRead(PydanticBaseModel):
