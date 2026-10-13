@@ -497,6 +497,7 @@ class SharePointService:
             read_only=state.read_only,
             refresh_token=tokens.refresh_token,
             sign_in_id=str(uuid4()),
+            subject_id=str(claims["oid"]) if claims.get("oid") else None,
         )
         self._save_secret(agent, content, context)
         return SharePointSignInRead.of(content)
@@ -767,6 +768,13 @@ class SharePointService:
         return agent
 
     def _save_secret(self, agent: Agent, content: SharePointContent, context: CurrentUserContext) -> None:
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(409, "An Agent lifecycle operation is already in progress")
+            current = self._require_manage(agent.id, context)
+            self._save_secret_locked(current, content, context)
+
+    def _save_secret_locked(self, agent: Agent, content: SharePointContent, context: CurrentUserContext) -> None:
         encrypted = encrypt_content(content, self.config.agent_token_encryption_key)
         existing = self.repository.get_secret(agent.id, SecretProvider.SHAREPOINT)
         if existing is not None:

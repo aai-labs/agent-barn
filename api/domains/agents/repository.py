@@ -50,6 +50,8 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
 )
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.integrations.isolation import default_isolation, isolation_read
+from api.domains.integrations.models import AgentIntegrationIsolation, AgentIntegrationRuntime
 from api.domains.organizations.models import Organization
 from api.domains.platform_admin.models import StatsGranularity
 from api.domains.rbac.catalog import (
@@ -1298,8 +1300,37 @@ class AgentRepository:
         correlation_id: UUID | None = None,
     ) -> list[UUID]:
         """Stage one AgentSecret and its audit event in an existing transaction."""
+        if secret.provider == SecretProvider.SHAREPOINT:
+            # Reconnect clears its warning atomically. Preserve broker lock order:
+            # runtime first, then credential, so an in-flight handoff cannot deadlock.
+            runtime = session.exec(
+                select(AgentIntegrationRuntime)
+                .where(AgentIntegrationRuntime.agent_id == secret.agent_id)
+                .with_for_update()
+            ).first()
+            if runtime and runtime.bindings.get("sharepoint", {}).get("binding_id") == str(secret.id):
+                runtime.bindings = {
+                    **runtime.bindings,
+                    "sharepoint": {**runtime.bindings["sharepoint"], "reconnect_required": False},
+                }
+                session.add(runtime)
         session.add(secret)
         session.flush()
+        policy = session.exec(
+            select(AgentIntegrationIsolation).where(
+                col(AgentIntegrationIsolation.agent_id) == secret.agent_id,
+                col(AgentIntegrationIsolation.provider) == secret.provider,
+                col(AgentIntegrationIsolation.source) == "agent_secret",
+            )
+        ).first()
+        if policy is None:
+            session.add(
+                AgentIntegrationIsolation(
+                    agent_id=secret.agent_id,
+                    provider=SecretProvider(secret.provider),
+                    isolated=default_isolation(SecretProvider(secret.provider)),
+                )
+            )
         event = EVENT_REGISTRY.build_event(
             event_name=event_name,
             schema_version=1,
@@ -1380,6 +1411,13 @@ class AgentRepository:
                 return []
             record_id, label, shared_reference_id = secret.id, secret.secret_name, secret.shared_credential_id
             session.delete(secret)
+            session.exec(
+                sa.delete(AgentIntegrationIsolation).where(
+                    col(AgentIntegrationIsolation.agent_id) == agent_id,
+                    col(AgentIntegrationIsolation.provider) == provider,
+                    col(AgentIntegrationIsolation.source) == "agent_secret",
+                )
+            )
             session.flush()
             event = EVENT_REGISTRY.build_event(
                 event_name=AGENT_SECRET_REMOVED,
@@ -1562,19 +1600,71 @@ class AgentRepository:
             return {}
         with Session(self.delegate.engine) as session:
             query = (
-                select(
-                    AgentSecret.agent_id,
-                    AgentSecret.provider,
-                    AgentSecret.secret_name,
-                    AgentSecret.shared_credential_id,
+                sa.select(
+                    col(AgentSecret.agent_id),
+                    col(AgentSecret.provider),
+                    col(AgentSecret.secret_name),
+                    col(AgentSecret.shared_credential_id),
+                    col(AgentIntegrationIsolation.isolated),
+                    col(AgentIntegrationRuntime.bindings),
+                    col(AgentIntegrationRuntime.previous_bindings),
+                    col(AgentIntegrationRuntime.generation),
+                    col(AgentIntegrationRuntime.state),
+                    col(Agent.status),
+                    col(AgentSecret.id),
                 )
                 .join(Agent, col(Agent.id) == col(AgentSecret.agent_id))
+                .outerjoin(
+                    AgentIntegrationIsolation,
+                    (col(AgentIntegrationIsolation.agent_id) == col(AgentSecret.agent_id))
+                    & (col(AgentIntegrationIsolation.provider) == col(AgentSecret.provider))
+                    & (col(AgentIntegrationIsolation.source) == "agent_secret"),
+                )
                 .where(col(AgentSecret.agent_id).in_(agent_ids), *agent_scope_predicates(authorization_scope))
+                .outerjoin(AgentIntegrationRuntime, col(AgentIntegrationRuntime.agent_id) == col(Agent.id))
             )
             result: dict[UUID, list[AgentSecretRead]] = {}
-            for agent_id, provider, name, credential_id in session.exec(query).all():
+            for (
+                agent_id,
+                provider,
+                name,
+                credential_id,
+                isolated,
+                bindings,
+                previous_bindings,
+                generation,
+                state,
+                agent_status,
+                binding_id,
+            ) in session.connection().execute(query).all():
+                metadata = isolation_read(SecretProvider(provider), isolated)
+                verified = (previous_bindings or {}).get(provider, {})
+                if (
+                    verified.get("binding_id") == str(binding_id)
+                    and verified.get("source", "agent_secret") == "agent_secret"
+                ):
+                    metadata.last_verified = verified.get("isolated")
+                applied = (bindings or {}).get(provider)
+                if applied and applied.get("binding_id") == str(binding_id):
+                    metadata.reconnect_required = bool(applied.get("reconnect_required"))
+                    metadata.generation = generation
+                if (
+                    state == "ready"
+                    and agent_status == AgentStatus.RUNNING
+                    and applied
+                    and applied["binding_id"] == str(binding_id)
+                ):
+                    metadata.applied = applied["isolated"]
+                    metadata.generation = generation
+                    metadata.pending = metadata.desired != metadata.applied
                 result.setdefault(agent_id, []).append(
-                    AgentSecretRead(provider=provider, secret_name=name, shared_credential_id=credential_id)
+                    AgentSecretRead(
+                        provider=SecretProvider(provider),
+                        secret_name=name,
+                        shared_credential_id=credential_id,
+                        isolation=metadata,
+                        source="shared_credential" if credential_id else "agent_secret",
+                    )
                 )
             return result
 

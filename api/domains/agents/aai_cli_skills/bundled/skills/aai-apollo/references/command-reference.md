@@ -1,7 +1,7 @@
 # aai-cli Apollo Skill
 
 Agent reference for the `aai-cli apollo` command group.
-                                                
+
 ## Global flags
 
 Accepted by every command. Can also be set via environment variables.

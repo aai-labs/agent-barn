@@ -13,7 +13,7 @@ This is not the per-Agent Activity tab ([`agent-activity.md`](agent-activity.md)
 ## Invariants
 
 - A Business Action records only these fields:
-  - `integration`: the aai-cli command group, for example `jira` or `microsoft`, or `google-<service>` for gog, for example `google-gmail`. The `google-` prefix keeps gog apart from aai-cli's own `drive` (Google Drive) and `email` (Zoho Mail) groups. This is not the glossary's **Integration**.
+  - `integration`: the aai-cli command group, for example `jira` or `microsoft`, or `google-<service>` for gog, for example `google-gmail`. The `google-` prefix keeps gog apart from aai-cli's own `drive` (Google Drive) group. The retired Zoho Mail `email` group is no longer catalogued. This is not the glossary's **Integration**.
   - `resource` and `verb`
   - `is_write` and `outcome_type`
   - `status`

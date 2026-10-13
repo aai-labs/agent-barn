@@ -1739,11 +1739,12 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.keysTab().click();
     await agentDetailPage.editButton().click();
 
-    await expect(page.getByText("Value hidden")).toBeVisible();
+    await page.locator("summary").filter({ hasText: "GitHub" }).click();
+    await expect(page.getByText("Credential configured · value hidden", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
   });
 
-  test("clicking Remove shows credential as pending removal with Undo", async ({ page }) => {
+  test("removing a credential stages its deletion until Apply", async () => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1754,12 +1755,11 @@ test.describe("Agent Detail Page — Keys tab", () => {
 
     await agentDetailPage.removeCredentialButton().click();
 
-    await expect(page.getByText("Will be removed")).toBeVisible();
-    await expect(agentDetailPage.undoCredentialButton()).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toHaveCount(0);
     await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
   });
 
-  test("clicking Undo reverts credential to normal state", async ({ page }) => {
+  test("Cancel discards a staged credential removal", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1770,14 +1770,18 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeCredentialButton().click();
-    await agentDetailPage.undoCredentialButton().click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByText("github-secret", { exact: true })).toBeVisible();
+    await expect(page.getByRole("switch")).toHaveCount(0);
+    await agentDetailPage.editButton().click();
 
-    await expect(page.getByText("Value hidden")).toBeVisible();
+    await page.locator("summary").filter({ hasText: "GitHub" }).click();
+    await expect(page.getByText("Credential configured · value hidden", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
     await expect(agentDetailPage.saveIntegrationsButton()).toBeDisabled();
   });
 
-  test("when integrations save fails, the pending removal and error remain visible", async ({ page }) => {
+  test("failed removal keeps the draft and error available for retry", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1801,7 +1805,8 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await expect(
       page.locator('section[aria-label="Integrations"]').getByText("Secret is used by a skill"),
     ).toBeVisible();
-    await expect(page.getByText("Will be removed")).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toHaveCount(0);
+    await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
   });
 
 });
