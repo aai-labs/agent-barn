@@ -32,8 +32,10 @@ from api.domains.agents.models import (
     AgentTemplateOverrideSourceType,
     AgentTemplateOverrideVersion,
     AgentType,
+    ApolloContent,
     CommandApprovalMode,
     SecretProvider,
+    decrypt_content,
 )
 from api.domains.agents.override_repository import AgentOverrideRepository
 from api.domains.agents.repository import AgentRepository
@@ -83,6 +85,7 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    providers_accept_credentials,
     skill_is_assigned_to_agent,
     there_is_a_skill,
     there_is_a_skill_for_another_org,
@@ -837,7 +840,7 @@ def _providers(response) -> list[str]:
 
 
 def test_patch_agent_adds_secret():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I patch the agent with a jira secret"):
@@ -881,7 +884,7 @@ def test_patch_agent_rejects_retired_google_provider():
 
 
 def test_patch_agent_upserts_existing_secret():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
         repository: AgentRepository = context.injector.get(AgentRepository)
 
@@ -996,7 +999,7 @@ _BITBUCKET_CONTENT_NO_REPOS = {
 
 
 def test_patch_agent_adds_github_secret_without_repos():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I patch the agent with a GitHub secret and no repos"):
@@ -1012,7 +1015,7 @@ def test_patch_agent_adds_github_secret_without_repos():
 
 
 def test_patch_agent_adds_github_secret_with_multiple_repos():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I patch the agent with a GitHub secret listing multiple repos"):
@@ -1038,7 +1041,7 @@ def test_patch_agent_adds_github_secret_with_multiple_repos():
 
 
 def test_patch_agent_adds_bitbucket_secret_without_repos():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I patch the agent with a Bitbucket secret and no repos"):
@@ -1061,7 +1064,7 @@ def test_patch_agent_adds_bitbucket_secret_without_repos():
 
 
 def test_patch_agent_adds_bitbucket_secret_with_multiple_repos():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I patch the agent with a Bitbucket secret listing multiple repos"):
@@ -1091,17 +1094,19 @@ def test_validate_integration_with_no_repos_returns_valid():
     endpoint must not report it as invalid."""
     with given([*_GIVEN, there_is_an_agent()]) as context:
         client: TestClient = context.client
-        client.patch(
-            f"{_BASE}/{context.agent.id}",
-            json={"secrets": [{"provider": "github", "content": _GITHUB_CONTENT_NO_REPOS}]},
-            headers=_auth(context),
-        )
-
         user_resp = httpx.Response(
             200,
             json={"login": "alice"},
             request=httpx.Request("GET", "https://api.github.com/user"),
         )
+        # Saving the credential runs the same GitHub validator as the endpoint below.
+        with patch("api.infrastructure.integration_validators.github.httpx.get", return_value=user_resp):
+            saved = client.patch(
+                f"{_BASE}/{context.agent.id}",
+                json={"secrets": [{"provider": "github", "content": _GITHUB_CONTENT_NO_REPOS}]},
+                headers=_auth(context),
+            )
+        assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
 
         with (
             when("I validate the GitHub integration"),
@@ -1292,7 +1297,7 @@ def test_start_agent_wires_telemetry_push_into_the_secret():
 def test_start_with_stored_secret_that_no_longer_validates_returns_400():
     """Stored content is re-validated on every start. A Pipedrive domain saved before the
     single-label rule must stop the start with a fixable message, not an unhandled error."""
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
         client.patch(
             f"{_BASE}/{context.agent.id}",
@@ -1597,7 +1602,7 @@ def test_update_agent_emits_updated_domain_event_with_field_changes():
 
 
 def test_update_agent_with_no_tracked_field_change_emits_no_updated_event():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I patch the agent with only a secret, no tracked scalar field"):
@@ -1631,7 +1636,7 @@ def test_delete_agent_emits_deleted_domain_event():
 
 
 def test_patch_agent_add_secret_emits_secret_added_domain_event():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I add a jira secret"):
@@ -1652,7 +1657,7 @@ def test_patch_agent_add_secret_emits_secret_added_domain_event():
 
 
 def test_patch_agent_update_secret_emits_secret_updated_domain_event():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I patch the same provider twice with different content"):
@@ -1676,7 +1681,7 @@ def test_patch_agent_update_secret_emits_secret_updated_domain_event():
 
 
 def test_patch_agent_remove_secret_emits_secret_removed_domain_event():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I add then remove a jira secret"):
@@ -2910,7 +2915,7 @@ def test_create_agent_pins_skill_to_explicit_version():
 
 
 def test_create_agent_with_invalid_skill_version_returns_404_and_leaves_no_partial_state():
-    with given([*_GIVEN, there_is_a_skill(name="My Skill")]) as context:
+    with given([*_GIVEN, there_is_a_skill(name="My Skill"), providers_accept_credentials()]) as context:
         client: TestClient = context.client
         litellm: MagicMock = context.injector.get(LiteLLMClient)
         payload = {
@@ -3402,6 +3407,7 @@ def test_start_agent_auto_attaches_aai_cli_skill_for_configured_provider():
                 global_skill=True,
                 tools_pointer=_JIRA_POINTER,
             ),
+            providers_accept_credentials(),
         ]
     ) as context:
         client: TestClient = context.client
@@ -3532,7 +3538,7 @@ def test_start_agent_auto_attach_does_not_duplicate_explicitly_assigned_skill():
 
 
 def test_start_agent_injects_profile_mapping_into_agents_md_openclaw():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
@@ -3553,7 +3559,9 @@ def test_start_agent_injects_profile_mapping_into_agents_md_openclaw():
 
 
 def test_start_agent_injects_profile_mapping_into_agents_md_hermes():
-    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES), providers_accept_credentials()]
+    ) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
@@ -4074,6 +4082,7 @@ def test_list_agents_marks_sole_group_member_required():
         [
             *_GIVEN,
             there_is_a_template_skill_group(("GitHub", "Bitbucket")),
+            providers_accept_credentials(),
         ]
     ) as context:
         client: TestClient = context.client
@@ -5178,7 +5187,7 @@ def _configure_apollo(client: TestClient, context, content: dict | None = None):
 
 def test_patch_agent_accepts_apollo_secret():
     """Covers the enum member, the content schema, and the DB check constraint."""
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I configure an Apollo credential"):
@@ -5236,8 +5245,49 @@ def test_create_agent_rejects_invalid_apollo_key():
             assert_that(client.get(_BASE, headers=_auth(context)).json()["items"], equal_to([]))
 
 
-def test_start_agent_wires_apollo_into_aai_cli():
+def test_patch_agent_live_validates_the_apollo_key_it_saves():
+    """The Agent's credential settings save through PATCH, so the key is checked there
+    too, not only when the Agent is created."""
     with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        healthy = _apollo_response(200, {"healthy": True, "is_logged_in": True})
+
+        with when("I add an Apollo key to an existing agent"):
+            with patch(_APOLLO_HTTPX_GET, return_value=healthy) as apollo_get:
+                response = _configure_apollo(client, context)
+
+        with then("Apollo is asked about exactly that key and the credential is saved"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            apollo_get.assert_called_once()
+            assert_that(apollo_get.call_args.kwargs["headers"], equal_to({"x-api-key": "apollo-test-key"}))
+            assert_that(_providers(response), equal_to(["apollo"]))
+
+
+def test_patch_agent_rejects_an_invalid_apollo_key_and_keeps_the_saved_one():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        with patch(_APOLLO_HTTPX_GET, return_value=_apollo_response(200, {"is_logged_in": True})):
+            _configure_apollo(client, context)
+
+        with when("I replace the key with one Apollo does not recognise"):
+            with patch(_APOLLO_HTTPX_GET, return_value=_apollo_response(200, {"is_logged_in": False})):
+                response = _configure_apollo(client, context, {"api_token": "mistyped-key"})
+
+        with then("the save is rejected with Apollo's reason"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("Invalid API key"))
+
+        with then("the previously saved key is still the one stored"):
+            stored = repository.get_secret(context.agent.id, SecretProvider.APOLLO)
+            assert stored is not None and stored.content is not None
+            content = decrypt_content(SecretProvider.APOLLO, stored.content, TEST_ENCRYPTION_KEY)
+            assert isinstance(content, ApolloContent)
+            assert_that(content.api_token, equal_to("apollo-test-key"))
+
+
+def test_start_agent_wires_apollo_into_aai_cli():
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         from api.domains.skills.skill_seeder import seed_aai_cli_skills
 
         client: TestClient = context.client
@@ -5297,7 +5347,7 @@ def _configure_gws(client: TestClient, context, content: dict | None = None):
 
 def test_patch_agent_accepts_google_workspace_secret():
     """Covers the enum member, the content schema, and the DB check constraint."""
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I configure a Google Workspace credential"):
@@ -5342,7 +5392,9 @@ def test_patch_agent_rejects_google_workspace_scopes_missing_selected_service():
 def test_start_agent_gog_state_is_not_on_the_hermes_pvc():
     """Hermes' PVC is /opt/data (where aai-cli lives); gog's state is deliberately
     ephemeral, since it is rebuilt from the credential on every boot."""
-    with given([*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+    with given(
+        [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES), providers_accept_credentials()]
+    ) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
@@ -5360,7 +5412,7 @@ def test_start_agent_gog_state_is_not_on_the_hermes_pvc():
 
 def test_start_agent_brokered_google_workspace_leaves_no_renewable_credential_in_the_pod():
     """The point of brokering: gog gets a token per invocation, not the grant itself."""
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
@@ -5438,7 +5490,7 @@ def test_start_agent_rejects_google_workspace_without_a_client():
     The empty client config is explicit: a developer's root .env may define real Google
     client credentials, which would otherwise be backfilled and let this pass.
     """
-    with given([*_GIVEN_WITHOUT_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+    with given([*_GIVEN_WITHOUT_GOOGLE_CLIENT, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("the stored credential has no client id/secret"):
@@ -5727,7 +5779,7 @@ def test_a_rejected_skill_pin_leaves_the_template_pin_alone():
 
 
 def test_selection_applies_recorded_runtime_settings_in_the_same_request():
-    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES), providers_accept_credentials()]) as context:
         client: TestClient = context.client
         there_is_a_template(template_key="recorded-template", name="Recorded")(context)
         agent = client.get(f"{_BASE}/{context.agent.id}", headers=_auth(context)).json()
@@ -6221,7 +6273,7 @@ def test_agent_list_credential_projections_do_not_load_encrypted_contents():
 
 def test_create_response_uses_committed_new_binding_isolation_policy():
     with (
-        given(_GIVEN) as context,
+        given([*_GIVEN, providers_accept_credentials()]) as context,
         patch(
             "api.infrastructure.integration_validators.pipedrive.httpx.get",
             return_value=httpx.Response(200, json={"data": {"email": "fixture@example.com"}}),
