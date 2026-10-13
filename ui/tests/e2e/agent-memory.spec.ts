@@ -85,6 +85,24 @@ test.describe("Agent Memory setting", () => {
     expect(setting.requests.map((request) => request.body)).toEqual([{ enabled: true }]);
   });
 
+  test("names the always-on built-in memory and keeps the comparison collapsed until opened", async ({ page }) => {
+    const { memory } = await open(page, OWNER_ACTIONS);
+
+    await expect(memory.builtInMemory()).toContainText("Always on");
+    await expect(memory.builtInMemory()).toContainText("cannot be switched off");
+    await expect(memory.settingsSection().getByRole("table")).toHaveCount(0);
+    // The restart instruction is operational, so it never hides behind the disclosure.
+    await expect(memory.settingsSection()).toContainText("applies the next time the Agent starts");
+
+    await memory.comparisonToggle().click();
+    const table = memory.settingsSection().getByRole("table");
+    await expect(table).toContainText("Not possible");
+    await expect(table).toContainText("Not rolled back");
+
+    await memory.comparisonToggle().click();
+    await expect(table).toHaveCount(0);
+  });
+
   test("turns memory off and states that saved memories are kept", async ({ page }) => {
     const { setting, memory } = await open(page, OWNER_ACTIONS, true);
 
@@ -470,8 +488,39 @@ test.describe("Agent memory viewer", () => {
       items: [],
     });
 
-    await expect(memory.viewer()).toContainText("Nothing saved yet");
     await expect(memory.viewer()).toContainText("Long-term memory is off");
+    await expect(memory.viewer()).not.toContainText("Nothing saved yet");
+    await expect(memory.builtInMemory()).toContainText("Always on");
+    await expect(memory.viewer()).toContainText("still remembers through its built-in memory");
+    await expect(memory.viewer().getByRole("searchbox")).toHaveCount(0);
+    await expect(memory.viewer().getByRole("link", { name: "Turn on in Configuration" })).toHaveAttribute(
+      "href",
+      `/dashboard/${mockAgent.organization_id}/agents/${MOCK_AGENT_ID}/configuration?section=memory`,
+    );
+  });
+
+  test("does not offer to turn memory on without the memory-management permission", async ({ page }) => {
+    const { memory } = await open(page, {
+      allowedActions: mockAgentAllowedActions,
+      agent: { memory_enabled: false },
+      items: [],
+    });
+
+    await expect(memory.viewer()).toContainText("Long-term memory is off");
+    await expect(memory.viewer().getByRole("link", { name: "Turn on in Configuration" })).toHaveCount(0);
+  });
+
+  test("keeps built-in memory as a quiet line, with runtime details on request, beside saved memories", async ({
+    page,
+  }) => {
+    const { memory } = await open(page, { agent: { agent_type: "hermes", memory_enabled: true } });
+
+    await expect(memory.viewer()).toContainText("Customers prefer invoices");
+    await expect(memory.builtInMemory()).toContainText("Always on");
+    await expect(memory.builtInMemory()).not.toContainText("MEMORY.md");
+    await memory.builtInMemory().getByRole("button", { name: "Details" }).click();
+    await expect(memory.builtInMemory()).toContainText("MEMORY.md, USER.md");
+    await expect(memory.viewer().getByRole("searchbox")).toBeVisible();
   });
 
   test("can return from an empty later page when saved memories change", async ({ page }) => {

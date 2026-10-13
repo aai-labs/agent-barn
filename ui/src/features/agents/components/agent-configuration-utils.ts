@@ -61,7 +61,7 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
   {
     key: "memory",
     label: "Memory",
-    description: "Long-term memory that adds to this Agent's own notes.",
+    description: "Built-in memory is always on; long-term memory is an optional add-on.",
   },
   {
     key: "keys",
