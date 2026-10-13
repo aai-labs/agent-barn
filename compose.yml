@@ -217,6 +217,9 @@ services:
       - .env
     environment:
       <<: *api-env
+      # Playbook Extractions call models through the proxy over the compose network;
+      # .env's LITELLM_BASE_URL is host-facing, as for the api service above.
+      LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
     volumes:
       - ./api:/app/api
 
