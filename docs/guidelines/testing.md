@@ -143,6 +143,12 @@ on any failure or cancellation. It is the check to require on `staging` and
 `main`; the per-component jobs are skipped when their paths are untouched, so
 requiring them by name is unreliable.
 
+`../../.github/workflows/deploy.yml` does not repeat lint and tests for a commit
+that is the merge result of a pull request whose head passed `ci-gate`; it builds
+and ships. It runs the full checks for direct pushes and manual dispatches, and
+always runs `make check-migrations` first. The rules are in
+[`operations.md`](operations.md#staging-environment).
+
 ## API tests
 
 API behavior changes MUST cover:
