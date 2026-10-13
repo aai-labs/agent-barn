@@ -1,0 +1,1258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Barn · Workflows — design proposal (MDP-119)</title>
+<style>
+:root{
+  --bg:#fbfaf8;--bg-elev:#fff;--bg-soft:#f4f2ee;--bg-sunken:#ebe9e3;
+  --line:#e7e4dc;--line-strong:#d4d0c4;
+  --ink:#1a1815;--ink-2:#36322c;--ink-3:#6a655c;--ink-4:#97928a;--ink-5:#c4beb2;
+  --accent:#4338ca;--accent-soft:#ece9ff;--accent-ink:#2a2294;
+  --ok:#15803d;--ok-soft:#e1f3e7;--ok-ink:#116530;
+  --warn:#b45309;--warn-soft:#fcefda;--warn-ink:#8f4308;
+  --err:#b42318;--err-soft:#fbe2dd;
+  --shadow:0 1px 0 rgba(20,16,10,.03),0 4px 14px rgba(20,16,10,.06);
+  --shadow-pop:0 20px 60px rgba(20,16,10,.16),0 2px 6px rgba(20,16,10,.06);
+  --font:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"Geist Mono",SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.55 var(--font);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;cursor:pointer;background:none;border:0;padding:0}
+button:disabled,[aria-disabled="true"]{cursor:not-allowed}
+textarea,input{font:inherit;color:var(--ink)}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px;border-radius:6px}
+[hidden]{display:none!important}
+h1,h2,h3,h4,p{margin:0}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.mono{font-family:var(--mono)}
+.muted{color:var(--ink-3)}
+.small{font-size:13px}
+
+/* ───────── prototype-only controls (not product UI) ───────── */
+.proto{background:#fff;border-bottom:1px dashed var(--line-strong);padding:10px 20px 12px;font-size:12.5px;color:var(--ink-3)}
+.proto-in{max-width:1200px;margin:0 auto}
+.proto-row{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.proto-tag{font:600 10.5px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;background:var(--bg-sunken);color:var(--ink-2);padding:5px 8px;border-radius:6px}
+.proto-grp{display:inline-flex;align-items:center;gap:7px}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:999px;overflow:hidden;background:#fff}
+.seg button{padding:4px 10px;font-size:12px;color:var(--ink-3);white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--ink);color:#fff}
+.proto .link{text-decoration:underline;color:var(--ink-2);font-size:12.5px}
+.proto .go{border:1px solid var(--ink);background:var(--ink);color:#fff;border-radius:999px;padding:4px 12px;font-size:12px}
+.ledger{margin-top:10px;border:1px dashed var(--line-strong);border-radius:10px;padding:10px 12px;background:var(--bg)}
+.ledger ol{margin:6px 0 0;padding-left:18px}
+.proto-note{margin-top:8px;font-size:12px;color:var(--ink-4)}
+.proto-toggle{display:none}
+
+/* ───────── page frame (mirrors .af-page) ───────── */
+.af-page{max-width:1200px;margin:0 auto;padding:28px 40px 110px}
+.back{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-3);padding:4px 8px;margin:0 0 20px -8px;border-radius:8px}
+.back:hover{background:var(--bg-soft)}
+svg.i{width:16px;height:16px;flex:none}
+
+/* header */
+.agent-head{display:flex;gap:22px;align-items:flex-start;padding-bottom:28px;flex-wrap:wrap}
+.avatar{border-radius:50%;display:grid;place-items:center;font-family:var(--mono);font-weight:600;color:#fff;flex:none;background:linear-gradient(135deg,#0d9488,#15803d)}
+.avatar.xl{width:72px;height:72px;font-size:22px}
+.avatar.sm{width:32px;height:32px;font-size:12px}
+.avatar.xs{width:24px;height:24px;font-size:10.5px}
+.who{flex:1;min-width:240px}
+.who h1{font-size:2.5rem;font-weight:600;letter-spacing:-.028em;line-height:1.1;margin-bottom:4px}
+.model{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-size:14.5px;color:var(--ink-3)}
+.msb{font-size:11px;font-weight:500;border:1px dashed var(--line-strong);background:var(--bg-soft);border-radius:6px;padding:1px 6px;color:var(--ink-3)}
+.badges{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--bg-soft);color:var(--ink-3);border-radius:999px;padding:1px 9px;font-size:12px}
+.statusrow{display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap}
+.status{display:inline-flex;align-items:center;gap:7px;font-size:12.5px}
+.status i{width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block}
+.status.ok{color:var(--ok)}.status.ok i{animation:pulse 2s infinite}
+.status.idle{color:var(--ink-3)}
+.attn{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:500;color:var(--warn-ink);background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 28%,transparent);border-radius:999px;padding:2px 10px}
+.attn:hover{border-color:var(--warn)}
+.head-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 currentColor;opacity:1}50%{box-shadow:0 0 0 4px rgba(0,0,0,0);opacity:.6}}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 14px;border-radius:999px;border:1px solid var(--line-strong);background:var(--bg-elev);font-size:13.5px;font-weight:500;color:var(--ink-2);white-space:nowrap;transition:background .12s,border-color .12s}
+.btn:not([aria-disabled="true"]):not(:disabled):hover{background:var(--bg-soft)}
+.btn[aria-disabled="true"],.btn:disabled{opacity:.45}
+.btn.primary{background:var(--ink);border-color:var(--ink);color:#fff}
+.btn.primary:not([aria-disabled="true"]):not(:disabled):hover{background:var(--ink-2)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink-3)}
+.btn.ghost:not([aria-disabled="true"]):hover{color:var(--ink);background:var(--bg-soft)}
+.btn.danger{background:var(--err);border-color:var(--err);color:#fff}
+.btn.danger-ghost{color:var(--err);border-color:transparent;background:transparent}
+.btn.danger-ghost:hover{background:var(--err-soft)!important}
+.btn.sm{padding:5px 11px;font-size:12.5px}
+.btn.lg{padding:11px 20px;font-size:14.5px}
+.split{display:flex;position:relative}
+.split .btn:first-child{border-radius:999px 0 0 999px}
+.split .btn:nth-child(2){border-radius:0 999px 999px 0;margin-left:-1px;padding:8px 10px}
+
+/* menus (styled, accessible — no native <select>) */
+.menu-wrap{position:relative;display:inline-block}
+.menu-panel{position:absolute;z-index:40;top:calc(100% + 6px);right:0;min-width:200px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-pop);padding:5px}
+.menu-panel.left{right:auto;left:0}
+.menu-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 10px;border-radius:8px;font-size:13.5px;color:var(--ink-2)}
+.menu-item:hover,.menu-item:focus-visible{background:var(--bg-soft);outline:none}
+.menu-item[aria-selected="true"]{font-weight:600}
+.menu-item .tick{margin-left:auto;color:var(--ink)}
+.menu-btn{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:170px;border:1px solid var(--line-strong);background:#fff;border-radius:10px;padding:9px 12px;font-size:14px}
+.menu-btn:focus-visible{outline-offset:2px}
+
+/* tabs (mirrors .ap-tab) */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:28px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.ap-tab{padding:12px 16px;font-size:14px;font-weight:500;color:var(--ink-3);position:relative;white-space:nowrap;display:inline-flex;align-items:center;gap:8px;flex:none}
+.ap-tab:hover{color:var(--ink)}
+.ap-tab[aria-current="page"]{color:var(--ink);font-weight:600}
+.ap-tab[aria-current="page"]::after{content:"";position:absolute;bottom:-1px;left:16px;right:16px;height:2px;background:var(--ink);border-radius:2px 2px 0 0}
+.dot-count{min-width:18px;height:18px;border-radius:999px;background:var(--warn);color:#fff;font-size:11px;font-weight:600;display:grid;place-items:center;padding:0 5px}
+.new-tag{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-ink);background:var(--accent-soft);border-radius:6px;padding:1px 5px}
+
+/* generic */
+.card{background:#fff;border:1px solid var(--line);border-radius:16px}
+.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:2px 10px;font-size:12px;font-weight:500;background:var(--bg-soft);color:var(--ink-3);border:1px solid var(--line);white-space:nowrap}
+.pill.warn{background:var(--warn-soft);color:var(--warn-ink);border-color:color-mix(in srgb,var(--warn) 25%,transparent)}
+.pill.ok{background:var(--ok-soft);color:var(--ok-ink);border-color:color-mix(in srgb,var(--ok) 22%,transparent)}
+.pill.acc{background:var(--accent-soft);color:var(--accent-ink);border-color:transparent}
+.pill.live::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 2s infinite}
+.crumbs{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-3);margin-bottom:14px}
+.crumbs button{color:var(--ink-3);text-decoration:underline;text-underline-offset:3px}
+.crumbs button:hover{color:var(--ink)}
+.view-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+.view-head h2{font-size:24px;font-weight:600;letter-spacing:-.02em;line-height:1.2}
+.view-head p{color:var(--ink-3);margin-top:4px;max-width:60ch}
+.view-head h2:focus{outline:none}
+.sec{font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--ink-3);margin:30px 0 12px;display:flex;align-items:center;gap:10px}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--warn-ink)}
+
+/* home: waiting strip */
+.strip{display:flex;gap:14px;align-items:center;width:100%;text-align:left;border:1px solid color-mix(in srgb,var(--warn) 32%,var(--line));background:var(--warn-soft);border-radius:16px;padding:14px 18px;margin-bottom:10px}
+.strip:hover{border-color:var(--warn)}
+.strip-ic{width:38px;height:38px;border-radius:12px;background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn);display:grid;place-items:center;flex:none}
+.strip b{display:block;font-size:15px}
+.strip span.t{display:block;color:var(--ink-3);font-size:13.5px}
+.strip .go{margin-left:auto;font-weight:600;font-size:13.5px;color:var(--warn-ink);white-space:nowrap}
+
+/* home: workflow cards */
+.wf-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.wf{padding:20px;display:flex;flex-direction:column;gap:10px;transition:border-color .15s,box-shadow .15s}
+.wf:hover{border-color:var(--line-strong);box-shadow:var(--shadow)}
+.wf.fresh{border-color:color-mix(in srgb,var(--accent) 40%,var(--line));box-shadow:0 0 0 3px var(--accent-soft)}
+.wf h4{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.wf p{color:var(--ink-3);font-size:14px}
+.tags{display:flex;gap:6px;flex-wrap:wrap}
+.wf-foot{display:flex;gap:8px;align-items:center;margin-top:auto;padding-top:6px;flex-wrap:wrap}
+.wf-foot .grow{flex:1}
+.how{border-top:1px solid var(--line);padding-top:12px;margin-top:2px}
+.how ol{margin:0;padding:0;list-style:none;counter-reset:s}
+.how li{counter-increment:s;display:flex;gap:10px;padding:5px 0;font-size:13.5px;color:var(--ink-2)}
+.how li::before{content:counter(s);width:20px;height:20px;border-radius:50%;background:var(--bg-soft);color:var(--ink-3);font-size:11px;display:grid;place-items:center;flex:none;margin-top:1px}
+.runs{overflow:hidden}
+.run-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px 18px;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line);width:100%;text-align:left}
+.run-row:last-child{border-bottom:0}
+.run-row:hover{background:var(--bg)}
+.run-row b{font-weight:600}
+.run-row .sub{font-size:13px;color:var(--ink-3)}
+
+/* create */
+.narrow{max-width:760px}
+.ask-box{width:100%;min-height:128px;border:1px solid var(--line-strong);border-radius:14px;padding:14px 16px;font-size:16px;line-height:1.55;background:#fff;resize:vertical;outline:none}
+.ask-box:focus{border-color:var(--ink);box-shadow:0 0 0 3px var(--bg-sunken)}
+.examples{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}
+.ex{text-align:left;border:1px solid var(--line);background:#fff;border-radius:14px;padding:12px 14px;transition:border-color .12s}
+.ex:hover{border-color:var(--line-strong)}
+.ex[aria-pressed="true"]{border-color:var(--ink);box-shadow:0 0 0 3px var(--bg-sunken)}
+.ex b{display:block;font-size:14px}
+.ex span{display:block;font-size:13px;color:var(--ink-3);margin-top:2px}
+.agent-say{display:flex;gap:12px;align-items:flex-start;margin-bottom:18px}
+.agent-say .bub{background:#fff;border:1px solid var(--line);border-radius:4px 16px 16px 16px;padding:12px 16px;max-width:62ch}
+.plan{overflow:hidden}
+.pstep{display:flex;gap:14px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.pstep:last-child{border-bottom:0}
+.pnum{width:26px;height:26px;border-radius:50%;background:var(--bg-soft);color:var(--ink-3);font-size:12px;font-weight:600;display:grid;place-items:center;flex:none;margin-top:1px}
+.pbody{flex:1;min-width:0}
+.pbody b{font-size:14.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pbody p{color:var(--ink-3);font-size:14px;margin-top:2px}
+.peditor{display:grid;gap:8px;margin-top:6px}
+.input{border:1px solid var(--line-strong);background:#fff;border-radius:8px;padding:9px 12px;font-size:14px;width:100%;outline:none}
+.input:focus{border-color:var(--ink);box-shadow:0 0 0 3px var(--bg-sunken)}
+.name-input{font-size:20px;font-weight:600;letter-spacing:-.015em;border:1px solid transparent;border-radius:10px;padding:6px 10px;margin-left:-10px;width:calc(100% + 10px);background:transparent}
+.name-input:hover,.name-input:focus{border-color:var(--line-strong);background:#fff;outline:none}
+.savebar{position:sticky;bottom:0;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:14px 0;margin-top:18px;background:linear-gradient(to top,var(--bg) 70%,rgba(251,250,248,0))}
+.typing{display:inline-flex;gap:4px;align-items:center}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--ink-4);animation:bounce 1.2s infinite}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+@keyframes bounce{0%,60%,100%{transform:translateY(0);opacity:.3}30%{transform:translateY(-3px);opacity:1}}
+
+/* run page */
+.run-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:28px;align-items:start}
+.rail{position:sticky;top:16px;display:grid;gap:14px}
+.rail .card{padding:16px 18px}
+.rail h3{font-size:13px;font-weight:600;color:var(--ink-3);margin-bottom:10px;letter-spacing:.02em}
+.prog{margin:0 0 22px}
+.bar{height:8px;background:var(--bg-sunken);border-radius:999px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ink);border-radius:999px;transition:width .5s}
+.prog-copy{display:flex;justify-content:space-between;gap:12px;font-size:13.5px;color:var(--ink-3);margin-top:8px;flex-wrap:wrap}
+.prog-copy b{color:var(--ink)}
+.rplan{list-style:none;margin:0;padding:0}
+.rplan li{display:flex;gap:10px;padding:6px 0;font-size:13.5px;color:var(--ink-3)}
+.rplan .mk{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--bg-soft);font-size:11px;margin-top:1px}
+.rplan li.done .mk{background:var(--ok-soft);color:var(--ok)}
+.rplan li.cur{color:var(--ink);font-weight:500}
+.rplan li.cur .mk{background:var(--ink);color:#fff}
+.rplan li.wait .mk{background:var(--warn);color:#fff}
+.dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13.5px;margin:0}
+.dl dt{color:var(--ink-3)}.dl dd{margin:0}
+.cancel-note{font-size:12.5px;color:var(--ink-3);margin-top:8px}
+.log{list-style:none;margin:0;padding:0}
+.log li{display:grid;grid-template-columns:48px 1fr;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+.log li:last-child{border-bottom:0}
+.log time{color:var(--ink-4);font-size:12.5px;font-variant-numeric:tabular-nums;padding-top:1px}
+.log .warn{color:var(--warn-ink);font-weight:500}.log .ok{color:var(--ok-ink)}
+.log .you{font-weight:500}
+
+/* thread (shared by run page + Chat) */
+.thread{display:grid;gap:14px}
+.msg{display:flex;gap:10px;align-items:flex-start;max-width:min(680px,100%)}
+.msg .bub{background:#fff;border:1px solid var(--line);border-radius:4px 16px 16px 16px;padding:10px 14px}
+.msg .who-l{font-size:12px;color:var(--ink-3);margin-bottom:2px}
+.msg.you{justify-self:end;flex-direction:row-reverse}
+.msg.you .bub{background:var(--bg-sunken);border-color:transparent;border-radius:16px 4px 16px 16px}
+.msg.you .who-l{text-align:right}
+.event{justify-self:center;font-size:12.5px;color:var(--ink-3);background:var(--bg-soft);border-radius:999px;padding:3px 12px}
+.past{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--ink-3);border:1px dashed var(--line-strong);border-radius:12px;padding:10px 14px;background:transparent}
+.past .ic{flex:none;margin-top:1px}
+.past.ok .ic{color:var(--ok)}.past b{color:var(--ink-2);font-weight:500}
+
+/* approval card */
+.ask{background:#fff;border:1px solid color-mix(in srgb,var(--warn) 32%,var(--line));border-radius:18px;overflow:hidden;box-shadow:var(--shadow)}
+.ask-top{background:var(--warn-soft);padding:11px 20px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.ask-body{padding:18px 20px 4px}
+.ask h3{font-size:19px;font-weight:600;letter-spacing:-.015em;line-height:1.3}
+.ask .deal{color:var(--ink-3);font-size:14px;margin-top:2px}
+.why{display:flex;gap:10px;margin-top:14px;align-items:flex-start}
+.why p{font-size:14.5px}
+.why .lbl{font-size:12px;color:var(--ink-3);display:block;margin-bottom:1px}
+.changes{margin:16px 0 0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.changes .h{background:var(--bg-soft);font-size:12px;font-weight:600;color:var(--ink-3);letter-spacing:.04em;padding:7px 14px}
+.changes dl{display:grid;grid-template-columns:96px 1fr;margin:0}
+.changes dt,.changes dd{margin:0;padding:9px 14px;border-top:1px solid var(--line);font-size:14px}
+.changes dt{color:var(--ink-3)}.changes dd{font-weight:500}
+.safe{display:flex;gap:10px;align-items:flex-start;margin-top:12px;font-size:13.5px;color:var(--ink-2);background:var(--ok-soft);border-radius:12px;padding:10px 14px}
+.safe .i{color:var(--ok);margin-top:2px}
+.diff{margin-top:12px;font-size:13.5px;color:var(--accent-ink);background:var(--accent-soft);border-radius:12px;padding:8px 14px}
+.decide{margin-top:18px;padding:16px 20px 18px;border-top:1px solid var(--line);background:var(--bg)}
+.approve-row{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.hint{font-size:13px;color:var(--ink-3)}
+.reply-lbl{display:block;font-size:13.5px;font-weight:600;margin:16px 0 8px}
+.reply{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;border:1px solid var(--line-strong);border-radius:14px;background:#fff;padding:6px 6px 6px 14px}
+.reply:focus-within{border-color:var(--ink);box-shadow:0 0 0 3px var(--bg-sunken)}
+.reply textarea{flex:1;min-width:0;border:0;outline:0;resize:none;background:transparent;padding:7px 0;line-height:1.5;max-height:150px;min-height:26px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.chip{border:1px solid var(--line-strong);background:#fff;border-radius:999px;padding:4px 11px;font-size:13px;color:var(--ink-2)}
+.chip:hover{background:var(--bg-soft)}
+.fine{font-size:12.5px;color:var(--ink-3);margin-top:10px}
+.readonly{font-size:13.5px;color:var(--ink-3);display:flex;gap:10px;align-items:flex-start}
+.state-card{padding:20px 22px;display:flex;gap:14px;align-items:flex-start}
+.state-card h3{font-size:17px;font-weight:600;letter-spacing:-.01em}
+.state-card p{color:var(--ink-3);margin-top:3px}
+.state-ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;flex:none;background:var(--bg-soft);color:var(--ink-2)}
+.state-ic.ok{background:var(--ok-soft);color:var(--ok)}
+.state-ic.live{background:var(--ok-soft);color:var(--ok)}
+.recap{margin-top:12px;font-size:13.5px;color:var(--ink-2);background:var(--bg-soft);border-radius:10px;padding:8px 12px}
+
+/* chat (mirrors chat-tab.tsx layout) */
+.chat{display:flex;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--bg);height:min(720px,82vh)}
+.threads{width:224px;flex:none;border-right:1px solid var(--line);display:flex;flex-direction:column}
+.threads .top{padding:10px}
+.threads .lbl{padding:6px 18px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3)}
+.titem{display:block;width:calc(100% - 12px);margin:0 6px 2px;text-align:left;padding:8px 10px;border-radius:8px;font-size:13px}
+.titem.act{background:var(--bg-soft)}
+.titem span{display:block;font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-main{flex:1;min-width:0;display:flex;flex-direction:column}
+.chat-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);flex:none}
+.chat-head .t{display:flex;gap:10px;align-items:center;min-width:0}
+.live{font-size:12px;color:var(--ok);font-weight:500;display:flex;gap:6px;align-items:center;white-space:nowrap}
+.live::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ok)}
+.exp{font-size:11px;font-weight:500;color:var(--warn-ink);background:var(--warn-soft);border-radius:999px;padding:0 8px;margin-left:8px}
+.chat-scroll{flex:1;overflow:auto;padding:20px}
+.chat-compose{flex:none;padding:12px 16px 16px;border-top:1px solid var(--line)}
+.chat-hint{font-size:12.5px;color:var(--warn-ink);margin:0 0 8px;display:flex;gap:8px;align-items:center}
+.compose{display:flex;gap:8px;align-items:center;border:1px solid var(--line-strong);border-radius:999px;background:#fff;padding:5px 6px 5px 16px}
+.compose:focus-within{border-color:var(--ink);box-shadow:0 0 0 3px var(--bg-sunken)}
+.compose input{flex:1;min-width:0;border:0;outline:0;background:transparent;padding:6px 0}
+.icon-btn{width:34px;height:34px;border-radius:50%;background:var(--ink);color:#fff;display:grid;place-items:center;flex:none}
+.icon-btn:disabled{opacity:.35}
+.chat .ask{box-shadow:none}
+.ask.compact .changes .h{display:none}
+.ask.compact .changes dt,.ask.compact .changes dd{padding:6px 12px;font-size:13.5px}
+.ask.compact .changes dl{grid-template-columns:80px 1fr}
+.ask.compact .changes dt:first-of-type,.ask.compact .changes dd:first-of-type{border-top:0}
+.ask.compact .ask-body{padding-top:14px}
+.ask.compact h3{font-size:17px}
+.ask.compact .why{margin-top:10px}
+.ask.compact .fine{display:none}
+.ask.compact .decide{margin-top:14px;padding-top:14px}
+.ask.compact .reply-lbl{margin-top:12px}
+
+/* dialogs + toast */
+.overlay{position:fixed;inset:0;background:rgba(20,16,10,.38);z-index:60;display:grid;place-items:center;padding:16px}
+.dialog{background:#fff;border-radius:18px;box-shadow:var(--shadow-pop);width:min(460px,100%);padding:22px}
+.dialog h3{font-size:18px;font-weight:600;letter-spacing:-.01em}
+.dialog p{color:var(--ink-3);margin-top:8px}
+.dialog .field{margin-top:16px}
+.dialog .field label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+.dialog .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:20px;flex-wrap:wrap}
+.note-box{margin-top:14px;font-size:13.5px;background:var(--bg-soft);border-radius:10px;padding:10px 12px;color:var(--ink-2)}
+.toast{position:fixed;left:50%;bottom:20px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:var(--ink);color:#fff;border-radius:12px;padding:10px 16px;font-size:13.5px;z-index:70;max-width:min(560px,calc(100vw - 32px));transition:opacity .2s,transform .2s}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.empty{padding:28px;text-align:center;color:var(--ink-3)}
+
+@media (max-width:900px){
+  .run-grid{grid-template-columns:1fr}
+  .rail{position:static}
+  .wf-grid{grid-template-columns:1fr}
+  .examples{grid-template-columns:1fr}
+}
+@media (max-width:640px){
+  .af-page{padding:18px 16px 100px}
+  .agent-head{gap:14px}
+  .avatar.xl{width:56px;height:56px;font-size:18px}
+  .who{min-width:0;flex:1 1 calc(100% - 80px)}
+  .who h1{font-size:1.75rem}
+  .head-actions{width:100%}
+  .head-actions .btn{padding:7px 12px}
+  .ap-tab{padding:12px 12px}
+  .view-head h2{font-size:21px}
+  .view-head .btn{width:100%}
+  .threads{display:none}
+  .chat{height:min(680px,78vh)}
+  .chat-scroll{padding:14px}
+  .live{display:none}
+  .run-row{grid-template-columns:1fr auto}
+  .run-row .when{display:none}
+  .ask-body{padding:16px 16px 2px}
+  .ask-top{padding:10px 16px}
+  .decide{padding:14px 16px 16px}
+  .approve-row .btn{width:100%}
+  .changes dl{grid-template-columns:78px 1fr}
+  .strip{flex-wrap:wrap}
+  .strip .go{margin-left:52px}
+  .state-card{padding:16px}
+  .dialog{padding:18px}
+  .dialog .foot .btn{flex:1}
+  .proto-grp{width:100%;flex-wrap:wrap}
+  .proto-toggle{display:inline}
+  .proto.collapsed .proto-segs{display:none}
+  .proto-note{display:none}
+  .model{font-size:13px}
+  .lbl-text{display:none}
+  .reply textarea{flex:1 1 100%}
+  .reply{padding:8px 8px 8px 14px}
+  .reply .btn{margin-left:auto}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+.savebar{position:static}.artifacts{margin-top:26px}.artifacts .art-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.artifacts h3{font-size:16px;font-weight:600;margin:0}.artifacts .art-intro{font-size:12px;color:var(--ink-3);margin:4px 0 0}.artifact-list{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:white}.artifact-row{padding:16px 18px;display:flex;gap:13px;align-items:flex-start;border-bottom:1px solid var(--line)}.artifact-row:last-child{border:0}.file-icon{width:36px;height:40px;background:var(--bg-soft);border:1px solid var(--line);border-radius:7px;display:grid;place-items:center;font-family:var(--font-mono,monospace);font-size:9px;color:var(--ink-3);flex-shrink:0}.file-info{flex:1;min-width:0}.file-info b{display:block;font-size:13px;overflow-wrap:anywhere}.file-info p{font-size:11px;color:var(--ink-3);margin-top:4px}.file-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.pending-file{background:var(--bg);opacity:.85}.output-setting{border-top:1px solid var(--line);margin-top:12px;padding-top:12px;font-size:12px}.output-setting label{display:flex;gap:8px;align-items:center;color:var(--ink-2);cursor:pointer}.output-setting input[type=checkbox]{accent-color:var(--ink);width:15px;height:15px}.output-details{margin:10px 0 2px;display:grid;gap:10px}.output-details .input{font-size:12px}.format-options{display:flex;gap:5px;flex-wrap:wrap}.format-options button{border:1px solid var(--line);background:white;color:var(--ink-3);padding:5px 9px;border-radius:99px;font-size:11px}.format-options button.active{background:var(--ink);color:white;border-color:var(--ink)}.final-output{padding:18px;margin-top:18px}.final-output h3{font-size:14px;margin-bottom:6px}.artifact-dialog{width:min(820px,calc(100% - 24px));max-height:85vh;overflow:auto}.artifact-dialog .art-preview-meta{font-size:12px;color:var(--ink-3);margin:6px 0 18px}.artifact-preview{border:1px solid var(--line);border-radius:12px;padding:20px;background:var(--bg);overflow:auto}.artifact-preview pre{white-space:pre-wrap;font-size:12px;line-height:1.7;font-family:var(--font-mono,monospace)}.artifact-preview table{border-collapse:collapse;width:100%;font-size:12px}.artifact-preview th,.artifact-preview td{text-align:left;padding:9px;border-bottom:1px solid var(--line);white-space:nowrap}.artifact-preview h1,.artifact-preview h2{font-size:23px;margin-bottom:12px}.artifact-preview h4{font-size:14px;margin:18px 0 7px}.artifact-preview p,.artifact-preview li{font-size:12px;line-height:1.7}.artifact-preview ul{padding-left:20px}.file-summary{font-size:11px;color:var(--ink-3);margin-top:5px}.artifact-scenarios{padding:12px 20px;display:flex;gap:7px;flex-wrap:wrap;border-bottom:1px dashed var(--line-strong);font-size:11px}.artifact-scenarios button{font:inherit;padding:6px 10px;border:1px solid var(--line-strong);border-radius:99px;background:var(--bg-elev);color:var(--ink-2)}
+@media(max-width:550px){.artifact-row{padding:14px;gap:10px}.artifact-preview{padding:14px}.artifact-dialog{padding:18px}.file-actions .btn{font-size:11px;padding:6px 10px}}
+
+.pstep>.btn{align-self:start;margin-top:4px}.artifact-preserve-row{display:flex;justify-content:space-between;align-items:center;gap:12px;color:var(--ink-2);font-size:12px;font-weight:500}
+.artifact-preserve-switch{width:36px;height:22px;padding:3px;border:0;border-radius:99px;background:var(--line-strong);cursor:pointer;flex-shrink:0}
+.artifact-preserve-switch span{display:block;width:16px;height:16px;border-radius:50%;background:white;transition:transform .12s;box-shadow:0 1px 2px #0002}
+.artifact-preserve-switch[aria-checked=true]{background:var(--ink)}
+.artifact-preserve-switch[aria-checked=true] span{transform:translateX(14px)}
+.artifact-description-label{display:block!important;font-size:11px;color:var(--ink-3)!important;font-weight:500}
+.artifact-description{min-height:96px;line-height:1.6;resize:vertical}
+.artifact-description-help{font-size:11px!important;color:var(--ink-3);margin-top:0!important}
+</style>
+</head>
+<body>
+
+<!-- Prototype-only controls. Everything in this bar simulates behavior a real runtime would provide. -->
+<div class="proto" id="proto" role="region" aria-label="Prototype controls — not part of the product"></div>
+
+<div class="artifact-scenarios" aria-label="Artifact prototype views"><button data-act="artifact-current">Step outputs · current run</button><button data-act="artifact-completed">Final output · completed run</button><button data-act="artifact-settings">Request files in a workflow</button></div><div class="af-page">
+  <button class="back" data-act="na" data-msg="Your team page isn't part of this prototype."><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Your team</button>
+  <header class="agent-head" id="head"></header>
+  <nav class="tabs" id="tabs" aria-label="Agent sections"></nav>
+  <main id="view"></main>
+</div>
+<div class="overlay" id="overlay" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+'use strict';
+/* ═══════════ helpers ═══════════ */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad = n => String(n).padStart(2, '0');
+const P = {
+  back:'<path d="m15 18-6-6 6-6"/>',
+  sliders:'<path d="M4 6h8M18 6h2M4 12h2M12 12h8M4 18h10M20 18h0"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  share:'<path d="M12 3v12M8 7l4-4 4 4M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>',
+  pause:'<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  play:'<path d="m7 4 13 8-13 8z"/>',
+  chev:'<path d="m6 9 6 6 6-6"/>',
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  up:'<path d="M12 19V5M5 12l7-7 7 7"/>',
+  check:'<path d="m5 12 5 5 9-10"/>',
+  x:'<path d="M18 6 6 18M6 6l12 12"/>',
+  pencil:'<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  shield:'<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z"/><path d="m9 12 2 2 4-4"/>',
+  hand:'<path d="M18 11V6a2 2 0 0 0-4 0M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.9-2.4L3.4 16a2 2 0 0 1 3-2.6L8 15"/>',
+  arrow:'<path d="M5 12h14M13 6l6 6-6 6"/>',
+  lock:'<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  trash:'<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V4h6v3"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  loop:'<path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/>'
+};
+const ic = (n, c = '') => `<svg class="i ${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n]}</svg>`;
+const NAME = 'Sales Analyst';
+const av = (size = 'sm') => `<span class="avatar ${size}" aria-hidden="true">SA</span>`;
+
+/* ═══════════ scripted content (sample data) ═══════════ */
+const SKIP_CHIP = t => ({label:'Skip this deal', text:t});
+const ATLAS = {
+  deal:'Atlas', detail:'Annual agreement', kind:'Call', short:'a follow-up call',
+  verb:'Add a Call to Pipedrive for Atlas',
+  why:"I'd like Maya to follow up with Atlas. The proposal went out 9 days ago and nothing is scheduled next.",
+  fields:[['Add','Call · “Follow up on proposal”'],['For','Maya'],['Due','Tuesday, Oct 13']],
+  safe:'Only adds a Call to the Atlas deal in Pipedrive. No call is placed and no email is sent.',
+  done:'Call “Follow up on proposal” added to Atlas, for Maya, due Oct 13',
+  chips:[
+    {label:'Keep it internal for now', text:"Don't schedule a call yet. Create an internal task for Maya to check procurement status on Friday. No outreach for now."},
+    SKIP_CHIP('Skip Atlas for now and move on to the next deal.')
+  ],
+  revise:{
+    kind:'Task', short:'an internal task', verb:'Add a Task to Pipedrive for Atlas',
+    lead:"Understood, I'll keep this internal. I've turned it into a task for Maya instead of a call. Because this is a different action, it needs your approval before I add it.",
+    why:"You asked for no outreach for now, so this is only a reminder for Maya to check procurement status on Friday.",
+    fields:[['Add','Task · “Check procurement status”'],['For','Maya'],['Due','Friday, Oct 16']],
+    safe:'Only adds an internal Task to the Atlas deal in Pipedrive. Nobody outside your team is contacted.',
+    done:'Task “Check procurement status” added to Atlas, for Maya, due Oct 16',
+    diff:'Compared with the call you declined: a Task instead of a Call, due Friday instead of Tuesday, no outreach.',
+    chips:[SKIP_CHIP('Skip Atlas and move on.')]
+  }
+};
+const NORTHWIND = {
+  deal:'Northwind Foods', detail:'Renewal', kind:'Stage change', short:'a stage change', at:8,
+  verb:'Move Northwind Foods to “Negotiation”',
+  lead:'Northwind Foods needs a decision from you before I continue.',
+  why:"They replied to the renewal quote this morning and asked about terms, so they look ready to negotiate.",
+  fields:[['Change','Deal stage'],['From','Proposal sent'],['To','Negotiation']],
+  safe:'Only updates the stage of this deal in Pipedrive. Nothing is sent to the customer.',
+  done:'Northwind Foods moved to “Negotiation”',
+  chips:[{label:'Hold off for now', text:"Not yet. Leave it where it is and I'll check again next week."}, SKIP_CHIP('Skip this one and move on.')]
+};
+const BIRCHWOOD = {
+  deal:'Birchwood Dental', detail:'New business', kind:'Note', short:'a note', at:4,
+  verb:'Add a Note to Pipedrive for Birchwood Dental',
+  lead:'Birchwood Dental needs a decision from you before I continue.',
+  why:"They asked for a quote by Friday. A note on the deal keeps the whole team aware of the deadline.",
+  fields:[['Add','Note · “Quote requested by Friday”'],['On','Birchwood Dental deal']],
+  safe:'Only adds a private note to the deal in Pipedrive. Nothing is sent.',
+  done:'Note “Quote requested by Friday” added to Birchwood Dental',
+  chips:[SKIP_CHIP('Skip this one and move on.')]
+};
+const FILLER = ['Birch Logistics','Quill & Co','Harbor Textiles','Summit Optics','Lumen Health','Foxglove Studio','Redwood Supply','Copperline'];
+
+const EXAMPLES = [
+  {id:'stalled', title:'Follow up on stalled deals', text:'Find deals with no activity in the last 7 days and suggest a follow-up for each one. Ask me before adding anything to Pipedrive.'},
+  {id:'summary', title:'Weekly pipeline summary', text:"Summarize what moved, what's stuck, and what needs my attention this week. Don't change anything."},
+  {id:'prep', title:'Prepare for a customer call', text:'Gather the notes and recent activity for one deal and give me a short briefing before the call.'}
+];
+const PLANS = {
+  stalled:[
+    {t:'Find the deals',c:'Look at open deals in Pipedrive that have had no activity for 7 days.'},
+    {t:'Review each deal',c:'Read the notes and history to see where things stand.'},
+    {t:'Suggest a follow-up',c:'When a follow-up makes sense, show you exactly what it would add to Pipedrive and wait for your answer.',asks:true},
+    {t:'Summarize the results',c:'Tell you what was added, what you skipped, and what is left.'}
+  ],
+  summary:[
+    {t:'Gather this week’s deals',c:'Read the deals that moved or stalled in Pipedrive this week.'},
+    {t:'Write the summary',c:'Highlight progress, stuck deals, and what needs your attention.'},
+    {t:'Show it to you',c:'Keep the summary with the run. Nothing in Pipedrive is changed.'}
+  ],
+  prep:[
+    {t:'Choose the deal',c:'Use the deal you pick when you start the run.'},
+    {t:'Gather background',c:'Collect notes, recent activity, and who has been involved.'},
+    {t:'Write a short briefing',c:'Give you a one-page briefing you can read before the call. Nothing is changed.'}
+  ],
+  custom:t=>[
+    {t:'Look at what you described',c:t},
+    {t:'Work out what to do',c:'Decide what each item needs, based on what is in Pipedrive.'},
+    {t:'Ask before changing anything',c:'When something should change in Pipedrive, show you the exact change and wait for your answer.',asks:true},
+    {t:'Report back',c:'Tell you what was done and what is left.'}
+  ]
+};
+
+/* ═══════════ state ═══════════ */
+let S;
+function fresh() {
+  const p1 = {...ATLAS, id:'p1', run:'r1', seq:1, rev:1, state:'pending'};
+  return {
+    role:'editor', pacing:'auto', declineMode:'auto', paused:false,
+    tab:'workflows', view:'home', viewRun:'r1', focusNext:null, menu:null, dialog:null,
+    seqP:1, seqR:1, seqW:2, clock:4, ledgerOpen:false, protoOpen:false, ledger:[], steps:[], seqStep:0,
+    expanded:{}, drafts:{}, freshWf:null, chatDraft:'', chatLen:0,
+    create:{phase:'compose', text:'', example:null, plan:[], name:'', edit:null, wfId:null, drafting:false, error:false, ts:0},
+    workflows:[
+      {id:'w1', name:'Weekly pipeline review', desc:'Look through open deals one by one and suggest next steps. Asks you before adding anything to Pipedrive.', writes:true, last:'Oct 5', total:24,
+       steps:[PLANS.stalled[0], {t:'Review each deal',c:'Read the notes and history, then decide whether a follow-up makes sense.'}, PLANS.stalled[2], PLANS.stalled[3]],
+       param:{label:'Look at deals with no activity in the last', options:['7 days','14 days','30 days']}},
+      {id:'w2', name:'Deal research', desc:'Gather background on one deal and write a short summary. Only reads information.', writes:false, last:'Sep 28', total:1,
+       steps:PLANS.prep,
+       param:{label:'Which deal?', options:['Atlas','Northwind Foods','Birchwood Dental']}}
+    ],
+    runs:[
+      {id:'r1', wf:'w1', name:'Weekly pipeline review', started:'Today, 09:00', total:24, reviewed:2, status:'waiting', currentDeal:'Atlas', seq:1,
+       script:[NORTHWIND], changes:0, skipped:0, period:'7 days', filler:[...FILLER], recap:null,
+       log:[
+        {t:'09:04', text:'Atlas needs your decision: a follow-up call.', tone:'warn'},
+        {t:'09:03', text:'Reviewed Juniper Labs. Nothing to change.'},
+        {t:'09:02', text:'Reviewed Cedar Freight. Nothing to change.'},
+        {t:'09:00', text:'Collected 24 open deals from Pipedrive.'},
+        {t:'09:00', text:'You started this run.', tone:'you'}
+       ]},
+      {id:'r0', wf:'w1', name:'Weekly pipeline review', started:'Oct 5, 09:00', total:21, reviewed:21, status:'completed', past:true, changes:4, skipped:0, seq:0, script:[], filler:[],
+       log:[{t:'09:31', text:'Run finished. You approved 4 changes and all were added to Pipedrive.', tone:'ok'},{t:'09:00', text:'You started this run.', tone:'you'}]}
+    ],
+    proposals:[p1],
+    thread:[
+      {k:'event', text:'You started “Weekly pipeline review” from Workflows', t:'09:00'},
+      {k:'msg', who:'agent', run:'r1', seq:0, t:'09:00', text:"I'll go through your 24 open deals one at a time. I'll ask you before I add or change anything in Pipedrive."},
+      {k:'msg', who:'agent', run:'r1', seq:1, t:'09:04', text:'Cedar Freight and Juniper Labs need nothing right now. Atlas needs a decision from you before I continue.'},
+      {k:'proposal', id:'p1', run:'r1', seq:1}
+    ]
+  };
+}
+
+/* ═══════════ model helpers ═══════════ */
+const runById = id => S.runs.find(r => r.id === id);
+const propById = id => S.proposals.find(p => p.id === id);
+const wfById = id => S.workflows.find(w => w.id === id);
+const waiting = () => S.proposals.filter(p => p.state === 'pending' && runById(p.run).status === 'waiting');
+const isEditor = () => S.role === 'editor';
+const canDecide = () => isEditor() && !S.paused;
+const draftOf = id => S.drafts[id] || '';
+const hasDraft = id => draftOf(id).trim().length > 0;
+const isActive = r => ['working','waiting','reconsidering'].includes(r.status);
+function nowT() { const m = 540 + S.clock; return pad(Math.floor(m / 60)) + ':' + pad(m % 60); }
+function log(run, text, tone = '') { S.clock += 1; run.log.unshift({t:nowT(), text, tone}); }
+function say(run, text) { S.thread.push({k:'msg', who:'agent', run:run.id, seq:run.seq, t:nowT(), text}); }
+function toast(text) {
+  const t = $('#toast'); t.textContent = text; t.classList.add('on');
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('on'), 4200);
+}
+function statusOf(r) {
+  if (isActive(r) && S.paused) return {label:'Paused', cls:''};
+  const need = isEditor() ? 'Needs you' : 'Waiting for a decision';
+  return {waiting:{label:need, cls:'warn'}, reconsidering:{label:'Reconsidering', cls:'acc'}, working:{label:'Working', cls:'ok live'},
+          completed:{label:'Completed', cls:'ok'}, canceled:{label:'Canceled', cls:''}}[r.status];
+}
+
+/* ═══════════ simulated Agent engine (prototype-only) ═══════════ */
+function step(run, label, ms, fn) {
+  const s = {id:++S.seqStep, run:run.id, label, ms, fn, timer:null, held:false};
+  S.steps.push(s);
+  if (S.pacing === 'auto') arm(s);
+}
+function arm(s) { clearTimeout(s.timer); s.timer = setTimeout(() => fire(s), s.ms); }
+function fire(s) {
+  if (!S.steps.includes(s)) return;
+  if (S.paused) { s.held = true; return; }
+  S.steps = S.steps.filter(x => x !== s);
+  clearTimeout(s.timer);
+  s.fn();
+  render();
+}
+function dropSteps(runId) { S.steps.filter(s => s.run === runId).forEach(s => clearTimeout(s.timer)); S.steps = S.steps.filter(s => s.run !== runId); }
+
+function present(run, def) {
+  const p = {...def, id:'p' + (++S.seqP), run:run.id, seq:run.seq, rev:def.rev || 1, state:'pending'};
+  if (def.at != null) run.reviewed = def.at;
+  run.currentDeal = p.deal; run.status = 'waiting';
+  S.proposals.push(p);
+  say(run, def.lead || `${p.deal} needs a decision from you before I continue.`);
+  S.thread.push({k:'proposal', id:p.id, run:run.id, seq:run.seq});
+  log(run, `${p.deal} needs your decision: ${p.short}.`, 'warn');
+  return p;
+}
+function finishRun(run) {
+  run.status = 'completed'; run.reviewed = run.total; run.currentDeal = null;
+  const n = run.changes, sk = run.skipped;
+  say(run, `All done. I reviewed ${run.total} deal${run.total === 1 ? '' : 's'}, added ${n} change${n === 1 ? '' : 's'} to Pipedrive${sk ? ` and skipped ${sk}` : ''}.`);
+  log(run, `Run finished. ${n} change${n === 1 ? '' : 's'} added, ${sk} skipped.`, 'ok');
+}
+function proceed(run) {   // the Agent resumes after a decision; the run is NOT finished by an approval
+  run.status = 'working'; run.seq += 1;
+  run.reviewed = Math.min(run.reviewed + 1, run.total);
+  run.currentDeal = run.script.length ? (run.filler.shift() || 'the next deal') : (run.filler.shift() || 'the last deals');
+  step(run, `${NAME} keeps reviewing deals`, 2800, () => {
+    if (run.script.length) present(run, run.script.shift()); else finishRun(run);
+  });
+}
+function approve(id, via) {
+  const p = propById(id); if (!p || p.state !== 'pending') return;
+  if (!canDecide() || hasDraft(id)) return;
+  const run = runById(p.run);
+  p.state = 'approved'; p.via = via;
+  S.ledger.push({t:nowT(), text:p.done, run:run.id});          // the only place the simulated Pipedrive is changed
+  run.changes += 1;
+  run.recap = `You approved “${p.verb}”${via === 'Chat' ? ' in Chat' : ''}. It was added to Pipedrive.`;
+  log(run, `You approved: ${p.verb}.${via === 'Chat' ? ' (in Chat)' : ''}`, 'you');
+  log(run, 'Added to Pipedrive. Reviewing the next deal.', 'ok');
+  toast('Approved and added to Pipedrive. Sales Analyst is carrying on with the run.');
+  proceed(run);
+  S.focusNext = '#vh';
+  render();
+}
+function decline(id, via) {
+  const p = propById(id); if (!p || p.state !== 'pending') return;
+  const text = draftOf(id).trim();
+  if (!canDecide()) return;
+  const run = runById(p.run);
+  p.state = 'declined'; p.via = via; p.reply = text;
+  S.drafts[id] = '';
+  if (text) S.thread.push({k:'msg', who:'you', run:run.id, seq:run.seq, t:nowT(), text, via, re:id});
+  log(run, `You declined ${p.short} for ${p.deal}${text ? ' and replied' : ''}.${via === 'Chat' ? ' (in Chat)' : ''}`, 'you');
+  run.status = 'reconsidering';
+  toast(text ? 'Declined. Nothing was added to Pipedrive, and your reply is on its way to Sales Analyst.' : 'Declined. Nothing was added to Pipedrive.');
+  step(run, `${NAME} reads your reply`, 1700, () => respond(run, p, text));
+  render();
+}
+function respond(run, p, text) {
+  const wantsSkip = /\bskip\b/i.test(text);
+  let mode = S.declineMode === 'auto' ? (wantsSkip || !text ? 'skip' : (p.revise ? 'revise' : 'skip')) : S.declineMode;
+  if (mode === 'revise' && !p.revise) mode = 'skip';
+  if (mode === 'revise') {
+    const r = p.revise;
+    const np = {...p, ...r, revise:undefined, reply:undefined, via:undefined, rev:p.rev + 1, id:'p' + (++S.seqP), state:'pending', chips:r.chips || []};
+    S.proposals.push(np);
+    say(run, r.lead);
+    S.thread.push({k:'proposal', id:np.id, run:run.id, seq:run.seq});
+    run.status = 'waiting'; run.currentDeal = np.deal;
+    log(run, `Sales Analyst proposed ${np.short} instead and is waiting for you.`, 'warn');
+  } else {
+    say(run, `Understood. I won't make that change. I'll skip ${p.deal} and move on to the next deal.${text ? '' : " If you'd like me to try something different, just tell me."}`);
+    run.skipped += 1;
+    run.recap = `You declined ${p.short} for ${p.deal}. Nothing was changed and Sales Analyst skipped the deal.`;
+    log(run, `${p.deal} skipped. Nothing was changed.`);
+    proceed(run);
+  }
+}
+function startRun(wfId, period) {
+  const wf = wfById(wfId); const id = 'r' + (++S.seqR);
+  const run = {id, wf:wfId, name:wf.name, started:'Today, ' + nowT(), total:wf.total || 18, reviewed:0, status:'working', currentDeal:'collecting the deals', seq:1,
+    script: wf.writes ? [{...BIRCHWOOD}] : [], changes:0, skipped:0, period, filler:[...FILLER].reverse(), recap:null, log:[]};
+  S.runs.unshift(run);
+  S.thread.push({k:'event', text:`You started “${wf.name}” from Workflows`, t:nowT()});
+  S.thread.push({k:'msg', who:'agent', run:id, seq:0, t:nowT(), text: wf.writes
+    ? `Starting “${wf.name}”. I'll ask you before I add or change anything in Pipedrive.`
+    : `Starting “${wf.name}”. This one only reads information, so I won't change anything.`});
+  log(run, 'You started this run.', 'you');
+  step(run, `${NAME} collects the deals`, 2400, () => {
+    if (run.script.length) { run.reviewed = 0; present(run, run.script.shift()); } else finishRun(run);
+  });
+  S.viewRun = id; S.view = 'run'; S.tab = 'workflows'; S.focusNext = '#vh';
+  toast(`“${wf.name}” started. ${NAME} is working on it.`);
+}
+function cancelRun(runId) {
+  const run = runById(runId); if (!run || !isActive(run)) return;
+  dropSteps(run.id);
+  S.proposals.filter(p => p.run === run.id && p.state === 'pending').forEach(p => { p.state = 'withdrawn'; });
+  S.drafts = Object.fromEntries(Object.entries(S.drafts).filter(([k]) => propById(k)?.run !== run.id));
+  run.status = 'canceled'; run.currentDeal = null;
+  S.thread.push({k:'event', text:`You canceled “${run.name}”`, t:nowT()});
+  log(run, 'You canceled this run. The waiting action was not carried out.', 'you');
+  S.dialog = null; S.focusNext = '#vh';
+  toast(`Run canceled. ${NAME} is still on and ready for other work.`);
+}
+
+/* ═══════════ views ═══════════ */
+function renderHead() {
+  const w = waiting().length;
+  const lifeOpen = S.menu === 'life';
+  $('#head').innerHTML = `
+    <div class="avatar xl" aria-hidden="true">SA</div>
+    <div class="who">
+      <h1>${NAME}</h1>
+      <div class="model"><span class="mono">anthropic/claude-sonnet-5-5</span><span class="msb" title="Follows the organization default">default</span></div>
+      <div class="badges"><span class="badge">Hermes</span><span class="badge">Slack</span></div>
+      <div class="statusrow">
+        ${S.paused ? `<span class="status idle" data-testid="agent-status"><i></i>Idle</span>` : `<span class="status ok" data-testid="agent-status"><i></i>Working</span>`}
+        ${w ? `<button class="attn" data-act="open-waiting">${w} waiting for ${isEditor() ? 'you' : 'a decision'}</button>` : ''}
+      </div>
+    </div>
+    <div class="head-actions">
+      <div class="menu-wrap">
+        <div class="split">
+          <button class="btn" data-act="pause">${ic(S.paused ? 'play' : 'pause')} ${S.paused ? 'Start' : 'Pause'}</button>
+          <button class="btn" data-act="menu" data-id="life" aria-haspopup="menu" aria-expanded="${lifeOpen}" aria-label="More lifecycle actions">${ic('chev')}</button>
+        </div>
+        ${lifeOpen ? `<div class="menu-panel" role="menu" aria-label="Agent actions">
+          <button class="menu-item" role="menuitem" data-act="pause">${ic(S.paused ? 'play' : 'pause')} ${S.paused ? 'Start' : 'Pause'}</button>
+          <button class="menu-item" role="menuitem" data-act="na" data-msg="Restart isn't part of this prototype.">${ic('loop')} Restart</button>
+        </div>` : ''}
+      </div>
+      <button class="btn" aria-label="Configuration" data-act="na" data-msg="Configuration isn't part of this prototype.">${ic('sliders')}<span class="lbl-text">Configuration</span></button>
+      <button class="btn" aria-label="Share" data-act="na" data-msg="Sharing isn't part of this prototype.">${ic('share')}<span class="lbl-text">Share</span></button>
+    </div>`;
+}
+function renderTabs() {
+  const w = waiting().length;
+  const names = ['Chat','Workflows','Conversations','Tool calls','Logs','Memory','Activity','Costs','Resource usage','About'];
+  $('#tabs').innerHTML = names.map(n => {
+    const key = n === 'Chat' ? 'chat' : n === 'Workflows' ? 'workflows' : null;
+    const cur = key && S.tab === key;
+    return `<button class="ap-tab" ${key ? `data-act="tab" data-id="${key}"` : `data-act="na" data-msg="${n} isn't part of this prototype."`} ${cur ? 'aria-current="page"' : ''}>
+      ${n}${n === 'Workflows' ? (w ? `<span class="dot-count" aria-label="${w} waiting for a decision">${w}</span>` : `<span class="new-tag">New</span>`) : ''}</button>`;
+  }).join('');
+}
+
+/* — approval card (the same component renders in Workflows and Chat) — */
+function approvalCard(p, variant) {
+  const run = runById(p.run);
+  const revised = p.rev > 1;
+  const has = hasDraft(p.id);
+  const dis = !canDecide();
+  const decision = !isEditor()
+    ? `<div class="decide"><div class="readonly">${ic('lock')}<span>You can see this request, but only people who can edit ${NAME} can answer it.</span></div></div>`
+    : `<div class="decide">
+        <div class="approve-row">
+          <button class="btn primary lg" data-act="approve" data-id="${p.id}" data-approve="${p.id}" ${has || S.paused ? 'aria-disabled="true"' : ''}>${ic('check')} Approve this action</button>
+          <span class="hint" data-hint="${p.id}">${S.paused ? `${NAME} is paused. Start it to answer.` : has ? 'Clear your reply below to approve instead.' : `Only this action. ${NAME} carries on afterwards.`}</span>
+        </div>
+        <label class="reply-lbl" for="reply-${p.id}">Not right? Decline, and tell ${NAME} what to do instead <span class="muted" style="font-weight:400">(optional)</span></label>
+        <div class="reply">
+          <textarea id="reply-${p.id}" data-draft="${p.id}" data-key="reply-${p.id}" rows="1" ${S.paused ? 'disabled' : ''}
+            placeholder="Explain why, ask for something different, or say to skip this one…">${esc(draftOf(p.id))}</textarea>
+          <button class="btn sm ${has ? 'primary' : ''}" data-act="send" data-id="${p.id}" data-send="${p.id}" ${S.paused ? 'aria-disabled="true"' : ''}><span data-send-label="${p.id}">${has ? 'Decline &amp; send reply' : 'Decline'}</span>${has ? ic('up') : ''}</button>
+        </div>
+        ${(p.chips || []).length ? `<div class="chips" role="group" aria-label="Quick replies">${p.chips.map((c, i) => `<button class="chip" data-act="chip" data-id="${p.id}" data-i="${i}" ${S.paused ? 'disabled' : ''}>${esc(c.label)}</button>`).join('')}</div>` : ''}
+        <p class="fine">Declining adds nothing to Pipedrive. ${NAME} uses your reply for this run only, and your saved workflow stays as it is. Ctrl+Enter sends.</p>
+      </div>`;
+  return `
+  <section class="ask ${variant === 'chat' ? 'compact' : ''}" aria-label="Waiting for your approval: ${esc(p.verb)}" data-card="${p.id}">
+    <div class="ask-top"><span class="eyebrow">${revised ? 'New proposal · needs your approval' : isEditor() ? 'Needs your approval' : 'Waiting for a decision'}</span><span class="pill">${esc(run.name)} · Pipedrive</span></div>
+    <div class="ask-body">
+      <h3>${esc(p.verb)}</h3>
+      <div class="deal">${esc(p.deal)} · ${esc(p.detail)}</div>
+      <div class="why">${av('xs')}<p><span class="lbl">Why</span>${esc(p.why)}</p></div>
+      <div class="changes"><div class="h">WHAT WILL CHANGE</div><dl>${p.fields.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>
+      <div class="safe">${ic('shield')}<span>${esc(p.safe)}</span></div>
+      ${p.diff ? `<div class="diff">${esc(p.diff)}</div>` : ''}
+    </div>
+    ${decision}
+  </section>`;
+}
+function settledRow(p) {
+  const via = p.via ? ` in ${p.via}` : '';
+  if (p.state === 'approved') return `<div class="past ok">${ic('check', 'ic')}<span><b>Approved${via}</b> · ${esc(p.done)}.</span></div>`;
+  if (p.state === 'declined') return `<div class="past">${ic('x', 'ic')}<span><b>Declined${via}</b> · ${esc(p.verb)}. It was not carried out.</span></div>`;
+  return `<div class="past">${ic('x', 'ic')}<span><b>Canceled with the run</b> · ${esc(p.verb)}. It was not carried out.</span></div>`;
+}
+function typingRow() {
+  return `<div class="msg">${av('xs')}<div class="bub"><div class="who-l">${NAME}</div><span class="typing" aria-label="${NAME} is reconsidering"><i></i><i></i><i></i></span> <span class="muted small">Reconsidering your reply…</span></div></div>`;
+}
+function threadEntry(e, variant) {
+  if (e.k === 'event') return `<div class="event">${esc(e.text)} · ${e.t}</div>`;
+  if (e.k === 'msg') {
+    const who = e.who === 'you' ? 'You' + (e.via ? ` · replied in ${e.via}` : '') : NAME;
+    return `<div class="msg ${e.who === 'you' ? 'you' : ''}">${e.who === 'you' ? '' : av('xs')}<div class="bub"><div class="who-l">${esc(who)} · ${e.t}</div>${esc(e.text)}</div></div>`;
+  }
+  const p = propById(e.id);
+  return p.state === 'pending' ? approvalCard(p, variant) : settledRow(p);
+}
+
+/* — Workflows: home — */
+function homeView() {
+  const w = waiting();
+  const strips = w.map(p => `
+    <button class="strip" data-act="open-run" data-id="${p.run}">
+      <span class="strip-ic">${ic('hand', '')}</span>
+      <span><b>${isEditor() ? `${NAME} needs your approval` : `${NAME} is waiting for a decision`}</b><span class="t">${esc(p.verb)} · ${esc(runById(p.run).name)}</span></span>
+      <span class="go">${isEditor() ? 'Review' : 'View'} →</span>
+    </button>`).join('');
+  const cards = S.workflows.map(wf => {
+    const open = S.expanded[wf.id];
+    return `<article class="card wf ${S.freshWf === wf.id ? 'fresh' : ''}" data-wf="${wf.id}">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><h4>${esc(wf.name)}</h4>${S.freshWf === wf.id ? '<span class="pill acc">Just saved</span>' : ''}</div>
+      <p>${esc(wf.desc)}</p>
+      <div class="tags"><span class="pill">Pipedrive</span><span class="pill ${wf.writes ? 'warn' : ''}">${wf.writes ? 'Asks before changing' : 'Only reads'}</span><span class="pill">${wf.last ? 'Last run ' + wf.last : 'Not run yet'}</span></div>
+      ${open ? `<div class="how"><ol>${wf.steps.map(s => `<li><span>${esc(s.t)}${s.asks ? ' <span class="pill warn" style="margin-left:4px">Asks you first</span>' : ''}</span></li>`).join('')}</ol></div>` : ''}
+      <div class="wf-foot">
+        <button class="btn ghost sm" data-act="toggle-how" data-id="${wf.id}" aria-expanded="${!!open}">${open ? 'Hide steps' : 'See the steps'}</button>
+        ${isEditor() ? `<button class="btn ghost sm" data-act="edit-wf" data-id="${wf.id}">${ic('pencil')} Edit</button>` : ''}
+        <span class="grow"></span>
+        <button class="btn primary" data-act="start-dialog" data-id="${wf.id}" ${isEditor() ? '' : 'aria-disabled="true" title="Running a workflow needs edit access"'}>Run${S.freshWf === wf.id ? ' it now' : ''}</button>
+      </div>
+    </article>`;
+  }).join('');
+  const rows = S.runs.map(r => {
+    const st = statusOf(r);
+    const sub = r.past ? `${r.reviewed} deals reviewed · ${r.changes} changes added`
+      : r.status === 'completed' ? `${r.reviewed} deals reviewed · ${r.changes} changes added`
+      : r.status === 'canceled' ? `Stopped at ${r.reviewed} of ${r.total} deals`
+      : `${r.reviewed} of ${r.total} deals reviewed${r.currentDeal ? ' · now ' + r.currentDeal : ''}`;
+    return `<button class="run-row" data-act="open-run" data-id="${r.id}">
+      <span><b>${esc(r.name)}</b><span class="sub" style="display:block">${esc(sub)}</span></span>
+      <span class="sub when">${esc(r.started)}</span>
+      <span class="pill ${st.cls}">${st.label}</span>
+    </button>`;
+  }).join('');
+  return `
+    <div class="view-head">
+      <div><h2 id="vh" tabindex="-1">Workflows</h2><p>Repeatable work ${NAME} does for you. It always asks before changing anything in Pipedrive.</p></div>
+      <button class="btn primary" data-act="new-wf" ${isEditor() ? '' : 'aria-disabled="true" title="Creating a workflow needs edit access"'}>${ic('plus')} New workflow</button>
+    </div>
+    ${strips}
+    <h3 class="sec">Your workflows</h3>
+    <div class="wf-grid">${cards}</div>
+    <h3 class="sec">Recent runs</h3>
+    <div class="card runs">${rows}</div>`;
+}
+
+/* — Workflows: create — */
+function createView() {
+  const c = S.create;
+  if (c.phase === 'compose') {
+    return `<div class="narrow">
+      <nav class="crumbs" aria-label="Breadcrumb"><button data-act="home">Workflows</button><span>/</span><span>New workflow</span></nav>
+      <div class="agent-say">${av('sm')}<div class="bub"><h2 id="vh" tabindex="-1" style="font-size:19px;font-weight:600;letter-spacing:-.015em">What should ${NAME} do?</h2><p class="muted" style="margin-top:4px">Describe the outcome in your own words. I'll draft the steps, and you decide what stays. Nothing runs until you start it.</p></div></div>
+      <label class="sr" for="goal">What should ${NAME} do?</label>
+      <textarea id="goal" class="ask-box" data-field="goal" data-key="goal" placeholder="For example: every Monday, find deals that have gone quiet and suggest a follow-up for each one.">${esc(c.text)}</textarea>
+      ${c.error ? `<p class="small" style="color:var(--err);margin-top:8px" role="alert">Describe what you'd like ${NAME} to do first.</p>` : ''}
+      <div class="sec" style="margin-top:20px">Or start from an example</div>
+      <div class="examples">${EXAMPLES.map(e => `<button class="ex" data-act="example" data-id="${e.id}" aria-pressed="${c.example === e.id}"><b>${esc(e.title)}</b><span>${esc(e.text.split('. ')[0].replace(/\.$/, ''))}.</span></button>`).join('')}</div>
+      <div class="savebar" style="position:static;background:none;margin-top:22px"><span class="hint">${ic('pencil')} You'll review the plan before anything is saved.</span><button class="btn primary lg" data-act="build" ${c.drafting ? 'aria-disabled="true"' : ''}>${c.drafting ? 'Drafting a plan…' : 'Draft a plan'}</button></div>
+    </div>`;
+  }
+  const items = c.plan.map((s, i) => {
+    const editing = c.edit === i;
+    return `<li class="pstep" data-step="${i}" style="list-style:none">
+      <span class="pnum">${i + 1}</span>
+      <div class="pbody">
+        ${editing ? `<div class="peditor">
+            <label class="sr" for="st-${i}">Step name</label><input class="input" id="st-${i}" data-key="st-${i}" value="${esc(s.t)}">
+            <label class="sr" for="sc-${i}">What happens</label><textarea class="input" id="sc-${i}" rows="2" style="resize:vertical">${esc(s.c)}</textarea>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn sm primary" data-act="done-step" data-i="${i}">Done</button>
+              <button class="btn sm ghost" data-act="move-step" data-i="${i}" data-d="-1" ${i === 0 ? 'aria-disabled="true"' : ''}>Move up</button>
+              <button class="btn sm ghost" data-act="move-step" data-i="${i}" data-d="1" ${i === c.plan.length - 1 ? 'aria-disabled="true"' : ''}>Move down</button>
+              <button class="btn sm danger-ghost" data-act="remove-step" data-i="${i}" ${c.plan.length === 1 ? 'aria-disabled="true"' : ''}>${ic('trash')} Remove</button>
+            </div></div>`
+        : `<b>${esc(s.t)}${s.asks ? '<span class="pill warn">Asks you first</span>' : ''}</b><p>${esc(s.c)}</p>`}
+      </div>
+      ${editing ? '' : `<button class="btn ghost sm" data-act="edit-step" data-i="${i}" aria-label="Edit step ${i + 1}: ${esc(s.t)}">${ic('pencil')} Edit</button>`}
+    </li>`;
+  }).join('');
+  const writes = c.plan.some(s => s.asks);
+  return `<div class="narrow">
+    <nav class="crumbs" aria-label="Breadcrumb"><button data-act="home">Workflows</button><span>/</span><span>${c.wfId ? 'Edit workflow' : 'New workflow'}</span></nav>
+    <div class="agent-say">${av('sm')}<div class="bub"><h2 id="vh" tabindex="-1" style="font-size:19px;font-weight:600;letter-spacing:-.015em">${c.wfId ? 'Change anything that’s not right.' : 'Here’s how I’d do it.'}</h2><p class="muted" style="margin-top:4px">Read the steps and change anything that isn't right. Saving only keeps the plan. It doesn't start a run.</p></div></div>
+    <label class="small muted" for="wf-name">Name</label>
+    <input class="name-input" id="wf-name" data-key="wf-name" data-field="name" value="${esc(c.name)}" aria-describedby="name-err">
+    ${c.error ? `<p id="name-err" class="small" style="color:var(--err);margin:4px 0 0" role="alert">Give this workflow a name so you can find it later.</p>` : '<span id="name-err"></span>'}
+    <div class="agent-say" style="margin:6px 0 16px">${av('xs')}<p class="small muted" style="padding-top:2px">${writes ? `${NAME} will always ask before it changes anything in Pipedrive. You'll see the exact change and can approve it, or reply with a different idea.` : `This workflow only reads information. It won't change anything in Pipedrive.`}</p></div>
+    <ol class="card plan" style="margin:0;padding:0">${items}</ol>
+    <div style="margin-top:12px"><button class="btn ghost sm" data-act="add-step">${ic('plus')} Add a step</button></div>
+    <div class="savebar">
+      <button class="btn" data-act="back-compose">${ic('back')} Change the request</button>
+      <button class="btn primary lg" data-act="save-wf">Save workflow</button>
+    </div>
+  </div>`;
+}
+
+/* — Workflows: a run — */
+function runView(run) {
+  const st = statusOf(run);
+  const pct = Math.round(run.reviewed / run.total * 100);
+  const wf = wfById(run.wf);
+  const entries = S.thread.filter(e => e.k !== 'event' && e.run === run.id && e.seq === run.seq && run.seq > 0);
+  const live = run.status === 'waiting' || run.status === 'reconsidering';
+  let now;
+  if (live) {
+    now = `<div class="thread" aria-live="polite">${entries.map(e => threadEntry(e, 'run')).join('')}${run.status === 'reconsidering' ? typingRow() : ''}</div>`;
+  } else if (run.status === 'working') {
+    now = `<div class="card state-card"><span class="state-ic live">${ic('loop')}</span><div><h3>${S.paused ? 'Paused' : `Reviewing ${esc(run.currentDeal)}`}</h3>
+      <p>${S.paused ? `${NAME} is paused and will carry on when you start it again.` : `Nothing needs you right now. You'll be asked before anything changes in Pipedrive.`}</p>
+      ${run.recap ? `<div class="recap">${esc(run.recap)}</div>` : ''}</div></div>`;
+  } else if (run.status === 'completed') {
+    now = `<div class="card state-card"><span class="state-ic ok">${ic('check')}</span><div><h3>Run finished</h3>
+      <p>${run.reviewed} deals reviewed · ${run.changes} change${run.changes === 1 ? '' : 's'} added to Pipedrive${run.skipped ? ` · ${run.skipped} skipped` : ''}.</p>
+      ${run.recap ? `<div class="recap">${esc(run.recap)}</div>` : ''}</div></div>`;
+  } else {
+    now = `<div class="card state-card"><span class="state-ic">${ic('x')}</span><div><h3>Run canceled</h3>
+      <p>The action that was waiting did not happen. Anything you already approved stays in Pipedrive. ${NAME} is still on and ready for other work.</p></div></div>`;
+  }
+  const plan = wf ? wf.steps.map((s, i) => {
+    let cls = '', mk = i + 1;
+    if (run.status === 'completed') { cls = 'done'; mk = '✓'; }
+    else if (i === 0 && run.status !== 'canceled' && run.reviewed > 0) { cls = 'done'; mk = '✓'; }
+    else if (run.status !== 'canceled' && (i === 1 || (i === 0 && run.reviewed === 0))) { cls = 'cur'; }
+    if (s.asks && run.status === 'waiting') cls = 'wait';
+    return `<li class="${cls}"><span class="mk">${mk}</span><span>${esc(s.t)}${s.asks && run.status === 'waiting' ? ' · needs you' : ''}</span></li>`;
+  }).join('') : '';
+  const logHtml = run.log.map(l => `<li><time>${l.t}</time><span class="${l.tone}">${esc(l.text)}</span></li>`).join('');
+  return `
+    <nav class="crumbs" aria-label="Breadcrumb"><button data-act="home">Workflows</button><span>/</span><span>${esc(run.name)}</span></nav>
+    <div class="view-head" style="margin-bottom:16px">
+      <div><h2 id="vh" tabindex="-1">${esc(run.name)}</h2><p>${run.past ? 'Run on ' + esc(run.started) : 'Started by you · ' + esc(run.started)}${run.period ? ' · Looking at deals with no activity in the last ' + esc(run.period) : ''}</p></div>
+      <span class="pill ${st.cls}">${st.label}</span>
+    </div>
+    <div class="prog" role="group" aria-label="Progress">
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="${run.total}" aria-valuenow="${run.reviewed}" aria-label="Deals reviewed"><i style="width:${pct}%"></i></div>
+      <div class="prog-copy"><span><b>${run.reviewed} of ${run.total}</b> deals reviewed</span>${run.currentDeal && isActive(run) ? `<span>Now: <b>${esc(run.currentDeal)}</b></span>` : ''}</div>
+    </div>
+    <div class="run-grid">
+      <div>
+        ${now}
+        <h3 class="sec">What's happened so far</h3>
+        <div class="card" style="padding:4px 18px"><ol class="log">${logHtml}</ol></div>
+      </div>
+      <aside class="rail" aria-label="Run details">
+        <div class="card"><h3>The plan</h3><ol class="rplan">${plan}</ol></div>
+        <div class="card"><h3>About this run</h3>
+          <dl class="dl"><dt>Agent</dt><dd>${NAME}</dd><dt>Started</dt><dd>${esc(run.started)}</dd><dt>Changes</dt><dd>${run.changes} added to Pipedrive</dd></dl>
+          ${isActive(run) && isEditor() ? `<hr style="border:0;border-top:1px solid var(--line);margin:14px 0 10px">
+            <button class="btn danger-ghost sm" data-act="cancel-dialog" data-id="${run.id}" style="margin-left:-11px">Cancel this run</button>
+            <p class="cancel-note">Stops this run only. ${NAME} stays on and can start other work.</p>` : ''}
+        </div>
+      </aside>
+    </div>`;
+}
+
+/* — Chat — */
+function chatView() {
+  const w = waiting();
+  const typing = S.runs.some(r => r.status === 'reconsidering');
+  const entries = S.thread.map(e => threadEntry(e, 'chat')).join('');
+  return `
+  <div class="chat">
+    <div class="threads">
+      <div class="top"><button class="btn sm" style="width:100%" data-act="na" data-msg="New chat isn't part of this prototype.">${ic('plus')} New chat</button></div>
+      <div class="lbl">Threads</div>
+      <button class="titem act"><b style="font-weight:500">Main chat</b><span>${esc(lastLine())}</span></button>
+    </div>
+    <div class="chat-main">
+      <div class="chat-head">
+        <div class="t">${av('sm')}<div style="min-width:0"><div style="font-weight:500">Chat with ${NAME}<span class="exp">Experimental</span></div><div class="small muted">Workflow questions and approvals appear here too.</div></div></div>
+        <span class="live">Live updates</span>
+      </div>
+      <div class="chat-scroll" id="chat-scroll"><div class="thread">${entries}${typing ? typingRow() : ''}</div></div>
+      <div class="chat-compose">
+        ${w.length ? `<p class="chat-hint">${ic('clock')} ${w.length === 1 ? `Waiting for your decision on “${esc(w[0].verb)}”.` : `${w.length} proposals are waiting for your decision.`} A message here won't approve or decline it.</p>` : ''}
+        <div class="compose"><label class="sr" for="chat-in">Message ${NAME}</label><input id="chat-in" data-key="chat-in" data-field="chat" placeholder="Message ${NAME}…" value="${esc(S.chatDraft)}" ${isEditor() ? '' : 'disabled'}><button class="icon-btn" data-act="chat-send" aria-label="Send message" ${S.chatDraft.trim() && isEditor() ? '' : 'disabled'}>${ic('up')}</button></div>
+      </div>
+    </div>
+  </div>`;
+}
+function lastLine() { const m = [...S.thread].reverse().find(e => e.k === 'msg'); return m ? m.text : ''; }
+
+/* ═══════════ dialogs ═══════════ */
+function renderDialog() {
+  const o = $('#overlay'); const d = S.dialog;
+  if (!d) { o.hidden = true; o.innerHTML = ''; return; }
+  o.hidden = false;
+  if (d.type === 'cancel') {
+    const run = runById(d.id); const hasWait = S.proposals.some(p => p.run === run.id && p.state === 'pending');
+    o.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-t" aria-describedby="dlg-d">
+      <h3 id="dlg-t">Cancel this run?</h3>
+      <p id="dlg-d">${NAME} will stop working on “${esc(run.name)}”. ${hasWait ? "The action waiting for your approval won't happen. " : ''}Anything you already approved stays in Pipedrive.</p>
+      <div class="note-box">This only cancels the run. ${NAME} stays on and can start other work.</div>
+      <div class="foot"><button class="btn" data-act="close-dialog" data-autofocus>Keep running</button><button class="btn danger" data-act="confirm-cancel" data-id="${run.id}">Cancel run</button></div>
+    </div>`;
+  } else {
+    const wf = wfById(d.id); const open = S.menu === 'period';
+    o.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-t">
+      <h3 id="dlg-t">Run “${esc(wf.name)}”</h3>
+      <div class="field"><label id="period-l">${esc(wf.param.label)}</label>
+        <div class="menu-wrap" style="display:block">
+          <button class="menu-btn" data-act="menu" data-id="period" aria-haspopup="listbox" aria-expanded="${open}" aria-labelledby="period-l period-b" id="period-b" data-autofocus><span>${esc(d.period)}</span>${ic('chev')}</button>
+          ${open ? `<div class="menu-panel left" role="listbox" aria-labelledby="period-l" style="min-width:100%">${wf.param.options.map(op => `<button class="menu-item" role="option" aria-selected="${op === d.period}" data-act="period-set" data-v="${esc(op)}">${esc(op)}${op === d.period ? `<span class="tick">${ic('check')}</span>` : ''}</button>`).join('')}</div>` : ''}
+        </div></div>
+      <div class="note-box">${wf.writes ? `${NAME} will ask you before it changes anything in Pipedrive.` : `This workflow only reads information. It won't change anything.`}</div>
+      <div class="foot"><button class="btn" data-act="close-dialog">Not now</button><button class="btn primary" data-act="start-run" data-id="${wf.id}">Start run</button></div>
+    </div>`;
+  }
+}
+
+/* ═══════════ prototype bar ═══════════ */
+function renderProto() {
+  const seg = (name, val, opts) => `<span class="seg" role="group" aria-label="${name}">${opts.map(([v, l]) => `<button data-proto="${name}" data-v="${v}" aria-pressed="${val === v}">${l}</button>`).join('')}</span>`;
+  const next = S.steps[0];
+  $('#proto').classList.toggle('collapsed', !S.protoOpen);
+  $('#proto').innerHTML = `<div class="proto-in">
+    <div class="proto-row">
+      <span class="proto-tag">Prototype only</span>
+      <span class="proto-note">Simulated data. Nothing here talks to a real Agent or Pipedrive.</span>
+      <button class="link" data-act="ledger" aria-expanded="${S.ledgerOpen}">Pipedrive changes made: <b data-testid="ledger-count">${S.ledger.length}</b></button>
+      <button class="link" data-act="reset">Reset</button>
+      <button class="link proto-toggle" data-act="proto-toggle" aria-expanded="${S.protoOpen}">Controls</button>
+    </div>
+    <div class="proto-row proto-segs" style="margin-top:8px">
+      <span class="proto-grp">Viewing as ${seg('role', S.role, [['editor','Editor'],['viewer','Viewer']])}</span>
+      <span class="proto-grp">Agent speed ${seg('pacing', S.pacing, [['auto','Automatic'],['manual','Step by step']])}</span>
+      <span class="proto-grp">When a reply is sent, the Agent ${seg('declineMode', S.declineMode, [['auto','follows your words'],['revise','proposes a task'],['skip','skips the deal']])}</span>
+      ${S.pacing === 'manual' ? `<button class="go" data-proto-go ${next ? '' : 'disabled style="opacity:.4"'}>${next ? 'Let the Agent continue: ' + esc(next.label) : 'Agent has nothing pending'}</button>` : ''}
+    </div>
+    ${S.ledgerOpen ? `<div class="ledger">${S.ledger.length ? `<ol>${S.ledger.map(l => `<li>${l.t} · ${esc(l.text)}</li>`).join('')}</ol>` : 'No changes have been made to the simulated Pipedrive.'}</div>` : ''}
+  </div>`;
+}
+
+/* ═══════════ render ═══════════ */
+function render() {
+  const ae = document.activeElement;
+  const key = ae && ae.dataset ? ae.dataset.key : null;
+  const sel = key && 'selectionStart' in ae ? [ae.selectionStart, ae.selectionEnd] : null;
+  renderHead(); renderTabs(); renderProto();
+  const v = $('#view');
+  const prevScroll = $('#chat-scroll') ? $('#chat-scroll').scrollTop : 0;
+  if (S.tab === 'chat') v.innerHTML = chatView();
+  else if (S.view === 'create') v.innerHTML = createView();
+  else if (S.view === 'run') v.innerHTML = runView(runById(S.viewRun));
+  else v.innerHTML = homeView();
+  renderDialog();
+  $$('textarea[data-draft]').forEach(autoGrow);
+  const cs = $('#chat-scroll');
+  if (cs) { cs.scrollTop = S.thread.length !== S.chatLen || S.focusNext === '#chat-scroll' ? cs.scrollHeight : prevScroll; S.chatLen = S.thread.length; }
+  let target = null;
+  if (S.focusNext) { target = $(S.focusNext); S.focusNext = null; }
+  else if (S.dialog) { target = $('#overlay [data-autofocus]'); if (!$('#overlay').contains(ae)) {} else target = key ? null : target; }
+  if (!target && key) target = $(`[data-key="${key}"]`);
+  if (target && (target !== document.activeElement)) {
+    target.focus({preventScroll:target.id === 'vh'});
+    if (sel && target.dataset && target.dataset.key === key) { try { target.setSelectionRange(sel[0], sel[1]); } catch (e) {} }
+  }
+}
+function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 150) + 'px'; }
+function syncDecision(id) {
+  const has = hasDraft(id);
+  $$(`[data-approve="${id}"]`).forEach(b => b.setAttribute('aria-disabled', String(has || S.paused)));
+  $$(`[data-send="${id}"]`).forEach(b => { b.classList.toggle('primary', has); b.innerHTML = `<span data-send-label="${id}">${has ? 'Decline &amp; send reply' : 'Decline'}</span>${has ? ic('up') : ''}`; });
+  $$(`[data-hint="${id}"]`).forEach(h => { h.textContent = has ? 'Clear your reply below to approve instead.' : `Only this action. ${NAME} carries on afterwards.`; });
+}
+
+/* ═══════════ interaction ═══════════ */
+const H = {
+  tab(el) { if (el.dataset.id === 'workflows' && S.tab === 'workflows' && S.view !== 'create') S.view = 'home'; S.tab = el.dataset.id; S.menu = null; S.focusNext = S.tab === 'chat' ? '#chat-scroll' : '#vh'; render(); },
+  home() { S.view = 'home'; S.tab = 'workflows'; S.focusNext = '#vh'; S.freshWf = null; render(); },
+  'open-run'(el) { S.viewRun = el.dataset.id; S.view = 'run'; S.tab = 'workflows'; S.focusNext = '#vh'; render(); },
+  'open-waiting'() { const w = waiting()[0]; if (w) { S.viewRun = w.run; S.view = 'run'; S.tab = 'workflows'; S.focusNext = '#vh'; render(); } },
+  'toggle-how'(el) { S.expanded[el.dataset.id] = !S.expanded[el.dataset.id]; render(); },
+  na(el) { toast(el.dataset.msg || "That isn't part of this prototype."); S.menu = null; render(); },
+  menu(el) { S.menu = S.menu === el.dataset.id ? null : el.dataset.id; S.focusNext = S.menu ? '.menu-panel [aria-selected="true"], .menu-panel .menu-item' : (el.dataset.id === 'period' ? '#period-b' : null); render(); },
+  pause() {
+    S.paused = !S.paused; S.menu = null;
+    if (!S.paused) S.steps.filter(s => s.held).forEach(s => { s.held = false; if (S.pacing === 'auto') arm(s); });
+    toast(S.paused ? `${NAME} is paused. Runs wait, and nothing new is added to Pipedrive.` : `${NAME} is working again.`);
+    render();
+  },
+  /* create */
+  'new-wf'() {
+    if (!isEditor()) return;
+    S.create = {phase:'compose', text:'', example:null, plan:[], name:'', edit:null, wfId:null, drafting:false, error:false, ts:0};
+    S.view = 'create'; S.focusNext = '#goal'; render();
+  },
+  example(el) { const ex = EXAMPLES.find(e => e.id === el.dataset.id); S.create.text = ex.text; S.create.example = ex.id; S.create.error = false; S.focusNext = '#goal'; render(); },
+  build() {
+    const c = S.create; if (c.drafting) return;
+    if (!c.text.trim()) { c.error = true; S.focusNext = '#goal'; render(); return; }
+    c.error = false; c.drafting = true; const ts = ++c.ts; render();
+    setTimeout(() => {
+      if (S.create.ts !== ts || !S.create.drafting) return;
+      const ex = c.example && EXAMPLES.find(e => e.id === c.example && e.text === c.text);
+      const key = ex ? ex.id : 'custom';
+      c.plan = (key === 'custom' ? PLANS.custom(c.text.trim()) : PLANS[key]).map(s => ({...s}));
+      c.name = ex ? ex.title : c.text.trim().split(/[.!?\n]/)[0].slice(0, 40).replace(/^./, m => m.toUpperCase());
+      if (/each step|every step/i.test(c.text)) c.plan.forEach((s,i)=>{s.output={enabled:true,name:s.t,format:/spreadsheet|csv/i.test(c.text)?'csv':'md',description:'Preserve the results of this step. '+c.text.trim()}});
+      c.drafting = false; c.phase = 'plan'; c.edit = null; S.focusNext = '#vh'; render();
+    }, 900);
+  },
+  'back-compose'() { S.create.phase = 'compose'; S.focusNext = '#goal'; render(); },
+  'edit-step'(el) { S.create.edit = +el.dataset.i; S.focusNext = `#st-${el.dataset.i}`; render(); },
+  'done-step'(el) {
+    const i = +el.dataset.i; const t = $(`#st-${i}`).value.trim(); const c = $(`#sc-${i}`).value.trim();
+    if (t) S.create.plan[i].t = t; if (c) S.create.plan[i].c = c;
+    S.create.edit = null; render();
+  },
+  'remove-step'(el) { if (S.create.plan.length > 1) { S.create.plan.splice(+el.dataset.i, 1); S.create.edit = null; render(); } },
+  'move-step'(el) {
+    const i = +el.dataset.i, j = i + +el.dataset.d, p = S.create.plan; if (j < 0 || j >= p.length) return;
+    [p[i], p[j]] = [p[j], p[i]]; S.create.edit = j; render();
+  },
+  'add-step'() { S.create.plan.push({t:'New step', c:'Describe what should happen.'}); S.create.edit = S.create.plan.length - 1; S.focusNext = `#st-${S.create.edit}`; render(); },
+  'save-wf'() {
+    const c = S.create;
+    if (!c.name.trim()) { c.error = true; S.focusNext = '#wf-name'; render(); return; }
+    if (c.wfId) {
+      const wf = wfById(c.wfId); wf.name = c.name.trim(); wf.steps = c.plan.map(s => ({...s})); wf.writes = c.plan.some(s => s.asks); S.freshWf = wf.id;
+    } else {
+      const id = 'w' + (++S.seqW);
+      S.workflows.unshift({id, name:c.name.trim(), desc:c.text.trim().replace(/\s+/g, ' '), writes:c.plan.some(s => s.asks), last:null, total:18,
+        steps:c.plan.map(s => ({...s})), param:{label:'Look at deals with no activity in the last', options:['7 days','14 days','30 days']}});
+      S.freshWf = id;
+    }
+    S.view = 'home'; S.focusNext = '#vh';
+    toast(`Saved “${c.name.trim()}”. It hasn't run yet. Start it whenever you're ready.`);
+    render();
+  },
+  'edit-wf'(el) {
+    if (!isEditor()) return;
+    const wf = wfById(el.dataset.id);
+    S.create = {phase:'plan', text:wf.desc, example:null, plan:wf.steps.map(s => ({...s})), name:wf.name, edit:null, wfId:wf.id, drafting:false, error:false, ts:0};
+    S.view = 'create'; S.focusNext = '#vh'; render();
+  },
+  /* run */
+  'start-dialog'(el) {
+    if (!isEditor()) return;
+    const wf = wfById(el.dataset.id); S.dialog = {type:'start', id:wf.id, period:wf.param.options[0], opener:el}; render();
+  },
+  'period-set'(el) { S.dialog.period = el.dataset.v; S.menu = null; S.focusNext = '#period-b'; render(); },
+  'start-run'(el) { const d = S.dialog; S.dialog = null; S.menu = null; startRun(d.id, d.period); render(); },
+  'cancel-dialog'(el) { if (!isEditor()) return; S.dialog = {type:'cancel', id:el.dataset.id}; render(); },
+  'confirm-cancel'(el) { cancelRun(el.dataset.id); render(); },
+  'close-dialog'() { S.dialog = null; S.menu = null; S.focusNext = '#vh'; render(); },
+  /* approval */
+  approve(el) {
+    if (el.getAttribute('aria-disabled') === 'true') { const t = $(`#reply-${el.dataset.id}`); if (t && hasDraft(el.dataset.id)) t.focus(); return; }
+    approve(el.dataset.id, S.tab === 'chat' ? 'Chat' : 'Workflows');
+  },
+  send(el) { if (el.getAttribute('aria-disabled') === 'true') return; decline(el.dataset.id, S.tab === 'chat' ? 'Chat' : 'Workflows'); },
+  chip(el) {
+    const p = propById(el.dataset.id); S.drafts[p.id] = p.chips[+el.dataset.i].text;
+    S.focusNext = `#reply-${p.id}`; render();
+    const t = $(`#reply-${p.id}`); if (t) t.setSelectionRange(t.value.length, t.value.length);
+  },
+  'chat-send'() {
+    const text = S.chatDraft.trim(); if (!text || !isEditor()) return;
+    S.thread.push({k:'msg', who:'you', run:null, seq:-1, t:nowT(), text, via:null});
+    S.chatDraft = '';
+    const stillWaiting = waiting().length > 0;
+    setTimeout(() => {
+      S.thread.push({k:'msg', who:'agent', run:null, seq:-1, t:nowT(), text: stillWaiting
+        ? "Thanks, I've noted that. I'm still waiting for your decision on the proposal above before I carry on. Your message doesn't approve or decline it."
+        : "Thanks, I've noted that. Nothing is waiting for you right now."});
+      render();
+    }, 900);
+    S.focusNext = '#chat-in'; render();
+  },
+  ledger() { S.ledgerOpen = !S.ledgerOpen; render(); },
+  'proto-toggle'() { S.protoOpen = !S.protoOpen; render(); },
+  reset() { S.steps.forEach(s => clearTimeout(s.timer)); const keep = {role:S.role, pacing:S.pacing, declineMode:S.declineMode}; S = Object.assign(fresh(), keep); S.focusNext = null; render(); toast('Prototype reset.'); }
+};
+
+document.addEventListener('click', e => {
+  if (S.menu && !e.target.closest('.menu-wrap')) { S.menu = null; render(); }
+  const pr = e.target.closest('[data-proto]');
+  if (pr) {
+    const k = pr.dataset.proto, v = pr.dataset.v;
+    if (k === 'role') { S.role = v; }
+    if (k === 'pacing') {
+      S.pacing = v;
+      S.steps.forEach(s => { if (v === 'auto') { if (!s.held) arm(s); } else clearTimeout(s.timer); });
+    }
+    if (k === 'declineMode') S.declineMode = v;
+    render(); return;
+  }
+  if (e.target.closest('[data-proto-go]')) { const s = S.steps[0]; if (s) { s.held = false; fire(s); } return; }
+  const t = e.target.closest('[data-act]');
+  if (t && H[t.dataset.act]) { e.preventDefault(); H[t.dataset.act](t, e); }
+  if (e.target === $('#overlay') && S.dialog) H['close-dialog']();
+});
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.dataset.draft) { S.drafts[t.dataset.draft] = t.value; autoGrow(t); syncDecision(t.dataset.draft); }
+  else if (t.dataset.field === 'goal') { S.create.text = t.value; S.create.example = S.create.example && EXAMPLES.find(x => x.id === S.create.example && x.text === t.value) ? S.create.example : null; S.create.error = false; $$('.ex').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.id === S.create.example))); }
+  else if (t.dataset.field === 'name') { S.create.name = t.value; }
+  else if (t.dataset.field === 'chat') { S.chatDraft = t.value; const b = $('[data-act="chat-send"]'); if (b) b.disabled = !t.value.trim() || !isEditor(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.target.dataset && e.target.dataset.draft) { e.preventDefault(); H.send({getAttribute:() => hasDraft(e.target.dataset.draft) ? 'false' : 'true', dataset:{id:e.target.dataset.draft}}); return; }
+  if (e.key === 'Enter' && e.target.dataset && e.target.dataset.field === 'chat') { e.preventDefault(); H['chat-send'](); return; }
+  if (e.key === 'Escape') {
+    if (S.menu) { const trig = S.menu; S.menu = null; S.focusNext = trig === 'period' ? '#period-b' : '[data-id="life"]'; render(); return; }
+    if (S.dialog) { H['close-dialog'](); return; }
+  }
+  const panel = $('.menu-panel');
+  if (panel && ['ArrowDown','ArrowUp','Home','End'].includes(e.key)) {
+    const items = $$('.menu-item', panel); const i = items.indexOf(document.activeElement);
+    e.preventDefault();
+    const n = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+    items[n].focus(); return;
+  }
+  if (e.key === 'Tab' && S.dialog) {
+    const f = $$('#overlay button:not([disabled]), #overlay [tabindex="0"]'); if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+});
+
+S = fresh();
+render();
+window.__proto = {get S() { return S; }, approve, decline, cancelRun, startRun, H, render, waiting};
+</script>
+<script>
+/* Files belong to runs, with the step that created them. All content here is fictional. */
+const OUT_FORMATS=[['html','Document'],['csv','Spreadsheet'],['md','Notes']];
+const EXTS={html:'html',csv:'csv',md:'md'};
+const MIMES={html:'text/html;charset=utf-8',csv:'text/csv;charset=utf-8',md:'text/markdown;charset=utf-8'};
+function outputDefaults(s,i){return {enabled:false,name:s.t||('Step '+(i+1)),format:'md',description:''}}
+function finalDefault(){return {enabled:true,name:'Workflow result',format:'html',description:'A report summarizing the findings, the decisions I made, and the next steps.'}}
+function seedArtifactSettings(state){
+state.workflows.forEach(w=>{w.steps=w.steps.map(s=>({...s}));w.steps.forEach((s,i)=>{s.output={enabled:i===0||i===1,name:i===0?'Open deals':'Deal review notes',format:i===0?'csv':'md',description:i===0?'A spreadsheet of the open deals, including the company, deal owner, last activity, and next action.':i===1?'Notes for each reviewed deal, with the findings, recommended next steps, and the reasoning.':''}});w.finalOutput={enabled:true,name:w.name+' report',format:'html',description:'A report I can share with my team: summarize the pipeline, include the decisions and completed changes, and list the next steps.'}});
+state.runs.forEach(r=>{const w=state.workflows.find(w=>w.id===r.wf);r.outputPlan=w.steps.map(s=>({...s,output:{...s.output}}));r.finalOutput={...w.finalOutput};r.artifacts=[]});
+const active=state.runs.find(r=>r.id==='r1'),past=state.runs.find(r=>r.id==='r0');
+active.artifacts=[
+makeFile('r1-source',active,0,'Open deals','csv',false),
+makeFile('r1-notes',active,1,'Reviewed deals so far','md',true)
+];
+past.artifacts=[makeFile('r0-source',past,0,'Open deals','csv',false),makeFile('r0-report',past,-1,'Pipeline review report','html',false)];
+return state;
+}
+function makeFile(id,run,stepIndex,title,format,partial){const slug=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');const rows=[['Company','Deal','Owner','Next activity'],['Cedar Freight','Renewal','Maya','No change needed'],['Juniper Labs','Pilot','Jonas','No change needed'],['Atlas','Annual agreement','Maya',run.status==='completed'?'Approved activity recorded':'Awaiting review']];return {id,runId:run.id,stepIndex,title,format,partial,filename:slug+'.'+EXTS[format],created:run.started,source:stepIndex===-1?'Workflow result':run.outputPlan?.[stepIndex]?.t||'Deal review',rows,summary:run.status==='completed'?run.reviewed+' deals reviewed · '+run.changes+' approved changes recorded.':'Snapshot from this run. '+run.reviewed+' deals reviewed so far.',note:partial?'This snapshot covers completed deal reviews only. The remaining deals are still in progress.':'This file records information available when the step completed.'}}
+function artifactBody(a){if(a.format==='csv')return a.rows.map(row=>row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\r\n')+'\r\n';if(a.format==='md')return '# '+a.title+'\n\n'+a.summary+'\n\n'+a.note+'\n\n## Reviewed deals\n\n- Cedar Freight: no change needed.\n- Juniper Labs: no change needed.\n\nSource: '+a.source+'\nRun: '+a.runId+'\n';return '<!doctype html><html lang="en"><meta charset="utf-8"><title>'+esc(a.title)+'</title><style>body{font-family:system-ui;max-width:760px;margin:48px auto;padding:24px;line-height:1.7;color:#1a1815}table{border-collapse:collapse;width:100%;font-size:13px}td,th{text-align:left;padding:10px;border-bottom:1px solid #ddd}small{color:#666}</style><h1>'+esc(a.title)+'</h1><p>'+esc(a.summary)+'</p><h2>What happened</h2><p>'+esc(a.note)+'</p><table><thead><tr>'+a.rows[0].map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+a.rows.slice(1).map(row=>'<tr>'+row.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('')+'</tbody></table><h2>Next steps</h2><p>Follow up with deal owners on the agreed next steps.</p><small>Source: '+esc(a.source)+' · '+esc(a.created)+' · Sample Agent Barn workflow output</small></html>'}
+function artById(id){return S.runs.flatMap(r=>r.artifacts||[]).find(a=>a.id===id)}
+function artifactRow(a){const bytes=new Blob([artifactBody(a)],{type:MIMES[a.format]}).size;return '<div class="artifact-row" data-artifact="'+esc(a.id)+'"><span class="file-icon">'+a.format.toUpperCase()+'</span><div class="file-info"><b>'+esc(a.filename)+'</b><p>'+esc(a.source)+' · '+Math.max(1,Math.ceil(bytes/1024))+' KB'+(a.partial?' · Partial result':'')+'</p><div class="file-actions"><button class="btn sm" data-act="artifact-view" data-id="'+esc(a.id)+'">View</button><button class="btn ghost sm" data-act="artifact-download" data-id="'+esc(a.id)+'">↓ Download</button></div></div><span class="pill '+(a.partial?'warn':'ok')+'">'+(a.partial?'So far':'Ready')+'</span></div>'}
+function artifactSection(run){const arts=run.artifacts||[];const final=run.finalOutput?.enabled;const finalReady=arts.some(a=>a.stepIndex===-1);const pending=final&&!finalReady;return '<section class="artifacts" aria-label="Files from this run"><div class="art-heading"><div><h3>Files from this run</h3><p class="art-intro">View or download the outputs each step produces.</p></div><span class="pill">'+arts.length+' ready</span></div><div class="artifact-list">'+arts.map(artifactRow).join('')+(pending?'<div class="artifact-row pending-file"><span class="file-icon">'+run.finalOutput.format.toUpperCase()+'</span><div class="file-info"><b>'+esc(run.finalOutput.name)+'</b><p>Workflow result · '+(run.status==='canceled'?'Not produced — run canceled':'Available when this workflow finishes')+'</p></div><span class="pill">'+(run.status==='canceled'?'Not produced':'Pending')+'</span></div>':'')+(!arts.length&&!pending?'<div class="artifact-row"><p class="small muted">Files will appear here when the Agent produces them.</p></div>':'')+'</div></section>'}
+function outputControls(o,scope,index){const uid='artifact-'+scope+'-'+index;const description=o.description||'';return '<div class="output-setting"><div class="artifact-preserve-row"><span id="'+uid+'-label">Preserve artifact</span><button type="button" class="artifact-preserve-switch" role="switch" aria-checked="'+Boolean(o.enabled)+'" aria-labelledby="'+uid+'-label" data-act="artifact-preserve" data-scope="'+scope+'" data-i="'+index+'"><span></span></button></div>'+(o.enabled?'<div class="output-details"><label class="artifact-description-label" for="'+uid+'-description">Describe the artifact</label><textarea class="input artifact-description" id="'+uid+'-description" data-output-description="'+scope+'" data-i="'+index+'" data-key="'+uid+'-description" rows="3" placeholder="'+(scope==='final'?'A report of the findings and decisions, with charts and recommendations. Make it a PDF I can share with my team.':'A file with the results of this step. Describe the content, file type, or layout you need.')+'">'+esc(description)+'</textarea><p class="artifact-description-help">Describe what you need. Include a file type or layout if it matters.</p></div>':'')+'</div>'}
+
+function ensureOutputSettings(){const c=S.create;if(!c.artifactSettingsCloned){c.plan.forEach(s=>{if(s.output)s.output={...s.output}});c.artifactSettingsCloned=true}if(!c.finalOutput)c.finalOutput=c.wfId?{...(wfById(c.wfId)?.finalOutput||finalDefault())}:finalDefault();c.plan.forEach((s,i)=>{if(!s.output)s.output=outputDefaults(s,i)})}
+const oldFresh=fresh;fresh=function(){return seedArtifactSettings(oldFresh())};seedArtifactSettings(S);
+const oldCreate=createView;createView=function(){ensureOutputSettings();let out=oldCreate();if(S.create.phase==='compose')return out.replace('Nothing runs until you start it.','Describe any artifact you need at a step or at the end, including its contents and file type. Nothing runs until you start it.');const doc=document.createElement('div');doc.innerHTML=out;doc.querySelectorAll('[data-step]').forEach(el=>{const i=+el.dataset.step;const body=el.querySelector('.pbody');body.insertAdjacentHTML('beforeend',outputControls(S.create.plan[i].output,'step',i))});const save=doc.querySelector('.savebar');save.insertAdjacentHTML('beforebegin','<div class="card final-output"><h3>Final artifact</h3><p class="small muted">What would you like to take away when the workflow finishes?</p>'+outputControls(S.create.finalOutput,'final',-1)+'</div>');return doc.innerHTML};
+const oldRun=runView;runView=function(run){const doc=document.createElement('div');doc.innerHTML=oldRun(run);const main=doc.querySelector('.run-grid > div');const logHeading=main.querySelector('h3.sec');logHeading.insertAdjacentHTML('beforebegin',artifactSection(run));return doc.innerHTML};
+const oldHome=homeView;homeView=function(){const doc=document.createElement('div');doc.innerHTML=oldHome();doc.querySelectorAll('.run-row').forEach(el=>{const r=runById(el.dataset.id);const n=r.artifacts?.length||0;if(n){const text=el.querySelector('.sub');text.textContent+=' · '+n+' file'+(n===1?'':'s')}});return doc.innerHTML};
+const oldChatArtifacts=chatView;chatView=function(){const doc=document.createElement('div');doc.innerHTML=oldChatArtifacts();const current=S.runs.find(r=>!r.past);if(current){doc.querySelector('#chat-scroll .thread')?.insertAdjacentHTML('beforeend',artifactSection(current))}return doc.innerHTML};
+const oldDialog=renderDialog;renderDialog=function(){if(S.dialog?.type!=='artifact'){oldDialog();return}const a=artById(S.dialog.id);const o=$('#overlay');if(!a){S.dialog=null;oldDialog();return}o.hidden=false;let preview;if(a.format==='csv'){preview='<table><thead><tr>'+a.rows[0].map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+a.rows.slice(1).map(row=>'<tr>'+row.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('')+'</tbody></table>'}else if(a.format==='md'){preview='<pre>'+esc(artifactBody(a))+'</pre>'}else{preview=new DOMParser().parseFromString(artifactBody(a),'text/html').body.innerHTML}o.innerHTML='<div class="dialog artifact-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-t"><h3 id="dlg-t">'+esc(a.filename)+'</h3><p class="art-preview-meta">'+esc(a.source)+' · '+esc(a.created)+(a.partial?' · Partial result':'')+'</p><div class="artifact-preview" tabindex="0">'+preview+'</div><div class="foot"><button class="btn" data-act="close-dialog" data-autofocus>Close</button><button class="btn primary" data-act="artifact-download" data-id="'+esc(a.id)+'">↓ Download file</button></div></div>'};
+function downloadArtifact(id){const a=artById(id);if(!a)return;const blob=new Blob([artifactBody(a)],{type:MIMES[a.format]});const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download=a.filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}
+H['artifact-view']=el=>{S.dialog={type:'artifact',id:el.dataset.id};S.focusNext=null;render()};
+H['artifact-download']=el=>downloadArtifact(el.dataset.id);
+H['artifact-format']=el=>{ensureOutputSettings();const o=el.dataset.scope==='final'?S.create.finalOutput:S.create.plan[+el.dataset.i].output;o.format=el.dataset.format;render()};
+H['artifact-current']=()=>{S.viewRun='r1';S.view='run';S.tab='workflows';render();$('#view .artifacts')?.scrollIntoView({behavior:'smooth',block:'start'})};
+H['artifact-completed']=()=>{S.viewRun='r0';S.view='run';S.tab='workflows';render();$('#view .artifacts')?.scrollIntoView({behavior:'smooth',block:'start'})};
+H['artifact-settings']=()=>{H['edit-wf']({dataset:{id:'w1'}})};
+const oldSave=H['save-wf'];H['save-wf']=function(){ensureOutputSettings();const final={...S.create.finalOutput};if(!S.create.name.trim()){oldSave();return}oldSave();const wf=wfById(S.freshWf);wf.finalOutput=final;render()};
+const oldStart=startRun;startRun=function(id,period){oldStart(id,period);const r=runById(S.viewRun),w=wfById(id);r.outputPlan=w.steps.map(s=>({...s,output:s.output?{...s.output}:null}));r.finalOutput={...w.finalOutput};r.artifacts=[]};
+function saveRunFile(run,index,partial){const s=run.outputPlan?.[index];if(!s?.output?.enabled)return;const id=run.id+'-step-'+index+(partial?'-snapshot-'+run.reviewed:'');if(run.artifacts.some(a=>a.id===id))return;run.artifacts.push(makeFile(id,run,index,s.output.name,s.output.format,partial))}
+const oldPresent=present;present=function(run,def){saveRunFile(run,0,false);return oldPresent(run,def)};
+const oldProceed=proceed;proceed=function(run){const sourceDeal=run.currentDeal;oldProceed(run);if(run.outputPlan?.[1]?.output?.enabled){const o=run.outputPlan[1].output;const a=makeFile(run.id+'-review-'+run.reviewed,run,1,o.name+' — '+sourceDeal,o.format,true);a.summary=sourceDeal+' reviewed. The decision and any approved action are recorded in the run history.';run.artifacts.push(a)}};
+const oldFinish=finishRun;finishRun=function(run){oldFinish(run);run.outputPlan?.forEach((s,i)=>saveRunFile(run,i,false));if(run.finalOutput?.enabled&&!run.artifacts.some(a=>a.stepIndex===-1)){run.artifacts.push(makeFile(run.id+'-final',run,-1,run.finalOutput.name,run.finalOutput.format,false))}};
+document.addEventListener('change',e=>{const t=e.target;if(t.dataset.outputToggle){ensureOutputSettings();const o=t.dataset.outputToggle==='final'?S.create.finalOutput:S.create.plan[+t.dataset.i].output;o.enabled=t.checked;render()}});
+document.addEventListener('input',e=>{const t=e.target;if(t.dataset.outputName){ensureOutputSettings();const o=t.dataset.outputName==='final'?S.create.finalOutput:S.create.plan[+t.dataset.i].output;o.name=t.value}});
+window.__artifacts={body:artifactBody,find:artById,download:downloadArtifact};
+S.view='run';S.viewRun='r0';render();
+</script><script>
+H['artifact-preserve']=function(el){ensureOutputSettings();const o=el.dataset.scope==='final'?S.create.finalOutput:S.create.plan[+el.dataset.i].output;o.enabled=!o.enabled;render()};
+document.addEventListener('input',e=>{const t=e.target;if(t.dataset.outputDescription){ensureOutputSettings();const o=t.dataset.outputDescription==='final'?S.create.finalOutput:S.create.plan[+t.dataset.i].output;o.description=t.value}});
+H['artifact-settings']();
+</script></body>
+</html>
