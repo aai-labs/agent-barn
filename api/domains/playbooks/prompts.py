@@ -10,11 +10,13 @@ from typing import Any
 
 from api.domains.playbooks.transcripts import SessionTranscript, estimated_tokens
 
-PROMPT_VERSION = "playbook-2026-10-13.2"
+PROMPT_VERSION = "playbook-2026-10-14"
 
 NOTES_MAX_TOKENS = 1_200
 PLAYBOOK_MAX_TOKENS = 4_000
 MEMORY_CHARS = 500
+MAX_CONVENTIONS = 30
+CONVENTION_CHARS = 500
 # What one session's notes usually come to; used only for estimates.
 TYPICAL_NOTES_TOKENS = 400
 
@@ -43,8 +45,18 @@ PLAYBOOK_SYSTEM_PROMPT = f"""You write a playbook that teaches a new AI Agent ho
 organization does its work. You receive notes taken from the experienced Agent's recent
 conversations and the facts it keeps in long-term memory.
 
-Return a JSON object with two keys:
+Separate two kinds of practice:
+- Organization conventions: rules any Agent at this organization should follow whatever its
+  role and tools, such as time zones, when to ask for approval, how to handle uncertainty,
+  message format and tone, and escalation. A convention never names this role's tools,
+  commands, data sources, or tasks.
+- Everything else belongs to this role and goes in the playbook body. Do not repeat
+  conventions in the body.
+
+Return a JSON object with three keys:
 - "description": one sentence saying when an Agent should use this playbook.
+- "conventions": a list of objects, each with "rule" (one imperative sentence) and
+  "conversations" (how many conversations support it); an empty list when there are none.
 - "body": the playbook in Markdown, with these sections:
   # <a short title>
   ## When to use
@@ -62,9 +74,16 @@ words. Write for an Agent, in the second person. {_PRIVACY}"""
 
 
 @dataclass(frozen=True)
+class Convention:
+    rule: str
+    conversations: int
+
+
+@dataclass(frozen=True)
 class Playbook:
     description: str
     body: str
+    conventions: tuple[Convention, ...] = ()
 
 
 def notes_messages(transcript: SessionTranscript) -> list[dict[str, str]]:
@@ -107,7 +126,30 @@ def parse_playbook(content: str) -> Playbook | None:
     description, body = answer.get("description"), answer.get("body")
     if not isinstance(description, str) or not isinstance(body, str) or not body.strip():
         return None
-    return Playbook(description=" ".join(description.split())[:500], body=body.strip())
+    return Playbook(
+        description=" ".join(description.split())[:500],
+        body=body.strip(),
+        conventions=_parse_conventions(answer.get("conventions")),
+    )
+
+
+def _parse_conventions(value: Any) -> tuple[Convention, ...]:
+    """Well-formed conventions only; a malformed list costs the conventions, not the playbook."""
+    if not isinstance(value, list):
+        return ()
+    conventions: list[Convention] = []
+    for item in value:
+        rule = item.get("rule") if isinstance(item, dict) else None
+        if not isinstance(rule, str) or not rule.strip():
+            continue
+        count = item.get("conversations")
+        conventions.append(
+            Convention(
+                rule=" ".join(rule.split())[:CONVENTION_CHARS],
+                conversations=count if isinstance(count, int) and count > 0 else 1,
+            )
+        )
+    return tuple(conventions[:MAX_CONVENTIONS])
 
 
 def skill_markdown(slug: str, playbook: Playbook) -> str:

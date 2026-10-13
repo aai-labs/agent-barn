@@ -292,6 +292,7 @@ def test_a_run_detail_includes_the_generated_playbook():
         )
     ) as context:
         context.extraction.result_markdown = "# Billing playbook"
+        context.extraction.result_conventions = [{"rule": "Use Vilnius time.", "conversations": 3}]
         context.postgres_delegate.save(context.extraction)
         with when("the Owner opens the run"):
             response = context.client.get(f"{_runs(context)}/{context.extraction.id}", headers=_auth(context))
@@ -299,6 +300,8 @@ def test_a_run_detail_includes_the_generated_playbook():
         with then("the playbook the run produced is included"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["result_markdown"], equal_to("# Billing playbook"))
+            assert_that(response.json()["conventions"], equal_to([{"rule": "Use Vilnius time.", "conversations": 3}]))
+            assert_that(response.json()["convention_count"], equal_to(1))
 
 
 def test_a_run_of_another_agent_is_not_found_through_this_agents_path():

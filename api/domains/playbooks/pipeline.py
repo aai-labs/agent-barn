@@ -158,7 +158,12 @@ class PlaybookPipeline:
             return rendered["markdown"]
 
         # Kept on the run first, so a draft that cannot be written loses nothing paid for.
-        self._progress(extraction.id, result_markdown=render(_preview_slug(extraction.skill_name)), **usage.values())
+        self._progress(
+            extraction.id,
+            result_markdown=render(_preview_slug(extraction.skill_name)),
+            result_conventions=[{"rule": c.rule, "conversations": c.conversations} for c in playbook.conventions],
+            **usage.values(),
+        )
         try:
             skill_id = self.skills.write_playbook_draft(
                 extraction.organization_id, extraction.skill_id, extraction.skill_name, playbook.description, render

@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from decimal import Decimal
-from typing import Self
+from typing import Any, Self
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -107,6 +107,10 @@ class PlaybookExtraction(BaseModel, table=True):
     completion_tokens: int = SqlField(default=0, nullable=False)
     cost_usd: Decimal | None = SqlField(default=None, sa_column=Column(sa.Numeric(20, 12), nullable=True))
     result_markdown: str | None = SqlField(default=None, sa_column=Column(sa.Text, nullable=True))
+    # Proposed Organization Conventions: [{"rule": str, "conversations": int}], reviewed before use.
+    result_conventions: list[dict[str, Any]] = SqlField(
+        default_factory=list, sa_column=Column(JSONB, nullable=False, server_default=sa.text("'[]'::jsonb"))
+    )
     # A plain string column: new codes ship without a database enum migration.
     error_code: str | None = SqlField(default=None, sa_column=Column(sa.String(64), nullable=True))
     started_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
@@ -156,19 +160,34 @@ class PlaybookExtractionRead(PydanticBaseModel):
     completion_tokens: int
     cost_usd: Decimal | None
     requested_by_user_id: UUID | None
+    convention_count: int
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
 
     @classmethod
     def from_row(cls, row: PlaybookExtraction, source_agent_name: str) -> Self:
-        return cls.model_validate({**row.model_dump(), "source_agent_name": source_agent_name})
+        return cls.model_validate(
+            {
+                **row.model_dump(),
+                "source_agent_name": source_agent_name,
+                "convention_count": len(row.result_conventions or []),
+                "conventions": row.result_conventions or [],
+            }
+        )
+
+
+class PlaybookConventionRead(PydanticBaseModel):
+    rule: str
+    conversations: int
 
 
 class PlaybookExtractionDetailRead(PlaybookExtractionRead):
-    """Adds the generated playbook, kept so a run whose draft could not be written loses nothing."""
+    """Adds the generated playbook, kept so a run whose draft could not be written loses nothing,
+    and the Organization Conventions it proposed."""
 
     result_markdown: str | None
+    conventions: list[PlaybookConventionRead]
 
 
 class PlaybookExtractionPreview(PydanticBaseModel):

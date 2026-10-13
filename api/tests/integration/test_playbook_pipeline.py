@@ -51,9 +51,14 @@ from api.tests.steps.playbooks import (
 IN = MessageDirection.INBOUND
 OUT = MessageDirection.OUTBOUND
 
+PLAYBOOK_BODY = "# Refunds\n\n## How we work\n\n1. Check the order first (seen in 2 conversations)."
 PLAYBOOK = {
     "description": "Use when preparing refunds for customers.",
-    "body": "# Refunds\n\n## How we work\n\n1. Check the order first (seen in 2 conversations).",
+    "conventions": [
+        {"rule": "Use Vilnius time for dates and deadlines.", "conversations": 2},
+        {"rule": "Ask before changing any record.", "conversations": 1},
+    ],
+    "body": PLAYBOOK_BODY,
 }
 
 
@@ -200,12 +205,49 @@ def test_a_run_writes_its_playbook_as_a_new_organization_skill_draft():
                 files["SKILL.md"],
                 equal_to(
                     f'---\nname: {skill.slug}\ndescription: "Use when preparing refunds for customers."\n---\n\n'
-                    + PLAYBOOK["body"]
+                    + PLAYBOOK_BODY
                     + "\n"
                 ),
             )
             assert_that(context.injector.get(SkillRepository).get_latest_version(skill.id), none())
             assert_that(run.result_markdown, equal_to(files["SKILL.md"]))
+
+
+def test_organization_conventions_are_kept_on_the_run_apart_from_the_playbook():
+    with given(
+        _setup(two_refund_conversations(), the_model_proxy_is(model_replies()), there_is_a_playbook_extraction())
+    ) as context:
+        with when("the worker runs the extraction"):
+            run = process_extraction(context)
+
+        with then("the proposed conventions are stored for review and left out of the Skill"):
+            assert_that(
+                run.result_conventions,
+                equal_to(
+                    [
+                        {"rule": "Use Vilnius time for dates and deadlines.", "conversations": 2},
+                        {"rule": "Ask before changing any record.", "conversations": 1},
+                    ]
+                ),
+            )
+            assert_that(_draft_files(context, run.skill_id)["SKILL.md"], is_not(contains_string("Vilnius")))
+
+
+def test_malformed_conventions_are_dropped_without_failing_the_run():
+    malformed = {**PLAYBOOK, "conventions": [{"rule": ""}, "not an object", {"rule": "Answer in English."}]}
+    with given(
+        _setup(
+            two_refund_conversations(),
+            the_model_proxy_is(model_replies(playbook=malformed)),
+            there_is_a_playbook_extraction(),
+        )
+    ) as context:
+        with when("the model answers with some malformed conventions"):
+            run = process_extraction(context)
+
+        with then("the run succeeds with only the well-formed one"):
+            assert_that(run.status, equal_to(PlaybookExtractionStatus.SUCCEEDED))
+            assert_that(run.result_conventions, equal_to([{"rule": "Answer in English.", "conversations": 1}]))
 
 
 def test_a_run_records_what_it_read_and_what_it_cost():
@@ -328,7 +370,7 @@ def test_refreshing_a_playbook_writes_the_next_draft_of_the_same_skill():
 
         with then("the existing Skill gains a draft and keeps its published version"):
             assert_that(run.skill_id, equal_to(context.skill.id))
-            assert_that(_draft_files(context, context.skill.id)["SKILL.md"], contains_string(PLAYBOOK["body"]))
+            assert_that(_draft_files(context, context.skill.id)["SKILL.md"], contains_string(PLAYBOOK_BODY))
             assert_that(context.injector.get(SkillRepository).get_latest_version(context.skill.id).version, equal_to(1))
 
 
@@ -349,7 +391,7 @@ def test_a_draft_started_after_the_request_is_never_overwritten():
             assert_that(run.status, equal_to(PlaybookExtractionStatus.FAILED))
             assert_that(run.error_code, equal_to("draft_conflict"))
             assert_that(_draft_files(context, context.skill.id)["SKILL.md"], equal_to("# Unpublished edits"))
-            assert_that(run.result_markdown or "", contains_string(PLAYBOOK["body"]))
+            assert_that(run.result_markdown or "", contains_string(PLAYBOOK_BODY))
             assert_that(run.prompt_tokens, equal_to(5_000))
 
 
