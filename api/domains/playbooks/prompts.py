@@ -10,7 +10,7 @@ from typing import Any
 
 from api.domains.playbooks.transcripts import SessionTranscript, estimated_tokens
 
-PROMPT_VERSION = "playbook-2026-10-13"
+PROMPT_VERSION = "playbook-2026-10-13.2"
 
 NOTES_MAX_TOKENS = 1_200
 PLAYBOOK_MAX_TOKENS = 4_000
@@ -52,7 +52,8 @@ Return a JSON object with two keys:
   ## Tools and commands
   ## Preferences and standards
   ## Corrections to avoid — what people corrected, and the right way instead
-  ## Open questions for the reviewer — practices seen only once, or that conflict
+  ## Open questions for the reviewer — list every procedure seen in only one conversation
+     and every conflict between conversations; write "None" only when there are none
 
 Include only practices the notes or memories support, and say how many conversations
 support each procedure, for example "(seen in 3 conversations)". Never invent tools or

@@ -33,9 +33,10 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 
 ### 2026-10-13 — slice 4
 
-- Delivered: `PlaybookPipeline`, its prompts (`playbook-2026-10-13`), `SkillService.write_playbook_draft`, and output-token and model fields on the preview.
+- Delivered: `PlaybookPipeline`, its prompts (`playbook-2026-10-13`, revised to `.2` after a live check), `SkillService.write_playbook_draft`, and output-token and model fields on the preview.
 - Removed: the transitional `pipeline_unavailable` error code.
 - Changed: the Compose worker receives `MEMORY_VIEW_BASE_URL`; Helm already supplies it through the API Secret.
+- Verified live: one run over 20 local sales conversations with `openrouter/openai/gpt-4.1-mini` made 21 calls, about 56k prompt and 9k completion tokens, roughly $0.03, and produced a usable playbook with real commands, standards, and corrections. It reported no open questions despite single-conversation procedures, so the instruction was tightened.
 - Follow-up: slice 5, the UI.
 
 ### 2026-10-13 — slice 3
