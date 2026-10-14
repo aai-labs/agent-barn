@@ -9,13 +9,20 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: the platform app settings `ONEDRIVE_SYNC_CLIENT_ID` and `ONEDRIVE_SYNC_CLIENT_SECRET` in `api/core/config.py`. `Config.is_onedrive_sync_enabled` is true only when both are non-blank. Nothing reads the settings yet.
 - Delivered: deploy wiring. The API chart Secret renders `ONEDRIVE_SYNC_CLIENT_ID` / `ONEDRIVE_SYNC_CLIENT_SECRET` from `onedriveSyncClientId` / `onedriveSyncClientSecret`; Helmfile reads them from the environment; `deploy.yml` and `deploy-public.yml` pass the shared `vars.ONEDRIVE_SYNC_CLIENT_ID` and `secrets.ONEDRIVE_SYNC_CLIENT_SECRET`. Unset values render blank, leaving OneDrive sync unavailable.
 - Delivered: verification of the Microsoft flow (T-1, T-5) against a real tenant, recorded in the 2026-10-14 entry.
+- Delivered: `MicrosoftIdentityClient.exchange_code(..., client_secret=None)` redeems as a confidential client when a secret is given (still with the PKCE verifier), and `build_app_permission_consent_url(..., state=None)` carries a `state`. Existing SharePoint callers pass neither and are unchanged.
 - In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
-- Next: Microsoft identity support for a confidential client and consent `state`.
+- Next: Microsoft Graph site search, site lookup by id, and folder creation.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Confidential client and consent state
+
+- Delivered: optional `client_secret` on `MicrosoftIdentityClient.exchange_code` and optional `state` on `build_app_permission_consent_url` in `api/domains/agents/microsoft_identity.py`.
+- Verified: new unit tests in `api/tests/unit/test_microsoft_identity.py`; the existing exact-request test still proves the public-client exchange sends no secret; `test_sharepoint_sign_in.py` and `test_sharepoint_selected_sites.py` pass unchanged.
+- Follow-up: Microsoft Graph site search, site lookup by id, and folder creation.
 
 ### 2026-10-14 — AF-383 — Deploy wiring
 
