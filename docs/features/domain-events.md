@@ -74,7 +74,7 @@ AF-381 (prepaid credit) adds, all projected by `security_audit.projection`:
 - `organization.agent_limit.changed` — emitted atomically when a Platform Administrator sets or clears an Organization's own Agent limit, with the previous and current limit (`null` follows the default).
 - `platform.billing_settings.changed` — emitted atomically when a Platform Administrator changes a billing setting (`min_purchase_usd`, `max_purchase_usd`, `credit_rate`, `purchase_fee_percent`), one event per setting that moved, same payload shape as `platform.trial_settings.changed`.
 - `platform.organization_settings.changed` — the same, for the platform's Organization settings (`default_agent_limit`).
-- `platform.credit_purchase.unapplied` — emitted when a paid credit purchase arrives for an Organization that no longer runs on Credit, so nothing was granted; carries the payment reference, the credit and the amount paid, and names the Organization in `subject_display` (a Platform event carries no Organization id).
+- `platform.credit_purchase.unapplied` — emitted when a paid credit purchase arrives for an Organization that no longer runs on Credit, so nothing was granted; carries the payment reference, the credit, the amount paid and the reason (for example, the amount paid doesn't match the checkout we created), and names the Organization in `subject_display` (a Platform event carries no Organization id). Also emitted for a paid session that doesn't match a checkout we created.
 
 AF-167 broadens Security Audit Record coverage to additional mutations:
 

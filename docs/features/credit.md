@@ -47,10 +47,14 @@ Buying credit is also what converts a trial ([Trial onboarding](trial-onboarding
 it ends the trial without touching the ledger or the one-off window, and clears an expiry.
 
 Ending a trial (by a purchase, or by a Platform Administrator) lets its owner create
-further Organizations. Every Organization created by someone who signed themselves up
-runs on Credit, starting with none (an opening adjustment of $0): it spends only what is
-bought for it, never the platform's budget. Organizations created by anyone else, or by
-a Platform Administrator, stay on renewing limits and have no ledger.
+further Organizations. Only accounts a Platform Administrator set up
+(`user.platform_provisioned_at`, set by `POST /platform/users` and for Platform
+Administrators, and backfilled for every account that existed before and didn't sign
+itself up) create Organizations on renewing limits. Everyone else's new Organizations,
+whether they signed themselves up or were invited by an Organization, run on Credit,
+starting with none (an opening adjustment of $0): they spend only what is bought for
+them, never the platform's budget. Without this, a trial's owner could invite an address
+of their own and create Organizations on the platform's budget from it.
 
 ## Buying credit
 
@@ -68,16 +72,21 @@ webhook secret.
   minimum and maximum; returns a Stripe Checkout URL. The charge is the credit divided
   by the credit rate, plus the purchase fee, rounded up to the cent, computed in exact
   fractions; a charge below Stripe's $0.50 minimum is refused (400), and Stripe failing
-  is a 503 that says to try again. Each Organization
+  is a 503 that says to try again. A second purchase updates the Stripe Customer's
+  email to the current buyer, so receipts follow ownership changes. Each Organization
   pays as one Stripe Customer, created on its first purchase. The buyer's user id goes
   in the session's metadata with the Organization and the credit. Nothing is granted here.
 - `POST /billing/stripe/webhook` — Stripe's signed events; unsigned or wrongly signed
   ones are refused (400). Stripe doesn't deliver events in order, so:
-  - A paid Checkout Session grants the credit in its metadata (keyed by the payment
-    intent), recorded as the buyer's (or the payment provider's, when the buyer's
-    account is gone), and converts a trial. One for an Organization no longer on Credit
-    grants nothing and is recorded as `platform.credit_purchase.unapplied` for someone
-    to refund.
+  - Checkout records every session it creates (`billing_checkout`: the credit, the
+    charge, the Organization and the buyer). A paid Checkout Session grants what that
+    record says, keyed by the payment intent, and converts a trial, but only when the
+    session matches it: a one-off payment, in US dollars, with a payment intent, for the
+    same Organization, for exactly the recorded charge. The session's own metadata is
+    never trusted for the amount, since anyone with access to the Stripe account (or a
+    leaked key) could write it. A session that doesn't match, one we never created, or
+    one for an Organization no longer on Credit grants nothing and is recorded as
+    `platform.credit_purchase.unapplied`, with the reason, for someone to refund.
   - Any refund event (`refund.created`, `refund.updated`, `refund.failed`) settles the
     refund on its status as Stripe has it now: credit taken back while it stands (its
     share of the purchase, keyed by the refund id), given back once it has failed or
@@ -122,6 +131,16 @@ Card details never reach Agent Barn: payment happens on Stripe's page. Credit is
 granted only by a verified event, never by the browser returning from Checkout.
 Stripe can email receipts itself; the Billing page shows the credit history without
 receipt links. Credit is in US dollars only.
+
+## Accepted risks
+
+- **A purchase later disputed still converts the trial.** Someone can buy the minimum,
+  then dispute the charge: the chargeback takes the credit back, but the Organization
+  stays converted (no longer a trial, the default Agent limit instead of the trial's,
+  and its owner may create Organizations, which run on Credit from $0). Nothing here
+  spends the platform's budget, since every one of those Organizations is held to its
+  own credit, and the payment provider charges the dispute fee either way. Converting
+  only after the dispute window (up to 120 days) would penalise every honest buyer.
 
 ## Source map
 

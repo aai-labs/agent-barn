@@ -37,3 +37,10 @@ def test_payments_on_without_a_stripe_secret_refuses_to_boot(secret_key, webhook
 
 def test_payments_off_needs_no_secrets():
     assert_that(_config(payments_enabled=False).payments_enabled, equal_to(False))
+
+
+def test_a_webhook_secret_without_the_secret_key_refuses_to_boot():
+    """The webhook reads refunds from Stripe, payments on or off: without the key every
+    refund would fail until Stripe gave up on it."""
+    with pytest.raises(ValueError, match="STRIPE_SECRET_KEY"):
+        _config(payments_enabled=False, webhook_secret="whsec_x")

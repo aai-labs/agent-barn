@@ -72,7 +72,14 @@ def test_the_migrated_schema_matches_the_models_for_af381():
         diff
         for diff in differences
         if any(
-            name in repr(diff) for name in (LEDGER, "agent_limit", "trial_expired_at", "platform_organization_settings")
+            name in repr(diff)
+            for name in (
+                LEDGER,
+                "agent_limit",
+                "trial_expired_at",
+                "platform_organization_settings",
+                "platform_provisioned_at",
+            )
         )
     ]
     assert_that(ours, equal_to([]))
@@ -108,3 +115,30 @@ def test_trials_already_out_of_credit_are_expired_by_the_migration(scratch_datab
         }
     assert_that(expired, equal_to({spent, spent_elsewhere}))
     assert_that(unobserved in expired, equal_to(False))
+
+
+def test_existing_accounts_that_did_not_sign_themselves_up_count_as_set_up_by_the_platform(scratch_database):  # noqa: F811
+    """So nobody's behaviour changes: only new invitees create Organizations on credit."""
+    command.upgrade(scratch_database.config, "a7d4e2c9b816")
+    with scratch_database.engine.begin() as connection:
+        ids = {}
+        for name, signed_up in (("brought-in", False), ("signed-up", True)):
+            ids[name] = uuid7()
+            connection.execute(
+                text(
+                    'INSERT INTO "user" (id, created_at, updated_at, email, hashed_password, is_platform_admin, '
+                    "security_stamp, signed_up_at) VALUES (:id, now(), now(), :email, 'x', false, 's', "
+                    "CASE WHEN :signed_up THEN now() END)"
+                ),
+                {"id": ids[name], "email": f"{name}@example.com", "signed_up": signed_up},
+            )
+
+    command.upgrade(scratch_database.config, "b8e5f3a1c207")
+    scratch_database.engine.dispose()
+
+    with scratch_database.engine.connect() as connection:
+        provisioned = {
+            row[0]
+            for row in connection.execute(text('SELECT id FROM "user" WHERE platform_provisioned_at IS NOT NULL'))
+        }
+    assert_that(provisioned, equal_to({ids["brought-in"]}))

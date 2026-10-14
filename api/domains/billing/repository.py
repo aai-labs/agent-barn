@@ -11,6 +11,7 @@ from sqlmodel import Session, col, select
 
 from api.domains.billing.models import (
     BILLING_SETTINGS_SUBJECT_DISPLAY,
+    BillingCheckout,
     BillingSettingsRead,
     OrganizationBillingCustomer,
     PlatformBillingSettings,
@@ -155,6 +156,7 @@ class UnappliedPurchaseRepository:
         payment_reference: str,
         credit_usd: Decimal,
         amount_paid_usd: Decimal,
+        reason: str,
     ) -> list[UUID]:
         """Stage the platform audit Event for a payment no credit was granted for."""
         with Session(self.delegate.engine) as session:
@@ -171,6 +173,7 @@ class UnappliedPurchaseRepository:
                     "payment_reference": payment_reference,
                     "credit_usd": float(credit_usd),
                     "amount_paid_usd": float(amount_paid_usd),
+                    "reason": reason,
                     "actor_display": "Credit purchase",
                     "subject_display": organization_name,
                 },
@@ -179,3 +182,36 @@ class UnappliedPurchaseRepository:
             ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             return ids
+
+
+@inject
+@singleton
+@dataclass
+class BillingCheckoutRepository:
+    delegate: PostgresRepositoryDelegate
+
+    def record(
+        self,
+        stripe_session_id: str,
+        organization_id: UUID,
+        *,
+        credit_usd: Decimal,
+        amount_cents: int,
+        purchased_by_user_id: UUID | None,
+    ) -> None:
+        with Session(self.delegate.engine) as session:
+            session.add(
+                BillingCheckout(
+                    stripe_session_id=stripe_session_id,
+                    organization_id=organization_id,
+                    credit_usd=credit_usd,
+                    amount_cents=amount_cents,
+                    purchased_by_user_id=purchased_by_user_id,
+                    created_at=datetime.now(UTC),
+                )
+            )
+            session.commit()
+
+    def get(self, stripe_session_id: str) -> BillingCheckout | None:
+        with Session(self.delegate.engine) as session:
+            return session.get(BillingCheckout, stripe_session_id)

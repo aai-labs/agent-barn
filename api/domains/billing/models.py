@@ -57,6 +57,21 @@ class OrganizationBillingCustomer(SQLModel, table=True):
     created_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
 
 
+class BillingCheckout(SQLModel, table=True):
+    """A Checkout Session we created, and what it was for. The webhook grants what this
+    says, and only when Stripe's session matches it: the session's own metadata could
+    have been written by anyone with access to the Stripe account."""
+
+    __tablename__: str = "billing_checkout"
+    __table_args__ = (sa.CheckConstraint("amount_cents > 0", name="ck_billing_checkout_amount_positive"),)
+    stripe_session_id: str = SqlField(primary_key=True, max_length=255)
+    organization_id: UUID = SqlField(foreign_key="organization.id", ondelete="CASCADE", index=True)
+    credit_usd: Decimal = SqlField(sa_column=sa.Column(sa.Numeric(14, 6), nullable=False))
+    amount_cents: int
+    purchased_by_user_id: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
+    created_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+
+
 class BillingSettingsRead(BaseModel):
     # Whether this deployment takes payments at all (PAYMENTS_ENABLED).
     payments_enabled: bool = False

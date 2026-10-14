@@ -554,6 +554,8 @@ class PlatformCreditPurchaseUnappliedPayload(BaseModel):
     payment_reference: str
     credit_usd: float
     amount_paid_usd: float
+    # Why nothing was granted.
+    reason: str
     actor_display: str
     subject_display: str
 

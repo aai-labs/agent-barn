@@ -381,10 +381,51 @@ test.describe("Platform · Billing settings", () => {
     await page.getByLabel("Purchase fee").fill("5.5");
     await page.getByRole("button", { name: "Save", exact: true }).click();
 
+    const confirm = page.getByRole("dialog");
+    await expect(confirm).toContainText("Each $1.00 of credit will cost buyers $1.06.");
+    await expect(confirm.getByRole("alert")).toHaveCount(0);
+    expect(saved).toHaveLength(0);
+    await confirm.getByRole("button", { name: "Save settings" }).click();
+
     await expect(section.getByRole("status")).toContainText("Billing settings saved.");
     await expect(section).toContainText("$10.00");
     await expect(section).toContainText("5.5%");
     expect(saved).toHaveLength(1);
+  });
+
+  test("settings that sell credit below cost are warned about before saving", async ({ page }) => {
+    const data = new DataSupport(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetUserContextRequest();
+    await data.users.interceptGetOrganizationsRequest();
+    await data.platformMemory.intercept();
+    const saved: unknown[] = [];
+    await page.route("**/api/v1/platform/settings/billing", (route) => {
+      if (route.request().method() === "PUT") saved.push(route.request().postDataJSON());
+      return route.fulfill({
+        json: {
+          payments_enabled: true,
+          min_purchase_usd: 5,
+          max_purchase_usd: 500,
+          credit_rate: 1,
+          purchase_fee_percent: 0,
+          updated_at: null,
+        },
+      });
+    });
+    await page.goto("/dashboard/platform/settings");
+    await page.getByRole("button", { name: "Billing" }).click();
+    await page.getByRole("region", { name: "Billing" }).getByRole("button", { name: "Edit" }).click();
+
+    await page.getByLabel("Credit per dollar").fill("10");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    const confirm = page.getByRole("dialog");
+    await expect(confirm.getByRole("alert")).toContainText(
+      "Each $1.00 of credit will cost buyers $0.10, less than it costs to provide.",
+    );
+    await confirm.getByRole("button", { name: "Cancel" }).click();
+    expect(saved).toEqual([]);
   });
 
   for (const [label, typed, message] of [

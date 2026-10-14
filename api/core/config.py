@@ -263,6 +263,10 @@ class Config(BaseSettings):
             for name in ("stripe_secret_key", "stripe_webhook_secret"):
                 if not (getattr(self, name) or "").strip():
                     raise ValueError(f"PAYMENTS_ENABLED needs {name.upper()}")
+        # The webhook is served whenever its secret is set, payments on or off, and it
+        # reads each refund's status from Stripe: without the key every refund would fail.
+        if (self.stripe_webhook_secret or "").strip() and not (self.stripe_secret_key or "").strip():
+            raise ValueError("STRIPE_WEBHOOK_SECRET needs STRIPE_SECRET_KEY")
         return self
 
     @field_validator("organization_default_agent_limit", mode="before")

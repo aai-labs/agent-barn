@@ -76,6 +76,7 @@ def the_user_signed_themselves_up():
         users = context.injector.get(UserRepository)
         user = users.get(context.user.id)
         user.signed_up_at = datetime.now(UTC)
+        user.platform_provisioned_at = None
         users.save(user)
 
     return step
@@ -261,6 +262,66 @@ def test_a_self_signed_up_user_creates_organizations_once_their_trial_has_ended(
             assert_that(
                 [(grant.kind, grant.credit_usd) for grant in grants], equal_to([(CreditGrantKind.ADJUSTMENT, 0)])
             )
+
+
+def _organization_created_by(context, token: str):
+    response = context.client.post(
+        "/api/v1/organizations", json={"name": "Side Org"}, headers={"Authorization": f"Bearer {token}"}
+    )
+    assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+    created = context.injector.get(OrganizationRepository).get(UUID(response.json()["id"]))
+    assert created is not None
+    return created
+
+
+def _token_for(context, email: str) -> str:
+    """Sign in as an account someone else set up, as if its invite had been accepted."""
+    users = context.injector.get(UserRepository)
+    user = users.get_by_email(email)
+    assert user is not None
+    user.email_verified_at = datetime.now(UTC)
+    users.save(user)
+    previous_token, previous_user = context.access_token, context.user
+    there_is_an_access_token_for_user(user.id)(context)
+    token, context.access_token, context.user = context.access_token, previous_token, previous_user
+    return token
+
+
+def test_someone_a_trial_owner_invites_creates_organizations_only_on_credit():
+    """Otherwise a trial's owner could invite an address of their own and create
+    Organizations on the platform's budget from it."""
+    with given(_setup(the_organization_is_a_trial(), the_user_signed_themselves_up())) as context:
+        invited = context.client.post(
+            f"/api/v1/organizations/{context.organization.id}/members",
+            json={"email": "second-self@example.com", "role": "ADMIN"},
+            headers=auth(context),
+        )
+        assert_that(invited.status_code, equal_to(status.HTTP_201_CREATED), invited.text)
+
+        created = _organization_created_by(context, _token_for(context, "second-self@example.com"))
+
+        assert_that((created.llm_budget_duration, created.llm_budget_usd), equal_to((ONE_OFF_BUDGET_WINDOW, 0.0)))
+
+
+def test_someone_a_platform_administrator_sets_up_creates_organizations_on_the_platform_budget():
+    with given(_setup(a_platform_admin_token())) as context:
+        set_up = context.client.post(
+            "/api/v1/platform/users",
+            json={"email": "customer@example.com", "full_name": "Customer"},
+            headers=auth(context),
+        )
+        assert_that(set_up.status_code, equal_to(status.HTTP_201_CREATED), set_up.text)
+
+        created = _organization_created_by(context, _token_for(context, "customer@example.com"))
+
+        assert_that(created.runs_on_credit, equal_to(False))
+
+
+def test_a_platform_administrator_creates_organizations_on_the_platform_budget():
+    with given(_setup(a_platform_admin_token())) as context:
+        created = _organization_created_by(context, context.access_token)
+
+        assert_that(created.runs_on_credit, equal_to(False))
 
 
 def test_a_user_brought_in_by_an_administrator_still_creates_organizations():

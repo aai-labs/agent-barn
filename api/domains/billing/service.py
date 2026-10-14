@@ -24,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from api.core.config import Config
 from api.domains.auth.models import CurrentUserContext
 from api.domains.billing.models import (
+    BillingCheckout,
     BillingSettingsRead,
     BillingSettingsUpdate,
     CheckoutCreate,
@@ -33,6 +34,7 @@ from api.domains.billing.models import (
     PlatformCreditRecordRead,
 )
 from api.domains.billing.repository import (
+    BillingCheckoutRepository,
     BillingCustomerRepository,
     BillingSettingsRepository,
     UnappliedPurchaseRepository,
@@ -47,7 +49,7 @@ from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.users.service import UserService
 from api.infrastructure.shared.models import PaginatedItems, Pagination
-from api.infrastructure.stripe.client import PaymentProviderUnavailable, StripeGateway
+from api.infrastructure.stripe.client import PaymentProviderUnavailable, StripeGateway, StripeNotConfigured
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,7 @@ class BillingService:
     organization_service: OrganizationService
     users: UserService
     unapplied: UnappliedPurchaseRepository
+    checkouts: BillingCheckoutRepository
 
     # --- platform settings ----------------------------------------------------------
 
@@ -227,6 +230,10 @@ class BillingService:
                     organization_id=organization_id, name=credit.name, email=context.user.email
                 )
                 customer_id = await run_in_threadpool(self.customers.save_customer_id, organization_id, created)
+            else:
+                # Receipts go to whoever is buying now: after an ownership change, the
+                # former Owner must stop getting them.
+                await self.stripe.update_customer_email(customer_id, context.user.email)
 
             billing_url = f"{self.config.web_app_url.rstrip('/')}/dashboard/{organization_id}/billing"
             session = await self.stripe.create_checkout_session(
@@ -241,6 +248,18 @@ class BillingService:
         except PaymentProviderUnavailable as exc:
             logger.warning("Stripe checkout for Organization %s failed: %s", organization_id, exc)
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_UNAVAILABLE) from exc
+        except StripeNotConfigured as exc:
+            logger.error("Stripe checkout for Organization %s refused: %s", organization_id, exc)
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_UNAVAILABLE) from exc
+        await run_in_threadpool(
+            lambda: self.checkouts.record(
+                session.id,
+                organization_id,
+                credit_usd=data.credit_usd,
+                amount_cents=amount_cents,
+                purchased_by_user_id=context.user.id,
+            )
+        )
         return CheckoutRead(url=session.url)
 
     # --- Stripe's events ------------------------------------------------------------
@@ -278,8 +297,14 @@ class BillingService:
         except PaymentProviderUnavailable as exc:
             # Stripe will send the event again.
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_UNAVAILABLE) from exc
+        except StripeNotConfigured as exc:
+            # Boot refuses this setup; if it happens anyway, keep the event for a retry.
+            logger.error("Stripe event %s can't be settled: %s", event.get("id"), exc)
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_UNAVAILABLE) from exc
 
     def _purchase(self, session: dict) -> None:
+        """Grant a paid Checkout Session's credit, as our own record of the checkout says,
+        once the session matches that record."""
         if session.get("payment_status") != "paid":
             # A delayed payment method: granted on async_payment_succeeded instead.
             return
@@ -287,16 +312,30 @@ class BillingService:
         if "organization_id" not in metadata or "credit_usd" not in metadata:
             logger.info("Ignoring a Stripe Checkout Session that isn't a credit purchase: %s", session.get("id"))
             return
-        organization_id = UUID(metadata["organization_id"])
-        credit_usd = Decimal(metadata["credit_usd"])
-        amount_paid_usd = Decimal(session["amount_total"]) / 100
-        actor, actor_display = self._buyer(metadata.get("purchased_by_user_id"))
+        checkout = self.checkouts.get(session.get("id") or "")
+        reference = session.get("payment_intent") or ""
+        amount_paid_usd = Decimal(session.get("amount_total") or 0) / 100
+        problem = self._mismatch(session, checkout)
+        if problem is not None or checkout is None:
+            organization_id = checkout.organization_id if checkout else self._uuid(metadata["organization_id"])
+            self._unapplied(
+                organization_id,
+                reference or str(session.get("id")),
+                Decimal(str(checkout.credit_usd if checkout else metadata["credit_usd"])),
+                amount_paid_usd,
+                problem or "No checkout was started for this payment.",
+            )
+            return
+        organization_id = checkout.organization_id
+        actor, actor_display = self._buyer(
+            str(checkout.purchased_by_user_id) if checkout.purchased_by_user_id else None
+        )
         try:
             self.budgets.record_purchase(
                 organization_id,
-                credit_usd=credit_usd,
+                credit_usd=Decimal(str(checkout.credit_usd)),
                 amount_paid_usd=amount_paid_usd,
-                reference=session["payment_intent"],
+                reference=reference,
                 actor=actor,
                 actor_display=actor_display,
             )
@@ -304,23 +343,57 @@ class BillingService:
             # Paid for, but no longer on credit (a Platform Administrator moved it onto a
             # renewing limit meanwhile). Acknowledged so Stripe stops retrying, and
             # flagged on the platform's audit log so someone refunds or adjusts it.
-            logger.error(
-                "Stripe payment %s for Organization %s, which no longer runs on credit",
-                session["payment_intent"],
+            self._unapplied(
                 organization_id,
-            )
-            self.dispatcher.enqueue_immediate(
-                self.unapplied.record(
-                    self.organizations.get_name(organization_id),
-                    payment_reference=session["payment_intent"],
-                    credit_usd=credit_usd,
-                    amount_paid_usd=amount_paid_usd,
-                )
+                reference,
+                Decimal(str(checkout.credit_usd)),
+                amount_paid_usd,
+                "The organization no longer runs on credit.",
             )
             return
         # Also on a redelivery: a first delivery that granted the credit but failed to
         # convert the trial must not leave it a trial for good.
         self.organization_service.convert_trial(organization_id, actor=_STRIPE, actor_display="Credit purchase")
+
+    @staticmethod
+    def _mismatch(session: dict, checkout: BillingCheckout | None) -> str | None:
+        """Why a paid session isn't the checkout we created, or None when it is."""
+        if checkout is None:
+            return "No checkout was started for this payment."
+        if session.get("mode") != "payment":
+            return "The payment isn't a one-off payment."
+        if session.get("currency") != "usd":
+            return "The payment isn't in US dollars."
+        if not session.get("payment_intent"):
+            return "The payment has no payment reference."
+        if session.get("client_reference_id") != str(checkout.organization_id):
+            return "The payment names a different organization."
+        if session.get("amount_total") != checkout.amount_cents:
+            return "The amount paid doesn't match the price of the credit."
+        return None
+
+    @staticmethod
+    def _uuid(value: str) -> UUID | None:
+        try:
+            return UUID(value)
+        except ValueError:
+            return None
+
+    def _unapplied(
+        self, organization_id: UUID | None, reference: str, credit_usd: Decimal, amount_paid_usd: Decimal, reason: str
+    ) -> None:
+        """Grant nothing, and put the payment on the platform's audit log to be refunded."""
+        logger.error("Stripe payment %s granted no credit: %s", reference, reason)
+        name = self.organizations.get_name(organization_id) if organization_id else ""
+        self.dispatcher.enqueue_immediate(
+            self.unapplied.record(
+                name or "Unknown organization",
+                payment_reference=reference,
+                credit_usd=credit_usd,
+                amount_paid_usd=amount_paid_usd,
+                reason=reason,
+            )
+        )
 
     def _buyer(self, user_id: str | None) -> tuple[ActorIdentity, str]:
         """Who bought the credit, or the payment itself when they can't be named (an older

@@ -89,9 +89,14 @@ async def receive_stripe_event(
     declared_length = request.headers.get("content-length", "")
     if declared_length.isdigit() and int(declared_length) > MAX_STRIPE_EVENT_BYTES:
         raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="Event is too large")
-    payload = await request.body()
-    if len(payload) > MAX_STRIPE_EVENT_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="Event is too large")
+    # Read a chunk at a time: a request sent without a length must not be buffered whole
+    # before it can be refused.
+    received = bytearray()
+    async for chunk in request.stream():
+        received.extend(chunk)
+        if len(received) > MAX_STRIPE_EVENT_BYTES:
+            raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="Event is too large")
+    payload = bytes(received)
     try:
         await service.handle_webhook(payload, signature)
     except PermissionError as exc:

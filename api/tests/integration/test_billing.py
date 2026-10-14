@@ -22,21 +22,26 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 import pytest
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_entries, has_length, not_
 from injector import Module, provider, singleton
 
-from api.domains.billing.repository import BillingSettingsRepository
+from api.domains.billing.repository import BillingCheckoutRepository, BillingSettingsRepository
 from api.domains.billing.service import BillingService
 from api.domains.organizations.models import CreditGrantKind
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import OrganizationRole
 from api.domains.users.models import User
 from api.domains.users.repository import UserRepository
-from api.infrastructure.stripe.client import CheckoutSession, PaymentProviderUnavailable, StripeGateway
+from api.infrastructure.stripe.client import (
+    CheckoutSession,
+    PaymentProviderUnavailable,
+    StripeGateway,
+    StripeNotConfigured,
+)
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.integration.test_credit_spend_limits import the_organization_runs_on_credit
@@ -60,8 +65,9 @@ class MockStripeModule(Module):
     def provide_stripe(self) -> StripeGateway:
         gateway: Any = MagicMock(spec=StripeGateway)
         gateway.create_customer = AsyncMock(return_value="cus_test")
+        sessions = iter(["cs_test", *(f"cs_test_{n}" for n in range(2, 100))])
         gateway.create_checkout_session = AsyncMock(
-            return_value=CheckoutSession(id="cs_test", url="https://checkout.stripe.test/cs_test")
+            side_effect=lambda **_: CheckoutSession(id=next(sessions), url="https://checkout.stripe.test/cs_test")
         )
         # The signature check is real: only the calls out to Stripe are faked.
         gateway.construct_event.side_effect = lambda payload, signature: StripeGateway.construct_event(
@@ -71,6 +77,7 @@ class MockStripeModule(Module):
         # Stripe's view now: refunds stand, and other payments aren't credit purchases.
         gateway.refund_status = AsyncMock(return_value="succeeded")
         gateway.payment_metadata = AsyncMock(return_value={})
+        gateway.update_customer_email = AsyncMock()
         return gateway
 
 
@@ -183,19 +190,48 @@ def stripe_says_the_payment_is_a_credit_purchase(context) -> None:
 
 
 def paid_session(
-    context, *, credit="20", amount_cents=2000, intent="pi_1", payment_status="paid", buyer: str | None = None
+    context,
+    *,
+    credit="20",
+    amount_cents=2000,
+    intent: str | None = "pi_1",
+    payment_status="paid",
+    buyer: str | None = None,
+    session_id: str | None = None,
+    recorded: bool = True,
+    **overrides,
 ) -> dict:
-    metadata = {"organization_id": str(context.organization.id), "credit_usd": credit}
+    """A Checkout Session as ours look, and (unless `recorded` is False) our own record
+    of having created it, as checkout writes."""
+    session_id = session_id or f"cs_{intent}_{credit}_{amount_cents}"
+    if recorded and context.injector.get(BillingCheckoutRepository).get(session_id) is None:
+        buyer_id = UUID(buyer) if buyer else None
+        known = buyer_id is not None and context.injector.get(UserRepository).get(buyer_id) is not None
+        context.injector.get(BillingCheckoutRepository).record(
+            session_id,
+            context.organization.id,
+            credit_usd=Decimal(credit),
+            amount_cents=amount_cents,
+            purchased_by_user_id=buyer_id if known else None,
+        )
+    metadata = {
+        "organization_id": str(context.organization.id),
+        "credit_usd": credit,
+        "amount_cents": str(amount_cents),
+    }
     if buyer is not None:
         metadata["purchased_by_user_id"] = buyer
     return {
-        "id": "cs_test",
+        "id": session_id,
         "object": "checkout.session",
+        "mode": "payment",
+        "currency": "usd",
         "payment_status": payment_status,
         "payment_intent": intent,
         "amount_total": amount_cents,
         "client_reference_id": str(context.organization.id),
         "metadata": metadata,
+        **overrides,
     }
 
 
@@ -400,6 +436,16 @@ def test_a_second_purchase_reuses_the_organizations_stripe_customer():
         stripe(context).create_customer.assert_awaited_once()
 
 
+def test_receipts_go_to_whoever_is_buying_now():
+    """After an ownership change, the former Owner stops getting the receipts."""
+    with given(_setup(an_owner_on_credit())) as context:
+        buy(context, 20)
+
+        buy(context, 30)
+
+        stripe(context).update_customer_email.assert_awaited_once_with("cus_test", "owner@example.com")
+
+
 def test_the_charge_includes_the_credit_rate_and_purchase_fee():
     with given(
         _setup(an_owner_on_credit(), the_billing_settings_are(credit_rate=0.5, purchase_fee_percent=10))
@@ -483,6 +529,98 @@ def test_a_purchase_by_someone_no_longer_here_still_grants_the_credit():
         ).json()["history"]
         # Nobody to name, and never the payment provider's name instead.
         assert_that(history[0], has_entries(kind="purchase", purchased_by=None))
+
+
+@pytest.mark.parametrize(
+    "tampered",
+    [
+        {"amount_total": 50},
+        {"currency": "eur"},
+        {"mode": "subscription"},
+        {"client_reference_id": "someone-else"},
+        {"payment_intent": None},
+    ],
+    ids=["underpaid", "another-currency", "not-a-payment", "another-organization", "no-payment-reference"],
+)
+def test_a_session_that_does_not_match_the_checkout_we_created_grants_nothing(tampered):
+    """Metadata alone isn't proof: someone with access to the Stripe account (or a leaked
+    key) could create a cheap session whose metadata claims a lot of credit."""
+    with given(_setup(an_owner_on_credit())) as context:
+        response = deliver(context, "checkout.session.completed", paid_session(context, **tampered))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(stored(context).llm_budget_usd, equal_to(10.0))
+        events = events_named(context, "platform.credit_purchase.unapplied")
+        assert_that(events, has_length(1))
+        assert_that(events[0].payload["reason"], not_(equal_to("")))
+
+
+def test_a_session_we_never_created_grants_nothing():
+    with given(_setup(an_owner_on_credit())) as context:
+        deliver(context, "checkout.session.completed", paid_session(context, recorded=False))
+
+        assert_that(stored(context).llm_budget_usd, equal_to(10.0))
+        assert_that(
+            events_named(context, "platform.credit_purchase.unapplied")[0].payload["reason"],
+            equal_to("No checkout was started for this payment."),
+        )
+
+
+def test_a_checkout_started_here_is_granted_when_its_payment_arrives():
+    with given(_setup(an_owner_on_credit())) as context:
+        buy(context, 20)
+
+        deliver(context, "checkout.session.completed", paid_session(context, session_id="cs_test", recorded=False))
+
+        assert_that(ledger(context)[-1], equal_to((CreditGrantKind.PURCHASE, Decimal(20))))
+
+
+def test_a_refund_while_stripe_cannot_be_asked_is_retried_not_dropped():
+    with given(_setup(an_owner_on_credit())) as context:
+        deliver(context, "checkout.session.completed", paid_session(context))
+        stripe(context).refund_status.side_effect = StripeNotConfigured("STRIPE_SECRET_KEY is not set")
+
+        response = deliver(context, "refund.created", refund(cents=2000))
+
+        assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
+        assert_that(stored(context).llm_budget_usd, equal_to(30.0))
+
+
+def test_an_oversized_event_sent_in_chunks_is_refused():
+    """Without a declared length, the body is read only up to the limit. Driven through
+    ASGI directly: the test client buffers the whole body before the app sees it."""
+    with given(_setup(an_owner_on_credit())) as context:
+        pulled = 0
+        statuses = []
+
+        async def receive():
+            nonlocal pulled
+            pulled += 1
+            return {"type": "http.request", "body": b"x" * 1024, "more_body": pulled < 2048}
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                statuses.append(message["status"])
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": WEBHOOK,
+            "raw_path": WEBHOOK.encode(),
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"host", b"testserver"), (b"stripe-signature", b"t=1,v1=x")],
+            "client": ("127.0.0.1", 1),
+            "server": ("testserver", 80),
+        }
+        asyncio.run(context.client.app(scope, receive, send))
+
+        assert_that(statuses, equal_to([status.HTTP_413_CONTENT_TOO_LARGE]))
+        # Refused once past 256 KB, not after reading all 2 MB.
+        assert_that(pulled < 300, equal_to(True))
 
 
 def test_a_redelivered_payment_is_granted_once():
@@ -686,5 +824,10 @@ def test_a_payment_for_an_organization_no_longer_on_credit_is_flagged_for_a_refu
         assert_that(events, has_length(1))
         assert_that(
             events[0].payload,
-            has_entries(subject_display="Jane's Organization", payment_reference="pi_1", amount_paid_usd=20.0),
+            has_entries(
+                subject_display="Jane's Organization",
+                payment_reference="pi_1",
+                amount_paid_usd=20.0,
+                reason="The organization no longer runs on credit.",
+            ),
         )

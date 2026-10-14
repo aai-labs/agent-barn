@@ -73,6 +73,7 @@ class UserService:
         user = User(
             **user_data.model_dump(),
             hashed_password=hash_text(password),
+            platform_provisioned_at=datetime.now(UTC),
         )
         return self.user_repository.save(user)
 
@@ -96,6 +97,10 @@ class UserService:
                 email=str(data.email),
                 full_name=data.full_name,
             )
+            # Set up by a Platform Administrator: their own Organizations may run on the
+            # platform's renewing limit.
+            prepared.user.platform_provisioned_at = datetime.now(UTC)
+            self.user_repository.save_with_session(prepared.user, session)
             organization = self.organization_repository.save_with_session(
                 Organization(
                     name=self._initial_organization_name(data),

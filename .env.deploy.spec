@@ -126,8 +126,8 @@ SELF_SIGNUP_ENABLED=false
 # ORGANIZATION_DEFAULT_AGENT_LIMIT, STAGING_ORGANIZATION_DEFAULT_AGENT_LIMIT and
 # PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT (GitHub Variables) for their environments.
 ORGANIZATION_DEFAULT_AGENT_LIMIT=
-# Buying credit with Stripe. Off unless true; true needs both Stripe secrets or the API
-# won't boot. The webhook is served whenever its secret is set, payments on or off. The deploy workflows read the
+# Buying credit with Stripe. Off unless true; true needs both Stripe secrets, and a
+# webhook secret needs the secret key, or the API won't boot. The webhook is served whenever its secret is set, payments on or off. The deploy workflows read the
 # PAYMENTS_ENABLED / STAGING_PAYMENTS_ENABLED / PUBLIC_PAYMENTS_ENABLED GitHub Variables
 # and the STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET GitHub Secrets (prefixed STAGING_ or
 # PUBLIC_ for those environments). The webhook endpoint is

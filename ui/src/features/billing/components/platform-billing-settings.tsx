@@ -4,10 +4,12 @@ import { useState } from "react";
 import { Pencil } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { formatUsd } from "@/features/organizations/spend-limit";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { useBillingSettings } from "../hooks/use-billing-settings";
+import { chargeUsd } from "../pricing";
 
 type Draft = { min: string; max: string; rate: string; fee: string };
 
@@ -84,6 +86,7 @@ export function PlatformBillingSettings() {
     useBillingSettings();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saved, setSaved] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   if (isLoading) return <p className="m-0">Loading billing settings…</p>;
   if (error || !billingSettings)
@@ -104,6 +107,9 @@ export function PlatformBillingSettings() {
     resetSave();
   }
 
+  // What a buyer pays for $1.00 of credit; below $1.00 the platform sells at a loss.
+  const pricePerCredit = rate === null || fee === null ? null : (1 / rate) * (1 + fee / 100);
+
   async function submit() {
     if (min === null || max === null || rate === null || fee === null || max < min) return;
     try {
@@ -112,6 +118,8 @@ export function PlatformBillingSettings() {
       setSaved(true);
     } catch {
       /* The error stays beside the fields. */
+    } finally {
+      setConfirming(false);
     }
   }
 
@@ -197,7 +205,7 @@ export function PlatformBillingSettings() {
             <button
               className="af-btn af-btn-primary"
               disabled={minInvalid || maxInvalid || rateInvalid || feeInvalid || isSaving}
-              onClick={() => void submit()}
+              onClick={() => setConfirming(true)}
             >
               {isSaving ? "Saving…" : "Save"}
             </button>
@@ -219,6 +227,30 @@ export function PlatformBillingSettings() {
           </button>
         )}
       </footer>
+      {rate !== null && fee !== null && pricePerCredit !== null && (
+        <ConfirmationDialog
+          open={confirming}
+          onOpenChange={setConfirming}
+          title="Save billing settings?"
+          description="They apply to every purchase from now on."
+          confirmLabel="Save settings"
+          pendingLabel="Saving…"
+          isPending={isSaving}
+          onConfirm={submit}
+        >
+          {pricePerCredit < 1 ? (
+            <p className="m-0 text-[0.88rem]" role="alert" style={{ color: "var(--err)" }}>
+              Each $1.00 of credit will cost buyers {formatUsd(chargeUsd(1, { creditRate: rate, purchaseFeePercent: fee }), 2)},
+              less than it costs to provide. Every purchase will lose money.
+            </p>
+          ) : (
+            <p className="m-0 text-[0.88rem]" style={{ color: "var(--ink-2)" }}>
+              Each $1.00 of credit will cost buyers{" "}
+              {formatUsd(chargeUsd(1, { creditRate: rate, purchaseFeePercent: fee }), 2)}.
+            </p>
+          )}
+        </ConfirmationDialog>
+      )}
     </section>
   );
 }

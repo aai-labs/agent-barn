@@ -42,7 +42,12 @@ def test_a_credit_purchase_is_a_one_off_payment_carrying_the_organization_credit
     call = client.v1.checkout.sessions.create_async.await_args
     assert call is not None
     params = call.kwargs["params"]
-    metadata = {"organization_id": str(organization_id), "credit_usd": "20", "purchased_by_user_id": str(buyer_id)}
+    metadata = {
+        "organization_id": str(organization_id),
+        "credit_usd": "20",
+        "amount_cents": "2110",
+        "purchased_by_user_id": str(buyer_id),
+    }
     assert_that((session.id, session.url), equal_to(("cs_1", "https://pay")))
     assert_that(
         params,
@@ -65,6 +70,16 @@ def test_a_new_customer_is_tagged_with_its_organization():
     assert call is not None
     params = call.kwargs["params"]
     assert_that(params, equal_to({"name": "Acme", "metadata": {"organization_id": str(organization_id)}}))
+
+
+def test_a_customers_email_is_kept_to_the_current_buyer():
+    client = MagicMock()
+    client.v1.customers.update_async = AsyncMock()
+
+    with patch.object(StripeGateway, "_stripe", return_value=client):
+        asyncio.run(gateway().update_customer_email("cus_1", "new@example.com"))
+
+    client.v1.customers.update_async.assert_awaited_once_with("cus_1", params={"email": "new@example.com"})
 
 
 def test_a_refunds_current_status_is_read_from_stripe():

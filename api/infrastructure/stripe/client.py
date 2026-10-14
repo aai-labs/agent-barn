@@ -75,6 +75,8 @@ class StripeGateway:
         metadata = {
             "organization_id": str(organization_id),
             "credit_usd": str(credit_usd),
+            # What we charge for it, so the webhook can check the payment matches.
+            "amount_cents": str(amount_cents),
             "purchased_by_user_id": str(purchased_by_user_id),
         }
         params = {
@@ -104,6 +106,13 @@ class StripeGateway:
         if not session.url:
             raise PaymentProviderUnavailable("Stripe returned a Checkout Session without a URL")
         return CheckoutSession(id=session.id, url=session.url)
+
+    async def update_customer_email(self, customer_id: str, email: str) -> None:
+        """Send receipts to whoever is buying now, not whoever bought first."""
+        try:
+            await self._stripe().v1.customers.update_async(customer_id, params={"email": email})
+        except stripe.StripeError as exc:
+            raise PaymentProviderUnavailable(str(exc)) from exc
 
     async def refund_status(self, refund_id: str) -> str:
         """The refund's status now: Stripe doesn't deliver events in order, so an event's

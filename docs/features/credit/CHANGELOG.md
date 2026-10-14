@@ -20,6 +20,26 @@ Related context: [Credit](../credit.md), [Costs](../costs.md), [Trial onboarding
 
 ## Changes
 
+### 2026-10-14 — AF-381 — Security review fixes (PR pending)
+
+- Delivered:
+  - Only accounts a Platform Administrator set up create Organizations on the
+    platform's budget; everyone else's run on Credit from $0, closing the route where a
+    trial's owner invited an address of their own.
+  - Checkout records every session it creates, and the webhook grants only what that
+    record says, after checking the payment is a one-off, in US dollars, for the same
+    Organization and exactly the recorded charge, with a payment reference.
+  - A webhook secret without the secret key refuses to boot, and a missing key at
+    runtime answers 503 so Stripe retries rather than dropping refunds.
+  - The webhook reads its body in a stream and stops at 256 KB.
+  - Receipts go to the current buyer.
+  - The platform billing settings ask for confirmation before saving, and warn when
+    credit would sell below cost.
+- Changed: migrations `b8e5f3a1c207_platform_provisioned_users` and
+  `c9f6a4b2d318_billing_checkouts`; `platform.credit_purchase.unapplied` carries a
+  `reason`.
+- Follow-up: a request body limit for the whole API at the ingress.
+
 ### 2026-10-14 — AF-381 — Review fixes (PR pending)
 
 - Delivered:
