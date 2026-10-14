@@ -44,7 +44,7 @@ from api.domains.events.catalog import (
     AGENT_LLM_BUDGET_THRESHOLD_REACHED,
     EVENT_REGISTRY,
 )
-from api.domains.organizations.lookup import OrganizationLlmLimit, OrganizationLookupService
+from api.domains.organizations.lookup import ON_CREDIT_LIMIT_REFUSED, OrganizationLlmLimit, OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.crypto import decrypt_token
@@ -79,7 +79,10 @@ def resolve_agent_limit(
 ) -> ResolvedAgentLimit:
     """The limit an Agent's key carries: its own, else the default, never above its
     Organization's. The last rule is what keeps a platform-wide default that exceeds
-    one Organization's own limit from putting that Organization's Agents over it."""
+    one Organization's own limit from putting that Organization's Agents over it.
+    On credit every Agent spends from the Organization's whole balance."""
+    if organization.runs_on_credit:
+        return ResolvedAgentLimit(organization.limit_usd, "organization")
     wanted, source = (own_usd, "agent") if own_usd is not None else (default_usd, "default")
     if wanted > organization.limit_usd:
         return ResolvedAgentLimit(organization.limit_usd, "organization")
@@ -170,6 +173,8 @@ class AgentLlmBudgetService:
             detail="You don't have permission to change this agent's spend limit.",
         )
         organization = self._organization_limit(agent.organization_id)
+        if amount_usd is not None and organization.runs_on_credit:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=ON_CREDIT_LIMIT_REFUSED)
         if amount_usd is not None and amount_usd > organization.limit_usd:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -243,7 +248,8 @@ class AgentLlmBudgetService:
         )
         return AgentLlmBudgetRead(
             limit_usd=resolved.limit_usd,
-            own_limit_usd=agent.llm_budget_usd,
+            # One left from before the Organization ran on credit is not in force.
+            own_limit_usd=None if organization.runs_on_credit else agent.llm_budget_usd,
             source=resolved.source,
             # Organization-wide figures, for the edit form only: anyone who may read
             # this Agent's costs sees its limit, not the Organization's.

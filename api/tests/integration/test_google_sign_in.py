@@ -2,8 +2,10 @@
 Organization; a returning one signs in; every failure lands back on the page it started
 from with nothing created."""
 
+import hashlib
 import threading
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from hamcrest import assert_that, empty, equal_to, has_entries, has_length, is_not, none, not_none
@@ -15,7 +17,7 @@ from api.domains.auth.repository import PasswordResetTokenRepository
 from api.domains.auth.service import AuthService
 from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.onboarding.settings_service import TrialSettingsService
-from api.domains.organizations.models import Organization
+from api.domains.organizations.models import CreditGrantKind, Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -139,6 +141,10 @@ def test_a_first_sign_in_creates_a_trial_organization_on_one_off_credit():
             assert_that(organization.name, equal_to("Jane's Organization"))
             assert_that(organization.llm_budget_usd, equal_to(7.5))
             assert_that(organization.llm_budget_duration, equal_to(ONE_OFF_BUDGET_WINDOW))
+
+        with then("the trial credit is the first grant on its ledger"):
+            grants = context.injector.get(OrganizationRepository).list_credit_grants(organization.id)
+            assert_that([(g.kind, g.credit_usd) for g in grants], equal_to([(CreditGrantKind.TRIAL, Decimal("7.5"))]))
 
 
 def test_the_trial_credit_is_the_one_platform_administrators_set():
@@ -316,6 +322,79 @@ def test_the_same_address_in_another_case_counts_as_the_same_trial():
         finish_google_sign_in(context)
         _delete_account(context, _user(context))
         google_returns(google_identity(sub="another-google-account", email="JANE@Example.com"))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response)[1], equal_to({"error": "trial_used"}))
+
+
+@pytest.mark.parametrize(
+    "second",
+    ["janedoe@gmail.com", "Jane.Doe+trial@gmail.com", "j.a.n.e.d.o.e@googlemail.com"],
+)
+def test_another_spelling_of_the_same_gmail_inbox_counts_as_the_same_trial(second):
+    """Gmail ignores dots and anything after a plus, and googlemail.com is gmail.com."""
+    with given(_setup()) as context:
+        google_returns(google_identity(sub="first-google-account", email="jane.doe@gmail.com"))(context)
+        finish_google_sign_in(context)
+        google_returns(google_identity(sub="another-google-account", email=second))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response)[1], equal_to({"error": "trial_used"}))
+
+
+def test_a_plus_tag_on_any_address_counts_as_the_same_trial():
+    with given(_setup()) as context:
+        google_returns(google_identity(sub="first-google-account", email="jane@example.com"))(context)
+        finish_google_sign_in(context)
+        google_returns(google_identity(sub="another-google-account", email="jane+again@example.com"))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response)[1], equal_to({"error": "trial_used"}))
+
+
+def test_a_trial_the_same_inbox_took_meanwhile_turns_the_sign_up_away(monkeypatch):
+    """An invited member's first Organization can record the inbox's trial after
+    sign-up looked it up but before it took the lock; sign-up's retry then sees it."""
+    with given(_setup()) as context:
+        trials_full = TrialSettingsService.trials_full
+
+        def a_member_trial_lands_first(service, session):
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as other:
+                service.record_trial("jane+work@example.com", other)
+                other.commit()
+            monkeypatch.setattr(TrialSettingsService, "trials_full", trials_full)
+            return trials_full(service, session)
+
+        monkeypatch.setattr(TrialSettingsService, "trials_full", a_member_trial_lands_first)
+        google_returns(google_identity(sub="first-google-account", email="jane@example.com"))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response)[1], equal_to({"error": "trial_used"}))
+        assert_that(_user(context, "jane@example.com"), none())
+
+
+def test_dots_still_tell_addresses_apart_outside_gmail():
+    with given(_setup()) as context:
+        google_returns(google_identity(sub="first-google-account", email="jane.doe@example.com"))(context)
+        finish_google_sign_in(context)
+        google_returns(google_identity(sub="another-google-account", email="janedoe@example.com"))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response), equal_to((ONBOARDING, {})))
+
+
+def test_a_trial_recorded_before_addresses_were_normalised_still_counts():
+    with given(_setup()) as context:
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            legacy = hashlib.sha256(b"jane.doe+old@gmail.com").hexdigest()
+            context.injector.get(TrialSettingsRepository).record_grant(legacy, session)
+            session.commit()
+        google_returns(google_identity(sub="another-google-account", email="Jane.Doe+old@gmail.com"))(context)
 
         response = finish_google_sign_in(context)
 

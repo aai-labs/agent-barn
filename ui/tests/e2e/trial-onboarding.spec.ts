@@ -228,7 +228,7 @@ test.describe("Trial onboarding", () => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false }));
     await data.organizations.interceptGetOrganization({
-      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 50 },
+      organization: { ...trialUserContext.organization_users[0].organization, agent_limit: 50 },
     });
     await data.agents.interceptGetAgentsRequest();
     await data.agents.interceptGetAgentHealthRequest();
@@ -291,7 +291,7 @@ test.describe("Trial onboarding", () => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false }));
     await data.organizations.interceptGetOrganization({
-      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 1 },
+      organization: { ...trialUserContext.organization_users[0].organization, agent_limit: 1 },
     });
     await data.agents.interceptGetAgentsRequest();
     await data.agents.interceptGetAgentHealthRequest();
@@ -299,7 +299,7 @@ test.describe("Trial onboarding", () => {
     await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
     await page.getByRole("button", { name: "Hire agent" }).click();
 
-    await expect(page.getByText("Trial organizations can have 1 agent.")).toBeVisible();
+    await expect(page.getByText("This organization can have 1 agent.")).toBeVisible();
     await expect(page.getByLabel("Agent name")).toHaveCount(0);
   });
 
@@ -307,7 +307,7 @@ test.describe("Trial onboarding", () => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false }));
     await data.organizations.interceptGetOrganization({
-      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 1 },
+      organization: { ...trialUserContext.organization_users[0].organization, agent_limit: 1 },
     });
     await data.organizations.interceptGetMembers();
 

@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { AgentDefaultSpendLimitSection } from "@/features/agent-settings/components/agent-default-spend-limit-section";
 import { useOrganizationLlmBudget } from "@/features/organizations/hooks/use-organization-llm-budget";
-import { periodLabel, windowLabel } from "@/features/organizations/spend-limit";
+import { periodLabel, runsOnCredit, windowLabel } from "@/features/organizations/spend-limit";
 
 import { AgentLimitsTable } from "./agent-limits-table";
 import { OrganizationLimitSection } from "./organization-limit-section";
@@ -30,6 +30,7 @@ export function SpendLimitsPanel() {
   const [editing, setEditing] = useState<SectionKey | null>(null);
   const { budget } = useOrganizationLlmBudget();
   const toggle = (section: SectionKey) => () => setEditing((current) => (current === section ? null : section));
+  const onCredit = runsOnCredit(budget?.window);
 
   return (
     <div className="flex flex-col gap-8">
@@ -37,14 +38,18 @@ export function SpendLimitsPanel() {
         <Heading>Organization limit</Heading>
         <OrganizationLimitSection editing={editing === "organization"} onEdit={toggle("organization")} />
       </section>
-      <section>
-        <Heading>Default Agent limit</Heading>
-        <AgentDefaultSpendLimitSection editing={editing === "default"} onEdit={toggle("default")} />
-      </section>
-      <section>
-        <Heading>Agent limits</Heading>
-        <AgentLimitsTable period={periodLabel(budget?.window)} per={windowLabel(budget?.window)} />
-      </section>
+      {!onCredit && (
+        <>
+          <section>
+            <Heading>Default Agent limit</Heading>
+            <AgentDefaultSpendLimitSection editing={editing === "default"} onEdit={toggle("default")} />
+          </section>
+          <section>
+            <Heading>Agent limits</Heading>
+            <AgentLimitsTable period={periodLabel(budget?.window)} per={windowLabel(budget?.window)} />
+          </section>
+        </>
+      )}
     </div>
   );
 }

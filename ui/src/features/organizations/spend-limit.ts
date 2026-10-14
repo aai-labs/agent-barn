@@ -14,6 +14,12 @@ export const DEFAULT_SPEND_LIMIT_WINDOW = "30d";
 // choice for an organization that renews.
 export const ONE_OFF_SPEND_LIMIT_WINDOW = { value: "once", label: "in total", period: "so far" } as const;
 
+/** Credit is a limit granted once and spent down. Nothing sits beneath it: any lower
+ *  limit would never renew, so a top-up could never lift it. */
+export function runsOnCredit(value: string | null | undefined) {
+  return value === ONE_OFF_SPEND_LIMIT_WINDOW.value;
+}
+
 function findWindow(value: string | null | undefined) {
   return [...SPEND_LIMIT_WINDOWS, ONE_OFF_SPEND_LIMIT_WINDOW].find((option) => option.value === value);
 }

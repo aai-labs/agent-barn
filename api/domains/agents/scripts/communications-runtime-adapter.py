@@ -227,11 +227,15 @@ def _terminal_llm_error(delivery_id: str) -> str | None:
     return code if isinstance(code, str) and code else None
 
 
+_SPENT_CODES = frozenset({"SPEND_LIMIT_REACHED", "CREDIT_EXHAUSTED"})
+
+
 def _spend_limit_reached(delivery_id: str) -> bool:
     """The proxy answers a refused chat completion with the notice as an ordinary reply,
     so native chat can post it. Web Chat keeps it as a terminal failure instead, shown
-    under the person's message rather than as something the Agent said."""
-    return _terminal_llm_error(delivery_id) == "SPEND_LIMIT_REACHED"
+    under the person's message rather than as something the Agent said. On credit the
+    proxy records CREDIT_EXHAUSTED instead."""
+    return _terminal_llm_error(delivery_id) in _SPENT_CODES
 
 
 _SPEND_LIMIT_ERROR = RuntimeError("Model spend limit reached")

@@ -6,10 +6,12 @@ from uuid import UUID
 
 from injector import inject
 
+from api.domains.events import EventDeliveryDispatcher
 from api.domains.events.catalog import (
     ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,
     ORGANIZATION_LLM_BUDGET_EXHAUSTED,
     ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED,
+    ORGANIZATION_TRIAL_EXPIRY_HANDLER,
 )
 from api.domains.events.handlers import (
     EventDeliveryContext,
@@ -33,6 +35,24 @@ def _format_usd(value: float, limit: float) -> str:
     # Matches the card: a sub-dollar limit must not render as "$0.00".
     digits = 4 if 0 < limit < 1 else 2
     return f"${value:,.{digits}f}"
+
+
+@inject
+@dataclass
+class OrganizationTrialExpiryHandler:
+    """A trial whose credit has run out expires, freeing its place under the cap on
+    active trials. Idempotent: a redelivered Event finds it already expired."""
+
+    repository: OrganizationRepository
+    event_delivery_dispatcher: EventDeliveryDispatcher
+
+    name: ClassVar[str] = ORGANIZATION_TRIAL_EXPIRY_HANDLER
+    supported_events: ClassVar[Sequence[SupportedEvent]] = (SupportedEvent(ORGANIZATION_LLM_BUDGET_EXHAUSTED, 1),)
+
+    def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:
+        del context
+        delivery_ids = self.repository.expire_trial_with_event(UUID(str(event.payload["organization_id"])))
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
 
 @inject

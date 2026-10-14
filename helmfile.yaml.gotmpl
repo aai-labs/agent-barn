@@ -179,6 +179,9 @@ releases:
       # Public trial signup stays off unless an environment opts in.
       - name: selfSignupEnabled
         value: {{ env "SELF_SIGNUP_ENABLED" | default "false" | quote }}
+      # Empty means the default of 10 Agents for Organizations that are not trials.
+      - name: organizationDefaultAgentLimit
+        value: {{ env "ORGANIZATION_DEFAULT_AGENT_LIMIT" | default "" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
@@ -229,6 +232,13 @@ releases:
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
         value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
+      # Payments stay off unless an environment opts in.
+      - name: paymentsEnabled
+        value: {{ env "PAYMENTS_ENABLED" | default "false" | quote }}
+      - name: stripe.secretKey
+        value: {{ env "STRIPE_SECRET_KEY" | default "" | quote }}
+      - name: stripe.webhookSecret
+        value: {{ env "STRIPE_WEBHOOK_SECRET" | default "" | quote }}
       - name: agentFirecrawlApiKey
         value: {{ env "FIRECRAWL_API_KEY" | default "" | quote }}
       - name: apiExternalUrl

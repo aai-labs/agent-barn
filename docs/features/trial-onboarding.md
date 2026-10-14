@@ -50,11 +50,12 @@ self-signed-up user back to `/onboarding` until they finish.
 
 | Rule | Where |
 | --- | --- |
-| One trial per email address, ever: signup records a hash of the lowercased address in `trial_grant`, kept when the account is deleted; a recorded address is refused (`?error=trial_used`) with nothing created | `../../api/domains/auth/google_sign_in.py`, `TrialSettingsService` |
-| A self-signed-up user creates no Organizations until a Platform Administrator has ended their trial (`user.trial_ended_at`), so deleting the trial unlocks nothing; nor does anyone owning an active Trial Organization (403; the selector hides the option) | `OrganizationService.create_organization_for_current_user` |
-| A Trial Organization runs at most the platform's trial agent limit, counted under a lock as an Agent is stored (409). The limit applies to existing trials at once; a trial over a lowered limit keeps its Agents but hires no more | `AgentRepository.create_with_creator_access`, `AgentService.create_agent` |
-| At most the platform's cap on active trials exist at once, counted under a lock at sign-up; a sign-up past it is refused (`?error=trials_full`) with nothing created or recorded, so the address can come back. Ending or deleting a trial frees its place; no cap is the default | `GoogleSignInService._sign_up`, `TrialSettingsService.trials_full` |
-| Trial Credit is a one-off Model Spend Limit | [Costs](costs.md#organization-llm-budgets) |
+| One trial per email inbox, ever: signup records a hash of the normalised address in `trial_grant` (lowercased, any `+tag` dropped, and for Gmail dots dropped and googlemail.com read as gmail.com), kept when the account is deleted; a recorded address, or one recorded before normalisation by its lowercased form, is refused (`?error=trial_used`) with nothing created | `../../api/domains/auth/google_sign_in.py`, `TrialSettingsService` |
+| A self-signed-up user creates no Organizations until their trial has ended (`user.trial_ended_at`), by a credit purchase or a Platform Administrator, so deleting the trial unlocks nothing; nor does anyone owning an active Trial Organization (403; the selector hides the option). Once it has ended, every Organization they create runs on Credit, starting with none, as does every Organization created by anyone a Platform Administrator didn't set up, except that an invited member whose address never had a trial gets one as their first Organization ([Credit](credit.md)). Those trials skip onboarding, which is for self-signups | `OrganizationService.create_organization_for_current_user` |
+| A Trial Organization runs at most the platform's trial agent limit, unless a Platform Administrator set its own [Agent Limit](identity-and-organizations.md#agent-limit), counted under a lock as an Agent is stored (409). The limit applies to existing trials at once; a trial over a lowered limit keeps its Agents but hires no more | `AgentRepository.create_with_creator_access`, `AgentService.create_agent` |
+| At most the platform's cap on active trials exist at once, counted under a lock at sign-up; a sign-up past it is refused (`?error=trials_full`) with nothing created or recorded, so the address can come back. Ending, expiring or deleting a trial frees its place; no cap is the default | `GoogleSignInService._sign_up`, `TrialSettingsService.trials_full` |
+| Trial Credit is a one-off Model Spend Limit: the first grant on the Organization's [Credit](credit.md) ledger | [Costs](costs.md#organization-llm-budgets) |
+| A trial whose credit runs out is expired (`trial_expired_at`, `organization.trial.expired`) when its budget-exhausted alert is delivered: it keeps its Agents and stays a trial, but no longer counts as active. Buying credit converts it (or any trial) into an ordinary Organization that stays on Credit | `OrganizationTrialExpiryHandler`, `OrganizationService.convert_trial` |
 | A Platform Administrator ends a trial, choosing the spend limit and renewal window it goes on to | `POST /platform/organizations/{id}/end-trial` with `{budget_usd, budget_duration}`, the platform Organization page |
 
 Platform Administrators set the Trial Credit for new trials, the trial agent limit and
@@ -62,8 +63,8 @@ the cap on active trials on the platform settings page (`GET`/`PUT
 /platform/settings/trial`, a singleton row; each setting that moves is audited as
 `platform.trial_settings.changed`, a removed cap as `null`). The page also shows how many
 trials are active. Until the first save, `TRIAL_DEFAULT_CREDIT_USD`, a limit of one Agent
-and no cap apply. An active trial is any Organization still on a trial, including one
-whose credit is spent. An existing trial's spend limit
+and no cap apply. An active trial is any Organization still on a trial whose credit has not
+run out. An existing trial's spend limit
 is changed on its Organization page, like any other Organization's; the platform
 Organizations list marks trials.
 

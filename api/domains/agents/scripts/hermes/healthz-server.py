@@ -32,6 +32,15 @@ _BUDGET_EXHAUSTED = (
     "A model spend limit has been reached, so this agent cannot reply right now. "
     "Contact your administrator to raise it or wait for the limit to renew."
 )
+# On credit (AGENTBARN_SPEND_LIMIT_KIND=credit) nothing sits beneath the Organization's
+# balance, so running out means buying more, and the notice says who can.
+_ON_CREDIT = os.environ.get("AGENTBARN_SPEND_LIMIT_KIND", "") == "credit"
+_CREDIT_EXHAUSTED = (
+    "This organization has used all its credit, so this agent cannot reply right now. "
+    "Ask the organization's owner to buy more credit in Billing."
+)
+_SPENT_MESSAGE = _CREDIT_EXHAUSTED if _ON_CREDIT else _BUDGET_EXHAUSTED
+_SPENT_CODE = "CREDIT_EXHAUSTED" if _ON_CREDIT else "SPEND_LIMIT_REACHED"
 
 
 # An exhausted limit has been seen as a 400, is documented as a 429, and is a 422 by
@@ -71,7 +80,7 @@ def _budget_message(body: bytes) -> str | None:
         return None
     if not isinstance(error, dict) or error.get("type") != "budget_exceeded":
         return None
-    return _BUDGET_EXHAUSTED
+    return _SPENT_MESSAGE
 
 
 def _spend_limit_completion(path: str, request_body: bytes | None) -> tuple[str, bytes] | None:
@@ -79,7 +88,7 @@ def _spend_limit_completion(path: str, request_body: bytes | None) -> tuple[str,
 
     Native chat posts whatever the runtime answers, so a refused chat completion answered
     as an error reaches the channel as the runtime's own billing text, or not at all. The
-    marker still lets the Web Chat adapter report the turn as SPEND_LIMIT_REACHED.
+    marker still lets the Web Chat adapter report the turn as SPEND_LIMIT_REACHED (or CREDIT_EXHAUSTED on credit).
     Requests that are not chat completions, or that cannot be read back, keep the 402.
     """
     if not path.split("?", 1)[0].endswith("/chat/completions") or not request_body:
@@ -100,7 +109,7 @@ def _spend_limit_completion(path: str, request_body: bytes | None) -> tuple[str,
             {
                 **base,
                 "choices": [
-                    {"index": 0, "delta": {"role": "assistant", "content": _BUDGET_EXHAUSTED}, "finish_reason": None}
+                    {"index": 0, "delta": {"role": "assistant", "content": _SPENT_MESSAGE}, "finish_reason": None}
                 ],
             },
             {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": usage},
@@ -112,9 +121,7 @@ def _spend_limit_completion(path: str, request_body: bytes | None) -> tuple[str,
         "object": "chat.completion",
         "created": created,
         "model": model,
-        "choices": [
-            {"index": 0, "message": {"role": "assistant", "content": _BUDGET_EXHAUSTED}, "finish_reason": "stop"}
-        ],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": _SPENT_MESSAGE}, "finish_reason": "stop"}],
         "usage": usage,
     }
     return "application/json", json.dumps(body).encode()
@@ -378,7 +385,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     # usually says 429, which the runtime retries as a rate limit
                     # indefinitely, so the person chatting would never hear back.
                     status = _BUDGET_EXHAUSTED_STATUS
-                    _record_terminal_llm_error("SPEND_LIMIT_REACHED")
+                    _record_terminal_llm_error(_SPENT_CODE)
                     completion = _spend_limit_completion(self.path, body)
                     if completion is not None:
                         content_type, completion_body = completion

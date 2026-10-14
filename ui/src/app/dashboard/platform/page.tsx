@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
 import { PlatformStatsPanel } from "@/features/platform-stats/components/platform-stats-panel";
-import { Activity, FileText, Receipt, Settings, Sparkles } from "lucide-react";
+import { Activity, CreditCard, FileText, Receipt, Settings, Sparkles } from "lucide-react";
 
 const platformLinks = [
   { href: "/dashboard/platform/settings", title: "Platform Settings", description: "Choose the memory-processing model shared across Organizations.", Icon: Settings },
@@ -32,6 +32,12 @@ const platformLinks = [
     title: "Platform Costs",
     description: "Model spend across every organization, with burn rate and OpenRouter credits.",
     Icon: Receipt,
+  },
+  {
+    href: "/dashboard/platform/billing",
+    title: "Billing",
+    description: "Credit bought, refunded and adjusted across every organization.",
+    Icon: CreditCard,
   },
   {
     href: "/dashboard/platform/resource-usage",

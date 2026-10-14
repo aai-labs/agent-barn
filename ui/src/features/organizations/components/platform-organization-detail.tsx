@@ -18,6 +18,7 @@ import { SearchInput } from "@/components/search-input";
 import { usePlatformOrganization } from "../hooks/use-platform-organization";
 import { usePlatformOrganizationMembers } from "../hooks/use-platform-organization-members";
 import type { PlatformOrganizationMember } from "../schemas";
+import { AgentLimitCard } from "./agent-limit-card";
 import { LlmBudgetCard } from "./llm-budget-card";
 import { TrialCard } from "./trial-card";
 import { organizationInitials } from "./organization-detail-utils";
@@ -145,6 +146,8 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
       </div>
 
       <LlmBudgetCard organization={organization} />
+
+      <AgentLimitCard organization={organization} />
 
       <TrialCard organization={organization} />
 

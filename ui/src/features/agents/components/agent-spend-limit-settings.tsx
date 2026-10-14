@@ -14,6 +14,7 @@ import {
   formatUsd,
   parseAmount,
   periodLabel,
+  runsOnCredit,
   windowLabel,
   zeroNotice,
 } from "@/features/organizations/spend-limit";
@@ -60,6 +61,7 @@ export function AgentSpendLimitSettings({
   }
 
   const per = windowLabel(budget.window);
+  const onCredit = runsOnCredit(budget.window);
   // Organization-wide figures are only sent to people who can change the limit, and
   // only they ever see the form that uses them.
   const defaultLimit = budget.defaultLimitUsd ?? budget.limitUsd;
@@ -87,7 +89,7 @@ export function AgentSpendLimitSettings({
     <SettingsSection
       title="Model spend limit"
       description="The most this Agent can spend on model calls."
-      canEdit={budget.canManage}
+      canEdit={budget.canManage && !onCredit}
       editing={editing}
       onEdit={onEdit}
       onApply={async () => {
@@ -158,7 +160,17 @@ export function AgentSpendLimitSettings({
         </div>
       ) : (
         <div className="flex flex-col gap-4">
-        {budget.state === "exhausted" && (
+        {onCredit && budget.state !== "exhausted" && (
+          <p className="m-0 text-[0.88rem]" style={{ color: "var(--ink-2)" }}>
+            This Agent can spend all of your organization&apos;s credit.
+          </p>
+        )}
+        {budget.state === "exhausted" && onCredit && (
+          <p role="status" className="m-0 text-[0.88rem]" style={{ color: "var(--err)" }}>
+            Your organization&apos;s credit has run out, so this Agent can&apos;t make model calls.
+          </p>
+        )}
+        {budget.state === "exhausted" && !onCredit && (
           <p role="status" className="m-0 text-[0.88rem]" style={{ color: "var(--err)" }}>
             {`This Agent has reached its limit and can't make model calls${until}.`}{" "}
             {budget.canManage &&
@@ -174,9 +186,10 @@ export function AgentSpendLimitSettings({
           </p>
         )}
         <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
-          <Fact label="Limit in force">
+          <Fact label={onCredit ? "Credit" : "Limit in force"}>
             {formatUsd(budget.limitUsd)} {per}
           </Fact>
+          {!onCredit && (
           <Fact label="Set by">
             {budget.source === "agent" || !budget.canManage ? (
               SOURCE[budget.source]
@@ -191,6 +204,7 @@ export function AgentSpendLimitSettings({
               </Link>
             )}
           </Fact>
+          )}
           <Fact label={`Spent ${periodLabel(budget.window)}`}>
             <span style={{ color: budget.state === "exhausted" ? "var(--err)" : undefined }}>
               {budget.spendUsd == null
@@ -198,7 +212,7 @@ export function AgentSpendLimitSettings({
                 : `${formatUsage(budget.spendUsd, budget.limitUsd)}${budget.state === "exhausted" ? " — limit reached" : ""}`}
             </span>
           </Fact>
-          <Fact label="Renews">{renews ?? "—"}</Fact>
+          {!onCredit && <Fact label="Renews">{renews ?? "—"}</Fact>}
         </dl>
         </div>
       )}
