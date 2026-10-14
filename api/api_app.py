@@ -42,6 +42,7 @@ from api.domains.discovery.routes import router as discovery_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
+from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
 from api.domains.organizations.routes import org_router, platform_org_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.playbooks.platform_routes import platform_playbooks_router
@@ -131,6 +132,8 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agent_webhooks_router)
     subapi.include_router(agent_settings_router)
     subapi.include_router(platform_memory_router)
+    subapi.include_router(platform_trial_settings_router)
+    subapi.include_router(onboarding_router)
     subapi.include_router(agent_memory_router)
     subapi.include_router(memory_grants_router)
     subapi.include_router(organization_memory_router)

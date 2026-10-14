@@ -26,6 +26,7 @@ from sqlmodel import Session
 from starlette.testclient import TestClient
 
 from api.core.config import Config
+from api.domains.agents.builders import HERMES_DEFAULT_MAX_TURNS
 from api.domains.agents.models import (
     AgentSecret,
     AgentStatus,
@@ -440,6 +441,68 @@ def test_create_openclaw_agent_with_verbose_mode_true_returns_400():
             assert_that(response.json()["detail"], contains_string("OpenClaw"))
 
 
+def test_create_agent_without_a_turn_limit_follows_the_platform_default():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes agent without a turn limit"):
+            response = client.post(_BASE, json=_VALID_CREATE_HERMES, headers=_auth(context))
+
+        with then("it follows the platform default and the read says what that is"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["max_turns"], none())
+            assert_that(response.json()["effective_max_turns"], equal_to(HERMES_DEFAULT_MAX_TURNS))
+
+
+def test_create_hermes_agent_with_its_own_turn_limit():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a Hermes agent with its own turn limit"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE_HERMES, "max_turns": 150},
+                headers=_auth(context),
+            )
+
+        with then("the limit is the effective one"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["max_turns"], equal_to(150))
+            assert_that(response.json()["effective_max_turns"], equal_to(150))
+
+
+def test_create_openclaw_agent_with_a_turn_limit_returns_400():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create an OpenClaw agent with a turn limit"):
+            response = client.post(
+                _BASE,
+                json={**_VALID_CREATE, "max_turns": 150},
+                headers=_auth(context),
+            )
+
+        with then("it returns 400 because only Hermes reads the limit"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
+
+
+def test_create_agent_rejects_a_turn_limit_outside_its_bounds():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        for value in (0, 501):
+            with when(f"I create a Hermes agent with a turn limit of {value}"):
+                response = client.post(
+                    _BASE,
+                    json={**_VALID_CREATE_HERMES, "max_turns": value},
+                    headers=_auth(context),
+                )
+
+            with then("it is a validation error"):
+                assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
 def test_create_openclaw_agent_with_approval_mode_off_returns_400():
     with given(_GIVEN) as context:
         client: TestClient = context.client
@@ -751,6 +814,48 @@ def test_patch_hermes_agent_verbose_mode_to_true():
         with then("the response reflects the new verbose_mode"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that(response.json()["verbose_mode"], equal_to(True))
+
+
+def test_patch_hermes_agent_turn_limit():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I give the Hermes agent its own turn limit"):
+            response = client.patch(f"{_BASE}/{agent_id}", json={"max_turns": 150}, headers=_auth(context))
+
+        with then("the response carries it as the effective limit"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["max_turns"], equal_to(150))
+            assert_that(response.json()["effective_max_turns"], equal_to(150))
+
+
+def test_patch_hermes_agent_turn_limit_to_null_returns_to_the_platform_default():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.HERMES)]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+        client.patch(f"{_BASE}/{agent_id}", json={"max_turns": 150}, headers=_auth(context))
+
+        with when("I send an explicit null turn limit"):
+            response = client.patch(f"{_BASE}/{agent_id}", json={"max_turns": None}, headers=_auth(context))
+
+        with then("the agent follows the platform default again"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json()["max_turns"], none())
+            assert_that(response.json()["effective_max_turns"], equal_to(HERMES_DEFAULT_MAX_TURNS))
+
+
+def test_patch_openclaw_agent_turn_limit_returns_400():
+    with given([*_GIVEN, there_is_an_agent(agent_type=AgentType.OPENCLAW)]) as context:
+        client: TestClient = context.client
+        agent_id = str(context.agent.id)
+
+        with when("I give an OpenClaw agent a turn limit"):
+            response = client.patch(f"{_BASE}/{agent_id}", json={"max_turns": 150}, headers=_auth(context))
+
+        with then("it is refused because only Hermes reads the limit"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("OpenClaw"))
 
 
 def test_patch_hermes_agent_approval_mode_to_off():
@@ -5742,6 +5847,7 @@ def test_selection_applies_recorded_runtime_settings_in_the_same_request():
                     "expected_agent_updated_at": agent["updated_at"],
                     "approval_mode": "manual",
                     "verbose_mode": True,
+                    "max_turns": 150,
                 },
                 headers=_auth(context),
             )
@@ -5752,6 +5858,7 @@ def test_selection_applies_recorded_runtime_settings_in_the_same_request():
             assert_that(body["template_key"], equal_to("recorded-template"))
             assert_that(body["approval_mode"], equal_to("manual"))
             assert_that(body["verbose_mode"], equal_to(True))
+            assert_that(body["max_turns"], equal_to(150))
 
 
 def test_selection_accepts_one_member_of_a_required_skill_group():

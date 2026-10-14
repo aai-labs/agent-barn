@@ -5,6 +5,7 @@ import { ModelSettingCard } from "@/components/settings/model-setting-card";
 
 import { usePlatformMemorySettings } from "../hooks/use-platform-memory-settings";
 
+/** The Agent Memory section of the platform settings page. */
 export function PlatformMemorySettings() {
   const {
     memorySettings,
@@ -20,7 +21,7 @@ export function PlatformMemorySettings() {
     saveError,
     resetSave,
   } = usePlatformMemorySettings();
-  if (isLoadingSettings) return <div>Loading Platform Settings…</div>;
+  if (isLoadingSettings) return <p className="m-0">Loading Agent Memory settings…</p>;
   if (settingsError)
     return (
       <AppErrorState

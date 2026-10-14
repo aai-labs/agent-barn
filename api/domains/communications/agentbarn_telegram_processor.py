@@ -289,7 +289,7 @@ class AgentBarnTelegramUpdateProcessor:
         if self._courtesy_due("sign_up", user_id, _SIGN_UP_REPLY_COOLDOWN_SECONDS):
             self._reply(
                 chat_id,
-                f"Hi! To talk to an agent here, sign up at {self.config.web_app_url} and connect Telegram from there.",
+                f"Hi! To talk to an agent here, sign up at {self.config.web_app_url}/signup and connect Telegram from there.",
                 essential=False,
             )
         return False

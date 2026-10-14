@@ -318,7 +318,7 @@ its absence after repair.
 ## Platform memory-processing model
 
 Platform Admins choose the Hindsight model at **Platform Settings → Agent Memory**
-(`/dashboard/platform/settings`, the default section beside Playbooks). The page uses the shared settings sidebar and
+(`/dashboard/platform/settings`, the default section beside Playbooks and Trials). The page uses the shared settings sidebar and
 card layout, with a read-only model summary and an Edit → Save/Cancel flow.
 It applies to all Organizations and Agents,
 separately from Agent chat models and Organization model allowlists. The catalog

@@ -1,38 +1,43 @@
 "use client";
 
-import { BookOpenCheck, Brain } from "lucide-react";
+import { BookOpenCheck, Brain, Sparkles } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { PlatformMemorySettings } from "@/features/agent-memory/components/platform-memory-settings";
+import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
 import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
 
-const SECTIONS = [
-  {
-    key: "agent-memory",
+const SECTIONS = {
+  "agent-memory": {
     label: "Agent Memory",
+    icon: <Brain size={15} aria-hidden />,
     description: "Long-term memory settings shared by every Agent and Organization.",
-    icon: Brain,
   },
-  {
-    key: "playbooks",
+  playbooks: {
     label: "Playbooks",
+    icon: <BookOpenCheck size={15} aria-hidden />,
     description: "How playbooks are extracted from an Agent's conversations, for every Organization.",
-    icon: BookOpenCheck,
   },
-] as const;
+  trials: {
+    label: "Trials",
+    icon: <Sparkles size={15} aria-hidden />,
+    description: "What a new organization gets when someone signs themselves up.",
+  },
+} as const;
 
-type SectionKey = (typeof SECTIONS)[number]["key"];
+type SectionKey = keyof typeof SECTIONS;
 
-export function PlatformSettingsPage() {
+export function PlatformSettings() {
+  // In the URL so a section can be linked to, e.g. ?section=playbooks.
   const [active, setActive] = useQueryState(
     "section",
-    parseAsStringEnum<SectionKey>(SECTIONS.map((section) => section.key))
+    parseAsStringEnum<SectionKey>(Object.keys(SECTIONS) as SectionKey[])
       .withDefault("agent-memory")
       .withOptions({ scroll: false, history: "replace" }),
   );
-  const section = SECTIONS.find((item) => item.key === active) ?? SECTIONS[0];
+  const section = SECTIONS[active];
 
   return (
     <div className="af-page">
@@ -56,19 +61,17 @@ export function PlatformSettingsPage() {
         sidebar={
           <SettingsSidebar
             eyebrow="Platform"
-            items={SECTIONS.map((item) => {
-              const Icon = item.icon;
-              return { key: item.key, label: item.label, icon: <Icon size={15} aria-hidden /> };
-            })}
-            activeKey={section.key}
+            items={Object.entries(SECTIONS).map(([key, item]) => ({ key, label: item.label, icon: item.icon }))}
+            activeKey={active}
             onSelect={(key) => void setActive(key as SectionKey)}
           />
         }
         heading={section.label}
         description={section.description}
       >
-        {section.key === "agent-memory" && <PlatformMemorySettings />}
-        {section.key === "playbooks" && <PlatformPlaybookSettings />}
+        {active === "agent-memory" && <PlatformMemorySettings />}
+        {active === "playbooks" && <PlatformPlaybookSettings />}
+        {active === "trials" && <PlatformTrialSettings />}
       </SettingsPageLayout>
     </div>
   );

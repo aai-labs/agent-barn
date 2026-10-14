@@ -971,6 +971,7 @@ class RestorePointService:
             effective_model=agent.running_model or agent.model or "",
             approval_mode=agent.approval_mode,
             verbose_mode=agent.verbose_mode,
+            max_turns=agent.max_turns,
             skills=[
                 RestorePointSkill(skill_id=skill.id, name=skill.name, pinned_version=row.pinned_version)
                 for row, skill in self.skill_repository.get_agent_skills_with_details(agent.id)

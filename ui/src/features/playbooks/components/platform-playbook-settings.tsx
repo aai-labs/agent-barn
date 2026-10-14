@@ -20,7 +20,7 @@ export function PlatformPlaybookSettings() {
     saveError,
     resetSave,
   } = usePlatformPlaybookSettings();
-  if (isLoadingSettings) return <div>Loading Platform Settings…</div>;
+  if (isLoadingSettings) return <p className="m-0">Loading Playbook settings…</p>;
   if (settingsError)
     return (
       <AppErrorState

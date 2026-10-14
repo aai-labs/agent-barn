@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -234,6 +234,19 @@ class UserRepository:
 
     def get_by_email_with_session(self, email: str, session: Session) -> User | None:
         return session.exec(select(User).where(col(User.email) == email)).first()
+
+    def get_by_google_sub_for_update(self, google_sub: str, session: Session) -> User | None:
+        return session.exec(select(User).where(col(User.google_sub) == google_sub).with_for_update()).first()
+
+    def get_by_email_ignoring_case_for_update(self, email: str, session: Session) -> User | None:
+        """A Google address and the one an account was created with can differ only in
+        case; both name the same mailbox."""
+        return session.exec(
+            select(User)
+            .where(func.lower(col(User.email)) == email.lower())
+            .order_by(col(User.created_at))
+            .with_for_update()
+        ).first()
 
     def save_with_session(self, user: User, session: Session) -> User:
         email = user.email

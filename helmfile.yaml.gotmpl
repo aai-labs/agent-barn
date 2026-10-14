@@ -176,6 +176,9 @@ releases:
         value: {{ env "ORGANIZATION_DEFAULT_LLM_BUDGET_USD" | quote }}
       - name: organizationLlmBudgets.defaultAgentUsd
         value: {{ env "AGENT_DEFAULT_LLM_BUDGET_USD" | quote }}
+      # Public trial signup stays off unless an environment opts in.
+      - name: selfSignupEnabled
+        value: {{ env "SELF_SIGNUP_ENABLED" | default "false" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
