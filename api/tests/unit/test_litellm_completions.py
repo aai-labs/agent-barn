@@ -108,3 +108,17 @@ def test_an_unreachable_proxy_is_unavailable():
         _client(base_url).complete("sk-agent-key", "m", [], max_tokens=10, timeout_seconds=2)
 
     assert_that(raised.value.failure, equal_to(CompletionFailure.UNAVAILABLE))
+
+
+def test_an_answer_cut_off_at_the_token_limit_is_marked_truncated():
+    result = _complete(
+        StubProxy(body={"choices": [{"message": {"content": '{"body": "# Pla'}, "finish_reason": "length"}]})
+    )
+
+    assert_that(result.truncated, equal_to(True))
+
+
+def test_a_complete_answer_is_not_truncated():
+    result = _complete(StubProxy(body={"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]}))
+
+    assert_that(result.truncated, equal_to(False))

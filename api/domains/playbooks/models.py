@@ -42,6 +42,7 @@ class PlaybookExtractionError(str, enum.Enum):
     MODEL_UNAVAILABLE = "model_unavailable"
     SPEND_LIMIT_REACHED = "spend_limit_reached"
     MODEL_ERROR = "model_error"
+    ANSWER_TRUNCATED = "answer_truncated"
     DRAFT_CONFLICT = "draft_conflict"
     SKILL_UNAVAILABLE = "skill_unavailable"
     INTERNAL_ERROR = "internal_error"

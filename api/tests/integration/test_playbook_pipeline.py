@@ -83,7 +83,11 @@ def _user(request: dict[str, Any]) -> str:
 
 
 def model_replies(
-    notes: Any = None, playbook: Any = PLAYBOOK, notes_status: int = 200, playbook_status: int = 200
+    notes: Any = None,
+    playbook: Any = PLAYBOOK,
+    notes_status: int = 200,
+    playbook_status: int = 200,
+    playbook_finish_reason: str = "stop",
 ) -> StubProxy:
     """Notes for each conversation, then the playbook; each reply reports usage and cost."""
 
@@ -95,7 +99,11 @@ def model_replies(
                 return notes_status, body, {}
             return notes_status, completion(json.dumps(body), 1_000, 100), {"x-litellm-response-cost": "0.001"}
         content = playbook if isinstance(playbook, str) else json.dumps(playbook)
-        return playbook_status, completion(content, 3_000, 800), {"x-litellm-response-cost": "0.01"}
+        return (
+            playbook_status,
+            completion(content, 3_000, 800, finish_reason=playbook_finish_reason),
+            {"x-litellm-response-cost": "0.01"},
+        )
 
     return StubProxy(respond=respond)
 
@@ -448,6 +456,40 @@ def test_a_playbook_answer_in_the_wrong_shape_fails_the_run():
 
         with then("the run fails with a model error and keeps the spent tokens"):
             assert_that((run.error_code, run.prompt_tokens), equal_to(("model_error", 5_000)))
+
+
+def test_a_playbook_answer_cut_off_at_the_token_limit_fails_the_run_as_truncated():
+    with given(
+        _setup(
+            two_refund_conversations(),
+            the_model_proxy_is(model_replies(playbook='{"description": "Use when', playbook_finish_reason="length")),
+            there_is_a_playbook_extraction(),
+        )
+    ) as context:
+        with when("the model stops at the playbook step's token limit"):
+            run = process_extraction(context)
+
+        with then("the run says the answer was cut off, writes no Skill, and keeps the spent tokens"):
+            assert_that((run.error_code, run.prompt_tokens), equal_to(("answer_truncated", 5_000)))
+            with Session(context.postgres_delegate.engine) as session:
+                assert_that(session.exec(select(Skill)).all(), has_length(0))
+
+
+def test_a_playbook_wrapped_in_a_code_fence_is_still_read():
+    fenced = "```json\n" + json.dumps(PLAYBOOK) + "\n```"
+    with given(
+        _setup(
+            two_refund_conversations(),
+            the_model_proxy_is(model_replies(playbook=fenced)),
+            there_is_a_playbook_extraction(),
+        )
+    ) as context:
+        with when("the model wraps its JSON answer in a Markdown code fence"):
+            run = process_extraction(context)
+
+        with then("the playbook is written as usual"):
+            assert_that(run.status, equal_to(PlaybookExtractionStatus.SUCCEEDED))
+            assert_that(run.result_markdown or "", contains_string(PLAYBOOK_BODY))
 
 
 def test_cancelling_while_notes_are_taken_stops_the_run_before_the_playbook_step():

@@ -32,6 +32,11 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 
 ## Changes
 
+### 2026-10-14 — fix: cut-off playbook answers
+
+- Found: in a live run with `openrouter/anthropic/claude-haiku-5.5` the playbook step stopped at its 4,000-token limit, so its JSON was cut off and the run failed with `model_error` after spending about $0.018.
+- Changed: the playbook step allows 12,000 output tokens; a completion that stops at its limit (`finish_reason: length`) fails the run with the new `answer_truncated` code; JSON wrapped in a Markdown code fence is accepted; the preview estimates 3,000 output tokens for the playbook.
+
 ### 2026-10-14 — slice 7: Organization Conventions
 
 - Decided: a role playbook suits Agents in the same role, while firm-wide rules belong to every Agent; they go to Template AGENTS.md, which every Agent loads at startup, rather than a Skill an Agent opens only when its description matches.

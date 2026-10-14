@@ -32,6 +32,8 @@ class CompletionResult:
     prompt_tokens: int
     completion_tokens: int
     cost_usd: Decimal | None
+    # The model stopped at max_tokens, so the content is cut off.
+    truncated: bool = False
 
 
 @inject
@@ -67,7 +69,8 @@ class LiteLLMCompletionClient:
             raise CompletionError(_failure_for(response))
         try:
             payload = response.json()
-            content = payload["choices"][0]["message"]["content"]
+            choice = payload["choices"][0]
+            content = choice["message"]["content"]
             usage = payload.get("usage") or {}
             if not isinstance(content, str) or not content.strip():
                 raise ValueError()
@@ -76,6 +79,7 @@ class LiteLLMCompletionClient:
                 prompt_tokens=int(usage.get("prompt_tokens") or 0),
                 completion_tokens=int(usage.get("completion_tokens") or 0),
                 cost_usd=_cost(response.headers.get("x-litellm-response-cost")),
+                truncated=choice.get("finish_reason") == "length",
             )
         except ValueError, KeyError, IndexError, TypeError:
             raise CompletionError(CompletionFailure.BAD_RESPONSE) from None

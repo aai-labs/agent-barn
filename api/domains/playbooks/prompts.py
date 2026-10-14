@@ -13,12 +13,14 @@ from api.domains.playbooks.transcripts import SessionTranscript, estimated_token
 PROMPT_VERSION = "playbook-2026-10-14"
 
 NOTES_MAX_TOKENS = 1_200
-PLAYBOOK_MAX_TOKENS = 4_000
+# Generous: models differ widely in how long they write, and a cut-off answer is unusable.
+PLAYBOOK_MAX_TOKENS = 12_000
 MEMORY_CHARS = 500
 MAX_CONVENTIONS = 30
 CONVENTION_CHARS = 500
 # What one session's notes usually come to; used only for estimates.
 TYPICAL_NOTES_TOKENS = 400
+TYPICAL_PLAYBOOK_TOKENS = 3_000
 
 _PRIVACY = """Privacy rules, which override everything else:
 - Describe practices generically. Never include names of people, clients, or companies,
@@ -96,7 +98,7 @@ def notes_messages(transcript: SessionTranscript) -> list[dict[str, str]]:
 def parse_notes(content: str) -> dict[str, Any] | str:
     """The notes object, or the raw text when the model did not return one."""
     try:
-        notes = json.loads(content)
+        notes = json.loads(_without_code_fence(content))
     except json.JSONDecodeError:
         return content.strip()
     return notes if isinstance(notes, dict) else content.strip()
@@ -118,7 +120,7 @@ def playbook_messages(skill_name: str, notes: list[dict[str, Any] | str], memori
 
 def parse_playbook(content: str) -> Playbook | None:
     try:
-        answer = json.loads(content)
+        answer = json.loads(_without_code_fence(content))
     except json.JSONDecodeError:
         return None
     if not isinstance(answer, dict):
@@ -169,5 +171,14 @@ def estimated_usage(transcripts: list[SessionTranscript]) -> tuple[int, int]:
         return 0, 0
     notes_input = sum(estimated_tokens(len(NOTES_SYSTEM_PROMPT) + len(t.text)) for t in transcripts)
     playbook_input = estimated_tokens(len(PLAYBOOK_SYSTEM_PROMPT)) + TYPICAL_NOTES_TOKENS * len(transcripts)
-    output = TYPICAL_NOTES_TOKENS * len(transcripts) + PLAYBOOK_MAX_TOKENS // 2
+    output = TYPICAL_NOTES_TOKENS * len(transcripts) + TYPICAL_PLAYBOOK_TOKENS
     return notes_input + playbook_input, output
+
+
+def _without_code_fence(content: str) -> str:
+    """JSON some models wrap in a Markdown code fence despite being asked for an object."""
+    text = content.strip()
+    if text.startswith("```") and text.endswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+        return text[: text.rfind("```")].strip()
+    return text

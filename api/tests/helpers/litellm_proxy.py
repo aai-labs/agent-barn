@@ -56,8 +56,10 @@ def litellm_proxy(stub: StubProxy) -> Iterator[str]:
         server.server_close()
 
 
-def completion(content: str, prompt_tokens: int = 0, completion_tokens: int = 0) -> dict[str, Any]:
+def completion(
+    content: str, prompt_tokens: int = 0, completion_tokens: int = 0, finish_reason: str = "stop"
+) -> dict[str, Any]:
     return {
-        "choices": [{"message": {"content": content}}],
+        "choices": [{"message": {"content": content}, "finish_reason": finish_reason}],
         "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
     }

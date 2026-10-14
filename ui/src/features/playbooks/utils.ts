@@ -47,6 +47,8 @@ const ERROR_MESSAGE: Record<PlaybookExtractionError, string> = {
   model_unavailable: "The model or this Agent's model key was rejected.",
   spend_limit_reached: "The Agent's or Organization's spend limit was reached.",
   model_error: "The model failed or answered in an unexpected shape. Try again.",
+  answer_truncated:
+    "The model's answer was longer than allowed and was cut off. Try again, or read fewer conversations.",
   draft_conflict:
     "The playbook already had an unpublished draft, which was left untouched. The generated playbook is kept on this run.",
   skill_unavailable: "The target Skill can no longer receive playbooks.",

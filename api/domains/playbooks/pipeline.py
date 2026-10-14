@@ -148,6 +148,8 @@ class PlaybookPipeline:
         result = self._complete(
             api_key, model, playbook_messages(extraction.skill_name, notes, memories), PLAYBOOK_MAX_TOKENS, usage
         )
+        if result.truncated:
+            raise PlaybookExtractionFailed(PlaybookExtractionError.ANSWER_TRUNCATED, **usage.values())
         playbook = parse_playbook(result.content)
         if playbook is None:
             raise PlaybookExtractionFailed(PlaybookExtractionError.MODEL_ERROR, **usage.values())

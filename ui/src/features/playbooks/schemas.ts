@@ -10,6 +10,7 @@ export const PlaybookExtractionErrorSchema = z.enum([
   "model_unavailable",
   "spend_limit_reached",
   "model_error",
+  "answer_truncated",
   "draft_conflict",
   "skill_unavailable",
   "internal_error",
