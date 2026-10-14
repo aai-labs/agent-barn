@@ -116,6 +116,15 @@ WEB_APP_URL=http://agentbarn.local
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
 
+# ── OneDrive sync ───────────────────────────────────────────────────
+# Multi-tenant Microsoft Entra app for Organization OneDrive sync. Leave blank to
+# disable. Register "<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback" as a
+# Web redirect URI (Microsoft requires HTTPS unless the host is localhost).
+# Permissions: application Sites.Selected; delegated Sites.FullControl.All,
+# Sites.Read.All, openid, profile.
+ONEDRIVE_SYNC_CLIENT_ID=
+ONEDRIVE_SYNC_CLIENT_SECRET=
+
 # ── Ingress TLS ──────────────────────────────────────────────────────────────
 # cert-manager ClusterIssuer that signs the api/ui ingress certs. cert-manager
 # is required. letsencrypt-http01 needs a publicly reachable host, so for a
