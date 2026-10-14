@@ -215,8 +215,16 @@ function TelegramLinking({
   const requested = useRef(false);
   useEffect(() => {
     if (requested.current || isLoadingLinkedAccounts || linkedAccounts.length > 0) return;
-    requested.current = true;
-    newLink();
+    // With cached accounts this effect runs on mount. Defer until subscriptions
+    // are attached, and cancel the discarded Strict Mode mount so its mutation
+    // cannot leave the live observer waiting for a result it never receives.
+    let active = true;
+    queueMicrotask(() => {
+      if (!active || requested.current) return;
+      requested.current = true;
+      newLink();
+    });
+    return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when the step first knows it isn't linked
   }, [isLoadingLinkedAccounts, linkedAccounts.length]);
 

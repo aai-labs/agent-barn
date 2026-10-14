@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { mockCommunicationConnection } from "../fixtures/communication-connections";
 import { TEST_ORG_ID } from "../constants";
 import { MOCK_AGENT_ID, mockAgent } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
@@ -65,6 +66,65 @@ test.describe("Hiring choices", () => {
     }]);
     expect(requests.starts).toHaveLength(1);
   });
+
+  test("closing Telegram setup leaves a way to resume from the Agent detail page", async ({ page }, testInfo) => {
+    const data = new DataSupport(page);
+    const requests = data.agents.trackHiringRequests();
+    await data.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "RUNNING" } });
+    await data.agents.interceptGetConversationChannelsRequest();
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+    await dashboard.openHireChoices();
+    await dashboard.chooseReadyMadeHiring();
+    await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Open in Telegram", exact: true })).toBeVisible();
+    await dashboard.closeHireDialog();
+    await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}`);
+    await expect(page.getByText("Finish connecting Telegram", { exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("telegram-reminder.png"), fullPage: true, animations: "disabled" });
+    await page.getByRole("button", { name: "Connect Telegram", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Say hi to @AgentBarnTestBot" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open in Telegram", exact: true })).toHaveAttribute("href", TRIAL_DEEP_LINK);
+    await dashboard.closeHireDialog();
+    await page.reload();
+    await page.getByRole("button", { name: "Connect Telegram", exact: true }).click();
+    await expect(page.getByRole("img", { name: "QR code that opens the bot" })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("resumed-telegram.png"), fullPage: true, animations: "disabled" });
+    expect(requests.creations).toHaveLength(1);
+    expect(requests.starts).toHaveLength(1);
+  });
+
+  for (const condition of ["linked", "read-only", "stopped"] as const) {
+    test(`Telegram resume respects ${condition} state`, async ({ page }) => {
+      const data = new DataSupport(page);
+      const requests = data.agents.trackHiringRequests();
+      await data.agents.interceptGetAgentRequest({ body: {
+        ...mockAgent,
+        status: condition === "stopped" ? "STOPPED" : "RUNNING",
+        ...(condition === "read-only" ? { allowed_actions: ["agent.read"] } : {}),
+      } });
+      await data.agents.interceptGetConversationChannelsRequest();
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, (route) => route.fulfill({ json: [{
+        ...mockCommunicationConnection, id: TRIAL_CONNECTION_ID, agent_id: MOCK_AGENT_ID,
+        platform_key: "agentbarn_telegram", external_identity: "@AgentBarnTestBot",
+      }] }));
+      const links = new OnboardingDataSupport(page, { organizationId: TEST_ORG_ID, agentId: MOCK_AGENT_ID, connectionId: TRIAL_CONNECTION_ID });
+      await links.interceptLinkedAccounts(condition === "linked" ? [{
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", telegram_username: "jane_doe",
+        linked_by_membership_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", created_at: "2026-10-07T12:00:00Z",
+      }] : []);
+      await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}`);
+      await expect(page.getByRole("heading", { name: "Maya", exact: true })).toBeVisible();
+      if (condition === "stopped") {
+        await expect(page.getByRole("button", { name: "Connect Telegram", exact: true })).toBeDisabled();
+        await expect(page.getByText("Start your agent, then link your Telegram account to chat with it there.")).toBeVisible();
+      } else {
+        await expect(page.getByRole("button", { name: "Connect Telegram", exact: true })).toHaveCount(0);
+      }
+      expect(requests.creations).toHaveLength(0);
+      expect(requests.starts).toHaveLength(0);
+    });
+  }
 
   test("Telegram is optional and skipping opens Web Chat without completing onboarding again", async ({ page }) => {
     const data = new DataSupport(page);

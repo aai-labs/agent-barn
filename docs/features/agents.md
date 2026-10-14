@@ -30,6 +30,14 @@ lost Connection response does not duplicate it. Telegram is optional: users can
 skip linking and go directly to Web Chat. This path does not reopen or modify
 onboarding completion.
 
+The Agent detail page shows **Finish connecting Telegram** for an enabled Agent
+Barn Telegram Connection with no linked accounts, including after a refresh or a
+closed setup dialog. Members with `agent.update` can reopen the same QR/linking
+screen using **Connect Telegram**. This links the existing Connection and never
+creates or starts an Agent. A stopped Agent must first be started through its
+lifecycle controls; linked Connections do not show the reminder. Skipping returns
+to the detail page's Web Chat tab.
+
 Before setup begins, a Trial Organization's current read must succeed. Its
 `trial_agent_limit_reached` flag reports creation capacity across non-deleted Agents,
 including stopped Agents and ones hidden from this member; it exposes neither their
