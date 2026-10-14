@@ -32,6 +32,10 @@ Password change/reset updates the security stamp so existing refresh tokens fail
 
 Accounts enter through Google sign-in (self-signup), Platform Administrator provisioning, or organization invitation. Password self-registration (`POST /auth/signup`) stays disabled. Platform provisioning atomically creates a pending User, their initial Organization, their Owner Membership, and a one-time set-password token; the invitation email is sent only after commit. The Platform Administrator never chooses or learns the user's password. Reset/invite tokens are stored as hashes, expire, and are marked used after successful enrollment/reset. Resending an invitation rotates the token so prior links stop working.
 
+The public welcome and password page layout is described in
+[Trial onboarding](trial-onboarding.md#flow). `/login` and `/signup` offer the same
+Google and email login choices; password self-registration remains disabled.
+
 ### Google sign-in and self-signup
 
 `GET /auth/google/start?origin=signup|login` redirects to Google's OpenID Connect consent screen, asking only for `openid email profile`, with the shared `GOOGLE_CLOUD_CLIENT_ID`. `<WEB_APP_URL>/api/v1/auth/google/callback` must be registered on that client. The signed `state` carries a nonce that is also set as a short-lived, single-use, path-scoped `SameSite=Lax` cookie; the callback requires both, so a callback cannot be replayed or used to sign someone else in. The callback redeems the code server-side and checks the id_token's issuer, audience, and expiry (the token comes straight from Google's token endpoint over TLS, so its signature is not checked).
@@ -53,6 +57,16 @@ Organization Owners and Admins can rename their Organization from its management
 
 Self-signup creates a **Trial Organization** (`is_trial`), at most one per email address and, when Platform Administrators set a cap, only while fewer trials than the cap are active: it runs up to the platform's trial agent limit (enforced under a lock when an Agent is stored) on a one-off spend limit set from the platform's trial credit. A Platform Administrator ends a trial with `POST /platform/organizations/{id}/end-trial`, giving the spend limit and window it moves to; that lifts the agent limit and its owner's Organization-creation block, and records `organization.trial.ended`. See [Trial onboarding](trial-onboarding.md#trials).
 
+`POST /organizations/default` requires a verified authenticated account, accepts no
+caller-selected owner or Organization ID, and creates a personally named ordinary
+Organization only when the user has no Memberships. Existing memberships are reused.
+The absence check, creation quota, Organization insert, Owner Membership and
+`organization.created` event use the same user lock and transaction as ordinary
+self-service creation, so concurrent recovery creates one Organization. New Organizations
+use the platform model and spend defaults. Recovery preserves the trial-creation
+restriction; deleting an unfinished trial never grants an unrestricted replacement.
+It creates no Agent. Platform administrators continue to enter Platform View automatically.
+
 All creation paths provision an Organization-scoped LiteLLM team after commit when the proxy is configured. Team identity, reconciliation, and the platform-administered spend ceiling stored on the Organization are owned by [Costs](costs.md#organization-llm-budgets).
 
 Organization Name is a mutable display label and is intentionally not globally unique. Platform View disambiguates same-named Organizations with owner identity and Organization ID, and its allowlisted Organization detail projection exposes immutable Creator identity without exposing Organization configuration. A separate globally unique human-facing handle is deferred until a URL, CLI, API, or support workflow requires one.
@@ -61,7 +75,7 @@ Legacy Organizations backfill Organization Creator from their current Owner Memb
 
 Membership list, invite, role-update, and removal workflows require their corresponding Organization Permissions through real membership; seeded Owner/Admin roles receive them. Organization invitations and resends are delivered only by email: the add-member and resend-invite responses keep their `invite_link` field for v1 compatibility but always return null, so an inviter cannot enroll an address they don't control. Owner-only rules protect ownership and sensitive Admin operations. Removing a pending Member also revokes outstanding invite/reset links.
 
-The UI resolves Organization View from `/dashboard/[orgId]`; Platform View lives at `/dashboard/platform` and has no active Organization. A signed-in user with no Membership lands on Platform View if they are a Platform Administrator, otherwise on `/no-organization`, which says so (and, for a self-signed-up user whose trial was deleted, that the trial has ended). The Organization selector is always membership-derived—even for Platform Administrators—and exposes self-service creation to every authenticated user. Platform-wide Organization results are never injected into the selector. Remembered organization state is only a navigation fallback for returning to Organization View. Organization-scoped hooks include the organization ID in API URLs. Organization switching removes known organization-scoped query caches because those keys are not organization-dimensioned.
+The UI resolves Organization View from `/dashboard/[orgId]`; Platform View lives at `/dashboard/platform` and has no active Organization. A signed-in user with no Membership lands on Platform View if they are a Platform Administrator. For an ordinary user, the dashboard automatically calls `POST /organizations/default`, refreshes their account context and opens the returned Organization. The old `/no-organization` URL redirects to `/dashboard`; its standalone screen is removed. A recovery failure stays in the dashboard with an explanation and retry. The Organization selector is always membership-derived—even for Platform Administrators—and exposes self-service creation to every authenticated user. Platform-wide Organization results are never injected into the selector. Remembered organization state is only a navigation fallback for returning to Organization View. Organization-scoped hooks include the organization ID in API URLs. Organization switching removes known organization-scoped query caches because those keys are not organization-dimensioned.
 
 ## Source map
 

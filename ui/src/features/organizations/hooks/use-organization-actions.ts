@@ -21,6 +21,22 @@ import {
   platformOrganizationsKey,
 } from "../utils";
 
+/** Recovery is idempotent and account-scoped, so simultaneous mounts share one request. */
+export function useDefaultOrganizationRecovery(userId: string, enabled: boolean) {
+  const queryClient = useQueryClient();
+  return useQuery({
+    queryKey: organizationsKey.detail(`default:${userId}`),
+    enabled,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.post("/api/v1/organizations/default", undefined, { schema: OrganizationSchema });
+      await queryClient.invalidateQueries({ queryKey: currentUserContextKey.all });
+      void queryClient.invalidateQueries({ queryKey: organizationsKey.lists() });
+      return response.data;
+    },
+  });
+}
+
 export function useCreateOrganization() {
   const queryClient = useQueryClient();
 

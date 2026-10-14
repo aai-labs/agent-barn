@@ -5,14 +5,16 @@ import { useRouter } from "next/navigation";
 
 import { AuthLoadingFallback } from "@/auth/components/auth-loading-fallback";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
+import { AppErrorState } from "@/components/app-error-state";
+import { useDefaultOrganizationRecovery } from "@/features/organizations/hooks/use-organization-actions";
 import { useOnboarding } from "@/features/onboarding/hooks/use-onboarding";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 /**
  * The dashboard root has no org in its URL. Resolve the active org and redirect into
  * org view. Platform admins with no available org land in Platform View; anyone else
- * without one is told so. Someone who signed themselves up and hasn't finished
- * onboarding goes back to it.
+ * without one receives their default Organization. A self-signed-up user who has
+ * not finished onboarding goes back to it.
  */
 export default function DashboardIndexPage() {
   const router = useRouter();
@@ -20,6 +22,10 @@ export default function DashboardIndexPage() {
   const { selectedOrganization } = useOrganizationContext();
   const signedUp = Boolean(user.signedUpAt);
   const { onboarding, isLoadingOnboarding } = useOnboarding({ enabled: signedUp });
+  const { isError, error, refetch: retryRecovery } = useDefaultOrganizationRecovery(
+    user.id,
+    !isLoadingOnboarding && !onboarding?.required && !selectedOrganization && !user.isPlatformAdmin,
+  );
 
   useEffect(() => {
     // An onboarding check that fails never keeps anyone out of the dashboard.
@@ -30,10 +36,17 @@ export default function DashboardIndexPage() {
       router.replace(`/dashboard/${selectedOrganization.id}`);
     } else if (user.isPlatformAdmin) {
       router.replace("/dashboard/platform");
-    } else {
-      router.replace("/no-organization");
     }
   }, [isLoadingOnboarding, onboarding?.required, selectedOrganization, user.isPlatformAdmin, router]);
 
+  if (isError) {
+    return (
+      <AppErrorState
+        error={error}
+        title="We couldn't prepare your organization"
+        onRetry={() => void retryRecovery()}
+      />
+    );
+  }
   return <AuthLoadingFallback message="Loading your workspace…" />;
 }

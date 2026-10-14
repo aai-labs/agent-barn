@@ -1,9 +1,6 @@
-import { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { NoOrganization } from "@/features/onboarding/components/no-organization";
-
-export const metadata: Metadata = { title: "No organization | Agent Barn" };
-
+/** Old bookmarks enter the same organization recovery path as sign-in. */
 export default function NoOrganizationPage() {
-  return <NoOrganization />;
+  redirect("/dashboard");
 }

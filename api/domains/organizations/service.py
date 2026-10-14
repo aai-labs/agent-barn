@@ -192,6 +192,20 @@ class OrganizationService:
         data: OrganizationCreate,
         actor: CurrentUserContext,
     ) -> OrganizationRead:
+        return self._create_organization(data, actor)
+
+    def ensure_default_organization(self, actor: CurrentUserContext) -> OrganizationRead:
+        first_name = (actor.user.full_name or "").strip().split(" ")[0]
+        name = f"{first_name}'s Organization" if first_name else "My Organization"
+        return self._create_organization(OrganizationCreate(name=name), actor, reuse_existing_membership=True)
+
+    def _create_organization(
+        self,
+        data: OrganizationCreate,
+        actor: CurrentUserContext,
+        *,
+        reuse_existing_membership: bool = False,
+    ) -> OrganizationRead:
         still_on_trial = actor.user.signed_up_at is not None and actor.user.trial_ended_at is None
         if still_on_trial or self.organization_repository.owns_active_trial(actor.user.id):
             # Another Organization would be spend outside the trial's limits, including
@@ -210,14 +224,16 @@ class OrganizationService:
             created_by_user_id=actor.user.id,
             allowed_models=allowed_models,
         )
+        attempted_id = organization.id
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
-            _, delivery_ids = self.organization_repository.create_for_user(
+            organization, delivery_ids = self.organization_repository.create_for_user(
                 organization,
                 actor.user.id,
                 config.organization_creation_limit,
                 ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id),
+                reuse_existing_membership=reuse_existing_membership,
             )
         except OrganizationCreationLimitReached as error:
             raise HTTPException(
@@ -228,7 +244,8 @@ class OrganizationService:
 
         # With its limit already on it: a new Organization is capped from the start.
         # Best effort — creation is committed, and key generation provisions again.
-        self.llm_budgets.provision_team(organization.id)
+        if organization.id == attempted_id:
+            self.llm_budgets.provision_team(organization.id)
         organization_read = self.organization_repository.get_read(organization.id)
         if not organization_read:
             raise HTTPException(
