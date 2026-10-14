@@ -8,6 +8,7 @@ import { AppErrorState } from "@/components/app-error-state";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
+import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { AgentCard } from "@/features/agents/components/agent-card";
 import { EmptyTeam } from "@/features/agents/components/empty-team";
@@ -43,6 +44,7 @@ export default function DashboardPage() {
   const [hireChoice, setHireChoice] = useState<HireChoice | undefined>();
   const [search, setSearch] = useState("");
   const { user } = useCurrentUser();
+  const { selectedOrganization } = useOrganizationContext();
   const { agents, total, isLoading, error, refetch } = useAgents();
 
   const hour = new Date().getHours();
@@ -89,7 +91,7 @@ export default function DashboardPage() {
               : displayedAgents.map((agent) => (
                   <AgentCard key={agent.id} agent={agent} href={`/dashboard/${orgId}/agents/${agent.id}`} />
                 ))}
-            {!isLoading && agents.length === 0 && <EmptyTeam onReady={() => { setHireChoice("ready"); setHireOpen(true); }} onCustom={() => { setHireChoice("custom"); setHireOpen(true); }} />}
+            {!isLoading && agents.length === 0 && <EmptyTeam onReady={selectedOrganization?.isTrial ? () => { setHireChoice("ready"); setHireOpen(true); } : undefined} onCustom={() => { setHireChoice("custom"); setHireOpen(true); }} />}
             {!isLoading && agents.length > 0 && displayedAgents.length === 0 && (
               <div className="col-span-full flex min-h-56 flex-col items-center justify-center gap-1 text-center" style={{ color: "var(--ink-3)" }}>
                 <div className="font-medium text-[0.9375rem]" style={{ color: "var(--ink)" }}>

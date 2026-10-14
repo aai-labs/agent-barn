@@ -503,7 +503,9 @@ test.describe("Trial onboarding", () => {
     await data.agents.interceptGetAgentHealthRequest();
 
     await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
-    await new DashboardPage(page).openHireCard();
+    const dashboard = new DashboardPage(page);
+    await dashboard.openHireChoices();
+    await dashboard.chooseCustomHiring();
 
     await expect(page.getByLabel("Agent name")).toBeVisible();
   });

@@ -47,7 +47,6 @@ export class DashboardPage {
 
   async openHireCard(keyboard = false) {
     await this.openHireChoices(keyboard);
-    await this.chooseCustomHiring();
   }
 
   async openHireChoices(keyboard = false) {

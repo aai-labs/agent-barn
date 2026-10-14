@@ -5,6 +5,7 @@ import { DashboardPage } from "../pages/dashboard-page.po";
 import { agentListWithMetadata, agentListWithoutMetadata, agentListWithPollingStates } from "../fixtures/agent-list";
 import { MOCK_AGENT_ID, mockAgent } from "../pages/data-support/agent-data-support.po";
 import { TEST_ORG_ID } from "../constants";
+import userContext from "../fixtures/user-context.json";
 
 test.describe("Dashboard Page", () => {
   let dashboardPage: DashboardPage;
@@ -23,6 +24,36 @@ test.describe("Dashboard Page", () => {
     await dataSupportPage.agents.interceptGetAgentsRequest();
     await dataSupportPage.agents.interceptGetAgentHealthRequest();
   });
+
+  for (const endedTrial of [false, true]) {
+    test(`a ${endedTrial ? "former trial" : "non-trial"} organization opens custom hiring directly`, async ({ page }) => {
+      await dataSupportPage.users.interceptGetUserContextRequest({ userContext: {
+        ...userContext,
+        ...(endedTrial ? {
+          signed_up_at: "2026-10-01T12:00:00Z",
+          onboarding_completed_at: "2026-10-01T12:05:00Z",
+          trial_ended_at: "2026-10-14T12:00:00Z",
+        } : {}),
+        organization_users: userContext.organization_users.map((membership) => ({
+          ...membership, organization: { ...membership.organization, is_trial: false },
+        })),
+      } });
+      await dataSupportPage.agents.interceptGetTemplatesRequest();
+      await dataSupportPage.agents.interceptGetModelsRequest();
+      await dataSupportPage.agents.interceptNameSuggestionRequest();
+      const requests = dataSupportPage.agents.trackHiringRequests();
+      await dashboardPage.goto();
+      for (const header of [false, true]) {
+        if (header) await page.goto(`/dashboard/${TEST_ORG_ID}/costs`);
+        await (header ? page.getByRole("button", { name: "Hire agent", exact: true }) : dashboardPage.hireCard()).click();
+        await expect(page.getByRole("heading", { name: "Build your own agent", exact: true })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "How would you like to start?" })).toHaveCount(0);
+        await expect(page.getByRole("radio", { name: /Ready-made assistant/ })).toHaveCount(0);
+        await dashboardPage.closeHireDialog();
+      }
+      expect(requests.creations).toHaveLength(0);
+    });
+  }
 
   test("should load dashboard with agent cards", async ({ page }) => {
     await dashboardPage.goto();
@@ -153,7 +184,7 @@ test.describe("Dashboard Page", () => {
   });
 
   for (const width of [320, 768, 1024, 1440]) {
-    test(`empty team offers ready-made and custom hiring at ${width}px`, async ({ page }, testInfo) => {
+    test(`empty non-trial team offers custom hiring at ${width}px`, async ({ page }, testInfo) => {
       await page.setViewportSize({ width, height: 900 });
       await dataSupportPage.agents.interceptGetAgentsRequest({
         body: { page: 1, page_size: 50, total: 0, items: [] },
@@ -165,7 +196,7 @@ test.describe("Dashboard Page", () => {
 
       await expect(page.getByRole("heading", { name: "Meet your first AI teammate." })).toBeVisible();
       await expect(dashboardPage.hireCard()).toHaveCount(1);
-      await expect(page.getByRole("button", { name: "Try a ready-made assistant" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Try a ready-made assistant" })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Hire agent", exact: true })).toHaveCount(0);
       await expect(page.getByText("0 working now · 0 idle")).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -175,9 +206,6 @@ test.describe("Dashboard Page", () => {
       await expect(page.getByRole("heading", { name: "How would you like to start?" })).toHaveCount(0);
       await expect(dashboardPage.agentNameInput()).toBeVisible();
       await dashboardPage.closeHireDialog();
-      await page.getByRole("button", { name: "Try a ready-made assistant" }).click();
-      await expect(page.getByRole("heading", { name: "Your ready-made assistant" })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "How would you like to start?" })).toHaveCount(0);
     });
   }
 

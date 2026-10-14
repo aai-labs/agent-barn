@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { mockCommunicationConnection } from "../fixtures/communication-connections";
+import userContext from "../fixtures/user-context.json";
 import { TEST_ORG_ID } from "../constants";
 import { MOCK_AGENT_ID, mockAgent } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
@@ -13,7 +14,14 @@ test.describe("Hiring choices", () => {
   test.beforeEach(async ({ page }) => {
     const data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
-    await data.users.interceptGetUserContextRequest();
+    const trialOrganization = { ...userContext.organization_users[0].organization, is_trial: true };
+    await data.users.interceptGetUserContextRequest({ userContext: {
+      ...userContext,
+      organization_users: [{ ...userContext.organization_users[0], organization: trialOrganization }],
+    } });
+    await data.organizations.interceptGetOrganization({ organization: {
+      ...trialOrganization, trial_agent_limit: 5, trial_agent_limit_reached: false,
+    } });
     await data.users.interceptGetOrganizationsRequest();
     await data.organizations.interceptGetOrganizationLlmBudget();
     await data.agents.interceptGetAgentsRequest();

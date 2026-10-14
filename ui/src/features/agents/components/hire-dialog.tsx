@@ -25,12 +25,14 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
   const isTrial = Boolean(selectedOrganization?.isTrial);
   const { organization, isLoading, isFetching, error, refetch } = useOrganization(isTrial ? selectedOrganization!.id : "");
   const [selected, setSelected] = useState<HireChoice | null>(null);
-  const [started, setStarted] = useState<HireChoice | null>(isTrial ? null : initialChoice ?? null);
+  const [started, setStarted] = useState<HireChoice | null>(null);
   const limit = organization?.trialAgentLimit;
   const full = isTrial && organization?.trialAgentLimitReached === true;
   const checking = isTrial && (isLoading || isFetching);
   const unavailable = isTrial && !checking && (Boolean(error) || organization?.trialAgentLimitReached === undefined || limit == null);
   const disabled = checking || unavailable || full;
+
+  if (!isTrial) return <HireFormDialog onClose={onClose} onHired={onHired} />;
 
   // An explicit dashboard choice advances as soon as its capacity check succeeds.
   // Latch that transition: this Agent may itself fill the trial during creation.

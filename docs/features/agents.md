@@ -7,10 +7,14 @@ point; the top navigation keeps its hire action on other Organization pages.
 
 ## Hiring choices
 
-General **Hire agent** entry points offer **Ready-made assistant** and **Build your
-own**, including after onboarding is complete and when the Organization already
-has Agents. Neither option is preselected; **Continue** requires an explicit choice. The empty dashboard's two explicit buttons open their respective setup
+For active Trial Organizations, general **Hire agent** entry points offer
+**Ready-made assistant** and **Build your own**, including after onboarding is
+complete and when the Organization already has Agents. Neither option is preselected; **Continue** requires an explicit choice. The empty dashboard's two explicit buttons open their respective setup
 directly after the capacity check, without asking the user to choose again.
+Ready-made hiring is offered only while the Organization is on a trial. For ordinary
+Organizations, including after a trial ends, every hiring entry point opens
+**Build your own agent** directly, and the empty dashboard shows only that action.
+Existing ready-made Agents and their Telegram linking remain available after a trial ends.
 Opening or cancelling the chooser or ready-made confirmation creates nothing.
 Build your own opens the existing runtime/template/model/Skill form. Ready-made
 first explains the assistant's purpose, General Purpose Template, Hermes runtime,
