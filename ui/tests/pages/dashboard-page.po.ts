@@ -46,12 +46,27 @@ export class DashboardPage {
   }
 
   async openHireCard(keyboard = false) {
+    await this.openHireChoices(keyboard);
+    await this.chooseCustomHiring();
+  }
+
+  async openHireChoices(keyboard = false) {
     if (keyboard) {
       await this.hireCard().focus();
       await this.hireCard().press("Enter");
     } else {
       await this.hireCard().click();
     }
+  }
+
+  async chooseCustomHiring() {
+    await this.page.getByRole("radio", { name: /Build your own/ }).click();
+    await this.page.getByRole("button", { name: "Continue", exact: true }).click();
+  }
+
+  async chooseReadyMadeHiring() {
+    await this.page.getByRole("radio", { name: /Ready-made assistant/ }).click();
+    await this.page.getByRole("button", { name: "Continue", exact: true }).click();
   }
 
   lastActivityTime(name: string): Locator {

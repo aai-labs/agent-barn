@@ -1,9 +1,35 @@
 # Agents
 
 The Home page shows a single first-Agent panel when the user's visible team is empty,
-with example use cases and a hire action that opens the ordinary hire dialog. Once
+with example use cases and direct ready-made/custom hiring choices. Once
 Agents exist, Home shows the Agent grid and its hire tile. Home owns its hire entry
 point; the top navigation keeps its hire action on other Organization pages.
+
+## Hiring choices
+
+Every dashboard hire entry point offers **Ready-made assistant** and **Build your
+own**, including after onboarding is complete and when the Organization already
+has Agents. Opening or cancelling the chooser creates nothing. Build your own
+opens the existing runtime/template/model/Skill form. Ready-made asks only for a
+name, then uses ordinary Agent create/start APIs to create a Hermes Agent from
+the current `general-purpose` Template, inheriting the Organization default model
+and using automatic command approval. API validation and Agent authorization apply
+to both paths. A failed start retries the newly created Agent within the same dialog.
+
+After a ready-made Agent starts, users choose Web Chat or open channel setup to
+connect Telegram. Telegram is optional; no Telegram Connection is created merely
+by hiring. Native channel setup retains its existing apply-and-restart behavior.
+The ready-made path does not reopen or modify onboarding completion.
+
+Before setup begins, a Trial Organization's current read must succeed. Its
+`trial_agent_limit_reached` flag reports creation capacity across non-deleted Agents,
+including stopped Agents and ones hidden from this member; it exposes neither their
+identities nor an unfiltered Agent count. When full, both choices stay visible and
+disabled, with the limit explained and **View your agents** as the action. The notice
+states that deleting an Agent frees a slot and stopping one does not. A failed capacity
+check offers retry and keeps both choices disabled. Creation still enforces the quota
+under the existing database lock, including when capacity changes after the check.
+Creating or deleting an Agent invalidates the Organization read as well as Agent lists.
 
 ## Read when
 

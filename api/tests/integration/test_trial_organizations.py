@@ -3,7 +3,7 @@ Agent, and creates no others, until a Platform Administrator ends the trial."""
 
 import threading
 from datetime import UTC, datetime
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_entries, has_length, not_none
@@ -17,6 +17,7 @@ from api.domains.events.catalog import ORGANIZATION_TRIAL_ENDED
 from api.domains.events.models import OutboxMessage
 from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.repository import UserRepository
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW, LiteLLMClient, LiteLLMError
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -213,7 +214,31 @@ def test_the_organization_read_says_whether_it_is_a_trial():
     with given(_setup(the_organization_is_a_trial())) as context:
         response = context.client.get(f"/api/v1/organizations/{context.organization.id}", headers=auth(context))
 
-        assert_that(response.json(), has_entries(is_trial=True, trial_agent_limit=1))
+        assert_that(response.json(), has_entries(is_trial=True, trial_agent_limit=1, trial_agent_limit_reached=False))
+
+
+def test_trial_capacity_counts_hidden_and_stopped_agents_but_not_deleted_agents():
+    with given(_setup(the_organization_is_a_trial())) as context:
+        created = context.client.post(AGENTS, json=CREATE, headers=auth(context))
+        assert_that(created.status_code, equal_to(201), created.text)
+        repository = context.injector.get(AgentRepository)
+        agent = repository.get_by_id(UUID(created.json()["id"]))
+        agent.general_access_role_id = None
+        repository.save(agent)
+        there_is_a_user(email="trial-member@example.com", role=OrganizationRole.MEMBER)(context)
+        there_is_an_access_token_for_user()(context)
+
+        visible = context.client.get(AGENTS, headers=auth(context))
+        assert_that(visible.json()["items"], has_length(0))
+        organization_url = f"/api/v1/organizations/{context.organization.id}"
+        capacity = context.client.get(organization_url, headers=auth(context))
+        assert_that(capacity.json(), has_entries(trial_agent_limit_reached=True))
+        assert_that(capacity.json().get("trial_agent_count"), equal_to(None))
+
+        agent.deleted_at = datetime.now(UTC)
+        repository.save(agent)
+        capacity = context.client.get(organization_url, headers=auth(context))
+        assert_that(capacity.json(), has_entries(trial_agent_limit_reached=False))
 
 
 # --- no further Organizations for self-signed-up users -----------------------------------

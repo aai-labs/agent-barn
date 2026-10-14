@@ -6,7 +6,7 @@ const EXAMPLES = [
   { icon: ListChecks, title: "Project updates", description: "Keep track of decisions, progress and next steps." },
 ];
 
-export function EmptyTeam({ onHire }: { onHire: () => void }) {
+export function EmptyTeam({ onReady, onCustom }: { onReady: () => void; onCustom: () => void }) {
   return (
     <section className="col-span-full overflow-hidden rounded-2xl border" aria-labelledby="empty-team-title" style={{ background: "var(--bg-elev)", borderColor: "var(--line)" }}>
       <div className="grid md:grid-cols-[1.1fr_1fr]">
@@ -18,9 +18,12 @@ export function EmptyTeam({ onHire }: { onHire: () => void }) {
           <p className="mb-7 mt-4 max-w-sm text-sm leading-relaxed" style={{ color: "var(--ink-3)" }}>
             Pick a template, give your agent a name, and make it your own. Start chatting on the web and connect more channels whenever you&apos;re ready.
           </p>
-          <button type="button" aria-label="Hire a teammate" onClick={onHire} className="af-btn af-btn-primary af-btn-lg">
-            Hire your first agent <ArrowRight size={16} aria-hidden="true" />
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" aria-label="Try a ready-made assistant" onClick={onReady} className="af-btn af-btn-primary af-btn-lg">
+              Ready-made assistant <ArrowRight size={16} aria-hidden="true" />
+            </button>
+            <button type="button" aria-label="Hire a teammate" onClick={onCustom} className="af-btn af-btn-lg">Build your own</button>
+          </div>
           <p className="mb-0 mt-3 text-xs" style={{ color: "var(--ink-3)" }}>You choose the template, model and runtime.</p>
         </div>
         <div className="flex flex-col justify-center gap-3 border-t p-6 sm:p-10 md:border-l md:border-t-0" style={{ background: "var(--bg-soft)", borderColor: "var(--line)" }}>

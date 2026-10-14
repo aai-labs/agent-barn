@@ -448,7 +448,7 @@ test.describe("Trial onboarding", () => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false }));
     await data.organizations.interceptGetOrganization({
-      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 50 },
+      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 50, trial_agent_limit_reached: false },
     });
     await data.agents.interceptGetAgentsRequest();
     await data.agents.interceptGetAgentHealthRequest();
@@ -511,16 +511,22 @@ test.describe("Trial onboarding", () => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false }));
     await data.organizations.interceptGetOrganization({
-      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 1 },
+      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 1, trial_agent_limit_reached: true },
     });
-    await data.agents.interceptGetAgentsRequest();
+    // Capacity is authoritative even if this member cannot see the Agent using it.
+    await data.agents.interceptGetAgentsRequest({ body: { page: 1, page_size: 50, total: 0, items: [] } });
     await data.agents.interceptGetAgentHealthRequest();
 
     await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
-    await new DashboardPage(page).openHireCard();
+    await new DashboardPage(page).openHireChoices();
 
-    await expect(page.getByText("Trial organizations can have 1 agent.")).toBeVisible();
+    await expect(page.getByText("Your trial includes 1 agent, and you're using it.")).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Ready-made assistant/ })).toBeDisabled();
+    await expect(page.getByRole("radio", { name: /Build your own/ })).toBeDisabled();
     await expect(page.getByLabel("Agent name")).toHaveCount(0);
+    await expect(page.getByText("Stopping an agent doesn't free a slot.", { exact: false })).toBeVisible();
+    await page.getByRole("button", { name: "View your agents" }).click();
+    await expect(page.getByRole("heading", { name: "How would you like to start?" })).toHaveCount(0);
   });
 
   test("deleting a trial warns that it ends the free trial for good", async ({ page }) => {

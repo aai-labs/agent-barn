@@ -535,6 +535,17 @@ export function mockVersionsForKey(templateKey: string) {
 }
 
 export class AgentDataSupport {
+  trackHiringRequests() {
+    const creations: Record<string, unknown>[] = [];
+    const starts: string[] = [];
+    this.page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const path = new URL(request.url()).pathname;
+      if (/\/organizations\/[^/]+\/agents$/.test(path)) creations.push(request.postDataJSON());
+      if (/\/organizations\/[^/]+\/agents\/[^/]+\/start$/.test(path)) starts.push(path);
+    });
+    return { creations, starts };
+  }
   constructor(private page: Page) {}
 
   async interceptWebChatApprovalPrompt({

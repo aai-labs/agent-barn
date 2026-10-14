@@ -153,7 +153,7 @@ test.describe("Dashboard Page", () => {
   });
 
   for (const width of [320, 768, 1024, 1440]) {
-    test(`empty team has one clear hire action at ${width}px`, async ({ page }, testInfo) => {
+    test(`empty team offers ready-made and custom hiring at ${width}px`, async ({ page }, testInfo) => {
       await page.setViewportSize({ width, height: 900 });
       await dataSupportPage.agents.interceptGetAgentsRequest({
         body: { page: 1, page_size: 50, total: 0, items: [] },
@@ -165,6 +165,7 @@ test.describe("Dashboard Page", () => {
 
       await expect(page.getByRole("heading", { name: "Meet your first AI teammate." })).toBeVisible();
       await expect(dashboardPage.hireCard()).toHaveCount(1);
+      await expect(page.getByRole("button", { name: "Try a ready-made assistant" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Hire agent", exact: true })).toHaveCount(0);
       await expect(page.getByText("0 working now · 0 idle")).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

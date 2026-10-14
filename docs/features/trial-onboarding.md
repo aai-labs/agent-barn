@@ -38,6 +38,8 @@ Credit appears in the desktop rail.
    Agent limit is shown when available. Opening onboarding creates no Agent.
    **I'll do this later** records completion and opens the dashboard without creating
    an Agent. The user can hire from the dashboard whenever ready.
+   Both ready-made and custom hiring remain available from the dashboard afterward;
+   see [Hiring choices](agents.md#hiring-choices) for trial capacity and retry behavior.
 2. **Quick start: Connect Telegram**. Only after Continue does the UI call
    `POST /onboarding/agent`. Each call does what is still missing: creates a Hermes
    Agent from `general-purpose`, names it like the hire dialog, gives it an enabled

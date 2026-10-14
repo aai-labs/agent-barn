@@ -11,7 +11,7 @@ import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { AgentCard } from "@/features/agents/components/agent-card";
 import { EmptyTeam } from "@/features/agents/components/empty-team";
-import { HireDialog } from "@/features/agents/components/hire-dialog";
+import { HireDialog, type HireChoice } from "@/features/agents/components/hire-dialog";
 import { HireTeammateCard } from "@/features/agents/components/hire-teammate-card";
 import { isQuiet } from "@/features/agents/utils";
 
@@ -40,6 +40,7 @@ export default function DashboardPage() {
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : "";
   const [hireOpen, setHireOpen] = useState(false);
+  const [hireChoice, setHireChoice] = useState<HireChoice>("ready");
   const [search, setSearch] = useState("");
   const { user } = useCurrentUser();
   const { agents, total, isLoading, error, refetch } = useAgents();
@@ -88,7 +89,7 @@ export default function DashboardPage() {
               : displayedAgents.map((agent) => (
                   <AgentCard key={agent.id} agent={agent} href={`/dashboard/${orgId}/agents/${agent.id}`} />
                 ))}
-            {!isLoading && agents.length === 0 && <EmptyTeam onHire={() => setHireOpen(true)} />}
+            {!isLoading && agents.length === 0 && <EmptyTeam onReady={() => { setHireChoice("ready"); setHireOpen(true); }} onCustom={() => { setHireChoice("custom"); setHireOpen(true); }} />}
             {!isLoading && agents.length > 0 && displayedAgents.length === 0 && (
               <div className="col-span-full flex min-h-56 flex-col items-center justify-center gap-1 text-center" style={{ color: "var(--ink-3)" }}>
                 <div className="font-medium text-[0.9375rem]" style={{ color: "var(--ink)" }}>
@@ -99,13 +100,13 @@ export default function DashboardPage() {
                 </div>
               </div>
             )}
-            {!isLoading && agents.length > 0 && <HireTeammateCard onHire={() => setHireOpen(true)} />}
+            {!isLoading && agents.length > 0 && <HireTeammateCard onHire={() => { setHireChoice("ready"); setHireOpen(true); }} />}
           </div>
         )}
       </div>
 
       {hireOpen && (
-        <HireDialog onClose={() => setHireOpen(false)} onHired={({ name }) => { setHireOpen(false); toast.success(`${name} was hired successfully.`); }} />
+        <HireDialog initialChoice={hireChoice} onClose={() => setHireOpen(false)} onHired={({ name }) => { setHireOpen(false); toast.success(`${name} was hired successfully.`); }} />
       )}
     </div>
   );
