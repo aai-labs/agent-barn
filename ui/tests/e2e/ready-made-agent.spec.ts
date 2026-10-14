@@ -198,6 +198,22 @@ test.describe("Hiring choices", () => {
     expect(requests.starts).toHaveLength(0);
   });
 
+  test("a full trial shows neither hiring option as selected", async ({ page }) => {
+    const data = new DataSupport(page);
+    await data.users.interceptGetUserContextRequest({ userContext: trialUserContext });
+    await data.organizations.interceptGetOrganization({ organization: {
+      ...trialUserContext.organization_users[0].organization,
+      trial_agent_limit: 1, trial_agent_limit_reached: true,
+    } });
+    await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
+    await new DashboardPage(page).openHireChoices();
+    await expect(page.getByRole("button", { name: "View your agents", exact: true })).toBeVisible();
+    for (const name of [/Ready-made assistant/, /Build your own/]) {
+      await expect(page.getByRole("radio", { name })).not.toBeChecked();
+      await expect(page.getByRole("radio", { name })).toBeDisabled();
+    }
+  });
+
   test("a failed capacity check blocks setup and can recover", async ({ page }) => {
     const data = new DataSupport(page);
     await data.users.interceptGetUserContextRequest({ userContext: trialUserContext });
@@ -254,6 +270,9 @@ test.describe("Hiring choices", () => {
       await dashboard.openHireChoices();
       const ready = page.getByRole("radio", { name: /Ready-made assistant/ });
       const custom = page.getByRole("radio", { name: /Build your own/ });
+      await expect(ready).not.toBeChecked();
+      await expect(custom).not.toBeChecked();
+      await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
       await ready.focus();
       await ready.press("ArrowRight");
       await expect(custom).toBeChecked();

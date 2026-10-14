@@ -9,7 +9,7 @@ point; the top navigation keeps its hire action on other Organization pages.
 
 General **Hire agent** entry points offer **Ready-made assistant** and **Build your
 own**, including after onboarding is complete and when the Organization already
-has Agents. The empty dashboard's two explicit buttons open their respective setup
+has Agents. Neither option is preselected; **Continue** requires an explicit choice. The empty dashboard's two explicit buttons open their respective setup
 directly after the capacity check, without asking the user to choose again.
 Opening or cancelling the chooser or ready-made confirmation creates nothing.
 Build your own opens the existing runtime/template/model/Skill form. Ready-made

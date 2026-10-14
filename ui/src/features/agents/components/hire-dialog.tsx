@@ -24,7 +24,7 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
   const { selectedOrganization } = useOrganizationContext();
   const isTrial = Boolean(selectedOrganization?.isTrial);
   const { organization, isLoading, isFetching, error, refetch } = useOrganization(isTrial ? selectedOrganization!.id : "");
-  const [selected, setSelected] = useState<HireChoice>(initialChoice ?? "ready");
+  const [selected, setSelected] = useState<HireChoice | null>(null);
   const [started, setStarted] = useState<HireChoice | null>(isTrial ? null : initialChoice ?? null);
   const limit = organization?.trialAgentLimit;
   const full = isTrial && organization?.trialAgentLimitReached === true;
@@ -76,7 +76,7 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
             { value: "ready", icon: WandSparkles, title: "Ready-made assistant", description: "A general-purpose assistant on Hermes, using your organization's default model. Chat on the web or connect Telegram afterward." },
             { value: "custom", icon: Wrench, title: "Build your own", description: "Choose your template, runtime, model and skills. Add channels whenever you're ready." },
           ] as const).map(({ value, icon: Icon, title, description }) => (
-            <button key={value} type="button" role="radio" aria-checked={selected === value} data-choice={value} tabIndex={selected === value ? 0 : -1} disabled={disabled} onClick={() => setSelected(value)} onKeyDown={(event) => {
+            <button key={value} type="button" role="radio" aria-checked={selected === value} data-choice={value} tabIndex={selected === value || (selected === null && value === "ready") ? 0 : -1} disabled={disabled} onClick={() => setSelected(value)} onKeyDown={(event) => {
               if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
               event.preventDefault();
               const next = value === "ready" ? "custom" : "ready";
@@ -95,7 +95,7 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
         {full ? (
           <button type="button" className="af-btn af-btn-primary" onClick={() => { onClose(); router.push(`/dashboard/${selectedOrganization!.id}`); }}>View your agents</button>
         ) : (
-          <button type="button" className="af-btn af-btn-primary" disabled={disabled} onClick={() => setStarted(selected)}>Continue <ArrowRight size={16} aria-hidden /></button>
+          <button type="button" className="af-btn af-btn-primary" disabled={disabled || selected === null} onClick={() => setStarted(selected)}>Continue <ArrowRight size={16} aria-hidden /></button>
         )}
       </footer>
     </DialogShell>
