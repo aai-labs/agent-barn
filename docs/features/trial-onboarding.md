@@ -63,8 +63,9 @@ Credit appears in the desktop rail.
    it creates no Agent and preserves any Agent already created by a failed start.
 4. **You're ready**. Successful linking or hiring records `user.onboarding_completed_at`
    through `POST /onboarding/complete`. A completion failure retries only that save,
-   without creating or starting another Agent. Quick start offers Open Telegram and
-   Go to dashboard; Build my own offers Web Chat and a link to configure channels.
+   without creating or starting another Agent. Quick start makes Go to dashboard
+   the primary action, with Open Telegram as a secondary link that opens separately;
+   Build my own offers Web Chat and a link to configure channels.
 
 Returning with an existing Agent keeps that Agent: one with the shared Telegram
 Connection can resume Quick start, while a custom Agent can finish and return to the

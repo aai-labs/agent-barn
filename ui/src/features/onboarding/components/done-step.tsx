@@ -43,6 +43,12 @@ export function DoneStep({
       : []),
   ];
 
+  const dashboardAction = (
+    <button type="button" className={`af-btn af-btn-lg${path === "quick" ? " af-btn-primary" : ""}`} onClick={onDashboard}>
+      Go to dashboard
+    </button>
+  );
+
   return (
     <OnboardingShell
       step={3}
@@ -50,17 +56,15 @@ export function DoneStep({
       email={email}
       creditUsd={creditUsd}
       title={path === "quick" ? "Your agent is live in Telegram." : `${agentName} is ready`}
-      subtitle={path === "quick" ? "Reply in Telegram to get started. The dashboard shows what your agent does and spends." : "Chat on the web now, or connect a channel whenever you're ready."}
-      footerStart={
-        <button type="button" className="af-btn af-btn-lg" onClick={onDashboard}>
-          Go to dashboard
-        </button>
-      }
-      footerEnd={path === "quick" && botUsername ? (
-        <a href={`https://t.me/${botUsername}`} target="_blank" rel="noreferrer" className="af-btn af-btn-primary af-btn-lg">
-          Open Telegram
-        </a>
-      ) : (
+      subtitle={path === "quick" ? "Your Telegram account is linked. The dashboard shows what your agent does and spends." : "Chat on the web now, or connect a channel whenever you're ready."}
+      footerStart={path === "quick" ? (
+        botUsername ? (
+          <a href={`https://t.me/${botUsername}`} target="_blank" rel="noreferrer" className="af-btn af-btn-lg">
+            Open Telegram
+          </a>
+        ) : undefined
+      ) : dashboardAction}
+      footerEnd={path === "quick" ? dashboardAction : (
         <Link href={chatHref} className="af-btn af-btn-primary af-btn-lg">
           Chat with your agent
         </Link>
