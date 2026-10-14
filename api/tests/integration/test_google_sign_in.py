@@ -2,6 +2,7 @@
 Organization; a returning one signs in; every failure lands back on the page it started
 from with nothing created."""
 
+import hashlib
 import threading
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -321,6 +322,57 @@ def test_the_same_address_in_another_case_counts_as_the_same_trial():
         finish_google_sign_in(context)
         _delete_account(context, _user(context))
         google_returns(google_identity(sub="another-google-account", email="JANE@Example.com"))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response)[1], equal_to({"error": "trial_used"}))
+
+
+@pytest.mark.parametrize(
+    "second",
+    ["janedoe@gmail.com", "Jane.Doe+trial@gmail.com", "j.a.n.e.d.o.e@googlemail.com"],
+)
+def test_another_spelling_of_the_same_gmail_inbox_counts_as_the_same_trial(second):
+    """Gmail ignores dots and anything after a plus, and googlemail.com is gmail.com."""
+    with given(_setup()) as context:
+        google_returns(google_identity(sub="first-google-account", email="jane.doe@gmail.com"))(context)
+        finish_google_sign_in(context)
+        google_returns(google_identity(sub="another-google-account", email=second))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response)[1], equal_to({"error": "trial_used"}))
+
+
+def test_a_plus_tag_on_any_address_counts_as_the_same_trial():
+    with given(_setup()) as context:
+        google_returns(google_identity(sub="first-google-account", email="jane@example.com"))(context)
+        finish_google_sign_in(context)
+        google_returns(google_identity(sub="another-google-account", email="jane+again@example.com"))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response)[1], equal_to({"error": "trial_used"}))
+
+
+def test_dots_still_tell_addresses_apart_outside_gmail():
+    with given(_setup()) as context:
+        google_returns(google_identity(sub="first-google-account", email="jane.doe@example.com"))(context)
+        finish_google_sign_in(context)
+        google_returns(google_identity(sub="another-google-account", email="janedoe@example.com"))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response), equal_to((ONBOARDING, {})))
+
+
+def test_a_trial_recorded_before_addresses_were_normalised_still_counts():
+    with given(_setup()) as context:
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            legacy = hashlib.sha256(b"jane.doe+old@gmail.com").hexdigest()
+            context.injector.get(TrialSettingsRepository).record_grant(legacy, session)
+            session.commit()
+        google_returns(google_identity(sub="another-google-account", email="Jane.Doe+old@gmail.com"))(context)
 
         response = finish_google_sign_in(context)
 
