@@ -1,5 +1,7 @@
 "use client";
 
+import { HermesIcon, OpenClawIcon } from "@/components/brand-icons";
+
 type Runtime = "hermes" | "openclaw";
 
 export function RuntimeChoice({ value, onChange, disabled = false }: {
@@ -18,7 +20,7 @@ export function RuntimeChoice({ value, onChange, disabled = false }: {
           data-runtime={runtime}
           tabIndex={value === runtime ? 0 : -1}
           disabled={disabled}
-          className="flex-1 rounded-full px-2.5 py-[7px] text-[13px] disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full px-2.5 py-[7px] text-[13px] disabled:cursor-not-allowed disabled:opacity-60"
           style={value === runtime
             ? { background: "var(--bg-elev)", color: "var(--ink)", fontWeight: 600, boxShadow: "var(--shadow)" }
             : { color: "var(--ink-3)" }}
@@ -31,6 +33,7 @@ export function RuntimeChoice({ value, onChange, disabled = false }: {
             event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-runtime="${next}"]`)?.focus();
           }}
         >
+          {runtime === "hermes" ? <HermesIcon size={16} /> : <OpenClawIcon size={16} />}
           {runtime === "hermes" ? "Hermes" : "OpenClaw"}
         </button>
       ))}
