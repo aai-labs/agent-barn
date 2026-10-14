@@ -13,6 +13,8 @@ from api.domains.users.organization_users.models import (
 )
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
+from api.infrastructure.email.service import EmailService
+from api.tests.core.givenpy import LambdaWith
 
 
 def there_is_an_access_token_for_user(user_id: UUID | None = None):
@@ -139,3 +141,30 @@ def there_is_authenticated_user(
         there_is_an_access_token_for_user()(context)
 
     return step
+
+
+def invite_emails_are_captured():
+    """Record each invitation email instead of sending it, as (address, set-password link)
+    on `context.invite_emails`. The link reaches the invitee only by email."""
+
+    def step(context):
+        context.invite_emails = []
+        original = EmailService.send_user_invite_email
+
+        def capture(self, receiver_email: str, set_password_link: str, receiver_name: str | None = None):
+            context.invite_emails.append((receiver_email, set_password_link))
+            return True
+
+        def patch():
+            EmailService.send_user_invite_email = capture  # type: ignore[method-assign]
+
+        def restore():
+            EmailService.send_user_invite_email = original  # type: ignore[method-assign]
+
+        return LambdaWith(patch, restore)
+
+    return step
+
+
+def last_emailed_invite_token(context) -> str:
+    return context.invite_emails[-1][1].split("token=")[1]

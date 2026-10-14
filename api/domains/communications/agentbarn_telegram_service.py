@@ -54,6 +54,10 @@ class AgentBarnTelegramService:
     repository: AgentBarnTelegramRepository
     plugins: PlatformPluginRegistry
 
+    def is_offered(self) -> bool:
+        """Whether this environment has Agent Barn's own bot configured."""
+        return self._plugin().is_offered()
+
     def runtime_secret(self, connection_id: UUID, *, create: bool) -> str | None:
         """A Connection's root secret, from which its Agent's credentials are derived.
 

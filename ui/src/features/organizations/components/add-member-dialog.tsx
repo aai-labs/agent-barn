@@ -20,7 +20,6 @@ import {
   AddMemberFormSchema,
   type MemberInviteResult,
 } from "../schemas";
-import { InviteLinkField } from "./invite-link-field";
 
 interface AddMemberDialogProps {
   organizationId: string;
@@ -29,20 +28,16 @@ interface AddMemberDialogProps {
 }
 
 function resultCopy(result: MemberInviteResult): { title: string; description: string } {
-  const { member, inviteLink } = result;
+  const { member } = result;
   const added = `${member.email} has been added as ${member.role.toLowerCase()}.`;
 
-  if (inviteLink) {
-    return { title: "Member invited", description: added };
-  }
-  // No link was issued because this person already has an account — an invite
-  // link belongs to the account, not the membership, so an org add never mints
-  // or replaces one. What we tell the admin differs by whether that account can
-  // already sign in.
+  // The invitation link goes only to their inbox, never to whoever invites. Someone
+  // brand new is emailed one; someone already invited keeps theirs, since an org add
+  // never mints or replaces a link. The response can't tell the two apart.
   if (member.isPending) {
     return {
-      title: "Member added",
-      description: `${added} They already have an outstanding invite from before, so no new one was sent — that link still works. Use "Resend invite" from the members list if they need a fresh one.`,
+      title: "Member invited",
+      description: `${added} They'll get an email with a link to set their password, unless they were already invited — their earlier invitation still works. Use "Resend invite" from the members list to send a fresh one.`,
     };
   }
   return {
@@ -79,9 +74,7 @@ export function AddMemberDialog({
       onSuccess: (created) => {
         setResult(created);
         reset();
-        toast.success(
-          created.inviteLink ? "Member invited." : "Member added.",
-        );
+        toast.success(created.member.isPending ? "Member invited." : "Member added.");
       },
       onError: (error) => {
         toast.error(error.message || "Failed to add member");
@@ -111,9 +104,6 @@ export function AddMemberDialog({
 
         {result ? (
           <div className="flex flex-col gap-4">
-            {result.inviteLink && (
-              <InviteLinkField link={result.inviteLink} label="Invite link" />
-            )}
             <DialogFooter>
               <button
                 type="button"
