@@ -221,11 +221,15 @@ class OrganizationService:
             created_by_user_id=actor.user.id,
             allowed_models=allowed_models,
         )
-        # Only accounts a Platform Administrator set up spend the platform's budget.
-        # Everyone else (signed up themselves, or invited by an Organization, which a
-        # trial's owner can do with an address of their own) pays for what their
-        # Organizations spend: each runs on credit, starting with none.
-        on_credit = not (actor.user.is_platform_admin or actor.user.platform_provisioned_at is not None)
+        # With self-signup on, only accounts a Platform Administrator set up spend the
+        # platform's budget. Everyone else (signed up themselves, or invited by an
+        # Organization, which a trial's owner can do with an address of their own) pays
+        # for what their Organizations spend: each runs on credit, starting with none.
+        # Without self-signup every account traces back to a Platform Administrator or an
+        # Organization they set up, so there is nothing to close.
+        on_credit = config.self_signup_enabled and not (
+            actor.user.is_platform_admin or actor.user.platform_provisioned_at is not None
+        )
         if on_credit:
             organization.llm_budget_usd = 0.0
             organization.llm_budget_duration = ONE_OFF_BUDGET_WINDOW

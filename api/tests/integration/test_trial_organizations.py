@@ -34,7 +34,7 @@ AGENTS = "/api/v1/organizations/{organization_id}/agents"
 CREATE = {"name": "Trial Agent", "template_key": "test-template"}
 
 
-def _setup(*steps):
+def _setup(*steps, self_signup: str = "true"):
     return [
         set_env_variable(
             {
@@ -43,6 +43,7 @@ def _setup(*steps):
                 "LITELLM_SECRET_NAME": "litellm",
                 "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
                 "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+                "SELF_SIGNUP_ENABLED": self_signup,
             }
         ),
         prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -301,6 +302,22 @@ def test_someone_a_trial_owner_invites_creates_organizations_only_on_credit():
         created = _organization_created_by(context, _token_for(context, "second-self@example.com"))
 
         assert_that((created.llm_budget_duration, created.llm_budget_usd), equal_to((ONE_OFF_BUDGET_WINDOW, 0.0)))
+
+
+def test_without_self_signup_someone_an_organization_invites_creates_organizations_on_the_platform_budget():
+    """With nobody able to sign themselves up, every account traces back to a Platform
+    Administrator or an Organization they set up: no credit to buy, nothing to close."""
+    with given(_setup(self_signup="false")) as context:
+        invited = context.client.post(
+            f"/api/v1/organizations/{context.organization.id}/members",
+            json={"email": "colleague@example.com", "role": "MEMBER"},
+            headers=auth(context),
+        )
+        assert_that(invited.status_code, equal_to(status.HTTP_201_CREATED), invited.text)
+
+        created = _organization_created_by(context, _token_for(context, "colleague@example.com"))
+
+        assert_that(created.runs_on_credit, equal_to(False))
 
 
 def test_someone_a_platform_administrator_sets_up_creates_organizations_on_the_platform_budget():

@@ -47,14 +47,16 @@ Buying credit is also what converts a trial ([Trial onboarding](trial-onboarding
 it ends the trial without touching the ledger or the one-off window, and clears an expiry.
 
 Ending a trial (by a purchase, or by a Platform Administrator) lets its owner create
-further Organizations. Only accounts a Platform Administrator set up
+further Organizations. With self-signup on, only accounts a Platform Administrator set up
 (`user.platform_provisioned_at`, set by `POST /platform/users` and for Platform
 Administrators, and backfilled for every account that existed before and didn't sign
 itself up) create Organizations on renewing limits. Everyone else's new Organizations,
 whether they signed themselves up or were invited by an Organization, run on Credit,
 starting with none (an opening adjustment of $0): they spend only what is bought for
 them, never the platform's budget. Without this, a trial's owner could invite an address
-of their own and create Organizations on the platform's budget from it.
+of their own and create Organizations on the platform's budget from it. With self-signup
+off, every account traces back to a Platform Administrator or an Organization they set
+up, so every Organization a user creates gets the platform's renewing limit, as before.
 
 ## Buying credit
 

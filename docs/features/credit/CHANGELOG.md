@@ -20,6 +20,16 @@ Related context: [Credit](../credit.md), [Costs](../costs.md), [Trial onboarding
 
 ## Changes
 
+### 2026-10-14 — AF-381 — Credit rule only with self-signup (PR pending)
+
+- Delivered: Organizations of accounts the platform didn't set up run on credit only
+  when self-signup is on; deployments without it keep the platform's renewing limit for
+  every Organization a user creates.
+- Upgrade note for operators: every Organization that isn't a trial now has an Agent
+  limit. It defaults to 10 (was unlimited when `ORGANIZATION_DEFAULT_AGENT_LIMIT` was
+  unset); change it in Platform Settings → Organizations or with the variable.
+- Follow-up: none.
+
 ### 2026-10-14 — AF-381 — Security review fixes (PR pending)
 
 - Delivered:
