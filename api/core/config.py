@@ -84,7 +84,8 @@ class Config(BaseSettings):
     # Off (the default) turns new Google accounts away; existing users can still sign in.
     self_signup_enabled: bool = False
     # Buying credit with Stripe. Off unless set: with it off, Organizations on credit
-    # can't buy more and the Stripe webhook isn't served.
+    # can't buy more. The webhook is served whenever its secret is set, so payments made
+    # before payments were turned off, and their refunds and disputes, still land.
     payments_enabled: bool = False
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
@@ -249,6 +250,16 @@ class Config(BaseSettings):
         would put every new Agent in breach from its first call."""
         if self.agent_default_llm_budget_usd > self.organization_default_llm_budget_usd:
             raise ValueError("AGENT_DEFAULT_LLM_BUDGET_USD must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD")
+        return self
+
+    @model_validator(mode="after")
+    def payments_have_stripe_secrets(self) -> Self:
+        """Payments without both secrets would fail every purchase and every Stripe event
+        at runtime; refuse to boot instead."""
+        if self.payments_enabled:
+            for name in ("stripe_secret_key", "stripe_webhook_secret"):
+                if not (getattr(self, name) or "").strip():
+                    raise ValueError(f"PAYMENTS_ENABLED needs {name.upper()}")
         return self
 
     @field_validator("organization_default_agent_limit", mode="before")

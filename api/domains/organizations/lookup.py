@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from injector import inject, singleton
@@ -45,6 +46,16 @@ class OrganizationCredit:
     credit_usd: float
     # None until spend has been observed.
     spend_usd: float | None
+
+
+@dataclass(frozen=True)
+class RecordedCredit:
+    """One change to an Organization's credit, found by its payment provider reference."""
+
+    organization_id: UUID
+    credit_usd: Decimal
+    # What was paid for it, for a purchase.
+    amount_paid_usd: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -128,16 +139,23 @@ class OrganizationLookupService:
         self,
         pagination: Pagination,
         *,
-        kind: CreditGrantKind | None = None,
+        kind: str | None = None,
         organization_id: UUID | None = None,
     ) -> PaginatedItems[PlatformCreditGrantRead]:
-        """Every Organization's changes to its credit, newest first."""
-        return self.repository.list_all_credit_grants(pagination, kind=kind, organization_id=organization_id)
+        """Every Organization's changes to its credit, newest first; `kind` narrows it to
+        one kind of change, by its value."""
+        return self.repository.list_all_credit_grants(
+            pagination, kind=CreditGrantKind(kind) if kind else None, organization_id=organization_id
+        )
 
-    def find_credit_grant(self, external_ref: str) -> CreditGrantRead | None:
+    def find_credit_grant(self, external_ref: str) -> RecordedCredit | None:
         """The grant recorded under a payment provider's reference, if any."""
         grant = self.repository.get_credit_grant_by_ref(external_ref)
-        return CreditGrantRead.model_validate(grant) if grant is not None else None
+        if grant is None:
+            return None
+        return RecordedCredit(
+            organization_id=grant.organization_id, credit_usd=grant.credit_usd, amount_paid_usd=grant.amount_paid_usd
+        )
 
     def get_llm_limit(self, organization_id: UUID) -> OrganizationLlmLimit | None:
         """None when the Organization does not exist."""

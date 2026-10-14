@@ -21,7 +21,9 @@ RUNTIMES = {AgentType.OPENCLAW: _GIVEN, AgentType.HERMES: _GIVEN_WITH_HERMES_IMA
 def spend_limit_kind(runtime: AgentType, *steps, payments: str) -> str:
     with given(
         [
-            set_env_variable({"PAYMENTS_ENABLED": payments}),
+            set_env_variable(
+                {"PAYMENTS_ENABLED": payments, "STRIPE_SECRET_KEY": "sk_test_x", "STRIPE_WEBHOOK_SECRET": "whsec_x"}
+            ),
             *RUNTIMES[runtime],
             there_is_an_agent(agent_type=runtime),
             *steps,

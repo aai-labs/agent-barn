@@ -7,11 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+import stripe as stripe_sdk
 from hamcrest import assert_that, equal_to, has_entries
 
 from api.domains.billing.models import BillingSettingsRead
 from api.domains.billing.service import charge_cents
-from api.infrastructure.stripe.client import StripeGateway, StripeNotConfigured
+from api.infrastructure.stripe.client import PaymentProviderUnavailable, StripeGateway, StripeNotConfigured
 
 
 def gateway(secret_key="sk_test_x", webhook_secret="whsec_x") -> StripeGateway:
@@ -66,6 +67,39 @@ def test_a_new_customer_is_tagged_with_its_organization():
     assert_that(params, equal_to({"name": "Acme", "metadata": {"organization_id": str(organization_id)}}))
 
 
+def test_a_refunds_current_status_is_read_from_stripe():
+    client = MagicMock()
+    client.v1.refunds.retrieve_async = AsyncMock(return_value=MagicMock(status="canceled"))
+
+    with patch.object(StripeGateway, "_stripe", return_value=client):
+        status = asyncio.run(gateway().refund_status("re_1"))
+
+    assert_that(status, equal_to("canceled"))
+    client.v1.refunds.retrieve_async.assert_awaited_once_with("re_1")
+
+
+def test_a_payments_metadata_is_read_from_stripe():
+    client = MagicMock()
+    client.v1.payment_intents.retrieve_async = AsyncMock(
+        return_value=MagicMock(
+            to_dict=MagicMock(return_value={"metadata": {"organization_id": "org", "credit_usd": "20"}})
+        )
+    )
+
+    with patch.object(StripeGateway, "_stripe", return_value=client):
+        metadata = asyncio.run(gateway().payment_metadata("pi_1"))
+
+    assert_that(metadata, equal_to({"organization_id": "org", "credit_usd": "20"}))
+
+
+def test_stripe_failing_is_reported_as_unavailable():
+    client = MagicMock()
+    client.v1.customers.create_async = AsyncMock(side_effect=stripe_sdk.APIConnectionError("down"))
+
+    with patch.object(StripeGateway, "_stripe", return_value=client), pytest.raises(PaymentProviderUnavailable):
+        asyncio.run(gateway().create_customer(organization_id=uuid4(), name="Acme", email=None))
+
+
 def test_a_wrongly_signed_event_is_refused():
     with pytest.raises(PermissionError):
         gateway().construct_event(b'{"id": "evt_1"}', "t=1,v1=bad")
@@ -86,6 +120,9 @@ def test_nothing_reaches_stripe_without_a_key_or_secret():
         ("20", 0.5, 10.0, 4400),
         # A fraction of a cent is rounded up, never given away.
         ("10.01", 1.0, 3.0, 1032),
+        # Exact: no leftover from dividing by the rate adds a cent.
+        ("5.15", 0.95, 33.0, 721),
+        ("1.00", 0.6, 200.0, 500),
     ],
 )
 def test_the_charge_is_the_credit_at_the_rate_plus_the_fee_rounded_up(credit, rate, fee, cents):

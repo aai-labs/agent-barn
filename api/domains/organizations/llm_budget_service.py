@@ -9,6 +9,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -40,6 +41,7 @@ from api.domains.organizations.models import (
     AgentLlmCoverageRead,
     AgentLlmEnrollment,
     CreditGrantCreate,
+    CreditGrantKind,
     Organization,
     OrganizationLlmBudgetRead,
     OrganizationLlmBudgetState,
@@ -293,6 +295,51 @@ class OrganizationLlmBudgetService:
             result.organization, result.delivery_ids, before=before, actor=actor, actor_display=actor_display
         )
         return True
+
+    def record_purchase(
+        self,
+        organization_id: UUID,
+        *,
+        credit_usd: Decimal,
+        amount_paid_usd: Decimal,
+        reference: str,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> bool:
+        """Credit bought with a payment, keyed by the payment's reference."""
+        grant = CreditGrantCreate(
+            kind=CreditGrantKind.PURCHASE,
+            credit_usd=credit_usd,
+            amount_paid_usd=amount_paid_usd,
+            external_ref=reference,
+        )
+        return self.grant_credit(organization_id, grant, actor=actor, actor_display=actor_display)
+
+    def take_back_credit(
+        self,
+        organization_id: UUID,
+        *,
+        credit_usd: Decimal,
+        reference: str,
+        chargeback: bool,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> bool:
+        """Take `credit_usd` back off for a refund, or for a dispute the payer won."""
+        grant = CreditGrantCreate(
+            kind=CreditGrantKind.CHARGEBACK if chargeback else CreditGrantKind.REFUND,
+            credit_usd=-credit_usd,
+            external_ref=reference,
+        )
+        return self.grant_credit(organization_id, grant, actor=actor, actor_display=actor_display)
+
+    def return_credit(
+        self, organization_id: UUID, *, credit_usd: Decimal, reference: str, actor: ActorIdentity, actor_display: str
+    ) -> bool:
+        """Give back credit taken back by a refund that didn't go through or a dispute
+        that was won."""
+        grant = CreditGrantCreate(kind=CreditGrantKind.ADJUSTMENT, credit_usd=credit_usd, external_ref=reference)
+        return self.grant_credit(organization_id, grant, actor=actor, actor_display=actor_display)
 
     def _apply_stored(
         self,

@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -15,7 +16,11 @@ from api.domains.billing.models import (
     PlatformBillingSettings,
 )
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
-from api.domains.events.catalog import EVENT_REGISTRY, PLATFORM_BILLING_SETTINGS_CHANGED
+from api.domains.events.catalog import (
+    EVENT_REGISTRY,
+    PLATFORM_BILLING_SETTINGS_CHANGED,
+    PLATFORM_CREDIT_PURCHASE_UNAPPLIED,
+)
 from api.domains.events.models import EventScope
 from api.domains.events.repository import OutboxMessageRepository
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -134,3 +139,43 @@ class BillingCustomerRepository:
             session.commit()
             row = session.get(OrganizationBillingCustomer, organization_id)
             return row.stripe_customer_id if row else stripe_customer_id
+
+
+@inject
+@singleton
+@dataclass
+class UnappliedPurchaseRepository:
+    delegate: PostgresRepositoryDelegate
+    outbox: OutboxMessageRepository
+
+    def record(
+        self,
+        organization_name: str,
+        *,
+        payment_reference: str,
+        credit_usd: Decimal,
+        amount_paid_usd: Decimal,
+    ) -> list[UUID]:
+        """Stage the platform audit Event for a payment no credit was granted for."""
+        with Session(self.delegate.engine) as session:
+            event = EVENT_REGISTRY.build_event(
+                event_name=PLATFORM_CREDIT_PURCHASE_UNAPPLIED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                event_scope=EventScope.PLATFORM,
+                organization_id=None,
+                actor=ActorIdentity(type=ActorIdentityType.SYSTEM, id="stripe"),
+                subject=SubjectIdentity(type=SubjectIdentityType.SYSTEM, id=f"payment:{payment_reference}"),
+                correlation_id=uuid4(),
+                payload={
+                    "payment_reference": payment_reference,
+                    "credit_usd": float(credit_usd),
+                    "amount_paid_usd": float(amount_paid_usd),
+                    "actor_display": "Credit purchase",
+                    "subject_display": organization_name,
+                },
+            )
+            self.outbox.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return ids

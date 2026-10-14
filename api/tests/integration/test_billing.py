@@ -7,9 +7,13 @@
   fee, within its minimum and maximum, and is paid on Stripe's own page.
 - Stripe's signed webhook grants a purchase once, converts a trial, and takes refunds and
   lost disputes back off; the ledger's unique reference is what makes a redelivered event
-  harmless.
+  harmless. Stripe doesn't promise order, so a refund settles on the refund's current
+  status, and one for a purchase not yet recorded is retried rather than dropped.
+- Turning payments off stops new purchases only: payments already made, refunds and
+  disputes still land while the deployment has a webhook secret.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -22,15 +26,17 @@ from uuid import uuid7
 
 import pytest
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_entries, has_length
+from hamcrest import assert_that, equal_to, has_entries, has_length, not_
 from injector import Module, provider, singleton
 
 from api.domains.billing.repository import BillingSettingsRepository
+from api.domains.billing.service import BillingService
 from api.domains.organizations.models import CreditGrantKind
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import OrganizationRole
+from api.domains.users.models import User
 from api.domains.users.repository import UserRepository
-from api.infrastructure.stripe.client import CheckoutSession, StripeGateway
+from api.infrastructure.stripe.client import CheckoutSession, PaymentProviderUnavailable, StripeGateway
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.integration.test_credit_spend_limits import the_organization_runs_on_credit
@@ -62,10 +68,13 @@ class MockStripeModule(Module):
             gateway, payload, signature
         )
         gateway.webhook_secret = WEBHOOK_SECRET
+        # Stripe's view now: refunds stand, and other payments aren't credit purchases.
+        gateway.refund_status = AsyncMock(return_value="succeeded")
+        gateway.payment_metadata = AsyncMock(return_value={})
         return gateway
 
 
-def _setup(*steps, payments: str = "true") -> list:
+def _setup(*steps, payments: str = "true", webhook_secret: str = WEBHOOK_SECRET) -> list:
     return [
         set_env_variable(
             {
@@ -75,7 +84,7 @@ def _setup(*steps, payments: str = "true") -> list:
                 "WEB_APP_URL": "https://app.test",
                 "PAYMENTS_ENABLED": payments,
                 "STRIPE_SECRET_KEY": "sk_test_x",
-                "STRIPE_WEBHOOK_SECRET": WEBHOOK_SECRET,
+                "STRIPE_WEBHOOK_SECRET": webhook_secret,
             }
         ),
         prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), MockStripeModule()]),
@@ -141,17 +150,36 @@ def buy(context, credit_usd):
     )
 
 
-def deliver(context, event_type: str, data: dict, *, secret: str = WEBHOOK_SECRET, event_id: str | None = None):
+def signed(event_type: str, data: dict, *, secret: str = WEBHOOK_SECRET, event_id: str | None = None):
+    """A Stripe event and its signature header."""
     payload = json.dumps(
         {"id": event_id or f"evt_{uuid7().hex}", "object": "event", "type": event_type, "data": {"object": data}}
     )
     timestamp = int(time.time())
     signature = hmac.new(secret.encode(), f"{timestamp}.{payload}".encode(), hashlib.sha256).hexdigest()
+    return payload, f"t={timestamp},v1={signature}"
+
+
+def deliver(context, event_type: str, data: dict, *, secret: str = WEBHOOK_SECRET, event_id: str | None = None):
+    payload, signature = signed(event_type, data, secret=secret, event_id=event_id)
     return context.client.post(
-        WEBHOOK,
-        content=payload,
-        headers={"Stripe-Signature": f"t={timestamp},v1={signature}", "Content-Type": "application/json"},
+        WEBHOOK, content=payload, headers={"Stripe-Signature": signature, "Content-Type": "application/json"}
     )
+
+
+def refund(refund_id="re_1", *, cents=1100, intent="pi_1", status_now="succeeded") -> dict:
+    return {"id": refund_id, "object": "refund", "amount": cents, "payment_intent": intent, "status": status_now}
+
+
+def stripe_says_the_refund_is(context, refund_status: str) -> None:
+    stripe(context).refund_status.return_value = refund_status
+
+
+def stripe_says_the_payment_is_a_credit_purchase(context) -> None:
+    stripe(context).payment_metadata.return_value = {
+        "organization_id": str(context.organization.id),
+        "credit_usd": "20",
+    }
 
 
 def paid_session(
@@ -174,6 +202,20 @@ def paid_session(
 def ledger(context) -> list[tuple[CreditGrantKind, Decimal]]:
     grants = context.injector.get(OrganizationRepository).list_credit_grants(context.organization.id)
     return [(grant.kind, grant.credit_usd) for grant in grants]
+
+
+def dispute(context, *, reinstated_cents: int | None = None) -> dict:
+    """A $20 dispute on the purchase; reinstated in part or whole when `reinstated_cents`."""
+    transactions = [{"object": "balance_transaction", "amount": -2000}]
+    if reinstated_cents is not None:
+        transactions.append({"object": "balance_transaction", "amount": reinstated_cents})
+    return {
+        "id": "dp_1",
+        "object": "dispute",
+        "amount": 2000,
+        "payment_intent": "pi_1",
+        "balance_transactions": transactions,
+    }
 
 
 def stored(context):
@@ -224,6 +266,13 @@ def test_impossible_billing_settings_are_refused(payload):
         assert_that(
             response.status_code, equal_to(status.HTTP_400_BAD_REQUEST if "min_purchase_usd" in payload else 422)
         )
+
+
+def test_a_minimum_below_what_a_card_can_be_charged_is_refused():
+    with given(_setup(a_platform_administrator())) as context:
+        response = context.client.put(SETTINGS, json={"min_purchase_usd": 0.49}, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(422))
 
 
 def test_only_a_platform_administrator_sees_the_billing_settings():
@@ -294,6 +343,25 @@ def test_only_the_owner_buys_credit(role):
         assert_that(buy(context, 20).status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
+def test_an_owner_cannot_read_or_buy_for_another_organization():
+    with given(_setup(an_owner_on_credit())) as context:
+        mine = context.organization.id
+        acme_owner = User(email="acme-owner@example.com", hashed_password="x")
+        context.injector.get(UserRepository).save(acme_owner)
+        there_is_an_organization(name="Acme", owner_id=acme_owner.id)(context)
+        the_organization_runs_on_credit()(context)
+        theirs = context.organization.id
+
+        read = context.client.get(BILLING.format(organization_id=theirs), headers=auth(context))
+        bought = context.client.post(
+            CHECKOUT.format(organization_id=theirs), json={"credit_usd": 20}, headers=auth(context)
+        )
+
+        assert_that([read.status_code, bought.status_code], equal_to([403, 403]))
+        assert_that(theirs, not_(equal_to(mine)))
+        stripe(context).create_checkout_session.assert_not_awaited()
+
+
 # --- checkout ------------------------------------------------------------------------------
 
 
@@ -348,6 +416,27 @@ def test_a_purchase_outside_the_platforms_bounds_is_refused_before_stripe(credit
 
         assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
         stripe(context).create_checkout_session.assert_not_awaited()
+
+
+def test_a_charge_below_stripes_minimum_is_refused_before_stripe():
+    with given(
+        _setup(an_owner_on_credit(), the_billing_settings_are(min_purchase_usd=0.5, credit_rate=100))
+    ) as context:
+        # $1 of credit at 100 credit per dollar would be a one-cent charge.
+        response = buy(context, 1)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        stripe(context).create_checkout_session.assert_not_awaited()
+
+
+def test_stripe_being_down_at_checkout_says_to_try_again():
+    with given(_setup(an_owner_on_credit())) as context:
+        stripe(context).create_checkout_session.side_effect = PaymentProviderUnavailable("down")
+
+        response = buy(context, 20)
+
+        assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
+        assert_that(response.json()["detail"], equal_to("Payments aren't available right now. Try again shortly."))
 
 
 # --- the webhook ---------------------------------------------------------------------------
@@ -424,11 +513,8 @@ def test_a_refund_takes_its_share_of_the_credit_back_and_a_failed_one_returns_it
             assert_that(stored(context).llm_budget_usd, equal_to(20.0))
 
         with when("the refund fails"):
-            deliver(
-                context,
-                "refund.failed",
-                {"id": "re_1", "object": "refund", "amount": 1100, "payment_intent": "pi_1", "status": "failed"},
-            )
+            stripe_says_the_refund_is(context, "failed")
+            deliver(context, "refund.failed", refund(status_now="failed"))
 
         with then("the credit comes back"):
             assert_that(stored(context).llm_budget_usd, equal_to(30.0))
@@ -467,9 +553,132 @@ def test_events_that_are_not_ours_are_acknowledged_and_ignored():
         assert_that(stored(context).llm_budget_usd, equal_to(10.0))
 
 
-def test_the_webhook_is_not_there_while_payments_are_off():
-    with given(_setup(an_owner_on_credit(), payments="false")) as context:
+def test_the_webhook_is_not_there_without_a_webhook_secret():
+    with given(_setup(an_owner_on_credit(), payments="false", webhook_secret="")) as context:
         response = deliver(context, "checkout.session.completed", paid_session(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
         assert_that(stored(context).llm_budget_usd, equal_to(10.0))
+
+
+def test_payments_made_and_refunds_still_land_after_payments_are_turned_off():
+    with given(_setup(an_owner_on_credit(), payments="false")) as context:
+        with when("a payment made before the switch arrives, and is then refunded"):
+            paid = deliver(context, "checkout.session.completed", paid_session(context))
+            refunded = deliver(context, "refund.created", refund(cents=2000))
+
+        with then("both land"):
+            assert_that([paid.status_code, refunded.status_code], equal_to([200, 200]))
+            assert_that(
+                ledger(context)[1:],
+                equal_to([(CreditGrantKind.PURCHASE, Decimal(20)), (CreditGrantKind.REFUND, Decimal(-20))]),
+            )
+
+
+# --- Stripe's events out of order ------------------------------------------------------------
+
+
+def test_a_refund_before_its_purchase_is_retried_not_dropped():
+    with given(_setup(an_owner_on_credit())) as context:
+        stripe_says_the_payment_is_a_credit_purchase(context)
+
+        with when("the refund arrives before the payment it refunds"):
+            early = deliver(context, "refund.created", refund(cents=2000), event_id="evt_refund")
+
+        with then("Stripe is asked to send it again, and nothing changes yet"):
+            assert_that(early.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(stored(context).llm_budget_usd, equal_to(10.0))
+
+        with when("the payment lands and Stripe resends the refund"):
+            deliver(context, "checkout.session.completed", paid_session(context))
+            deliver(context, "refund.created", refund(cents=2000), event_id="evt_refund")
+
+        with then("the refund takes the credit back"):
+            assert_that(stored(context).llm_budget_usd, equal_to(10.0))
+            assert_that(ledger(context)[-1], equal_to((CreditGrantKind.REFUND, Decimal(-20))))
+
+
+def test_a_refund_whose_failure_arrived_first_takes_nothing():
+    with given(_setup(an_owner_on_credit())) as context:
+        deliver(context, "checkout.session.completed", paid_session(context))
+        stripe_says_the_refund_is(context, "failed")
+
+        deliver(context, "refund.failed", refund(status_now="failed"))
+        deliver(context, "refund.created", refund(status_now="pending"))
+
+        assert_that(stored(context).llm_budget_usd, equal_to(30.0))
+
+
+def test_a_cancelled_refund_returns_its_credit():
+    with given(_setup(an_owner_on_credit())) as context:
+        deliver(context, "checkout.session.completed", paid_session(context, amount_cents=2000))
+        deliver(context, "refund.created", refund(cents=1000, status_now="pending"))
+        assert_that(stored(context).llm_budget_usd, equal_to(20.0))
+
+        stripe_says_the_refund_is(context, "canceled")
+        deliver(context, "refund.updated", refund(cents=1000, status_now="canceled"))
+
+        assert_that(stored(context).llm_budget_usd, equal_to(30.0))
+
+
+def test_partial_refunds_that_add_up_take_back_exactly_the_purchase():
+    with given(_setup(an_owner_on_credit())) as context:
+        deliver(context, "checkout.session.completed", paid_session(context, credit="10", amount_cents=1055))
+
+        for refund_id, cents in (("re_1", 333), ("re_2", 333), ("re_3", 389)):
+            deliver(context, "refund.created", refund(refund_id, cents=cents))
+
+        assert_that(sum(credit for _, credit in ledger(context)[2:]), equal_to(Decimal(-10)))
+
+
+def test_a_partly_reinstated_dispute_returns_only_what_was_reinstated():
+    with given(_setup(an_owner_on_credit())) as context:
+        deliver(context, "checkout.session.completed", paid_session(context))
+        deliver(context, "charge.dispute.funds_withdrawn", dispute(context))
+
+        deliver(context, "charge.dispute.funds_reinstated", dispute(context, reinstated_cents=500))
+
+        assert_that(ledger(context)[-1], equal_to((CreditGrantKind.ADJUSTMENT, Decimal(5))))
+        assert_that(stored(context).llm_budget_usd, equal_to(15.0))
+
+
+def test_a_reinstatement_before_its_withdrawal_still_nets_out():
+    with given(_setup(an_owner_on_credit())) as context:
+        deliver(context, "checkout.session.completed", paid_session(context))
+
+        deliver(context, "charge.dispute.funds_reinstated", dispute(context, reinstated_cents=2000))
+        deliver(context, "charge.dispute.funds_withdrawn", dispute(context))
+
+        assert_that(stored(context).llm_budget_usd, equal_to(30.0))
+
+
+def test_one_payment_delivered_twice_at_once_is_granted_once():
+    with given(_setup(an_owner_on_credit())) as context:
+        payload, signature = signed("checkout.session.completed", paid_session(context), event_id="evt_1")
+        service = context.injector.get(BillingService)
+
+        async def both():
+            await asyncio.gather(*(service.handle_webhook(payload.encode(), signature) for _ in range(2)))
+
+        asyncio.run(both())
+
+        assert_that(stored(context).llm_budget_usd, equal_to(30.0))
+        assert_that([kind for kind, _ in ledger(context)].count(CreditGrantKind.PURCHASE), equal_to(1))
+
+
+def test_a_payment_for_an_organization_no_longer_on_credit_is_flagged_for_a_refund():
+    with given(_setup(an_owner_on_credit())) as context:
+        organizations = context.injector.get(OrganizationRepository)
+        organization = organizations.get(context.organization.id)
+        organization.llm_budget_duration = "30d"
+        organizations.save(organization)
+
+        response = deliver(context, "checkout.session.completed", paid_session(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        events = events_named(context, "platform.credit_purchase.unapplied")
+        assert_that(events, has_length(1))
+        assert_that(
+            events[0].payload,
+            has_entries(subject_display="Jane's Organization", payment_reference="pi_1", amount_paid_usd=20.0),
+        )

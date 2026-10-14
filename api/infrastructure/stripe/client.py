@@ -29,6 +29,10 @@ class StripeNotConfigured(RuntimeError):
     """Payments are on but the deployment has no Stripe key or webhook secret."""
 
 
+class PaymentProviderUnavailable(RuntimeError):
+    """Stripe refused or couldn't be reached; the caller may try again."""
+
+
 @inject
 @singleton
 class StripeGateway:
@@ -48,7 +52,10 @@ class StripeGateway:
         params: dict = {"name": name, "metadata": {"organization_id": str(organization_id)}}
         if email:
             params["email"] = email
-        customer = await self._stripe().v1.customers.create_async(params=params)  # ty: ignore[invalid-argument-type]
+        try:
+            customer = await self._stripe().v1.customers.create_async(params=params)  # ty: ignore[invalid-argument-type]
+        except stripe.StripeError as exc:
+            raise PaymentProviderUnavailable(str(exc)) from exc
         return customer.id
 
     async def create_checkout_session(
@@ -70,31 +77,52 @@ class StripeGateway:
             "credit_usd": str(credit_usd),
             "purchased_by_user_id": str(purchased_by_user_id),
         }
-        session = await self._stripe().v1.checkout.sessions.create_async(
-            params={
-                "mode": "payment",
-                "customer": customer_id,
-                "client_reference_id": str(organization_id),
-                "line_items": [
-                    {
-                        "quantity": 1,
-                        "price_data": {
-                            "currency": "usd",
-                            "unit_amount": amount_cents,
-                            "product_data": {"name": _PRODUCT_NAME},
-                        },
-                    }
-                ],
-                "metadata": metadata,
-                # Refunds and disputes arrive against the payment, not the session.
-                "payment_intent_data": {"metadata": metadata},
-                "success_url": success_url,
-                "cancel_url": cancel_url,
-            }
-        )
+        params = {
+            "mode": "payment",
+            "customer": customer_id,
+            "client_reference_id": str(organization_id),
+            "line_items": [
+                {
+                    "quantity": 1,
+                    "price_data": {
+                        "currency": "usd",
+                        "unit_amount": amount_cents,
+                        "product_data": {"name": _PRODUCT_NAME},
+                    },
+                }
+            ],
+            "metadata": metadata,
+            # Refunds and disputes arrive against the payment, not the session.
+            "payment_intent_data": {"metadata": metadata},
+            "success_url": success_url,
+            "cancel_url": cancel_url,
+        }
+        try:
+            session = await self._stripe().v1.checkout.sessions.create_async(params=params)  # ty: ignore[invalid-argument-type]
+        except stripe.StripeError as exc:
+            raise PaymentProviderUnavailable(str(exc)) from exc
         if not session.url:
-            raise RuntimeError("Stripe returned a Checkout Session without a URL")
+            raise PaymentProviderUnavailable("Stripe returned a Checkout Session without a URL")
         return CheckoutSession(id=session.id, url=session.url)
+
+    async def refund_status(self, refund_id: str) -> str:
+        """The refund's status now: Stripe doesn't deliver events in order, so an event's
+        own copy may be out of date. PaymentProviderUnavailable when it can't be read."""
+        try:
+            refund = await self._stripe().v1.refunds.retrieve_async(refund_id)
+        except stripe.StripeError as exc:
+            raise PaymentProviderUnavailable(str(exc)) from exc
+        return refund.status or ""
+
+    async def payment_metadata(self, payment_intent_id: str) -> dict[str, str]:
+        """What a payment was tagged with when it was made: a credit purchase carries its
+        Organization and credit. Empty for anyone else's payment."""
+        try:
+            payment = await self._stripe().v1.payment_intents.retrieve_async(payment_intent_id)
+        except stripe.StripeError as exc:
+            raise PaymentProviderUnavailable(str(exc)) from exc
+        metadata = payment.to_dict().get("metadata") or {}
+        return {str(key): str(value) for key, value in metadata.items()}
 
     def construct_event(self, payload: bytes, signature: str) -> stripe.Event:
         """The event Stripe signed, or PermissionError when the signature doesn't verify."""

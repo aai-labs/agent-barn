@@ -18,6 +18,8 @@ DEFAULT_CREDIT_RATE = 1.0
 DEFAULT_PURCHASE_FEE_PERCENT = 0.0
 # Bounds no real setting reaches; they only stop a typo.
 MAX_PURCHASE_CAP_USD = 100_000.0
+# The smallest card payment Stripe takes in US dollars.
+MIN_PURCHASE_FLOOR_USD = 0.5
 MAX_PURCHASE_FEE_PERCENT = 100.0
 
 
@@ -70,8 +72,12 @@ class BillingSettingsUpdate(BaseModel):
     """Omitting a setting leaves it as it is; none can be removed."""
 
     model_config = ConfigDict(extra="forbid")
-    min_purchase_usd: float | None = Field(default=None, gt=0, le=MAX_PURCHASE_CAP_USD, allow_inf_nan=False)
-    max_purchase_usd: float | None = Field(default=None, gt=0, le=MAX_PURCHASE_CAP_USD, allow_inf_nan=False)
+    min_purchase_usd: float | None = Field(
+        default=None, ge=MIN_PURCHASE_FLOOR_USD, le=MAX_PURCHASE_CAP_USD, allow_inf_nan=False
+    )
+    max_purchase_usd: float | None = Field(
+        default=None, ge=MIN_PURCHASE_FLOOR_USD, le=MAX_PURCHASE_CAP_USD, allow_inf_nan=False
+    )
     credit_rate: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
     purchase_fee_percent: float | None = Field(default=None, ge=0, le=MAX_PURCHASE_FEE_PERCENT, allow_inf_nan=False)
 
