@@ -833,9 +833,12 @@ class OrganizationRepository:
         actor: ActorIdentity,
         *,
         opening_credit_usd: Decimal | None = None,
+        opening_credit_kind: CreditGrantKind = CreditGrantKind.ADJUSTMENT,
+        in_transaction: Callable[[Session], None] | None = None,
     ) -> tuple[Organization, list[UUID]]:
         """Create the Organization and its creator's Owner Membership, staging its creation
-        Event; with `opening_credit_usd`, also open its credit ledger, all in one commit."""
+        Event; with `opening_credit_usd`, also open its credit ledger, all in one commit.
+        `in_transaction` runs inside it, after the quota check, and may raise to refuse."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             # Serialize creation attempts for one user. Without this lock, two
             # concurrent requests could both observe one remaining quota slot.
@@ -845,6 +848,8 @@ class OrganizationRepository:
             )
             if (created_count or 0) >= creation_limit:
                 raise OrganizationCreationLimitReached(creation_limit)
+            if in_transaction is not None:
+                in_transaction(session)
 
             session.add(organization)
             session.flush()
@@ -859,7 +864,7 @@ class OrganizationRepository:
                 self._add_credit_grant(
                     session,
                     organization.id,
-                    CreditGrantKind.ADJUSTMENT,
+                    opening_credit_kind,
                     opening_credit_usd,
                     actor_display="Opening balance",
                 )

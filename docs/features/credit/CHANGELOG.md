@@ -20,6 +20,17 @@ Related context: [Credit](../credit.md), [Costs](../costs.md), [Trial onboarding
 
 ## Changes
 
+### 2026-10-14 — AF-381 — First Organization trial for invited members (PR pending)
+
+- Delivered: with self-signup on, an invited member whose address has never had a trial
+  gets a trial as their first Organization of their own, counted against the cap and
+  recorded against their address; when no trials are available they're told so. After
+  that, or with an address that had a trial, Organizations start on credit at $0.
+- Changed: `OrganizationRepository.create_for_user` takes the opening credit's kind and a
+  hook that runs in its transaction.
+- Decided: a purchase later charged back still converts the trial (accepted risk, see
+  [Credit](../credit.md#accepted-risks)).
+
 ### 2026-10-14 — AF-381 — Credit rule only with self-signup (PR pending)
 
 - Delivered: Organizations of accounts the platform didn't set up run on credit only

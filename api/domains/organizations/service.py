@@ -34,6 +34,7 @@ from api.domains.organizations.exceptions import OrganizationCreationLimitReache
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.lookup import OrganizationAgentLimit
 from api.domains.organizations.models import (
+    CreditGrantKind,
     Organization,
     OrganizationCreate,
     OrganizationFilter,
@@ -230,9 +231,28 @@ class OrganizationService:
         on_credit = config.self_signup_enabled and not (
             actor.user.is_platform_admin or actor.user.platform_provisioned_at is not None
         )
+        # Their first Organization of their own is a trial when their address has never
+        # had one: an invited member gets the trial they'd have had by signing up. Someone
+        # who signed themselves up has had theirs, whatever the record says.
+        email = actor.user.email
+        trial = on_credit and actor.user.signed_up_at is None and not self._has_had_trial(email)
+        opening_credit = Decimal(0)
         if on_credit:
-            organization.llm_budget_usd = 0.0
+            if trial:
+                opening_credit = Decimal(str(self.trial_settings.credit_usd()))
+                organization.is_trial = True
+            organization.llm_budget_usd = float(opening_credit)
             organization.llm_budget_duration = ONE_OFF_BUDGET_WINDOW
+
+        def admit_trial(session: Session) -> None:
+            # Under the lock sign-up takes too, so two trials can't take the last place.
+            if self.trial_settings.trials_full(session):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No free trials are available right now. Try again later.",
+                )
+            self.trial_settings.record_trial(email, session)
+
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
@@ -241,7 +261,9 @@ class OrganizationService:
                 actor.user.id,
                 config.organization_creation_limit,
                 ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id),
-                opening_credit_usd=Decimal(0) if on_credit else None,
+                opening_credit_usd=opening_credit if on_credit else None,
+                opening_credit_kind=CreditGrantKind.TRIAL if trial else CreditGrantKind.ADJUSTMENT,
+                in_transaction=admit_trial if trial else None,
             )
         except OrganizationCreationLimitReached as error:
             raise HTTPException(
@@ -260,6 +282,10 @@ class OrganizationService:
                 detail="Failed to load organization",
             )
         return organization_read
+
+    def _has_had_trial(self, email: str) -> bool:
+        with Session(self.organization_repository.delegate.engine) as session:
+            return self.trial_settings.has_had_trial(email, session)
 
     def set_agent_limit(
         self, organization_id: UUID, agent_limit: int | None, context: CurrentUserContext

@@ -51,9 +51,12 @@ further Organizations. With self-signup on, only accounts a Platform Administrat
 (`user.platform_provisioned_at`, set by `POST /platform/users` and for Platform
 Administrators, and backfilled for every account that existed before and didn't sign
 itself up) create Organizations on renewing limits. Everyone else's new Organizations,
-whether they signed themselves up or were invited by an Organization, run on Credit,
-starting with none (an opening adjustment of $0): they spend only what is bought for
-them, never the platform's budget. Without this, a trial's owner could invite an address
+whether they signed themselves up or were invited by an Organization, run on Credit. An
+invited member whose address has never had a trial gets a trial as their first
+Organization of their own (the trial credit and Agent limit, counted against the cap on
+active trials, and their address recorded as having had its trial; refused with 409 when
+no trials are available). Otherwise it starts with no credit (an opening adjustment of
+$0): either way it spends only what it was given or bought, never the platform's budget. Without this, a trial's owner could invite an address
 of their own and create Organizations on the platform's budget from it. With self-signup
 off, every account traces back to a Platform Administrator or an Organization they set
 up, so every Organization a user creates gets the platform's renewing limit, as before.

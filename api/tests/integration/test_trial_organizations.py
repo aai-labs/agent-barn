@@ -15,7 +15,9 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.events.catalog import ORGANIZATION_TRIAL_ENDED
 from api.domains.events.models import OutboxMessage
+from api.domains.onboarding.models import TrialGrant
 from api.domains.onboarding.repository import TrialSettingsRepository
+from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.models import CreditGrantKind
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.repository import UserRepository
@@ -288,20 +290,82 @@ def _token_for(context, email: str) -> str:
     return token
 
 
-def test_someone_a_trial_owner_invites_creates_organizations_only_on_credit():
-    """Otherwise a trial's owner could invite an address of their own and create
-    Organizations on the platform's budget from it."""
-    with given(_setup(the_organization_is_a_trial(), the_user_signed_themselves_up())) as context:
+def a_member_invited_by_email(email: str):
+    """Someone this Organization's Owner invited, who has accepted: not set up by the
+    platform, and never signed themselves up."""
+
+    def step(context):
         invited = context.client.post(
             f"/api/v1/organizations/{context.organization.id}/members",
-            json={"email": "second-self@example.com", "role": "ADMIN"},
+            json={"email": email, "role": "MEMBER"},
             headers=auth(context),
         )
         assert_that(invited.status_code, equal_to(status.HTTP_201_CREATED), invited.text)
+        context.member_token = _token_for(context, email)
 
-        created = _organization_created_by(context, _token_for(context, "second-self@example.com"))
+    return step
 
-        assert_that((created.llm_budget_duration, created.llm_budget_usd), equal_to((ONE_OFF_BUDGET_WINDOW, 0.0)))
+
+def _trial_grants(context) -> int:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        return len(session.exec(select(TrialGrant)).all())
+
+
+def test_an_invited_members_first_organization_of_their_own_is_a_trial():
+    with given(_setup(a_member_invited_by_email("colleague@example.com"))) as context:
+        created = _organization_created_by(context, context.member_token)
+
+        with then("it is a trial with the trial's credit, and their address has had its trial"):
+            assert_that(
+                (created.is_trial, created.llm_budget_duration, created.llm_budget_usd),
+                equal_to((True, ONE_OFF_BUDGET_WINDOW, 10.0)),
+            )
+            grants = context.injector.get(OrganizationRepository).list_credit_grants(created.id)
+            assert_that([(g.kind, g.credit_usd) for g in grants], equal_to([(CreditGrantKind.TRIAL, 10)]))
+            assert_that(_trial_grants(context), equal_to(1))
+
+
+def test_an_invited_member_on_a_trial_creates_no_more_organizations():
+    with given(_setup(a_member_invited_by_email("colleague@example.com"))) as context:
+        _organization_created_by(context, context.member_token)
+
+        second = context.client.post(
+            "/api/v1/organizations", json={"name": "Another"}, headers=auth(context, context.member_token)
+        )
+
+        assert_that(second.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_someone_whose_address_has_had_a_trial_gets_an_organization_on_credit_instead():
+    """Inviting an address of your own gets it no more than signing up with it would:
+    one trial per address, then credit."""
+    with given(_setup(a_member_invited_by_email("second-self@example.com"))) as context:
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            context.injector.get(TrialSettingsService).record_trial("second-self@example.com", session)
+            session.commit()
+
+        created = _organization_created_by(context, context.member_token)
+
+        assert_that(
+            (created.is_trial, created.llm_budget_duration, created.llm_budget_usd),
+            equal_to((False, ONE_OFF_BUDGET_WINDOW, 0.0)),
+        )
+
+
+def test_an_invited_member_is_told_when_no_trials_are_available():
+    with given(_setup(a_member_invited_by_email("colleague@example.com"))) as context:
+        context.injector.get(TrialSettingsRepository).set_settings(
+            {"max_active_trials": 1}, 10, context.user.id, "Platform Admin"
+        )
+        the_organization_is_a_trial()(context)
+
+        response = context.client.post(
+            "/api/v1/organizations", json={"name": "Side Org"}, headers=auth(context, context.member_token)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("No free trials are available right now"))
+        assert_that(_trial_grants(context), equal_to(0))
 
 
 def test_without_self_signup_someone_an_organization_invites_creates_organizations_on_the_platform_budget():
