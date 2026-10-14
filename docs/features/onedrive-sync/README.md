@@ -72,6 +72,17 @@ Searching or choosing without a fresh pending connection is 409: the administrat
    A refused revoke is 403 (SharePoint Administrator and site member), throttling 503, an unreachable Microsoft 502. In all three cases the connection stays active.
 3. The "Agent Barn" folder and its files are left in place. The Organization may connect again.
 
+## Organization settings
+
+Settings → OneDrive (`?tab=onedrive-sync`) is visible to every Organization Member, and reads the status route.
+
+- Server without the app: "OneDrive sync isn't available on this server."
+- Not connected: Owners and Admins are told that a Microsoft Global Administrator approves Agent Barn, and that the person connecting must be a SharePoint Administrator and a member of the site. Members are told an Owner or Admin can connect.
+- Pending: no SharePoint site has been chosen yet.
+- Active: the site name, an "Open in OneDrive" link to the folder (new tab), and the hint to choose "Add shortcut to My files" in OneDrive.
+
+The query is keyed by Organization id, so switching Organization never shows the previous one's connection.
+
 ## Keeping Agents out of the folder site
 
 - Connecting refuses a site any Agent in the Organization, including a deleted one, holds a recorded SharePoint selected-sites grant on (see the connect flow).
@@ -88,7 +99,8 @@ Searching or choosing without a fresh pending connection is 409: the administrat
 | Routes | `../../../api/domains/onedrive_sync/routes.py` |
 | Folder site for other domains | `../../../api/domains/onedrive_sync/lookup.py`, used by `../../../api/domains/agents/sharepoint_service.py` |
 | Microsoft identity and Graph calls | `../../../api/domains/agents/microsoft_identity.py`, `microsoft_graph_sites.py` |
-| Tests | `../../../api/tests/integration/test_onedrive_sync_connection.py`, `test_onedrive_sync_repository.py` |
+| UI | `../../../ui/src/features/onedrive-sync/`, registered in `../../../ui/src/features/organizations/components/organization-settings-utils.ts` and `../../../ui/src/app/dashboard/[orgId]/settings/page.tsx` |
+| Tests | `../../../api/tests/integration/test_onedrive_sync_connection.py`, `test_onedrive_sync_repository.py`, `../../../ui/tests/e2e/onedrive-sync.spec.ts` |
 
 ## Change impact
 

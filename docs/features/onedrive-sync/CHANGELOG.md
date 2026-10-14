@@ -23,13 +23,21 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: choosing a site is refused (409, one line) when any Agent in the Organization, including a deleted one, has a recorded SharePoint selected-sites grant on it.
 - Delivered: `POST …/connection/disconnect` revokes the platform app's site grant with the administrator's fresh delegated token from the same Microsoft tenant, then marks the connection disconnected. The folder stays.
 - Delivered: the SharePoint integration refuses (409) to grant an Agent the Organization's OneDrive folder site; other SharePoint behaviour is unchanged. The API side of AF-383 is complete.
-- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. There is no UI yet.
-- Next: the Organization settings section (status, unavailable and connected states).
+- Delivered: Settings → OneDrive shows the unavailable, not connected, pending and active states to every Member, with "Open in OneDrive" and the "Add shortcut to My files" hint.
+- In transition: the section has no Connect, picker or Disconnect controls yet. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
+- Next: the connect flow and site picker in the UI.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Organization settings section
+
+- Delivered: `ui/src/features/onedrive-sync/` (schema, query key, status query hook, panel) and the `onedrive-sync` section in Organization settings, visible to every Member.
+- Changed: `README.md` (Organization settings), `docs/INDEX.md`.
+- Verified: `ui/tests/e2e/onedrive-sync.spec.ts` (6 tests) with `OneDriveSyncDataSupport` and `SettingsOneDriveSyncPage`; the Shared Credentials, Spend limits and Agent Memory specs still pass; lint and type check pass.
+- Follow-up: the Connect button moved to the connect-flow slice, where it does something. The query is keyed by Organization id instead of being added to the org-switch deny-list (`docs/guidelines/webapp.md` allows either).
 
 ### 2026-10-14 — AF-383 — SharePoint guard for the folder site
 
