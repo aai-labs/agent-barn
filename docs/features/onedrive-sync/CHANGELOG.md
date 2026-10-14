@@ -37,6 +37,11 @@ Acceptance criteria amendment: another Organization's caller gets **403**, not 4
 
 ## Changes
 
+### 2026-10-14 — AF-383 — Merge staging: imports and migration heads
+
+- Changed: merge revision `0219de43e2c9` joins `734b0f2b3793` (OneDrive sync connection) and staging's `b3d8e1f4a6c2` (trial onboarding) into one Alembic head. `api/api_app.py` and `api/migrations/env.py` import `onboarding` before `onedrive_sync`, as ruff requires.
+- Verified: ruff, format, one Alembic head, the OneDrive repository and connection suites (migrating through the merged chain), the public API contract test, and the OneDrive Playwright spec.
+
 ### 2026-10-14 — AF-383 — No site search after the picker closes
 
 - Fixed: choosing a site or starting over refetched the active site search against a connection that was no longer pending, which the API answered with 409 (seen in the local API log during the manual run). `useChooseOneDriveSite` and `useAbandonOneDrive` now remove the cached searches instead of invalidating them.
