@@ -30,17 +30,22 @@ from api.domains.agents.microsoft_graph_sites import (
     SitesUnavailable,
 )
 from api.domains.agents.microsoft_identity import MicrosoftIdentityError, MicrosoftIdentityUnavailable, MicrosoftTokens
+from api.domains.agents.models import AgentSecret, GrantedSite, SecretProvider, SharePointContent, encrypt_content
 from api.domains.agents.sharepoint_service import SignInState, encode_sign_in_state
 from api.domains.onedrive_sync.models import OneDriveSyncStatus
 from api.domains.onedrive_sync.repository import OneDriveSyncRepository
 from api.domains.onedrive_sync.service import OneDriveSyncState, encode_state
 from api.domains.users.organization_users.models import OrganizationRole
 from api.infrastructure.crypto import decrypt_token, encrypt_token
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
-from api.tests.steps.agent import TEST_ENCRYPTION_KEY
+from api.tests.steps.agent import TEST_ENCRYPTION_KEY, there_is_an_agent
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
-from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.organization import (
+    there_is_an_organization,
+    there_is_an_organization_with_user_and_access_token,
+)
 from api.tests.steps.sharepoint import (
     FOLDER_WEB_URL,
     FakeMicrosoftIdentityModule,
@@ -882,3 +887,88 @@ def test_a_site_that_disappeared_is_reported_without_a_grant():
 
         assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
         assert_that(fake_graph_sites(context).revokes, equal_to([]))
+
+
+# --- sites an Agent already holds --------------------------------------------------
+
+
+def _an_agent_holds_site(context, site_id: str = _SITE_ID, *, deleted: bool = False) -> None:
+    """An Agent's SharePoint integration was granted ``site_id`` on its own Teams app."""
+    there_is_an_agent(name=f"SharePoint Agent {uuid7()}", deleted=deleted)(context)
+    content = SharePointContent(
+        mode="selected_sites",
+        connection_id=str(uuid.uuid4()),
+        tenant_id=_TENANT_ID,
+        client_id="teams-app-id",
+        email="admin@contoso.com",
+        scopes=["Sites.Selected"],
+        sites=[
+            GrantedSite(url="https://contoso.sharepoint.com/sites/AgentBarnTest", site_id=site_id, permission_id="p1")
+        ],
+    )
+    context.injector.get(PostgresRepositoryDelegate).save(
+        AgentSecret(
+            agent_id=context.agent.id,
+            provider=SecretProvider.SHAREPOINT,
+            secret_name="SharePoint",
+            content=encrypt_content(content, TEST_ENCRYPTION_KEY),
+        )
+    )
+
+
+def test_a_site_an_agent_already_holds_is_refused():
+    with given(_given()) as context:
+        _an_agent_holds_site(context, site_id=_SITE_ID.upper())
+        _pending(context)
+
+        with when("the Owner picks a site an Agent's SharePoint integration was granted"):
+            response = _choose(context)
+
+        with then("connecting is refused with one line, before anything is granted"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(
+                response.json()["detail"],
+                equal_to(
+                    "An Agent in this Organization already has SharePoint access to this site. "
+                    "Remove it there, or pick another site."
+                ),
+            )
+            assert_that(fake_graph_sites(context).grants, equal_to([]))
+            assert_that(
+                context.client.get(_base(context), headers=_auth(context)).json(), has_entries(status="pending")
+            )
+
+
+def test_a_site_a_deleted_agent_still_holds_is_refused():
+    with given(_given()) as context:
+        _an_agent_holds_site(context, deleted=True)
+        _pending(context)
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(fake_graph_sites(context).grants, equal_to([]))
+
+
+def test_a_site_an_agent_holds_elsewhere_does_not_block_connecting():
+    with given(_given()) as context:
+        _an_agent_holds_site(context, site_id="contoso.sharepoint.com,other,site")
+        _pending(context)
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json(), has_entries(status="active"))
+
+
+def test_another_organizations_agent_does_not_block_connecting():
+    with given(_given()) as context:
+        organization = context.organization
+        there_is_an_organization()(context)
+        _an_agent_holds_site(context)
+        context.organization = organization
+        _pending(context)
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)

@@ -34,6 +34,7 @@ from api.domains.agents.microsoft_identity import (
     claims_from_id_token,
     pkce_pair,
 )
+from api.domains.agents.sharepoint_service import SharePointService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.onedrive_sync.models import (
@@ -92,6 +93,9 @@ _SITE_NOT_FOUND = "Couldn't find that SharePoint site. Search again and pick it 
 _NOT_A_SITE_ADMINISTRATOR = "Sign in as a SharePoint administrator who is a member of this site, then try again."
 _THROTTLED = "Microsoft is limiting requests right now. Wait a few minutes, then try again."
 _FOLDER_FAILED = "Agent Barn couldn't create its folder on that site, so it was not connected. Please try again."
+_SITE_HELD_BY_AGENT = (
+    "An Agent in this Organization already has SharePoint access to this site. Remove it there, or pick another site."
+)
 
 OneDriveSyncPurpose = Literal["connect", "disconnect"]
 
@@ -185,6 +189,7 @@ class OneDriveSyncService:
     permission_policy: PermissionPolicy
     identity: MicrosoftIdentityClient
     graph_sites: MicrosoftGraphSites
+    sharepoint: SharePointService
     config: Config
 
     def status(self, organization_id: UUID, context: CurrentUserContext) -> OneDriveSyncConnectionRead:
@@ -330,6 +335,8 @@ class OneDriveSyncService:
         connection, token = self._signed_in(organization_id)
         try:
             site = self.graph_sites.get_site(token, site_id)
+            if site.id.lower() in self.sharepoint.organization_site_ids(organization_id):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SITE_HELD_BY_AGENT)
             permission_id = self.graph_sites.grant_site(
                 token,
                 site_id=site.id,

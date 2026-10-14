@@ -20,13 +20,20 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: `GET /organizations/{organization_id}/onedrive-sync/connection` (status, `organization.read`), `GET …/connection/authorize-url?purpose=connect|disconnect` (`organization.update`), and the unauthenticated `GET /api/v1/integrations/onedrive-sync/callback`. The behaviour contract is [`README.md`](README.md).
 - Delivered: `POST …/connection/sign-in` redeems the administrator's code into a pending connection holding their encrypted delegated token, and `DELETE …/connection` abandons a pending connection.
 - Delivered: `GET …/connection/sites?search=` and `POST …/connection/site`. Choosing a site grants the platform app `write` on it, ensures the "Agent Barn" folder as the app, and activates the connection; a failure after the grant revokes it.
-- In transition: choosing a site does not yet refuse a site an Agent's SharePoint integration already holds. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
-- Next: refuse connecting to a site already granted to an Agent.
+- Delivered: choosing a site is refused (409, one line) when any Agent in the Organization, including a deleted one, has a recorded SharePoint selected-sites grant on it.
+- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
+- Next: disconnect (the administrator signs in again to revoke the grant).
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Refuse a site an Agent already holds
+
+- Delivered: `AgentRepository.list_secrets_for_organization` (soft-deleted Agents included) and `SharePointService.organization_site_ids`, used by `OneDriveSyncService.choose_site` before any grant. `SharePointService._stored_content` now shares its decryption with the new method.
+- Verified: 4 new tests in `api/tests/integration/test_onedrive_sync_connection.py` (held site, held by a deleted Agent, held site elsewhere, another Organization's Agent). `test_sharepoint_selected_sites.py`, `test_sharepoint_sign_in.py` and `test_sharepoint_token_endpoint.py` pass unchanged.
+- Follow-up: disconnect.
 
 ### 2026-10-14 — AF-383 — Site picker, grant and folder
 

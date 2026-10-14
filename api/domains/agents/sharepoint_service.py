@@ -753,8 +753,20 @@ class SharePointService:
         except SiteAccessRefused, SiteNotFound, SitesUnavailable:
             logger.warning("SharePoint site access level could not be put back after a failed sign-in")
 
+    def organization_site_ids(self, organization_id: UUID) -> set[str]:
+        """Graph ids (lower-cased) of every site an Agent's SharePoint integration in the
+        Organization holds a recorded grant on, including Agents since deleted."""
+        site_ids: set[str] = set()
+        for secret in self.repository.list_secrets_for_organization(organization_id, SecretProvider.SHAREPOINT):
+            content = self._content_of(secret)
+            if content is not None and content.mode == "selected_sites":
+                site_ids.update(site.site_id.lower() for site in content.sites)
+        return site_ids
+
     def _stored_content(self, agent_id: UUID) -> SharePointContent | None:
-        secret = self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT)
+        return self._content_of(self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT))
+
+    def _content_of(self, secret: AgentSecret | None) -> SharePointContent | None:
         if secret is None or secret.content is None:
             return None
         content = decrypt_content(SecretProvider.SHAREPOINT, secret.content, self.config.agent_token_encryption_key)

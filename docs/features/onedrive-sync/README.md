@@ -46,10 +46,11 @@ When either setting is blank, status reports `available: false` and starting a c
 8. The picker calls `GET …/connection/sites?search=<term>` (`organization.update`), which runs Graph's site search with the administrator's delegated token. The term is required: Microsoft doesn't document what an empty search returns.
 9. The opener calls `POST …/connection/site {site_id}` (`organization.update`). The server:
    1. reads the site from Graph (400 if unknown), so the stored name and URL never come from the client;
-   2. grants the platform app `write` on that site, with display name "Agent Barn", using the administrator's delegated token. Microsoft requires the signer to be a SharePoint Administrator and a member of the site, so a refusal is a 403 that says so;
-   3. gets an app-only token in the connection's tenant;
-   4. ensures the "Agent Barn" folder at the root of the site's default document library;
-   5. activates the connection with the site, folder link and grant id, and drops the delegated token.
+   2. refuses (409, "An Agent in this Organization already has SharePoint access to this site. Remove it there, or pick another site.") when any Agent in the Organization, including a deleted one, has a recorded SharePoint selected-sites grant on that site id (compared case-insensitively). Deleting an Agent neither revokes nor forgets its grants, so they still count. Nothing is granted when refused;
+   3. grants the platform app `write` on that site, with display name "Agent Barn", using the administrator's delegated token. Microsoft requires the signer to be a SharePoint Administrator and a member of the site, so a refusal is a 403 that says so;
+   4. gets an app-only token in the connection's tenant;
+   5. ensures the "Agent Barn" folder at the root of the site's default document library;
+   6. activates the connection with the site, folder link and grant id, and drops the delegated token.
 
    If anything fails after the grant, the grant is revoked with the delegated token and the connection stays pending (502). Throttling is 503.
 
