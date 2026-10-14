@@ -10,13 +10,20 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: deploy wiring. The API chart Secret renders `ONEDRIVE_SYNC_CLIENT_ID` / `ONEDRIVE_SYNC_CLIENT_SECRET` from `onedriveSyncClientId` / `onedriveSyncClientSecret`; Helmfile reads them from the environment; `deploy.yml` and `deploy-public.yml` pass the shared `vars.ONEDRIVE_SYNC_CLIENT_ID` and `secrets.ONEDRIVE_SYNC_CLIENT_SECRET`. Unset values render blank, leaving OneDrive sync unavailable.
 - Delivered: verification of the Microsoft flow (T-1, T-5) against a real tenant, recorded in the 2026-10-14 entry.
 - Delivered: `MicrosoftIdentityClient.exchange_code(..., client_secret=None)` redeems as a confidential client when a secret is given (still with the PKCE verifier), and `build_app_permission_consent_url(..., state=None)` carries a `state`. Existing SharePoint callers pass neither and are unchanged.
+- Delivered: `MicrosoftGraphSites.search_sites`, `get_site` (both return `SiteSummary(id, name, web_url)`, the name preferring `displayName`) and `ensure_folder` (returns `FolderRef(item_id, web_url)`). `ensure_folder` reads the folder by path at the root of the site's default library, creates it on 404 with `conflictBehavior: fail`, and reuses one created in between.
 - In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
-- Next: Microsoft Graph site search, site lookup by id, and folder creation.
+- Next: the `onedrive_sync` domain model, migration, repository and lookup.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Graph site search, site lookup and folder
+
+- Delivered: `search_sites`, `get_site` and `ensure_folder` on `MicrosoftGraphSites` in `api/domains/agents/microsoft_graph_sites.py`, reusing its existing request helper and exceptions.
+- Verified: new unit tests in `api/tests/unit/test_microsoft_graph_sites.py` cover the request URLs (URL-encoded search term and folder name), result parsing, reuse of an existing folder, creation of a missing one, a folder created in between, refusal, throttling and a response without a link.
+- Follow-up: the `onedrive_sync` domain model, migration, repository and lookup.
 
 ### 2026-10-14 — AF-383 — Confidential client and consent state
 
