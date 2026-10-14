@@ -25,11 +25,13 @@ export function SetupStep({
   creditUsd,
   onBack,
   onHired,
+  onLater,
 }: {
   email: string;
   creditUsd: number | null;
   onBack: () => void;
   onHired: (agent: HiredAgent) => void;
+  onLater: () => void;
 }) {
   const form = useHireAgentForm({ onHired });
   const { template, createdAgent, pending, error, provisioningFailure } = form;
@@ -51,15 +53,20 @@ export function SetupStep({
         </button>
       }
       footerEnd={
-        <button
-          type="button"
-          className="af-btn af-btn-primary af-btn-lg"
-          disabled={pending || !form.canHire}
-          onClick={() => void form.hire()}
-        >
-          {hireLabel}
-          {!pending && !createdAgent && <ArrowRight aria-hidden />}
-        </button>
+        <>
+          <button type="button" className="af-btn af-btn-ghost" disabled={pending} onClick={onLater}>
+            I&apos;ll do this later
+          </button>
+          <button
+            type="button"
+            className="af-btn af-btn-primary af-btn-lg"
+            disabled={pending || !form.canHire}
+            onClick={() => void form.hire()}
+          >
+            {hireLabel}
+            {!pending && !createdAgent && <ArrowRight aria-hidden />}
+          </button>
+        </>
       }
     >
       {form.templatesError && <div className="mb-4"><StepAlert>We couldn&apos;t load templates.</StepAlert><button type="button" className="af-btn mt-2" onClick={() => void form.reloadTemplates()}>Try again</button></div>}
@@ -119,7 +126,7 @@ export function SetupStep({
                     Loading templates…
                   </span>
                 ) : (
-                  <div role="radiogroup" aria-label="Template" className="grid max-h-[232px] gap-2 overflow-y-auto p-[3px] sm:grid-cols-2">
+                  <div role="radiogroup" aria-label="Template" className="grid gap-2 p-[3px] sm:grid-cols-2">
                     {form.templates.map((item) => {
                       const selected = item.templateKey === form.templateKey;
                       return (

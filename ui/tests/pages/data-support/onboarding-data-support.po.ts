@@ -67,6 +67,17 @@ export function linkToken(status: "waiting" | "linked" | "expired", extra: Recor
 export class OnboardingDataSupport {
   constructor(private page: Page) {}
 
+  trackAgentCreationRequests() {
+    const requests: string[] = [];
+    this.page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST" && (path.endsWith("/agents") || path === "/api/v1/onboarding/agent")) {
+        requests.push(path);
+      }
+    });
+    return requests;
+  }
+
   async interceptDefaultOrganization(userContext: { organization_users: unknown[] }, { failure = false } = {}) {
     const calls: number[] = [];
     let failed = failure;

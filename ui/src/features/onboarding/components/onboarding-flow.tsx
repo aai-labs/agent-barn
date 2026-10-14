@@ -135,6 +135,11 @@ export function OnboardingFlow() {
         step={1}
         title="How do you want to start?"
         subtitle="Start with an assistant that's ready to go, or make one your own."
+        footerStart={
+          <button type="button" className="af-btn af-btn-ghost" onClick={() => finish(null, true)}>
+            I&apos;ll do this later
+          </button>
+        }
         footerEnd={onboarding.agentId && !onboarding.connectionId ? (
           <button
             type="button"
@@ -159,6 +164,7 @@ export function OnboardingFlow() {
       <SetupStep
         {...shell}
         onBack={() => setStage("choose")}
+        onLater={() => finish(null, true)}
         onHired={(agent) => { setHired(agent); finish(); }}
       />
     );

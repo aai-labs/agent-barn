@@ -10,7 +10,7 @@ import {
   TRIAL_ORG_ID,
   trialUserContext,
 } from "../pages/data-support/onboarding-data-support.po";
-import { mockAgent } from "../pages/data-support/agent-data-support.po";
+import { mockAgent, mockTemplates } from "../pages/data-support/agent-data-support.po";
 import { OnboardingPage } from "../pages/onboarding-page.po";
 
 const linkedAccount = {
@@ -122,6 +122,42 @@ test.describe("Trial onboarding", () => {
     expect(calls).toHaveLength(0);
   });
 
+  for (const screen of ["choice", "custom setup"]) {
+    test(`can defer ${screen} without hiring an agent`, async ({ page }) => {
+      const data = await signedInTrialUser(page);
+      await data.onboarding.interceptGetOnboarding();
+      const creations = data.onboarding.trackAgentCreationRequests();
+      const completions = await data.onboarding.interceptCompleteOnboarding([204], { required: false });
+      await data.agents.interceptGetTemplatesRequest();
+      await data.agents.interceptGetModelsRequest();
+      await data.agents.interceptNameSuggestionRequest();
+      const wizard = new OnboardingPage(page);
+      await wizard.goto();
+      if (screen === "custom setup") await wizard.chooseOwnAgent();
+      await wizard.laterAction().click();
+      await expect(page).toHaveURL(`/dashboard/${TRIAL_ORG_ID}`);
+      expect(completions).toHaveLength(1);
+      expect(creations).toHaveLength(0);
+      await page.goto("/onboarding");
+      await expect(page).toHaveURL(`/dashboard/${TRIAL_ORG_ID}`);
+    });
+  }
+
+  test("deferring setup can retry a failed save without hiring an agent", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    const creations = data.onboarding.trackAgentCreationRequests();
+    const completions = await data.onboarding.interceptCompleteOnboarding([500, 204], { required: false });
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.laterAction().click();
+    await expect(wizard.alert()).toContainText("save your progress");
+    await wizard.retryAction().click();
+    await expect(page).toHaveURL(`/dashboard/${TRIAL_ORG_ID}`);
+    expect(completions).toHaveLength(2);
+    expect(creations).toHaveLength(0);
+  });
+
   test("builds a custom agent without consuming a quick-start slot", async ({ page }) => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding();
@@ -206,7 +242,13 @@ test.describe("Trial onboarding", () => {
       await page.setViewportSize({ width, height: 900 });
       const data = await signedInTrialUser(page);
       await data.onboarding.interceptGetOnboarding();
-      await data.agents.interceptGetTemplatesRequest();
+      const templates = Array.from({ length: 8 }, (_, index) => ({
+        ...mockTemplates[0],
+        template_key: `template-${index}`,
+        template_name: `Template ${index + 1}`,
+        description: "An assistant that helps your team organize projects, review documents, and follow up on the work that matters most.",
+      }));
+      await data.agents.interceptGetTemplatesRequest({ body: { page: 1, page_size: 50, total: templates.length, items: templates } });
       await data.agents.interceptGetModelsRequest();
       await data.agents.interceptNameSuggestionRequest();
       const wizard = new OnboardingPage(page);
@@ -215,6 +257,10 @@ test.describe("Trial onboarding", () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await wizard.chooseOwnAgent();
       await expect(wizard.agentName()).toBeVisible();
+      await expect(wizard.templateGroup().getByRole("radio")).toHaveCount(8);
+      expect(await wizard.templateGroup().evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(true);
+      await wizard.laterAction().scrollIntoViewIfNeeded();
+      await expect(wizard.laterAction()).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     });
   }

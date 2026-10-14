@@ -103,7 +103,7 @@ export function OnboardingShell({
       footer={
         <>
           {footerStart}
-          <div className="ml-auto flex items-center gap-2.5">{footerEnd}</div>
+          <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2.5">{footerEnd}</div>
         </>
       }
     >

@@ -24,6 +24,8 @@ export class OnboardingPage {
   template() { return this.page.getByRole("radio", { name: /General Purpose/ }); }
   hireAction() { return this.page.getByRole("button", { name: "Hire agent", exact: true }); }
   skipAction() { return this.page.getByRole("button", { name: "Skip, I'll chat on the web" }); }
+  laterAction() { return this.page.getByRole("button", { name: "I'll do this later" }); }
+  templateGroup() { return this.page.getByRole("radiogroup", { name: "Template", exact: true }); }
 
   step(label: string): Locator {
     return this.page.getByText(label, { exact: true });
