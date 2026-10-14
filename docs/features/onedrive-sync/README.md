@@ -72,6 +72,12 @@ Searching or choosing without a fresh pending connection is 409: the administrat
    A refused revoke is 403 (SharePoint Administrator and site member), throttling 503, an unreachable Microsoft 502. In all three cases the connection stays active.
 3. The "Agent Barn" folder and its files are left in place. The Organization may connect again.
 
+## Keeping Agents out of the folder site
+
+- Connecting refuses a site any Agent in the Organization, including a deleted one, holds a recorded SharePoint selected-sites grant on (see the connect flow).
+- The SharePoint integration refuses to grant an Agent the site holding the Organization's folder (409, before any grant), through `OneDriveSyncLookupService.folder_site_id`. See [SharePoint selected sites](../integrations.md#sharepoint-selected-sites).
+- Delegated-mode SharePoint Agents have no per-site grant: they reach whatever the person who signed them in can open, which may include the folder site. This gap is accepted and documented, not enforced.
+
 ## Source map
 
 | Concern | Source |
@@ -80,7 +86,7 @@ Searching or choosing without a fresh pending connection is 409: the administrat
 | Persistence and read contracts | `../../../api/domains/onedrive_sync/models.py`, `repository.py` |
 | Flow, state and callback page | `../../../api/domains/onedrive_sync/service.py` |
 | Routes | `../../../api/domains/onedrive_sync/routes.py` |
-| Folder site for other domains | `../../../api/domains/onedrive_sync/lookup.py` |
+| Folder site for other domains | `../../../api/domains/onedrive_sync/lookup.py`, used by `../../../api/domains/agents/sharepoint_service.py` |
 | Microsoft identity and Graph calls | `../../../api/domains/agents/microsoft_identity.py`, `microsoft_graph_sites.py` |
 | Tests | `../../../api/tests/integration/test_onedrive_sync_connection.py`, `test_onedrive_sync_repository.py` |
 

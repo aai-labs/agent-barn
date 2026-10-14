@@ -22,13 +22,21 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: `GET …/connection/sites?search=` and `POST …/connection/site`. Choosing a site grants the platform app `write` on it, ensures the "Agent Barn" folder as the app, and activates the connection; a failure after the grant revokes it.
 - Delivered: choosing a site is refused (409, one line) when any Agent in the Organization, including a deleted one, has a recorded SharePoint selected-sites grant on it.
 - Delivered: `POST …/connection/disconnect` revokes the platform app's site grant with the administrator's fresh delegated token from the same Microsoft tenant, then marks the connection disconnected. The folder stays.
-- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. An Agent's SharePoint integration can still be granted the folder site.
-- Next: the SharePoint integration guard (409 for the Organization's folder site).
+- Delivered: the SharePoint integration refuses (409) to grant an Agent the Organization's OneDrive folder site; other SharePoint behaviour is unchanged. The API side of AF-383 is complete.
+- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. There is no UI yet.
+- Next: the Organization settings section (status, unavailable and connected states).
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — SharePoint guard for the folder site
+
+- Delivered: `SharePointService._refuse_onedrive_folder_site`, called in `_complete_site_grant` after new site ids are resolved and before any grant, via `OneDriveSyncLookupService`.
+- Changed: `docs/features/integrations.md` (SharePoint selected sites) and `README.md` describe both directions of the guard and the delegated-mode gap.
+- Verified: 4 new tests in `api/tests/integration/test_sharepoint_selected_sites.py` (refused alongside another site with nothing granted or saved, case-insensitive match, other sites still granted, another Organization's folder site not blocking). All existing tests in `test_sharepoint_selected_sites.py`, `test_sharepoint_sign_in.py`, `test_sharepoint_token_endpoint.py` and `test_onedrive_sync_connection.py` pass.
+- Follow-up: the Organization settings UI.
 
 ### 2026-10-14 — AF-383 — Disconnect
 
