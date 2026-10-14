@@ -12,7 +12,7 @@ import {
 } from "../integrations";
 import { formatAgentName } from "../naming";
 import { provisioningFailureOf } from "../provisioning-failure";
-import type { AgentProvisioningError } from "../schemas";
+import type { AgentProvisioningError, AgentTemplateRead } from "../schemas";
 import { splitRequiredSkills } from "../utils";
 import { useAgentNameSuggestion } from "./use-agent-name-suggestion";
 import { useCreateAgent } from "./use-create-agent";
@@ -41,13 +41,19 @@ function credentialsForProviders(
  * Shared by the hire dialog and onboarding's "Set up your agent" step, which lay the
  * same fields out differently.
  */
-export function useHireAgentForm({ onHired }: { onHired: (agent: HiredAgent) => void }) {
-  const { templates, isLoading: isLoadingTemplates, error: templatesError, refetch: reloadTemplates } = useTemplates();
+export function useHireAgentForm({ onHired, templatePagination }: {
+  onHired: (agent: HiredAgent) => void;
+  templatePagination?: { page: number; pageSize: number };
+}) {
+  const { templates, total: totalTemplates, isLoading: isLoadingTemplates, error: templatesError, refetch: reloadTemplates } = useTemplates(templatePagination);
   const createAgent = useCreateAgent();
   const startAgent = useStartAgent();
   const suggestion = useAgentNameSuggestion();
   const [manualName, setManualName] = useState<string | null>(null);
-  const [templateKey, setTemplateKey] = useState("");
+  // Selection pins the Template version and required Skills while the user browses
+  // other API pages; it must not depend on the currently displayed query result.
+  const [template, setTemplate] = useState<AgentTemplateRead | undefined>();
+  const templateKey = template?.templateKey ?? "";
   const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
   const [model, setModel] = useState<string | null>(null);
   const { defaultModel } = useModels();
@@ -62,7 +68,6 @@ export function useHireAgentForm({ onHired }: { onHired: (agent: HiredAgent) => 
   // start that Agent instead of creating a second one.
   const [createdAgent, setCreatedAgent] = useState<{ id: string; name: string } | null>(null);
 
-  const template = templates.find((candidate) => candidate.templateKey === templateKey);
   const name = manualName ?? (suggestion.firstName
     ? formatAgentName(suggestion.firstName, template?.templateName)
     : "");
@@ -77,7 +82,7 @@ export function useHireAgentForm({ onHired }: { onHired: (agent: HiredAgent) => 
 
   function handleTemplateChange(nextKey: string) {
     const nextTemplate = templates.find((candidate) => candidate.templateKey === nextKey);
-    setTemplateKey(nextKey);
+    setTemplate(nextTemplate);
     setError(null);
 
     if (!nextTemplate) {
@@ -191,6 +196,7 @@ export function useHireAgentForm({ onHired }: { onHired: (agent: HiredAgent) => 
 
   return {
     templates,
+    totalTemplates,
     isLoadingTemplates,
     templatesError,
     reloadTemplates,

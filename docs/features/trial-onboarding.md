@@ -59,6 +59,9 @@ Credit appears in the desktop rail.
    Templates are paginated in groups of six full cards, without an inner scrolling
    area. Previous/Next controls show the visible range; browsing preserves the selection,
    with the selected Template named below the grid.
+   Template pages request six items from the API and use its total, so catalogs
+   beyond the first API page remain reachable. The selected Template version,
+   generated name, required Skills, and entered credentials persist while browsing.
    **I'll do this later** is also available here when no hire/start request is in flight;
    it creates no Agent and preserves any Agent already created by a failed start.
 4. **You're ready**. Successful linking or hiring records `user.onboarding_completed_at`

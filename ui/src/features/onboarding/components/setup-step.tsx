@@ -37,13 +37,15 @@ export function SetupStep({
   onHired: (agent: HiredAgent) => void;
   onLater: () => void;
 }) {
-  const form = useHireAgentForm({ onHired });
+  const [templatePage, setTemplatePage] = useState(1);
+  const form = useHireAgentForm({ onHired, templatePagination: { page: templatePage, pageSize: TEMPLATES_PER_PAGE } });
   const { template, createdAgent, pending, error, provisioningFailure } = form;
-  const [templatePage, setTemplatePage] = useState(0);
-  const pageCount = Math.ceil(form.templates.length / TEMPLATES_PER_PAGE);
-  const currentPage = Math.min(templatePage, Math.max(0, pageCount - 1));
-  const pageStart = currentPage * TEMPLATES_PER_PAGE;
-  const visibleTemplates = form.templates.slice(pageStart, pageStart + TEMPLATES_PER_PAGE);
+  const pageCount = Math.max(1, Math.ceil(form.totalTemplates / TEMPLATES_PER_PAGE));
+  if (!form.isLoadingTemplates && !form.templatesError && templatePage > pageCount) {
+    setTemplatePage(pageCount);
+    return null;
+  }
+  const pageStart = (templatePage - 1) * TEMPLATES_PER_PAGE;
 
   const hireLabel = createdAgent ? (pending ? "Starting…" : "Start again") : pending ? "Hiring…" : "Hire agent";
 
@@ -114,7 +116,7 @@ export function SetupStep({
                 ) : (
                   <>
                     <div role="radiogroup" aria-label="Template" className="grid gap-2 p-[3px] sm:grid-cols-2">
-                      {visibleTemplates.map((item) => {
+                      {form.templates.map((item) => {
                         const selected = item.templateKey === form.templateKey;
                         return (
                           <button
@@ -153,13 +155,13 @@ export function SetupStep({
                     {pageCount > 1 && (
                       <nav aria-label="Template pages" className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[12px]" style={{ color: "var(--ink-3)" }}>
                         <span aria-live="polite" aria-atomic="true">
-                          {pageStart + 1}–{Math.min(pageStart + TEMPLATES_PER_PAGE, form.templates.length)} of {form.templates.length} templates
+                          {pageStart + 1}–{Math.min(pageStart + TEMPLATES_PER_PAGE, form.totalTemplates)} of {form.totalTemplates} templates
                         </span>
                         <div className="flex gap-1">
-                          <button type="button" aria-label="Previous templates" className="af-btn af-btn-ghost" disabled={currentPage === 0} onClick={() => setTemplatePage(currentPage - 1)}>
+                          <button type="button" aria-label="Previous templates" className="af-btn af-btn-ghost" disabled={templatePage === 1} onClick={() => setTemplatePage(templatePage - 1)}>
                             <ArrowLeft size={14} aria-hidden /> Previous
                           </button>
-                          <button type="button" aria-label="Next templates" className="af-btn af-btn-ghost" disabled={currentPage + 1 >= pageCount} onClick={() => setTemplatePage(currentPage + 1)}>
+                          <button type="button" aria-label="Next templates" className="af-btn af-btn-ghost" disabled={templatePage >= pageCount} onClick={() => setTemplatePage(templatePage + 1)}>
                             Next <ArrowRight size={14} aria-hidden />
                           </button>
                         </div>

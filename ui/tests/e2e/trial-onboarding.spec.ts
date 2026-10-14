@@ -10,7 +10,8 @@ import {
   TRIAL_ORG_ID,
   trialUserContext,
 } from "../pages/data-support/onboarding-data-support.po";
-import { mockAgent, mockTemplates } from "../pages/data-support/agent-data-support.po";
+import { mockAgent, mockAssignedSkill, mockTemplates } from "../pages/data-support/agent-data-support.po";
+import { mockPlatformSkill } from "../pages/data-support/skill-data-support.po";
 import { OnboardingPage } from "../pages/onboarding-page.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
 
@@ -240,6 +241,48 @@ test.describe("Trial onboarding", () => {
     await expect(wizard.continueAction()).toBeVisible();
   });
 
+  test("custom setup can hire template 51 and preserves its selection while browsing API pages", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    await data.onboarding.interceptCompleteOnboarding();
+    const templates = Array.from({ length: 54 }, (_, index) => ({
+      ...mockTemplates[0], template_key: `template-${index + 1}`, template_name: `Template ${index + 1}`,
+      description: "A useful assistant for multi-page onboarding catalogs.",
+      required_skills: index === 50 ? [{ ...mockAssignedSkill, id: mockPlatformSkill.id, required: true, version: 3 }] : [],
+    }));
+    await data.agents.interceptGetTemplatesRequest({ catalog: templates });
+    await data.agents.interceptGetModelsRequest();
+    await data.agents.interceptNameSuggestionRequest();
+    await data.skills.interceptGetSkillsRequest();
+    await data.agents.interceptCreateAgentRequest({ body: { ...mockAgent, id: TRIAL_AGENT_ID, status: "STOPPED" } });
+    await data.agents.interceptStartAgentRequest({ agentId: TRIAL_AGENT_ID });
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.chooseOwnAgent();
+    for (let pageIndex = 0; pageIndex < 8; pageIndex += 1) await wizard.nextTemplates().click();
+    const template = wizard.templateGroup().getByRole("radio", { name: /^Template 51 / });
+    await expect(template).toBeVisible();
+    await expect(page.getByText("49–54 of 54 templates")).toBeVisible();
+    await expect(wizard.nextTemplates()).toBeDisabled();
+    await template.click();
+    await page.getByPlaceholder("github_pat_… or ghp_…").fill("test-github-token");
+    await page.getByPlaceholder("owner-or-org").fill("demo-org");
+    await expect(wizard.agentName()).toHaveValue("Brandon the Template 51");
+    await wizard.previousTemplates().click();
+    await expect(page.getByText("Selected: Template 51", { exact: true })).toBeVisible();
+    await expect(wizard.agentName()).toHaveValue("Brandon the Template 51");
+    await expect(page.getByPlaceholder("github_pat_… or ghp_…")).toHaveValue("test-github-token");
+    await expect(page.getByPlaceholder("owner-or-org")).toHaveValue("demo-org");
+    const created = page.waitForRequest((request) => request.url().endsWith("/agents") && request.method() === "POST");
+    await wizard.hireAction().click();
+    expect((await created).postDataJSON()).toMatchObject({
+      name: "Brandon the Template 51", template_key: "template-51", template_version: 1,
+      skill_ids: [mockPlatformSkill.id], skill_versions: [{ skill_id: mockPlatformSkill.id, version: 3 }],
+      secrets: [{ provider: "github", content: { token: "test-github-token", owner: "demo-org", org: "demo-org" } }],
+    });
+    await expect(wizard.heading("Maya is ready")).toBeVisible();
+  });
+
   for (const width of [320, 768, 1024, 1440]) {
     test(`wizard fits a ${width}px viewport`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
@@ -251,7 +294,7 @@ test.describe("Trial onboarding", () => {
         template_name: `Template ${index + 1}`,
         description: "An assistant that helps your team organize projects, review documents, and follow up on the work that matters most.",
       }));
-      await data.agents.interceptGetTemplatesRequest({ body: { page: 1, page_size: 50, total: templates.length, items: templates } });
+      await data.agents.interceptGetTemplatesRequest({ catalog: templates });
       await data.agents.interceptGetModelsRequest();
       await data.agents.interceptNameSuggestionRequest();
       const wizard = new OnboardingPage(page);
