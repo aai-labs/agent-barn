@@ -52,6 +52,8 @@ test("an Owner previews what a run reads and starts one for a new playbook", asy
   await expect(playbooks.preview()).toContainText("Reads 20 conversations (41 messages, 137 tool calls)");
   await expect(playbooks.preview()).toContainText("48.0k input and 10.0k output tokens with gpt-4.1-mini");
   await expect(playbooks.form().getByRole("textbox", { name: "Playbook name" })).toHaveValue("Sally playbook");
+  await expect(playbooks.form()).toContainText("Role playbook: how Sally does its job");
+  await expect(playbooks.form()).toContainText("Organization conventions: rules every Agent should follow");
 
   await playbooks.create();
 
@@ -96,9 +98,10 @@ test("a running run updates to a reviewable draft without reloading", async ({ p
   mock.update(String(running.id), mockSucceededRun({ id: running.id }));
 
   const run = playbooks.runs().first();
-  await expect(run).toContainText("Draft ready", { timeout: 10_000 });
+  await expect(run).toContainText("Ready to review", { timeout: 10_000 });
   await expect(run).toContainText("20 conversations · 41 messages · 137 tool calls · 3 memories · 65.0k tokens");
-  await expect(run.getByRole("link", { name: "Review draft" })).toHaveAttribute(
+  await expect(run.getByRole("group", { name: "Role playbook" })).toContainText("How Sally does its job");
+  await expect(run.getByRole("link", { name: "Review playbook" })).toHaveAttribute(
     "href",
     `/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_PLAYBOOK_SKILL_ID}`,
   );
@@ -195,7 +198,10 @@ test("proposed organization conventions are reviewed and added to a Template's A
     }),
   );
 
-  await playbooks.runs().first().getByRole("button", { name: "Review conventions (3)" }).click();
+  const conventions = playbooks.runs().first().getByRole("group", { name: "Organization conventions" });
+  await expect(conventions).toContainText("Organization conventions (3)");
+  await expect(conventions).toContainText("Rules for every Agent, whatever its role.");
+  await conventions.getByRole("button", { name: "Review conventions" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("Seen in 4 conversations");
   await dialog.getByRole("checkbox", { name: "Include convention 3" }).click();
@@ -218,6 +224,7 @@ test("proposed organization conventions are reviewed and added to a Template's A
 test("a run that proposed no conventions offers no review", async ({ page }) => {
   const { playbooks } = await open(page, { runs: [mockSucceededRun({ convention_count: 0 })] });
 
-  await expect(playbooks.runs().first()).toContainText("Draft ready");
+  await expect(playbooks.runs().first()).toContainText("Ready to review");
+  await expect(playbooks.runs().first()).toContainText("None found in these conversations.");
   await expect(playbooks.runs().first().getByRole("button", { name: /Review conventions/ })).toHaveCount(0);
 });

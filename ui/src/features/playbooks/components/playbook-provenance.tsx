@@ -1,10 +1,12 @@
 "use client";
 
-import { BookOpenCheck } from "lucide-react";
+import { useState } from "react";
+import { BookOpenCheck, ScrollText } from "lucide-react";
 
 import { formatDate } from "@/shared/date";
 
 import { useOrganizationPlaybookRuns } from "../hooks/use-organization-playbook-runs";
+import { ConventionsReviewDialog } from "./conventions-review-dialog";
 import { PlaybookInstallActions } from "./playbook-install-actions";
 
 const REVIEW_CHECKLIST = [
@@ -33,6 +35,7 @@ export function PlaybookProvenance({
   hasDraft: boolean;
 }) {
   const { runs } = useOrganizationPlaybookRuns(skillId, enabled);
+  const [reviewing, setReviewing] = useState(false);
   const latest = runs.find((run) => run.status === "SUCCEEDED");
   if (!enabled || !latest) return null;
 
@@ -52,6 +55,26 @@ export function PlaybookProvenance({
             {latest.sessionCount} conversations from {formatDate(latest.windowStart)} to {formatDate(latest.windowEnd)}
             {latest.memoryCount > 0 ? `, and ${latest.memoryCount} long-term memories` : ""}.
           </p>
+          <p className="mb-0 mt-2" style={{ color: "var(--ink-3)" }}>
+            This is the <strong>role playbook</strong>: how {latest.sourceAgentName} does its job. Install it only on
+            Agents that do the same job.
+          </p>
+          <div
+            className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2"
+            style={{ borderColor: "var(--line)", background: "var(--bg-soft)" }}
+            data-testid="playbook-conventions-pointer"
+          >
+            <span>
+              {latest.conventionCount > 0
+                ? `The same run proposed ${latest.conventionCount} organization ${latest.conventionCount === 1 ? "convention" : "conventions"}: rules for every Agent, whatever its role.`
+                : "The same run found no organization conventions for every Agent."}
+            </span>
+            {latest.conventionCount > 0 && (
+              <button type="button" className="af-btn af-btn-sm" onClick={() => setReviewing(true)}>
+                <ScrollText size={13} aria-hidden /> Review conventions
+              </button>
+            )}
+          </div>
           {publishedVersion !== null && (
             <>
               <p className="mb-0 mt-3 font-medium">Put version {publishedVersion} to work</p>
@@ -70,6 +93,11 @@ export function PlaybookProvenance({
           )}
         </div>
       </div>
+      <ConventionsReviewDialog
+        agentId={latest.sourceAgentId}
+        runId={reviewing ? latest.id : null}
+        onClose={() => setReviewing(false)}
+      />
     </section>
   );
 }

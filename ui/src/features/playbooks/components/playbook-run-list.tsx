@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ExternalLink, FileText, Loader2, ScrollText } from "lucide-react";
+import { BookOpenCheck, ExternalLink, FileText, Loader2, ScrollText } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Badge, type BadgeVariant } from "@/components/badge";
@@ -47,6 +47,66 @@ function RunFacts({ run }: { run: PlaybookExtraction }) {
   return (
     <div className="mt-1 text-[0.78rem]" style={{ color: "var(--ink-3)" }}>
       {facts.join(" · ")}
+    </div>
+  );
+}
+
+/** What a finished run produced: a playbook for this role, and conventions for every Agent. */
+function RunOutputs({
+  run,
+  organizationId,
+  onReviewConventions,
+}: {
+  run: PlaybookExtraction;
+  organizationId: string | null;
+  onReviewConventions: () => void;
+}) {
+  return (
+    <div className="mt-3 grid gap-3 sm:grid-cols-2" data-testid="playbook-run-outputs">
+      <div className="rounded-lg border p-3" style={{ borderColor: "var(--line)" }} aria-label="Role playbook" role="group">
+        <div className="flex items-center gap-2 text-[0.88rem] font-medium">
+          <BookOpenCheck size={15} aria-hidden style={{ color: "var(--accent-ink)" }} /> Role playbook
+        </div>
+        <p className="mb-3 mt-1 text-[0.8rem]" style={{ color: "var(--ink-3)" }}>
+          How {run.sourceAgentName} does its job, for Agents in the same role. Saved as the unpublished Skill “
+          {run.skillName}”.
+        </p>
+        {run.skillId && organizationId ? (
+          <Link
+            className="af-btn af-btn-sm af-btn-primary"
+            href={`/dashboard/${organizationId}/settings/skills/${run.skillId}`}
+          >
+            <ExternalLink size={13} aria-hidden /> Review playbook
+          </Link>
+        ) : (
+          <span className="text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
+            The Skill has since been deleted.
+          </span>
+        )}
+      </div>
+      <div
+        className="rounded-lg border p-3"
+        style={{ borderColor: "var(--line)" }}
+        aria-label="Organization conventions"
+        role="group"
+      >
+        <div className="flex items-center gap-2 text-[0.88rem] font-medium">
+          <ScrollText size={15} aria-hidden style={{ color: "var(--accent-ink)" }} /> Organization conventions (
+          {run.conventionCount})
+        </div>
+        <p className="mb-3 mt-1 text-[0.8rem]" style={{ color: "var(--ink-3)" }}>
+          Rules for every Agent, whatever its role. You choose which Templates&apos; AGENTS.md they go into.
+        </p>
+        {run.conventionCount > 0 ? (
+          <button type="button" className="af-btn af-btn-sm af-btn-primary" onClick={onReviewConventions}>
+            <ScrollText size={13} aria-hidden /> Review conventions
+          </button>
+        ) : (
+          <span className="text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
+            None found in these conversations.
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -144,53 +204,49 @@ export function PlaybookRunList({
           {runs.map((run) => (
             <li
               key={run.id}
-              className="flex flex-wrap items-start justify-between gap-3 border-b px-5 py-4 last:border-b-0"
+              className="border-b px-5 py-4 last:border-b-0"
               style={{ borderColor: "var(--line)" }}
               data-testid="playbook-run"
             >
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{run.skillName}</span>
-                  <Badge variant={STATUS_VARIANT[run.status]}>
-                    {isActive(run) && <Loader2 size={11} className="animate-spin" aria-hidden />}
-                    {STATUS_LABEL[run.status]}
-                  </Badge>
-                  <span className="text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
-                    {formatDate(run.createdAt)}
-                  </span>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{run.skillName}</span>
+                    <Badge variant={STATUS_VARIANT[run.status]}>
+                      {isActive(run) && <Loader2 size={11} className="animate-spin" aria-hidden />}
+                      {STATUS_LABEL[run.status]}
+                    </Badge>
+                    <span className="text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
+                      {formatDate(run.createdAt)}
+                    </span>
+                  </div>
+                  <RunFacts run={run} />
+                  {run.status === "FAILED" && (
+                    <p className="mb-0 mt-1 text-[0.8rem]" style={{ color: "var(--err)" }}>
+                      {errorMessage(run.errorCode)}
+                    </p>
+                  )}
                 </div>
-                <RunFacts run={run} />
-                {run.status === "FAILED" && (
-                  <p className="mb-0 mt-1 text-[0.8rem]" style={{ color: "var(--err)" }}>
-                    {errorMessage(run.errorCode)}
-                  </p>
-                )}
+                <div className="flex shrink-0 items-center gap-2">
+                  {isActive(run) && (
+                    <button type="button" className="af-btn af-btn-sm" onClick={() => setCancelTarget(run)}>
+                      Cancel
+                    </button>
+                  )}
+                  {run.errorCode === "draft_conflict" && (
+                    <button type="button" className="af-btn af-btn-sm" onClick={() => setViewingRunId(run.id)}>
+                      <FileText size={13} aria-hidden /> View playbook
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                {isActive(run) && (
-                  <button type="button" className="af-btn af-btn-sm" onClick={() => setCancelTarget(run)}>
-                    Cancel
-                  </button>
-                )}
-                {run.status === "SUCCEEDED" && run.skillId && selectedOrganization && (
-                  <Link
-                    className="af-btn af-btn-sm af-btn-primary"
-                    href={`/dashboard/${selectedOrganization.id}/settings/skills/${run.skillId}`}
-                  >
-                    <ExternalLink size={13} aria-hidden /> Review draft
-                  </Link>
-                )}
-                {run.status === "SUCCEEDED" && run.conventionCount > 0 && (
-                  <button type="button" className="af-btn af-btn-sm" onClick={() => setConventionsRunId(run.id)}>
-                    <ScrollText size={13} aria-hidden /> Review conventions ({run.conventionCount})
-                  </button>
-                )}
-                {run.errorCode === "draft_conflict" && (
-                  <button type="button" className="af-btn af-btn-sm" onClick={() => setViewingRunId(run.id)}>
-                    <FileText size={13} aria-hidden /> View playbook
-                  </button>
-                )}
-              </div>
+              {run.status === "SUCCEEDED" && (
+                <RunOutputs
+                  run={run}
+                  organizationId={selectedOrganization?.id ?? null}
+                  onReviewConventions={() => setConventionsRunId(run.id)}
+                />
+              )}
             </li>
           ))}
         </ul>

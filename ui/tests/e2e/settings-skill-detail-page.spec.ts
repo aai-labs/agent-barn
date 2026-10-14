@@ -375,4 +375,38 @@ test.describe("Settings — Skill detail page", () => {
     await expect(page.getByRole("heading", { name: mockCustomSkill.name })).toBeVisible();
     await expect(page.getByRole("region", { name: "Playbook source" })).toHaveCount(0);
   });
+
+  test("a playbook's Skill page says it is the role playbook and leads to the run's conventions", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillFilesRequest({
+      skill: { ...mockCustomSkill, hasDraft: true },
+      files: [{ path: "SKILL.md", content: "# Refunds playbook" }],
+    });
+    await dataSupportPage.skills.interceptGetSkillVersionsRequest();
+    await dataSupportPage.skills.interceptGetSkillDraftRequest();
+    await dataSupportPage.orgTemplates.interceptGetLineages();
+    await dataSupportPage.playbooks.intercept({
+      runs: [
+        mockSucceededRun({
+          skill_id: MOCK_CUSTOM_SKILL_ID,
+          source_agent_name: "Sally",
+          convention_count: 1,
+          conventions: [{ rule: "Use Vilnius time for dates and deadlines.", conversations: 4 }],
+        }),
+      ],
+    });
+
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
+
+    const source = page.getByRole("region", { name: "Playbook source" });
+    await expect(source).toContainText("role playbook: how Sally does its job");
+    await expect(page.getByTestId("playbook-conventions-pointer")).toContainText(
+      "The same run proposed 1 organization convention:",
+    );
+    await source.getByRole("button", { name: "Review conventions" }).click();
+
+    await expect(page.getByRole("dialog")).toContainText("Organization conventions");
+    await expect(page.getByRole("textbox", { name: "Convention 1" })).toHaveValue(
+      "Use Vilnius time for dates and deadlines.",
+    );
+  });
 });

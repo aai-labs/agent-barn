@@ -34,7 +34,7 @@ export function isActive(run: Pick<PlaybookExtraction, "status">): boolean {
 export const STATUS_LABEL: Record<PlaybookExtractionStatus, string> = {
   QUEUED: "Queued",
   RUNNING: "Running",
-  SUCCEEDED: "Draft ready",
+  SUCCEEDED: "Ready to review",
   FAILED: "Failed",
   CANCELLED: "Cancelled",
 };

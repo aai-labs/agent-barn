@@ -32,6 +32,11 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 
 ## Changes
 
+### 2026-10-14 — clearer outputs in the UI
+
+- Changed: a finished run shows its two outputs as labelled cards, the Role playbook (for Agents in the same role) and Organization conventions (for every Agent), each with its own review action; the status reads Ready to review; the create form explains both outputs; the Skill page banner says it is the role playbook and links to the same run's conventions.
+- Why: after a run, people opened the sales Skill draft and missed the role-independent conventions on the same run.
+
 ### 2026-10-14 — fix: cut-off playbook answers
 
 - Found: in a live run with `openrouter/anthropic/claude-haiku-5.5` the playbook step stopped at its 4,000-token limit, so its JSON was cut off and the run failed with `model_error` after spending about $0.018.

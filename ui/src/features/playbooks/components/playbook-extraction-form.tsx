@@ -77,17 +77,26 @@ export function PlaybookExtractionForm({ agent, hasActiveRun }: { agent: Agent; 
         <div className="min-w-0">
           <h3 className="m-0 text-[0.95rem] font-semibold">Create a playbook from this Agent</h3>
           <p className="mb-0 mt-1 text-[0.84rem] leading-relaxed" style={{ color: "var(--ink-3)" }}>
-            Reads this Agent&apos;s recent conversations, tool calls, and long-term memories. It drafts an Organization
-            Skill describing how this role works, and proposes organization conventions that apply to every Agent.
-            Nothing is published: you review the draft and the conventions, then put them to use.
+            Reads this Agent&apos;s recent conversations, tool calls, and long-term memories, and produces two things
+            for you to review. Nothing is published or installed until you do.
           </p>
+          <ul className="mb-0 mt-2 pl-5 text-[0.84rem] leading-relaxed" style={{ color: "var(--ink-3)" }}>
+            <li>
+              <strong>Role playbook</strong>: how {agent.name} does its job, saved as a Skill draft for Agents in the
+              same role.
+            </li>
+            <li>
+              <strong>Organization conventions</strong>: rules every Agent should follow whatever its role, which you
+              add to the AGENTS.md of the Templates you choose.
+            </li>
+          </ul>
         </div>
       </div>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <fieldset className="m-0 border-0 p-0 sm:col-span-2">
-          <legend className="mb-2 text-sm font-medium">Write to</legend>
-          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Write to">
+          <legend className="mb-2 text-sm font-medium">Save the role playbook to</legend>
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Save the role playbook to">
             <button
               type="button"
               role="radio"
