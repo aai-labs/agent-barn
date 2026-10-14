@@ -200,3 +200,69 @@ test.describe("Settings · OneDrive · connecting", () => {
     await expect(oneDrive.connect).toHaveCount(0);
   });
 });
+
+test.describe("Settings · OneDrive · disconnecting", () => {
+  let data: DataSupport;
+  let oneDrive: SettingsOneDriveSyncPage;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    oneDrive = new SettingsOneDriveSyncPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetOrganizationsRequest();
+    await data.organizations.interceptGetOrganization();
+  });
+
+  test("an Owner confirms, signs in with Microsoft and the connection ends", async () => {
+    await data.users.interceptGetUserContextRequest();
+    const record = await data.oneDriveSync.interceptConnectFlow({ initial: activeOneDriveSync() });
+    await oneDrive.open();
+
+    await oneDrive.disconnect.click();
+    await expect(oneDrive.dialog).toContainText("The Agent Barn folder and its files stay in SharePoint");
+    await oneDrive.dialog.getByRole("button", { name: "Disconnect", exact: true }).click();
+
+    await expect(oneDrive.connect).toBeVisible();
+    await expect(oneDrive.openInOneDrive).toHaveCount(0);
+    expect(record.authorizeQuery?.get("purpose")).toBe("disconnect");
+    expect(record.disconnectBody).toEqual({ code: "the-code", state: "the-state" });
+  });
+
+  test("a disconnect Microsoft refuses keeps the connection and says why", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.oneDriveSync.interceptConnectFlow({
+      initial: activeOneDriveSync(),
+      disconnectStatus: 403,
+      disconnectDetail: "Sign in as a SharePoint administrator who is a member of this site, then try again.",
+    });
+    await oneDrive.open();
+
+    await oneDrive.confirmDisconnect();
+
+    await expect(oneDrive.error).toContainText("SharePoint administrator who is a member of this site");
+    await expect(oneDrive.openInOneDrive).toBeVisible();
+  });
+
+  test("a Member cannot disconnect", async () => {
+    await data.users.interceptGetUserContextRequest({ userContext: memberContext() });
+    await data.oneDriveSync.interceptConnectFlow({ initial: activeOneDriveSync() });
+
+    await oneDrive.open();
+
+    await expect(oneDrive.openInOneDrive).toBeVisible();
+    await expect(oneDrive.disconnect).toHaveCount(0);
+  });
+
+  test("an unfinished connection can be started over", async () => {
+    await data.users.interceptGetUserContextRequest();
+    const record = await data.oneDriveSync.interceptConnectFlow({ initial: oneDriveSyncStatus({ status: "pending" }) });
+    await oneDrive.open();
+
+    await oneDrive.startOver.click();
+
+    await expect(oneDrive.connect).toBeVisible();
+    await expect(oneDrive.siteSearch).toHaveCount(0);
+    expect(record.abandoned).toBe(true);
+  });
+});

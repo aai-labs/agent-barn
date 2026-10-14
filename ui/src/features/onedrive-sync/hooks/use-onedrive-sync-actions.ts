@@ -69,6 +69,62 @@ export function useConnectOneDrive() {
   return { connect, isConnecting };
 }
 
+/**
+ * Disconnects OneDrive: the administrator signs in again (no consent step), because only their
+ * delegated token may remove Agent Barn's grant on the site. The folder stays in SharePoint.
+ */
+export function useDisconnectOneDrive() {
+  const { path, organizationId } = useConnectionPath();
+  const queryClient = useQueryClient();
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
+
+  const disconnect = useCallback(async () => {
+    const popup = openOAuthPopup(POPUP_NAME);
+    setIsDisconnecting(true);
+    try {
+      try {
+        const { data } = await api.get<{ authorizeUrl: string }>(`${path}/authorize-url`, {
+          schema: AuthorizeUrlSchema,
+          params: { purpose: "disconnect" },
+        });
+        popup.location.href = data.authorizeUrl;
+      } catch (err) {
+        popup.close();
+        throw err;
+      }
+      const { code, state } = await waitForOAuthPopupMessage(popup, MESSAGE_TYPE, "Microsoft", CLOSED_MESSAGE);
+      const { data } = await api.post<OneDriveSyncConnection>(
+        `${path}/disconnect`,
+        { code, state },
+        { schema: OneDriveSyncConnectionSchema },
+      );
+      queryClient.setQueryData(oneDriveSyncKey.detail(organizationId), data);
+    } finally {
+      setIsDisconnecting(false);
+    }
+  }, [path, organizationId, queryClient]);
+
+  return { disconnect, isDisconnecting };
+}
+
+/** Forgets an unfinished connection so connecting can start again. */
+export function useAbandonOneDrive() {
+  const { path, organizationId } = useConnectionPath();
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      await api.delete(path);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: oneDriveSyncKey.detail(organizationId) });
+      void queryClient.invalidateQueries({ queryKey: oneDriveSyncKey.lists() });
+    },
+  });
+
+  return { abandon: mutation.mutateAsync, isAbandoning: mutation.isPending };
+}
+
 /** SharePoint sites matching `search`, seen by the administrator who signed in. Idle without a term. */
 export function useOneDriveSyncSites(search: string) {
   const { path, organizationId } = useConnectionPath();

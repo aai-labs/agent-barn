@@ -83,7 +83,8 @@ Settings → OneDrive (`?tab=onedrive-sync`) is visible to every Organization Me
 - Pending:
   - Owners and Admins get the site picker: a search that needs a term, a result list, and **Use this site**. The API's `detail` is shown inline when choosing fails, for example a site an Agent already holds. Reloading the page resumes at the picker while the sign-in is fresh.
   - Members are told no SharePoint site has been chosen yet.
-- Active: the site name, an "Open in OneDrive" link to the folder (new tab), and the hint to choose "Add shortcut to My files" in OneDrive.
+- Pending (Owners and Admins): **Start over** abandons the unfinished connection.
+- Active: the site name, an "Open in OneDrive" link to the folder (new tab), and the hint to choose "Add shortcut to My files" in OneDrive. Owners and Admins also get **Disconnect**, confirmed in a dialog that says the folder and its files stay in SharePoint. It then opens the Microsoft sign-in popup and posts the code to the disconnect route. A refusal, such as a signer who isn't a SharePoint Administrator and site member, is shown inline and the connection stays.
 
 The query is keyed by Organization id, so switching Organization never shows the previous one's connection.
 
@@ -92,6 +93,14 @@ The query is keyed by Organization id, so switching Organization never shows the
 - Connecting refuses a site any Agent in the Organization, including a deleted one, holds a recorded SharePoint selected-sites grant on (see the connect flow).
 - The SharePoint integration refuses to grant an Agent the site holding the Organization's folder (409, before any grant), through `OneDriveSyncLookupService.folder_site_id`. See [SharePoint selected sites](../integrations.md#sharepoint-selected-sites).
 - Delegated-mode SharePoint Agents have no per-site grant: they reach whatever the person who signed them in can open, which may include the folder site. This gap is accepted and documented, not enforced.
+
+## Known limits
+
+- **Delegated-mode SharePoint Agents** can reach the folder site through their signer's own access; only selected-sites grants are guarded.
+- **Deleting an Organization** deletes its connection row (cascade) but leaves the platform app's grant on the site in Microsoft. Nobody is signed in to revoke it. An administrator can remove it from the site's permissions.
+- **There is no lock between an Agent's selected-sites grant and an Organization connecting at the same moment.** Each check reads the other's state independently, so two requests finishing together can both pass.
+- **Approving the app needs a Microsoft Global Administrator or Privileged Role Administrator.** Connecting and disconnecting need a SharePoint Administrator who is a member of the site.
+- **The app shows as "unverified" on Microsoft's consent page** until the AAI Labs app has publisher verification.
 
 ## Source map
 

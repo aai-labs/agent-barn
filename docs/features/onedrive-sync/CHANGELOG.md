@@ -25,13 +25,21 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: the SharePoint integration refuses (409) to grant an Agent the Organization's OneDrive folder site; other SharePoint behaviour is unchanged. The API side of AF-383 is complete.
 - Delivered: Settings → OneDrive shows the unavailable, not connected, pending and active states to every Member, with "Open in OneDrive" and the "Add shortcut to My files" hint.
 - Delivered: Owners and Admins connect from the section: **Connect OneDrive** (one popup for consent and sign-in), then the site picker, then the connected state.
-- In transition: the section has no Disconnect or Start over control yet. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
-- Next: disconnect and abandoning a pending connection in the UI, then the manual run against the test tenant.
+- Delivered: Owners and Admins disconnect (confirmation dialog, then a Microsoft sign-in) and start over from a pending connection. Every AF-383 slice is implemented.
+- In transition: no GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
+- Next: the manual run against the test tenant (acceptance criteria 3 to 6, and disconnect); then close this log.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Disconnect and Start over in the UI
+
+- Delivered: `useDisconnectOneDrive` and `useAbandonOneDrive`, the Disconnect control behind `ConfirmationDialog`, and Start over under the site picker.
+- Changed: `README.md` (Organization settings, Known limits).
+- Verified: 4 new tests in `ui/tests/e2e/onedrive-sync.spec.ts` (disconnect with recorded requests, a refused disconnect keeping the connection, a Member without the control, Start over); the Shared Credentials, Spend limits and Agent Memory specs still pass; lint and type check pass.
+- Follow-up: the manual run against the test tenant.
 
 ### 2026-10-14 — AF-383 — Connect flow and site picker in the UI
 

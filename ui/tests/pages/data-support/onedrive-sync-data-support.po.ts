@@ -38,6 +38,8 @@ export type ConnectFlowRecord = {
   signInBody?: Record<string, unknown>;
   searches: string[];
   siteBody?: Record<string, unknown>;
+  disconnectBody?: Record<string, unknown>;
+  abandoned: boolean;
 };
 
 export class OneDriveSyncDataSupport extends BaseInterceptor {
@@ -52,19 +54,43 @@ export class OneDriveSyncDataSupport extends BaseInterceptor {
     sites = [ONEDRIVE_SITE],
     chooseStatus = 200,
     chooseDetail = "Choosing the site failed",
+    disconnectStatus = 200,
+    disconnectDetail = "Disconnecting failed",
   }: {
     initial?: Record<string, unknown>;
     callbackMessage?: Record<string, unknown>;
     sites?: Record<string, unknown>[];
     chooseStatus?: number;
     chooseDetail?: string;
+    disconnectStatus?: number;
+    disconnectDetail?: string;
   } = {}): Promise<ConnectFlowRecord> {
-    const record: ConnectFlowRecord = { searches: [] };
+    const record: ConnectFlowRecord = { searches: [], abandoned: false };
     let current = initial;
     const base = "**/api/v1/organizations/*/onedrive-sync/connection";
 
     await this.page.route(base, async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
+      const method = route.request().method();
+      if (method === "DELETE") {
+        record.abandoned = true;
+        if (current.status === "pending") current = oneDriveSyncStatus();
+        await route.fulfill({ status: 204, body: "" });
+        return;
+      }
+      if (method !== "GET") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) });
+    });
+    await this.page.route(`${base}/disconnect`, async (route) => {
+      record.disconnectBody = route.request().postDataJSON() as Record<string, unknown>;
+      if (disconnectStatus >= 400) {
+        await route.fulfill({
+          status: disconnectStatus,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: disconnectDetail }),
+        });
+        return;
+      }
+      current = oneDriveSyncStatus();
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) });
     });
     await this.page.route(`${base}/authorize-url*`, async (route) => {

@@ -42,6 +42,23 @@ export class SettingsOneDriveSyncPage {
     return this.section.getByRole("alert");
   }
 
+  get disconnect() {
+    return this.section.getByRole("button", { name: "Disconnect", exact: true });
+  }
+
+  get startOver() {
+    return this.section.getByRole("button", { name: "Start over" });
+  }
+
+  get dialog() {
+    return this.page.getByRole("dialog");
+  }
+
+  async confirmDisconnect() {
+    await this.disconnect.click();
+    await this.dialog.getByRole("button", { name: "Disconnect", exact: true }).click();
+  }
+
   useSite(name: string) {
     return this.section.getByRole("button", { name: `Use ${name}` });
   }

@@ -4,9 +4,10 @@ import { useState, type ReactNode } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { SettingsSection } from "@/components/settings/settings-section";
 
-import { useConnectOneDrive } from "../hooks/use-onedrive-sync-actions";
+import { useAbandonOneDrive, useConnectOneDrive, useDisconnectOneDrive } from "../hooks/use-onedrive-sync-actions";
 import { useOneDriveSyncQuery } from "../hooks/use-onedrive-sync-query";
 import { OneDriveSitePicker } from "./onedrive-site-picker";
 
@@ -32,15 +33,25 @@ function ErrorText({ children }: { children: string }) {
 export function OneDriveSyncPanel({ canManage }: { canManage: boolean }) {
   const { connection, isLoading, error, refetch } = useOneDriveSyncQuery();
   const { connect, isConnecting } = useConnectOneDrive();
-  const [connectError, setConnectError] = useState<string | null>(null);
+  const { disconnect, isDisconnecting } = useDisconnectOneDrive();
+  const { abandon, isAbandoning } = useAbandonOneDrive();
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
-  async function handleConnect() {
-    setConnectError(null);
+  async function run(action: () => Promise<unknown>, fallback: string) {
+    setActionError(null);
     try {
-      await connect();
+      await action();
     } catch (err) {
-      setConnectError(err instanceof Error ? err.message : "Connecting OneDrive failed.");
+      setActionError(err instanceof Error ? err.message : fallback);
     }
+  }
+
+  function handleDisconnect() {
+    // The popup opens synchronously inside this click, before any await, or browsers block it.
+    const pending = run(disconnect, "Disconnecting OneDrive failed.");
+    setConfirmingDisconnect(false);
+    return pending;
   }
 
   if (isLoading) {
@@ -74,11 +85,10 @@ export function OneDriveSyncPanel({ canManage }: { canManage: boolean }) {
                   type="button"
                   className="af-btn af-btn-primary w-fit"
                   disabled={isConnecting}
-                  onClick={() => void handleConnect()}
+                  onClick={() => void run(connect, "Connecting OneDrive failed.")}
                 >
                   {isConnecting ? "Connecting…" : "Connect OneDrive"}
                 </button>
-                {connectError && <ErrorText>{connectError}</ErrorText>}
               </>
             ) : (
               <Note>An Organization Owner or Admin can connect OneDrive.</Note>
@@ -88,7 +98,17 @@ export function OneDriveSyncPanel({ canManage }: { canManage: boolean }) {
 
         {connection.available && connection.status === "pending" &&
           (canManage ? (
-            <OneDriveSitePicker />
+            <>
+              <OneDriveSitePicker />
+              <button
+                type="button"
+                className="af-btn af-btn-ghost af-btn-sm w-fit"
+                disabled={isAbandoning}
+                onClick={() => void run(() => abandon(), "Starting over failed.")}
+              >
+                Start over
+              </button>
+            </>
           ) : (
             <Note>A connection was started, but no SharePoint site has been chosen yet.</Note>
           ))}
@@ -110,9 +130,30 @@ export function OneDriveSyncPanel({ canManage }: { canManage: boolean }) {
               In OneDrive, choose <span className="font-medium">Add shortcut to My files</span> to keep this folder
               next to your own files.
             </Note>
+            {canManage && (
+              <button
+                type="button"
+                className="af-btn af-btn-danger af-btn-sm w-fit"
+                disabled={isDisconnecting}
+                onClick={() => setConfirmingDisconnect(true)}
+              >
+                {isDisconnecting ? "Disconnecting…" : "Disconnect"}
+              </button>
+            )}
           </>
         )}
+
+        {actionError && <ErrorText>{actionError}</ErrorText>}
       </div>
+      <ConfirmationDialog
+        open={confirmingDisconnect}
+        onOpenChange={setConfirmingDisconnect}
+        title="Disconnect OneDrive?"
+        description="You'll sign in with Microsoft so Agent Barn's access to the site can be removed. The Agent Barn folder and its files stay in SharePoint."
+        confirmLabel="Disconnect"
+        variant="destructive"
+        onConfirm={handleDisconnect}
+      />
     </SettingsSection>
   );
 }
