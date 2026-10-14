@@ -166,6 +166,11 @@
   ],
   [
     "GET",
+    "/integrations/onedrive-sync/callback",
+    "onedrive_sync_callback_integrations_onedrive_sync_callback_get"
+  ],
+  [
+    "GET",
     "/llms-full.txt",
     "llms_full_txt_llms_full_txt_get"
   ],
@@ -493,6 +498,16 @@
     "GET",
     "/organizations/{organization_id}/memory/items",
     "list_organization_memories_organizations__organization_id__memory_items_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/onedrive-sync/connection",
+    "onedrive_sync_status_organizations__organization_id__onedrive_sync_connection_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/onedrive-sync/connection/authorize-url",
+    "onedrive_sync_authorize_url_organizations__organization_id__onedrive_sync_connection_authorize_url_get"
   ],
   [
     "GET",

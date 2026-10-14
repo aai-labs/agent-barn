@@ -17,13 +17,24 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
   - `activate` (pending only) records the site, folder and grant id and clears the delegated token;
   - `mark_disconnected` (active only), `delete_pending` and `get_open`.
 - Delivered: `OneDriveSyncLookupService.folder_site_id(organization_id)`, the active connection's site id or None, for other domains.
-- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. No route uses the table yet.
-- Next: status, authorize-url and callback routes.
+- Delivered: `GET /organizations/{organization_id}/onedrive-sync/connection` (status, `organization.read`), `GET …/connection/authorize-url?purpose=connect|disconnect` (`organization.update`), and the unauthenticated `GET /api/v1/integrations/onedrive-sync/callback`. The behaviour contract is [`README.md`](README.md).
+- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. A completed sign-in reaches the opener but nothing redeems its code yet.
+- Next: completing the sign-in into a pending connection, and abandoning it.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Status, authorize URL and callback
+
+- Delivered: `OneDriveSyncService` and routes in `api/domains/onedrive_sync/`, registered in `api/api_app.py`.
+  - Status reports `available: false` when the platform app is unset, and hides a pending connection whose sign-in expired.
+  - `authorize-url` returns 503 when unset and 409 for a connect while active or a disconnect while not.
+  - The callback continues from admin consent to sign-in without trusting the redirect's `tenant`, and explains when a Microsoft Global Administrator must approve.
+- Changed: `docs/features/onedrive-sync/README.md` (new feature doc), `docs/INDEX.md`, the `CONTEXT.md` link, and `api/developer_docs/operations-v1.json` with the three new operations.
+- Verified: `api/tests/integration/test_onedrive_sync_connection.py` (21 tests) and `test_public_api_contract.py`.
+- Follow-up: the read-only API key check moves to the sign-in POST, the first mutating route; `authorize-url` is a GET, which read-only keys may call.
 
 ### 2026-10-14 — AF-383 — Connection model, migration, repository and lookup
 

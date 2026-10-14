@@ -3,6 +3,7 @@ from enum import StrEnum
 from uuid import UUID
 
 import sqlalchemy as sa
+from pydantic import BaseModel as PydanticBaseModel
 from sqlalchemy import Column
 from sqlmodel import Field as SqlField
 
@@ -54,3 +55,18 @@ class OneDriveSyncConnection(BaseModel, table=True):
     disconnected_at: datetime | None = SqlField(
         default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
     )
+
+
+class OneDriveSyncConnectionRead(PydanticBaseModel):
+    """What every Organization Member may see. Never tokens, the grant id or the tenant."""
+
+    available: bool
+    status: OneDriveSyncStatus | None = None
+    site_name: str | None = None
+    site_url: str | None = None
+    folder_web_url: str | None = None
+    connected_at: datetime | None = None
+
+
+class OneDriveSyncAuthorizeUrlRead(PydanticBaseModel):
+    authorize_url: str

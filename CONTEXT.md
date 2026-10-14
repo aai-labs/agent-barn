@@ -293,7 +293,7 @@ The Agent-specific choice of whether a tool Integration keeps long-lived provide
 _Avoid_: encryption toggle, Shared Credential setting
 
 **OneDrive Sync Connection**:
-An Organization's connection to one SharePoint site through the platform Microsoft app, where Agent Barn keeps an "Agent Barn" folder. An Organization has at most one open (pending or active) connection. It is not an Integration: no Agent is given access to it. See [OneDrive sync](docs/features/onedrive-sync/CHANGELOG.md).
+An Organization's connection to one SharePoint site through the platform Microsoft app, where Agent Barn keeps an "Agent Barn" folder. An Organization has at most one open (pending or active) connection. It is not an Integration: no Agent is given access to it. See [OneDrive sync](docs/features/onedrive-sync/README.md).
 _Avoid_: OneDrive integration, SharePoint integration
 
 **Conversation Message**:
