@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import {
@@ -19,6 +20,8 @@ import { useHireAgentForm, type HiredAgent } from "@/features/agents/hooks/use-h
 
 import { OnboardingShell, StepAlert } from "./onboarding-shell";
 
+const TEMPLATES_PER_PAGE = 6;
+
 /** Step 3 of "build my own": the hire dialog's choices, laid out as a wizard step. */
 export function SetupStep({
   email,
@@ -35,6 +38,11 @@ export function SetupStep({
 }) {
   const form = useHireAgentForm({ onHired });
   const { template, createdAgent, pending, error, provisioningFailure } = form;
+  const [templatePage, setTemplatePage] = useState(0);
+  const pageCount = Math.ceil(form.templates.length / TEMPLATES_PER_PAGE);
+  const currentPage = Math.min(templatePage, Math.max(0, pageCount - 1));
+  const pageStart = currentPage * TEMPLATES_PER_PAGE;
+  const visibleTemplates = form.templates.slice(pageStart, pageStart + TEMPLATES_PER_PAGE);
 
   const hireLabel = createdAgent ? (pending ? "Starting…" : "Start again") : pending ? "Hiring…" : "Hire agent";
 
@@ -126,43 +134,63 @@ export function SetupStep({
                     Loading templates…
                   </span>
                 ) : (
-                  <div role="radiogroup" aria-label="Template" className="grid gap-2 p-[3px] sm:grid-cols-2">
-                    {form.templates.map((item) => {
-                      const selected = item.templateKey === form.templateKey;
-                      return (
-                        <button
-                          key={`${item.templateKey}:${item.version}`}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          className="af-hover-bg flex items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-left"
-                          style={{
-                            borderColor: selected ? "var(--ink)" : "var(--line-strong)",
-                            boxShadow: selected ? "0 0 0 3px var(--bg-sunken)" : undefined,
-                          }}
-                          onClick={() => form.handleTemplateChange(item.templateKey)}
-                        >
-                          <span
-                            aria-hidden
-                            className="grid size-7 shrink-0 place-items-center rounded-lg text-[12px] font-semibold"
-                            style={{ background: "var(--ink)", color: "var(--bg-elev)" }}
+                  <>
+                    <div role="radiogroup" aria-label="Template" className="grid gap-2 p-[3px] sm:grid-cols-2">
+                      {visibleTemplates.map((item) => {
+                        const selected = item.templateKey === form.templateKey;
+                        return (
+                          <button
+                            key={`${item.templateKey}:${item.version}`}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            className="af-hover-bg flex items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-left"
+                            style={{
+                              borderColor: selected ? "var(--ink)" : "var(--line-strong)",
+                              boxShadow: selected ? "0 0 0 3px var(--bg-sunken)" : undefined,
+                            }}
+                            onClick={() => form.handleTemplateChange(item.templateKey)}
                           >
-                            {item.templateName.charAt(0)}
-                          </span>
-                          <span className="min-w-0">
-                            <span className="block text-[13px] font-semibold" style={{ color: "var(--ink)" }}>
-                              {item.templateName}
+                            <span
+                              aria-hidden
+                              className="grid size-7 shrink-0 place-items-center rounded-lg text-[12px] font-semibold"
+                              style={{ background: "var(--ink)", color: "var(--bg-elev)" }}
+                            >
+                              {item.templateName.charAt(0)}
                             </span>
-                            {item.description && (
-                              <span className="line-clamp-2 text-[12px]" style={{ color: "var(--ink-3)" }}>
-                                {item.description}
+                            <span className="min-w-0">
+                              <span className="block text-[13px] font-semibold" style={{ color: "var(--ink)" }}>
+                                {item.templateName}
                               </span>
-                            )}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                              {item.description && (
+                                <span className="line-clamp-2 text-[12px]" style={{ color: "var(--ink-3)" }}>
+                                  {item.description}
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {pageCount > 1 && (
+                      <nav aria-label="Template pages" className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[12px]" style={{ color: "var(--ink-3)" }}>
+                        <span aria-live="polite" aria-atomic="true">
+                          {pageStart + 1}–{Math.min(pageStart + TEMPLATES_PER_PAGE, form.templates.length)} of {form.templates.length} templates
+                        </span>
+                        <div className="flex gap-1">
+                          <button type="button" aria-label="Previous templates" className="af-btn af-btn-ghost" disabled={currentPage === 0} onClick={() => setTemplatePage(currentPage - 1)}>
+                            <ArrowLeft size={14} aria-hidden /> Previous
+                          </button>
+                          <button type="button" aria-label="Next templates" className="af-btn af-btn-ghost" disabled={currentPage + 1 >= pageCount} onClick={() => setTemplatePage(currentPage + 1)}>
+                            Next <ArrowRight size={14} aria-hidden />
+                          </button>
+                        </div>
+                      </nav>
+                    )}
+                    {template && pageCount > 1 && (
+                      <p className="mb-0 mt-2 text-[12px]" style={{ color: "var(--ink-3)" }}>Selected: {template.templateName}</p>
+                    )}
+                  </>
                 )}
               </FormField>
             </div>

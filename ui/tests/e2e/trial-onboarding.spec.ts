@@ -242,7 +242,7 @@ test.describe("Trial onboarding", () => {
       await page.setViewportSize({ width, height: 900 });
       const data = await signedInTrialUser(page);
       await data.onboarding.interceptGetOnboarding();
-      const templates = Array.from({ length: 8 }, (_, index) => ({
+      const templates = Array.from({ length: 20 }, (_, index) => ({
         ...mockTemplates[0],
         template_key: `template-${index}`,
         template_name: `Template ${index + 1}`,
@@ -257,8 +257,23 @@ test.describe("Trial onboarding", () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await wizard.chooseOwnAgent();
       await expect(wizard.agentName()).toBeVisible();
-      await expect(wizard.templateGroup().getByRole("radio")).toHaveCount(8);
+      await expect(wizard.templateGroup().getByRole("radio")).toHaveCount(6);
       expect(await wizard.templateGroup().evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(true);
+      await expect(wizard.previousTemplates()).toBeDisabled();
+      await expect(page.getByText("1–6 of 20 templates")).toBeVisible();
+      await wizard.nextTemplates().click();
+      await wizard.nextTemplates().click();
+      await wizard.nextTemplates().click();
+      await expect(wizard.templateGroup().getByRole("radio")).toHaveCount(2);
+      await expect(page.getByText("19–20 of 20 templates")).toBeVisible();
+      await expect(wizard.nextTemplates()).toBeDisabled();
+      const lastTemplate = wizard.templateGroup().getByRole("radio", { name: /^Template 20 / });
+      await lastTemplate.click();
+      await expect(lastTemplate).toBeChecked();
+      await wizard.previousTemplates().click();
+      await expect(page.getByText("Selected: Template 20", { exact: true })).toBeVisible();
+      await wizard.nextTemplates().click();
+      await expect(lastTemplate).toBeChecked();
       await wizard.laterAction().scrollIntoViewIfNeeded();
       await expect(wizard.laterAction()).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

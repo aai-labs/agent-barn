@@ -26,6 +26,8 @@ export class OnboardingPage {
   skipAction() { return this.page.getByRole("button", { name: "Skip, I'll chat on the web" }); }
   laterAction() { return this.page.getByRole("button", { name: "I'll do this later" }); }
   templateGroup() { return this.page.getByRole("radiogroup", { name: "Template", exact: true }); }
+  nextTemplates() { return this.page.getByRole("button", { name: "Next templates" }); }
+  previousTemplates() { return this.page.getByRole("button", { name: "Previous templates" }); }
 
   step(label: string): Locator {
     return this.page.getByText(label, { exact: true });
