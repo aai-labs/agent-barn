@@ -95,14 +95,19 @@ self-signed-up user back to `/onboarding` until they finish.
 | Trial Credit is a one-off Model Spend Limit | [Costs](costs.md#organization-llm-budgets) |
 | A Platform Administrator ends a trial, choosing the spend limit and renewal window it goes on to | `POST /platform/organizations/{id}/end-trial` with `{budget_usd, budget_duration}`, the platform Organization page |
 
-Platform Administrators set the Trial Credit for new trials, the trial agent limit and
-the cap on active trials on the platform settings page (`GET`/`PUT
+Platform Administrators enable or disable self-signup and set the Trial Credit for new trials, the trial agent limit and
+the cap on active trials on the platform settings page under **Signup & trials** (`GET`/`PUT
 /platform/settings/trial`, a singleton row; each setting that moves is audited as
 `platform.trial_settings.changed`, a removed cap as `null`). The page also shows how many
-trials are active. Until the first save, `TRIAL_DEFAULT_CREDIT_USD`, a limit of one Agent
-and no cap apply. An active trial is any Organization still on a trial, including one
-whose credit is spent. An existing trial's spend limit
-is changed on its Organization page, like any other Organization's; the platform
+trials are active. Until the first save, self-signup is disabled, Trial Credit is $0,
+the Agent limit is one, and there is no cap. Self-signup requires positive Trial Credit.
+Updates validate the combined persisted settings under a lock: administrators may enable
+signup and set credit in one save, or disable signup and clear credit together. Zero
+credit is refused while signup remains enabled; negative or non-finite credit is always
+refused. A database constraint also enforces the positive-credit requirement. Signup
+reads its enabled state and credit together and holds them stable until trial creation
+commits. Changes apply without a restart. An active trial is any Organization still
+on a trial, including one whose credit is spent. An existing trial's spend limit is changed on its Organization page, like any other Organization's; the platform
 Organizations list marks trials.
 
 An Owner may delete their Trial Organization (after deleting its Agents). The delete
@@ -120,12 +125,12 @@ spend so far counts against its first renewing period, for the team and its Agen
 alike, until their shared renewal (see [Costs](costs.md#organization-llm-budgets)). The
 owner is not notified, and a trial cannot be restarted.
 
-Signup is off unless `SELF_SIGNUP_ENABLED` is true and the environment has Agent Barn's
+Signup is off unless a Platform Administrator enables it and the environment has Agent Barn's
 Telegram bot configured (`AGENTBARN_TELEGRAM_BOT_TOKEN` and `_USERNAME`), because Quick start uses it (`?error=signup_closed` otherwise); existing users can always sign in with
 Google. If setting up an Agent fails anyway (say the bot was removed later), onboarding
-shows the API's reason with "Try again", and the API logs it. The chart default is off; the deploy workflows
-read the `SELF_SIGNUP_ENABLED`, `STAGING_SELF_SIGNUP_ENABLED` and
-`PUBLIC_SELF_SIGNUP_ENABLED` GitHub Variables, an unset one meaning off.
+shows the API's reason with "Try again", and the API logs it. Signup policy and Trial
+Credit are database-owned settings; deployment environment variables and Helm values
+do not control them.
 
 Organization invitations are emailed only: the API returns no set-password link to whoever
 invites (`invite_link` is always null on Organization routes), so nobody can enroll an

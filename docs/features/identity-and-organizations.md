@@ -45,7 +45,7 @@ The callback resolves the account by Google account id first, then by email igno
 - An unverified Google address neither creates an account nor signs in to one.
 - An existing account is linked to the Google account. A pending invitee is enrolled — verified, with their invitation links retired — as if they had followed the link.
 - An address that has already had a trial, even one whose account was deleted, is refused with `?error=trial_used`.
-- An unknown address, when `SELF_SIGNUP_ENABLED` is on (it is off by default), creates a verified User marked `signed_up_at`, their trial Organization, and their Owner Membership in one transaction, then provisions the Organization's LiteLLM team. Google-only accounts hold an unusable password hash, as invitees do until they enroll.
+- An unknown address, when self-signup is enabled in platform settings (it is off by default; see [Trial onboarding](trial-onboarding.md#trials)), creates a verified User marked `signed_up_at`, their trial Organization, and their Owner Membership in one transaction, then provisions the Organization's LiteLLM team. Google-only accounts hold an unusable password hash, as invitees do until they enroll.
 
 Success starts a session like password login: the refresh-token cookie, which the web app trades for an access token. The browser lands on `/onboarding` while a self-signed-up user has not finished onboarding, otherwise on `/dashboard`. Failure returns to the starting page with `?error=cancelled|failed|unavailable|unverified|signup_closed|trial_used` and nothing created. Trial onboarding itself is described in [Trial onboarding](trial-onboarding.md).
 

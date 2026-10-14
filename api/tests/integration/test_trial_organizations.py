@@ -113,7 +113,7 @@ def _end_trial(context, organization_id=None, body=None):
 def the_trial_agent_limit_is(limit: int):
     def step(context):
         context.injector.get(TrialSettingsRepository).set_settings(
-            {"agent_limit": limit}, 10, context.user.id, "Platform Admin"
+            {"agent_limit": limit}, context.user.id, "Platform Admin"
         )
 
     return step

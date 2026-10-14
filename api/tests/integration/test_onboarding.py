@@ -21,6 +21,7 @@ from api.tests.core.modules import create_test_client, prepare_api_server, prepa
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.google_sign_in import WEB_APP_URL, FakeGoogleIdentityModule, finish_google_sign_in
+from api.tests.steps.onboarding import trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.user import there_is_a_user
 
@@ -32,8 +33,6 @@ def _setup(*steps):
         set_env_variable(
             {
                 "WEB_APP_URL": WEB_APP_URL,
-                "SELF_SIGNUP_ENABLED": "true",
-                "TRIAL_DEFAULT_CREDIT_USD": "10",
                 "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
                 "LITELLM_BASE_URL": "http://litellm:4000",
                 "LITELLM_SECRET_NAME": "litellm",
@@ -50,6 +49,7 @@ def _setup(*steps):
         create_test_client(),
         database_repo_is_ready(),
         database_is_clean(),
+        trial_settings_are_configured(),
         predefined_templates_are_seeded(),
         *steps,
     ]
@@ -283,7 +283,7 @@ def test_onboarding_follows_the_trials_first_agent():
         first = _set_up_agent(context).json()
         there_is_a_user(email="limit-admin@example.com", is_platform_admin=True, organization_id=None)(context)
         context.injector.get(TrialSettingsRepository).set_settings(
-            {"agent_limit": 2}, 10, context.user.id, "Platform Admin"
+            {"agent_limit": 2}, context.user.id, "Platform Admin"
         )
         hired = context.client.post(
             f"/api/v1/organizations/{first['organization_id']}/agents",

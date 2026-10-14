@@ -14,6 +14,7 @@ from alembic.migration import MigrationContext
 from hamcrest import assert_that, equal_to
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import SQLModel
 
 # Every model module must be imported for the metadata comparison to see its tables.
@@ -134,3 +135,32 @@ def test_the_migrated_schema_matches_the_models_for_trial_onboarding():
     ]
 
     assert_that(ours, equal_to([]))
+
+
+def test_signup_policy_upgrade_constraint_and_downgrade(scratch_database):
+    command.upgrade(scratch_database.config, AF368_HEAD)
+    with scratch_database.engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO platform_trial_settings (id, credit_usd, updated_at) VALUES (1, 0, now())")
+        )
+    command.upgrade(scratch_database.config, "head")
+    with scratch_database.engine.connect() as connection:
+        assert_that(
+            connection.execute(text("SELECT self_signup_enabled FROM platform_trial_settings")).scalar_one(),
+            equal_to(False),
+        )
+    with pytest.raises(IntegrityError), scratch_database.engine.begin() as connection:
+        connection.execute(text("UPDATE platform_trial_settings SET self_signup_enabled = true"))
+    with scratch_database.engine.begin() as connection:
+        connection.execute(text("UPDATE platform_trial_settings SET self_signup_enabled = true, credit_usd = 20"))
+    command.downgrade(scratch_database.config, AF368_HEAD)
+    with scratch_database.engine.connect() as connection:
+        assert_that(
+            connection.execute(text("SELECT credit_usd FROM platform_trial_settings")).scalar_one(), equal_to(20)
+        )
+    command.upgrade(scratch_database.config, "head")
+    with scratch_database.engine.connect() as connection:
+        assert_that(
+            connection.execute(text("SELECT self_signup_enabled FROM platform_trial_settings")).scalar_one(),
+            equal_to(False),
+        )

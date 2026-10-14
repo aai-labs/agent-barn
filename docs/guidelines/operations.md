@@ -64,6 +64,16 @@ The deployable services have independent Helm charts. `../../helmfile.yaml.gotmp
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
 
+## Public signup configuration
+
+Configure public self-signup and Trial Credit in **Platform settings → Signup & trials**.
+New installations default to signup disabled and $0 credit. A Platform Administrator
+must set positive credit before enabling signup; both can be saved together. These
+settings take effect without redeployment and are audited. They are no longer read
+from environment variables, Helm values, or GitHub Variables. Google OAuth and the
+shared Telegram bot still require deployment credentials as described in
+[Trial onboarding](../features/trial-onboarding.md#trials).
+
 ## Local Communications reload
 
 Compose and `make dev-api` / `make dev-communications` run the Communications
