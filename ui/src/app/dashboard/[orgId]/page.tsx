@@ -40,7 +40,7 @@ export default function DashboardPage() {
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : "";
   const [hireOpen, setHireOpen] = useState(false);
-  const [hireChoice, setHireChoice] = useState<HireChoice>("ready");
+  const [hireChoice, setHireChoice] = useState<HireChoice | undefined>();
   const [search, setSearch] = useState("");
   const { user } = useCurrentUser();
   const { agents, total, isLoading, error, refetch } = useAgents();
@@ -100,7 +100,7 @@ export default function DashboardPage() {
                 </div>
               </div>
             )}
-            {!isLoading && agents.length > 0 && <HireTeammateCard onHire={() => { setHireChoice("ready"); setHireOpen(true); }} />}
+            {!isLoading && agents.length > 0 && <HireTeammateCard onHire={() => { setHireChoice(undefined); setHireOpen(true); }} />}
           </div>
         )}
       </div>

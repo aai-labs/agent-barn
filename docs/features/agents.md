@@ -7,13 +7,17 @@ point; the top navigation keeps its hire action on other Organization pages.
 
 ## Hiring choices
 
-Every dashboard hire entry point offers **Ready-made assistant** and **Build your
+General **Hire agent** entry points offer **Ready-made assistant** and **Build your
 own**, including after onboarding is complete and when the Organization already
-has Agents. Opening or cancelling the chooser creates nothing. Build your own
-opens the existing runtime/template/model/Skill form. Ready-made asks only for a
-name, then uses ordinary Agent create/start APIs to create a Hermes Agent from
-the current `general-purpose` Template, inheriting the Organization default model
-and using automatic command approval. API validation and Agent authorization apply
+has Agents. The empty dashboard's two explicit buttons open their respective setup
+directly after the capacity check, without asking the user to choose again.
+Opening or cancelling the chooser creates nothing. Build your own
+opens the existing runtime/template/model/Skill form. Ready-made reuses that same
+form, preselecting the current `general-purpose` Template, Hermes, the Organization
+default model and automatic command approval. Every field remains editable, and
+the preset's required Skills and credential fields are initialized like an explicit
+Template selection. Both paths use ordinary Agent create/start APIs.
+API validation and Agent authorization apply
 to both paths. A failed start retries the newly created Agent within the same dialog.
 
 After a ready-made Agent starts, users choose Web Chat or open channel setup to

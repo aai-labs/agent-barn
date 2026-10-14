@@ -19,9 +19,11 @@ import { ModelChoice } from "./model-choice";
 interface HireDialogProps {
   onClose: () => void;
   onHired: (agent: HiredAgent) => void;
+  initialTemplateKey?: string;
+  title?: string;
 }
 
-export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
+export function HireFormDialog({ onClose, onHired, initialTemplateKey, title = "Build your own agent" }: HireDialogProps) {
   const {
     templates,
     isLoadingTemplates: isLoading,
@@ -52,7 +54,7 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
     pending,
     canHire,
     hire,
-  } = useHireAgentForm({ onHired });
+  } = useHireAgentForm({ onHired, initialTemplateKey });
 
   const hireButtonLabel = createdAgent
     ? pending
@@ -67,7 +69,7 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
       <header className="flex items-start justify-between border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
         <div>
           <div className="mb-1 text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-3)" }}>New Agent</div>
-          <h2 className="m-0 text-xl font-semibold tracking-tight">Build your own agent</h2>
+          <h2 className="m-0 text-xl font-semibold tracking-tight">{title}</h2>
           <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>Choose a template, runtime and model. Start chatting on the web and add more channels later.</p>
         </div>
         <button type="button" aria-label="Close hiring dialog" className="af-btn af-btn-ghost af-btn-icon" disabled={pending} onClick={onClose}><XIcon /></button>
@@ -77,7 +79,7 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
         {!createdAgent && (
           <>
         <FormField label="Agent name">
-          <input aria-label="Agent name" className="af-input" value={name} maxLength={255} onChange={(event) => setManualName(event.target.value)} autoFocus />
+          <input aria-label="Agent name" className="af-input" value={name} maxLength={255} disabled={pending || suggestion.isLoading} onChange={(event) => setManualName(event.target.value)} autoFocus />
           {suggestion.isLoading && <span role="status">Suggesting a name…</span>}
           {suggestion.error && (
             <span role="alert">

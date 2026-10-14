@@ -10,31 +10,49 @@ import { useOrganizationContext } from "@/features/organizations/providers/organ
 import type { HiredAgent } from "../hooks/use-hire-agent-form";
 import { DialogShell } from "./hire-dialog-primitives";
 import { HireFormDialog } from "./hire-form-dialog";
-import { ReadyMadeAgentDialog } from "./ready-made-agent-dialog";
+import { HiredAgentDialog } from "./hired-agent-dialog";
 
 export type HireChoice = "ready" | "custom";
 
-export function HireDialog({ onClose, onHired, initialChoice = "ready" }: {
+export function HireDialog({ onClose, onHired, initialChoice }: {
   onClose: () => void;
   onHired: (agent: HiredAgent) => void;
+  /** A choice already made on the dashboard; omit to show the chooser. */
   initialChoice?: HireChoice;
 }) {
   const router = useRouter();
   const { selectedOrganization } = useOrganizationContext();
   const isTrial = Boolean(selectedOrganization?.isTrial);
   const { organization, isLoading, isFetching, error, refetch } = useOrganization(isTrial ? selectedOrganization!.id : "");
-  const [selected, setSelected] = useState<HireChoice>(initialChoice);
-  const [started, setStarted] = useState<HireChoice | null>(null);
-  // Once creation starts, capacity may become full because of this very Agent.
-  // Keep the mounted form so a failed start can retry that Agent rather than create another.
-  if (started === "custom") return <HireFormDialog onClose={onClose} onHired={onHired} />;
-  if (started === "ready") return <ReadyMadeAgentDialog onClose={onClose} onHired={onHired} />;
-
+  const [selected, setSelected] = useState<HireChoice>(initialChoice ?? "ready");
+  const [started, setStarted] = useState<HireChoice | null>(isTrial ? null : initialChoice ?? null);
+  const [hired, setHired] = useState<HiredAgent | null>(null);
   const limit = organization?.trialAgentLimit;
   const full = isTrial && organization?.trialAgentLimitReached === true;
   const checking = isTrial && (isLoading || isFetching);
   const unavailable = isTrial && !checking && (Boolean(error) || organization?.trialAgentLimitReached === undefined || limit == null);
   const disabled = checking || unavailable || full;
+
+  // An explicit dashboard choice advances as soon as its capacity check succeeds.
+  // Latch that transition: this Agent may itself fill the trial during creation.
+  if (initialChoice && started === null && !disabled) {
+    setStarted(initialChoice);
+    return null;
+  }
+
+  if (started === "custom") return <HireFormDialog onClose={onClose} onHired={onHired} />;
+  if (hired) return <HiredAgentDialog agent={hired} onClose={onClose} onHired={onHired} />;
+  if (started === "ready") return <HireFormDialog title="Your ready-made assistant" initialTemplateKey="general-purpose" onClose={onClose} onHired={setHired} />;
+  if (initialChoice && !full && !unavailable) {
+    return (
+      <DialogShell shadeClick={onClose}>
+        <div className="p-6">
+          <p role="status" className="m-0">Checking your trial&apos;s agent limit…</p>
+          <button type="button" aria-label="Close hiring dialog" className="af-btn mt-4" onClick={onClose}>Cancel</button>
+        </div>
+      </DialogShell>
+    );
+  }
 
   return (
     <DialogShell shadeClick={onClose}>

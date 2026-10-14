@@ -170,8 +170,14 @@ test.describe("Dashboard Page", () => {
       await expect(page.getByText("0 working now · 0 idle")).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath("empty-team.png"), fullPage: true });
-      await dashboardPage.openHireCard(true);
+      await dashboardPage.openHireChoices(true);
+      await expect(page.getByRole("heading", { name: "Build your own agent", exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "How would you like to start?" })).toHaveCount(0);
       await expect(dashboardPage.agentNameInput()).toBeVisible();
+      await dashboardPage.closeHireDialog();
+      await page.getByRole("button", { name: "Try a ready-made assistant" }).click();
+      await expect(page.getByRole("heading", { name: "Your ready-made assistant", exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "How would you like to start?" })).toHaveCount(0);
     });
   }
 
