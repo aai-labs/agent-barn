@@ -6,6 +6,7 @@ import {
   MOCK_JIRA_SKILL_ID,
   MOCK_SHAREPOINT_SKILL_ID,
   mockCustomSkill,
+  mockGmailSkill,
   mockSharePointSkill,
 } from "../pages/data-support/skill-data-support.po";
 import { mockCommunicationConnection } from "../fixtures/communication-connections";
@@ -928,6 +929,163 @@ test.describe("Agent configuration page", () => {
     const versionSelect = page.getByRole("combobox", { name: "Version for my-tool" });
     await expect(versionSelect).toBeDisabled();
     await expect(versionSelect).toHaveAttribute("title", /Change it in the Template section/);
+  });
+
+  test.describe("Gmail", () => {
+    // Stands in for Google: the authorize URL points the popup straight at our callback,
+    // which hands the code back to the page. Records what the page sent at each step.
+    async function mockGoogleSignIn(page: Page) {
+      const sent: {
+        authorizeQuery?: URLSearchParams;
+        tokenBody?: Record<string, unknown>;
+        patchBody?: Record<string, unknown>;
+      } = {};
+      await page.route("**/api/v1/integrations/google/authorize-url*", async (route) => {
+        const url = new URL(route.request().url());
+        sent.authorizeQuery = url.searchParams;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            authorize_url: `${url.origin}/api/v1/integrations/google/callback?code=the-code&state=the-state`,
+          }),
+        });
+      });
+      await page.context().route("**/api/v1/integrations/google/callback*", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/html",
+          body: `<script>window.opener.postMessage({type: "google-oauth", provider: "gmail", code: "the-code"}, window.location.origin); window.close();</script>`,
+        });
+      });
+      await page.route("**/api/v1/integrations/google/token", async (route) => {
+        sent.tokenBody = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            refresh_token: "the-refresh-token",
+            email: "someone@example.com",
+            granted_scopes: ["openid", "https://www.googleapis.com/auth/gmail.readonly"],
+          }),
+        });
+      });
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+        if (route.request().method() !== "PATCH") {
+          await route.fallback();
+          return;
+        }
+        sent.patchBody = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...mockAgent,
+            status: "STOPPED",
+            secrets: [{ provider: "gmail", secret_name: "Gmail credential", shared_credential_id: null }],
+          }),
+        });
+      });
+      return sent;
+    }
+
+    async function openIntegrationsAndAddGmail(page: Page) {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      const sent = await mockGoogleSignIn(page);
+
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionButton("Integrations").click();
+      const section = page.locator('section[aria-label="Integrations"]');
+      await section.getByRole("button", { name: "Edit", exact: true }).click();
+      await section.getByRole("button", { name: "Gmail", exact: true }).click();
+      return { section, sent };
+    }
+
+    async function apply(page: Page, section: import("@playwright/test").Locator) {
+      await section.getByRole("button", { name: "Apply", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Apply", exact: true }).click();
+    }
+
+    test("connects in one click on the shared Google client", async ({ page }) => {
+      const { section, sent } = await openIntegrationsAndAddGmail(page);
+
+      // Nothing to fill in: no service or access-level choice, and no client fields.
+      await expect(section.getByRole("checkbox")).toHaveCount(0);
+      await expect(section.getByPlaceholder(/apps\.googleusercontent\.com/)).toHaveCount(0);
+      await section.getByRole("button", { name: "Authenticate with Google" }).click();
+
+      await expect(section.getByText("Connected as someone@example.com")).toBeVisible();
+      expect(sent.authorizeQuery?.get("provider")).toBe("gmail");
+      expect(sent.authorizeQuery?.has("client_id")).toBe(false);
+      expect(sent.authorizeQuery?.has("services")).toBe(false);
+      expect(sent.tokenBody).toEqual({ code: "the-code" });
+
+      await apply(page, section);
+      await expect.poll(() => sent.patchBody).toBeDefined();
+      expect(sent.patchBody?.secrets).toEqual([
+        {
+          provider: "gmail",
+          content: {
+            refresh_token: "the-refresh-token",
+            client_id: "",
+            client_secret: "",
+            email: "someone@example.com",
+            scopes: ["openid", "https://www.googleapis.com/auth/gmail.readonly"],
+          },
+        },
+      ]);
+    });
+
+    test("connects in one click when the Gmail skill is added", async ({ page }) => {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED", skills: [] } });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      await dataSupport.skills.interceptGetAgentSkillsRequest({ body: [mockGmailSkill] });
+      const sent = await mockGoogleSignIn(page);
+
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionButton("Skills").click();
+      const section = page.locator('section[aria-label="Skills"]');
+      await section.getByRole("button", { name: "Add", exact: true }).click();
+      await section.getByRole("button", { name: "Authenticate with Google" }).click();
+
+      await expect(section.getByText("Connected as someone@example.com")).toBeVisible();
+      expect(sent.authorizeQuery?.get("provider")).toBe("gmail");
+      expect(sent.authorizeQuery?.has("client_id")).toBe(false);
+    });
+
+    test("lets you sign in with your own Google client instead", async ({ page }) => {
+      const { section, sent } = await openIntegrationsAndAddGmail(page);
+
+      await section.getByRole("button", { name: /Use your own Google client/ }).click();
+      await section.getByPlaceholder(/apps\.googleusercontent\.com/).fill("own.apps.googleusercontent.com");
+      await section.getByPlaceholder(/GOCSPX/).fill("own-secret");
+      await section.getByRole("button", { name: "Authenticate with Google" }).click();
+
+      await expect(section.getByText("Connected as someone@example.com")).toBeVisible();
+      expect(sent.authorizeQuery?.get("client_id")).toBe("own.apps.googleusercontent.com");
+      expect(sent.tokenBody).toEqual({
+        code: "the-code",
+        client_id: "own.apps.googleusercontent.com",
+        client_secret: "own-secret",
+      });
+
+      await apply(page, section);
+      await expect.poll(() => sent.patchBody).toBeDefined();
+      const [saved] = sent.patchBody?.secrets as { content: Record<string, unknown> }[];
+      expect(saved.content.client_id).toBe("own.apps.googleusercontent.com");
+      expect(saved.content.client_secret).toBe("own-secret");
+    });
   });
 
   test.describe("SharePoint", () => {
