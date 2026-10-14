@@ -19,13 +19,21 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: `OneDriveSyncLookupService.folder_site_id(organization_id)`, the active connection's site id or None, for other domains.
 - Delivered: `GET /organizations/{organization_id}/onedrive-sync/connection` (status, `organization.read`), `GET …/connection/authorize-url?purpose=connect|disconnect` (`organization.update`), and the unauthenticated `GET /api/v1/integrations/onedrive-sync/callback`. The behaviour contract is [`README.md`](README.md).
 - Delivered: `POST …/connection/sign-in` redeems the administrator's code into a pending connection holding their encrypted delegated token, and `DELETE …/connection` abandons a pending connection.
-- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. A pending connection cannot yet choose a site.
-- Next: the site picker, the site grant and the "Agent Barn" folder.
+- Delivered: `GET …/connection/sites?search=` and `POST …/connection/site`. Choosing a site grants the platform app `write` on it, ensures the "Agent Barn" folder as the app, and activates the connection; a failure after the grant revokes it.
+- In transition: choosing a site does not yet refuse a site an Agent's SharePoint integration already holds. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
+- Next: refuse connecting to a site already granted to an Agent.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Site picker, grant and folder
+
+- Delivered: `OneDriveSyncService.sites` and `choose_site` with `GET …/connection/sites` and `POST …/connection/site`.
+- Changed: `README.md` connect flow; `api/developer_docs/operations-v1.json` with the two new operations; the test fake `FakeMicrosoftGraphSites` in `api/tests/steps/sharepoint.py` gains `search_sites`, `get_site` and `ensure_folder`, and records the grant's display name.
+- Verified: 16 new tests in `api/tests/integration/test_onedrive_sync_connection.py` cover search, permissions, an expired or missing sign-in, the grant shape, the app-only folder call in the connection's tenant, activation, and revoking the grant when the app token or folder fails. `test_sharepoint_selected_sites.py` and `test_sharepoint_sign_in.py` pass unchanged.
+- Follow-up: refuse connecting to a site already granted to an Agent.
 
 ### 2026-10-14 — AF-383 — Sign-in to a pending connection, and abandon
 

@@ -18,6 +18,13 @@ from api.domains.agents.microsoft_graph_scopes import (
     SITE_GRANT_PERMISSION,
     granted_permissions,
 )
+from api.domains.agents.microsoft_graph_sites import (
+    MicrosoftGraphSites,
+    SiteAccessRefused,
+    SiteNotFound,
+    SitesThrottled,
+    SitesUnavailable,
+)
 from api.domains.agents.microsoft_identity import (
     MicrosoftIdentityClient,
     MicrosoftIdentityError,
@@ -32,6 +39,7 @@ from api.domains.auth.service import JWT_ENCODING_ALGORITHM
 from api.domains.onedrive_sync.models import (
     OneDriveSyncConnection,
     OneDriveSyncConnectionRead,
+    OneDriveSyncSiteRead,
     OneDriveSyncStatus,
 )
 from api.domains.onedrive_sync.repository import OneDriveSyncConnectionConflict, OneDriveSyncRepository
@@ -75,6 +83,15 @@ _SITE_ADMINISTRATION_MISSING = (
 )
 _UNREACHABLE = "Microsoft couldn't be reached. Please try again."
 _REQUIRED_PERMISSIONS = frozenset({SITE_GRANT_PERMISSION, READ_PERMISSION})
+FOLDER_NAME = "Agent Barn"
+GRANT_DISPLAY_NAME = "Agent Barn"
+GRANT_ROLE = "write"
+_SIGN_IN_NEEDED = "Your Microsoft sign-in has expired. Start connecting OneDrive again."
+_SEARCH_TERM_NEEDED = "Type part of the SharePoint site's name to search."
+_SITE_NOT_FOUND = "Couldn't find that SharePoint site. Search again and pick it from the list."
+_NOT_A_SITE_ADMINISTRATOR = "Sign in as a SharePoint administrator who is a member of this site, then try again."
+_THROTTLED = "Microsoft is limiting requests right now. Wait a few minutes, then try again."
+_FOLDER_FAILED = "Agent Barn couldn't create its folder on that site, so it was not connected. Please try again."
 
 OneDriveSyncPurpose = Literal["connect", "disconnect"]
 
@@ -167,6 +184,7 @@ class OneDriveSyncService:
     repository: OneDriveSyncRepository
     permission_policy: PermissionPolicy
     identity: MicrosoftIdentityClient
+    graph_sites: MicrosoftGraphSites
     config: Config
 
     def status(self, organization_id: UUID, context: CurrentUserContext) -> OneDriveSyncConnectionRead:
@@ -283,10 +301,105 @@ class OneDriveSyncService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_ALREADY_CONNECTED) from exc
         return self.status(organization_id, context)
 
+    def sites(self, organization_id: UUID, search: str, context: CurrentUserContext) -> list[OneDriveSyncSiteRead]:
+        """SharePoint sites the signed-in administrator can see that match ``search``."""
+        self._require_manage(organization_id, context)
+        self._require_configured()
+        query = search.strip()
+        if not query:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SEARCH_TERM_NEEDED)
+        _, token = self._signed_in(organization_id)
+        try:
+            found = self.graph_sites.search_sites(token, query)
+        except SiteAccessRefused as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SITE_ADMINISTRATION_MISSING) from exc
+        except SitesThrottled as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_THROTTLED) from exc
+        except SiteNotFound, SitesUnavailable:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from None
+        return [OneDriveSyncSiteRead(id=site.id, name=site.name, web_url=site.web_url) for site in found]
+
+    def choose_site(
+        self, organization_id: UUID, site_id: str, context: CurrentUserContext
+    ) -> OneDriveSyncConnectionRead:
+        """Grant the platform app write on the chosen site, ensure the Agent Barn folder as the app,
+        and activate the connection. A failure after the grant takes the grant back, so the site is
+        never left granted to a connection that stayed pending."""
+        self._require_manage(organization_id, context)
+        self._require_configured()
+        connection, token = self._signed_in(organization_id)
+        try:
+            site = self.graph_sites.get_site(token, site_id)
+            permission_id = self.graph_sites.grant_site(
+                token,
+                site_id=site.id,
+                app_id=self.config.onedrive_sync_client_id,
+                display_name=GRANT_DISPLAY_NAME,
+                role=GRANT_ROLE,
+            )
+        except SiteNotFound as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SITE_NOT_FOUND) from exc
+        except SiteAccessRefused as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_NOT_A_SITE_ADMINISTRATOR) from exc
+        except SitesThrottled as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_THROTTLED) from exc
+        except SitesUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from exc
+        try:
+            app_tokens = self.identity.client_credentials(
+                tenant_id=connection.tenant_id,
+                client_id=self.config.onedrive_sync_client_id,
+                client_secret=self.config.onedrive_sync_client_secret,
+            )
+            folder = self.graph_sites.ensure_folder(app_tokens.access_token, site_id=site.id, name=FOLDER_NAME)
+        except (
+            MicrosoftIdentityError,
+            MicrosoftIdentityUnavailable,
+            SiteAccessRefused,
+            SiteNotFound,
+            SitesUnavailable,
+        ) as exc:
+            logger.warning(
+                "OneDrive sync folder setup failed for organization %s: %s", organization_id, type(exc).__name__
+            )
+            self._revoke_quietly(token, site.id, permission_id)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_FOLDER_FAILED) from exc
+        activated = self.repository.activate(
+            connection.id,
+            site_id=site.id,
+            site_name=site.name,
+            site_url=site.web_url,
+            folder_item_id=folder.item_id,
+            folder_web_url=folder.web_url,
+            permission_id=permission_id,
+        )
+        if activated is None:
+            self._revoke_quietly(token, site.id, permission_id)
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SIGN_IN_NEEDED)
+        return self.status(organization_id, context)
+
     def abandon_pending(self, organization_id: UUID, context: CurrentUserContext) -> None:
         """Forget an unfinished connection. An active connection is left alone; disconnect it instead."""
         self._require_manage(organization_id, context)
         self.repository.delete_pending(organization_id)
+
+    def _signed_in(self, organization_id: UUID) -> tuple[OneDriveSyncConnection, str]:
+        """The pending connection and its administrator's delegated token, while the sign-in is fresh."""
+        connection = self.repository.get_open(organization_id)
+        if (
+            connection is None
+            or connection.status != OneDriveSyncStatus.PENDING
+            or connection.pending_access_token is None
+            or _expired_pending(connection)
+        ):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SIGN_IN_NEEDED)
+        return connection, decrypt_token(connection.pending_access_token, self.config.agent_token_encryption_key)
+
+    def _revoke_quietly(self, token: str, site_id: str, permission_id: str) -> None:
+        try:
+            self.graph_sites.revoke_site(token, site_id=site_id, permission_id=permission_id)
+        except SiteAccessRefused, SitesUnavailable:
+            logger.warning("OneDrive sync could not take back site grant %s on %s", permission_id, site_id)
 
     def _sign_in_url(self, state: str, code_challenge: str) -> str:
         return build_authorize_url(

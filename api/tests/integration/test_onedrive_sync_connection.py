@@ -22,19 +22,32 @@ from hamcrest import (
 )
 
 from api.core.config import get_config
+from api.domains.agents.microsoft_graph_sites import (
+    SiteAccessRefused,
+    SiteNotFound,
+    SitesThrottled,
+    SiteSummary,
+    SitesUnavailable,
+)
 from api.domains.agents.microsoft_identity import MicrosoftIdentityError, MicrosoftIdentityUnavailable, MicrosoftTokens
 from api.domains.agents.sharepoint_service import SignInState, encode_sign_in_state
 from api.domains.onedrive_sync.models import OneDriveSyncStatus
 from api.domains.onedrive_sync.repository import OneDriveSyncRepository
 from api.domains.onedrive_sync.service import OneDriveSyncState, encode_state
 from api.domains.users.organization_users.models import OrganizationRole
-from api.infrastructure.crypto import decrypt_token
+from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
-from api.tests.steps.sharepoint import FakeMicrosoftIdentityModule, fake_identity, id_token
+from api.tests.steps.sharepoint import (
+    FOLDER_WEB_URL,
+    FakeMicrosoftIdentityModule,
+    fake_graph_sites,
+    fake_identity,
+    id_token,
+)
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _CLIENT_ID = "7029602d-0000-4000-8000-000000000001"
@@ -111,7 +124,7 @@ def _pending(context, *, expires_in: timedelta = timedelta(hours=1)):
         context.organization.id,
         tenant_id=_TENANT_ID,
         connected_by_user_id=context.user.id,
-        pending_access_token="encrypted-delegated-token",
+        pending_access_token=encrypt_token(_DELEGATED_ACCESS_TOKEN, TEST_ENCRYPTION_KEY),
         pending_expires_at=datetime.now(UTC) + expires_in,
     )
 
@@ -201,7 +214,10 @@ def test_a_pending_connection_is_reported_while_its_sign_in_is_fresh():
         body = context.client.get(_base(context), headers=_auth(context)).json()
 
         assert_that(body, has_entries(status="pending"))
-        assert_that(str(body), not_(contains_string("encrypted-delegated-token")))
+        assert_that(str(body), not_(contains_string(_DELEGATED_ACCESS_TOKEN)))
+        assert_that(
+            set(body), equal_to({"available", "status", "site_name", "site_url", "folder_web_url", "connected_at"})
+        )
 
 
 def test_an_expired_pending_connection_reads_as_not_connected():
@@ -626,3 +642,243 @@ def test_a_member_cannot_abandon_a_connection():
         response = context.client.delete(_base(context), headers=_member_headers(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+# --- site picker -------------------------------------------------------------------
+
+
+def _search(context, search: str, headers: dict | None = None):
+    return context.client.get(f"{_base(context)}/sites", params={"search": search}, headers=headers or _auth(context))
+
+
+def _choose(context, site_id: str = _SITE_ID, headers: dict | None = None):
+    return context.client.post(f"{_base(context)}/site", json={"site_id": site_id}, headers=headers or _auth(context))
+
+
+def test_sites_are_searched_with_the_administrators_delegated_token():
+    with given(_given()) as context:
+        _pending(context)
+        fake_graph_sites(context).search_results = [
+            SiteSummary(
+                id=_SITE_ID, name="Agent Barn Test", web_url="https://contoso.sharepoint.com/sites/AgentBarnTest"
+            )
+        ]
+
+        response = _search(context, "Agent Barn")
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            response.json(),
+            equal_to(
+                [
+                    {
+                        "id": _SITE_ID,
+                        "name": "Agent Barn Test",
+                        "web_url": "https://contoso.sharepoint.com/sites/AgentBarnTest",
+                    }
+                ]
+            ),
+        )
+        assert_that(
+            fake_graph_sites(context).searches, equal_to([{"token": _DELEGATED_ACCESS_TOKEN, "query": "Agent Barn"}])
+        )
+
+
+def test_a_search_needs_a_term():
+    with given(_given()) as context:
+        _pending(context)
+
+        response = _search(context, "   ")
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(fake_graph_sites(context).searches, equal_to([]))
+
+
+def test_sites_cannot_be_searched_without_a_sign_in():
+    with given(_given()) as context:
+        response = _search(context, "Agent Barn")
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_sites_cannot_be_searched_after_the_sign_in_expired():
+    with given(_given()) as context:
+        _pending(context, expires_in=timedelta(minutes=-1))
+
+        response = _search(context, "Agent Barn")
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(fake_graph_sites(context).searches, equal_to([]))
+
+
+def test_a_member_cannot_search_sites():
+    with given(_given()) as context:
+        _pending(context)
+
+        response = _search(context, "Agent Barn", headers=_member_headers(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+# --- choosing the site -------------------------------------------------------------
+
+
+def test_choosing_a_site_grants_write_on_it_and_creates_the_agent_barn_folder():
+    with given(_given()) as context:
+        _pending(context)
+
+        with when("the Owner picks the SharePoint site"):
+            response = _choose(context)
+
+        with then("the platform app is granted write on that site only, with the administrator's token"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(
+                fake_graph_sites(context).grants,
+                equal_to(
+                    [
+                        {
+                            "token": _DELEGATED_ACCESS_TOKEN,
+                            "site_id": _SITE_ID,
+                            "app_id": _CLIENT_ID,
+                            "role": "write",
+                            "display_name": "Agent Barn",
+                        }
+                    ]
+                ),
+            )
+
+        with then("the folder is ensured as the app, in the tenant the administrator signed in to"):
+            assert_that(
+                fake_identity(context).app_token_requests,
+                equal_to([{"tenant_id": _TENANT_ID, "client_id": _CLIENT_ID, "client_secret": _CLIENT_SECRET}]),
+            )
+            assert_that(
+                fake_graph_sites(context).folders,
+                equal_to([{"token": "app-only-token", "site_id": _SITE_ID, "name": "Agent Barn"}]),
+            )
+
+        with then("the connection is active, shows the folder link, and keeps no token"):
+            assert_that(
+                response.json(),
+                has_entries(
+                    status="active",
+                    site_name="Agent Barn Test",
+                    site_url="https://contoso.sharepoint.com/sites/AgentBarnTest",
+                    folder_web_url=FOLDER_WEB_URL,
+                ),
+            )
+            connection = context.injector.get(OneDriveSyncRepository).get_open(context.organization.id)
+            assert connection is not None
+            assert_that(connection.permission_id, equal_to("perm-1"))
+            assert_that(connection.folder_item_id, equal_to("folder-item-1"))
+            assert_that(connection.pending_access_token, none())
+
+
+def test_a_site_cannot_be_chosen_after_the_sign_in_expired():
+    with given(_given()) as context:
+        _pending(context, expires_in=timedelta(minutes=-1))
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(fake_graph_sites(context).grants, equal_to([]))
+
+
+def test_a_site_cannot_be_chosen_without_a_sign_in():
+    with given(_given()) as context:
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+def test_a_member_cannot_choose_the_site():
+    with given(_given()) as context:
+        _pending(context)
+
+        response = _choose(context, headers=_member_headers(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(fake_graph_sites(context).grants, equal_to([]))
+
+
+def test_an_unknown_site_is_reported():
+    with given(_given()) as context:
+        _pending(context)
+        fake_graph_sites(context).unknown_sites.add(_SITE_ID)
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(fake_graph_sites(context).grants, equal_to([]))
+
+
+def test_a_grant_microsoft_refuses_says_who_may_connect():
+    with given(_given()) as context:
+        _pending(context)
+        fake_graph_sites(context).grant_failures[_SITE_ID] = SiteAccessRefused("HTTP 403")
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(response.json()["detail"], contains_string("SharePoint administrator who is a member of this site"))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), has_entries(status="pending"))
+
+
+def test_throttling_says_to_wait():
+    with given(_given()) as context:
+        _pending(context)
+        fake_graph_sites(context).grant_failures[_SITE_ID] = SitesThrottled("HTTP 429")
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
+
+
+def test_a_folder_that_cannot_be_created_takes_back_the_grant():
+    with given(_given()) as context:
+        _pending(context)
+        fake_graph_sites(context).folder_failure = SitesUnavailable("HTTP 500")
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+        assert_that(
+            fake_graph_sites(context).revokes,
+            equal_to([{"token": _DELEGATED_ACCESS_TOKEN, "site_id": _SITE_ID, "permission_id": "perm-1"}]),
+        )
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), has_entries(status="pending"))
+
+
+def test_a_folder_the_app_may_not_create_takes_back_the_grant():
+    with given(_given()) as context:
+        _pending(context)
+        fake_graph_sites(context).folder_failure = SiteAccessRefused("HTTP 403")
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+        assert_that(len(fake_graph_sites(context).revokes), equal_to(1))
+
+
+def test_an_app_token_microsoft_refuses_takes_back_the_grant():
+    with given(_given()) as context:
+        _pending(context)
+        fake_identity(context).app_token_result = MicrosoftIdentityError("invalid_client", "AADSTS7000215")
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+        assert_that(response.text, not_(contains_string(_CLIENT_SECRET)))
+        assert_that(len(fake_graph_sites(context).revokes), equal_to(1))
+        assert_that(fake_graph_sites(context).folders, equal_to([]))
+
+
+def test_a_site_that_disappeared_is_reported_without_a_grant():
+    with given(_given()) as context:
+        _pending(context)
+        fake_graph_sites(context).grant_failures[_SITE_ID] = SiteNotFound(_SITE_ID)
+
+        response = _choose(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(fake_graph_sites(context).revokes, equal_to([]))

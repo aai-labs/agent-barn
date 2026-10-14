@@ -516,6 +516,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/onedrive-sync/connection/sites",
+    "search_onedrive_sync_sites_organizations__organization_id__onedrive_sync_connection_sites_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/shared-credentials",
     "list_shared_credentials_organizations__organization_id__shared_credentials_get"
   ],
@@ -1043,6 +1048,11 @@
     "POST",
     "/organizations/{organization_id}/onedrive-sync/connection/sign-in",
     "complete_onedrive_sync_sign_in_organizations__organization_id__onedrive_sync_connection_sign_in_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/onedrive-sync/connection/site",
+    "choose_onedrive_sync_site_organizations__organization_id__onedrive_sync_connection_site_post"
   ],
   [
     "POST",

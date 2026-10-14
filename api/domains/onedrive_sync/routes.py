@@ -11,6 +11,8 @@ from api.domains.onedrive_sync.models import (
     OneDriveSyncAuthorizeUrlRead,
     OneDriveSyncConnectionRead,
     OneDriveSyncSignInCreate,
+    OneDriveSyncSiteChoice,
+    OneDriveSyncSiteRead,
 )
 from api.domains.onedrive_sync.service import OneDriveSyncPurpose, OneDriveSyncService
 
@@ -58,6 +60,26 @@ def complete_onedrive_sync_sign_in(
     service: Annotated[OneDriveSyncService, Injected(OneDriveSyncService)],
 ):
     return service.complete_sign_in(organization_id, data.code, data.state, context)
+
+
+@onedrive_sync_router.get("/sites", response_model=list[OneDriveSyncSiteRead])
+def search_onedrive_sync_sites(
+    organization_id: UUID,
+    search: str,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[OneDriveSyncService, Injected(OneDriveSyncService)],
+):
+    return service.sites(organization_id, search, context)
+
+
+@onedrive_sync_router.post("/site", response_model=OneDriveSyncConnectionRead)
+def choose_onedrive_sync_site(
+    organization_id: UUID,
+    data: OneDriveSyncSiteChoice,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[OneDriveSyncService, Injected(OneDriveSyncService)],
+):
+    return service.choose_site(organization_id, data.site_id, context)
 
 
 @onedrive_sync_callback_router.get("/callback", response_class=HTMLResponse)

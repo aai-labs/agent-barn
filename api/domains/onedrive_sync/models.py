@@ -75,3 +75,13 @@ class OneDriveSyncAuthorizeUrlRead(PydanticBaseModel):
 class OneDriveSyncSignInCreate(PydanticBaseModel):
     code: str
     state: str
+
+
+class OneDriveSyncSiteRead(PydanticBaseModel):
+    id: str
+    name: str
+    web_url: str
+
+
+class OneDriveSyncSiteChoice(PydanticBaseModel):
+    site_id: str

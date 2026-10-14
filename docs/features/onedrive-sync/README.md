@@ -43,9 +43,21 @@ When either setting is blank, status reports `available: false` and starting a c
 
    It then stores a pending connection holding the delegated access token Fernet-encrypted (`AGENT_TOKEN_ENCRYPTION_KEY`) until the token expires. No refresh token is requested. A new sign-in replaces an existing pending connection; one is refused (409) while a connection is active. Microsoft refusals are 400 and an unreachable Microsoft is 502.
 
+8. The picker calls `GET …/connection/sites?search=<term>` (`organization.update`), which runs Graph's site search with the administrator's delegated token. The term is required: Microsoft doesn't document what an empty search returns.
+9. The opener calls `POST …/connection/site {site_id}` (`organization.update`). The server:
+   1. reads the site from Graph (400 if unknown), so the stored name and URL never come from the client;
+   2. grants the platform app `write` on that site, with display name "Agent Barn", using the administrator's delegated token. Microsoft requires the signer to be a SharePoint Administrator and a member of the site, so a refusal is a 403 that says so;
+   3. gets an app-only token in the connection's tenant;
+   4. ensures the "Agent Barn" folder at the root of the site's default document library;
+   5. activates the connection with the site, folder link and grant id, and drops the delegated token.
+
+   If anything fails after the grant, the grant is revoked with the delegated token and the connection stays pending (502). Throttling is 503.
+
+Searching or choosing without a fresh pending connection is 409: the administrator connects again.
+
 `DELETE …/connection` (`organization.update`) abandons a pending connection and leaves an active one alone.
 
-Choosing the site and disconnecting are listed under `Next` in the [change log](CHANGELOG.md).
+Disconnecting is listed under `Next` in the [change log](CHANGELOG.md).
 
 ## Disconnect flow
 
