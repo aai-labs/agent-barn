@@ -6,13 +6,15 @@ import logging
 from unittest.mock import MagicMock
 
 from fastapi import status
-from hamcrest import assert_that, equal_to, has_entries, has_length, none, not_none
+from hamcrest import assert_that, contains_string, equal_to, has_entries, has_length, none, not_none
 
 from api.core.config import Config
 from api.domains.agents.models import AgentStatus, AgentType
 from api.domains.agents.repository import AgentRepository
 from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.onboarding.service import OnboardingService
+from api.domains.templates.defaults import ONBOARDING_TEMPLATE_KEY
+from api.domains.templates.repository import TemplateRepository
 from api.domains.templates.service import TemplateService
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.tests.core.givenpy import given, then, when
@@ -109,7 +111,7 @@ def test_setting_up_creates_and_starts_a_hermes_agent():
         with when("onboarding sets up their Agent"):
             response = _set_up_agent(context)
 
-        with then("a General Purpose Hermes Agent with a suggested name exists and has been started"):
+        with then("a Hermes Agent on the Onboarding Template, with a suggested name, exists and has been started"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
             body = response.json()
             assert_that(body["agent_name"].endswith(" the Assistant"), equal_to(True), body["agent_name"])
@@ -117,10 +119,14 @@ def test_setting_up_creates_and_starts_a_hermes_agent():
             assert_that(agent.agent_type, equal_to(AgentType.HERMES))
             assert_that(agent.status, equal_to(AgentStatus.RUNNING))
             assert_that(body["agent_status"], equal_to(AgentStatus.RUNNING.value))
+            pinned = context.injector.get(TemplateRepository).get_pinned_template(agent)
+            assert_that(getattr(pinned, "template_key", None), equal_to(ONBOARDING_TEMPLATE_KEY))
 
-        with then("its Deployment was created"):
+        with then("its Deployment was created with the first-conversation script"):
             k8s: MagicMock = context.injector.get(KubernetesClient)
             assert_that(k8s.create_deployment.call_count, equal_to(1))
+            config_map = k8s.create_config_map.call_args.args[1].data
+            assert_that(config_map["BOOTSTRAP.md"], contains_string("First conversation"))
 
 
 def test_setting_up_gives_the_agent_an_agent_barn_telegram_connection():

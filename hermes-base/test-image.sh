@@ -40,6 +40,16 @@ docker run --rm --network none \
     "$image" \
     /driver.py
 
+# First-conversation plugin and its seed helper against Hermes' real plugin loader,
+# hook dispatch, tool registry and per-platform toolsets. Root, for the real /workspace.
+docker run --rm --network none --user root \
+    -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-first-conversation:/plugin:ro" \
+    -v "$repo_root/api/domains/agents/scripts/hermes/first-conversation-seed.py:/seed.py:ro" \
+    -v "$repo_root/api/tests/fixtures/hermes_first_conversation_driver.py:/driver.py:ro" \
+    --entrypoint python3 \
+    "$image" \
+    /driver.py
+
 # Native scheduler delivery remains active without the retired completion capture patch.
 docker run --rm --network none \
     -v "$repo_root/api/tests/fixtures/hermes_native_delivery_driver.py:/native-driver.py:ro" \

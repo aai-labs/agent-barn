@@ -124,7 +124,7 @@ AF-150 backend supports listing explicit assignments and locked roles, granting 
 
 ## Shared Organization resources
 
-Organization Members may read and use Templates and Skills when creating or configuring an Agent but may not create, update, version, publish, or delete shared definitions. Organization Owner/Admin may manage those resources. Organization-wide cost and activity summaries remain Organization-authorized; Agent Viewer/Editor/Owner permissions authorize only the corresponding Agent aggregate.
+Organization Members may read and use Templates and Skills when creating or configuring an Agent but may not create, update, version, publish, or delete shared definitions. The Onboarding Template is not a shared definition: no Organization role may read it through Organization template routes, or create or re-pin an Agent onto it; only trial onboarding creates Agents on it (see [Templates and Skills](../templates-and-skills.md)). Organization Owner/Admin may manage those resources. Organization-wide cost and activity summaries remain Organization-authorized; Agent Viewer/Editor/Owner permissions authorize only the corresponding Agent aggregate.
 
 ## Persistence and migration
 

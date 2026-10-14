@@ -26,7 +26,7 @@ from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.skills.repository import SkillRepository
-from api.domains.templates.defaults import DEFAULT_SOUL_MD
+from api.domains.templates.defaults import DEFAULT_SOUL_MD, ONBOARDING_TEMPLATE_KEY
 from api.domains.templates.models import (
     AgentTemplate,
     AgentTemplateDraft,
@@ -1673,6 +1673,7 @@ def test_seed_predefined_templates_creates_three_lineages():
                 "email-reminder",
                 "jira-task-helper",
                 "documentation-agent",
+                ONBOARDING_TEMPLATE_KEY,
             ):
                 template = repository.get_latest_platform_template(template_key)
                 assert_that(template, is_not(none()))
@@ -1681,7 +1682,7 @@ def test_seed_predefined_templates_creates_three_lineages():
                 # platform_template rows are inherently pre-defined (no source column)
 
         with then("the registry and DB agree on the count"):
-            assert_that(len(PREDEFINED_TEMPLATES), equal_to(6))
+            assert_that(len(PREDEFINED_TEMPLATES), equal_to(7))
 
 
 def test_seed_predefined_templates_is_idempotent():
@@ -1699,6 +1700,83 @@ def test_seed_predefined_templates_is_idempotent():
             assert_that(body["total"], equal_to(6))
             for item in body["items"]:
                 assert_that(item["version"], equal_to(1))
+
+
+@pytest.mark.parametrize("actor", ["owner", "member"])
+def test_onboarding_template_is_not_listed_to_organizations(actor: str):
+    steps = [*_GIVEN, _there_is_a_member_actor()] if actor == "member" else _GIVEN
+    with given(steps) as context:
+        context.injector.get(TemplateService).seed_predefined_templates()
+        client: TestClient = context.client
+
+        with when("the organization lists its templates"):
+            listed = client.get(_BASE, headers=_auth(context)).json()
+            searched = client.get(f"{_BASE}?search=onboarding", headers=_auth(context)).json()
+            built_in = client.get(f"{_BASE}?source=pre-defined&page_size=50", headers=_auth(context)).json()
+            first_page = client.get(f"{_BASE}?page=1&page_size=6", headers=_auth(context)).json()
+            second_page = client.get(f"{_BASE}?page=2&page_size=6", headers=_auth(context)).json()
+            lineages = client.get(f"{_BASE}/lineages", headers=_auth(context)).json()
+
+        with then("the onboarding template is in none of them, and counts leave it out"):
+            for page in (listed, searched, built_in, first_page, second_page):
+                keys = [item["template_key"] for item in page["items"]]
+                assert ONBOARDING_TEMPLATE_KEY not in keys
+            assert_that(searched["total"], equal_to(0))
+            assert_that(built_in["total"], equal_to(6))
+            assert_that(first_page["total"], equal_to(6))
+            assert_that(second_page["items"], equal_to([]))
+            assert ONBOARDING_TEMPLATE_KEY not in [lineage["template_key"] for lineage in lineages]
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("get", ""),
+        ("get", "/versions"),
+        ("get", "/versions?include_platform=true"),
+        ("post", "/draft"),
+        ("post", "/draft?source_version=1"),
+        ("post", "/draft?source_scope=platform"),
+        ("post", "/draft?source_scope=platform&source_version=1"),
+        ("post", "/draft?source_scope=organization"),
+        ("post", "/platform-update"),
+        ("delete", ""),
+    ],
+)
+def test_onboarding_template_is_not_found_for_organizations(method: str, path: str):
+    with given(_GIVEN) as context:
+        context.injector.get(TemplateService).seed_predefined_templates()
+        repository: TemplateRepository = context.injector.get(TemplateRepository)
+
+        with when(f"the organization calls {method.upper()} {ONBOARDING_TEMPLATE_KEY}{path}"):
+            response = getattr(context.client, method)(
+                f"{_BASE}/{ONBOARDING_TEMPLATE_KEY}{path}", headers=_auth(context)
+            )
+
+        with then("it is not found and the organization gets no copy of it"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+            assert_that(repository.get_org_draft(context.organization.id, ONBOARDING_TEMPLATE_KEY), none())
+            assert_that(repository.get_latest_org_template(context.organization.id, ONBOARDING_TEMPLATE_KEY), none())
+
+
+def test_platform_admin_still_manages_the_onboarding_template():
+    with given([*_GIVEN, _there_is_a_platform_admin_actor()]) as context:
+        context.injector.get(TemplateService).seed_predefined_templates()
+        client: TestClient = context.client
+        base = f"{_PLATFORM_TEMPLATES_BASE}/{ONBOARDING_TEMPLATE_KEY}"
+
+        with when("a Platform Administrator opens the platform catalogue"):
+            catalogue = client.get(_PLATFORM_TEMPLATES_BASE, headers=_auth(context))
+            published = client.get(base, headers=_auth(context))
+            versions = client.get(f"{base}/versions", headers=_auth(context))
+            draft = client.post(f"{base}/draft", headers=_auth(context))
+
+        with then("the onboarding template is listed, readable and editable"):
+            assert ONBOARDING_TEMPLATE_KEY in [item["template_key"] for item in catalogue.json()]
+            assert_that(published.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(published.json()["bootstrap_md"], contains_string("First conversation"))
+            assert_that(versions.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(draft.status_code, equal_to(status.HTTP_201_CREATED))
 
 
 def test_seed_does_not_clobber_edited_predefined_template():

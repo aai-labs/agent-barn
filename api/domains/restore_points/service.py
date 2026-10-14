@@ -651,7 +651,7 @@ class RestorePointService:
         selection.removed_skill_ids = [
             row.skill_id for row in self.agent_repository.get_skills_for_agent(agent.id) if row.skill_id not in recorded
         ]
-        resolved = self.selection.resolve(agent, selection, agent.organization_id)
+        resolved = self.selection.resolve(agent, selection, agent.organization_id, recorded=True)
         self.override_repository.select_pin(
             agent.id,
             agent.organization_id,
@@ -721,7 +721,7 @@ class RestorePointService:
         return selection
 
     def _validate_recorded_configuration(self, agent: Agent, target: AgentRestorePoint) -> None:
-        self.selection.resolve(agent, self._recorded_selection(agent, target), agent.organization_id)
+        self.selection.resolve(agent, self._recorded_selection(agent, target), agent.organization_id, recorded=True)
 
     def _create_pre_restore_row(self, agent: Agent, job_name: str) -> AgentRestorePoint:
         backup_id = uuid7()

@@ -15,7 +15,7 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agents.exceptions import TrialAgentLimitReached
-from api.domains.agents.models import AgentCreate, AgentFilter, AgentRead, AgentStatus, AgentType
+from api.domains.agents.models import AgentFilter, AgentRead, AgentStatus
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.models import CommunicationConnectionCreate, CommunicationConnectionRead
@@ -27,7 +27,6 @@ from api.infrastructure.shared.models import Pagination
 
 logger = logging.getLogger(__name__)
 
-TRIAL_TEMPLATE_KEY = "general-purpose"
 TELEGRAM_PLATFORM_KEY = "agentbarn_telegram"
 # What the hire dialog calls a General Purpose Agent.
 _AGENT_ROLE = "the Assistant"
@@ -132,9 +131,7 @@ class OnboardingService:
     def _create_agent(self, trial: CurrentUserContext) -> AgentRead:
         name = f"{self.agents.suggest_agent_name(trial).first_name} {_AGENT_ROLE}"
         try:
-            return self.agents.create_agent(
-                AgentCreate(name=name, agent_type=AgentType.HERMES, template_key=TRIAL_TEMPLATE_KEY), trial
-            )
+            return self.agents.create_onboarding_agent(name, trial)
         except TrialAgentLimitReached:
             # Another onboarding request created it first.
             agent = self._agent(trial)

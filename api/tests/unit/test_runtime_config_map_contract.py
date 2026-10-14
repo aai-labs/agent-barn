@@ -27,8 +27,9 @@ _AGENT_ID = uuid4()
 _ORG_ID = uuid4()
 _NS = "agent-farm"
 
-# Supplied only for some Agents; start.sh guards each with `[ -f ... ]`.
-_OPTIONAL = {"aai-cli-setup.sh", "aai-cli-config.toml", "gog-setup.sh", "skills.json"}
+# Supplied only for some Agents; start.sh guards each with `[ -f ... ]`, or hands it
+# to a helper that treats a missing file as nothing to do.
+_OPTIONAL = {"aai-cli-setup.sh", "aai-cli-config.toml", "gog-setup.sh", "skills.json", "BOOTSTRAP.md"}
 
 
 def _referenced_files(start_script: Path) -> set[str]:

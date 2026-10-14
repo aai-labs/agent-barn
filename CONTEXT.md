@@ -264,6 +264,10 @@ _Avoid_: fork version, template merge baseline
 The manual action that clones an origin's newer Platform Template snapshot—including content and required skills—into the next Organization Template Version. It intentionally replaces organization customizations; existing Agent pins remain unchanged.
 _Avoid_: template merge, in-place sync
 
+**Onboarding Template**:
+The built-in Platform Template (`trial-onboarding`) that trial onboarding gives a new user's first Agent. It is hidden from every Organization — absent from template lists and answering 404 to Organization template routes — and is managed only by Platform Administrators.
+_Avoid_: trial template, onboarding agent template, hidden template
+
 **Skill**:
 A packaged set of UTF-8 agent instructions or references that can be assigned to an Agent or required by a Template. A retained Skill is a stable lineage; immutable content is stored in Skill Versions and every published version has one root `SKILL.md`. A custom lineage may be hard-deleted with its draft and versions when no Agent pins any version and no Template, Override, or fork-source reference remains.
 _Avoid_: integration, tool, prompt blob
@@ -403,7 +407,7 @@ _Avoid_: webhook
 - A **Platform Skill** has no owner; an **Organization Skill** belongs to one Organization; an **Agent Skill** belongs to one Agent and retains its Organization for tenant isolation.
 - An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
 - A custom **Skill Lineage** can be hard-deleted from its owning Platform, Organization, or Agent scope only when no Agent pins any of its versions and no Template, Override, or fork-source reference remains; the delete cascades the lineage's own Drafts, Versions, and files.
-- A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization.
+- A Platform Template lineage has at most one **Draft Template Version**, authored only by a **Platform Administrator**; publishing it exposes the next Platform Template Version to every Organization, except for the **Onboarding Template**, which no Organization sees.
 - A **Platform Administrator** can restore an immutable Platform Template Version into a Platform draft; an Organization member with template management permission can restore an Organization version or a Built-in source version into an Organization draft. Both forms of **Template Restore** preserve published history and existing Agent pins.
 - An Organization Template fork tracks a **Fork Baseline Version**; the first fork is Organization v1 and a **Template Update** clones its origin's newer Platform Template snapshot into the next organization version.
 - Editing an Agent's Template from the Agent's own screen creates or updates one **Agent Template Override Draft** as a snapshot of the exact active shared Template Version or Agent Template Override Version, retaining its **Override Source Version** lineage; other Agents and the shared source lineage are unaffected. Selecting or rolling back a published version does not modify or discard that draft.

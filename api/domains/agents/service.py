@@ -177,6 +177,7 @@ from api.domains.shared_credentials.models import SharedCredential
 from api.domains.shared_credentials.repository import SharedCredentialRepository
 from api.domains.skills.models import PinnedSkill, Skill, SkillVersion, derive_tools_pointer
 from api.domains.skills.repository import SkillRepository
+from api.domains.templates.defaults import ONBOARDING_TEMPLATE_KEY, is_hidden_template_key, is_placeholder_bootstrap
 from api.domains.templates.models import AgentTemplate, PlatformTemplate, TemplateRead
 from api.domains.templates.renderer import render_template
 from api.domains.templates.repository import TemplateRepository
@@ -844,6 +845,16 @@ class AgentService:
         return AgentNameSuggestionRead(first_name=choose_first_name(self.repository.count_all_by_org(org_id)))
 
     def create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
+        if is_hidden_template_key(data.template_key):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {data.template_key} not found")
+        return self._create_agent(data, context)
+
+    def create_onboarding_agent(self, name: str, context: CurrentUserContext) -> AgentRead:
+        return self._create_agent(
+            AgentCreate(name=name, agent_type=AgentType.HERMES, template_key=ONBOARDING_TEMPLATE_KEY), context
+        )
+
+    def _create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
         self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
         self._ensure_model_allowed(data.model, org_id)
@@ -1790,6 +1801,7 @@ class AgentService:
         # validator guarantees both keys appear together.
         effective_template = None
         if "template_key" in updated:
+            self.selection.ensure_template_pinnable(agent, updated["template_key"])
             effective_template = self.template_repository.resolve_template(
                 org_id, updated["template_key"], updated["template_version"]
             )
@@ -2164,6 +2176,7 @@ class AgentService:
             )
         # Placeholders are kept raw in storage and rendered at seed time.
         rendered = render_template(template, agent.name)
+        first_conversation_md = None if is_placeholder_bootstrap(rendered.bootstrap_md) else rendered.bootstrap_md
         ns = self.config.k8s_namespace
 
         name = f"agent-{agent.id}"
@@ -2228,6 +2241,7 @@ class AgentService:
                 agentbarn_telegram=agentbarn_telegram,
                 memory_enabled=agent.memory_enabled,
                 max_turns=agent.max_turns,
+                first_conversation=first_conversation_md is not None,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -2558,6 +2572,7 @@ class AgentService:
                 gog_setup_sh=gog_setup_sh,
                 gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
+                bootstrap_md=first_conversation_md,
             )
         else:
             config_map = build_config_map(

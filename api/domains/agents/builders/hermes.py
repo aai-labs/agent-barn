@@ -38,10 +38,12 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_FIRST_CONVERSATION = _SCRIPTS / "plugins" / "agentbarn-first-conversation"
 
 HERMES_BOOTLOADER_FOOTER: str = (_SCRIPTS / "bootloader-footer.md").read_text()
 HERMES_CONFIG_MERGE_PY: str = (_SCRIPTS / "config-merge.py").read_text()
 HERMES_MEMORY_SETUP_PY: str = (_SCRIPTS / "memory-setup.py").read_text()
+HERMES_FIRST_CONVERSATION_SEED_PY: str = (_SCRIPTS / "first-conversation-seed.py").read_text()
 MEMORY_GATEWAY_READY_PY: str = (_COMMON_SCRIPTS / "memory-gateway-ready.py").read_text()
 HERMES_HEALTHZ_PY: str = (_SCRIPTS / "healthz-server.py").read_text()
 HERMES_START_SH: str = (_SCRIPTS / "start.sh").read_text()
@@ -49,6 +51,8 @@ TELEMETRY_PUSH_PLUGIN_YAML: str = (_TELEMETRY_PUSH / "plugin.yaml").read_text()
 TELEMETRY_PUSH_PLUGIN_INIT: str = (_TELEMETRY_PUSH / "__init__.py").read_text()
 OBSERVER_PLUGIN_YAML: str = (_OBSERVER / "plugin.yaml").read_text()
 OBSERVER_PLUGIN_INIT: str = (_OBSERVER / "__init__.py").read_text()
+FIRST_CONVERSATION_PLUGIN_YAML: str = (_FIRST_CONVERSATION / "plugin.yaml").read_text()
+FIRST_CONVERSATION_PLUGIN_INIT: str = (_FIRST_CONVERSATION / "__init__.py").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
@@ -65,6 +69,7 @@ _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # that notice without accidentally making an arbitrary real channel the
 # destination for proactive messages.
 _NO_HOME_CHANNEL = "__agentbarn_no_home_channel__"
+FIRST_CONVERSATION_PLUGIN = "agentbarn-first-conversation"
 # Every auxiliary.<task> block v2026.8.19 reads, minus the moa_* slots (MoA only).
 _HERMES_AUXILIARY_TASKS = (
     "vision",
@@ -179,13 +184,18 @@ def build_hermes_gateway_config(
     agentbarn_telegram: AgentBarnTelegramRuntime | None = None,
     memory_enabled: bool = False,
     max_turns: int | None = None,
+    first_conversation: bool = False,
 ) -> dict:
     plugins = ["telemetry-push"]
     if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
         plugins.append("agentbarn-observer")
+    if first_conversation:
+        plugins.append(FIRST_CONVERSATION_PLUGIN)
     config = _hermes_config_core(
         model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, max_turns=max_turns
     )
+    if first_conversation:
+        config["onboarding"] = {"profile_build": "off"}
     config["memory"]["provider"] = "hindsight" if memory_enabled else ""
     if memory_enabled:
         config["memory"]["hindsight"] = hermes_memory_settings()
@@ -409,6 +419,8 @@ def build_hermes_config_map(
     gog_shim_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
+    *,
+    bootstrap_md: str | None = None,
 ) -> client.V1ConfigMap:
     data: dict[str, str] = {
         "SOUL.md": soul_md + HERMES_BOOTLOADER_FOOTER,
@@ -425,9 +437,12 @@ def build_hermes_config_map(
         "telemetry-push-init.py": TELEMETRY_PUSH_PLUGIN_INIT,
         "agentbarn-observer-plugin.yaml": OBSERVER_PLUGIN_YAML,
         "agentbarn-observer-init.py": OBSERVER_PLUGIN_INIT,
+        "agentbarn-first-conversation-plugin.yaml": FIRST_CONVERSATION_PLUGIN_YAML,
+        "agentbarn-first-conversation-init.py": FIRST_CONVERSATION_PLUGIN_INIT,
         "healthz-server.py": HERMES_HEALTHZ_PY,
         "config-merge.py": HERMES_CONFIG_MERGE_PY,
         "memory-setup.py": HERMES_MEMORY_SETUP_PY,
+        "first-conversation-seed.py": HERMES_FIRST_CONVERSATION_SEED_PY,
         "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
         "terminal-env.sh": 'export PATH="/home/hermes/.local/bin:$PATH"\n',
@@ -436,6 +451,8 @@ def build_hermes_config_map(
         "retire-messaging.py": RETIRE_MESSAGING_PY,
         "boot-run.py": HERMES_BOOT_RUN_PY,
     }
+    if bootstrap_md is not None:
+        data["BOOTSTRAP.md"] = bootstrap_md
     if aai_cli_config_toml is not None:
         data["aai-cli-config.toml"] = aai_cli_config_toml
     if aai_cli_setup_sh is not None:

@@ -311,7 +311,7 @@ hooks directly. Shared setup lives in
   host through `host.docker.internal`.
 - Fakes of runtime objects can only prove our own logic. Anything that depends
   on runtime behavior MUST also be checked inside the pinned image. The Hermes
-  SessionStore, PVC, native Telegram access, Teams runtime webhook, and image smoke contracts run through
+  SessionStore, PVC, native Telegram access, Teams runtime webhook, first-conversation plugin and seed, and image smoke contracts run through
   `../../hermes-base/test-image.sh`, invoked by
   `../../.github/workflows/hermes-base.yml`. Both that workflow and
   `../../.github/workflows/openclaw-base.yml` smoke-test their base images. CI

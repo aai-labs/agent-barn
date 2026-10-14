@@ -1,3 +1,9 @@
+import re
+
+ONBOARDING_TEMPLATE_KEY = "trial-onboarding"
+HIDDEN_TEMPLATE_KEYS = frozenset({ONBOARDING_TEMPLATE_KEY})
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
 DEFAULT_SOUL_MD = """\
 # SOUL.md - Who Am I?
 
@@ -181,3 +187,12 @@ DEFAULT_HEARTBEAT_MD = """\
 
 # Add tasks below when you want the agent to check something periodically.
 """
+
+
+def is_hidden_template_key(template_key: str) -> bool:
+    return template_key in HIDDEN_TEMPLATE_KEYS
+
+
+def is_placeholder_bootstrap(bootstrap_md: str) -> bool:
+    lines = _HTML_COMMENT.sub("", bootstrap_md).splitlines()
+    return all(not line.strip() or line.lstrip().startswith("#") for line in lines)

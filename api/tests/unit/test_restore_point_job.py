@@ -183,6 +183,23 @@ def test_hermes_capture_retains_agent_owned_memories_and_work(tmp_path):
     assert_that(names, has_item("workspace/notes.md"))
 
 
+def test_hermes_capture_retains_the_first_conversation_script_and_its_marker(tmp_path):
+    source, dest = tmp_path / "src", tmp_path / "dst"
+    source.mkdir()
+    dest.mkdir()
+    _hermes_volume(source)
+    _write(source, "workspace/.agentbarn/BOOTSTRAP.md", "# First conversation")
+    _write(source, "workspace/.agentbarn/bootstrap-decided", "")
+    _write(source, "workspace/.agentbarn/bootstrap-turns", "2")
+
+    capture(source, dest, _HERMES)
+
+    names = _members(dest)
+    assert_that(names, has_item("workspace/.agentbarn/BOOTSTRAP.md"))
+    assert_that(names, has_item("workspace/.agentbarn/bootstrap-decided"))
+    assert_that(names, has_item("workspace/.agentbarn/bootstrap-turns"))
+
+
 def test_openclaw_capture_retains_workspace_user_md_but_drops_regenerated_markdown(tmp_path):
     source, dest = tmp_path / "src", tmp_path / "dst"
     source.mkdir()

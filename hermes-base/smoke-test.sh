@@ -278,6 +278,20 @@ if 'recursive delete' not in approval._permanent_approved:
     raise SystemExit('approvals contract broken: command_allowlist is no longer loaded when tools.approval is imported')
 "
 
+check onboarding-profile-build-off python3 -c "
+import sys
+
+sys.path.insert(0, '/opt/hermes')
+
+from agent.onboarding import profile_build_mode
+from hermes_cli.config_defaults import DEFAULT_CONFIG
+
+if 'profile_build' not in (DEFAULT_CONFIG.get('onboarding') or {}):
+    raise SystemExit('onboarding contract broken: onboarding.profile_build is no longer a recognised config key')
+if profile_build_mode({'onboarding': {'profile_build': 'off'}}) != 'off':
+    raise SystemExit('onboarding contract broken: profile_build off no longer turns the first-contact offer off')
+"
+
 if [ "$CLOUD_CLIS" = "true" ]; then
     check aws    aws --version
     check gcloud gcloud --version

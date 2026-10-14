@@ -25,6 +25,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.skills.models import Skill, SkillVersion
+from api.domains.templates.defaults import HIDDEN_TEMPLATE_KEYS
 from api.domains.templates.models import (
     AgentTemplate,
     AgentTemplateDraft,
@@ -524,6 +525,7 @@ class TemplateRepository:
                     col(PlatformTemplate.template_name),
                     col(PlatformTemplate.version),
                 )
+                .where(col(PlatformTemplate.template_key).not_in(HIDDEN_TEMPLATE_KEYS))
                 .distinct(col(PlatformTemplate.template_key))
                 .order_by(
                     col(PlatformTemplate.template_key).asc(),

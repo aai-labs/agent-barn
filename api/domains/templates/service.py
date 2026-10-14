@@ -23,6 +23,7 @@ from api.domains.templates.defaults import (
     DEFAULT_SOUL_MD,
     DEFAULT_TOOLS_MD,
     DEFAULT_USER_MD,
+    is_hidden_template_key,
 )
 from api.domains.templates.models import (
     AgentTemplate,
@@ -220,7 +221,13 @@ class TemplateService:
             detail="Could not allocate a unique template key; please try again",
         )
 
+    @staticmethod
+    def _reject_hidden(template_key: str) -> None:
+        if is_hidden_template_key(template_key):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Template {template_key} not found")
+
     def _get_latest_or_404(self, org_id: UUID, template_key: str) -> AgentTemplate | PlatformTemplate:
+        self._reject_hidden(template_key)
         template = self.repository.resolve_latest_template(org_id, template_key)
         if not template:
             raise HTTPException(
@@ -301,6 +308,7 @@ class TemplateService:
         self, template_key: str, context: CurrentUserContext, *, include_platform: bool = False
     ) -> list[TemplateRead]:
         org_id = self._org_id(context)
+        self._reject_hidden(template_key)
         versions = (
             self.repository.get_shared_versions(org_id, template_key)
             if include_platform
@@ -380,6 +388,7 @@ class TemplateService:
         scope retains Organization-first resolution. Restoring a Platform
         snapshot preserves the fork origin and updates only its baseline."""
         org_id = self._org_id(context)
+        self._reject_hidden(template_key)
         existing_draft = self.repository.get_org_draft(org_id, template_key)
         source: AgentTemplate | PlatformTemplate | None
         if source_scope == "platform":
