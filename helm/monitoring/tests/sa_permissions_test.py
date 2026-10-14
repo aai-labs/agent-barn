@@ -17,6 +17,9 @@ MANIFESTS = ["k8s/agent-farm-user.yaml", "k8s/agent-farm-user.staging.yaml"]
 # files/litellm_metrics_key.py reads the Secret before deciding to keep or
 # rewrite the key.
 NEEDED = [("get", "litellm-metrics-key"), ("create", None), ("update", "litellm-metrics-key")]
+# Public cluster only: k8s/agent-farm-user.yaml is the sole grant. The shared
+# cluster's tenant Role already allows get on every Secret.
+PUBLIC_ONLY = [("get", "hindsight-litellm-hashes")]
 
 
 def allows(rules, verb, name):
@@ -36,7 +39,10 @@ for path in MANIFESTS:
     role = next(
         d for d in yaml.safe_load_all((ROOT / path).read_text()) if d and d.get("kind") == "Role"
     )
-    for verb, name in NEEDED:
+    needed = list(NEEDED)
+    if path == "k8s/agent-farm-user.yaml":
+        needed.extend(PUBLIC_ONLY)
+    for verb, name in needed:
         if not allows(role["rules"], verb, name):
             failures.append(f"{path}: Role doesn't allow {verb} on secrets/{name or '*'}")
 
