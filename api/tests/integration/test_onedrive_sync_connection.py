@@ -972,3 +972,136 @@ def test_another_organizations_agent_does_not_block_connecting():
         response = _choose(context)
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+
+
+# --- disconnect --------------------------------------------------------------------
+
+
+def _disconnect_state(context) -> str:
+    response = _authorize_url(context, purpose="disconnect")
+    assert response.status_code == status.HTTP_200_OK, response.text
+    return _query(response.json()["authorize_url"])["state"]
+
+
+def _disconnect(context, state: str, headers: dict | None = None):
+    return context.client.post(
+        f"{_base(context)}/disconnect", json={"code": "the-code", "state": state}, headers=headers or _auth(context)
+    )
+
+
+def test_disconnecting_revokes_the_site_grant_with_the_administrators_sign_in():
+    with given(_given()) as context:
+        _active(context)
+        fake_identity(context).exchange_result = _signed_in_tokens()
+
+        with when("the Owner signs in again to disconnect"):
+            response = _disconnect(context, _disconnect_state(context))
+
+        with then("the platform app's grant on the site is revoked with their delegated token"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(
+                fake_graph_sites(context).revokes,
+                equal_to([{"token": _DELEGATED_ACCESS_TOKEN, "site_id": _SITE_ID, "permission_id": "perm-1"}]),
+            )
+            assert_that(fake_identity(context).exchanges[0], has_entries(client_secret=_CLIENT_SECRET))
+
+        with then("the Organization is no longer connected, and may connect again"):
+            assert_that(response.json(), has_entries(available=True, status=None))
+            assert_that(context.injector.get(OneDriveSyncRepository).get_open(context.organization.id), none())
+            assert_that(_authorize_url(context).status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_a_sign_in_to_another_microsoft_organization_cannot_disconnect():
+    with given(_given()) as context:
+        _active(context)
+        fake_identity(context).exchange_result = _signed_in_tokens(tenant_id="99999999-9999-4999-8999-999999999999")
+
+        response = _disconnect(context, _disconnect_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(fake_graph_sites(context).revokes, equal_to([]))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), has_entries(status="active"))
+
+
+def test_the_tenant_is_compared_regardless_of_case():
+    with given(_given()) as context:
+        _active(context)
+        fake_identity(context).exchange_result = _signed_in_tokens(tenant_id=_TENANT_ID.upper())
+
+        response = _disconnect(context, _disconnect_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+
+
+def test_a_revoke_microsoft_refuses_keeps_the_connection():
+    with given(_given()) as context:
+        _active(context)
+        fake_identity(context).exchange_result = _signed_in_tokens()
+        fake_graph_sites(context).revoke_failures[_SITE_ID] = SiteAccessRefused("HTTP 403")
+
+        response = _disconnect(context, _disconnect_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(response.json()["detail"], contains_string("SharePoint administrator who is a member of this site"))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), has_entries(status="active"))
+
+
+def test_an_unreachable_microsoft_keeps_the_connection():
+    with given(_given()) as context:
+        _active(context)
+        fake_identity(context).exchange_result = _signed_in_tokens()
+        fake_graph_sites(context).revoke_failures[_SITE_ID] = SitesUnavailable("HTTP 503")
+
+        response = _disconnect(context, _disconnect_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), has_entries(status="active"))
+
+
+def test_a_disconnect_without_site_administration_is_refused():
+    with given(_given()) as context:
+        _active(context)
+        fake_identity(context).exchange_result = _signed_in_tokens(scope="https://graph.microsoft.com/Sites.Read.All")
+
+        response = _disconnect(context, _disconnect_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(fake_graph_sites(context).revokes, equal_to([]))
+
+
+def test_a_connect_state_cannot_disconnect():
+    with given(_given()) as context:
+        _active(context)
+
+        response = _disconnect(context, _forged_state(context, purpose="connect"))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(fake_identity(context).exchanges, equal_to([]))
+
+
+def test_a_disconnect_state_issued_to_someone_else_is_refused():
+    with given(_given()) as context:
+        _active(context)
+
+        response = _disconnect(context, _forged_state(context, user_id=uuid7(), purpose="disconnect"))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_disconnecting_when_not_connected_is_refused():
+    with given(_given()) as context:
+        response = _disconnect(context, _forged_state(context, purpose="disconnect"))
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(fake_identity(context).exchanges, equal_to([]))
+
+
+def test_a_member_cannot_disconnect():
+    with given(_given()) as context:
+        _active(context)
+        headers = _member_headers(context)
+
+        response = _disconnect(context, _forged_state(context, purpose="disconnect"), headers=headers)
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(fake_graph_sites(context).revokes, equal_to([]))

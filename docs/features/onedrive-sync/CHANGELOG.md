@@ -21,13 +21,21 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: `POST …/connection/sign-in` redeems the administrator's code into a pending connection holding their encrypted delegated token, and `DELETE …/connection` abandons a pending connection.
 - Delivered: `GET …/connection/sites?search=` and `POST …/connection/site`. Choosing a site grants the platform app `write` on it, ensures the "Agent Barn" folder as the app, and activates the connection; a failure after the grant revokes it.
 - Delivered: choosing a site is refused (409, one line) when any Agent in the Organization, including a deleted one, has a recorded SharePoint selected-sites grant on it.
-- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
-- Next: disconnect (the administrator signs in again to revoke the grant).
+- Delivered: `POST …/connection/disconnect` revokes the platform app's site grant with the administrator's fresh delegated token from the same Microsoft tenant, then marks the connection disconnected. The folder stays.
+- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. An Agent's SharePoint integration can still be granted the folder site.
+- Next: the SharePoint integration guard (409 for the Organization's folder site).
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Disconnect
+
+- Delivered: `OneDriveSyncService.disconnect` and `POST …/connection/disconnect`. The state check and the code redemption are shared with sign-in (`_verified_state`, `_redeem`).
+- Changed: `README.md` disconnect flow; `api/developer_docs/operations-v1.json` with the new operation.
+- Verified: 10 new tests in `api/tests/integration/test_onedrive_sync_connection.py` cover the revoke, reconnecting afterwards, another tenant, tenant case, a refused or failed revoke keeping the connection, missing scope, wrong state purpose or user, not connected, and a Member.
+- Follow-up: the SharePoint integration guard.
 
 ### 2026-10-14 — AF-383 — Refuse a site an Agent already holds
 

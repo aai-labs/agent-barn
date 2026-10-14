@@ -58,11 +58,19 @@ Searching or choosing without a fresh pending connection is 409: the administrat
 
 `DELETE …/connection` (`organization.update`) abandons a pending connection and leaves an active one alone.
 
-Disconnecting is listed under `Next` in the [change log](CHANGELOG.md).
-
 ## Disconnect flow
 
-`GET …/connection/authorize-url?purpose=disconnect` returns 409 unless a connection is active. Otherwise it returns the sign-in URL directly, with no consent step: revoking the site grant needs the administrator's delegated `Sites.FullControl.All`, because an app granted `write` cannot manage site permissions.
+1. `GET …/connection/authorize-url?purpose=disconnect` returns 409 unless a connection is active. Otherwise it returns the sign-in URL directly, with no consent step. Revoking the site grant needs the administrator's delegated `Sites.FullControl.All`, because an app granted `write` cannot manage site permissions.
+2. After sign-in the opener calls `POST …/connection/disconnect {code, state}` (`organization.update`). The server:
+   1. requires a disconnect state issued to this caller for this Organization (400);
+   2. requires an active connection (409);
+   3. redeems the code exactly as for connecting;
+   4. requires the sign-in's `tid` to equal the connection's tenant, compared case-insensitively (400);
+   5. revokes the stored grant on the site;
+   6. marks the connection disconnected.
+
+   A refused revoke is 403 (SharePoint Administrator and site member), throttling 503, an unreachable Microsoft 502. In all three cases the connection stays active.
+3. The "Agent Barn" folder and its files are left in place. The Organization may connect again.
 
 ## Source map
 

@@ -29,6 +29,7 @@ from api.domains.agents.microsoft_identity import (
     MicrosoftIdentityClient,
     MicrosoftIdentityError,
     MicrosoftIdentityUnavailable,
+    MicrosoftTokens,
     build_app_permission_consent_url,
     build_authorize_url,
     claims_from_id_token,
@@ -93,6 +94,7 @@ _SITE_NOT_FOUND = "Couldn't find that SharePoint site. Search again and pick it 
 _NOT_A_SITE_ADMINISTRATOR = "Sign in as a SharePoint administrator who is a member of this site, then try again."
 _THROTTLED = "Microsoft is limiting requests right now. Wait a few minutes, then try again."
 _FOLDER_FAILED = "Agent Barn couldn't create its folder on that site, so it was not connected. Please try again."
+_ANOTHER_TENANT = "Sign in with an account from the Microsoft organization that connected OneDrive."
 _SITE_HELD_BY_AGENT = (
     "An Agent in this Organization already has SharePoint access to this site. Remove it there, or pick another site."
 )
@@ -266,34 +268,8 @@ class OneDriveSyncService:
         until a site is chosen. The tenant is the one Microsoft names in the id_token."""
         self._require_manage(organization_id, context)
         self._require_configured()
-        state = decode_state(state_token, self.config)
-        if (
-            state is None
-            or state.purpose != "connect"
-            or state.organization_id != organization_id
-            or state.user_id != context.user.id
-        ):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SIGN_IN_NOT_YOURS)
-        try:
-            tokens = self.identity.exchange_code(
-                tenant_id=MULTI_TENANT_AUTHORITY,
-                client_id=self.config.onedrive_sync_client_id,
-                code=code,
-                redirect_uri=redirect_uri(self.config),
-                code_verifier=state.code_verifier,
-                scopes=SIGN_IN_SCOPES,
-                client_secret=self.config.onedrive_sync_client_secret,
-            )
-        except MicrosoftIdentityError as exc:
-            logger.info("OneDrive sync sign-in refused by Microsoft: %s", exc.error)
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SIGN_IN_REFUSED) from exc
-        except MicrosoftIdentityUnavailable as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from exc
-        tenant_id = str(claims_from_id_token(tokens.id_token).get("tid") or "")
-        if not tenant_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SIGN_IN_WITHOUT_TENANT)
-        if not _REQUIRED_PERMISSIONS <= granted_permissions(tokens.scope.split()):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SITE_ADMINISTRATION_MISSING)
+        state = self._verified_state(state_token, "connect", organization_id, context)
+        tokens, tenant_id = self._redeem(code, state)
         try:
             self.repository.create_pending(
                 organization_id,
@@ -385,10 +361,82 @@ class OneDriveSyncService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_SIGN_IN_NEEDED)
         return self.status(organization_id, context)
 
+    def disconnect(
+        self, organization_id: UUID, code: str, state_token: str, context: CurrentUserContext
+    ) -> OneDriveSyncConnectionRead:
+        """Revoke the platform app's site grant with the administrator's fresh delegated token, then
+        close the connection. An app granted only ``write`` cannot remove its own grant, which is
+        why disconnecting needs this sign-in. The folder is left in place."""
+        self._require_manage(organization_id, context)
+        self._require_configured()
+        state = self._verified_state(state_token, "disconnect", organization_id, context)
+        connection = self.repository.get_open(organization_id)
+        if (
+            connection is None
+            or connection.status != OneDriveSyncStatus.ACTIVE
+            or connection.site_id is None
+            or connection.permission_id is None
+        ):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_NOT_CONNECTED)
+        tokens, tenant_id = self._redeem(code, state)
+        if tenant_id.lower() != connection.tenant_id.lower():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_ANOTHER_TENANT)
+        try:
+            self.graph_sites.revoke_site(
+                tokens.access_token, site_id=connection.site_id, permission_id=connection.permission_id
+            )
+        except SiteAccessRefused as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_NOT_A_SITE_ADMINISTRATOR) from exc
+        except SitesThrottled as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_THROTTLED) from exc
+        except SitesUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from exc
+        self.repository.mark_disconnected(connection.id)
+        return self.status(organization_id, context)
+
     def abandon_pending(self, organization_id: UUID, context: CurrentUserContext) -> None:
         """Forget an unfinished connection. An active connection is left alone; disconnect it instead."""
         self._require_manage(organization_id, context)
         self.repository.delete_pending(organization_id)
+
+    def _verified_state(
+        self, state_token: str, purpose: OneDriveSyncPurpose, organization_id: UUID, context: CurrentUserContext
+    ) -> OneDriveSyncState:
+        """The signed state, only if it was issued to this caller, for this Organization and purpose."""
+        state = decode_state(state_token, self.config)
+        if (
+            state is None
+            or state.purpose != purpose
+            or state.organization_id != organization_id
+            or state.user_id != context.user.id
+        ):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SIGN_IN_NOT_YOURS)
+        return state
+
+    def _redeem(self, code: str, state: OneDriveSyncState) -> tuple[MicrosoftTokens, str]:
+        """Redeem the code as the platform app; returns the tokens and the tenant Microsoft names
+        in the id_token. Both site permissions must have been granted."""
+        try:
+            tokens = self.identity.exchange_code(
+                tenant_id=MULTI_TENANT_AUTHORITY,
+                client_id=self.config.onedrive_sync_client_id,
+                code=code,
+                redirect_uri=redirect_uri(self.config),
+                code_verifier=state.code_verifier,
+                scopes=SIGN_IN_SCOPES,
+                client_secret=self.config.onedrive_sync_client_secret,
+            )
+        except MicrosoftIdentityError as exc:
+            logger.info("OneDrive sync sign-in refused by Microsoft: %s", exc.error)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SIGN_IN_REFUSED) from exc
+        except MicrosoftIdentityUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from exc
+        tenant_id = str(claims_from_id_token(tokens.id_token).get("tid") or "")
+        if not tenant_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SIGN_IN_WITHOUT_TENANT)
+        if not _REQUIRED_PERMISSIONS <= granted_permissions(tokens.scope.split()):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SITE_ADMINISTRATION_MISSING)
+        return tokens, tenant_id
 
     def _signed_in(self, organization_id: UUID) -> tuple[OneDriveSyncConnection, str]:
         """The pending connection and its administrator's delegated token, while the sign-in is fresh."""

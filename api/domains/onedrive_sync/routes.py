@@ -62,6 +62,16 @@ def complete_onedrive_sync_sign_in(
     return service.complete_sign_in(organization_id, data.code, data.state, context)
 
 
+@onedrive_sync_router.post("/disconnect", response_model=OneDriveSyncConnectionRead)
+def disconnect_onedrive_sync(
+    organization_id: UUID,
+    data: OneDriveSyncSignInCreate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[OneDriveSyncService, Injected(OneDriveSyncService)],
+):
+    return service.disconnect(organization_id, data.code, data.state, context)
+
+
 @onedrive_sync_router.get("/sites", response_model=list[OneDriveSyncSiteRead])
 def search_onedrive_sync_sites(
     organization_id: UUID,
