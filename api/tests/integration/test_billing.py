@@ -566,6 +566,32 @@ def test_a_session_we_never_created_grants_nothing():
         )
 
 
+def test_a_payment_that_granted_nothing_is_flagged_once_however_often_it_is_sent():
+    with given(_setup(an_owner_on_credit())) as context:
+        session = paid_session(context, amount_total=50)
+
+        deliver(context, "checkout.session.completed", session)
+        deliver(context, "checkout.session.completed", session)
+
+        assert_that(events_named(context, "platform.credit_purchase.unapplied"), has_length(1))
+
+
+def test_refunding_or_disputing_a_payment_that_granted_nothing_is_acknowledged_and_takes_nothing():
+    """The audit log says to refund such a payment; its refund and any dispute have no
+    credit to take back, and must not be sent again forever."""
+    with given(_setup(an_owner_on_credit())) as context:
+        deliver(context, "checkout.session.completed", paid_session(context, amount_total=50))
+        stripe_says_the_payment_is_a_credit_purchase(context)
+
+        with when("the payment is refunded, and another is disputed"):
+            refunded = deliver(context, "refund.created", refund(cents=50))
+            disputed = deliver(context, "charge.dispute.funds_withdrawn", dispute(context))
+
+        with then("both are acknowledged and the credit is untouched"):
+            assert_that((refunded.status_code, disputed.status_code), equal_to((200, 200)))
+            assert_that(ledger(context), equal_to([(CreditGrantKind.TRIAL, Decimal(10))]))
+
+
 def test_a_checkout_started_here_is_granted_when_its_payment_arrives():
     with given(_setup(an_owner_on_credit())) as context:
         buy(context, 20)

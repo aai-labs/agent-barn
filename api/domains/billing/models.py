@@ -72,6 +72,16 @@ class BillingCheckout(SQLModel, table=True):
     created_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
 
 
+class BillingUnappliedPayment(SQLModel, table=True):
+    """A payment that granted no credit, put on the platform audit log to be refunded.
+    Its refund or dispute then has nothing to take back, rather than waiting for a
+    purchase that will never be recorded."""
+
+    __tablename__: str = "billing_unapplied_payment"
+    payment_reference: str = SqlField(primary_key=True, max_length=255)
+    created_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+
+
 class BillingSettingsRead(BaseModel):
     # Whether this deployment takes payments at all (PAYMENTS_ENABLED).
     payments_enabled: bool = False

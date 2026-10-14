@@ -13,6 +13,7 @@ from api.domains.billing.models import (
     BILLING_SETTINGS_SUBJECT_DISPLAY,
     BillingCheckout,
     BillingSettingsRead,
+    BillingUnappliedPayment,
     OrganizationBillingCustomer,
     PlatformBillingSettings,
 )
@@ -158,8 +159,16 @@ class UnappliedPurchaseRepository:
         amount_paid_usd: Decimal,
         reason: str,
     ) -> list[UUID]:
-        """Stage the platform audit Event for a payment no credit was granted for."""
+        """Remember a payment no credit was granted for, and stage its platform audit
+        Event; nothing new for a payment already remembered (a redelivery)."""
         with Session(self.delegate.engine) as session:
+            remembered = session.connection().execute(
+                insert(BillingUnappliedPayment)
+                .values(payment_reference=payment_reference, created_at=datetime.now(UTC))
+                .on_conflict_do_nothing(index_elements=["payment_reference"])
+            )
+            if not remembered.rowcount:
+                return []
             event = EVENT_REGISTRY.build_event(
                 event_name=PLATFORM_CREDIT_PURCHASE_UNAPPLIED,
                 schema_version=1,
@@ -182,6 +191,10 @@ class UnappliedPurchaseRepository:
             ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             return ids
+
+    def includes(self, payment_reference: str) -> bool:
+        with Session(self.delegate.engine) as session:
+            return session.get(BillingUnappliedPayment, payment_reference) is not None
 
 
 @inject

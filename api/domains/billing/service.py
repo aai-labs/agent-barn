@@ -414,6 +414,9 @@ class BillingService:
         purchase = await run_in_threadpool(self.organizations.find_credit_grant, payment_intent)
         if purchase is not None and purchase.amount_paid_usd:
             return purchase
+        if await run_in_threadpool(self.unapplied.includes, payment_intent):
+            logger.info("Ignoring Stripe %s for payment %s, which granted no credit", reference, payment_intent)
+            return None
         metadata = await self.stripe.payment_metadata(payment_intent)
         organization_id = metadata.get("organization_id")
         if not organization_id or "credit_usd" not in metadata:

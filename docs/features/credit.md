@@ -91,7 +91,9 @@ webhook secret.
     never trusted for the amount, since anyone with access to the Stripe account (or a
     leaked key) could write it. A session that doesn't match, one we never created, or
     one for an Organization no longer on Credit grants nothing and is recorded as
-    `platform.credit_purchase.unapplied`, with the reason, for someone to refund.
+    `platform.credit_purchase.unapplied`, with the reason, for someone to refund. The
+    payment is remembered (`billing_unapplied_payment`), so a redelivery doesn't log it
+    again.
   - Any refund event (`refund.created`, `refund.updated`, `refund.failed`) settles the
     refund on its status as Stripe has it now: credit taken back while it stands (its
     share of the purchase, keyed by the refund id), given back once it has failed or
@@ -100,8 +102,9 @@ webhook secret.
     reinstated share, after first taking back the withdrawal if that event hasn't
     arrived yet.
   - A refund or dispute for a credit purchase that hasn't been recorded yet is answered
-    with a 409, so Stripe sends it again. Events that aren't ours (no credit purchase
-    behind them) are acknowledged and ignored.
+    with a 409, so Stripe sends it again. One for a payment that granted nothing, and
+    events that aren't ours (no credit purchase behind them), are acknowledged and
+    ignored.
 - `GET`/`PUT /platform/settings/billing` — Platform Administrators set the minimum and
   maximum purchase, the credit rate (1.0: credit at cost) and the purchase fee percent;
   each change is audited as `platform.billing_settings.changed`.

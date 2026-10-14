@@ -14,11 +14,25 @@ Related context: [Credit](../credit.md), [Costs](../costs.md), [Trial onboarding
   banner that links to buying more; the out-of-credit reply on Hermes and OpenClaw;
   healed spend counted against credit; a platform default Agent limit; and the review
   fixes of 2026-10-14.
-- In transition: built on the AF-368 trial-onboarding branch, which is not yet on staging.
-- Next: review, then rebase onto staging once AF-368 merges; manual sandbox testing.
+- In transition: none; rebased onto staging, which now includes AF-368.
+- Next: the PR into staging.
 - Blockers: none. A Stripe sandbox exists for manual testing.
 
 ## Changes
+
+### 2026-10-14 — AF-381 — Third review fixes (PR pending)
+
+- Delivered:
+  - Web Chat shows running out of credit as a failure under the person's message, as it
+    does a spent limit, on both runtimes.
+  - An invited member whose inbox took its trial while their first Organization was
+    being created is told to try again (409), and the retry starts on credit.
+  - A payment that granted no credit goes on the platform audit log once, and its refund
+    or dispute is acknowledged instead of being sent again for days.
+  - The deploy comments say an empty `ORGANIZATION_DEFAULT_AGENT_LIMIT` means 10.
+- Changed: migration `d4a7c2e9f150_billing_unapplied_payments`.
+- Accepted: a trial recorded before addresses were normalised blocks only its exact
+  spelling (staging data only).
 
 ### 2026-10-14 — AF-381 — First Organization trial for invited members (PR pending)
 
