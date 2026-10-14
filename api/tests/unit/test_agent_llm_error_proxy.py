@@ -263,8 +263,9 @@ def test_running_out_of_credit_says_to_buy_more_and_is_recorded_as_such(runtime,
     with _upstream(400, BUDGET_BODY) as target, _proxy(runtime, target, extra) as proxy:
         status, body = _post(proxy)
         recorded = json.loads(marker.read_text())
-    assert_that(status, equal_to(402))
-    assert_that(body["error"]["message"], equal_to(CREDIT_MESSAGE))
+    # The same ordinary reply as a spent limit, worded for credit.
+    assert_that(status, equal_to(200))
+    assert_that(body["choices"][0]["message"]["content"], equal_to(CREDIT_MESSAGE))
     assert_that(recorded["code"], equal_to("CREDIT_EXHAUSTED"))
 
 
