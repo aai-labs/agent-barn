@@ -86,7 +86,7 @@ export function DoneStep({
           </div>
         ))}
       </dl>
-      {path === "own" && <Link href={channelsHref} className="af-btn af-btn-lg">Connect Telegram</Link>}
+      {path === "own" && <Link href={channelsHref} className="af-btn af-btn-lg">Connect a messaging app</Link>}
     </OnboardingShell>
   );
 }
