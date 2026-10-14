@@ -8,7 +8,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import status
 from hamcrest import assert_that, equal_to, is_, none
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlmodel import Session, col, select
 
 from api.core.config import Config as AppConfig
@@ -1034,8 +1034,13 @@ def test_apollo_upgrade_preserves_direct_bindings_and_explicit_choices(existing,
                     context.agent.id, SecretProvider.APOLLO, existing, "agent_secret"
                 )
             if deleted:
-                context.agent.deleted_at = datetime.now(UTC)
-                context.injector.get(AgentRepository).save(context.agent)
+                # Plain SQL on purpose: the schema is downgraded here, and the ORM
+                # model writes every current Agent column, old or new.
+                with context.postgres_delegate.engine.begin() as connection:
+                    connection.execute(
+                        text("UPDATE agent SET deleted_at = :deleted_at WHERE id = :id"),
+                        {"deleted_at": datetime.now(UTC), "id": context.agent.id},
+                    )
             command.upgrade(config, "head")
             policy = _policy(context)
             if existing is None and deleted:
