@@ -368,6 +368,36 @@ def test_an_invited_member_is_told_when_no_trials_are_available():
         assert_that(_trial_grants(context), equal_to(0))
 
 
+def test_a_trial_taken_by_the_same_inbox_meanwhile_is_a_clean_refusal_and_a_retry_gets_credit(monkeypatch):
+    """A double submit, or a sign-up with a variant of the same inbox, can record the
+    address's trial after it was looked up but before the cap is checked under the lock."""
+    with given(_setup(a_member_invited_by_email("colleague@example.com"))) as context:
+        trials_full = TrialSettingsService.trials_full
+
+        def a_sign_up_lands_first(service, session):
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as other:
+                service.record_trial("colleague+side@example.com", other)
+                other.commit()
+            monkeypatch.setattr(TrialSettingsService, "trials_full", trials_full)
+            return trials_full(service, session)
+
+        monkeypatch.setattr(TrialSettingsService, "trials_full", a_sign_up_lands_first)
+
+        with when("the member creates their first Organization"):
+            response = context.client.post(
+                "/api/v1/organizations", json={"name": "Side Org"}, headers=auth(context, context.member_token)
+            )
+
+        with then("it is refused cleanly, with no second trial recorded"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+            assert_that(response.json()["detail"], contains_string("Try again"))
+            assert_that(_trial_grants(context), equal_to(1))
+
+        with then("trying again creates it on credit"):
+            created = _organization_created_by(context, context.member_token)
+            assert_that((created.is_trial, created.llm_budget_usd), equal_to((False, 0.0)))
+
+
 def test_without_self_signup_someone_an_organization_invites_creates_organizations_on_the_platform_budget():
     """With nobody able to sign themselves up, every account traces back to a Platform
     Administrator or an Organization they set up: no credit to buy, nothing to close."""

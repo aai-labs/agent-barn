@@ -355,6 +355,28 @@ def test_a_plus_tag_on_any_address_counts_as_the_same_trial():
         assert_that(redirect_target(response)[1], equal_to({"error": "trial_used"}))
 
 
+def test_a_trial_the_same_inbox_took_meanwhile_turns_the_sign_up_away(monkeypatch):
+    """An invited member's first Organization can record the inbox's trial after
+    sign-up looked it up but before it took the lock; sign-up's retry then sees it."""
+    with given(_setup()) as context:
+        trials_full = TrialSettingsService.trials_full
+
+        def a_member_trial_lands_first(service, session):
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as other:
+                service.record_trial("jane+work@example.com", other)
+                other.commit()
+            monkeypatch.setattr(TrialSettingsService, "trials_full", trials_full)
+            return trials_full(service, session)
+
+        monkeypatch.setattr(TrialSettingsService, "trials_full", a_member_trial_lands_first)
+        google_returns(google_identity(sub="first-google-account", email="jane@example.com"))(context)
+
+        response = finish_google_sign_in(context)
+
+        assert_that(redirect_target(response)[1], equal_to({"error": "trial_used"}))
+        assert_that(_user(context, "jane@example.com"), none())
+
+
 def test_dots_still_tell_addresses_apart_outside_gmail():
     with given(_setup()) as context:
         google_returns(google_identity(sub="first-google-account", email="jane.doe@example.com"))(context)

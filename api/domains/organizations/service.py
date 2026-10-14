@@ -251,6 +251,14 @@ class OrganizationService:
                     status_code=status.HTTP_409_CONFLICT,
                     detail="No free trials are available right now. Try again later.",
                 )
+            # Looked up before the lock: a sign-up with the same inbox, or this request
+            # sent twice, may have taken the address's trial since. Trying again
+            # creates the Organization on credit.
+            if self.trial_settings.has_had_trial(email, session):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Your organization couldn't be created. Try again.",
+                )
             self.trial_settings.record_trial(email, session)
 
         try:
