@@ -5,6 +5,7 @@ import type {
   RestorePointConfigManifest,
   RestorePointSkill,
 } from "../schemas";
+import { turnLimitText } from "../utils";
 
 export const RESTORE_POINT_STATUS_LABEL: Record<RestorePoint["status"], string> = {
   PENDING: "Queued",
@@ -201,6 +202,14 @@ export function diffConfigManifest(
       recorded: manifest.verboseMode ? "On" : "Off",
       current: agent.verboseMode ? "On" : "Off",
       changed: manifest.verboseMode !== agent.verboseMode,
+    },
+    {
+      key: "maxTurns",
+      label: "Turn limit",
+      // Older manifests did not record it; replaying one leaves the limit as it is.
+      recorded: manifest.maxTurns === undefined ? "Not recorded" : turnLimitText(manifest.maxTurns),
+      current: turnLimitText(agent.maxTurns),
+      changed: manifest.maxTurns !== undefined && manifest.maxTurns !== agent.maxTurns,
     },
     {
       key: "skills",

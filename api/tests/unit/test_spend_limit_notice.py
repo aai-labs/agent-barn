@@ -1,10 +1,11 @@
 """A turn stopped by a model spend limit must tell the person chatting why (AF-337).
 
-The runtime cannot be relied on to carry the reason out: OpenClaw rewrites the
-proxy's message into its own billing error and Hermes aborts the turn. So the
-in-pod proxy records the refusal, the adapter in the same container reports it as
-SPEND_LIMIT_REACHED when the turn fails, and Communications turns that code into
-the notice shown under the message (web chat) or posted in the channel.
+The runtime cannot be relied on to carry the reason out: OpenClaw rewrites an
+error into its own billing text and Hermes aborts the turn. So the in-pod proxy
+answers a refused chat completion with the notice as an ordinary reply, which native
+chat posts in the channel, and records the refusal. The adapter in the same container
+reports a Web Chat turn that hit the limit as SPEND_LIMIT_REACHED, whether the turn
+failed or ended with the notice, and Communications shows the notice under the message.
 """
 
 import json
@@ -78,6 +79,68 @@ def test_an_openclaw_turn_stopped_by_the_limit_is_reported_as_such(monkeypatch, 
     adapter.run_delivery_chat_completions(_DELIVERY)
 
     assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code="SPEND_LIMIT_REACHED")))
+
+
+def replies(calls):
+    return [payload for url, payload in calls if url.endswith("/replies")]
+
+
+def test_an_openclaw_turn_answered_with_the_notice_is_still_a_spend_limit_failure(monkeypatch, marker):
+    """The proxy answered the refused call with the notice as a reply so native chat can
+    post it; Web Chat must keep it as a failure under the message, not an Agent reply."""
+    adapter = _load_adapter(monkeypatch, runtime_kind="openclaw")
+    calls = []
+
+    def fake_http_request(method, url, *, headers, payload=None, timeout=None):
+        calls.append((url, payload))
+        if url.endswith("/v1/chat/completions"):
+            write_marker(marker, at=time.time())
+            return {"choices": [{"message": {"content": SPEND_LIMIT_NOTICE}}]}
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    adapter.run_delivery_chat_completions(_DELIVERY)
+
+    assert_that(replies(calls), equal_to([]))
+    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code="SPEND_LIMIT_REACHED")))
+
+
+def test_a_hermes_run_completed_with_the_notice_is_still_a_spend_limit_failure(monkeypatch, marker):
+    adapter = _load_adapter(monkeypatch, runtime_kind="hermes")
+    calls = []
+
+    def fake_http_request(method, url, *, headers, payload=None, timeout=None):
+        calls.append((url, payload))
+        if url.endswith("/v1/runs"):
+            write_marker(marker, at=time.time())
+            return {"run_id": "run-1"}
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    monkeypatch.setattr(
+        adapter.urllib.request, "urlopen", _fake_urlopen([("run.completed", {"text": SPEND_LIMIT_NOTICE})])
+    )
+    adapter._run_and_drain(_DELIVERY, adapter.session_key_for(_DELIVERY))
+
+    assert_that(replies(calls), equal_to([]))
+    assert_that(completions(calls), contains_exactly(has_entries(succeeded=False, error_code="SPEND_LIMIT_REACHED")))
+
+
+def test_an_ordinary_successful_turn_still_posts_its_reply(monkeypatch, marker):
+    adapter = _load_adapter(monkeypatch, runtime_kind="openclaw")
+    calls = []
+
+    def fake_http_request(method, url, *, headers, payload=None, timeout=None):
+        calls.append((url, payload))
+        if url.endswith("/v1/chat/completions"):
+            return {"choices": [{"message": {"content": "hello"}}]}
+        return None
+
+    monkeypatch.setattr(adapter, "http_request", fake_http_request)
+    adapter.run_delivery_chat_completions(_DELIVERY)
+
+    assert_that([reply.get("text") for reply in replies(calls)], equal_to(["hello"]))
+    assert_that(completions(calls), contains_exactly(has_entries(succeeded=True)))
 
 
 def test_a_refusal_from_an_earlier_turn_is_not_blamed_for_this_one(monkeypatch, marker):

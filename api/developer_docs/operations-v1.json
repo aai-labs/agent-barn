@@ -321,6 +321,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/integrations/sharepoint",
+    "sharepoint_current_organizations__organization_id__agents__agent_id__integrations_sharepoint_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/integrations/sharepoint/authorize-url",
     "sharepoint_authorize_url_organizations__organization_id__agents__agent_id__integrations_sharepoint_authorize_url_get"
   ],
@@ -1178,6 +1183,11 @@
     "PUT",
     "/organizations/{organization_id}/agent-settings",
     "update_agent_settings_organizations__organization_id__agent_settings_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/isolation",
+    "apply_integration_isolation_organizations__organization_id__agents__agent_id__integrations__provider__isolation_put"
   ],
   [
     "PUT",

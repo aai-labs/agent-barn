@@ -59,6 +59,9 @@ AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").rea
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
+# Turns one Hermes run may take before the runtime stops it. An Agent's own
+# `max_turns` replaces it; a review of a large pull request needs more than this.
+HERMES_DEFAULT_MAX_TURNS = 50
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # Hermes shows a first-message onboarding notice whenever this variable is
@@ -99,6 +102,7 @@ def _hermes_config_core(
     litellm_base_url: str,
     enabled_plugins: list[str],
     approval_mode: str = "auto",
+    max_turns: int | None = None,
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
@@ -116,6 +120,14 @@ def _hermes_config_core(
             "backend": "local",
             "cwd": HERMES_WORKSPACE_DIR,
             "timeout": 120,
+            # Hermes snapshots a login shell, which resets the inherited PATH.
+            # Keep its usual user init files, then restore our runtime tools.
+            "shell_init_files": [
+                "~/.profile",
+                "~/.bash_profile",
+                "~/.bashrc",
+                "/app/config/terminal-env.sh",
+            ],
         },
         "memory": {
             "memory_enabled": True,
@@ -125,7 +137,7 @@ def _hermes_config_core(
             "enabled": False,
         },
         "agent": {
-            "max_turns": 50,
+            "max_turns": max_turns if max_turns is not None else HERMES_DEFAULT_MAX_TURNS,
         },
         "display": {
             "tool_progress": "all",
@@ -171,6 +183,7 @@ def build_hermes_gateway_config(
     verbose_mode: bool = False,
     agentbarn_telegram: AgentBarnTelegramRuntime | None = None,
     memory_enabled: bool = False,
+    max_turns: int | None = None,
     first_conversation: bool = False,
 ) -> dict:
     plugins = ["telemetry-push"]
@@ -178,7 +191,9 @@ def build_hermes_gateway_config(
         plugins.append("agentbarn-observer")
     if first_conversation:
         plugins.append(FIRST_CONVERSATION_PLUGIN)
-    config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
+    config = _hermes_config_core(
+        model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, max_turns=max_turns
+    )
     if first_conversation:
         config["onboarding"] = {"profile_build": "off"}
     config["memory"]["provider"] = "hindsight" if memory_enabled else ""
@@ -401,6 +416,7 @@ def build_hermes_config_map(
     aai_cli_config_toml: str | None = None,
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
+    gog_shim_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
     *,
@@ -429,6 +445,7 @@ def build_hermes_config_map(
         "first-conversation-seed.py": HERMES_FIRST_CONVERSATION_SEED_PY,
         "memory-gateway-ready.py": MEMORY_GATEWAY_READY_PY,
         "start.sh": HERMES_START_SH,
+        "terminal-env.sh": 'export PATH="/home/hermes/.local/bin:$PATH"\n',
         "communications-runtime-adapter.py": COMMUNICATIONS_RUNTIME_ADAPTER_PY,
         "agent-trigger-server.py": AGENT_TRIGGER_SERVER_PY,
         "retire-messaging.py": RETIRE_MESSAGING_PY,
@@ -442,6 +459,10 @@ def build_hermes_config_map(
         data["aai-cli-setup.sh"] = aai_cli_setup_sh
     if gog_setup_sh is not None:
         data["gog-setup.sh"] = gog_setup_sh
+    if gog_shim_sh is not None:
+        # Installed onto PATH by gog-setup.sh; start.sh puts that directory ahead of
+        # /usr/local/bin so every agent command resolves the wrapper first.
+        data["gog-shim.sh"] = gog_shim_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(

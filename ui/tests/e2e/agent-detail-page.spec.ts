@@ -1739,11 +1739,12 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.keysTab().click();
     await agentDetailPage.editButton().click();
 
-    await expect(page.getByText("Value hidden")).toBeVisible();
+    await page.locator("summary").filter({ hasText: "GitHub" }).click();
+    await expect(page.getByText("Credential configured · value hidden", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
   });
 
-  test("clicking Remove shows credential as pending removal with Undo", async ({ page }) => {
+  test("removing a credential stages its deletion until Apply", async () => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1754,12 +1755,11 @@ test.describe("Agent Detail Page — Keys tab", () => {
 
     await agentDetailPage.removeCredentialButton().click();
 
-    await expect(page.getByText("Will be removed")).toBeVisible();
-    await expect(agentDetailPage.undoCredentialButton()).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toHaveCount(0);
     await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
   });
 
-  test("clicking Undo reverts credential to normal state", async ({ page }) => {
+  test("Cancel discards a staged credential removal", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1770,14 +1770,18 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await agentDetailPage.editButton().click();
 
     await agentDetailPage.removeCredentialButton().click();
-    await agentDetailPage.undoCredentialButton().click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByText("github-secret", { exact: true })).toBeVisible();
+    await expect(page.getByRole("switch")).toHaveCount(0);
+    await agentDetailPage.editButton().click();
 
-    await expect(page.getByText("Value hidden")).toBeVisible();
+    await page.locator("summary").filter({ hasText: "GitHub" }).click();
+    await expect(page.getByText("Credential configured · value hidden", { exact: true })).toBeVisible();
     await expect(agentDetailPage.removeCredentialButton()).toBeVisible();
     await expect(agentDetailPage.saveIntegrationsButton()).toBeDisabled();
   });
 
-  test("when integrations save fails, the pending removal and error remain visible", async ({ page }) => {
+  test("failed removal keeps the draft and error available for retry", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
       body: { ...mockAgent, status: "STOPPED", secrets: [mockSecret] },
     });
@@ -1801,7 +1805,8 @@ test.describe("Agent Detail Page — Keys tab", () => {
     await expect(
       page.locator('section[aria-label="Integrations"]').getByText("Secret is used by a skill"),
     ).toBeVisible();
-    await expect(page.getByText("Will be removed")).toBeVisible();
+    await expect(agentDetailPage.removeCredentialButton()).toHaveCount(0);
+    await expect(agentDetailPage.saveIntegrationsButton()).toBeEnabled();
   });
 
 });
@@ -1859,6 +1864,30 @@ test.describe("Agent Detail Page — Personality tab (approval mode)", () => {
     const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
 
     expect(body.approval_mode).toBe("off");
+  });
+
+  test("saving a turn limit sends max_turns in the PATCH request", async ({ page }) => {
+    await page.getByRole("spinbutton", { name: "Turn limit" }).fill("150");
+
+    const patchPromise = page.waitForRequest(
+      (req) =>
+        req.url().includes(`/agents/${MOCK_AGENT_ID}`) &&
+        req.method() === "PATCH",
+    );
+    await page.getByRole("button", { name: /^Apply$/i }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Apply", exact: true })
+      .click();
+    const body = (await patchPromise).postDataJSON() as Record<string, unknown>;
+
+    expect(body.max_turns).toBe(150);
+  });
+
+  test("a turn limit outside its bounds cannot be applied", async ({ page }) => {
+    await page.getByRole("spinbutton", { name: "Turn limit" }).fill("0");
+
+    await expect(page.getByRole("button", { name: /^Apply$/i })).toBeDisabled();
   });
 });
 
@@ -2296,7 +2325,14 @@ test.describe("Agent Detail Page — About tab", () => {
     page,
   }) => {
     await dataSupportPage.agents.interceptGetAgentRequest({
-      body: { ...mockAgent, agent_type: "hermes", approval_mode: "manual", verbose_mode: true },
+      body: {
+        ...mockAgent,
+        agent_type: "hermes",
+        approval_mode: "manual",
+        verbose_mode: true,
+        max_turns: 150,
+        effective_max_turns: 150,
+      },
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
@@ -2306,6 +2342,7 @@ test.describe("Agent Detail Page — About tab", () => {
     await expect(overview).toContainText("Hermes");
     await expect(overview).toContainText("Manual — every command waits for approval");
     await expect(overview).toContainText("Shows progress while working");
+    await expect(overview).toContainText("150 turns per run");
   });
 
   test("lists the agent's skills without opening configuration", async ({

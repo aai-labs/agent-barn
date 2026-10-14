@@ -1,5 +1,7 @@
 #!/bin/sh
 set -e
+export AGENT_RUNTIME_SETUP_READY_FILE=/tmp/agentbarn-runtime-setup-ready
+rm -f "$AGENT_RUNTIME_SETUP_READY_FILE"
 python3 /app/config/retire-messaging.py hermes /opt/data
 python3 /app/config/healthz-server.py &
 python3 /app/config/communications-runtime-adapter.py &
@@ -43,12 +45,16 @@ for f in IDENTITY.md AGENTS.md TOOLS.md BOOT.md HEARTBEAT.md; do
     cp /app/config/$f /workspace/$f
 done
 
+# The gog wrapper installs here when Google Workspace is brokered through the
+# credential gateway. Ahead of /usr/local/bin so agent commands resolve it first.
+export PATH="/home/hermes/.local/bin:$PATH"
+
 if [ -f /app/config/aai-cli-setup.sh ]; then
-  sh /app/config/aai-cli-setup.sh || echo "[aai-cli] setup failed; continuing"
+  sh /app/config/aai-cli-setup.sh || exit $?
 fi
 
 if [ -f /app/config/gog-setup.sh ]; then
-  sh /app/config/gog-setup.sh || echo "[gog] setup failed; continuing"
+  sh /app/config/gog-setup.sh || exit $?
 fi
 
 # /workspace persists across restarts (PVC). The personality files above are
@@ -74,5 +80,6 @@ PYEOF
 fi
 
 # Pinned Hermes never runs BOOT.md; OpenClaw bundles a gateway:startup hook for it.
+touch "$AGENT_RUNTIME_SETUP_READY_FILE"
 python3 /app/config/boot-run.py &
 exec hermes gateway run

@@ -101,7 +101,7 @@ _update_ids = count(20_000)
 
 def _link(context, user: int) -> None:
     repository = context.injector.get(AgentBarnTelegramRepository)
-    if user in repository.linked_user_ids(context.connection.id):
+    if repository.active_links(context.connection.id, [user]):
         return
     raw = f"link-{user}-{next(_update_ids)}"
     repository.create_link_token(
@@ -132,7 +132,11 @@ def _queue(context, text: str, user: int = _JANE, *, received_at: datetime | Non
     repository = context.injector.get(AgentBarnTelegramRepository)
     repository.store_updates([update])
     repository.queue_update(
-        update_id, telegram_user_id=user, agent_id=context.agent.id, connection_id=context.connection.id
+        update_id,
+        telegram_user_id=user,
+        agent_id=context.agent.id,
+        connection_id=context.connection.id,
+        payload=update,
     )
     if received_at is not None:
         with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
@@ -321,6 +325,40 @@ def test_a_running_agent_that_rejects_messages_is_not_described_as_waking_up() -
             assert_that(context.bot.sent, equal_to([]))
 
 
+def test_a_message_the_agent_keeps_refusing_is_dropped_so_later_ones_get_through() -> None:
+    with given(_given()) as context:
+        start = datetime.now(UTC)
+        refused = _queue(context, "malformed", received_at=start)
+        _queue(context, "second", received_at=start)
+        pod = Pod(400, 400, 400, 400, 400, 200)
+
+        with when("the agent's webhook refuses the first message on five passes, then the queue moves on"):
+            for minute in range(6):
+                _forward(context, pod, now=start + timedelta(minutes=minute))
+
+        with then("the refused message is dropped with one note and the next one is delivered"):
+            assert_that(pod.texts(), equal_to(["malformed"] * 5 + ["second"]))
+            assert_that(_row(context, refused).status, equal_to(AgentBarnTelegramUpdateStatus.DROPPED))
+            assert_that(
+                context.bot.sent,
+                equal_to([(_JANE, "Your agent couldn't accept one of your messages, so it wasn't delivered.")]),
+            )
+
+
+def test_an_agent_that_is_still_starting_does_not_use_up_a_messages_refusals() -> None:
+    with given(_given()) as context:
+        start = datetime.now(UTC)
+        update_id = _queue(context, "hello", received_at=start)
+        pod = Pod(503, 503, 503, 503, 503, 400)
+
+        with when("the pod is unreachable on five passes and then refuses the message once"):
+            for minute in range(6):
+                _forward(context, pod, now=start + timedelta(minutes=minute))
+
+        with then("the message is still waiting for its agent"):
+            assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))
+
+
 def test_messages_held_for_someone_since_unlinked_are_not_delivered() -> None:
     with given(_given(AgentStatus.STOPPED)) as context:
         update_id = _queue(context, "private note")
@@ -353,7 +391,7 @@ def test_messages_are_not_delivered_once_the_linking_member_lost_access() -> Non
             assert_that(pod.received, equal_to([]))
             assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.DROPPED))
             repository = context.injector.get(AgentBarnTelegramRepository)
-            assert_that(_JANE in repository.linked_user_ids(context.connection.id), equal_to(False))
+            assert_that(repository.active_links(context.connection.id, [_JANE]), equal_to([]))
 
 
 def test_users_waiting_on_a_retry_do_not_crowd_out_users_who_are_due() -> None:

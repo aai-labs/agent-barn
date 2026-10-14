@@ -1,3 +1,4 @@
+import type { Agent } from "@/features/agents/schemas";
 import { agentsKey } from "@/features/agents/utils";
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
@@ -37,6 +38,17 @@ export const MEMORY_TYPE_LABEL: Record<MemoryItemType, string> = {
 };
 
 export const ORGANIZATION_MEMORY_LABEL = "Organization Memory";
+
+// Agent Memory's long-term layer is an opt-in add-on. The runtime's own notes are the
+// built-in layer: always on, on the Agent's disk, and never shown by the viewer.
+export const BUILT_IN_MEMORY_LABEL = "Built-in memory";
+export const LONG_TERM_MEMORY_LABEL = "Long-term memory";
+
+export function builtInMemoryDescription(agentType: Agent["agentType"]): string {
+  return agentType === "hermes"
+    ? "Hermes keeps its own notes (MEMORY.md, USER.md) on this Agent's disk and reads them at the start of every conversation."
+    : "OpenClaw keeps its own memory notes on this Agent's disk and uses them in every conversation.";
+}
 
 export function grantSourceLabel(grant: Pick<MemoryGrant, "sourceAgentId" | "sourceAgentName">): string {
   return grant.sourceAgentId === null

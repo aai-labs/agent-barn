@@ -6,7 +6,7 @@ opener, and the opener completes the sign-in through an authenticated request. S
 ``SharePointService`` for why it is a public client (PKCE, no secret).
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -37,6 +37,15 @@ class SharePointSignInComplete(BaseModel):
     state: str
 
 
+@sharepoint_sign_in_router.get("", response_model=SharePointSignInRead)
+def sharepoint_current(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[SharePointService, Injected(SharePointService)],
+):
+    return service.current(agent_id, context)
+
+
 @sharepoint_sign_in_router.get("/setup", response_model=SharePointSetupRead)
 def sharepoint_setup(
     agent_id: UUID,
@@ -54,11 +63,19 @@ def sharepoint_authorize_url(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[SharePointService, Injected(SharePointService)],
     read_only: bool = False,
+    mode: Literal["delegated", "selected_sites"] = "delegated",
+    sites: Annotated[list[str] | None, Query()] = None,
+    remove_all: bool = False,
 ):
-    return SharePointAuthorizeUrlRead(authorize_url=service.authorize_url(agent_id, connection_id, read_only, context))
+    return SharePointAuthorizeUrlRead(
+        authorize_url=service.authorize_url(
+            agent_id, connection_id, read_only, context, mode=mode, sites=sites or [], remove_all=remove_all
+        )
+    )
 
 
-@sharepoint_sign_in_router.post("/sign-in", response_model=SharePointSignInRead)
+# None after a sign-in that removed every site, which disconnects SharePoint.
+@sharepoint_sign_in_router.post("/sign-in", response_model=SharePointSignInRead | None)
 def complete_sharepoint_sign_in(
     agent_id: UUID,
     data: SharePointSignInComplete,

@@ -77,6 +77,17 @@ def ensure_approval_mode_supported(agent_type: AgentType, approval_mode: Command
         )
 
 
+def ensure_max_turns_supported(agent_type: AgentType, max_turns: int | None) -> None:
+    """Only the Hermes builder maps max_turns onto a runtime setting. A value for
+    an OpenClaw Agent would be stored and never read, so it is rejected.
+    """
+    if agent_type == AgentType.OPENCLAW and max_turns is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OpenClaw does not support a turn limit; max_turns is Hermes-only.",
+        )
+
+
 def ensure_verbose_mode_supported(agent_type: AgentType, verbose_mode: bool | None) -> None:
     """OpenClaw has no progress-message channel wired up yet; only Hermes
     reads verbose_mode (see builders/hermes.py). An explicit True would
@@ -390,6 +401,8 @@ class SelectionValidator:
             ensure_approval_mode_supported(agent.agent_type, data.approval_mode)
         if "verbose_mode" in updated:
             ensure_verbose_mode_supported(agent.agent_type, data.verbose_mode)
+        if "max_turns" in updated:
+            ensure_max_turns_supported(agent.agent_type, data.max_turns)
         if "model" in updated:
             self.ensure_model_allowed(data.model, org_id)
 
@@ -415,7 +428,7 @@ class SelectionValidator:
         self.validate_incoming_skill_providers(agent, [pin.skill_id for pin in resolved_skill_pins])
 
         scalar_updates: dict[str, object] = {
-            field: updated[field] for field in ("approval_mode", "verbose_mode") if field in updated
+            field: updated[field] for field in ("approval_mode", "verbose_mode", "max_turns") if field in updated
         }
         if "model" in updated:
             # Non-nullable column; "" is the sentinel for the Organization default.

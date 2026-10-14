@@ -4,6 +4,9 @@ from fastapi import status
 from hamcrest import assert_that, equal_to, has_key
 from starlette.testclient import TestClient
 
+from api.domains.events.catalog import ORGANIZATION_CREATED, PRODUCT_ANALYTICS_HANDLER
+from api.domains.events.models import OutboxMessage
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.tests.core.givenpy import given, then, when
@@ -220,3 +223,37 @@ def test_non_platform_admin_cannot_create_user():
 
         with then("it returns 403 forbidden"):
             assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_platform_user_creation_records_organization_created_by_the_admin():
+    super_id = uuid7()
+
+    with given(
+        [
+            prepare_injector(),
+            prepare_api_server(),
+            create_test_client(),
+            database_repo_is_ready(),
+            database_is_clean(),
+            there_is_a_user(id=super_id, email="super-event@example.com", is_platform_admin=True),
+            there_is_an_access_token_for_user(user_id=super_id),
+        ]
+    ) as context:
+        response = context.client.post(
+            "/api/v1/platform/users",
+            json={"email": "event-invitee@example.com", "organization_name": "Invitee Org"},
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        organization_id = UUID(response.json()["organization"]["id"])
+        events = [
+            message
+            for message in context.postgres_delegate.find_all(OutboxMessage)
+            if message.event_name == ORGANIZATION_CREATED
+        ]
+        assert_that(len(events), equal_to(1))
+        assert_that(events[0].organization_id, equal_to(organization_id))
+        assert_that(events[0].actor, equal_to({"type": "USER", "id": str(super_id), "organization_id": None}))
+        deliveries = context.injector.get(OutboxMessageRepository).list_deliveries_for_event(events[0].event_id)
+        assert_that([delivery.handler_name for delivery in deliveries], equal_to([PRODUCT_ANALYTICS_HANDLER]))

@@ -35,6 +35,9 @@ TEMPLATE_DELETED = "template.deleted"
 ORGANIZATION_MODEL_ALLOWLIST_CHANGED = "organization.model_allowlist.changed"
 ORGANIZATION_AGENT_SETTINGS_CHANGED = "organization.agent_settings.changed"
 ORGANIZATION_VALUE_SETTINGS_CHANGED = "organization.value_settings.changed"
+ORGANIZATION_CREATED = "organization.created"
+ORGANIZATION_UPDATED = "organization.updated"
+ORGANIZATION_DELETED = "organization.deleted"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
@@ -45,6 +48,8 @@ PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
 PLATFORM_TRIAL_SETTINGS_CHANGED = "platform.trial_settings.changed"
 API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
+USER_LOGGED_IN = "user.logged_in"
+USER_SIGNED_UP = "user.signed_up"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
 COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconnect.requested"
 COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
@@ -62,6 +67,7 @@ SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
+PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
 
 
 class PlatformMemoryModelChangedPayload(BaseModel):
@@ -419,6 +425,26 @@ class OrganizationValueSettingsChangedPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationCreatedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    created_by_user_id: UUID | None
+
+
+class OrganizationUpdatedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    changed_fields: list[str]
+
+
+class OrganizationDeletedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+
+
 class OrganizationMemberChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -516,6 +542,19 @@ class ApiKeyChangedPayload(BaseModel):
     subject_display: str
 
 
+class UserLoggedInPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID
+    method: str
+
+
+class UserSignedUpPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID
+
+
 class CommunicationConnectionHealthChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -585,19 +624,15 @@ class CommunicationDeliveryRecoveredPayload(BaseModel):
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
     for event_name, payload_model in (
-        (ORGANIZATION_ROLE_CHANGED, OrganizationRoleChangedPayload),
         (AGENT_ACCESS_GRANTED, AgentAccessGrantedPayload),
         (AGENT_ACCESS_REVOKED, AgentAccessRevokedPayload),
         (AGENT_GENERAL_ACCESS_CHANGED, AgentGeneralAccessChangedPayload),
-        (AGENT_UPDATED, AgentUpdatedPayload),
-        (AGENT_DELETED, AgentDeletedPayload),
         (TEMPLATE_CREATED, TemplateCreatedPayload),
         (TEMPLATE_UPDATED, TemplateUpdatedPayload),
         (TEMPLATE_DELETED, TemplateDeletedPayload),
         (ORGANIZATION_MODEL_ALLOWLIST_CHANGED, OrganizationModelAllowlistChangedPayload),
         (ORGANIZATION_AGENT_SETTINGS_CHANGED, OrganizationAgentSettingsChangedPayload),
         (ORGANIZATION_VALUE_SETTINGS_CHANGED, OrganizationValueSettingsChangedPayload),
-        (ORGANIZATION_OWNERSHIP_TRANSFERRED, OrganizationOwnershipTransferredPayload),
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
         (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
         (ORGANIZATION_TRIAL_ENDED, OrganizationTrialEndedPayload),
@@ -611,6 +646,21 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
+    for event_name, payload_model in (
+        (ORGANIZATION_ROLE_CHANGED, OrganizationRoleChangedPayload),
+        (AGENT_UPDATED, AgentUpdatedPayload),
+        (AGENT_DELETED, AgentDeletedPayload),
+        (ORGANIZATION_OWNERSHIP_TRANSFERRED, OrganizationOwnershipTransferredPayload),
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=payload_model,
+                handler_names=(SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
     for event_name in (AGENT_SECRET_ADDED, AGENT_SECRET_UPDATED, AGENT_SECRET_REMOVED):
         registry.register(
             DomainEventDefinition(
@@ -621,6 +671,33 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=ORGANIZATION_CREATED,
+            schema_version=1,
+            payload_model=OrganizationCreatedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=ORGANIZATION_UPDATED,
+            schema_version=1,
+            payload_model=OrganizationUpdatedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=ORGANIZATION_DELETED,
+            schema_version=1,
+            payload_model=OrganizationDeletedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
     for event_name, payload_model in (
         (AGENT_MEMORY_ENABLED, AgentMemoryChangedPayload),
         (AGENT_MEMORY_DISABLED, AgentMemoryChangedPayload),
@@ -642,7 +719,7 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_name=event_name,
                 schema_version=1,
                 payload_model=OrganizationMemberChangedPayload,
-                handler_names=(SECURITY_AUDIT_HANDLER,),
+                handler_names=(SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER),
                 event_scope=EventScope.ORGANIZATION,
             )
         )
@@ -651,6 +728,7 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=AGENT_CREATED,
             schema_version=1,
             payload_model=AgentCreatedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )
     )
@@ -698,7 +776,7 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_name=event_name,
                 schema_version=1,
                 payload_model=AgentLifecyclePayload,
-                handler_names=(AGENT_LIFECYCLE_EMAIL_HANDLER,),
+                handler_names=(AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER),
                 event_scope=EventScope.ORGANIZATION,
             )
         )
@@ -766,6 +844,24 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.PLATFORM,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=USER_LOGGED_IN,
+            schema_version=1,
+            payload_model=UserLoggedInPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=USER_SIGNED_UP,
+            schema_version=1,
+            payload_model=UserSignedUpPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
     for event_name, payload_model in (
         (COMMUNICATION_CONNECTION_HEALTH_CHANGED, CommunicationConnectionHealthChangedPayload),
         (COMMUNICATION_CONNECTION_RECONNECT_REQUESTED, CommunicationConnectionReconnectRequestedPayload),

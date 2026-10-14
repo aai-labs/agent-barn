@@ -23,9 +23,10 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Agent Webhooks are Agent-subordinate machine-ingress resources, separate from Platforms and Communication Connections. Their configuration follows Agent read/update/secret authority, while invocation content follows activity-read authority. See [`agent-webhooks.md`](agent-webhooks.md).
 - The Dashboard Web Chat composer accepts new messages only while the Agent is `RUNNING` and its health status is `ok` (shown as Working). A thread remains visibly awaiting a reply while its latest durable inbound Communication Delivery is `PENDING` or `PROCESSING`, so the working indicator survives tab navigation and page remounts until an outbound reply arrives or the user stops generation. Stop is durable and suppresses late replies for both runtimes; neither pinned runtime currently exposes a proven abort handle for this chat-completions path, so the product does not promise compute interruption. A Web Chat message that is a command-approval prompt exposes its `approval` (identity, command and offered choices), read from its outbound delivery, and renders one button per offered choice; clicking one sends that choice with the `approval_id` it answers. Answering requires the same Agent update permission as any send, and the buttons are not shown without it. A stored approval that no longer validates is omitted rather than failing the thread.
 - Command approval is currently Hermes-only: the persisted `approval_mode` field maps onto the Hermes runtime's approval policy. OpenClaw has no user-configurable command-approval control, so create/update reject an explicit non-default `approval_mode` for an OpenClaw Agent (HTTP 400) rather than silently ignoring it, and reads report the effective `AUTO` default for OpenClaw regardless of the stored value. OpenClaw command approval is deferred to a future task.
+- The turn limit is Hermes-only for the same reason. `max_turns` caps how many turns one run may take before the runtime stops it; null follows the platform default, `HERMES_DEFAULT_MAX_TURNS` in the Hermes builder, which reads expose as `effective_max_turns` next to the Agent's own `max_turns`. The value is bounded (1 to 500). Create, update, and template selection reject a value for an OpenClaw Agent (HTTP 400), and reads report null for OpenClaw regardless of the stored value. Sending `max_turns: null` on update returns the Agent to the default, as `model: null` does for the model. A change takes effect at the next start, like every other runtime setting.
 - Answering a Hermes approval prompt with `always` is permanent: the pattern is retained across Agent restarts and is not re-prompted. It covers the whole category of command, not the one command shown. Manual mode ignores these grants and asks for every flagged command, offering only `once` and `deny`; the grants return when the Agent leaves manual mode, and removing one is permanent. Scheduled and heartbeat runs have no one to prompt, so a dangerous command reached from cron or the heartbeat is denied rather than parked; a `BOOT.md` command is parked until it times out, so startup work should avoid flagged commands. See [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
-- A provisioning failure is normalized before it is persisted or returned. Every failed start is classified into one bounded category (quota exhaustion, cluster RBAC denial, rejected manifest, unreachable cluster, or an unclassified failure) whose user-facing copy is a property of that category, not of the cluster's text. That copy states what the reader can do: a failure only an administrator can clear says so, and one worth retrying says to try again. Image-pull and leftover-resource failures are deliberately absent: Kubernetes accepts a Deployment naming an image that cannot be pulled and fails it later on the pod, which the health surface reports, and every creation goes through a helper that resolves a 409 by reading the existing object. Raw Kubernetes text never reaches a client: the only variable part is a bounded `detail` rebuilt from allowlisted resource names and quantities in a complete quota format. Quota names and unfamiliar formats are omitted; stored details must match the same category-specific grammar, so credentials, Secret values, tokens, and kubeconfig content cannot be exposed. The full exception stays in the API logs.
+- A provisioning failure is normalized before it is persisted or returned. Every failed start is classified into one bounded category (quota exhaustion, cluster RBAC denial, rejected manifest, unreachable cluster, or an unclassified failure) whose user-facing copy is a property of that category, not of the cluster's text. That copy states what the reader can do: a failure only an administrator can clear says so, and one worth retrying says to try again. Image-pull and retryable container-configuration failures remain Kubernetes observations rather than persisted provisioning failures: Kubernetes accepts a Deployment naming an image that cannot be pulled and fails it later on the pod, which the health surface reports, while each resource creation resolves a leftover-object 409 by reading the existing object. For provisioned or ready integration generations, detail and health reads can reconcile an actual runtime exit (`CrashLoopBackOff` or a Failed pod with a terminated runtime container) into a durable startup failure under the lifecycle lock. Image-pull and container-configuration retries remain provisioned/unverified and keep their deployment. Agents without integration bindings retain their existing health-only reporting. See the [integration readiness and recovery contract](integrations.md#restart-and-recovery). Raw Kubernetes text never reaches a client: the only variable part is a bounded `detail` rebuilt from allowlisted resource names and quantities in a complete quota format. Quota names and unfamiliar formats are omitted; stored details must match the same category-specific grammar, so credentials, Secret values, tokens, and kubeconfig content cannot be exposed. The full exception stays in the API logs.
 - Agent read DTOs expose the normalized failure as `last_error` while the Agent is in `ERROR`, and a failed start or restart — including the start that follows hiring — returns the same shape as its error body, so a client never has to derive the cause from a status code. Both are rebuilt from the stored category at read time rather than trusted from storage, so a row written before this contract existed reports an unclassified failure instead of its unsanitized text. `last_error` is subject to the same Agent Access rules as the rest of the Agent read.
 - An Agent's model is either inherited or overridden. An empty `model` means the Agent follows its Organization's default runtime model, resolved at every start; a non-empty `model` is an explicit override that no default change touches. Agent read DTOs expose `model_source` and the resolved `effective_model` so no client re-derives this. Sending `model: null` on update clears an override and returns the Agent to the default. See [`agent-settings.md`](agent-settings.md).
 - A running Agent reports whether the platform has moved on beneath it. `running_config_digest` records the digest of the code and runtime images the Agent's pod was actually built from, and `update_available` is true when a running Agent's recorded digest differs from what the API would build now. The signal is advisory: it blocks no operation, changes no Agent behaviour, and clears when the Agent restarts. It covers platform-authored code and runtime images only, so the Agent's own configuration keeps its existing surfaces — `pending_model`, Template `source_update`, and the Skill-level `update_available` are unaffected. An Agent already running before its digest was first recorded reports an available update, because its pod genuinely predates the record. See [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
@@ -56,8 +57,8 @@ before changing startup or restore behavior.
 
 ## Agent list metadata
 
-Organization Agent reads expose `creator` (User ID, full name, and email) and
-`last_message_at`. Creator identity is immutable provenance, displayed as
+Organization Agent reads expose `creator` (User ID, full name, and email),
+`last_message_at`, and `last_activity_at`. Creator identity is immutable provenance, displayed as
 “By <name>” on the team card, with email as the fallback when no name is set.
 Legacy or deleted-user provenance is null and displays “Creator not recorded”;
 the UI never guesses a creator from access assignments. The creation date is
@@ -66,21 +67,34 @@ labeled separately.
 `last_message_at` is the greatest recorded Conversation Message occurrence time
 across inbound and outbound directions and all Connections, including Web Chat
 and retired Connections. It is independent of runtime health and billed calls.
+`last_activity_at` is the later of `last_message_at` and the occurrence time of
+the Agent's latest successful, non-memory billed model call (`cost_record`). It
+exists because an Agent that only works on schedules, heartbeats, or Agent
+Webhooks may write no messages while plainly working; message recency alone
+reads it as dormant. Cost rows arrive through the sync CronJob, so the call
+side can lag the runtime by a sync interval. Failed calls and memory calls do
+not count: a failing loop or post-conversation memory extraction is not the
+Agent doing its job. Only a timestamp is exposed, never call content, spend, or
+tokens.
+
 Reads use the Agent visibility query and require `activity.read` for that
-Agent; without it the timestamp is null and the card says “Not available”. With
-permission, null means “No messages yet”. No message content is returned.
+Agent for both fields; without it the timestamps are null and the card says
+“Not available”. (The Activity cost endpoints additionally require `cost.read`
+because they return spend; this single timestamp does not.) With permission, a
+null `last_activity_at` means “No activity yet”. No message content is returned.
 An older API response that omits the field also displays “Not available”.
-The card shows relative recency; the exact timestamp in the reader's local time
-zone appears on hover or keyboard focus. A last message 14 or more days old, or
-no messages yet, is highlighted as quiet, and the dashboard header counts quiet
-Agents on the loaded page from this field alone, without further queries. Late
-ingestion uses occurrence time rather than insertion time.
+The card labels it “Last active” and shows relative recency; the exact timestamp
+in the reader's local time zone appears on hover or keyboard focus. A last
+activity 14 or more days old, or none yet, is highlighted as quiet, and the
+dashboard header counts quiet Agents on the loaded page from this field alone,
+without further queries. Late ingestion uses occurrence time rather than
+insertion time.
 
 Team cards are whole-card links with keyboard navigation and no separate Open
 button. A single “Hire a teammate” card follows the displayed teammates in the
 dashboard grid and opens the hiring dialog with a click or keyboard activation.
 It remains available when the team is empty or search has no matches. Teammate
-cards truncate long names to one line (the full name shows on hover), and their last-message footers stay at the bottom. Cards do not show a pending model; the Agent detail page does (see [Agent settings](agent-settings.md)). The
+cards truncate long names to one line (the full name shows on hover), and their last-active footers stay at the bottom. Cards do not show a pending model; the Agent detail page does (see [Agent settings](agent-settings.md)). The
 dashboard search filters the currently loaded page, and identifies that limit
 when more Agents exist than are loaded.
 
@@ -94,8 +108,10 @@ Agents with `activity.read`; without that permission, a running Agent is labeled
 “Running” without claiming a known health state. Each card shows its state as a
 presence dot on the avatar and a labeled badge (Working, Initializing,
 Disconnected, Needs attention, Running). A stopped Agent shows a muted Idle status in
-the card footer in place of the labeled last-message time, and is not counted as
+the card footer in place of the labeled last-active time, and is not counted as
 quiet.
+
+Integration readiness reconciliation preserves retryable image/configuration diagnostics; it does not treat them as runtime exits.
 
 ## State model
 
@@ -160,7 +176,7 @@ Stop snapshots logs before removing active runtime resources and marking the Age
 
 `POST /organizations/{organization_id}/agents/{agent_id}/managed-update` is the one-click path behind the update banner shown when `update_available` is true. It requires `agent.lifecycle.manage` and also `agent.update`, because the rollback replays the recorded configuration and restore authorizes that as an Agent update; checking both up front keeps a refusal from surfacing later as an Agent left in `ERROR`. The Agent must be `RUNNING` with no restore-point operation in flight. The call returns `202` having only scheduled the work.
 
-**While it runs.** The `202` marks the Agent as updating (`update_in_progress` on `AgentRead`), with one conditional write, so two requests cannot both start an update. Until the update ends, start, stop, delete, another managed update, the operator fleet rebuild, and restore point capture, restore, re-apply, and delete are all refused with `409`. The update's own capture and rollback restore are the only exceptions. The marker is a heartbeat the update refreshes on every poll. The update runs as a background task in one API process, so if that process dies the heartbeat goes stale after two minutes and the Agent is no longer blocked. The UI polls the Agent while `update_in_progress` is true.
+**While it runs.** The `202` marks the Agent as updating (`update_in_progress` on `AgentRead`), with one conditional write, so two requests cannot both start an update. Until the update ends, start, stop, delete, integration isolation apply, another managed update, the operator fleet rebuild, and restore point capture, restore, re-apply, and delete are all refused with `409`. The update's own capture and rollback restore are the only exceptions. The marker is a heartbeat the update refreshes on every poll. The update runs as a background task in one API process, so if that process dies the heartbeat goes stale after two minutes and the Agent is no longer blocked. The UI polls the Agent while `update_in_progress` is true. Detail/health reads defer crash teardown to the managed-update workflow while that marker is live. A ready pod succeeds only after its integration authentication handoff is complete; the update watcher promotes the verified integration generation without a second readiness probe.
 
 **Steps.** The update stops the Agent and records the image its pod was actually running. It waits up to two minutes for the pod to let go of the volume; capture's own wait is only the 30s default grace period, and a person can retry that but an update cannot. Then it captures a Restore Point labelled "Automatic backup before managed update" with the `PRE_UPGRADE` origin and waits for it. Next it starts the Agent on the current platform images and polls the newest pod's readiness for `agent_update_ready_timeout_seconds` (default 600). The window starts when the start returns, so it has to cover pulling an image the node has never seen, init, the start script's installs, and the probe's 30s initial delay. The readiness probe sets no upper bound of its own: failures only mark the pod unready. Image pull errors do not end the wait, because the kubelet retries them and one registry blip must not roll an update back. A crash loop ends it once the container has restarted twice, and so does a container that cannot be created.
 
@@ -182,7 +198,7 @@ Restore first captures the current volume as a Pre-Restore Restore Point, then v
 
 Two consequences are worth stating plainly. The runtime's own session history lives on the volume and rolls back with it, while Agent Barn's conversation record does not — after a restore the product's history is ahead of the runtime's, which is correct because the product record is the audit trail. And deleting an Agent destroys its restore points irreversibly even though the Agent row itself is only soft-deleted, so deletion is the one path this feature cannot undo.
 
-Each Restore Point also records the Agent's pins at capture time — template pin, model, command approval, verbose mode, and skill version pins — in a versioned, display-oriented configuration manifest. The manifest never holds credentials. It records the template pin's scope (platform, organization, or Agent-owned override) rather than the display pin type, because an Organization fork shares its platform lineage's template key and restarts its own version numbering, so scope is what separates two pins that otherwise read alike. Manifest version 1 predates the template and skill pins; a Restore Point carrying one reports those fields as unrecorded, which is not the same as recorded-and-empty, and cannot be replayed.
+Each Restore Point also records the Agent's pins at capture time — template pin, model, command approval, verbose mode, turn limit, and skill version pins — in a versioned, display-oriented configuration manifest. The manifest never holds credentials. It records the template pin's scope (platform, organization, or Agent-owned override) rather than the display pin type, because an Organization fork shares its platform lineage's template key and restarts its own version numbering, so scope is what separates two pins that otherwise read alike. Manifest version 1 predates the template and skill pins; a Restore Point carrying one reports those fields as unrecorded, which is not the same as recorded-and-empty, and cannot be replayed. The turn limit arrived within version 2 as an optional key: a manifest without it reports the limit as unrecorded and leaves the Agent's limit alone on replay, while a recorded null replays as the platform default.
 
 A restore point's status is resolved by reading it, and also on a schedule, so a capture nobody watches still reaches a terminal state and still gives its volume back. The scheduled pass also applies a configuration replay a restore still owes, and deletes restore point volumes and Jobs that no row owns — matching each back to its row through a label, or through the resource's own name when that label is absent, because the stored Job name is cleared once a row goes terminal. Because it deletes storage from a comparison rather than from an instruction, it leaves recently created resources alone, caps how much it removes per run, refuses to delete anything it cannot positively identify, and fails no rows when the listing it compares against is empty or failed.
 

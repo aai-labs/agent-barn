@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # One-command local dev stack: validates .env, brings up the k3d cluster +
 # LiteLLM, loads agent base images (skipping any already in the cluster),
-# runs migrations, then starts db/redis/api/worker/cost-sync/communications/memory/ui in Docker with hot
-# reload.
+# runs migrations, then starts db/redis/api/worker/cost-sync/communications/memory/credential-gateway/ui
+# in Docker with hot reload.
 #
 # Usage:
 #   ./run.sh            start everything, then follow logs (Ctrl-C detaches;
@@ -101,12 +101,12 @@ step "Running database migrations"
 ${COMPOSE} build api
 ${COMPOSE} run --rm --no-deps --workdir /app/api api python -m alembic upgrade head
 
-step "Building and starting api, worker, cost-sync, budget-snapshots, communications, memory, ui"
+step "Building and starting api, worker, cost-sync, budget-snapshots, communications, memory, credential-gateway, ui"
 if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
   step "Starting local Hindsight database and backend"
   ${COMPOSE} up -d hindsight-db hindsight
 fi
-${COMPOSE} up -d --build api worker cost-sync budget-snapshots communications memory ui
+${COMPOSE} up -d --build api worker cost-sync budget-snapshots communications memory credential-gateway ui
 
 # Prints a boxed row padded to the border width, measuring visible width only
 # (ANSI color/bold codes stripped before computing the pad) so values of any
@@ -126,6 +126,7 @@ green "+------------------------------------------------------+"
 box_line "UI  -> $(printf '\033[1mhttp://localhost:3000\033[0m')"
 box_line "API -> $(printf '\033[1mhttp://localhost:%s\033[0m' "${API_PORT}")"
 box_line "Communications -> $(printf '\033[1mhttp://localhost:%s\033[0m' "${COMMUNICATIONS_PORT:-8002}")"
+box_line "Credential gateway -> $(printf '\033[1mhttp://localhost:%s\033[0m' "${GATEWAY_PORT:-8004}")"
 box_line "Memory -> $(printf '\033[1mhttp://localhost:%s\033[0m' "${MEMORY_PORT:-8003}")"
 green "+------------------------------------------------------+"
 printf '\n'

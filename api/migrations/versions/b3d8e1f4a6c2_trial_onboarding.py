@@ -1,7 +1,7 @@
 """trial onboarding
 
 Revision ID: b3d8e1f4a6c2
-Revises: 164fb0fb6c2c
+Revises: b3c9e1f2a7d4
 Create Date: 2026-10-07 12:00:00.000000
 
 Google sign-in and trial onboarding (AF-368): the Google account a User signs in
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b3d8e1f4a6c2"
-down_revision: str | Sequence[str] | None = "164fb0fb6c2c"
+down_revision: str | Sequence[str] | None = "b3c9e1f2a7d4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

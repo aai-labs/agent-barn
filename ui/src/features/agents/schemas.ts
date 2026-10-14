@@ -6,8 +6,24 @@ import { SkillScopeSchema } from "@/features/skills/schemas";
 export const AgentSecretReadSchema = z.object({
   provider: z.string(),
   secretName: z.string(),
+  source: z.enum(["agent_secret", "shared_credential", "platform_default"]).optional(),
   sharedCredentialId: z.string().uuid().nullable().optional(),
   sharedCredentialName: z.string().nullable().optional(),
+  isolation: z
+    .object({
+      desired: z.boolean(),
+      supportedModes: z.array(z.enum(["direct", "isolated"])),
+      directDescription: z.string(),
+      isolatedDescription: z.string(),
+      switchAvailable: z.boolean(),
+      applied: z.boolean().nullable().optional(),
+      generation: z.string().uuid().nullable().optional(),
+      pending: z.boolean().optional(),
+      lastVerified: z.boolean().nullish(),
+      reconnectRequired: z.boolean().optional(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const IntegrationValidationResultSchema = z.object({
@@ -130,6 +146,10 @@ export const AgentSchema = z.object({
   lastManagedUpdate: AgentManagedUpdateSchema.nullish(),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  /** The Agent's own Hermes turn limit; null follows the platform default. */
+  maxTurns: z.number().int().nullable().default(null),
+  /** The limit a run actually gets: the Agent's own, or the platform default. */
+  effectiveMaxTurns: z.number().int().default(0),
   memoryEnabled: z.boolean().default(false),
   lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
@@ -144,6 +164,7 @@ export const AgentSchema = z.object({
     email: z.string(),
   }).nullable().optional().default(null),
   lastMessageAt: z.string().datetime({ offset: true }).nullable().optional(),
+  lastActivityAt: z.string().datetime({ offset: true }).nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -474,6 +495,8 @@ export const RestorePointConfigManifestSchema = z.object({
   effectiveModel: z.string().default(""),
   approvalMode: z.string().default(""),
   verboseMode: z.boolean().default(false),
+  /** Absent on manifests recorded before the turn limit existed; kept undefined so a diff can say so. */
+  maxTurns: z.number().int().nullable().optional(),
   skills: z.array(RestorePointSkillSchema).default([]),
 });
 

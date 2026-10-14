@@ -11,6 +11,7 @@ import api.domains.agent_memory.platform_models
 import api.domains.agent_settings.models
 import api.domains.agent_webhooks.models
 import api.domains.agents.models
+import api.domains.analytics.models
 import api.domains.api_keys.models
 import api.domains.auth.models
 import api.domains.business_value.models
@@ -19,6 +20,7 @@ import api.domains.conversations.models
 import api.domains.costs.models
 import api.domains.events.models
 import api.domains.events.security_audit
+import api.domains.integrations.models
 import api.domains.onboarding.models
 import api.domains.organizations.models
 import api.domains.rbac.models

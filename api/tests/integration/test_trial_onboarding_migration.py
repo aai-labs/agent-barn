@@ -22,7 +22,7 @@ import api.domains.organizations.models
 import api.domains.users.models  # noqa: F401
 from api.core.config import get_config
 
-PRE_AF368_REVISION = "164fb0fb6c2c"
+PRE_AF368_REVISION = "b3c9e1f2a7d4"
 AF368_HEAD = "b3d8e1f4a6c2"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 AF368_COLUMNS = {

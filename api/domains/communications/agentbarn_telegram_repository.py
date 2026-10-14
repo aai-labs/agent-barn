@@ -1,4 +1,5 @@
 import enum
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -12,11 +13,14 @@ from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.communications.agentbarn_telegram_messages import sender_id
 from api.domains.communications.models import (
     AgentBarnTelegramConnectionSecret,
+    AgentBarnTelegramFile,
     AgentBarnTelegramIngressLease,
     AgentBarnTelegramLink,
     AgentBarnTelegramLinkToken,
+    AgentBarnTelegramMessage,
     AgentBarnTelegramUpdate,
     AgentBarnTelegramUpdateStatus,
     CommunicationConnection,
@@ -267,7 +271,9 @@ class AgentBarnTelegramRepository:
     def store_updates(self, updates: list[dict[str, Any]]) -> int:
         """Store received updates once each and return how many were new."""
         rows = [
-            AgentBarnTelegramUpdate(update_id=update["update_id"], payload=update).model_dump()
+            AgentBarnTelegramUpdate(
+                update_id=update["update_id"], payload=update, telegram_user_id=sender_id(update)
+            ).model_dump()
             for update in updates
             if isinstance(update.get("update_id"), int)
         ]
@@ -284,13 +290,32 @@ class AgentBarnTelegramRepository:
             session.commit()
             return len(stored)
 
-    def received_updates(self, *, limit: int) -> list[AgentBarnTelegramUpdate]:
-        """Unprocessed updates in the order Telegram issued them."""
+    def received_updates(self, *, now: datetime, limit: int) -> list[AgentBarnTelegramUpdate]:
+        """Unprocessed updates in the order Telegram issued them, leaving out senders who must wait.
+
+        A sender waits while one of their updates is backing off after a failure;
+        all of theirs are left out, so their order is kept and nobody else waits.
+        """
+        waiting = select(AgentBarnTelegramUpdate.telegram_user_id).where(
+            col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.RECEIVED,
+            col(AgentBarnTelegramUpdate.telegram_user_id).is_not(None),
+            col(AgentBarnTelegramUpdate.next_attempt_at) > now,
+        )
         with Session(self.delegate.engine) as session:
             return list(
                 session.exec(
                     select(AgentBarnTelegramUpdate)
-                    .where(col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.RECEIVED)
+                    .where(
+                        col(AgentBarnTelegramUpdate.status) == AgentBarnTelegramUpdateStatus.RECEIVED,
+                        sa.or_(
+                            col(AgentBarnTelegramUpdate.next_attempt_at).is_(None),
+                            col(AgentBarnTelegramUpdate.next_attempt_at) <= now,
+                        ),
+                        sa.or_(
+                            col(AgentBarnTelegramUpdate.telegram_user_id).is_(None),
+                            col(AgentBarnTelegramUpdate.telegram_user_id).not_in(waiting),
+                        ),
+                    )
                     .order_by(col(AgentBarnTelegramUpdate.update_id))
                     .limit(limit)
                 )
@@ -306,19 +331,33 @@ class AgentBarnTelegramRepository:
             )  # type: ignore[call-overload]
             session.commit()
 
-    def record_processing_failure(self, update_id: int) -> int:
-        """Count a failed processing pass for an update and return how many it has had."""
+    def record_processing_failure(self, update_id: int, *, retry_at: datetime) -> int:
+        """Count a failed processing pass, hold the update until `retry_at`, and return its attempts."""
         with Session(self.delegate.engine) as session:
             attempts = session.exec(
                 sa.update(AgentBarnTelegramUpdate)
                 .where(col(AgentBarnTelegramUpdate.update_id) == update_id)
-                .values(attempt_count=AgentBarnTelegramUpdate.attempt_count + 1)  # type: ignore[operator]
+                .values(
+                    attempt_count=AgentBarnTelegramUpdate.attempt_count + 1,  # type: ignore[operator]
+                    next_attempt_at=retry_at,
+                )
                 .returning(col(AgentBarnTelegramUpdate.attempt_count))
             ).first()  # type: ignore[call-overload]
             session.commit()
             return attempts[0] if attempts else 0
 
-    def queue_update(self, update_id: int, *, telegram_user_id: int, agent_id: UUID, connection_id: UUID) -> None:
+    def queue_update(
+        self,
+        update_id: int,
+        *,
+        telegram_user_id: int,
+        agent_id: UUID,
+        connection_id: UUID,
+        payload: dict[str, Any],
+        messages: Iterable[tuple[int, int]] = (),
+        files: Iterable[str] = (),
+    ) -> None:
+        """Queue an update, as the Agent may see it, and make its messages and files the Connection's."""
         with Session(self.delegate.engine) as session:
             session.exec(
                 sa.update(AgentBarnTelegramUpdate)
@@ -328,10 +367,13 @@ class AgentBarnTelegramRepository:
                     telegram_user_id=telegram_user_id,
                     agent_id=agent_id,
                     connection_id=connection_id,
-                    # Forwarding counts its own attempts from here.
+                    payload=payload,
+                    # Forwarding counts its own attempts, and sets its own retries, from here.
                     attempt_count=0,
+                    next_attempt_at=None,
                 )
             )  # type: ignore[call-overload]
+            self._insert_ownership(session, connection_id, messages, files)
             session.commit()
 
     def find_routable_link(self, telegram_user_id: int) -> AgentBarnTelegramLink | None:
@@ -467,6 +509,22 @@ class AgentBarnTelegramRepository:
             )  # type: ignore[call-overload]
             session.commit()
 
+    def record_rejection(self, update_id: int, *, retry_at: datetime) -> int:
+        """Count one refusal by the Agent's webhook and schedule a retry; the refusals so far."""
+        with Session(self.delegate.engine) as session:
+            rejected = session.exec(
+                sa.update(AgentBarnTelegramUpdate)
+                .where(col(AgentBarnTelegramUpdate.update_id) == update_id)
+                .values(
+                    attempt_count=AgentBarnTelegramUpdate.attempt_count + 1,  # type: ignore[operator]
+                    rejected_count=AgentBarnTelegramUpdate.rejected_count + 1,  # type: ignore[operator]
+                    next_attempt_at=retry_at,
+                )
+                .returning(col(AgentBarnTelegramUpdate.rejected_count))
+            ).first()  # type: ignore[call-overload]
+            session.commit()
+            return rejected[0] if rejected else 0
+
     def claim_notice(self, telegram_user_id: int, *, now: datetime) -> bool:
         """Record that the user was told their Agent is unavailable; False if already told."""
         with Session(self.delegate.engine) as session:
@@ -573,12 +631,14 @@ class AgentBarnTelegramRepository:
                 )
             ).one_or_none()
 
-    def linked_user_ids(self, connection_id: UUID) -> set[int]:
+    def active_links(self, connection_id: UUID, telegram_user_ids: Iterable[int]) -> list[AgentBarnTelegramLink]:
+        """The Connection's active links among these Telegram users."""
         with Session(self.delegate.engine) as session:
-            return set(
+            return list(
                 session.exec(
-                    select(AgentBarnTelegramLink.telegram_user_id).where(
+                    select(AgentBarnTelegramLink).where(
                         col(AgentBarnTelegramLink.connection_id) == connection_id,
+                        col(AgentBarnTelegramLink.telegram_user_id).in_(set(telegram_user_ids)),
                         col(AgentBarnTelegramLink.unlinked_at).is_(None),
                     )
                 )
@@ -596,3 +656,70 @@ class AgentBarnTelegramRepository:
                 .values(unlinked_at=now)
             )  # type: ignore[call-overload]
             session.commit()
+
+    def record_ownership(
+        self,
+        connection_id: UUID,
+        *,
+        messages: Iterable[tuple[int, int]] = (),
+        files: Iterable[str] = (),
+    ) -> None:
+        """Record (chat, message) pairs and file ids as the Connection's. A message keeps its first owner."""
+        with Session(self.delegate.engine) as session:
+            self._insert_ownership(session, connection_id, messages, files)
+            session.commit()
+
+    @staticmethod
+    def _insert_ownership(
+        session: Session,
+        connection_id: UUID,
+        messages: Iterable[tuple[int, int]],
+        files: Iterable[str],
+    ) -> None:
+        message_rows = [
+            AgentBarnTelegramMessage(chat_id=chat_id, message_id=message_id, connection_id=connection_id).model_dump()
+            for chat_id, message_id in set(messages)
+        ]
+        file_rows = [
+            AgentBarnTelegramFile(connection_id=connection_id, file_id=file_id).model_dump() for file_id in set(files)
+        ]
+        if message_rows:
+            session.exec(
+                pg_insert(AgentBarnTelegramMessage)
+                .values(message_rows)
+                .on_conflict_do_nothing(constraint="uq_agentbarn_telegram_message_chat_message")
+            )  # type: ignore[call-overload]
+        if file_rows:
+            session.exec(
+                pg_insert(AgentBarnTelegramFile)
+                .values(file_rows)
+                .on_conflict_do_nothing(constraint="uq_agentbarn_telegram_file_connection_file")
+            )  # type: ignore[call-overload]
+
+    def owns_messages(self, connection_id: UUID, messages: Iterable[tuple[int, int]]) -> bool:
+        wanted = set(messages)
+        if not wanted:
+            return True
+        with Session(self.delegate.engine) as session:
+            owned = session.exec(
+                select(sa.func.count()).where(
+                    col(AgentBarnTelegramMessage.connection_id) == connection_id,
+                    sa.tuple_(col(AgentBarnTelegramMessage.chat_id), col(AgentBarnTelegramMessage.message_id)).in_(
+                        list(wanted)
+                    ),
+                )
+            ).one()
+        return owned == len(wanted)
+
+    def owns_files(self, connection_id: UUID, file_ids: Iterable[str]) -> bool:
+        wanted = set(file_ids)
+        if not wanted:
+            return True
+        with Session(self.delegate.engine) as session:
+            owned = session.exec(
+                select(sa.func.count()).where(
+                    col(AgentBarnTelegramFile.connection_id) == connection_id,
+                    col(AgentBarnTelegramFile.file_id).in_(wanted),
+                )
+            ).one()
+        return owned == len(wanted)

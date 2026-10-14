@@ -36,6 +36,10 @@ Related context: [Activity and Ingest](../activity-and-ingest.md), [Agent Activi
 
 ## Slice history
 
+### 2026-10-08 — Credential gateway staging merge
+
+- Changed: removed the retired Zoho Mail `email messages list/get` paths from the aai-cli catalogue, matching the credential-gateway branch's shipped skill bundle. These were reads and contributed no saved minutes; the remaining catalogue and drift coverage are preserved.
+
 ### 2026-10-08 — Backfill runs on every deploy
 
 Why:

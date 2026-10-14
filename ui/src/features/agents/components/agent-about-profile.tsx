@@ -21,7 +21,7 @@ import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import type { Agent, AgentAssignedSkill, AgentSecretRead, CommandApprovalMode } from "../schemas";
-import { canAgent, currentModelOf, formatModelName } from "../utils";
+import { canAgent, currentModelOf, formatModelName, turnLimitLabel } from "../utils";
 import { ModelSourceBadge } from "./model-source-badge";
 
 const RUNTIME_LABELS = { hermes: "Hermes", openclaw: "OpenClaw" } as const;
@@ -122,6 +122,7 @@ function OverviewSection({
             {agent.verboseMode ? "Shows progress while working" : "Only the final reply is sent"}
           </Fact>
         )}
+        {isHermes && <Fact label="Turn limit">{turnLimitLabel(agent)}</Fact>}
         <Fact label="Hired">
           {formatDay(agent.createdAt)}
           {hiredAgo && (

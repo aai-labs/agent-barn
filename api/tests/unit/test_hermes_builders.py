@@ -11,7 +11,7 @@ from api.domains.agents.builders import (
     native_telegram_env,
     runtime_teams_env,
 )
-from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_START_SH
+from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_DEFAULT_MAX_TURNS, HERMES_START_SH
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
 
@@ -266,6 +266,17 @@ def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     assert approvals("manual") == {"mode": "manual", **policy}
     assert approvals("auto") == {"mode": "smart", **policy}
     assert approvals("off") == {"mode": "off", **policy}
+
+
+def test_gateway_config_caps_turns_at_the_platform_default_unless_the_agent_sets_its_own() -> None:
+    """A run stops at `agent.max_turns`; an Agent reviewing large pull requests
+    needs more than the default, so its own limit replaces it rather than adding to it.
+    """
+    default = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert default["agent"]["max_turns"] == HERMES_DEFAULT_MAX_TURNS == 50
+
+    own = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", max_turns=150)
+    assert own["agent"]["max_turns"] == 150
 
 
 def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:

@@ -1,9 +1,22 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from hamcrest import assert_that, contains_exactly, contains_string, equal_to, has_properties, is_, none, not_none
+from hamcrest import (
+    assert_that,
+    contains_exactly,
+    contains_string,
+    equal_to,
+    has_item,
+    has_properties,
+    is_,
+    is_not,
+    none,
+    not_none,
+)
 from sqlmodel import Session, col, select
 
+from api.domains.communications.agentbarn_telegram_ingress import AgentBarnTelegramIngress
 from api.domains.communications.agentbarn_telegram_processor import AgentBarnTelegramUpdateProcessor
 from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
 from api.domains.communications.agentbarn_telegram_service import hash_link_token
@@ -29,12 +42,21 @@ _WEB_APP_URL = "https://app.agentbarn.test"
 class RecordingBot:
     def __init__(self, fail: bool = False) -> None:
         self.sent: list[tuple[int, str]] = []
+        self.answered: list[tuple[str, str]] = []
+        # The texts sent as courtesies, which give way when the shared budget is spent.
+        self.courtesies: list[str] = []
         self.fail = fail
 
     def send(self, chat_id: int, text: str, *, essential: bool = True) -> bool:
         if self.fail:
             raise RuntimeError("Telegram is down")
         self.sent.append((chat_id, text))
+        if not essential:
+            self.courtesies.append(text)
+        return True
+
+    def answer_callback(self, callback_query_id: str, text: str) -> bool:
+        self.answered.append((callback_query_id, text))
         return True
 
 
@@ -184,6 +206,35 @@ def test_a_used_or_unknown_link_asks_for_a_fresh_one() -> None:
             )
 
 
+def test_someone_pressing_start_on_bad_links_hears_once_a_minute_and_as_a_courtesy() -> None:
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-old", expires_in=timedelta(seconds=-1))
+
+        with when("Jane presses Start on an expired link and then on links that were never issued"):
+            _receive(context, _private("/start token-old"))
+            _receive(context, _private("/start never-issued"))
+            _receive(context, _private("/start never-issued-either"))
+
+        with then("she gets one reply, which does not use the bot's reserved capacity"):
+            expired = "This link has expired. Go back to Agent Barn for a fresh one."
+            assert_that(context.bot.sent, contains_exactly((_JANE, expired)))
+            assert_that(context.bot.courtesies, contains_exactly(expired))
+
+
+def test_a_good_link_is_confirmed_even_right_after_a_bad_one() -> None:
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-sales")
+
+        with when("Jane presses Start on a bad link and then on her real one"):
+            _receive(context, _private("/start never-issued"))
+            _receive(context, _private("/start token-sales"))
+
+        with then("she is still told she is linked, as a message the bot must send"):
+            linked = "Hi Jane! You're linked to Sales Helper. Send a message to get started."
+            assert_that(context.bot.sent[-1], equal_to((_JANE, linked)))
+            assert_that(context.bot.courtesies, is_not(has_item(linked)))
+
+
 def test_a_stranger_is_pointed_to_sign_up_and_reaches_no_agent() -> None:
     with given(_GIVEN) as context:
         with when("someone who never linked writes to the bot"):
@@ -306,8 +357,10 @@ def test_an_update_that_keeps_failing_is_given_up_after_a_few_tries() -> None:
         with patch.object(repository, "find_routable_link", side_effect=RuntimeError("database blip")):
             with when("the same update fails on every pass"):
                 update_id = _receive(context, _private("hello?", user=7770007))
-                for _ in range(10):
-                    context.injector.get(AgentBarnTelegramUpdateProcessor).process_pending()
+                for minutes in range(1, 11):
+                    context.injector.get(AgentBarnTelegramUpdateProcessor).process_pending(
+                        now=datetime.now(UTC) + timedelta(minutes=minutes)
+                    )
 
         with then("it is given up, without its content, instead of retrying forever"):
             assert_that(
@@ -338,16 +391,19 @@ def test_a_users_later_messages_wait_behind_one_that_failed() -> None:
         )
 
         with patch.object(repository, "find_routable_link", side_effect=fails_once):
-            with when("Jane's first message fails once"):
+            with when("Jane's first message fails once, and is retried once it is due"):
                 processor.process_pending()
                 after_failure = (_stored(context, first).status, _stored(context, second).status)
                 processor.process_pending()
+                before_due = (_stored(context, first).status, _stored(context, second).status)
+                processor.process_pending(now=datetime.now(UTC) + timedelta(minutes=1))
 
         with then("her second message waits behind it, then both are queued in order"):
             assert_that(
                 after_failure,
                 equal_to((AgentBarnTelegramUpdateStatus.RECEIVED, AgentBarnTelegramUpdateStatus.RECEIVED)),
             )
+            assert_that(before_due, equal_to(after_failure))
             assert_that(
                 (_stored(context, first).status, _stored(context, second).status),
                 equal_to((AgentBarnTelegramUpdateStatus.QUEUED, AgentBarnTelegramUpdateStatus.QUEUED)),
@@ -362,3 +418,220 @@ def test_a_stranger_gets_the_sign_up_reply_once_in_a_while_not_every_time() -> N
 
         with then("they get the sign-up reply once"):
             assert_that([chat for chat, _ in context.bot.sent], equal_to([7770007]))
+
+
+def _jane_message(message_id: int, **content) -> dict:
+    sender = {"id": _JANE, "is_bot": False, "first_name": "Jane", "username": "jane_doe"}
+    return {"message_id": message_id, "from": sender, "chat": {"id": _JANE, "type": "private"}, "date": 0, **content}
+
+
+def _bot_message(message_id: int, text: str) -> dict:
+    sender = {"id": 424242, "is_bot": True, "first_name": "Agent Barn"}
+    return {"message_id": message_id, "from": sender, "chat": {"id": _JANE, "type": "private"}, "date": 0, "text": text}
+
+
+def _jane_switches_from_support_to_sales(context) -> None:
+    """Jane sent the support agent message 40, which answered with message 41; then she linked sales."""
+    _issue(context, context.support, "token-support")
+    _receive(context, _private("/start token-support"))
+    _receive(context, {"message": _jane_message(40, text="Where is my order?")})
+    _repo(context).record_ownership(context.support.id, messages=[(_JANE, 41)])
+    _issue(context, context.sales, "token-sales")
+    _receive(context, _private("/start token-sales"))
+    context.bot.sent.clear()
+
+
+def _owns(context, connection: CommunicationConnection, *, messages=(), files=()) -> bool:
+    return _repo(context).owns_messages(connection.id, [(_JANE, m) for m in messages]) and _repo(context).owns_files(
+        connection.id, files
+    )
+
+
+def test_a_users_message_and_its_files_become_their_agents() -> None:
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-sales")
+        _receive(context, _private("/start token-sales"))
+
+        with when("Jane sends her agent a photo"):
+            photo = [{"file_id": "file-small", "file_unique_id": "s"}, {"file_id": "file-large", "file_unique_id": "l"}]
+            _receive(context, {"message": _jane_message(50, photo=photo, caption="receipt")})
+
+        with then("the message and both sizes of the photo are her agent's, and no one else's"):
+            assert_that(_owns(context, context.sales, messages=[50], files=["file-small", "file-large"]), is_(True))
+            assert_that(_owns(context, context.support, messages=[50]), is_(False))
+            assert_that(_owns(context, context.support, files=["file-large"]), is_(False))
+
+
+def test_a_button_under_a_previous_agents_message_is_not_passed_on() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        with when("Jane presses a button under the support agent's old reply"):
+            callback = {
+                "id": "cb-1",
+                "from": {"id": _JANE, "is_bot": False, "first_name": "Jane"},
+                "message": _bot_message(41, "Your order ships Monday."),
+                "data": "track",
+            }
+            update_id = _receive(context, {"callback_query": callback})
+
+        with then("it reaches no agent, and Telegram is told the button no longer works"):
+            assert_that(
+                _stored(context, update_id),
+                has_properties(status=AgentBarnTelegramUpdateStatus.HANDLED, payload=none()),
+            )
+            assert_that(context.bot.answered, contains_exactly(("cb-1", "This button is no longer active.")))
+            assert_that(context.bot.sent, equal_to([]))
+
+
+def test_a_button_under_the_current_agents_message_is_passed_on() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        _repo(context).record_ownership(context.sales.id, messages=[(_JANE, 60)])
+
+        with when("Jane presses a button under the sales agent's message"):
+            callback = {
+                "id": "cb-2",
+                "from": {"id": _JANE, "is_bot": False, "first_name": "Jane"},
+                "message": _bot_message(60, "Pick a plan"),
+                "data": "pro",
+            }
+            update_id = _receive(context, {"callback_query": callback})
+
+        with then("it is queued for the sales agent"):
+            assert_that(
+                _stored(context, update_id),
+                has_properties(status=AgentBarnTelegramUpdateStatus.QUEUED, connection_id=context.sales.id),
+            )
+            assert_that(context.bot.answered, equal_to([]))
+
+
+def test_an_edit_of_a_message_sent_to_a_previous_agent_is_not_passed_on() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        with when("Jane edits the message she sent the support agent"):
+            update_id = _receive(context, {"edited_message": _jane_message(40, text="Where is my refund?")})
+
+        with then("it reaches no agent, and the bot stays quiet"):
+            assert_that(
+                _stored(context, update_id),
+                has_properties(status=AgentBarnTelegramUpdateStatus.HANDLED, payload=none()),
+            )
+            assert_that(context.bot.sent, equal_to([]))
+
+
+def test_a_reply_to_a_previous_agents_message_reaches_the_new_agent_without_it() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        with when("Jane replies to the support agent's old message, quoting part of it"):
+            reply = _jane_message(
+                70,
+                text="Is this still true?",
+                reply_to_message=_bot_message(41, "Your order ships Monday."),
+                quote={"text": "ships Monday", "position": 11},
+            )
+            update_id = _receive(context, {"message": reply})
+
+        with then("the sales agent gets her words but not the support agent's message"):
+            stored = _stored(context, update_id)
+            assert_that(stored.status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))
+            assert_that(stored.payload, not_none())
+            assert stored.payload is not None
+            assert_that(stored.payload["message"], equal_to(_jane_message(70, text="Is this still true?")))
+
+
+def test_a_reply_to_the_current_agents_own_message_keeps_it() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        _repo(context).record_ownership(context.sales.id, messages=[(_JANE, 60)])
+
+        with when("Jane replies to the sales agent's message"):
+            reply = _jane_message(71, text="Yes", reply_to_message=_bot_message(60, "Shall I book it?"))
+            update_id = _receive(context, {"message": reply})
+
+        with then("the sales agent sees what she replied to"):
+            stored = _stored(context, update_id)
+            assert stored.payload is not None
+            assert_that(stored.payload["message"], equal_to(reply))
+
+
+def test_pinning_a_previous_agents_message_does_not_show_it_to_the_new_agent() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        with when("Jane pins the support agent's old message"):
+            pinned = _jane_message(72, pinned_message=_bot_message(41, "Your order ships Monday."))
+            update_id = _receive(context, {"message": pinned})
+
+        with then("the sales agent is not shown the pinned message"):
+            stored = _stored(context, update_id)
+            assert stored.payload is not None
+            assert_that(stored.payload["message"], equal_to(_jane_message(72)))
+
+
+def test_an_edit_of_a_message_sent_to_the_current_agent_is_passed_on() -> None:
+    with given([*_GIVEN, _jane_switches_from_support_to_sales]) as context:
+        _receive(context, {"message": _jane_message(80, text="Book Tuesday")})
+
+        with when("Jane edits the message she sent the sales agent"):
+            update_id = _receive(context, {"edited_message": _jane_message(80, text="Book Wednesday")})
+
+        with then("it is queued for the sales agent"):
+            assert_that(
+                _stored(context, update_id),
+                has_properties(status=AgentBarnTelegramUpdateStatus.QUEUED, connection_id=context.sales.id),
+            )
+
+
+_ADA = 7770007
+
+
+def _ingress_pass(context) -> None:
+    """One ingress cycle over what is stored, as the polling replica runs it."""
+    ingress = context.injector.get(AgentBarnTelegramIngress)
+    with patch.object(ingress, "poll_once", AsyncMock()), patch.object(ingress, "should_poll", return_value=True):
+        asyncio.run(ingress.cycle(Mock()))
+
+
+def test_one_users_failing_backlog_does_not_hold_up_another_user() -> None:
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-sales")
+        _receive(context, _private("/start token-sales"))
+        repository = _repo(context)
+        real_find = repository.find_routable_link
+
+        def fails_for_ada(user_id):
+            if user_id == _ADA:
+                raise RuntimeError("database blip")
+            return real_find(user_id)
+
+        ada = [next(_next_update_id) for _ in range(6)]
+        jane = next(_next_update_id)
+        repository.store_updates(
+            [
+                *({**_private(f"ada {n}", user=_ADA), "update_id": u} for n, u in enumerate(ada)),
+                {**_private("hi"), "update_id": jane},
+            ]
+        )
+
+        with patch.object(repository, "find_routable_link", side_effect=fails_for_ada):
+            with when("one ingress pass runs while every one of Ada's updates fails"):
+                _ingress_pass(context)
+
+        with then("Jane's later message is queued, and Ada's wait in order behind her first"):
+            assert_that(_stored(context, jane).status, equal_to(AgentBarnTelegramUpdateStatus.QUEUED))
+            assert_that(
+                [(_stored(context, u).status, _stored(context, u).attempt_count) for u in ada],
+                equal_to(
+                    [(AgentBarnTelegramUpdateStatus.RECEIVED, 1)] + [(AgentBarnTelegramUpdateStatus.RECEIVED, 0)] * 5
+                ),
+            )
+            assert_that(_stored(context, ada[0]).next_attempt_at, not_none())
+
+
+def test_a_failed_update_without_a_sender_waits_out_its_own_backoff() -> None:
+    with given(_GIVEN) as context:
+        repository = _repo(context)
+        processor = context.injector.get(AgentBarnTelegramUpdateProcessor)
+        update_id = next(_next_update_id)
+        repository.store_updates([{"update_id": update_id, "message": {"message_id": 1, "chat": {"id": -5}}}])
+
+        with patch.object(repository, "settle_update", side_effect=RuntimeError("database blip")):
+            with when("it fails, and the next pass runs straight away"):
+                processor.process_pending()
+                processor.process_pending()
+
+        with then("it was tried once"):
+            assert_that(_stored(context, update_id).attempt_count, equal_to(1))

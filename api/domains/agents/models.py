@@ -57,6 +57,12 @@ class ManagedUpdateOutcome(str, enum.Enum):
     ROLLBACK_FAILED = "ROLLBACK_FAILED"
 
 
+# Bounds for an Agent's own Hermes turn limit. The lower bound keeps a run able to
+# answer at all; the upper one keeps a runaway run inside one spend-limit window.
+MAX_TURNS_MIN = 1
+MAX_TURNS_MAX = 500
+
+
 class CommandApprovalMode(str, enum.Enum):
     MANUAL = "manual"
     AUTO = "auto"
@@ -86,13 +92,11 @@ class SecretProvider(str, enum.Enum):
     JIRA = "jira"
     CONFLUENCE = "confluence"
     BITBUCKET = "bitbucket"
-    ZOHO_MAIL = "zoho_mail"
-    ZOHO_CALENDAR = "zoho_calendar"
     FIRECRAWL = "firecrawl"
-    SLACK = "slack"
     PIPEDRIVE = "pipedrive"
     GOOGLE_WORKSPACE = "google_workspace"
     SHAREPOINT = "sharepoint"
+    APOLLO = "apollo"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -106,13 +110,11 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.JIRA: "Jira credential",
     SecretProvider.CONFLUENCE: "Confluence credential",
     SecretProvider.BITBUCKET: "Bitbucket credential",
-    SecretProvider.ZOHO_MAIL: "Zoho Mail credential",
-    SecretProvider.ZOHO_CALENDAR: "Zoho Calendar credential",
     SecretProvider.FIRECRAWL: "Firecrawl credential",
-    SecretProvider.SLACK: "Slack credential",
     SecretProvider.PIPEDRIVE: "Pipedrive credential",
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
     SecretProvider.SHAREPOINT: "SharePoint credential",
+    SecretProvider.APOLLO: "Apollo credential",
 }
 
 
@@ -216,15 +218,33 @@ class GoogleWorkspaceContent(SecretContent):
         return self
 
 
-class SharePointContent(SecretContent):
-    """A SharePoint sign-in made on the agent's Microsoft Teams app.
+class GrantedSite(PydanticBaseModel):
+    """One SharePoint site the agent's Teams app was granted under ``Sites.Selected``."""
 
-    The sign-in is a public client (PKCE, no secret), so the refresh token here refreshes
-    without the Teams app's secret; aai-cli's ``microsoft_delegated`` profile does exactly
-    that and stores each rotated token itself. The Teams app's secret is never read for
-    SharePoint and cannot be stored here (``extra="forbid"`` on SecretContent).
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=1)
+    site_id: str = Field(min_length=1)
+    # The grant on the site, kept so a later administrator sign-in can revoke it.
+    permission_id: str = Field(min_length=1)
+
+
+class SharePointContent(SecretContent):
+    """SharePoint for an agent, on the agent's Microsoft Teams app. One of two modes.
+
+    ``delegated``: a person signed in as a public client (PKCE, no secret), so the refresh
+    token here refreshes without the Teams app's secret; aai-cli's ``microsoft_delegated``
+    profile does exactly that and stores each rotated token itself.
+
+    ``selected_sites``: an administrator signed in once to grant the Teams app access to
+    ``sites`` under ``Sites.Selected``. Nothing from that sign-in is kept; ``email`` is the
+    administrator's account. The pod fetches short-lived app-only tokens from the API, which
+    mints them with the Teams app's secret, read server-side.
+
+    Neither mode stores the Teams app's secret (``extra="forbid"`` on SecretContent).
     """
 
+    mode: Literal["delegated", "selected_sites"] = "delegated"
     # Strings rather than UUIDs: encrypt_content JSON-serialises model_dump(), which a UUID
     # object would break. Validated and normalised below.
     connection_id: str
@@ -233,39 +253,43 @@ class SharePointContent(SecretContent):
     email: str = Field(min_length=1)
     scopes: list[str] = Field(default_factory=list)
     read_only: bool = False
-    refresh_token: str = Field(min_length=1)
-    # New for every sign-in. The pod writes the refresh token into aai-cli's store only when
-    # this changes, so a restart keeps aai-cli's rotated token and a reconnect replaces it.
-    sign_in_id: str
+    refresh_token: str | None = Field(default=None, min_length=1)
+    # New for every delegated sign-in. The pod writes the refresh token into aai-cli's store
+    # only when this changes, so a restart keeps aai-cli's rotated token and a reconnect
+    # replaces it.
+    sign_in_id: str | None = None
+    sites: list[GrantedSite] = Field(default_factory=list)
+    broker_access_token: str | None = Field(default=None, repr=False)
+    broker_expires_at: float | None = None
+    store_revision: str | None = None
+    subject_id: str | None = None
 
     @field_validator("connection_id", "sign_in_id")
     @classmethod
-    def _validate_uuid(cls, value: str) -> str:
-        return str(UUID(value))
+    def _validate_uuid(cls, value: str | None) -> str | None:
+        return None if value is None else str(UUID(value))
 
-
-class ZohoMailContent(SecretContent):
-    email: str
-    account_id: str
-    client_id: str
-    client_secret: str
-    refresh_token: str
-
-
-class ZohoCalendarContent(SecretContent):
-    username: str
-    email: str
-    app_password: str
-    caldav_url: str
+    @model_validator(mode="after")
+    def _validate_mode(self) -> Self:
+        if self.mode == "delegated":
+            if self.refresh_token is None or self.sign_in_id is None:
+                raise ValueError("a delegated SharePoint sign-in needs refresh_token and sign_in_id")
+            if self.sites:
+                raise ValueError("a delegated SharePoint sign-in holds no granted sites")
+        else:
+            if not self.sites:
+                raise ValueError("selected-sites SharePoint needs at least one granted site")
+            if self.refresh_token is not None or self.sign_in_id is not None:
+                raise ValueError("selected-sites SharePoint keeps no token from the administrator's sign-in")
+        return self
 
 
 class FirecrawlContent(SecretContent):
     api_key: str
+    # Self-hosted override. Kept for backward-compatible decryption of already-stored
+    # content (SecretContent forbids extra fields) but no longer read by anything —
+    # FirecrawlPlugin.upstream_base_url ignores it. See that plugin for why.
     base_url: str = ""
-
-
-class SlackContent(SecretContent):
-    token: str
 
 
 _PIPEDRIVE_DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
@@ -291,18 +315,22 @@ class PipedriveContent(SecretContent):
         return label
 
 
+class ApolloContent(SecretContent):
+    # No base URL: an Apollo API key is only ever sent to Apollo's own API host, so a
+    # configurable endpoint would only be a way to move the key somewhere else.
+    api_token: str = Field(min_length=1)
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
     SecretProvider.CONFLUENCE: ConfluenceContent,
     SecretProvider.BITBUCKET: BitbucketContent,
-    SecretProvider.ZOHO_MAIL: ZohoMailContent,
-    SecretProvider.ZOHO_CALENDAR: ZohoCalendarContent,
     SecretProvider.FIRECRAWL: FirecrawlContent,
-    SecretProvider.SLACK: SlackContent,
     SecretProvider.PIPEDRIVE: PipedriveContent,
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
     SecretProvider.SHAREPOINT: SharePointContent,
+    SecretProvider.APOLLO: ApolloContent,
 }
 
 
@@ -460,6 +488,10 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # How many turns one Hermes run may take before the runtime stops it. NULL
+    # follows the platform default (builders/hermes.py). Hermes-only, like
+    # verbose_mode: OpenClaw has no equivalent runtime setting.
+    max_turns: int | None = SqlField(default=None, nullable=True)
     # Opt-in Agent Memory. Turning it off stops recall and retain but keeps stored memories.
     memory_enabled: bool = SqlField(
         default=False,
@@ -993,6 +1025,8 @@ class AgentCreate(PydanticBaseModel):
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
     verbose_mode: bool = False
+    # None follows the platform default; see AgentRead.effective_max_turns.
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
@@ -1025,6 +1059,9 @@ class AgentUpdate(PydanticBaseModel):
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
+    # Unset leaves the limit alone; an explicit null returns the Agent to the
+    # platform default, as `model: null` does for the model.
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
     @model_validator(mode="before")
     @classmethod
@@ -1182,12 +1219,13 @@ class AgentTemplateSelection(PydanticBaseModel):
     removed_skill_ids: list[UUID] = Field(default_factory=list)
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
 
-    # Unset means "leave as it is"; a null model clears the override, as in AgentUpdate.
+    # Unset means "leave as it is"; a null model or max_turns clears the override, as in AgentUpdate.
     model: str | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
-    # These columns are not nullable; only `model` gives null a meaning.
+    # These columns are not nullable; only `model` and `max_turns` give null a meaning.
     @model_validator(mode="before")
     @classmethod
     def reject_null_approval_mode(cls, values: object) -> object:
@@ -1273,6 +1311,24 @@ class AgentConfigurationRead(PydanticBaseModel):
     override_versions: list[AgentTemplateOverrideVersionRead] = Field(default_factory=list)
 
 
+class IntegrationIsolationRead(PydanticBaseModel):
+    desired: bool
+    supported_modes: list[Literal["direct", "isolated"]]
+    direct_description: str
+    isolated_description: str
+    switch_available: bool = False
+    applied: bool | None = None
+    generation: UUID | None = None
+    pending: bool = True
+    last_verified: bool | None = None
+    reconnect_required: bool = False
+
+
+class IntegrationIsolationUpdate(PydanticBaseModel):
+    isolated: bool
+    restart: bool = False
+
+
 class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret values
     model_config = ConfigDict(from_attributes=True)
 
@@ -1280,6 +1336,8 @@ class AgentSecretRead(PydanticBaseModel):  # label + provider only — no secret
     secret_name: str
     shared_credential_id: UUID | None = None
     shared_credential_name: str | None = None
+    isolation: IntegrationIsolationRead | None = None
+    source: Literal["agent_secret", "shared_credential", "platform_default"] = "agent_secret"
 
 
 class AgentAccessRoleRead(PydanticBaseModel):
@@ -1417,12 +1475,19 @@ class AgentRead(PydanticBaseModel):
     native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    #: The Agent's own turn limit; null when it follows the platform default.
+    max_turns: int | None = None
+    #: The limit a Hermes run actually gets: the Agent's own, or the platform default.
+    effective_max_turns: int
     memory_enabled: bool = False
     last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)
     creator: AgentCreatorRead | None = None
     #: Latest recorded inbound or outbound message, withheld without activity.read.
     last_message_at: datetime | None = None
+    #: Latest message or successful model call, so background-only work counts.
+    #: Withheld without activity.read.
+    last_activity_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

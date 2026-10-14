@@ -302,6 +302,7 @@ jobs:
           GRAFANA_HOST: ${{ vars.PUBLIC_GRAFANA_HOST }}
           STORAGE_CLASS: ${{ vars.PUBLIC_STORAGE_CLASS }}
           SENDER_EMAIL: ${{ vars.PUBLIC_SENDER_EMAIL }}
+          ANALYTICS_ENABLED: "true"
           AGENT_EMAIL_DOMAIN: ${{ vars.PUBLIC_AGENT_EMAIL_DOMAIN }}
           EMAIL_INBOUND_SECRET: ${{ secrets.PUBLIC_EMAIL_INBOUND_SECRET }}
           POSTGRES_APP_USER: ${{ vars.POSTGRES_APP_USER }}

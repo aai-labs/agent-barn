@@ -29,7 +29,11 @@ def _proxy(handler, *, connection_secret: str | None = _CONNECTION_SECRET) -> Ag
     repository.proxy_connection.return_value = SimpleNamespace(id=uuid4(), organization_id=uuid4())
     connection_secrets = Mock()
     connection_secrets.runtime_secret.return_value = connection_secret
-    repository.linked_user_ids.return_value = {5550001}
+    repository.active_links.return_value = [
+        SimpleNamespace(telegram_user_id=5550001, linked_by_membership_id=uuid4(), agent_id=uuid4())
+    ]
+    authorization = Mock()
+    authorization.membership_has_permission.return_value = True
     config = cast(
         Config,
         SimpleNamespace(
@@ -44,15 +48,16 @@ def _proxy(handler, *, connection_secret: str | None = _CONNECTION_SECRET) -> Ag
         repository=repository,
         connection_secrets=connection_secrets,
         limits=AgentBarnTelegramRateLimits(config),
+        authorization=authorization,
     )
     proxy.client = httpx.Client(transport=httpx.MockTransport(handler))
     return proxy
 
 
 def _call(proxy: AgentBarnTelegramProxy, method: str, params: dict | None = None):
-    return proxy.handle(
-        uuid4(), runtime_api_token(_CONNECTION_SECRET, _REAL_TOKEN), method, request=BotApiRequest(params=params or {})
-    )
+    caller = proxy.authenticate(uuid4(), runtime_api_token(_CONNECTION_SECRET, _REAL_TOKEN))
+    assert caller is not None
+    return proxy.handle(caller, method, request=BotApiRequest(params=params or {}))
 
 
 def test_an_unreachable_telegram_is_reported_without_the_real_token(caplog: pytest.LogCaptureFixture) -> None:
@@ -169,7 +174,8 @@ def test_a_connection_whose_agent_never_started_with_it_cannot_use_the_proxy() -
     requests: list[httpx.Request] = []
     proxy = _proxy(lambda request: requests.append(request) or httpx.Response(200), connection_secret=None)
 
-    response = _call(proxy, "sendMessage", {"chat_id": 5550001, "text": "hi"})
-
-    assert response.status_code == 401
+    assert proxy.authenticate(uuid4(), runtime_api_token(_CONNECTION_SECRET, _REAL_TOKEN)) is None
+    assert (
+        proxy.download(uuid4(), runtime_api_token(_CONNECTION_SECRET, _REAL_TOKEN), "photos/a.jpg").status_code == 401
+    )
     assert requests == []

@@ -126,13 +126,20 @@ discussion, list the checks you ran, call out migrations and breaking changes,
 and explain why any new dependency is needed. Include screenshots for visible UI
 changes.
 
-CI is path-aware. It runs API linting, migration checks, tests, and image builds
+CI runs once per pull request and is path-aware; a branch without a pull request
+is not checked until you open one (a draft is enough). It runs API linting, migration checks, tests, and image builds
 for API changes; ESLint, TypeScript, Playwright, and an image build for UI changes;
 the matching Hermes or OpenClaw base-image workflow for base-image, runtime
 builder/startup, telemetry-plugin, shared messaging, or runtime-fixture changes;
 and alert-rule tests for monitoring changes. Both
 runtime workflows smoke-test their image, and Hermes also runs its pinned-image
 plugin contract.
+
+Both base-image runtime suites also run when credential adapters, their
+capability catalogue, integration plugins, SharePoint broker/store import,
+aai-cli/gog artifact builders or shared integration test credentials change.
+These triggers keep the real Google import and SharePoint handoff/token contracts
+aligned with their inputs.
 
 Maintainers review both the implementation and its routed documentation. Address
 review comments by pushing updates to the same branch. A maintainer merges the
@@ -179,3 +186,11 @@ licenses.
 
 After your first pull request is merged, post its link in Discord
 [#contributing](https://discord.gg/A3vJF5ZKnu) to request the Contributor role.
+
+### Optional integration isolation check
+
+The **Integration Isolation (on demand)** GitHub Actions workflow is manually
+triggered and is not a required PR workflow. It runs the same disposable-cluster
+contract as `make test-integration-isolation`; see the
+[testing guide](docs/guidelines/testing.md#on-demand-integration-isolation-verification)
+for local prerequisites, runtime selection, coverage, and cleanup.

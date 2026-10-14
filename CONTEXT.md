@@ -8,6 +8,10 @@ Agent Barn manages organization-owned AI agents that use a selected runtime and 
 The tenant boundary that owns agents, templates, skills, memberships, and organization-scoped activity.
 _Avoid_: workspace, tenant account
 
+**Installation**:
+One running Agent Barn deployment, identified by the single generated id in its database, such as the hosted cloud or a customer's self-hosted cluster. Product analytics reports it as a group. See [`product-analytics.md`](docs/features/product-analytics.md).
+_Avoid_: instance, tenant, environment
+
 **Organization Creator**:
 The user who originally created an Organization, retained as immutable provenance. Creation grants an Organization Owner Membership, but later ownership changes do not change the Organization Creator.
 _Avoid_: Organization Owner, current owner
@@ -136,6 +140,10 @@ _Avoid_: snapshot, backup, volume image, checkpoint
 Opt-in long-term memory that lets an Agent recall and retain through Agent Barn's Hindsight gateway, in addition to its Runtime's own memory. Its data contract keeps memories while memory is off and removes access when the Agent is deleted; they live outside the Agent's volume. The opt-in, Memory Grants, gateway, credentials, automatic Runtime use, and read-only viewing of an Agent's own and currently permitted Organization memories, an Owner/Admin Organization viewer, and asynchronous deletion purging are implemented. See [Agent Memory](docs/features/agent-memory.md).
 _Avoid_: MEMORY.md, Runtime memory, knowledge base
 
+**Built-in memory**:
+The memory a Runtime keeps itself on the Agent's disk (Hermes `MEMORY.md` and `USER.md`, OpenClaw's memory notes). It is always on, cannot be switched off from Agent Barn, and is not shown by the memory viewer. Agent Memory adds to it and never replaces it.
+_Avoid_: Agent Memory, Runtime memory, long-term memory
+
 **Organization Memory**:
 Agent Memory marked for sharing across one Organization. One Organization Memory grant gives an Agent either Read only access for recall or Read and write access for recall and explicit shared saves.
 _Avoid_: team memory, shared bank
@@ -155,6 +163,14 @@ _Avoid_: runtime
 **Communication Connection**:
 An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have one active Communication Connection per Platform; retired Connections preserve history and may be replaced.
 _Avoid_: channel, integration, platform config
+
+**Agent Barn Telegram**:
+The Platform through which Agents use one Telegram bot owned by Agent Barn and shared by every Organization, instead of a bot the Organization brings to the `telegram` Platform. Its Connections hold no credentials. People reach an Agent on it only after Telegram Account Linking, and only in private chats.
+_Avoid_: shared Telegram, Agent Barn bot Connection
+
+**Telegram Account Linking**:
+Tying one person's Telegram account to one Agent's Agent Barn Telegram Connection, by opening a single-use link that a Member with `agent.update` issued and pressing Start. The link acts on that Member's authority and ends when they lose it. A Telegram account is linked to at most one Agent at a time; linking another ends the previous link, and that Agent keeps its own messages and files in the chat.
+_Avoid_: pairing, Telegram login
 
 **Agent Webhook**:
 An Agent-owned HTTP endpoint through which an authenticated external system submits discrete work to that Agent. It is not a Platform or Communication Connection.
@@ -296,6 +312,10 @@ _Avoid_: org secret, global credential
 An external service made available to an agent through an Agent Secret and runtime-specific configuration.
 _Avoid_: credential
 
+**Credential Isolation Policy**:
+The Agent-specific choice of whether a tool Integration keeps long-lived provider credentials outside its runtime. It is independent of credential ownership; Agents sharing a Shared Credential can choose independently. New bindings default OFF, and running changes require explicit application and restart. See [Integrations](docs/features/integrations.md#optional-credential-isolation) for routing, applied generations and recovery.
+_Avoid_: encryption toggle, Shared Credential setting
+
 **Conversation Message**:
 An inbound or outbound chat message ingested from an agent runtime and associated with a channel, direct message, session, and optional thread.
 _Avoid_: conversation
@@ -375,6 +395,8 @@ _Avoid_: webhook
 - An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections** and **Agent Webhooks**.
 - Each **Communication Connection** belongs to one **Agent**, targets one **Platform**, and is interpreted by that Platform's **Platform Plugin**.
 - A **Communication Connection** on a mailbox-addressed **Platform** holds at most one active **Agent Email Address**.
+- An **Agent** holds at most one non-retired Telegram-type **Communication Connection**, on `telegram` or **Agent Barn Telegram** but not both, because a Runtime runs one Telegram adapter. A disabled Connection still counts; it must be removed before the Agent can take the other type.
+- A Telegram account has at most one active **Telegram Account Linking** to an **Agent Barn Telegram** Connection, and each link records the Membership that issued it.
 - Each **Agent Webhook** belongs to one **Agent** and owns zero or more **Webhook Invocations**.
 - Each **Webhook Invocation** may submit one **Agent Trigger Job** per dispatch generation.
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.

@@ -4,7 +4,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -12,13 +12,14 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.communications.agentbarn_telegram_messages import file_ids
 from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
 from api.domains.communications.agentbarn_telegram_repository import (
     AgentBarnTelegramRepository,
     LinkTokenOutcome,
 )
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
-from api.domains.communications.models import AgentBarnTelegramUpdate
+from api.domains.communications.models import AgentBarnTelegramLink, AgentBarnTelegramUpdate
 from api.domains.rbac.catalog import PermissionKey
 
 logger = logging.getLogger(__name__)
@@ -29,11 +30,19 @@ _START_WITH_TOKEN = re.compile(r"^/start(?:@\w+)?\s+([A-Za-z0-9_-]{1,64})\s*$")
 _ROUTED_MESSAGE_KEYS = ("message", "edited_message")
 # An update that fails this many passes is given up rather than retried forever.
 _MAX_PROCESSING_ATTEMPTS = 5
+# A failed update, and its sender's later ones, wait this long before the next try, doubling up to the cap.
+_PROCESSING_RETRY_MAX_SECONDS = 60
 # Someone who is not linked hears how to sign up at most this often.
 _SIGN_UP_REPLY_COOLDOWN_SECONDS = 600
+# Someone pressing Start on expired or unknown links hears about it at most this often.
+_BAD_LINK_REPLY_COOLDOWN_SECONDS = 60
 # A message the bot must send waits at most this long for the shared budget.
 _ESSENTIAL_WAIT_SECONDS = 2.0
 _SEND_TIMEOUT_SECONDS = 5
+_STALE_BUTTON = "This button is no longer active."
+# Messages an incoming message may carry that are not the sender's own; each is kept
+# only while it belongs to the Agent the update goes to.
+_CARRIED_MESSAGES = {"reply_to_message": ("quote",), "pinned_message": ()}
 
 
 class UpdateKind(enum.Enum):
@@ -130,6 +139,15 @@ class AgentBarnTelegramBot:
         Courtesy messages are skipped while the budget is spent; essential ones
         (link confirmations, delivery notices) wait briefly for it.
         """
+        return self._call("sendMessage", {"chat_id": chat_id, "text": text}, essential=essential)
+
+    def answer_callback(self, callback_query_id: str, text: str) -> bool:
+        """Answer a button press so its spinner stops; a courtesy, skipped while the budget is spent."""
+        return self._call(
+            "answerCallbackQuery", {"callback_query_id": callback_query_id, "text": text}, essential=False
+        )
+
+    def _call(self, method: str, payload: dict[str, Any], *, essential: bool) -> bool:
         wait = self.limits.acquire_for_organization(None)
         if wait > 0 and essential and wait <= _ESSENTIAL_WAIT_SECONDS:
             time.sleep(wait)
@@ -139,9 +157,7 @@ class AgentBarnTelegramBot:
             return False
         token = self.config.agentbarn_telegram_bot_token.strip()
         try:
-            response = self.client.post(
-                f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": text}
-            )
+            response = self.client.post(f"https://api.telegram.org/bot{token}/{method}", json=payload)
         except httpx.HTTPError as exc:
             # httpx errors carry the URL, and with it the token.
             logger.warning("Agent Barn Telegram bot message failed (%s)", type(exc).__name__)
@@ -168,37 +184,40 @@ class AgentBarnTelegramUpdateProcessor:
     authorization: AgentAuthorization
     bot: AgentBarnTelegramBot
     # When each unlinked sender was last told how to sign up (per process).
-    _sign_up_replies: dict[int, float] = field(default_factory=dict, init=False)
-    _sign_up_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    # When each user may next get each kind of courtesy reply. Per process, like the rate limits.
+    _courtesy_due_at: dict[tuple[str, int], float] = field(default_factory=dict, init=False)
+    _courtesy_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
-    def process_pending(self, *, limit: int = 100) -> int:
-        """Process up to `limit` received updates; return how many were done with.
+    def process_pending(self, *, limit: int = 100, now: datetime | None = None) -> int:
+        """Process up to `limit` received updates; return how many were looked at.
 
-        Failed and held-back updates do not count, so a caller that keeps going
-        while a pass is full does not retry a failure straight away.
+        A failed update backs off and holds back its sender's later ones, in
+        this pass and until it is due again, so a caller that keeps going while
+        a pass is full moves on to other senders rather than retrying it.
         """
-        updates = self.repository.received_updates(limit=limit)
-        done = 0
-        # A user's later updates wait behind one of theirs that failed, keeping their order.
+        now = now or datetime.now(UTC)
+        updates = self.repository.received_updates(now=now, limit=limit)
         held_back: set[int] = set()
         for update in updates:
-            user_id = classify_update(update.payload or {}).telegram_user_id
+            user_id = update.telegram_user_id
             if user_id is not None and user_id in held_back:
                 continue
             try:
                 self._process(update)
-                done += 1
             except Exception as exc:
                 # Content stays out of the log.
                 logger.warning("Agent Barn Telegram update %s failed (%s)", update.update_id, type(exc).__name__)
                 if user_id is not None:
                     held_back.add(user_id)
-                self._record_failure(update)
-        return done
+                self._record_failure(update, now)
+        return len(updates)
 
-    def _record_failure(self, update: AgentBarnTelegramUpdate) -> None:
+    def _record_failure(self, update: AgentBarnTelegramUpdate, now: datetime) -> None:
         try:
-            attempts = self.repository.record_processing_failure(update.update_id)
+            delay = min(2 ** (update.attempt_count + 1), _PROCESSING_RETRY_MAX_SECONDS)
+            attempts = self.repository.record_processing_failure(
+                update.update_id, retry_at=now + timedelta(seconds=delay)
+            )
             if attempts >= _MAX_PROCESSING_ATTEMPTS:
                 logger.warning("Agent Barn Telegram update %s given up after %s attempts", update.update_id, attempts)
                 self.repository.settle_update(update.update_id)
@@ -218,7 +237,7 @@ class AgentBarnTelegramUpdateProcessor:
             classified.kind == UpdateKind.ROUTE
             and user_id is not None
             and chat_id is not None
-            and self._queue(update.update_id, user_id, chat_id)
+            and self._queue(update, user_id, chat_id)
         ):
             # Queued for the Agent; its content is kept until forwarded.
             return
@@ -229,13 +248,17 @@ class AgentBarnTelegramUpdateProcessor:
         result = self.links.consume_link_token(
             classified.link_token, telegram_user_id=user_id, telegram_username=classified.username
         )
-        if result.outcome == LinkTokenOutcome.EXPIRED:
-            self._reply(chat_id, "This link has expired. Go back to Agent Barn for a fresh one.")
-            return
         if result.outcome != LinkTokenOutcome.LINKED or result.link is None:
-            self._reply(
-                chat_id, "This link has already been used or isn't valid. Go back to Agent Barn for a fresh one."
-            )
+            # Anyone can send any token, so these replies are courtesies: they give
+            # way to link confirmations when the shared budget is spent.
+            if self._courtesy_due("bad_link", user_id, _BAD_LINK_REPLY_COOLDOWN_SECONDS):
+                self._reply(
+                    chat_id,
+                    "This link has expired. Go back to Agent Barn for a fresh one."
+                    if result.outcome == LinkTokenOutcome.EXPIRED
+                    else "This link has already been used or isn't valid. Go back to Agent Barn for a fresh one.",
+                    essential=False,
+                )
             return
         replaced = result.replaced_link
         names = self.repository.agent_names(
@@ -254,19 +277,16 @@ class AgentBarnTelegramUpdateProcessor:
             f"Hi {classified.first_name or 'there'}! You're linked to {agent_name}. Send a message to get started.",
         )
 
-    def _queue(self, update_id: int, user_id: int, chat_id: int) -> bool:
+    def _queue(self, update: AgentBarnTelegramUpdate, user_id: int, chat_id: int) -> bool:
         link = self.repository.find_routable_link(user_id)
         if link is not None and self.authorization.membership_has_permission(
             link.linked_by_membership_id, link.agent_id, PermissionKey.AGENT_UPDATE
         ):
-            self.repository.queue_update(
-                update_id, telegram_user_id=user_id, agent_id=link.agent_id, connection_id=link.connection_id
-            )
-            return True
+            return self._queue_own_part(update, user_id, chat_id, link)
         if link is not None:
             # The Member who linked this account lost access to the Agent.
             self.repository.end_active_link(user_id, now=datetime.now(UTC))
-        if self._sign_up_reply_due(user_id):
+        if self._courtesy_due("sign_up", user_id, _SIGN_UP_REPLY_COOLDOWN_SECONDS):
             self._reply(
                 chat_id,
                 f"Hi! To talk to an agent here, sign up at {self.config.web_app_url}/signup and connect Telegram from there.",
@@ -274,18 +294,75 @@ class AgentBarnTelegramUpdateProcessor:
             )
         return False
 
-    def _sign_up_reply_due(self, user_id: int) -> bool:
-        now = time.monotonic()
-        with self._sign_up_lock:
-            last = self._sign_up_replies.get(user_id)
-            if last is not None and now - last < _SIGN_UP_REPLY_COOLDOWN_SECONDS:
+    def _queue_own_part(
+        self, update: AgentBarnTelegramUpdate, user_id: int, chat_id: int, link: AgentBarnTelegramLink
+    ) -> bool:
+        """Queue what of the update belongs to the linked Agent; False when none of it does.
+
+        The user's chat outlives their links, so it may hold another Agent's
+        messages: a button under one, an edit of one, or a reply quoting one.
+        """
+        payload = dict(update.payload or {})
+        connection_id = link.connection_id
+
+        def owned(message: Any) -> bool:
+            return isinstance(message, dict) and self.repository.owns_messages(
+                connection_id, [(chat_id, message.get("message_id"))]
+            )
+
+        callback = payload.get("callback_query")
+        if isinstance(callback, dict):
+            if not owned(callback.get("message")):
+                if isinstance(callback.get("id"), str):
+                    self._answer_stale_button(callback["id"])
                 return False
-            self._sign_up_replies = {
-                key: value
-                for key, value in self._sign_up_replies.items()
-                if now - value < _SIGN_UP_REPLY_COOLDOWN_SECONDS
-            }
-            self._sign_up_replies[user_id] = now
+            self.repository.queue_update(
+                update.update_id,
+                telegram_user_id=user_id,
+                agent_id=link.agent_id,
+                connection_id=connection_id,
+                payload=payload,
+            )
+            return True
+
+        edited = payload.get("edited_message")
+        if isinstance(edited, dict):
+            if not owned(edited):
+                return False
+            message = edited
+        else:
+            message = dict(payload["message"])
+            for carried, alongside in _CARRIED_MESSAGES.items():
+                if carried in message and not owned(message[carried]):
+                    for dropped in (carried, *alongside):
+                        message.pop(dropped, None)
+            payload["message"] = message
+        self.repository.queue_update(
+            update.update_id,
+            telegram_user_id=user_id,
+            agent_id=link.agent_id,
+            connection_id=connection_id,
+            payload=payload,
+            messages=[(chat_id, message["message_id"])] if isinstance(message.get("message_id"), int) else [],
+            files=file_ids(message),
+        )
+        return True
+
+    def _answer_stale_button(self, callback_query_id: str) -> None:
+        try:
+            self.bot.answer_callback(callback_query_id, _STALE_BUTTON)
+        except Exception as exc:
+            logger.warning("Agent Barn Telegram button answer failed (%s)", type(exc).__name__)
+
+    def _courtesy_due(self, kind: str, user_id: int, cooldown_seconds: float) -> bool:
+        """Whether ``user_id`` may get a ``kind`` reply now; if so, the next one waits ``cooldown_seconds``."""
+        now = time.monotonic()
+        with self._courtesy_lock:
+            due_at = self._courtesy_due_at.get((kind, user_id))
+            if due_at is not None and now < due_at:
+                return False
+            self._courtesy_due_at = {key: value for key, value in self._courtesy_due_at.items() if now < value}
+            self._courtesy_due_at[(kind, user_id)] = now + cooldown_seconds
             return True
 
     def _reply(self, chat_id: int, text: str, *, essential: bool = True) -> None:

@@ -8,14 +8,15 @@ from unittest.mock import patch
 import httpx
 
 from api.domains.agents.models import (
+    ApolloContent,
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
     GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
-    SlackContent,
 )
+from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
@@ -23,7 +24,6 @@ from api.infrastructure.integration_validators.google_workspace import validate_
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
-from api.infrastructure.integration_validators.slack import validate_slack
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -54,9 +54,9 @@ _CONFLUENCE_SCOPED = ConfluenceContent(
     use_scoped_token=True,
 )
 _BB = BitbucketContent(workspace="acme", repos=["backend"], email="alice@acme.com", api_token="bb-tok")
-_SLACK = SlackContent(token="xoxb-test-token")
 _PD = PipedriveContent(api_token="pd-tok")
 _PD_WITH_DOMAIN = PipedriveContent(api_token="pd-tok", domain="aai-labs")
+_APOLLO = ApolloContent(api_token="apollo-key")
 
 # ── IntegrationValidationResult ───────────────────────────────────────────────
 
@@ -738,55 +738,6 @@ def test_confluence_identity_falls_back_to_content_email_when_absent():
     assert _CONFLUENCE.email in (result.identity or "")
 
 
-# ── Slack ─────────────────────────────────────────────────────────────────────
-
-_SLACK_MOD = "api.infrastructure.integration_validators.slack.httpx.post"
-
-
-def test_slack_valid_token_returns_identity():
-    ok_body = {"ok": True, "team": "AAI Labs", "user": "test-bot", "team_id": "T1", "user_id": "U1"}
-    with patch(_SLACK_MOD, return_value=_resp(ok_body)):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is True
-    assert result.identity == "test-bot @ AAI Labs"
-    assert result.error is None
-
-
-def test_slack_invalid_auth_returns_error():
-    with patch(_SLACK_MOD, return_value=_resp({"ok": False, "error": "invalid_auth"})):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is False
-    assert "invalid" in (result.error or "").lower()
-
-
-def test_slack_missing_scope_returns_error():
-    with patch(_SLACK_MOD, return_value=_resp({"ok": False, "error": "missing_scope"})):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is False
-    assert "missing_scope" in (result.error or "")
-
-
-def test_slack_unexpected_status_returns_error():
-    with patch(_SLACK_MOD, return_value=_resp({}, status=500)):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is False
-    assert "500" in (result.error or "")
-
-
-def test_slack_network_error_returns_error():
-    with patch(_SLACK_MOD, side_effect=_connect_error()):
-        result = validate_slack(_SLACK)
-
-    assert result.valid is False
-    assert result.error is not None
-    assert "slack" in result.error.lower()
-    assert result.identity is None
-
-
 # ── Pipedrive ─────────────────────────────────────────────────────────────────
 
 _PD_MOD = "api.infrastructure.integration_validators.pipedrive.httpx.get"
@@ -841,6 +792,66 @@ def test_pipedrive_network_error_returns_error():
     assert result.valid is False
     assert result.error is not None
     assert "pipedrive" in result.error.lower()
+
+
+# ── Apollo ────────────────────────────────────────────────────────────────────
+
+_APOLLO_MOD = "api.infrastructure.integration_validators.apollo.httpx.get"
+_APOLLO_HEALTHY = {"healthy": True, "is_logged_in": True}
+
+
+def test_apollo_valid_key_is_valid():
+    with patch(_APOLLO_MOD, return_value=_resp(_APOLLO_HEALTHY)) as mock_get:
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is True
+    assert result.missing_scopes == []
+    assert result.error is None
+    mock_get.assert_called_once()
+    assert mock_get.call_args.args == ("https://api.apollo.io/v1/auth/health",)
+    assert mock_get.call_args.kwargs["headers"] == {"x-api-key": "apollo-key"}
+
+
+def test_apollo_health_not_logged_in_is_invalid():
+    # Apollo answers its health check with 200 for any key and reports validity in the body.
+    with patch(_APOLLO_MOD, return_value=_resp({"healthy": True, "is_logged_in": False})) as mock_get:
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+    assert "invalid" in (result.error or "").lower()
+    mock_get.assert_called_once()
+
+
+def test_apollo_health_401_is_invalid():
+    unauthorized = httpx.Response(401, text="Invalid access credentials.", request=_REQUEST)
+    with patch(_APOLLO_MOD, return_value=unauthorized):
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+    assert "invalid" in (result.error or "").lower()
+
+
+def test_apollo_health_non_json_body_is_invalid():
+    with patch(_APOLLO_MOD, return_value=httpx.Response(200, text="ok", request=_REQUEST)):
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+
+
+def test_apollo_unexpected_status_returns_error():
+    with patch(_APOLLO_MOD, return_value=_resp({}, status=500)):
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+    assert "500" in (result.error or "")
+
+
+def test_apollo_network_error_returns_error():
+    with patch(_APOLLO_MOD, side_effect=_connect_error()):
+        result = validate_apollo(_APOLLO)
+
+    assert result.valid is False
+    assert "apollo" in (result.error or "").lower()
 
 
 # ── Google Workspace (gog) ────────────────────────────────────────────────────

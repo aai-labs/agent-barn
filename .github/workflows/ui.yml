@@ -1,8 +1,9 @@
 name: UI
 
 on:
-  # Reusable only -- called by deploy.yml (staging/main, push_image: true)
-  # and ci.yml (other branches/PRs, push_image: false).
+  # Reusable only -- called by deploy.yml (staging/main, push_image: true;
+  # run_checks: false when the commit already passed CI as a pull request) and
+  # ci.yml (pull requests and manual runs, push_image: false).
   workflow_call:
     inputs:
       push_image:
@@ -10,9 +11,17 @@ on:
         required: false
         type: boolean
         default: false
+      run_checks:
+        description: >-
+          Whether to run lint, tests, and the validation build. deploy.yml sets
+          this to false for commits that already passed CI as a pull request.
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   lint:
+    if: inputs.run_checks
     name: Lint
     runs-on: ubuntu-latest
     steps:
@@ -32,6 +41,7 @@ jobs:
       - run: make check-ui
 
   test:
+    if: inputs.run_checks
     name: Test
     needs: [lint]
     runs-on: ubuntu-latest
@@ -59,6 +69,7 @@ jobs:
       - run: make test-ui
 
   build:
+    if: inputs.run_checks
     name: Build
     needs: [lint, test]
     runs-on: ubuntu-latest
@@ -76,8 +87,11 @@ jobs:
 
   push:
     name: Push
-    if: inputs.push_image
-    needs: [build]
+    # Not gated on the check jobs succeeding by `needs` alone: when run_checks is
+    # false they are skipped, which would skip this job too. A failed check
+    # still blocks the push.
+    if: ${{ inputs.push_image && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [lint, test, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

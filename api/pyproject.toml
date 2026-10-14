@@ -31,6 +31,7 @@ dependencies = [
     "dramatiq[redis,watch]>=2.2.0",
     "redis>=8.1.0",
     "prometheus-fastapi-instrumentator>=8.1.0",
+    "pynacl>=1.6.2",
 ]
 
 [tool.pytest.ini_options]
@@ -54,6 +55,7 @@ line-length = 120
 [tool.ruff.per-file-target-version]
 # Deployment provisioning runs with the runner's Python, without API dependencies.
 "scripts/provision_memory.py" = "py310"
+"k8s_runtime_tests/fixtures/**" = "py312"
 "domains/agents/scripts/openclaw/**" = "py312"
 "domains/agents/scripts/hermes/**" = "py313"
 "domains/agents/scripts/communications-runtime-adapter.py" = "py312"

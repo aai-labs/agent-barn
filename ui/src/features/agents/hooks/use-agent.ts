@@ -31,7 +31,9 @@ export function useAgent(agentId: string) {
       return response.data;
     },
     enabled: !!agentId,
-    refetchInterval: (current) => (current.state.data?.updateInProgress ? UPDATE_POLL_INTERVAL_MS : false),
+    refetchInterval: (query) => (query.state.data?.updateInProgress || (query.state.data?.status === "RUNNING"
+      && query.state.data.secrets?.some((secret) => secret.isolation?.generation != null && secret.isolation.applied == null)))
+      ? UPDATE_POLL_INTERVAL_MS : false,
   });
 
   // When an update ends, the restore points, the list card and the health
@@ -56,8 +58,8 @@ export function useAgent(agentId: string) {
 }
 
 /**
- * Reads the Agent now rather than from cache. The detail query neither polls nor
- * refetches on focus, so anything sending the Agent's own state back to the server
+ * Reads the Agent now rather than from cache. The detail query polls managed updates and unverified
+ * integration generations, so anything sending the Agent's own state back to the server
  * must build that request from a current read or be rejected as stale.
  */
 export function useFetchAgent() {

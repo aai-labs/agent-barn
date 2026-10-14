@@ -16,6 +16,24 @@ as in the README setup; native transport dependencies belong to the runtime imag
 
 ## Database migrations
 
+Migration `b91a73e42c60` removes the unused global `aai-zoho-mail` built-in Skill
+left behind by Zoho provider retirement. It runs automatically on upgrade and
+does nothing on installations without that lineage (including new installs).
+It preserves custom Skills and any built-in lineage still referenced by Agent
+pins, Template/Override requirements, or fork provenance. The deleted retired
+content is not recreated on downgrade.
+
+The following migration, `c42e91b7a603`, removes only `zoho_mail`, `zoho_calendar`,
+and `slack` from `required_providers` on all retained Skill lineages, published
+versions, and drafts in every scope. This is a repair to historical provider
+metadata after tool-provider retirement: content, assignments, version numbers,
+fork provenance, timestamps, and other provider requirements remain unchanged.
+It does not enable retired tool integrations or affect runtime-owned Slack
+Communication Connections. Already-clean installations require no changes;
+downgrade does not reconstruct removed requirements. These migrations complement
+the credential cleanup in `a85f48650d6a`; removing a provider from code alone
+does not retire database Skill metadata.
+
 ```bash
 make migrate          # upgrade the configured database to head
 make makemigrations   # autogenerate a revision after prompting for its message
@@ -415,6 +433,28 @@ talks to the provider; `EmailService` above it is transport-agnostic.
   starve real invites.
 - Message size is capped at 5 MiB including attachments. The inline barn logo is sent as a base64 attachment with `disposition: "inline"` and a snake_case `content_id` matching the `cid:` reference in the MJML templates — `contentId` is the Workers binding's spelling and is not accepted by the REST API.
 
+## Product analytics
+
+Business events go to the Agent Barn PostHog project (EU) through the `product_analytics.posthog` Event Handler. What is sent is defined in [`../features/product-analytics.md`](../features/product-analytics.md).
+
+- **`ANALYTICS_ENABLED`** flows through `helmfile.yaml.gotmpl` into the API chart's Secret. Every API process reads that Secret, the worker included.
+  - The chart, the Helmfile and `Config` default to on. Set `ANALYTICS_ENABLED=false` to opt out. A blank value counts as off in `Config`; Helmfile treats a blank as unset and uses its on default. The local development `.env.spec` ships true, so local stacks report as `installation_environment=local`; tests explicitly set false.
+- **Where it is on, and where it is off:**
+  - `deploy.yml` sets it to `true` on both `main` and `staging`. Staging events are labelled with the staging `WEB_APP_URL` host as `installation_name` (`installation_environment=remote`); exclude that name to see production only.
+  - `deploy-public.yml` sets it to `true`.
+  - `.env.deploy.spec` ships `true`, as do customer release bundles.
+  - Plain Helm and Helmfile installs also report by default.
+- **User privacy.** Analytics never sends user email or full name. The former user-details setting has been removed; stale environment entries have no effect in updated processes. Previously sent personal details require separate PostHog cleanup.
+- **Installation label.** Events use the `WEB_APP_URL` hostname for remote installs, or `local-<first 8 UUID characters>` for localhost, loopback, unspecified IPs, or a missing host. The `installation_environment` property labels these as `remote` or `local`; it does not control telemetry. A developer stack with a custom domain is labelled remote. There is no name override, and URL changes preserve the Installation UUID. See [`../features/product-analytics.md`](../features/product-analytics.md).
+- **`ANALYTICS_POSTHOG_HOST`** and **`ANALYTICS_POSTHOG_PROJECT_TOKEN`** default to the EU host and the Agent Barn project token committed in `api/core/config.py`. Override them only to point an install at a test receiver. The project token is write-only and public by design; never commit a personal API key (`phx_`).
+- **Message counts CronJob.**
+  - `analytics-message-counts` runs at minute 15 each hour (`analyticsMessageCounts.schedule`). It sends the previous closed hour's counts.
+  - The chart renders it only when `analyticsEnabled` is `"true"`.
+  - Run the same pass by hand with `make report-message-counts`.
+  - It reads `ANALYTICS_*` from the API Secret only. A `kubectl set env` on the Deployments does not reach it, so override the CronJob itself when pointing a test stack at a recording endpoint.
+- **Outbox volume.** Every successful login writes one Outbox Message and one Event Delivery, and outbox rows are never pruned. Expect `user.logged_in` to dominate the Platform Event Delivery Monitor.
+- **Testing.** Local and staging stacks report to the real project deliberately; filter `installation_environment = remote` and exclude the staging `installation_name` to see production only. Events cannot be removed from the project, so for end-to-end checks of analytics itself set `ANALYTICS_POSTHOG_HOST` to a local recording endpoint.
+
 ## Per-Agent email addresses
 
 Agents reachable by email get their own address on a dedicated subdomain, receive mail through a Cloudflare Email Worker, and reply through the same Email Sending path as transactional mail. Rationale for the Worker: [`../adr/2026-08-31-cloudflare-worker-for-inbound-email.md`](../adr/2026-08-31-cloudflare-worker-for-inbound-email.md).
@@ -446,6 +486,16 @@ Agents reachable by email get their own address on a dedicated subdomain, receiv
 - **Local k3d testing**: a Worker runs on Cloudflare's edge and cannot reach a local cluster. Either expose the product API with a tunnel (`cloudflared tunnel`) and point `INBOUND_URL` at it, or skip the Cloudflare hop entirely and exercise the whole Agent Barn path by posting the Worker's JSON straight at `/communications/v1/webhooks/email/inbound` with the configured bearer token.
 - **Agent mail draws on the same account-wide sending quota** as invites, password resets, and lifecycle notifications, across both environments. A chatty Agent can starve real user invites; see the quota note above.
 - Relevant limits: 200 routing rules per domain, 200 verified destination addresses per account, 30 domains per zone, 25 MiB inbound message size.
+
+## Optional integration isolation rollout
+
+The [integration contract](../features/integrations.md#optional-credential-isolation) owns mode defaults, source binding and recovery. Prepare new immutable base-image versions for both runtimes when releasing this change; rebuild and run their smoke/runtime suites before enabling isolated SharePoint. Publish no replacement under an existing `VERSION` tag. Deploy the expanded schema and matching API, gateway and UI together. Both API and gateway need the same encryption key and operator Firecrawl configuration. Application rollout preserves existing Agent pods/modes; explicitly restart selected Agents to apply the new generation and verify their Keys metadata.
+
+Isolated Apollo requires both runtime images to be rebuilt with `aai-apollo-routing.patch`. Publish new immutable image versions before rollout; an older image can send `apollo health` outside the gateway. Migration `0d612dc60e9a` preserves direct routing for pre-existing Apollo credentials and leaves existing policy choices unchanged.
+
+For a failed application, open the integration setup and Apply & Restart to retry, or select Restore previous mode and then Apply & Restart. A SharePoint reconnect-required message means the broker could not prove continuity; reconnect the sign-in before retrying. Preserve the aai-cli PVC store/key/marker until the handoff succeeds. Credential setup failures now stop startup; repair a corrupted store/key pair rather than booting with stale credentials. The gateway cache needs no separate service or replica affinity. Apply & Restart returns after provisioning; a slow image pull remains unverified and is not torn down on a readiness timeout. If an old pod stays Terminating past the termination budget, inspect its node and volume state before retrying; an operator must establish that the old process cannot run before forcing deletion. Preserve its gateway authorization until termination is established.
+
+Before rolling the application/schema back, apply direct SharePoint through the current API to hand back the latest service-side grant, then stop affected Agents. Do not downgrade while isolated SharePoint generations are live. The generation migration's downgrade requires `AGENT_TOKEN_ENCRYPTION_KEY` when SharePoint rows exist; it removes broker/cache metadata from encrypted payloads while preserving the latest refresh token so older strict schemas can decrypt them. It keeps the latest service-side refresh grant. Downgrade removes the revision marker metadata, so the older setup imports that DB grant again; it cannot capture any subsequent direct-PVC rotation. Keep the rollback interval short and reconnect if Microsoft refuses that grant. Default-source policy is discarded on schema downgrade because older applications have no such binding; restart Agents under the older application's routing after rollback. Keep a database backup and the PVC together; a mode change cannot revoke credentials already received by an Agent.
 
 ## Native runtime gateway rollout
 
@@ -498,6 +548,8 @@ See
 for why staging is a namespace.
 
 - **Trigger:** `deploy.yml` runs on pushes to `staging` and `main`, and via `workflow_dispatch`; it resolves `NAMESPACE`/`ENVIRONMENT`/image-tag suffix/hosts/secrets from `github.ref_name`. Dispatching from anything other than `staging` or `main` fails the workflow.
+- **Required check:** `ci.yml` ends in a `ci-gate` job (see [`testing.md`](testing.md#when-ci-runs)). The `Protect main and staging` ruleset SHOULD require it, so a pull request cannot merge on a red or cancelled component.
+- **Checks:** `deploy.yml` skips lint and tests (`run_checks=false`) only when the pushed commit is the merge result of a pull request into the same branch whose head passed `ci-gate`, found through the commit's associated pull requests and that head's check runs. A direct push, a manual `workflow_dispatch`, a pull request without a passing `ci-gate` (including ones merged before the check existed), or any lookup failure runs the full checks, so an untested commit never ships. The single-Alembic-head check (`make check-migrations`) runs in either case, because two pull requests that each add a migration can pass CI separately and still leave two heads once merged in sequence. A failure in that preflight or in change detection stops the deploy before any image is pushed or released.
 - **Images:** all four images (api, ui, hermes-base, openclaw-base) get a `-staging` tag suffix on staging; staging never pushes `:latest`, since each environment builds its own base images and their installed contents can diverge.
 - **Change detection:** `deploy.yml` compares the current commit with the latest successful deploy run for the same branch. A failed deploy does not advance that baseline, so a later fix rebuilds every component changed since the last successful deploy. If no valid baseline can be found, or the workflow is dispatched manually, all four images are built.
 - **Secrets/vars:** every per-env value uses a `STAGING_`-prefixed GitHub secret or variable, selected by a `github.ref_name == 'staging' && secrets.STAGING_X || secrets.X` ternary in `deploy.yml`. Shared references (registry, `OPENROUTER_API_KEY`, Google OAuth client, DB user/db names, and the Cloudflare email account/token) are reused as-is. Email follows the standard convention: only `STAGING_SENDER_EMAIL` differs, pointing staging at its own `mail-staging.` sending subdomain.
@@ -594,9 +646,12 @@ independent versions:
   image contents. Bump the matching file when its Dockerfile, upstream runtime
   pin, resolved `aai-cli` revision or other build dependency, or a file copied
   into the image changes.
-  The Dockerfiles currently resolve `aai-cli` from its public default branch,
-  so rebuilding after that branch moves is a content change and requires a new
-  runtime version. Workflow, smoke-test, and runtime-plugin-only changes do not
+  Both Dockerfiles pin the same `AAI_CLI_COMMIT` and apply matching
+  `aai-token-url.patch` and `aai-apollo-routing.patch` files. The former preserves
+  delegated Excel support for brokered Graph tokens and prevents unrelated
+  environment-token fallback; the latter keeps Apollo health requests on the
+  configured provider or gateway route.
+  Changing either the commit or patch requires a new runtime version. Workflow, smoke-test, and runtime-plugin-only changes do not
   otherwise alter the image and need no version bump.
 
 Rules:
@@ -604,6 +659,9 @@ Rules:
 - API and UI image tags are explicit deployment inputs (`API_IMAGE_TAG`, `UI_IMAGE_TAG`), not chart metadata.
 - Bump chart versions late, ideally immediately before the PR, to reduce merge conflicts, when chart packaging actually changed.
 - `../../.github/workflows/deploy.yml` builds API and UI images under moving environment tags and passes those tags into Helm via `API_IMAGE_TAG` and `UI_IMAGE_TAG`: `latest` on `main`, `latest-staging` on `staging`. Branch deploys no longer depend on chart `appVersion` bumps.
+- **The API image is deployed by digest.** `api.yml` pushes it without a tag; `deploy.yml` passes `API_IMAGE_TAG=<moving tag>@sha256:<digest>` (a valid reference whose tag is ignored), runs the migration hook and rollout against that digest, and only then re-tags `latest`/`latest-staging` to it in `promote-api`. A failed migration therefore leaves the moving tag, and every pod restart, CronJob and restore-point job that resolves it, on the previous image. The re-tag copies a manifest and stores no layers; no per-deploy tag is created. When the API was not rebuilt, `resolve-env` pins the moving tag's current digest so the rendered spec matches the running one. If that lookup fails the plain tag is used, which rolls the API but never changes its image silently. The UI and the Hermes/OpenClaw base images keep their moving tags: the UI has no schema coupling, and the base images carry `VERSION` tags consumed by API-created pods. Rationale: [`../adr/2026-10-13-deploy-api-image-by-digest.md`](../adr/2026-10-13-deploy-api-image-by-digest.md).
+- `promote-api` runs after a successful deploy when the API push produced a new digest, even when optional upstream jobs were skipped. It skips when no new API image was pushed, deployment did not succeed, or the run was cancelled.
+- A run that fails after `deploy` but before `promote-api` is not a successful deploy, so it stays out of the change-detection baseline and the next run rebuilds the API. Re-run the failed run, or dispatch `deploy.yml`, to move the tag.
 - Public hosted deploys (`../../.github/workflows/deploy-public.yml`) pin API/UI to the git tag (`vX.Y.Z`) on `registry.agentbarn.dev`. They never move k3s `latest` tags.
 - Runtime `VERSION` tags MUST NOT be reused for different image contents:
   local loading skips a tag already present in k3d, and release workflows

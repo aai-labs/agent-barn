@@ -23,8 +23,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      checks: read
       contents: read
+      pull-requests: read
     outputs:
+      run_checks: ${{ steps.changes.outputs.run_checks }}
       api: ${{ steps.changes.outputs.api }}
       ui: ${{ steps.changes.outputs.ui }}
       hermes: ${{ steps.changes.outputs.hermes }}
@@ -43,6 +46,7 @@ jobs:
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             {
+              echo "run_checks=true"
               echo "api=true"
               echo "ui=true"
               echo "hermes=true"
@@ -53,6 +57,32 @@ jobs:
           fi
 
           api=false; ui=false; hermes=false; openclaw=false; worker=false
+
+          # Lint and tests already ran on the pull request that produced this
+          # commit, so repeating them here only delays the deploy. Skip them
+          # when -- and only when -- the pushed commit is the merge result of a
+          # PR into this branch whose head passed the `ci-gate` check. A direct
+          # push, a lookup failure, or a PR without a passing gate keeps the
+          # full checks, so nothing reaches the cluster untested.
+          # The commit can be listed under several PRs (an open staging->main PR
+          # shares staging's tip), hence the merged/base/merge-commit filter.
+          run_checks=true
+          pr_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --jq "[.[] | select(.merged_at != null and .base.ref == \"${GITHUB_REF_NAME}\" and .merge_commit_sha == \"${GITHUB_SHA}\")][0].head.sha // empty" \
+            2>/dev/null || true)"
+          if [ -n "$pr_head_sha" ]; then
+            gate_passed="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${pr_head_sha}/check-runs?check_name=ci-gate" \
+              --jq '[.check_runs[] | select(.conclusion == "success")] | length' \
+              2>/dev/null || echo 0)"
+            if [ "${gate_passed:-0}" -gt 0 ]; then
+              run_checks=false
+              echo "Commit is the merge of a PR whose head ${pr_head_sha} passed ci-gate; skipping lint and tests."
+            else
+              echo "::notice::Merged PR head ${pr_head_sha} has no passing ci-gate check; running full checks."
+            fi
+          else
+            echo "::notice::Commit is not the merge result of a PR into ${GITHUB_REF_NAME}; running full checks."
+          fi
 
           # A failed deploy must not become the baseline for the next run. Find
           # the last successful deploy on this branch and compare the whole
@@ -92,6 +122,7 @@ jobs:
           fi
 
           {
+            echo "run_checks=$run_checks"
             echo "api=$api"
             echo "ui=$ui"
             echo "hermes=$hermes"
@@ -100,49 +131,82 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   # ═══════════════════════════════════════════════════════════════
-  # Phase 2: Lint, test, build + push each changed component (parallel)
+  # Phase 2: Build + push each changed component (parallel)
   # ═══════════════════════════════════════════════════════════════
 
-  push-api:
+  # Lint and tests are skipped here (run_checks=false) when the commit already
+  # passed CI as a pull request. Two PRs that each add a migration can both pass
+  # CI and still leave two Alembic heads once merged one after the other, which
+  # would only surface as a failed migration hook after images were pushed. So
+  # the single-head check always runs; the checked jobs already include it when
+  # run_checks is true.
+  preflight:
     needs: [detect-changes]
-    if: ${{ needs.detect-changes.outputs.api == 'true' }}
+    if: ${{ needs.detect-changes.outputs.api == 'true' && needs.detect-changes.outputs.run_checks != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - name: Install dependencies
+        working-directory: api
+        run: uv sync --frozen
+      - run: make check-migrations
+
+  # The push jobs name `preflight` explicitly in their `if` because it is
+  # skipped whenever the full checks run, and a skipped need would otherwise
+  # skip them too.
+  push-api:
+    needs: [detect-changes, preflight]
+    if: ${{ !cancelled() && needs.preflight.result != 'failure' && needs.detect-changes.outputs.api == 'true' }}
     uses: ./.github/workflows/api.yml
     secrets: inherit
     with:
       push_image: true
+      run_checks: ${{ needs.detect-changes.outputs.run_checks == 'true' }}
 
   push-ui:
-    needs: [detect-changes]
-    if: ${{ needs.detect-changes.outputs.ui == 'true' }}
+    needs: [detect-changes, preflight]
+    if: ${{ !cancelled() && needs.preflight.result != 'failure' && needs.detect-changes.outputs.ui == 'true' }}
     uses: ./.github/workflows/ui.yml
     secrets: inherit
     with:
       push_image: true
+      run_checks: ${{ needs.detect-changes.outputs.run_checks == 'true' }}
 
   push-hermes:
-    needs: [detect-changes]
-    if: ${{ needs.detect-changes.outputs.hermes == 'true' }}
+    needs: [detect-changes, preflight]
+    if: ${{ !cancelled() && needs.preflight.result != 'failure' && needs.detect-changes.outputs.hermes == 'true' }}
     uses: ./.github/workflows/hermes-base.yml
     secrets: inherit
     with:
       push_image: true
+      run_checks: ${{ needs.detect-changes.outputs.run_checks == 'true' }}
 
   push-openclaw:
-    needs: [detect-changes]
-    if: ${{ needs.detect-changes.outputs.openclaw == 'true' }}
+    needs: [detect-changes, preflight]
+    if: ${{ !cancelled() && needs.preflight.result != 'failure' && needs.detect-changes.outputs.openclaw == 'true' }}
     uses: ./.github/workflows/openclaw-base.yml
     secrets: inherit
     with:
       push_image: true
+      run_checks: ${{ needs.detect-changes.outputs.run_checks == 'true' }}
 
   # ═══════════════════════════════════════════════════════════════
   # Phase 3: Resolve environment config
   # ═══════════════════════════════════════════════════════════════
 
   resolve-env:
-    needs: [push-api, push-ui, push-hermes, push-openclaw]
+    needs: [detect-changes, preflight, push-api, push-ui, push-hermes, push-openclaw]
+    # detect-changes and preflight are named so that a failure in either stops
+    # the deploy: their dependents are then skipped, and "skipped" alone is
+    # treated as fine below.
     if: |
       always() && !cancelled() &&
+      needs.detect-changes.result == 'success' &&
+      (needs.preflight.result == 'success' || needs.preflight.result == 'skipped') &&
       (needs.push-api.result == 'success' || needs.push-api.result == 'skipped') &&
       (needs.push-ui.result == 'success' || needs.push-ui.result == 'skipped') &&
       (needs.push-hermes.result == 'success' || needs.push-hermes.result == 'skipped') &&
@@ -156,6 +220,7 @@ jobs:
       ui_host: ${{ steps.resolve.outputs.ui_host }}
       web_app_url: ${{ steps.resolve.outputs.web_app_url }}
       api_image_tag: ${{ steps.image-versions.outputs.api_image_tag }}
+      api_moving_tag: ${{ steps.resolve.outputs.service_image_tag }}
       ui_image_tag: ${{ steps.image-versions.outputs.ui_image_tag }}
       openclaw_image_tag: ${{ steps.image-versions.outputs.openclaw_image_tag }}
       hermes_image_tag: ${{ steps.image-versions.outputs.hermes_image_tag }}
@@ -194,14 +259,43 @@ jobs:
               exit 1
               ;;
           esac
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ vars.REGISTRY_URL }}
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      # The API image is deployed by digest: `<tag>@sha256:...` is a valid
+      # reference whose tag is ignored, so the chart needs no change. A rebuilt
+      # image uses the digest push-api just produced. When the API was not
+      # rebuilt, the tag's current digest is pinned instead, so the rendered
+      # spec equals the running one and unrelated deploys do not roll the API.
+      # If that lookup fails the plain tag is used: a rollout, never a silent
+      # change of image.
       - name: Read image versions
         id: image-versions
         env:
           IMAGE_SUFFIX: ${{ steps.resolve.outputs.image_suffix }}
           SERVICE_IMAGE_TAG: ${{ steps.resolve.outputs.service_image_tag }}
+          API_IMAGE_DIGEST: ${{ needs.push-api.outputs.image_digest }}
+          API_IMAGE_REPOSITORY: ${{ vars.REGISTRY_URL }}/agentbarn-api
         run: |
+          digest="${API_IMAGE_DIGEST}"
+          if [ -z "$digest" ]; then
+            digest="$(docker buildx imagetools inspect \
+              "${API_IMAGE_REPOSITORY}:${SERVICE_IMAGE_TAG}" \
+              --format '{{.Manifest.Digest}}' 2>/dev/null || true)"
+          fi
+          case "$digest" in
+            sha256:*) api_image_tag="${SERVICE_IMAGE_TAG}@${digest}" ;;
+            *)
+              echo "::warning::Could not resolve an API image digest; deploying the plain tag ${SERVICE_IMAGE_TAG}."
+              api_image_tag="${SERVICE_IMAGE_TAG}"
+              ;;
+          esac
           {
-            echo "api_image_tag=${SERVICE_IMAGE_TAG}"
+            echo "api_image_tag=${api_image_tag}"
             echo "ui_image_tag=${SERVICE_IMAGE_TAG}"
             echo "openclaw_image_tag=$(cat openclaw-base/VERSION)${IMAGE_SUFFIX}"
             echo "hermes_image_tag=$(cat hermes-base/VERSION)${IMAGE_SUFFIX}"
@@ -327,6 +421,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           SENDER_EMAIL: ${{ github.ref_name == 'staging' && vars.STAGING_SENDER_EMAIL || vars.SENDER_EMAIL }}
+          ANALYTICS_ENABLED: "true"
           AGENT_EMAIL_DOMAIN: ${{ github.ref_name == 'staging' && vars.STAGING_AGENT_EMAIL_DOMAIN || vars.AGENT_EMAIL_DOMAIN }}
           EMAIL_INBOUND_SECRET: ${{ github.ref_name == 'staging' && secrets.STAGING_EMAIL_INBOUND_SECRET || secrets.EMAIL_INBOUND_SECRET }}
           API_HOST: ${{ needs.resolve-env.outputs.api_host }}
@@ -358,6 +453,41 @@ jobs:
           set +a
           # Hindsight already synced: do not rotate its key again in this run.
           helmfile -f helmfile.yaml.gotmpl -l name!=hindsight sync --wait
+
+  # ═══════════════════════════════════════════════════════════════
+  # Phase 4b: Move the API image tag
+  # ═══════════════════════════════════════════════════════════════
+
+  # The cluster already runs the digest. This re-tags `latest`/`latest-staging`
+  # to it, a manifest-only copy that stores no new layers. It runs only after
+  # `deploy` succeeds, so a failed migration leaves the tag -- and every pod
+  # restart, CronJob and restore-point job that resolves it -- on the previous
+  # image. A failure here fails the run, which keeps it out of the change
+  # baseline, so the next deploy rebuilds the API rather than reverting it.
+  promote-api:
+    needs: [push-api, resolve-env, deploy]
+    # Override implicit success(): optional upstream jobs may be skipped even
+    # when the API push and deployment succeed.
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && needs.push-api.outputs.image_digest != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ vars.REGISTRY_URL }}
+          username: ${{ vars.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Move the API image tag to the deployed digest
+        env:
+          REPOSITORY: ${{ vars.REGISTRY_URL }}/agentbarn-api
+          TAG: ${{ needs.resolve-env.outputs.api_moving_tag }}
+          DIGEST: ${{ needs.push-api.outputs.image_digest }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${REPOSITORY}:${TAG}" \
+            "${REPOSITORY}@${DIGEST}"
+          docker buildx imagetools inspect "${REPOSITORY}:${TAG}" --format '{{.Manifest.Digest}}'
 
   # ═══════════════════════════════════════════════════════════════
   # Phase 5: Publish the Cloudflare Email Worker

@@ -13,9 +13,12 @@ from api.domains.activity.models import (
     ActivityFilter,
     ActivityTrigger,
 )
+from api.domains.agents.models import Agent
+from api.domains.agents.repository import agent_scope_predicates
 from api.domains.conversations.models import AgentChatMessage, MessageDirection
-from api.domains.costs.models import CostRecord
+from api.domains.costs.models import COST_RECORD_STATUS_SUCCESS, CostRecord
 from api.domains.platform_admin.models import StatsWindow
+from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
@@ -76,6 +79,41 @@ class ActivityRepository:
     """
 
     delegate: PostgresRepositoryDelegate
+
+    def latest_call_times_for_agents(
+        self,
+        agent_ids: list[UUID],
+        authorization_scope: AuthorizationScope,
+    ) -> dict[UUID, datetime]:
+        """Latest successful Agent model call per visible Agent, for the team cards.
+
+        Memory calls are excluded: they run after a conversation, so counting them
+        would read an Agent's own bookkeeping as the Agent working.
+        """
+        if not agent_ids:
+            return {}
+        # One index read per Agent on (agent_id, occurred_at) instead of
+        # aggregating the Agent's whole call history.
+        latest_call = (
+            select(CostRecord.occurred_at)
+            .where(
+                col(CostRecord.agent_id) == col(Agent.id),
+                col(CostRecord.is_memory).is_(False),
+                col(CostRecord.status) == COST_RECORD_STATUS_SUCCESS,
+            )
+            .order_by(col(CostRecord.occurred_at).desc())
+            .limit(1)
+            .correlate(Agent)
+            .scalar_subquery()
+        )
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(Agent.id, latest_call).where(
+                    col(Agent.id).in_(agent_ids),
+                    *agent_scope_predicates(authorization_scope),
+                )
+            ).all()
+        return {agent_id: occurred_at for agent_id, occurred_at in rows if occurred_at is not None}
 
     # --- Shared shape ------------------------------------------------------
 

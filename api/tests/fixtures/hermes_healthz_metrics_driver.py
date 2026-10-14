@@ -39,7 +39,7 @@ try:
     deadline = time.monotonic() + 15
     while True:
         try:
-            urllib.request.urlopen(f"{base}/ready", timeout=1)
+            urllib.request.urlopen(f"{base}/metrics", timeout=1)
             break
         # OSError covers URLError and ConnectionError. A multi-type `except` is spelled
         # without parentheses on Python 3.14 (which ruff would write here), and this
