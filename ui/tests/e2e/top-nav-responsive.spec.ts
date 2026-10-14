@@ -7,10 +7,9 @@ import { DashboardPage } from "../pages/dashboard-page.po";
  * The top nav is a single flex row whose children default to `min-width: auto`,
  * so without explicit shrink rules it forces the page wider than the viewport
  * instead of adapting. Below `lg` the tabs move into a drawer; at `lg` and up
- * they stay inline with compact spacing until `xl`. The Platform view has nine tabs,
- * including Settings and Resources, which do not fit at either spacing boundary
- * (73px short at 1024px, 17px short at 1280px), so it keeps them in the drawer until
- * 1360px.
+ * they stay inline with compact spacing until `xl`. The Platform view has ten tabs,
+ * including Settings and Resources, which do not fit at either spacing boundary, nor
+ * reliably at 1360px, so it keeps them in the drawer until 1440px.
  * These specs pin the outcomes — the page never scrolls sideways and every tab
  * stays reachable — not the utilities behind them.
  */
@@ -153,7 +152,7 @@ test.describe("Top nav responsiveness", () => {
   });
 
   test.describe("at the narrowest inline width of the Platform view", () => {
-    test.use({ viewport: { width: 1360, height: 900 } });
+    test.use({ viewport: { width: 1440, height: 900 } });
 
     test("fits every platform tab, Settings and Resources included, without an internal scroll", async ({
       page,
@@ -172,8 +171,9 @@ test.describe("Top nav responsiveness", () => {
     });
   });
 
-  // Both inline spacing boundaries: where compact spacing starts and where the roomier one does.
-  for (const width of [1024, 1280]) {
+  // Both inline spacing boundaries (where compact spacing starts and where the roomier one
+  // does), and the width just below where the Platform tabs go inline.
+  for (const width of [1024, 1280, 1360]) {
     test.describe(`at the inline spacing boundary (${width}px)`, () => {
       test.use({ viewport: { width, height: 900 } });
 

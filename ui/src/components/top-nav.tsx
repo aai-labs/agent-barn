@@ -70,13 +70,12 @@ export function TopNav({ onHire }: TopNavProps) {
         ...(billing?.available ? [{ href: `${orgBase}/billing`, label: "Billing" }] : []),
         { href: `${orgBase}/settings`, label: "Settings" },
       ];
-  // Platform view has nine tabs, and they do not fit inline until about 1300px: with the
-  // compact spacing they are 73px short at 1024px, and when the roomier spacing starts at
-  // 1280px they are 17px short, so no `lg` or `xl` breakpoint works. It keeps them in the
-  // drawer until 1360px, which leaves room to spare. The class names are written out whole
-  // so Tailwind can find them.
-  const drawerTrigger = isPlatformView ? "min-[1360px]:hidden" : "lg:hidden";
-  const inlineTabs = isPlatformView ? "min-[1360px]:flex" : "lg:flex";
+  // Platform view has ten tabs, about 900px of them, so no `lg` or `xl` breakpoint works.
+  // It keeps them in the drawer until 1440px, which leaves about 100px to spare: at 1360px
+  // the slack was under 30px and the tabs were cut off where fonts render wider. The class
+  // names are written out whole so Tailwind can find them.
+  const drawerTrigger = isPlatformView ? "min-[1440px]:hidden" : "lg:hidden";
+  const inlineTabs = isPlatformView ? "min-[1440px]:flex" : "lg:flex";
   const [menuOpen, setMenuOpen] = useState(false);
   const routeKey = pathname ?? "";
   const [navOpenedOn, setNavOpenedOn] = useState<string | null>(null);
