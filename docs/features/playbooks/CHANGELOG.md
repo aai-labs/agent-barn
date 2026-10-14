@@ -32,6 +32,11 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 
 ## Changes
 
+### 2026-10-14 — conventions dialog for many Templates
+
+- Found: with prod's 57 Template lineages (about 35 auto-named per-Agent ones), the single-screen dialog had two small nested scroll areas, cut-off one-line rules, and no way to find the Templates that matter.
+- Changed: the dialog has two steps, rules then Templates; rules show in full; the Template step lists Templates in use first and only them by default, with search, Select all shown, Clear, a selected count, versions, and badges.
+
 ### 2026-10-14 — clearer outputs in the UI
 
 - Changed: a finished run shows its two outputs as labelled cards, the Role playbook (for Agents in the same role) and Organization conventions (for every Agent), each with its own review action; the status reads Ready to review; the create form explains both outputs; the Skill page banner says it is the role playbook and links to the same run's conventions.

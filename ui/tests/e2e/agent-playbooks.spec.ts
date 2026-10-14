@@ -206,8 +206,9 @@ test("proposed organization conventions are reviewed and added to a Template's A
   await expect(dialog).toContainText("Seen in 4 conversations");
   await dialog.getByRole("checkbox", { name: "Include convention 3" }).click();
   await dialog.getByRole("textbox", { name: "Convention 2" }).fill("Ask for approval before changing records.");
-  await dialog.getByRole("checkbox", { name: "My Custom" }).click();
-  await dialog.getByRole("button", { name: "Add 2 to 1 Template" }).click();
+  await dialog.getByRole("button", { name: "Next: choose Templates (2 rules)" }).click();
+  await dialog.getByRole("checkbox", { name: "My Custom v2" }).click();
+  await dialog.getByRole("button", { name: "Add 2 rules to 1 Template" }).click();
 
   expect((await posted).postDataJSON()).toEqual({
     rules: ["Use Vilnius time for dates and deadlines.", "Ask for approval before changing records."],
@@ -227,4 +228,80 @@ test("a run that proposed no conventions offers no review", async ({ page }) => 
   await expect(playbooks.runs().first()).toContainText("Ready to review");
   await expect(playbooks.runs().first()).toContainText("None found in these conversations.");
   await expect(playbooks.runs().first().getByRole("button", { name: /Review conventions/ })).toHaveCount(0);
+});
+
+function manyTemplates() {
+  const lineage = (key: string, name: string, version: number, inUse: boolean) => ({
+    template_key: key,
+    template_name: name,
+    latest_published_version: version,
+    has_draft: false,
+    template_source: "custom",
+    is_fork: false,
+    platform_update_available: false,
+    in_use: inUse,
+  });
+  return [
+    lineage("tpl-code", "Code Reviewer V2", 13, true),
+    lineage("tpl-sales", "Pipedrive Sales Analyst", 17, true),
+    lineage("tpl-metrics-1", "Sales Metrics Tracker", 1, true),
+    lineage("tpl-metrics-2", "Sales Metrics Tracker", 2, false),
+    ...Array.from({ length: 30 }, (_, i) => lineage(`tpl-old-${i}`, `tommy-019e49${String(i).padStart(2, "0")}`, 1, false)),
+  ];
+}
+
+async function openTemplateStep(page: Page) {
+  const run = mockSucceededRun({
+    convention_count: 1,
+    conventions: [{ rule: "Use Vilnius time for dates and deadlines.", conversations: 4 }],
+  });
+  const { playbooks } = await open(page, { runs: [run] });
+  await new DataSupport(page).orgTemplates.interceptGetLineages({ body: manyTemplates() });
+  await playbooks.runs().first().getByRole("button", { name: "Review conventions" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "Next: choose Templates (1 rule)" }).click();
+  return dialog;
+}
+
+test("the Template step shows Templates Agents use first and can show all of them", async ({ page }) => {
+  const dialog = await openTemplateStep(page);
+  const templates = dialog.getByRole("list", { name: "Templates" });
+
+  await expect(templates.getByRole("checkbox")).toHaveCount(3);
+  await expect(templates.getByRole("listitem").first()).toContainText("Code Reviewer V2");
+  await expect(templates).toContainText("In use");
+
+  await dialog.getByRole("checkbox", { name: "Only Templates Agents use" }).click();
+  await expect(templates.getByRole("checkbox")).toHaveCount(34);
+  await expect(dialog.getByRole("checkbox", { name: "Sales Metrics Tracker v1" })).toBeVisible();
+  await expect(dialog.getByRole("checkbox", { name: "Sales Metrics Tracker v2" })).toBeVisible();
+});
+
+test("the Template step searches, selects all shown, and keeps hidden choices", async ({ page }) => {
+  const dialog = await openTemplateStep(page);
+
+  await dialog.getByRole("searchbox", { name: "Search Templates" }).fill("sales");
+  await expect(dialog.getByRole("list", { name: "Templates" }).getByRole("checkbox")).toHaveCount(2);
+  await dialog.getByRole("button", { name: "Select all shown" }).click();
+  await expect(dialog.getByTestId("selected-template-count")).toHaveText("2 Templates selected");
+
+  await dialog.getByRole("searchbox", { name: "Search Templates" }).fill("code");
+  await expect(dialog.getByTestId("selected-template-count")).toHaveText("2 Templates selected (2 not shown)");
+  await expect(dialog.getByRole("button", { name: "Add 1 rule to 2 Templates" })).toBeEnabled();
+
+  await dialog.getByRole("button", { name: "Clear" }).click();
+  await expect(dialog.getByRole("button", { name: "Add 1 rule to 0 Templates" })).toBeDisabled();
+});
+
+test("going back keeps the edited rules and chosen Templates", async ({ page }) => {
+  const dialog = await openTemplateStep(page);
+  await dialog.getByRole("checkbox", { name: "Code Reviewer V2 v13" }).click();
+
+  await dialog.getByRole("button", { name: "Back" }).click();
+  await expect(dialog.getByRole("textbox", { name: "Convention 1" })).toHaveValue(
+    "Use Vilnius time for dates and deadlines.",
+  );
+  await dialog.getByRole("button", { name: "Next: choose Templates (1 rule)" }).click();
+
+  await expect(dialog.getByRole("checkbox", { name: "Code Reviewer V2 v13" })).toBeChecked();
 });
