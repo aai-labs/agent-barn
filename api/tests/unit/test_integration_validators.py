@@ -17,6 +17,7 @@ from api.domains.agents.models import (
     JiraContent,
     PipedriveContent,
 )
+from api.domains.integrations.plugins.providers import GmailPlugin
 from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
@@ -1054,3 +1055,33 @@ def test_gmail_flags_a_different_account():
 
     assert result.valid is False
     assert "bob@example.com" in (result.error or "")
+
+
+def test_gmail_plugin_validates_through_the_gmail_validator():
+    with (
+        patch(_GRANT_TOKEN_MOD, return_value=_resp(_gmail_token_ok())),
+        patch(_GRANT_USERINFO_MOD, return_value=_resp({"email": "alice@example.com"})),
+    ):
+        result = GmailPlugin().validate_external(_GMAIL)
+
+    assert result.valid is True
+    assert result.identity == "alice@example.com"
+
+
+def test_google_grant_without_an_access_token_is_invalid():
+    with patch(_GRANT_TOKEN_MOD, return_value=_resp({"scope": _GMAIL_READONLY})):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is False
+    assert "access token" in (result.error or "")
+
+
+def test_google_grant_falls_back_to_stored_email_when_identity_lookup_fails():
+    with (
+        patch(_GRANT_TOKEN_MOD, return_value=_resp(_gmail_token_ok())),
+        patch(_GRANT_USERINFO_MOD, return_value=_resp({}, status=500)),
+    ):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is True
+    assert result.identity == "alice@example.com"
