@@ -26,6 +26,31 @@ export class SettingsOneDriveSyncPage {
     return this.page.getByRole("button", { name: /try again/i });
   }
 
+  get connect() {
+    return this.section.getByRole("button", { name: "Connect OneDrive" });
+  }
+
+  get siteSearch() {
+    return this.section.getByRole("textbox", { name: "Search SharePoint sites" });
+  }
+
+  get searchButton() {
+    return this.section.getByRole("button", { name: "Search", exact: true });
+  }
+
+  get error() {
+    return this.section.getByRole("alert");
+  }
+
+  useSite(name: string) {
+    return this.section.getByRole("button", { name: `Use ${name}` });
+  }
+
+  async searchSites(term: string) {
+    await this.siteSearch.fill(term);
+    await this.searchButton.click();
+  }
+
   async open() {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/settings?tab=onedrive-sync`);
     await expect(this.heading).toBeVisible();

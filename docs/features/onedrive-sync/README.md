@@ -77,8 +77,12 @@ Searching or choosing without a fresh pending connection is 409: the administrat
 Settings → OneDrive (`?tab=onedrive-sync`) is visible to every Organization Member, and reads the status route.
 
 - Server without the app: "OneDrive sync isn't available on this server."
-- Not connected: Owners and Admins are told that a Microsoft Global Administrator approves Agent Barn, and that the person connecting must be a SharePoint Administrator and a member of the site. Members are told an Owner or Admin can connect.
-- Pending: no SharePoint site has been chosen yet.
+- Not connected:
+  - Owners and Admins are told that a Microsoft Global Administrator approves Agent Barn, and that the person connecting must be a SharePoint Administrator and a member of the site. They also get **Connect OneDrive**, which opens one popup for consent and sign-in, then posts the code to the sign-in route. A Microsoft error from the callback, such as the Global Administrator message, is shown inline.
+  - Members are told an Owner or Admin can connect.
+- Pending:
+  - Owners and Admins get the site picker: a search that needs a term, a result list, and **Use this site**. The API's `detail` is shown inline when choosing fails, for example a site an Agent already holds. Reloading the page resumes at the picker while the sign-in is fresh.
+  - Members are told no SharePoint site has been chosen yet.
 - Active: the site name, an "Open in OneDrive" link to the folder (new tab), and the hint to choose "Add shortcut to My files" in OneDrive.
 
 The query is keyed by Organization id, so switching Organization never shows the previous one's connection.

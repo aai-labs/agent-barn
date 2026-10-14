@@ -14,3 +14,11 @@ export const OneDriveSyncConnectionSchema = z.object({
 });
 
 export type OneDriveSyncConnection = z.infer<typeof OneDriveSyncConnectionSchema>;
+
+export const OneDriveSyncSiteSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  webUrl: z.string(),
+});
+
+export type OneDriveSyncSite = z.infer<typeof OneDriveSyncSiteSchema>;

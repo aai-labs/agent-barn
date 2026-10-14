@@ -4,6 +4,7 @@ import UserContext from "../fixtures/user-context.json";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
   ONEDRIVE_FOLDER_URL,
+  ONEDRIVE_SITE,
   activeOneDriveSync,
   oneDriveSyncStatus,
 } from "../pages/data-support/onedrive-sync-data-support.po";
@@ -78,8 +79,8 @@ test.describe("Settings · OneDrive", () => {
     await expect(oneDrive.section).toContainText("Add shortcut to My files");
   });
 
-  test("an unfinished connection says no site has been chosen", async () => {
-    await data.users.interceptGetUserContextRequest();
+  test("a Member sees that an unfinished connection has no site yet", async () => {
+    await data.users.interceptGetUserContextRequest({ userContext: memberContext() });
     await data.oneDriveSync.interceptStatus({ connection: oneDriveSyncStatus({ status: "pending" }) });
 
     await oneDrive.open();
@@ -94,5 +95,108 @@ test.describe("Settings · OneDrive", () => {
     await oneDrive.open();
 
     await expect(oneDrive.retry).toBeVisible();
+  });
+});
+
+test.describe("Settings · OneDrive · connecting", () => {
+  let data: DataSupport;
+  let oneDrive: SettingsOneDriveSyncPage;
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeEach(async ({ page }) => {
+    data = new DataSupport(page);
+    oneDrive = new SettingsOneDriveSyncPage(page);
+    await data.auth.interceptRefreshRequest();
+    await data.users.interceptGetOrganizationsRequest();
+    await data.organizations.interceptGetOrganization();
+  });
+
+  test("an Owner connects through Microsoft, picks a site and gets the folder link", async () => {
+    await data.users.interceptGetUserContextRequest();
+    const record = await data.oneDriveSync.interceptConnectFlow();
+    await oneDrive.open();
+
+    await oneDrive.connect.click();
+
+    await expect(oneDrive.siteSearch).toBeVisible();
+    expect(record.authorizeQuery?.get("purpose")).toBe("connect");
+    expect(record.signInBody).toEqual({ code: "the-code", state: "the-state" });
+
+    await oneDrive.searchSites("Agent Barn");
+    await expect(oneDrive.section).toContainText(ONEDRIVE_SITE.web_url);
+    expect(record.searches).toEqual(["Agent Barn"]);
+
+    await oneDrive.useSite(ONEDRIVE_SITE.name).click();
+
+    await expect(oneDrive.openInOneDrive).toHaveAttribute("href", ONEDRIVE_FOLDER_URL);
+    expect(record.siteBody).toEqual({ site_id: ONEDRIVE_SITE.id });
+  });
+
+  test("an unfinished connection resumes at the site picker", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.oneDriveSync.interceptConnectFlow({ initial: oneDriveSyncStatus({ status: "pending" }) });
+
+    await oneDrive.open();
+
+    await expect(oneDrive.siteSearch).toBeVisible();
+    await expect(oneDrive.connect).toHaveCount(0);
+  });
+
+  test("searching needs a term", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.oneDriveSync.interceptConnectFlow({ initial: oneDriveSyncStatus({ status: "pending" }) });
+    await oneDrive.open();
+
+    await expect(oneDrive.searchButton).toBeDisabled();
+    await oneDrive.siteSearch.fill("   ");
+    await expect(oneDrive.searchButton).toBeDisabled();
+  });
+
+  test("Microsoft asking for an administrator's approval is explained", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.oneDriveSync.interceptConnectFlow({
+      callbackMessage: { error: "A Microsoft Global Administrator needs to approve Agent Barn for your organization." },
+    });
+    await oneDrive.open();
+
+    await oneDrive.connect.click();
+
+    await expect(oneDrive.error).toContainText("A Microsoft Global Administrator needs to approve Agent Barn");
+    await expect(oneDrive.connect).toBeVisible();
+  });
+
+  test("a site the server refuses shows why", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.oneDriveSync.interceptConnectFlow({
+      initial: oneDriveSyncStatus({ status: "pending" }),
+      chooseStatus: 409,
+      chooseDetail: "An Agent in this Organization already has SharePoint access to this site. Remove it there, or pick another site.",
+    });
+    await oneDrive.open();
+
+    await oneDrive.searchSites("Agent");
+    await oneDrive.useSite(ONEDRIVE_SITE.name).click();
+
+    await expect(oneDrive.error).toContainText("already has SharePoint access to this site");
+    await expect(oneDrive.siteSearch).toBeVisible();
+  });
+
+  test("a Member cannot connect or pick a site", async () => {
+    await data.users.interceptGetUserContextRequest({ userContext: memberContext() });
+    await data.oneDriveSync.interceptConnectFlow({ initial: oneDriveSyncStatus({ status: "pending" }) });
+
+    await oneDrive.open();
+
+    await expect(oneDrive.connect).toHaveCount(0);
+    await expect(oneDrive.siteSearch).toHaveCount(0);
+  });
+
+  test("there is nothing to connect when the server has no app", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.oneDriveSync.interceptConnectFlow({ initial: oneDriveSyncStatus({ available: false }) });
+
+    await oneDrive.open();
+
+    await expect(oneDrive.connect).toHaveCount(0);
   });
 });

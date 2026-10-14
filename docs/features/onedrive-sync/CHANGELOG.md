@@ -24,13 +24,21 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: `POST …/connection/disconnect` revokes the platform app's site grant with the administrator's fresh delegated token from the same Microsoft tenant, then marks the connection disconnected. The folder stays.
 - Delivered: the SharePoint integration refuses (409) to grant an Agent the Organization's OneDrive folder site; other SharePoint behaviour is unchanged. The API side of AF-383 is complete.
 - Delivered: Settings → OneDrive shows the unavailable, not connected, pending and active states to every Member, with "Open in OneDrive" and the "Add shortcut to My files" hint.
-- In transition: the section has no Connect, picker or Disconnect controls yet. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
-- Next: the connect flow and site picker in the UI.
+- Delivered: Owners and Admins connect from the section: **Connect OneDrive** (one popup for consent and sign-in), then the site picker, then the connected state.
+- In transition: the section has no Disconnect or Start over control yet. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
+- Next: disconnect and abandoning a pending connection in the UI, then the manual run against the test tenant.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Connect flow and site picker in the UI
+
+- Delivered: `useConnectOneDrive`, `useOneDriveSyncSites` and `useChooseOneDriveSite` (`hooks/use-onedrive-sync-actions.ts`, reusing `openOAuthPopup` / `waitForOAuthPopupMessage`), `components/onedrive-site-picker.tsx`, and the Connect control in the panel.
+- Changed: `README.md` (Organization settings). The PR 12 test for a pending connection now uses a Member, because Owners and Admins see the picker there instead of the note.
+- Verified: 7 new tests in `ui/tests/e2e/onedrive-sync.spec.ts` (full connect flow with recorded requests, resuming at the picker, search needs a term, the Global Administrator error, a refused site, Member and unavailable have no controls); the Shared Credentials and Spend limits specs still pass; lint and type check pass.
+- Follow-up: disconnect and Start over in the UI.
 
 ### 2026-10-14 — AF-383 — Organization settings section
 

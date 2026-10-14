@@ -1,12 +1,14 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { SettingsSection } from "@/components/settings/settings-section";
 
+import { useConnectOneDrive } from "../hooks/use-onedrive-sync-actions";
 import { useOneDriveSyncQuery } from "../hooks/use-onedrive-sync-query";
+import { OneDriveSitePicker } from "./onedrive-site-picker";
 
 const TITLE = "OneDrive";
 const DESCRIPTION = "Where Agent Barn keeps your organization's files in SharePoint.";
@@ -19,8 +21,27 @@ function Note({ children }: { children: ReactNode }) {
   );
 }
 
+function ErrorText({ children }: { children: string }) {
+  return (
+    <p role="alert" className="m-0 text-[0.84rem]" style={{ color: "var(--err)" }}>
+      {children}
+    </p>
+  );
+}
+
 export function OneDriveSyncPanel({ canManage }: { canManage: boolean }) {
   const { connection, isLoading, error, refetch } = useOneDriveSyncQuery();
+  const { connect, isConnecting } = useConnectOneDrive();
+  const [connectError, setConnectError] = useState<string | null>(null);
+
+  async function handleConnect() {
+    setConnectError(null);
+    try {
+      await connect();
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : "Connecting OneDrive failed.");
+    }
+  }
 
   if (isLoading) {
     return (
@@ -44,19 +65,33 @@ export function OneDriveSyncPanel({ canManage }: { canManage: boolean }) {
               Not connected
             </p>
             {canManage ? (
-              <Note>
-                A Microsoft Global Administrator approves Agent Barn for your organization, and the person
-                connecting must be a SharePoint Administrator and a member of the site they pick.
-              </Note>
+              <>
+                <Note>
+                  A Microsoft Global Administrator approves Agent Barn for your organization, and the person
+                  connecting must be a SharePoint Administrator and a member of the site they pick.
+                </Note>
+                <button
+                  type="button"
+                  className="af-btn af-btn-primary w-fit"
+                  disabled={isConnecting}
+                  onClick={() => void handleConnect()}
+                >
+                  {isConnecting ? "Connecting…" : "Connect OneDrive"}
+                </button>
+                {connectError && <ErrorText>{connectError}</ErrorText>}
+              </>
             ) : (
               <Note>An Organization Owner or Admin can connect OneDrive.</Note>
             )}
           </>
         )}
 
-        {connection.available && connection.status === "pending" && (
-          <Note>A connection was started, but no SharePoint site has been chosen yet.</Note>
-        )}
+        {connection.available && connection.status === "pending" &&
+          (canManage ? (
+            <OneDriveSitePicker />
+          ) : (
+            <Note>A connection was started, but no SharePoint site has been chosen yet.</Note>
+          ))}
 
         {connection.available && connection.status === "active" && connection.folderWebUrl && (
           <>
