@@ -35,8 +35,8 @@ test.describe("Hiring choices", () => {
       await expect(page.getByRole("radio", { name: /Build your own/ })).toBeVisible();
       expect(requests.creations).toHaveLength(0);
       await dashboard.chooseReadyMadeHiring();
-      await expect(page.getByRole("combobox").nth(0)).toContainText("Hermes");
-      await expect(page.getByRole("combobox").nth(1)).toContainText("General Purpose");
+      await expect(page.getByRole("radiogroup", { name: "Runtime" }).getByRole("radio", { name: "Hermes", exact: true })).toBeChecked();
+      await expect(page.getByRole("combobox", { name: "Template", exact: true })).toContainText("General Purpose");
       await expect(page.getByRole("radio", { name: /Use organization default/ })).toBeChecked();
       await dashboard.agentNameInput().fill("My ready-made assistant");
       await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
@@ -75,9 +75,11 @@ test.describe("Hiring choices", () => {
     await dashboard.openHireChoices();
     await dashboard.chooseReadyMadeHiring();
     await expect(dashboard.agentNameInput()).toHaveValue("Brandon the Assistant");
-    await page.getByRole("combobox").first().click();
-    await page.getByRole("option", { name: "OpenClaw", exact: true }).click();
-    await expect(page.getByRole("combobox").first()).toContainText("OpenClaw");
+    const runtime = page.getByRole("radiogroup", { name: "Runtime" });
+    await runtime.getByRole("radio", { name: "Hermes", exact: true }).focus();
+    await runtime.getByRole("radio", { name: "Hermes", exact: true }).press("ArrowRight");
+    await expect(runtime.getByRole("radio", { name: "OpenClaw", exact: true })).toBeChecked();
+    await expect(runtime.getByRole("radio", { name: "OpenClaw", exact: true })).toBeFocused();
     await dashboard.chooseHireTemplate("Scrum Master · v1");
     await expect(dashboard.agentNameInput()).toHaveValue("Brandon the Scrum Master");
     await expect(page.getByRole("radio", { name: /Choose a specific model/ })).toBeVisible();

@@ -15,6 +15,7 @@ import { AgentErrorBanner } from "./agent-error-banner";
 import { DialogShell, FormField } from "./hire-dialog-primitives";
 import { SkillsStep } from "./hire-dialog-steps";
 import { ModelChoice } from "./model-choice";
+import { RuntimeChoice } from "./runtime-choice";
 
 interface HireDialogProps {
   onClose: () => void;
@@ -89,14 +90,11 @@ export function HireFormDialog({ onClose, onHired, initialTemplateKey, title = "
           )}
         </FormField>
         <FormField label="Runtime">
-          <Select value={agentType} onValueChange={(value) => setAgentType(value as "openclaw" | "hermes")}>
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent><SelectGroup><SelectItem value="hermes">Hermes</SelectItem><SelectItem value="openclaw">OpenClaw</SelectItem></SelectGroup></SelectContent>
-          </Select>
+          <RuntimeChoice value={agentType} onChange={setAgentType} disabled={pending} />
         </FormField>
         <FormField label="Template" hint="Communication connections do not belong to templates or runtimes.">
           <Select value={templateKey} onValueChange={handleTemplateChange} disabled={isLoading || pending}>
-            <SelectTrigger className="w-full"><SelectValue placeholder={isLoading ? "Loading templates…" : "Choose a template"} /></SelectTrigger>
+            <SelectTrigger aria-label="Template" className="w-full"><SelectValue placeholder={isLoading ? "Loading templates…" : "Choose a template"} /></SelectTrigger>
             <SelectContent><SelectGroup>{templates.map((item) => <SelectItem key={`${item.templateKey}:${item.version}`} value={item.templateKey}>{item.templateName} · v{item.version}</SelectItem>)}</SelectGroup></SelectContent>
           </Select>
         </FormField>
@@ -111,7 +109,7 @@ export function HireFormDialog({ onClose, onHired, initialTemplateKey, title = "
         {agentType === "hermes" && (
           <FormField label="Command approval">
             <Select value={approvalMode} onValueChange={(value) => setApprovalMode(value as "manual" | "auto" | "off")} disabled={pending}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+            <SelectTrigger aria-label="Command approval" className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent><SelectGroup><SelectItem value="auto">Automatic</SelectItem><SelectItem value="manual">Manual</SelectItem><SelectItem value="off">Off</SelectItem></SelectGroup></SelectContent>
             </Select>
           </FormField>

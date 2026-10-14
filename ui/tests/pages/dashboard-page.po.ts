@@ -25,7 +25,7 @@ export class DashboardPage {
   }
 
   async chooseHireTemplate(name: string) {
-    await this.page.getByRole("combobox").nth(1).click();
+    await this.page.getByRole("combobox", { name: "Template", exact: true }).click();
     await this.page.getByRole("option", { name, exact: true }).click();
   }
 

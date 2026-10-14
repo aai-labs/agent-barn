@@ -16,6 +16,7 @@ import { CredentialErrorAlert } from "@/features/agents/components/credential-er
 import { FormField } from "@/features/agents/components/hire-dialog-primitives";
 import { SkillsStep } from "@/features/agents/components/hire-dialog-steps";
 import { ModelChoice } from "@/features/agents/components/model-choice";
+import { RuntimeChoice } from "@/features/agents/components/runtime-choice";
 import { useHireAgentForm, type HiredAgent } from "@/features/agents/hooks/use-hire-agent-form";
 
 import { OnboardingShell, StepAlert } from "./onboarding-shell";
@@ -102,30 +103,7 @@ export function SetupStep({
               )}
             </FormField>
             <FormField label="Runtime">
-              <div
-                role="radiogroup"
-                aria-label="Runtime"
-                className="flex rounded-full border p-[3px]"
-                style={{ background: "var(--bg-soft)", borderColor: "var(--line)" }}
-              >
-                {(["hermes", "openclaw"] as const).map((runtime) => (
-                  <button
-                    key={runtime}
-                    type="button"
-                    role="radio"
-                    aria-checked={form.agentType === runtime}
-                    className="flex-1 rounded-full px-2.5 py-[7px] text-[13px]"
-                    style={
-                      form.agentType === runtime
-                        ? { background: "var(--bg-elev)", color: "var(--ink)", fontWeight: 600, boxShadow: "var(--shadow)" }
-                        : { color: "var(--ink-3)" }
-                    }
-                    onClick={() => form.setAgentType(runtime)}
-                  >
-                    {runtime === "hermes" ? "Hermes" : "OpenClaw"}
-                  </button>
-                ))}
-              </div>
+              <RuntimeChoice value={form.agentType} onChange={form.setAgentType} disabled={pending} />
             </FormField>
             <div className="sm:col-span-2">
               <FormField label="Template">

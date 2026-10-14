@@ -19,6 +19,8 @@ the preset's required Skills and credential fields are initialized like an expli
 Template selection. Both paths use ordinary Agent create/start APIs.
 API validation and Agent authorization apply
 to both paths. A failed start retries the newly created Agent within the same dialog.
+The hiring modal and onboarding share the same Hermes/OpenClaw segmented runtime
+control, including keyboard selection and disabled behavior during submission.
 
 After a ready-made Agent starts, users choose Web Chat or open channel setup to
 connect Telegram. Telegram is optional; no Telegram Connection is created merely

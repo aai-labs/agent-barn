@@ -14,7 +14,7 @@ import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
 
 async function chooseTemplate(page: Page) {
-  await page.getByRole("combobox").nth(1).click();
+  await page.getByRole("combobox", { name: "Template", exact: true }).click();
   await page.getByRole("option", { name: "General Purpose · v1" }).click();
 }
 
@@ -301,11 +301,10 @@ test.describe("Hire Dialog", () => {
 
     // Pick a non-default approval mode while still on Hermes, then switch to
     // OpenClaw, to prove the stale value is dropped rather than sent along.
-    await page.getByRole("combobox").nth(2).click();
+    await page.getByRole("combobox", { name: "Command approval", exact: true }).click();
     await page.getByRole("option", { name: "Manual" }).click();
 
-    await page.getByRole("combobox").first().click();
-    await page.getByRole("option", { name: "OpenClaw" }).click();
+    await page.getByRole("radiogroup", { name: "Runtime" }).getByRole("radio", { name: "OpenClaw", exact: true }).click();
     await chooseTemplate(page);
 
     const createRequest = page.waitForRequest(
@@ -323,13 +322,12 @@ test.describe("Hire Dialog", () => {
 
   test("shows Command approval only for the Hermes runtime", async ({ page }) => {
     await expect(page.getByText("Command approval", { exact: true })).toBeVisible();
-    await expect(page.getByRole("combobox")).toHaveCount(3);
+    await expect(page.getByRole("combobox")).toHaveCount(2);
 
-    await page.getByRole("combobox").first().click();
-    await page.getByRole("option", { name: "OpenClaw" }).click();
+    await page.getByRole("radiogroup", { name: "Runtime" }).getByRole("radio", { name: "OpenClaw", exact: true }).click();
 
     await expect(page.getByText("Command approval", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("combobox")).toHaveCount(2);
+    await expect(page.getByRole("combobox")).toHaveCount(1);
   });
 
   test("keeps hire disabled until a template is selected", async ({ page }) => {
