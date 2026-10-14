@@ -73,7 +73,8 @@ function budgetMessage(body) {
 // Native chat posts whatever the runtime answers, and OpenClaw answers any 402 with its
 // own "top up your API key" billing text. So a chat completion refused for a spent limit
 // is answered as an ordinary assistant reply carrying the notice instead; the marker
-// above still lets the Web Chat adapter report the turn as SPEND_LIMIT_REACHED.
+// above still lets the Web Chat adapter report the turn as SPEND_LIMIT_REACHED, or
+// CREDIT_EXHAUSTED on credit.
 // Requests the proxy cannot read back fall through to the 402.
 const MAX_INSPECTED_REQUEST_BYTES = 8 * 1024 * 1024;
 
