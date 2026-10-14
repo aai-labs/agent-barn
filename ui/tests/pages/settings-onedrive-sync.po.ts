@@ -26,6 +26,10 @@ export class SettingsOneDriveSyncPage {
     return this.page.getByRole("button", { name: /try again/i });
   }
 
+  get approvalLink() {
+    return this.section.getByRole("link", { name: "Approval link for your Microsoft Global Administrator" });
+  }
+
   get connect() {
     return this.section.getByRole("button", { name: "Connect OneDrive" });
   }

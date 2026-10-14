@@ -24,18 +24,18 @@ When either setting is blank, status reports `available: false` and starting a c
 - Status (`GET /organizations/{organization_id}/onedrive-sync/connection`) requires `organization.read`, so every Organization Member sees the folder link. Starting a connect or disconnect requires `organization.update`. A caller outside the Organization gets 403, like every Organization-scoped route; 404 concealment applies to Agent resources only.
 - Status never includes tokens, the grant id or the tenant. A pending connection whose sign-in has expired reads as not connected.
 - An Organization has at most one open (pending or active) connection, enforced by the partial unique index `uq_onedrive_sync_connection_open`. Disconnected rows are kept.
-- The tenant is never taken from Microsoft's admin-consent redirect, which an attacker can alter. It comes from the sign-in `id_token`'s `tid`.
+- The tenant is never taken from Microsoft's admin-consent redirect, which an attacker can alter, and the callback never echoes it. It comes from the sign-in `id_token`'s `tid`.
 - The callback trusts only state this server signed with type `onedrive_sync_state`. A SharePoint or Google state is refused.
 
 ## Connect flow
 
+**Approving the app (once per Microsoft organization).** A Microsoft Global Administrator or Privileged Role Administrator approves the app. Status carries `approval_url`: Microsoft's admin-consent link at the `organizations` authority with `scope=https://graph.microsoft.com/.default` and no state. The settings section gives it to Owners and Admins to forward. After approving, Microsoft redirects to the callback with `admin_consent=True`, which shows "Agent Barn is approved for your organization. The person connecting can now connect OneDrive." Once approved, connecting needs no Global Administrator.
+
 1. The UI opens a popup and calls `GET …/connection/authorize-url?purpose=connect`. It returns 409 while a connection is active.
-2. The server signs a state (Organization, user, purpose, encrypted PKCE verifier, public challenge, 10-minute expiry) and returns Microsoft's admin-consent URL at the `organizations` authority with `scope=https://graph.microsoft.com/.default`.
-3. Approving the app needs a Microsoft Global Administrator or Privileged Role Administrator. Anyone else gets Microsoft's "Need admin approval" page.
-4. Microsoft redirects to `GET /api/v1/integrations/onedrive-sync/callback`. The callback reads `error` first, because Microsoft also sends `admin_consent=True` on a refused consent. A refused or required consent posts "A Microsoft Global Administrator needs to approve Agent Barn for your organization." to the opener.
-5. After consent, the callback answers 302 straight to sign-in at the `organizations` authority, with `Sites.FullControl.All`, `Sites.Read.All`, `openid`, `profile`, `prompt=select_account` and the state's PKCE challenge. Microsoft shows no second consent prompt.
-6. After sign-in, the callback posts `{type: "onedrive-sync-oauth", code, state}` to the opener.
-7. The opener calls `POST …/connection/sign-in {code, state}` (`organization.update`; a read-only API key is refused like on any mutating route). The server:
+2. The server signs a state (Organization, user, purpose, encrypted PKCE verifier, 10-minute expiry) and returns Microsoft's sign-in URL at the `organizations` authority, with `Sites.FullControl.All`, `Sites.Read.All`, `openid`, `profile`, `prompt=select_account` and the PKCE challenge. There is no consent step, and no consent prompt in an approved organization.
+3. Microsoft redirects to `GET /api/v1/integrations/onedrive-sync/callback`. The callback reads `error` first. Where the app isn't approved yet, Microsoft reports it (`consent_required`, or AADSTS65001/65004/90094/90095), and the callback posts "A Microsoft Global Administrator needs to approve Agent Barn for your organization." to the opener.
+4. After sign-in, the callback posts `{type: "onedrive-sync-oauth", code, state}` to the opener.
+5. The opener calls `POST …/connection/sign-in {code, state}` (`organization.update`; a read-only API key is refused like on any mutating route). The server:
    1. requires a connect state issued to this caller for this Organization (400 otherwise);
    2. redeems the code at the `organizations` authority as a confidential client (the platform secret plus the PKCE verifier);
    3. takes the tenant from the `id_token`'s `tid` (400 if missing);
@@ -43,8 +43,8 @@ When either setting is blank, status reports `available: false` and starting a c
 
    It then stores a pending connection holding the delegated access token Fernet-encrypted (`AGENT_TOKEN_ENCRYPTION_KEY`) until the token expires. No refresh token is requested. A new sign-in replaces an existing pending connection; one is refused (409) while a connection is active. Microsoft refusals are 400 and an unreachable Microsoft is 502.
 
-8. The picker calls `GET …/connection/sites?search=<term>` (`organization.update`), which runs Graph's site search with the administrator's delegated token. The term is required: Microsoft doesn't document what an empty search returns.
-9. The opener calls `POST …/connection/site {site_id}` (`organization.update`). The server:
+6. The picker calls `GET …/connection/sites?search=<term>` (`organization.update`), which runs Graph's site search with the administrator's delegated token. The term is required: Microsoft doesn't document what an empty search returns.
+7. The opener calls `POST …/connection/site {site_id}` (`organization.update`). The server:
    1. reads the site from Graph (400 if unknown), so the stored name and URL never come from the client;
    2. refuses (409, "An Agent in this Organization already has SharePoint access to this site. Remove it there, or pick another site.") when any Agent in the Organization, including a deleted one, has a recorded SharePoint selected-sites grant on that site id (compared case-insensitively). Deleting an Agent neither revokes nor forgets its grants, so they still count. Nothing is granted when refused;
    3. grants the platform app `write` on that site, with display name "Agent Barn", using the administrator's delegated token. Microsoft requires the signer to be a SharePoint Administrator and a member of the site, so a refusal is a 403 that says so;
@@ -78,7 +78,7 @@ Settings → OneDrive (`?tab=onedrive-sync`) is visible to every Organization Me
 
 - Server without the app: "OneDrive sync isn't available on this server."
 - Not connected:
-  - Owners and Admins are told that a Microsoft Global Administrator approves Agent Barn, and that the person connecting must be a SharePoint Administrator and a member of the site. They also get **Connect OneDrive**, which opens one popup for consent and sign-in, then posts the code to the sign-in route. A Microsoft error from the callback, such as the Global Administrator message, is shown inline.
+  - Owners and Admins are told that a Microsoft Global Administrator approves Agent Barn once, and that the person connecting must be a SharePoint Administrator and a member of the site. They get the **approval link** to forward, and **Connect OneDrive**, which opens a sign-in popup and then posts the code to the sign-in route. A Microsoft error from the callback, such as the Global Administrator message, is shown inline.
   - Members are told an Owner or Admin can connect.
 - Pending:
   - Owners and Admins get the site picker: a search that needs a term, a result list, and **Use this site**. The API's `detail` is shown inline when choosing fails, for example a site an Agent already holds. Reloading the page resumes at the picker while the sign-in is fresh.
@@ -99,7 +99,7 @@ The query is keyed by Organization id, so switching Organization never shows the
 - **Delegated-mode SharePoint Agents** can reach the folder site through their signer's own access; only selected-sites grants are guarded.
 - **Deleting an Organization** deletes its connection row (cascade) but leaves the platform app's grant on the site in Microsoft. Nobody is signed in to revoke it. An administrator can remove it from the site's permissions.
 - **There is no lock between an Agent's selected-sites grant and an Organization connecting at the same moment.** Each check reads the other's state independently, so two requests finishing together can both pass.
-- **Approving the app needs a Microsoft Global Administrator or Privileged Role Administrator.** Connecting and disconnecting need a SharePoint Administrator who is a member of the site.
+- **Approving the app needs a Microsoft Global Administrator or Privileged Role Administrator**, once per Microsoft organization, and again only if the app's permissions change. Connecting and disconnecting need a SharePoint Administrator who is a member of the site.
 - **The app shows as "unverified" on Microsoft's consent page** until the AAI Labs app has publisher verification.
 
 ## Source map

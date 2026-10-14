@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import UserContext from "../fixtures/user-context.json";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
+  ONEDRIVE_APPROVAL_URL,
   ONEDRIVE_FOLDER_URL,
   ONEDRIVE_SITE,
   activeOneDriveSync,
@@ -54,6 +55,26 @@ test.describe("Settings · OneDrive", () => {
     await expect(oneDrive.section).toContainText("Not connected");
     await expect(oneDrive.section).toContainText("Microsoft Global Administrator");
     await expect(oneDrive.section).toContainText("SharePoint Administrator");
+  });
+
+  test("an Owner can forward the one-time approval link to a Global Administrator", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.oneDriveSync.interceptStatus();
+
+    await oneDrive.open();
+
+    await expect(oneDrive.approvalLink).toHaveAttribute("href", ONEDRIVE_APPROVAL_URL);
+    await expect(oneDrive.approvalLink).toHaveAttribute("target", "_blank");
+  });
+
+  test("a Member is not given the approval link", async () => {
+    await data.users.interceptGetUserContextRequest({ userContext: memberContext() });
+    await data.oneDriveSync.interceptStatus();
+
+    await oneDrive.open();
+
+    await expect(oneDrive.section).toContainText("Not connected");
+    await expect(oneDrive.approvalLink).toHaveCount(0);
   });
 
   test("tells a Member who can connect", async () => {

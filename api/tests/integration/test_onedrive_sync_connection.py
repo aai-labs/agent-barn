@@ -161,7 +161,7 @@ def test_status_says_unavailable_when_the_platform_app_is_not_configured():
 
         with then("the section is reported unavailable rather than failing"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-            assert_that(response.json(), has_entries(available=False, status=None))
+            assert_that(response.json(), has_entries(available=False, status=None, approval_url=None))
 
 
 def test_status_says_not_connected_when_there_is_no_connection():
@@ -170,6 +170,25 @@ def test_status_says_not_connected_when_there_is_no_connection():
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(response.json(), has_entries(available=True, status=None, folder_web_url=None))
+
+
+def test_status_carries_the_one_time_approval_link_for_a_global_administrator():
+    with given(_given()) as context:
+        body = context.client.get(_base(context), headers=_auth(context)).json()
+
+        url = body["approval_url"]
+        assert_that(url, starts_with("https://login.microsoftonline.com/organizations/v2.0/adminconsent?"))
+        assert_that(
+            _query(url),
+            equal_to(
+                {
+                    "client_id": _CLIENT_ID,
+                    "scope": "https://graph.microsoft.com/.default",
+                    "redirect_uri": _REDIRECT_URI,
+                }
+            ),
+        )
+        assert_that(url, not_(contains_string(_CLIENT_SECRET)))
 
 
 def test_a_member_can_read_the_status():
@@ -208,7 +227,9 @@ def test_an_active_connection_shows_the_site_and_the_folder_link_only():
         assert_that(body["connected_at"], is_not(none()))
         assert_that(
             set(body),
-            equal_to({"available", "status", "site_name", "site_url", "folder_web_url", "connected_at"}),
+            equal_to(
+                {"available", "status", "site_name", "site_url", "folder_web_url", "connected_at", "approval_url"}
+            ),
         )
 
 
@@ -221,7 +242,10 @@ def test_a_pending_connection_is_reported_while_its_sign_in_is_fresh():
         assert_that(body, has_entries(status="pending"))
         assert_that(str(body), not_(contains_string(_DELEGATED_ACCESS_TOKEN)))
         assert_that(
-            set(body), equal_to({"available", "status", "site_name", "site_url", "folder_web_url", "connected_at"})
+            set(body),
+            equal_to(
+                {"available", "status", "site_name", "site_url", "folder_web_url", "connected_at", "approval_url"}
+            ),
         )
 
 
@@ -252,25 +276,29 @@ def test_a_member_cannot_start_a_connection():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-def test_an_admin_starts_with_microsoft_admin_consent_for_any_organization():
+def test_an_admin_starts_with_microsoft_sign_in_for_any_organization():
     with given(_given(role=OrganizationRole.ADMIN)) as context:
         with when("an Organization Admin starts connecting OneDrive"):
             response = _authorize_url(context)
 
-        with then("they are sent to Microsoft's admin consent for the platform app's permissions"):
+        with then("they go straight to Microsoft sign-in, with no admin-consent step"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             url = response.json()["authorize_url"]
-            assert_that(url, starts_with("https://login.microsoftonline.com/organizations/v2.0/adminconsent?"))
+            assert_that(url, starts_with("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?"))
             query = _query(url)
             assert_that(
                 query,
                 has_entries(
                     client_id=_CLIENT_ID,
-                    scope="https://graph.microsoft.com/.default",
                     redirect_uri=_REDIRECT_URI,
+                    response_type="code",
+                    scope=_SIGN_IN_SCOPE,
+                    prompt="select_account",
+                    code_challenge_method="S256",
                 ),
             )
             assert_that(query["state"], is_not(none()))
+            assert_that(query["code_challenge"], is_not(none()))
             assert_that(url, not_(contains_string(_CLIENT_SECRET)))
 
 
@@ -315,36 +343,20 @@ def test_disconnecting_goes_straight_to_microsoft_sign_in():
 # --- callback ----------------------------------------------------------------------
 
 
-def test_after_consent_the_callback_continues_to_sign_in_without_trusting_the_tenant():
+def test_a_global_administrators_approval_lands_on_an_approved_page():
     with given(_given()) as context:
-        state = _consent_state(context)
-
-        with when("Microsoft returns from admin consent, naming a tenant"):
+        with when("a Global Administrator approves from the forwarded link, and Microsoft names a tenant"):
             response = context.client.get(
                 _CALLBACK,
-                params={"admin_consent": "True", "tenant": "attacker-chosen-tenant", "state": state},
+                params={"admin_consent": "True", "tenant": "attacker-chosen-tenant"},
                 follow_redirects=False,
             )
 
-        with then("the popup is sent straight on to sign-in at the multi-tenant authority"):
-            assert_that(response.status_code, equal_to(status.HTTP_302_FOUND))
-            location = response.headers["location"]
-            assert_that(location, starts_with("https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize?"))
-            assert_that(location, not_(contains_string("attacker-chosen-tenant")))
-            query = _query(location)
-            assert_that(
-                query,
-                has_entries(
-                    client_id=_CLIENT_ID,
-                    redirect_uri=_REDIRECT_URI,
-                    response_type="code",
-                    scope=_SIGN_IN_SCOPE,
-                    prompt="select_account",
-                    state=state,
-                    code_challenge_method="S256",
-                ),
-            )
-            assert_that(query["code_challenge"], is_not(none()))
+        with then("the page says Agent Barn is approved, without redirecting or echoing the tenant"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.text, contains_string("Agent Barn is approved for your organization"))
+            assert_that(response.text, contains_string('"adminConsent": true'))
+            assert_that(response.text, not_(contains_string("attacker-chosen-tenant")))
 
 
 def test_a_consent_microsoft_refused_explains_who_must_approve():
@@ -453,7 +465,6 @@ def _forged_state(context, *, organization_id=None, user_id=None, purpose="conne
             user_id=user_id or context.user.id,
             purpose=purpose,
             code_verifier="v" * 50,
-            code_challenge="c",
         ),
     )
 

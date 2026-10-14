@@ -11,6 +11,8 @@ export const OneDriveSyncConnectionSchema = z.object({
   siteUrl: z.string().nullable(),
   folderWebUrl: z.string().nullable(),
   connectedAt: z.string().nullable(),
+  // The one-time Microsoft approval link an Owner or Admin forwards to a Global Administrator.
+  approvalUrl: z.string().nullable(),
 });
 
 export type OneDriveSyncConnection = z.infer<typeof OneDriveSyncConnectionSchema>;

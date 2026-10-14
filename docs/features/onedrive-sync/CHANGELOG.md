@@ -26,13 +26,23 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: Settings → OneDrive shows the unavailable, not connected, pending and active states to every Member, with "Open in OneDrive" and the "Add shortcut to My files" hint.
 - Delivered: Owners and Admins connect from the section: **Connect OneDrive** (one popup for consent and sign-in), then the site picker, then the connected state.
 - Delivered: Owners and Admins disconnect (confirmation dialog, then a Microsoft sign-in) and start over from a pending connection. Every AF-383 slice is implemented.
+- Delivered: connecting starts at Microsoft sign-in. A Global Administrator approves the app once per Microsoft organization, through the approval link in Organization settings; after that any SharePoint Administrator who is a site member connects without them.
 - In transition: no GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
 - Next: the manual run against the test tenant (acceptance criteria 3 to 6, and disconnect); then close this log.
+
+Acceptance criteria amendment: the ticket orders the flow "Microsoft admin consent → Microsoft sign-in". Starting every connect at admin consent shows "Need admin approval" to anyone who isn't a Global Administrator, even after their organization approved the app (seen in the 2026-10-14 verification). So connecting starts at sign-in, and admin consent is a one-time step per organization via `approval_url`. There is still no second consent prompt, and the tenant still comes from `tid`.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Connect starts at sign-in; one-time approval link
+
+- Delivered: `authorize-url?purpose=connect` returns Microsoft's sign-in URL instead of admin consent. Status carries `approval_url` (`.default` admin consent at `organizations`, no state). The callback's `admin_consent=True` shows an "approved" page instead of redirecting. The settings section gives Owners and Admins the approval link. The PKCE challenge is no longer carried in the state.
+- Changed: `README.md` (connect flow, Organization settings, Known limits).
+- Verified: updated and new tests in `api/tests/integration/test_onedrive_sync_connection.py` (sign-in URL for connect, `approval_url` present or absent, the approved page without the tenant) and `ui/tests/e2e/onedrive-sync.spec.ts` (approval link for Owners, not Members); the contract test, lint and type checks pass.
+- Follow-up: the manual run against the test tenant.
 
 ### 2026-10-14 — AF-383 — Disconnect and Start over in the UI
 

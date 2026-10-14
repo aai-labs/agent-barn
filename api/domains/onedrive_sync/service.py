@@ -8,7 +8,7 @@ from uuid import UUID
 
 import jwt
 from fastapi import HTTPException, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from injector import inject, singleton
 
 from api.core.config import Config
@@ -74,6 +74,10 @@ _NOT_CONNECTED = "This Organization isn't connected to OneDrive."
 _READ_DENIED = "You don't have permission to view OneDrive sync for this organization."
 _MANAGE_DENIED = "You don't have permission to manage OneDrive sync for this organization."
 _ADMIN_APPROVAL_NEEDED = "A Microsoft Global Administrator needs to approve Agent Barn for your organization."
+_APPROVED = (
+    "Agent Barn is approved for your organization. The person connecting can now connect OneDrive. "
+    "You can close this window."
+)
 _SIGN_IN_EXPIRED = "This sign-in has expired. Please try again."
 _SIGN_IN_INCOMPLETE = "Microsoft did not complete the sign-in. Please try again."
 _SIGN_IN_NOT_YOURS = "This sign-in has expired or was started by someone else. Please connect again."
@@ -109,7 +113,6 @@ class OneDriveSyncState:
     user_id: UUID
     purpose: OneDriveSyncPurpose
     code_verifier: str
-    code_challenge: str
 
 
 def redirect_uri(config: Config) -> str:
@@ -123,9 +126,8 @@ def encode_state(config: Config, state: OneDriveSyncState, *, ttl_seconds: int =
         "user_id": str(state.user_id),
         "purpose": state.purpose,
         # The state passes through Microsoft and the browser; the verifier proves the code
-        # redemption is ours, so it travels encrypted. The challenge is public by design.
+        # redemption is ours, so it travels encrypted.
         "verifier": encrypt_token(state.code_verifier, config.agent_token_encryption_key),
-        "challenge": state.code_challenge,
         "exp": int(time.time()) + ttl_seconds,
     }
     return jwt.encode(payload, config.secret_signing_key, algorithm=JWT_ENCODING_ALGORITHM)
@@ -142,19 +144,27 @@ def decode_state(token: str, config: Config) -> OneDriveSyncState | None:
             user_id=UUID(payload["user_id"]),
             purpose=payload["purpose"],
             code_verifier=decrypt_token(payload["verifier"], config.agent_token_encryption_key),
-            code_challenge=str(payload["challenge"]),
         )
     except Exception:
         return None
 
 
 def callback_html(
-    config: Config, *, code: str | None = None, state: str | None = None, error: str | None = None
+    config: Config,
+    *,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    approved: bool = False,
 ) -> HTMLResponse:
-    """A page that posts the result to the window that opened the popup, then closes."""
+    """A page that posts the result to the window that opened the popup, then closes. A Global
+    Administrator approving from a forwarded link lands here too, so it reads sensibly on its own."""
     if error is not None:
         message: dict = {"type": MESSAGE_TYPE, "error": error}
         blurb = "Sign-in failed. You can close this window."
+    elif approved:
+        message = {"type": MESSAGE_TYPE, "adminConsent": True}
+        blurb = _APPROVED
     else:
         message = {"type": MESSAGE_TYPE, "code": code, "state": state}
         blurb = "Sign-in complete. You can close this window."
@@ -198,9 +208,14 @@ class OneDriveSyncService:
         self.permission_policy.require(context, organization_id, PermissionKey.ORGANIZATION_READ, detail=_READ_DENIED)
         if not self.config.is_onedrive_sync_enabled:
             return OneDriveSyncConnectionRead(available=False)
+        approval_url = build_app_permission_consent_url(
+            tenant_id=MULTI_TENANT_AUTHORITY,
+            client_id=self.config.onedrive_sync_client_id,
+            redirect_uri=redirect_uri(self.config),
+        )
         connection = self.repository.get_open(organization_id)
         if connection is None or _expired_pending(connection):
-            return OneDriveSyncConnectionRead(available=True)
+            return OneDriveSyncConnectionRead(available=True, approval_url=approval_url)
         return OneDriveSyncConnectionRead(
             available=True,
             status=connection.status,
@@ -208,6 +223,7 @@ class OneDriveSyncService:
             site_url=connection.site_url,
             folder_web_url=connection.folder_web_url,
             connected_at=connection.connected_at,
+            approval_url=approval_url,
         )
 
     def authorize_url(self, organization_id: UUID, purpose: OneDriveSyncPurpose, context: CurrentUserContext) -> str:
@@ -221,21 +237,12 @@ class OneDriveSyncService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_NOT_CONNECTED)
         verifier, challenge = pkce_pair()
         state = OneDriveSyncState(
-            organization_id=organization_id,
-            user_id=context.user.id,
-            purpose=purpose,
-            code_verifier=verifier,
-            code_challenge=challenge,
+            organization_id=organization_id, user_id=context.user.id, purpose=purpose, code_verifier=verifier
         )
-        token = encode_state(self.config, state)
-        if purpose == "disconnect":
-            return self._sign_in_url(token, challenge)
-        return build_app_permission_consent_url(
-            tenant_id=MULTI_TENANT_AUTHORITY,
-            client_id=self.config.onedrive_sync_client_id,
-            redirect_uri=redirect_uri(self.config),
-            state=token,
-        )
+        # Straight to sign-in: once a Global Administrator has approved the app for the
+        # organization, any SharePoint Administrator can connect without them. Where it isn't
+        # approved yet, Microsoft says so and the callback explains who must approve.
+        return self._sign_in_url(encode_state(self.config, state), challenge)
 
     def callback_page(
         self,
@@ -252,11 +259,10 @@ class OneDriveSyncService:
             if error == "consent_required" or any(known in description for known in _ADMIN_APPROVAL_ERROR_CODES):
                 return callback_html(self.config, error=_ADMIN_APPROVAL_NEEDED)
             return callback_html(self.config, error=f"Microsoft sign-in was cancelled or failed ({error}).")
-        decoded = decode_state(state, self.config) if state else None
-        if state is None or decoded is None:
-            return callback_html(self.config, error=_SIGN_IN_EXPIRED)
         if (admin_consent or "").lower() == "true":
-            return RedirectResponse(self._sign_in_url(state, decoded.code_challenge), status_code=status.HTTP_302_FOUND)
+            return callback_html(self.config, approved=True)
+        if state is None or decode_state(state, self.config) is None:
+            return callback_html(self.config, error=_SIGN_IN_EXPIRED)
         if not code:
             return callback_html(self.config, error=_SIGN_IN_INCOMPLETE)
         return callback_html(self.config, code=code, state=state)

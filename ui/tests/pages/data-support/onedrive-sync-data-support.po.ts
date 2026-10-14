@@ -3,6 +3,9 @@ import { BaseInterceptor } from "./base-intercepter.po";
 export const ONEDRIVE_FOLDER_URL =
   "https://contoso.sharepoint.com/sites/AgentBarnTest/Shared%20Documents/Agent%20Barn";
 
+export const ONEDRIVE_APPROVAL_URL =
+  "https://login.microsoftonline.com/organizations/v2.0/adminconsent?client_id=app&scope=https%3A%2F%2Fgraph.microsoft.com%2F.default";
+
 /** An Organization's OneDrive sync status as the API returns it (snake_case). */
 export function oneDriveSyncStatus(overrides: Record<string, unknown> = {}) {
   return {
@@ -12,6 +15,7 @@ export function oneDriveSyncStatus(overrides: Record<string, unknown> = {}) {
     site_url: null,
     folder_web_url: null,
     connected_at: null,
+    approval_url: overrides.available === false ? null : ONEDRIVE_APPROVAL_URL,
     ...overrides,
   };
 }

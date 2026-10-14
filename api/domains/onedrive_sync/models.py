@@ -66,6 +66,9 @@ class OneDriveSyncConnectionRead(PydanticBaseModel):
     site_url: str | None = None
     folder_web_url: str | None = None
     connected_at: datetime | None = None
+    # The one-time Microsoft approval link to forward to a Global Administrator. Public: it
+    # carries only the app's client id and redirect URI.
+    approval_url: str | None = None
 
 
 class OneDriveSyncAuthorizeUrlRead(PydanticBaseModel):

@@ -78,9 +78,25 @@ export function OneDriveSyncPanel({ canManage }: { canManage: boolean }) {
             {canManage ? (
               <>
                 <Note>
-                  A Microsoft Global Administrator approves Agent Barn for your organization, and the person
+                  A Microsoft Global Administrator approves Agent Barn for your organization once, and the person
                   connecting must be a SharePoint Administrator and a member of the site they pick.
                 </Note>
+                {connection.approvalUrl && (
+                  <Note>
+                    Not approved yet? Send your Global Administrator the{" "}
+                    <a
+                      href={connection.approvalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="Approval link for your Microsoft Global Administrator"
+                      className="underline"
+                      style={{ color: "var(--accent-ink)" }}
+                    >
+                      approval link
+                    </a>
+                    , then connect once they&apos;ve approved.
+                  </Note>
+                )}
                 <button
                   type="button"
                   className="af-btn af-btn-primary w-fit"
