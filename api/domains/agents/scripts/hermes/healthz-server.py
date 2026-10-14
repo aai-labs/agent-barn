@@ -121,9 +121,7 @@ def _spend_limit_completion(path: str, request_body: bytes | None) -> tuple[str,
         "object": "chat.completion",
         "created": created,
         "model": model,
-        "choices": [
-            {"index": 0, "message": {"role": "assistant", "content": _SPENT_MESSAGE}, "finish_reason": "stop"}
-        ],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": _SPENT_MESSAGE}, "finish_reason": "stop"}],
         "usage": usage,
     }
     return "application/json", json.dumps(body).encode()
