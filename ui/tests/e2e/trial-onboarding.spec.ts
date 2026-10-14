@@ -182,6 +182,8 @@ test.describe("Trial onboarding", () => {
     expect(setups).toHaveLength(0);
     expect(completions).toHaveLength(1);
     await expect(page.getByRole("link", { name: "Chat with your agent" })).toHaveAttribute("href", `/dashboard/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}?tab=chat`);
+    await expect(page.getByRole("link", { name: "Connect a messaging app", exact: true })).toHaveAttribute("href", `/dashboard/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}/configuration?section=channels&connect=true`);
+    await expect(page.getByRole("link", { name: "Connect Telegram", exact: true })).toHaveCount(0);
   });
 
   test("retrying completion does not create or start the agent again", async ({ page }) => {
@@ -416,6 +418,10 @@ test.describe("Trial onboarding", () => {
     await onboardingPage.goto();
     await onboardingPage.chooseQuickStart();
     await onboardingPage.continueAction().click();
+    await expect(onboardingPage.goToDashboard()).toHaveClass(/\baf-btn-primary\b/);
+    await expect(onboardingPage.openTelegram()).not.toHaveClass(/\baf-btn-primary\b/);
+    await expect(onboardingPage.openTelegram()).toHaveAttribute("target", "_blank");
+    await expect(onboardingPage.openTelegram()).toHaveAttribute("href", "https://t.me/AgentBarnTestBot");
     await onboardingPage.goToDashboard().click();
 
     await page.waitForURL(`/dashboard/${TRIAL_ORG_ID}`);

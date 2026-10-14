@@ -61,6 +61,11 @@ test.describe("Hiring choices", () => {
     await expect(page.getByText("Linked as @jane_doe")).toBeVisible();
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Your agent is live in Telegram." })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Go to dashboard", exact: true })).toHaveClass(/\baf-btn-primary\b/);
+    await expect(page.getByRole("link", { name: "Open Telegram", exact: true })).not.toHaveClass(/\baf-btn-primary\b/);
+    await page.getByRole("button", { name: "Go to dashboard", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page).toHaveURL(`/dashboard/${TEST_ORG_ID}`);
     expect(requests.creations).toEqual([{
       name: "Brandon the Assistant", agent_type: "hermes", template_key: "general-purpose", approval_mode: "auto",
     }]);

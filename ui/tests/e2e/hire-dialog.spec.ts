@@ -304,7 +304,17 @@ test.describe("Hire Dialog", () => {
     await page.getByRole("combobox", { name: "Command approval", exact: true }).click();
     await page.getByRole("option", { name: "Manual" }).click();
 
-    await page.getByRole("radiogroup", { name: "Runtime" }).getByRole("radio", { name: "OpenClaw", exact: true }).click();
+    const runtime = page.getByRole("radiogroup", { name: "Runtime" });
+    const hermes = runtime.getByRole("radio", { name: "Hermes", exact: true });
+    const openclaw = runtime.getByRole("radio", { name: "OpenClaw", exact: true });
+    await hermes.focus();
+    await hermes.press("ArrowRight");
+    await expect(openclaw).toBeChecked();
+    await expect(openclaw).toBeFocused();
+    await openclaw.press("ArrowLeft");
+    await expect(hermes).toBeChecked();
+    await expect(hermes).toBeFocused();
+    await hermes.press("ArrowRight");
     await chooseTemplate(page);
 
     const createRequest = page.waitForRequest(
