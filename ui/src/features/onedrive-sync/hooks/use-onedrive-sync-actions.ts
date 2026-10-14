@@ -118,7 +118,7 @@ export function useAbandonOneDrive() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: oneDriveSyncKey.detail(organizationId) });
-      void queryClient.invalidateQueries({ queryKey: oneDriveSyncKey.lists() });
+      queryClient.removeQueries({ queryKey: oneDriveSyncKey.lists() });
     },
   });
 
@@ -162,7 +162,7 @@ export function useChooseOneDriveSite() {
     },
     onSuccess: (data) => {
       queryClient.setQueryData(oneDriveSyncKey.detail(organizationId), data);
-      void queryClient.invalidateQueries({ queryKey: oneDriveSyncKey.lists() });
+      queryClient.removeQueries({ queryKey: oneDriveSyncKey.lists() });
     },
   });
 

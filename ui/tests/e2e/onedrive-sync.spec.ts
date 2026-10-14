@@ -132,7 +132,7 @@ test.describe("Settings · OneDrive · connecting", () => {
     await data.organizations.interceptGetOrganization();
   });
 
-  test("an Owner connects through Microsoft, picks a site and gets the folder link", async () => {
+  test("an Owner connects through Microsoft, picks a site and gets the folder link", async ({ page }) => {
     await data.users.interceptGetUserContextRequest();
     const record = await data.oneDriveSync.interceptConnectFlow();
     await oneDrive.open();
@@ -151,6 +151,9 @@ test.describe("Settings · OneDrive · connecting", () => {
 
     await expect(oneDrive.openInOneDrive).toHaveAttribute("href", ONEDRIVE_FOLDER_URL);
     expect(record.siteBody).toEqual({ site_id: ONEDRIVE_SITE.id });
+    // The closing picker must not search again: the connection is no longer pending.
+    await page.waitForLoadState("networkidle");
+    expect(record.searches).toEqual(["Agent Barn"]);
   });
 
   test("an unfinished connection resumes at the site picker", async () => {

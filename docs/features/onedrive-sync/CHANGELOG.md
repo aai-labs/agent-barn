@@ -37,6 +37,11 @@ Acceptance criteria amendment: another Organization's caller gets **403**, not 4
 
 ## Changes
 
+### 2026-10-14 — AF-383 — No site search after the picker closes
+
+- Fixed: choosing a site or starting over refetched the active site search against a connection that was no longer pending, which the API answered with 409 (seen in the local API log during the manual run). `useChooseOneDriveSite` and `useAbandonOneDrive` now remove the cached searches instead of invalidating them.
+- Verified: the connect-flow test in `ui/tests/e2e/onedrive-sync.spec.ts` asserts that exactly one search was sent; it failed before the fix. Lint and type check pass.
+
 ### 2026-10-14 — AF-383 — Connect starts at sign-in; one-time approval link
 
 - Delivered: `authorize-url?purpose=connect` returns Microsoft's sign-in URL instead of admin consent. Status carries `approval_url` (`.default` admin consent at `organizations`, no state). The callback's `admin_consent=True` shows an "approved" page instead of redirecting. The settings section gives Owners and Admins the approval link. The PKCE challenge is no longer carried in the state.
