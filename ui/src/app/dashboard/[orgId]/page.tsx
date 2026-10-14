@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { AgentCard } from "@/features/agents/components/agent-card";
+import { EmptyTeam } from "@/features/agents/components/empty-team";
 import { HireDialog } from "@/features/agents/components/hire-dialog";
 import { HireTeammateCard } from "@/features/agents/components/hire-teammate-card";
 import { isQuiet } from "@/features/agents/utils";
@@ -59,7 +60,7 @@ export default function DashboardPage() {
             {greet}, {firstName}
           </h1>
           <div className="text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
-            {isLoading ? "Loading…" : `${running} working now · ${idle} idle`}
+            {isLoading ? "Loading…" : !error && total === 0 ? "Make room for the work you want to do." : `${running} working now · ${idle} idle`}
             {!isLoading && quiet > 0 && <span style={{ color: "var(--warn)" }}> · {quiet} quiet for 2+ weeks</span>}
           </div>
         </div>
@@ -87,17 +88,18 @@ export default function DashboardPage() {
               : displayedAgents.map((agent) => (
                   <AgentCard key={agent.id} agent={agent} href={`/dashboard/${orgId}/agents/${agent.id}`} />
                 ))}
-            {!isLoading && displayedAgents.length === 0 && (
+            {!isLoading && agents.length === 0 && <EmptyTeam onHire={() => setHireOpen(true)} />}
+            {!isLoading && agents.length > 0 && displayedAgents.length === 0 && (
               <div className="col-span-full flex min-h-56 flex-col items-center justify-center gap-1 text-center" style={{ color: "var(--ink-3)" }}>
                 <div className="font-medium text-[0.9375rem]" style={{ color: "var(--ink)" }}>
-                  {agents.length === 0 ? "No agents yet" : "No teammates match"}
+                  No teammates match
                 </div>
                 <div className="text-[0.844rem]">
-                  {agents.length === 0 ? "Hire your first teammate to get started." : "Try another name or clear your search."}
+                  Try another name or clear your search.
                 </div>
               </div>
             )}
-            {!isLoading && <HireTeammateCard onHire={() => setHireOpen(true)} />}
+            {!isLoading && agents.length > 0 && <HireTeammateCard onHire={() => setHireOpen(true)} />}
           </div>
         )}
       </div>

@@ -152,16 +152,27 @@ test.describe("Dashboard Page", () => {
     await expect(page.getByText("Showing 3 of 51 teammates. Search applies to the teammates shown.", { exact: true })).toBeVisible();
   });
 
-  test("shows empty state when no agents", async ({ page }) => {
-    await dataSupportPage.agents.interceptGetAgentsRequest({
-      body: { page: 1, page_size: 50, total: 0, items: [] },
+  for (const width of [320, 768, 1024, 1440]) {
+    test(`empty team has one clear hire action at ${width}px`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      await dataSupportPage.agents.interceptGetAgentsRequest({
+        body: { page: 1, page_size: 50, total: 0, items: [] },
+      });
+      await dataSupportPage.agents.interceptGetTemplatesRequest();
+      await dataSupportPage.agents.interceptGetModelsRequest();
+      await dataSupportPage.agents.interceptNameSuggestionRequest();
+      await dashboardPage.goto();
+
+      await expect(page.getByRole("heading", { name: "Meet your first AI teammate." })).toBeVisible();
+      await expect(dashboardPage.hireCard()).toHaveCount(1);
+      await expect(page.getByRole("button", { name: "Hire agent", exact: true })).toHaveCount(0);
+      await expect(page.getByText("0 working now · 0 idle")).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("empty-team.png"), fullPage: true });
+      await dashboardPage.openHireCard(true);
+      await expect(dashboardPage.agentNameInput()).toBeVisible();
     });
-
-    await dashboardPage.goto();
-
-    await expect(page.getByText("No agents yet")).toBeVisible();
-    await expect(dashboardPage.hireCard()).toBeVisible();
-  });
+  }
 
   test("shows error state when agents fail to load", async ({ page }) => {
     await dataSupportPage.agents.interceptGetAgentsRequest({

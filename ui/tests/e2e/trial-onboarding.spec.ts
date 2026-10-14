@@ -12,6 +12,7 @@ import {
 } from "../pages/data-support/onboarding-data-support.po";
 import { mockAgent, mockTemplates } from "../pages/data-support/agent-data-support.po";
 import { OnboardingPage } from "../pages/onboarding-page.po";
+import { DashboardPage } from "../pages/dashboard-page.po";
 
 const linkedAccount = {
   id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
@@ -453,7 +454,7 @@ test.describe("Trial onboarding", () => {
     await data.agents.interceptGetAgentHealthRequest();
 
     await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
-    await page.getByRole("button", { name: "Hire agent" }).click();
+    await new DashboardPage(page).openHireCard();
 
     await expect(page.getByLabel("Agent name")).toBeVisible();
   });
@@ -516,7 +517,7 @@ test.describe("Trial onboarding", () => {
     await data.agents.interceptGetAgentHealthRequest();
 
     await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
-    await page.getByRole("button", { name: "Hire agent" }).click();
+    await new DashboardPage(page).openHireCard();
 
     await expect(page.getByText("Trial organizations can have 1 agent.")).toBeVisible();
     await expect(page.getByLabel("Agent name")).toHaveCount(0);

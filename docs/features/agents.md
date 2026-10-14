@@ -1,5 +1,10 @@
 # Agents
 
+The Home page shows a single first-Agent panel when the user's visible team is empty,
+with example use cases and a hire action that opens the ordinary hire dialog. Once
+Agents exist, Home shows the Agent grid and its hire tile. Home owns its hire entry
+point; the top navigation keeps its hire action on other Organization pages.
+
 ## Read when
 
 Read before changing agent creation, Agent Access Roles, explicit Agent Access assignments, Agent General Access, lifecycle, runtime or platform selection, template pinning, Agent Template Overrides, model selection, skill assignment, credentials, logs, health, Agent Restore Points, or Kubernetes resources.
