@@ -112,7 +112,7 @@ agentModelAllowlist: ""
 selfSignupEnabled: false
 
 # How many Agents an Organization that is not a trial may run, unless a Platform
-# Administrator sets its own. Empty means no limit.
+# Administrator sets its own. Empty means the default of 10.
 organizationDefaultAgentLimit: ""
 
 # Agent Barn's own Telegram bot (token from @BotFather, and its @username without

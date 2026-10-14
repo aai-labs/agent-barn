@@ -179,7 +179,7 @@ releases:
       # Public trial signup stays off unless an environment opts in.
       - name: selfSignupEnabled
         value: {{ env "SELF_SIGNUP_ENABLED" | default "false" | quote }}
-      # Empty means Organizations that are not trials may run any number of Agents.
+      # Empty means the default of 10 Agents for Organizations that are not trials.
       - name: organizationDefaultAgentLimit
         value: {{ env "ORGANIZATION_DEFAULT_AGENT_LIMIT" | default "" | quote }}
       - name: litellmKeyServiceAccountName
