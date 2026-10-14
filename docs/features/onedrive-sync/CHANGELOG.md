@@ -7,14 +7,22 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 ## Current state
 
 - Delivered: the platform app settings `ONEDRIVE_SYNC_CLIENT_ID` and `ONEDRIVE_SYNC_CLIENT_SECRET` in `api/core/config.py`. `Config.is_onedrive_sync_enabled` is true only when both are non-blank. Nothing reads the settings yet.
+- Delivered: deploy wiring. The API chart Secret renders `ONEDRIVE_SYNC_CLIENT_ID` / `ONEDRIVE_SYNC_CLIENT_SECRET` from `onedriveSyncClientId` / `onedriveSyncClientSecret`; Helmfile reads them from the environment; `deploy.yml` and `deploy-public.yml` pass the shared `vars.ONEDRIVE_SYNC_CLIENT_ID` and `secrets.ONEDRIVE_SYNC_CLIENT_SECRET`. Unset values render blank, leaving OneDrive sync unavailable.
 - Delivered: verification of the Microsoft flow (T-1, T-5) against a real tenant, recorded in the 2026-10-14 entry.
-- In transition: nothing.
-- Next: deploy wiring (Helm, Helmfile, deploy workflows, operations guide).
-- Blockers: none.
+- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
+- Next: Microsoft identity support for a confidential client and consent `state`.
+- Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Deploy wiring
+
+- Delivered: `onedriveSyncClientId` / `onedriveSyncClientSecret` in `helm/agentbarn-api/values.yaml` and `templates/secret.yaml`, the matching `helmfile.yaml.gotmpl` values, and the variable and secret in `deploy.yml` and `deploy-public.yml`, shared across environments like the Google OAuth client.
+- Changed: `docs/guidelines/operations.md` lists the OneDrive sync Microsoft app among the shared staging and public references.
+- Verified: `helm template` of the API chart renders both keys when set and blank when unset.
+- Follow-up: Microsoft identity support for a confidential client and consent `state`.
 
 ### 2026-10-14 — AF-383 — Platform app settings
 
