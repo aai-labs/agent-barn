@@ -292,6 +292,10 @@ _Avoid_: credential
 The Agent-specific choice of whether a tool Integration keeps long-lived provider credentials outside its runtime. It is independent of credential ownership; Agents sharing a Shared Credential can choose independently. New bindings default OFF, and running changes require explicit application and restart. See [Integrations](docs/features/integrations.md#optional-credential-isolation) for routing, applied generations and recovery.
 _Avoid_: encryption toggle, Shared Credential setting
 
+**OneDrive Sync Connection**:
+An Organization's connection to one SharePoint site through the platform Microsoft app, where Agent Barn keeps an "Agent Barn" folder. An Organization has at most one open (pending or active) connection. It is not an Integration: no Agent is given access to it. See [OneDrive sync](docs/features/onedrive-sync/CHANGELOG.md).
+_Avoid_: OneDrive integration, SharePoint integration
+
 **Conversation Message**:
 An inbound or outbound chat message ingested from an agent runtime and associated with a channel, direct message, session, and optional thread.
 _Avoid_: conversation

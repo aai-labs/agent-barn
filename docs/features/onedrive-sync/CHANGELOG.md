@@ -11,13 +11,26 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
 - Delivered: verification of the Microsoft flow (T-1, T-5) against a real tenant, recorded in the 2026-10-14 entry.
 - Delivered: `MicrosoftIdentityClient.exchange_code(..., client_secret=None)` redeems as a confidential client when a secret is given (still with the PKCE verifier), and `build_app_permission_consent_url(..., state=None)` carries a `state`. Existing SharePoint callers pass neither and are unchanged.
 - Delivered: `MicrosoftGraphSites.search_sites`, `get_site` (both return `SiteSummary(id, name, web_url)`, the name preferring `displayName`) and `ensure_folder` (returns `FolderRef(item_id, web_url)`). `ensure_folder` reads the folder by path at the root of the site's default library, creates it on 404 with `conflictBehavior: fail`, and reuses one created in between.
-- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
-- Next: the `onedrive_sync` domain model, migration, repository and lookup.
+- Delivered: the `onedrive_sync_connection` table (migration `734b0f2b3793`) with statuses `pending`, `active` and `disconnected`. The partial unique index `uq_onedrive_sync_connection_open` allows one open (non-disconnected) row per Organization; rows cascade on Organization delete.
+- Delivered: `OneDriveSyncRepository` in `api/domains/onedrive_sync/`:
+  - `create_pending` replaces a pending row in the same transaction and raises `OneDriveSyncConnectionConflict` while one is active;
+  - `activate` (pending only) records the site, folder and grant id and clears the delegated token;
+  - `mark_disconnected` (active only), `delete_pending` and `get_open`.
+- Delivered: `OneDriveSyncLookupService.folder_site_id(organization_id)`, the active connection's site id or None, for other domains.
+- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. No route uses the table yet.
+- Next: status, authorize-url and callback routes.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Connection model, migration, repository and lookup
+
+- Delivered: `api/domains/onedrive_sync/` (`models.py`, `repository.py`, `lookup.py`) and migration `734b0f2b3793_add_onedrive_sync_connection.py`, registered in `api/migrations/env.py`.
+- Changed: `CONTEXT.md` defines OneDrive Sync Connection.
+- Verified: `api/tests/integration/test_onedrive_sync_repository.py` (14 tests) covers the repository transitions, the one-open-row index, the Organization delete cascade and the lookup. A one-off autogenerate comparison found no drift between the model and the migration.
+- Follow-up: status, authorize-url and callback routes.
 
 ### 2026-10-14 — AF-383 — Graph site search, site lookup and folder
 
