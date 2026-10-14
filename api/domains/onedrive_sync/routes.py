@@ -1,13 +1,17 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import HTMLResponse
 from fastapi_injector import Injected
 
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
-from api.domains.onedrive_sync.models import OneDriveSyncAuthorizeUrlRead, OneDriveSyncConnectionRead
+from api.domains.onedrive_sync.models import (
+    OneDriveSyncAuthorizeUrlRead,
+    OneDriveSyncConnectionRead,
+    OneDriveSyncSignInCreate,
+)
 from api.domains.onedrive_sync.service import OneDriveSyncPurpose, OneDriveSyncService
 
 onedrive_sync_router = APIRouter(
@@ -35,6 +39,25 @@ def onedrive_sync_authorize_url(
     service: Annotated[OneDriveSyncService, Injected(OneDriveSyncService)],
 ):
     return OneDriveSyncAuthorizeUrlRead(authorize_url=service.authorize_url(organization_id, purpose, context))
+
+
+@onedrive_sync_router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+def abandon_onedrive_sync_connection(
+    organization_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[OneDriveSyncService, Injected(OneDriveSyncService)],
+):
+    service.abandon_pending(organization_id, context)
+
+
+@onedrive_sync_router.post("/sign-in", response_model=OneDriveSyncConnectionRead)
+def complete_onedrive_sync_sign_in(
+    organization_id: UUID,
+    data: OneDriveSyncSignInCreate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[OneDriveSyncService, Injected(OneDriveSyncService)],
+):
+    return service.complete_sign_in(organization_id, data.code, data.state, context)
 
 
 @onedrive_sync_callback_router.get("/callback", response_class=HTMLResponse)

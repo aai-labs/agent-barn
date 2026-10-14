@@ -18,13 +18,21 @@ Related context: [Integrations](../integrations.md), [RBAC implementation brief]
   - `mark_disconnected` (active only), `delete_pending` and `get_open`.
 - Delivered: `OneDriveSyncLookupService.folder_site_id(organization_id)`, the active connection's site id or None, for other domains.
 - Delivered: `GET /organizations/{organization_id}/onedrive-sync/connection` (status, `organization.read`), `GET …/connection/authorize-url?purpose=connect|disconnect` (`organization.update`), and the unauthenticated `GET /api/v1/integrations/onedrive-sync/callback`. The behaviour contract is [`README.md`](README.md).
-- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. A completed sign-in reaches the opener but nothing redeems its code yet.
-- Next: completing the sign-in into a pending connection, and abandoning it.
+- Delivered: `POST …/connection/sign-in` redeems the administrator's code into a pending connection holding their encrypted delegated token, and `DELETE …/connection` abandons a pending connection.
+- In transition: nothing. No GitHub variable or secret is set yet, so every deployed environment renders the settings blank. A pending connection cannot yet choose a site.
+- Next: the site picker, the site grant and the "Agent Barn" folder.
 - Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
 ## Changes
+
+### 2026-10-14 — AF-383 — Sign-in to a pending connection, and abandon
+
+- Delivered: `OneDriveSyncService.complete_sign_in` and `abandon_pending` with `POST …/connection/sign-in` and `DELETE …/connection`. The code is redeemed as a confidential client at the `organizations` authority, the tenant comes from the `id_token` `tid`, both site scopes must be granted, and the delegated token is stored encrypted.
+- Changed: `README.md` connect flow, and `api/developer_docs/operations-v1.json` with the two new operations.
+- Verified: 16 new tests in `api/tests/integration/test_onedrive_sync_connection.py`, including a state issued to another user, Organization or purpose, a Member, a read-only API key, missing tenant or scope, Microsoft refusal and outage, replacing a pending connection and refusal while active.
+- Follow-up: the site picker, the site grant and the "Agent Barn" folder.
 
 ### 2026-10-14 — AF-383 — Status, authorize URL and callback
 

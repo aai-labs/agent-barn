@@ -61,6 +61,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/onedrive-sync/connection",
+    "abandon_onedrive_sync_connection_organizations__organization_id__onedrive_sync_connection_delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/shared-credentials/{credential_id}",
     "delete_shared_credential_organizations__organization_id__shared_credentials__credential_id__delete"
   ],
@@ -1033,6 +1038,11 @@
     "POST",
     "/organizations/{organization_id}/memory-grants",
     "create_memory_grant_organizations__organization_id__memory_grants_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/onedrive-sync/connection/sign-in",
+    "complete_onedrive_sync_sign_in_organizations__organization_id__onedrive_sync_connection_sign_in_post"
   ],
   [
     "POST",

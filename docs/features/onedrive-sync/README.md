@@ -35,8 +35,17 @@ When either setting is blank, status reports `available: false` and starting a c
 4. Microsoft redirects to `GET /api/v1/integrations/onedrive-sync/callback`. The callback reads `error` first, because Microsoft also sends `admin_consent=True` on a refused consent. A refused or required consent posts "A Microsoft Global Administrator needs to approve Agent Barn for your organization." to the opener.
 5. After consent, the callback answers 302 straight to sign-in at the `organizations` authority, with `Sites.FullControl.All`, `Sites.Read.All`, `openid`, `profile`, `prompt=select_account` and the state's PKCE challenge. Microsoft shows no second consent prompt.
 6. After sign-in, the callback posts `{type: "onedrive-sync-oauth", code, state}` to the opener.
+7. The opener calls `POST …/connection/sign-in {code, state}` (`organization.update`; a read-only API key is refused like on any mutating route). The server:
+   1. requires a connect state issued to this caller for this Organization (400 otherwise);
+   2. redeems the code at the `organizations` authority as a confidential client (the platform secret plus the PKCE verifier);
+   3. takes the tenant from the `id_token`'s `tid` (400 if missing);
+   4. requires both `Sites.FullControl.All` and `Sites.Read.All` in the granted scope (400 otherwise).
 
-Completing the sign-in, choosing the site and disconnecting are listed under `Next` in the [change log](CHANGELOG.md).
+   It then stores a pending connection holding the delegated access token Fernet-encrypted (`AGENT_TOKEN_ENCRYPTION_KEY`) until the token expires. No refresh token is requested. A new sign-in replaces an existing pending connection; one is refused (409) while a connection is active. Microsoft refusals are 400 and an unreachable Microsoft is 502.
+
+`DELETE …/connection` (`organization.update`) abandons a pending connection and leaves an active one alone.
+
+Choosing the site and disconnecting are listed under `Next` in the [change log](CHANGELOG.md).
 
 ## Disconnect flow
 

@@ -1,7 +1,8 @@
 import json
+import logging
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -15,10 +16,15 @@ from api.domains.agents.microsoft_graph_scopes import (
     GRAPH_SCOPE_PREFIX,
     READ_PERMISSION,
     SITE_GRANT_PERMISSION,
+    granted_permissions,
 )
 from api.domains.agents.microsoft_identity import (
+    MicrosoftIdentityClient,
+    MicrosoftIdentityError,
+    MicrosoftIdentityUnavailable,
     build_app_permission_consent_url,
     build_authorize_url,
+    claims_from_id_token,
     pkce_pair,
 )
 from api.domains.auth.models import CurrentUserContext
@@ -28,10 +34,12 @@ from api.domains.onedrive_sync.models import (
     OneDriveSyncConnectionRead,
     OneDriveSyncStatus,
 )
-from api.domains.onedrive_sync.repository import OneDriveSyncRepository
+from api.domains.onedrive_sync.repository import OneDriveSyncConnectionConflict, OneDriveSyncRepository
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.crypto import decrypt_token, encrypt_token
+
+logger = logging.getLogger(__name__)
 
 MESSAGE_TYPE = "onedrive-sync-oauth"
 MULTI_TENANT_AUTHORITY = "organizations"
@@ -58,6 +66,15 @@ _MANAGE_DENIED = "You don't have permission to manage OneDrive sync for this org
 _ADMIN_APPROVAL_NEEDED = "A Microsoft Global Administrator needs to approve Agent Barn for your organization."
 _SIGN_IN_EXPIRED = "This sign-in has expired. Please try again."
 _SIGN_IN_INCOMPLETE = "Microsoft did not complete the sign-in. Please try again."
+_SIGN_IN_NOT_YOURS = "This sign-in has expired or was started by someone else. Please connect again."
+_SIGN_IN_REFUSED = "Microsoft refused the sign-in. Please connect again."
+_SIGN_IN_WITHOUT_TENANT = "Microsoft didn't say which organization you signed in to. Sign in with a work account."
+_SITE_ADMINISTRATION_MISSING = (
+    "Microsoft didn't grant permission to manage SharePoint sites. Sign in as a SharePoint or Microsoft 365 "
+    "administrator."
+)
+_UNREACHABLE = "Microsoft couldn't be reached. Please try again."
+_REQUIRED_PERMISSIONS = frozenset({SITE_GRANT_PERMISSION, READ_PERMISSION})
 
 OneDriveSyncPurpose = Literal["connect", "disconnect"]
 
@@ -149,6 +166,7 @@ def callback_html(
 class OneDriveSyncService:
     repository: OneDriveSyncRepository
     permission_policy: PermissionPolicy
+    identity: MicrosoftIdentityClient
     config: Config
 
     def status(self, organization_id: UUID, context: CurrentUserContext) -> OneDriveSyncConnectionRead:
@@ -217,6 +235,58 @@ class OneDriveSyncService:
         if not code:
             return callback_html(self.config, error=_SIGN_IN_INCOMPLETE)
         return callback_html(self.config, code=code, state=state)
+
+    def complete_sign_in(
+        self, organization_id: UUID, code: str, state_token: str, context: CurrentUserContext
+    ) -> OneDriveSyncConnectionRead:
+        """Redeem the administrator's code and hold their delegated token on a pending connection
+        until a site is chosen. The tenant is the one Microsoft names in the id_token."""
+        self._require_manage(organization_id, context)
+        self._require_configured()
+        state = decode_state(state_token, self.config)
+        if (
+            state is None
+            or state.purpose != "connect"
+            or state.organization_id != organization_id
+            or state.user_id != context.user.id
+        ):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SIGN_IN_NOT_YOURS)
+        try:
+            tokens = self.identity.exchange_code(
+                tenant_id=MULTI_TENANT_AUTHORITY,
+                client_id=self.config.onedrive_sync_client_id,
+                code=code,
+                redirect_uri=redirect_uri(self.config),
+                code_verifier=state.code_verifier,
+                scopes=SIGN_IN_SCOPES,
+                client_secret=self.config.onedrive_sync_client_secret,
+            )
+        except MicrosoftIdentityError as exc:
+            logger.info("OneDrive sync sign-in refused by Microsoft: %s", exc.error)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SIGN_IN_REFUSED) from exc
+        except MicrosoftIdentityUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_UNREACHABLE) from exc
+        tenant_id = str(claims_from_id_token(tokens.id_token).get("tid") or "")
+        if not tenant_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SIGN_IN_WITHOUT_TENANT)
+        if not _REQUIRED_PERMISSIONS <= granted_permissions(tokens.scope.split()):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_SITE_ADMINISTRATION_MISSING)
+        try:
+            self.repository.create_pending(
+                organization_id,
+                tenant_id=tenant_id,
+                connected_by_user_id=context.user.id,
+                pending_access_token=encrypt_token(tokens.access_token, self.config.agent_token_encryption_key),
+                pending_expires_at=datetime.now(UTC) + timedelta(seconds=tokens.expires_in),
+            )
+        except OneDriveSyncConnectionConflict as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_ALREADY_CONNECTED) from exc
+        return self.status(organization_id, context)
+
+    def abandon_pending(self, organization_id: UUID, context: CurrentUserContext) -> None:
+        """Forget an unfinished connection. An active connection is left alone; disconnect it instead."""
+        self._require_manage(organization_id, context)
+        self.repository.delete_pending(organization_id)
 
     def _sign_in_url(self, state: str, code_challenge: str) -> str:
         return build_authorize_url(

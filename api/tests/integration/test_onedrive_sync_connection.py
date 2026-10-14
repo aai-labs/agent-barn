@@ -22,14 +22,19 @@ from hamcrest import (
 )
 
 from api.core.config import get_config
+from api.domains.agents.microsoft_identity import MicrosoftIdentityError, MicrosoftIdentityUnavailable, MicrosoftTokens
 from api.domains.agents.sharepoint_service import SignInState, encode_sign_in_state
+from api.domains.onedrive_sync.models import OneDriveSyncStatus
 from api.domains.onedrive_sync.repository import OneDriveSyncRepository
+from api.domains.onedrive_sync.service import OneDriveSyncState, encode_state
 from api.domains.users.organization_users.models import OrganizationRole
+from api.infrastructure.crypto import decrypt_token
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.sharepoint import FakeMicrosoftIdentityModule, fake_identity, id_token
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 _CLIENT_ID = "7029602d-0000-4000-8000-000000000001"
@@ -44,6 +49,8 @@ _SIGN_IN_SCOPE = (
     "https://graph.microsoft.com/Sites.FullControl.All https://graph.microsoft.com/Sites.Read.All openid profile"
 )
 _ADMIN_APPROVAL = "A Microsoft Global Administrator needs to approve Agent Barn for your organization."
+_GRANTED_SCOPE = "https://graph.microsoft.com/Sites.FullControl.All https://graph.microsoft.com/Sites.Read.All"
+_DELEGATED_ACCESS_TOKEN = "delegated-access-token"
 
 
 def _env(client_id: str = _CLIENT_ID, client_secret: str = _CLIENT_SECRET):
@@ -60,7 +67,7 @@ def _env(client_id: str = _CLIENT_ID, client_secret: str = _CLIENT_SECRET):
 def _given(role: OrganizationRole = OrganizationRole.OWNER, *, configured: bool = True):
     return [
         _env() if configured else _env(client_id="", client_secret=""),
-        prepare_injector(),
+        prepare_injector(modules=[FakeMicrosoftIdentityModule()]),
         prepare_api_server(),
         create_test_client(),
         database_repo_is_ready(),
@@ -399,3 +406,223 @@ def test_script_injection_in_the_error_is_escaped():
         response = context.client.get(_CALLBACK, params={"error": "</script><script>alert(1)</script>"})
 
         assert_that(response.text, not_(contains_string("</script><script>")))
+
+
+# --- sign-in -----------------------------------------------------------------------
+
+
+def _signed_in_tokens(*, scope: str = _GRANTED_SCOPE, tenant_id: str | None = _TENANT_ID) -> MicrosoftTokens:
+    claims_token = id_token(tenant_id=tenant_id) if tenant_id else None
+    return MicrosoftTokens(
+        access_token=_DELEGATED_ACCESS_TOKEN, refresh_token=None, expires_in=3600, scope=scope, id_token=claims_token
+    )
+
+
+def _sign_in(context, state: str, headers: dict | None = None):
+    return context.client.post(
+        f"{_base(context)}/sign-in", json={"code": "the-code", "state": state}, headers=headers or _auth(context)
+    )
+
+
+def _forged_state(context, *, organization_id=None, user_id=None, purpose="connect") -> str:
+    return encode_state(
+        get_config(),
+        OneDriveSyncState(
+            organization_id=organization_id or context.organization.id,
+            user_id=user_id or context.user.id,
+            purpose=purpose,
+            code_verifier="v" * 50,
+            code_challenge="c",
+        ),
+    )
+
+
+def test_signing_in_redeems_the_code_as_the_platform_app_and_holds_a_pending_connection():
+    with given(_given()) as context:
+        fake_identity(context).exchange_result = _signed_in_tokens()
+        state = _consent_state(context)
+
+        with when("the Owner's popup hands back Microsoft's code"):
+            response = _sign_in(context, state)
+
+        with then("the code is redeemed with the platform app's secret at the multi-tenant authority"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json(), has_entries(available=True, status="pending"))
+            assert_that(response.text, not_(contains_string(_DELEGATED_ACCESS_TOKEN)))
+            exchange = fake_identity(context).exchanges[0]
+            assert_that(
+                exchange,
+                has_entries(
+                    tenant_id="organizations",
+                    client_id=_CLIENT_ID,
+                    client_secret=_CLIENT_SECRET,
+                    code="the-code",
+                    redirect_uri=_REDIRECT_URI,
+                    scopes=tuple(_SIGN_IN_SCOPE.split()),
+                ),
+            )
+            assert_that(len(exchange["code_verifier"]) >= 43, equal_to(True))
+
+        with then("the tenant comes from the sign-in and the delegated token is kept only encrypted"):
+            connection = context.injector.get(OneDriveSyncRepository).get_open(context.organization.id)
+            assert connection is not None
+            assert connection.pending_access_token is not None
+            assert_that(connection.status, equal_to(OneDriveSyncStatus.PENDING))
+            assert_that(connection.tenant_id, equal_to(_TENANT_ID))
+            assert_that(connection.connected_by_user_id, equal_to(context.user.id))
+            assert_that(connection.pending_access_token, is_not(equal_to(_DELEGATED_ACCESS_TOKEN)))
+            assert_that(
+                decrypt_token(connection.pending_access_token, TEST_ENCRYPTION_KEY),
+                equal_to(_DELEGATED_ACCESS_TOKEN),
+            )
+            assert_that(connection.pending_expires_at, is_not(none()))
+
+
+def test_a_state_issued_to_someone_else_is_refused():
+    with given(_given()) as context:
+        state = _forged_state(context, user_id=uuid7())
+
+        response = _sign_in(context, state)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(fake_identity(context).exchanges, equal_to([]))
+
+
+def test_a_state_issued_for_another_organization_is_refused():
+    with given(_given()) as context:
+        response = _sign_in(context, _forged_state(context, organization_id=uuid7()))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_a_disconnect_state_cannot_complete_a_connect():
+    with given(_given()) as context:
+        response = _sign_in(context, _forged_state(context, purpose="disconnect"))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+def test_a_member_cannot_complete_a_sign_in():
+    with given(_given()) as context:
+        headers = _member_headers(context)
+        state = _forged_state(context)
+
+        response = _sign_in(context, state, headers=headers)
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(fake_identity(context).exchanges, equal_to([]))
+
+
+def test_a_read_only_api_key_cannot_complete_a_sign_in():
+    with given(_given()) as context:
+        key = context.client.post(
+            "/api/v1/auth/me/api-keys",
+            json={"name": "Automation", "access_mode": "READ_ONLY"},
+            headers=_auth(context),
+        ).json()["token"]
+
+        response = _sign_in(context, _consent_state(context), headers={"Authorization": f"Bearer {key}"})
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_signing_in_is_unavailable_when_the_platform_app_is_not_configured():
+    with given(_given(configured=False)) as context:
+        response = _sign_in(context, _forged_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
+
+
+def test_a_sign_in_without_a_tenant_is_refused():
+    with given(_given()) as context:
+        fake_identity(context).exchange_result = _signed_in_tokens(tenant_id=None)
+
+        response = _sign_in(context, _consent_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(context.injector.get(OneDriveSyncRepository).get_open(context.organization.id), none())
+
+
+def test_a_sign_in_without_site_administration_is_refused():
+    with given(_given()) as context:
+        fake_identity(context).exchange_result = _signed_in_tokens(scope="https://graph.microsoft.com/Sites.Read.All")
+
+        response = _sign_in(context, _consent_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json()["detail"], contains_string("administrator"))
+
+
+def test_a_sign_in_microsoft_refuses_is_reported():
+    with given(_given()) as context:
+        fake_identity(context).exchange_result = MicrosoftIdentityError("invalid_grant", "AADSTS70008: expired code")
+
+        response = _sign_in(context, _consent_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.text, not_(contains_string(_CLIENT_SECRET)))
+
+
+def test_an_unreachable_microsoft_is_reported():
+    with given(_given()) as context:
+        fake_identity(context).exchange_result = MicrosoftIdentityUnavailable("ConnectError")
+
+        response = _sign_in(context, _consent_state(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+
+
+def test_signing_in_again_replaces_the_pending_connection():
+    with given(_given()) as context:
+        fake_identity(context).exchange_result = _signed_in_tokens()
+        _sign_in(context, _consent_state(context))
+        first = context.injector.get(OneDriveSyncRepository).get_open(context.organization.id)
+
+        _sign_in(context, _consent_state(context))
+
+        second = context.injector.get(OneDriveSyncRepository).get_open(context.organization.id)
+        assert first is not None and second is not None
+        assert_that(second.id, is_not(equal_to(first.id)))
+
+
+def test_signing_in_is_refused_while_connected():
+    with given(_given()) as context:
+        fake_identity(context).exchange_result = _signed_in_tokens()
+        state = _forged_state(context)
+        _active(context)
+
+        response = _sign_in(context, state)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+
+# --- abandon -----------------------------------------------------------------------
+
+
+def test_abandoning_a_pending_connection_forgets_it():
+    with given(_given()) as context:
+        _pending(context)
+
+        response = context.client.delete(_base(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), has_entries(status=None))
+
+
+def test_abandoning_leaves_an_active_connection_alone():
+    with given(_given()) as context:
+        _active(context)
+
+        response = context.client.delete(_base(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(context.client.get(_base(context), headers=_auth(context)).json(), has_entries(status="active"))
+
+
+def test_a_member_cannot_abandon_a_connection():
+    with given(_given()) as context:
+        _pending(context)
+
+        response = context.client.delete(_base(context), headers=_member_headers(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
