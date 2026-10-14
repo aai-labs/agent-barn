@@ -48,6 +48,16 @@ check offers retry and keeps both choices disabled. Creation still enforces the 
 under the existing database lock, including when capacity changes after the check.
 Creating or deleting an Agent invalidates the Organization read as well as Agent lists.
 
+## Messaging connection choices
+
+The general Messaging picker offers users' own Telegram bots and other supported
+platforms. Agent Barn Telegram is reserved for ready-made setup and is excluded
+from this picker; existing shared-bot Connections can still be managed and linked.
+An Agent has one Telegram adapter, so either Telegram Connection type hides
+Telegram from the add picker, including when disabled. Deleting the existing
+Connection frees that choice. The API/database independently reject conflicting
+Telegram types; picker filtering does not replace that enforcement.
+
 ## Read when
 
 Read before changing agent creation, Agent Access Roles, explicit Agent Access assignments, Agent General Access, lifecycle, runtime or platform selection, template pinning, Agent Template Overrides, model selection, skill assignment, credentials, logs, health, Agent Restore Points, or Kubernetes resources.
