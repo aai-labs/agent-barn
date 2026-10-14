@@ -41,19 +41,19 @@ function credentialsForProviders(
  * Shared by the hire dialog and onboarding's "Set up your agent" step, which lay the
  * same fields out differently.
  */
-export function useHireAgentForm({ onHired, initialTemplateKey = "" }: { onHired: (agent: HiredAgent) => void; initialTemplateKey?: string }) {
+export function useHireAgentForm({ onHired }: { onHired: (agent: HiredAgent) => void }) {
   const { templates, isLoading: isLoadingTemplates, error: templatesError, refetch: reloadTemplates } = useTemplates();
   const createAgent = useCreateAgent();
   const startAgent = useStartAgent();
   const suggestion = useAgentNameSuggestion();
   const [manualName, setManualName] = useState<string | null>(null);
-  const [templateKey, setTemplateKey] = useState(initialTemplateKey);
+  const [templateKey, setTemplateKey] = useState("");
   const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
   const [model, setModel] = useState<string | null>(null);
   const { defaultModel } = useModels();
   const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
-  const [skillSelection, setSelectedSkillIds] = useState<string[] | null>(null);
-  const [credentialSelection, setSkillCredentials] = useState<IntegrationDraft[] | null>(null);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
   const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [provisioningFailure, setProvisioningFailure] =
@@ -67,13 +67,6 @@ export function useHireAgentForm({ onHired, initialTemplateKey = "" }: { onHired
     ? formatAgentName(suggestion.firstName, template?.templateName)
     : "");
   const { standalone, groups } = splitRequiredSkills(template?.requiredSkills ?? []);
-  // A preset can resolve after the catalogue arrives. Derive its initial required
-  // skills and credentials until the user edits them, just as selecting a template does.
-  const selectedSkillIds = skillSelection ?? standalone.map((skill) => skill.id);
-  const skillCredentials = credentialSelection ?? credentialsForProviders(
-    [...new Set(standalone.flatMap((skill) => skill.requiredProviders))].filter((provider) => !isAutoConfiguredProvider(provider)),
-    [],
-  );
   const missingGroupChoice = groups.some((group) => !(groupChoices[group.key]?.length));
   const pending = createAgent.isPending || startAgent.isPending;
   const canHire =
@@ -100,7 +93,7 @@ export function useHireAgentForm({ onHired, initialTemplateKey = "" }: { onHired
     ].filter((provider) => !isAutoConfiguredProvider(provider));
     setSelectedSkillIds(nextStandalone.map((skill) => skill.id));
     setGroupChoices({});
-    setSkillCredentials((current) => credentialsForProviders(requiredProviders, current ?? []));
+    setSkillCredentials((current) => credentialsForProviders(requiredProviders, current));
   }
 
   function handleGroupChoiceChange(groupKey: string, skillId: string) {

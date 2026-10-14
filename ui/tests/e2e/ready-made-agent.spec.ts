@@ -1,11 +1,10 @@
 import { expect, test } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
-import { MOCK_AGENT_ID, mockTemplates } from "../pages/data-support/agent-data-support.po";
-import { mockJiraSkill } from "../pages/data-support/skill-data-support.po";
+import { MOCK_AGENT_ID, mockAgent } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
-import { TRIAL_ORG_ID, trialUserContext } from "../pages/data-support/onboarding-data-support.po";
+import { OnboardingDataSupport, TRIAL_CONNECTION_ID, TRIAL_DEEP_LINK, TRIAL_FRESH_DEEP_LINK, TRIAL_ORG_ID, trialUserContext } from "../pages/data-support/onboarding-data-support.po";
 
 test.describe("Hiring choices", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -22,92 +21,110 @@ test.describe("Hiring choices", () => {
     await data.agents.interceptGetTemplatesRequest();
     await data.agents.interceptGetModelsRequest();
     await data.agents.interceptCreateAgentRequest();
-    await data.agents.interceptStartAgentRequest();
+    await data.communicationConnections.interceptQuickStartConnections(MOCK_AGENT_ID, TRIAL_CONNECTION_ID);
+    const links = new OnboardingDataSupport(page, { organizationId: TEST_ORG_ID, agentId: MOCK_AGENT_ID, connectionId: TRIAL_CONNECTION_ID });
+    await links.interceptLinkedAccounts();
+    await links.interceptLinkTokens();
+    await data.agents.interceptStartAgentRequest({ body: { ...mockAgent, status: "RUNNING" } });
   });
 
-  for (const telegram of [false, true]) {
-    test(`an existing team can hire a ready-made assistant and open ${telegram ? "channel setup" : "Web Chat"}`, async ({ page }) => {
-      const data = new DataSupport(page);
-      const requests = data.agents.trackHiringRequests();
-      const dashboard = new DashboardPage(page);
-      await dashboard.goto();
-      await dashboard.openHireChoices();
-      await expect(page.getByRole("radio", { name: /Build your own/ })).toBeVisible();
-      expect(requests.creations).toHaveLength(0);
-      await dashboard.chooseReadyMadeHiring();
-      await expect(page.getByRole("radiogroup", { name: "Runtime" }).getByRole("radio", { name: "Hermes", exact: true })).toBeChecked();
-      await expect(page.getByRole("combobox", { name: "Template", exact: true })).toContainText("General Purpose");
-      await expect(page.getByRole("radio", { name: /Use organization default/ })).toBeChecked();
-      await dashboard.agentNameInput().fill("My ready-made assistant");
-      await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
-      await expect(page.getByRole("heading", { name: /is ready$/ })).toBeVisible();
-      expect(requests.creations).toEqual([{
-        name: "My ready-made assistant", agent_type: "hermes", template_key: "general-purpose", template_version: 1, approval_mode: "auto",
-      }]);
-      expect(requests.starts).toHaveLength(1);
-      await page.getByRole("button", { name: telegram ? "Connect Telegram" : "Chat on the web", exact: true }).click();
-      const base = `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}`;
-      await expect(page).toHaveURL(telegram ? `${base}/configuration?section=channels&connect=true` : `${base}?tab=chat`);
-    });
-  }
+  test("ready-made setup waits for explicit hiring confirmation", async ({ page }) => {
+    const requests = new DataSupport(page).agents.trackHiringRequests();
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+    await dashboard.openHireChoices();
+    await dashboard.chooseReadyMadeHiring();
+    await expect(page.getByRole("heading", { name: "Your ready-made assistant" })).toBeVisible();
+    await expect(page.getByText("General Purpose", { exact: true })).toBeVisible();
+    expect(requests.creations).toHaveLength(0);
+    expect(requests.starts).toHaveLength(0);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(requests.creations).toHaveLength(0);
+  });
 
-  test("retrying a ready-made startup never creates a second agent", async ({ page }) => {
+  test("an existing team can use the onboarding Telegram linking flow", async ({ page }) => {
+    const data = new DataSupport(page);
+    const links = new OnboardingDataSupport(page, { organizationId: TEST_ORG_ID, agentId: MOCK_AGENT_ID, connectionId: TRIAL_CONNECTION_ID });
+    await links.interceptLinkTokens({ statuses: ["waiting", "linked"] });
+    const requests = data.agents.trackHiringRequests();
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+    await dashboard.openHireChoices();
+    expect(requests.creations).toHaveLength(0);
+    await dashboard.chooseReadyMadeHiring();
+    await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Say hi to @AgentBarnTestBot" })).toBeVisible();
+    await expect(page.getByLabel("Agent name")).toHaveCount(0);
+    await expect(page.getByRole("img", { name: "QR code that opens the bot" })).toBeVisible();
+    await expect(page.getByText("Linked as @jane_doe")).toBeVisible();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Your agent is live in Telegram." })).toBeVisible();
+    expect(requests.creations).toEqual([{
+      name: "Brandon the Assistant", agent_type: "hermes", template_key: "general-purpose", approval_mode: "auto",
+    }]);
+    expect(requests.starts).toHaveLength(1);
+  });
+
+  test("Telegram is optional and skipping opens Web Chat without completing onboarding again", async ({ page }) => {
+    const data = new DataSupport(page);
+    const completions = await data.onboarding.interceptCompleteOnboarding();
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+    await dashboard.openHireChoices();
+    await dashboard.chooseReadyMadeHiring();
+    await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Open in Telegram", exact: true })).toHaveAttribute("href", TRIAL_DEEP_LINK);
+    await page.getByRole("button", { name: "Skip, I'll chat on the web" }).click();
+    await expect(page).toHaveURL(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=chat`);
+    expect(completions).toHaveLength(0);
+  });
+
+  test("retrying startup reuses both the created Agent and its Telegram Connection", async ({ page }) => {
     const data = new DataSupport(page);
     await data.agents.interceptStartAgentRequest({ status: 500, detail: "Startup temporarily unavailable" });
+    const connections = await data.communicationConnections.interceptQuickStartConnections(MOCK_AGENT_ID, TRIAL_CONNECTION_ID);
     const requests = data.agents.trackHiringRequests();
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
     await dashboard.openHireChoices();
     await dashboard.chooseReadyMadeHiring();
-    await dashboard.agentNameInput().fill("Retry me");
-    await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
+    await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
     await expect(page.getByRole("alert").filter({ hasText: "Startup temporarily unavailable" })).toBeVisible();
-    await data.agents.interceptStartAgentRequest();
-    await page.getByRole("button", { name: "Start again", exact: true }).click();
-    await expect(page.getByRole("heading", { name: /is ready$/ })).toBeVisible();
+    await data.agents.interceptStartAgentRequest({ body: { ...mockAgent, status: "RUNNING" } });
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Open in Telegram", exact: true })).toBeVisible();
     expect(requests.creations).toHaveLength(1);
     expect(requests.starts).toHaveLength(2);
+    expect(connections).toHaveLength(1);
   });
 
-  test("the ready-made preset keeps the full form editable", async ({ page }) => {
-    const dashboard = new DashboardPage(page);
-    await dashboard.goto();
-    await dashboard.openHireChoices();
-    await dashboard.chooseReadyMadeHiring();
-    await expect(dashboard.agentNameInput()).toHaveValue("Brandon the Assistant");
-    const runtime = page.getByRole("radiogroup", { name: "Runtime" });
-    await runtime.getByRole("radio", { name: "Hermes", exact: true }).focus();
-    await runtime.getByRole("radio", { name: "Hermes", exact: true }).press("ArrowRight");
-    await expect(runtime.getByRole("radio", { name: "OpenClaw", exact: true })).toBeChecked();
-    await expect(runtime.getByRole("radio", { name: "OpenClaw", exact: true })).toBeFocused();
-    await dashboard.chooseHireTemplate("Scrum Master · v1");
-    await expect(dashboard.agentNameInput()).toHaveValue("Brandon the Scrum Master");
-    await expect(page.getByRole("radio", { name: /Choose a specific model/ })).toBeVisible();
-  });
-
-  test("the preset initializes required skill credentials without selecting the template again", async ({ page }) => {
+  test("a lost connection-create response is recovered without creating duplicates", async ({ page }) => {
     const data = new DataSupport(page);
-    await data.agents.interceptGetTemplatesRequest({ body: {
-      page: 1, page_size: 50, total: 1,
-      items: [{ ...mockTemplates[0], required_skills: [{
-        id: mockJiraSkill.id, name: mockJiraSkill.name, source: mockJiraSkill.source,
-        required_providers: mockJiraSkill.requiredProviders, tools_pointer: mockJiraSkill.toolsPointer,
-        required: true, created_at: mockJiraSkill.createdAt, updated_at: mockJiraSkill.updatedAt, group_key: null,
-      }] }],
-    } });
-    await data.skills.interceptGetSkillsRequest({ body: [mockJiraSkill] });
+    const connections = await data.communicationConnections.interceptQuickStartConnections(MOCK_AGENT_ID, TRIAL_CONNECTION_ID, { loseFirstResponse: true });
+    const requests = data.agents.trackHiringRequests();
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
     await dashboard.openHireChoices();
     await dashboard.chooseReadyMadeHiring();
-    await expect(dashboard.agentNameInput()).toHaveValue("Brandon the Assistant");
-    await expect(page.getByText("Template skills and credentials")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Hire Agent", exact: true })).toBeDisabled();
-    await page.getByPlaceholder("https://your-domain.atlassian.net").fill("https://acme.atlassian.net");
-    await page.getByText("Non-scoped token", { exact: true }).click();
-    await page.getByPlaceholder("you@example.com").fill("user@example.com");
-    await page.locator('input[type="password"]').fill("jira-test-token");
-    await expect(page.getByRole("button", { name: "Hire Agent", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: /reach the server/ })).toBeVisible();
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Open in Telegram", exact: true })).toBeVisible();
+    expect(requests.creations).toHaveLength(1);
+    expect(connections).toHaveLength(1);
+  });
+
+  test("the shared linking screen replaces an expired link", async ({ page }) => {
+    const links = new OnboardingDataSupport(page, { organizationId: TEST_ORG_ID, agentId: MOCK_AGENT_ID, connectionId: TRIAL_CONNECTION_ID });
+    await links.interceptLinkTokens({ urls: [TRIAL_DEEP_LINK, TRIAL_FRESH_DEEP_LINK], statuses: ["waiting", "expired"] });
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+    await dashboard.openHireChoices();
+    await dashboard.chooseReadyMadeHiring();
+    await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: /link expired/ })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open in Telegram again" })).toHaveAttribute("href", TRIAL_FRESH_DEEP_LINK);
   });
 
   test("cancelling the choice creates nothing", async ({ page }) => {
@@ -124,6 +141,9 @@ test.describe("Hiring choices", () => {
   test("a failed capacity check blocks setup and can recover", async ({ page }) => {
     const data = new DataSupport(page);
     await data.users.interceptGetUserContextRequest({ userContext: trialUserContext });
+    const trialLinks = new OnboardingDataSupport(page, { organizationId: TRIAL_ORG_ID, agentId: MOCK_AGENT_ID, connectionId: TRIAL_CONNECTION_ID });
+    await trialLinks.interceptLinkedAccounts();
+    await trialLinks.interceptLinkTokens();
     await data.organizations.interceptGetOrganization({ status: 503 });
     await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
     const dashboard = new DashboardPage(page);
@@ -139,7 +159,8 @@ test.describe("Hiring choices", () => {
     await page.getByRole("button", { name: "Try again", exact: true }).click();
     await expect(page.getByRole("radio", { name: /Ready-made assistant/ })).toBeEnabled();
     await dashboard.chooseReadyMadeHiring();
-    await expect(dashboard.agentNameInput()).toBeVisible();
+    await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Open in Telegram", exact: true })).toBeVisible();
   });
 
   for (const custom of [false, true]) {
@@ -154,10 +175,13 @@ test.describe("Hiring choices", () => {
         trial_agent_limit: 1,
         trial_agent_limit_reached: false,
       } });
+      const links = new OnboardingDataSupport(page, { organizationId: TRIAL_ORG_ID, agentId: MOCK_AGENT_ID, connectionId: TRIAL_CONNECTION_ID });
+      await links.interceptLinkedAccounts();
+      await links.interceptLinkTokens();
       await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
       if (custom) await new DashboardPage(page).openHireChoices();
       else await page.getByRole("button", { name: "Try a ready-made assistant" }).click();
-      await expect(page.getByRole("heading", { name: custom ? "Build your own agent" : "Your ready-made assistant", exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: custom ? "Build your own agent" : "Your ready-made assistant" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "How would you like to start?" })).toHaveCount(0);
     });
   }
@@ -179,7 +203,10 @@ test.describe("Hiring choices", () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath("hiring-choices.png"), fullPage: true });
       await page.getByRole("button", { name: "Continue", exact: true }).click();
-      await expect(dashboard.agentNameInput()).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Your ready-made assistant" })).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath("ready-made-confirmation.png"), fullPage: true, animations: "disabled" });
+      await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
+      await expect(page.getByRole("link", { name: "Open in Telegram", exact: true })).toBeVisible();
     });
   }
 });

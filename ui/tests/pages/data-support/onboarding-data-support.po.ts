@@ -9,8 +9,6 @@ export const TRIAL_TOKEN_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 export const TRIAL_DEEP_LINK = "https://t.me/AgentBarnTestBot?start=abcDEF123";
 export const TRIAL_FRESH_DEEP_LINK = "https://t.me/AgentBarnTestBot?start=freshXYZ789";
 
-const CONNECTION_BASE = `**/api/v1/organizations/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}/connections/${TRIAL_CONNECTION_ID}`;
-
 /** A self-signed-up user whose only Organization is their trial. */
 export const trialUserContext = {
   ...UserContext,
@@ -65,7 +63,11 @@ export function linkToken(status: "waiting" | "linked" | "expired", extra: Recor
 }
 
 export class OnboardingDataSupport {
-  constructor(private page: Page) {}
+  private connectionBase: string;
+
+  constructor(private page: Page, { organizationId = TRIAL_ORG_ID, agentId = TRIAL_AGENT_ID, connectionId = TRIAL_CONNECTION_ID } = {}) {
+    this.connectionBase = `**/api/v1/organizations/${organizationId}/agents/${agentId}/connections/${connectionId}`;
+  }
 
   trackAgentCreationRequests() {
     const requests: string[] = [];
@@ -142,7 +144,7 @@ export class OnboardingDataSupport {
 
   async interceptLinkedAccounts(accounts: unknown[] = []) {
     let current = accounts;
-    await this.page.route(`${CONNECTION_BASE}/telegram-links`, (route) => route.fulfill({ json: current }));
+    await this.page.route(`${this.connectionBase}/telegram-links`, (route) => route.fulfill({ json: current }));
     return {
       set(next: unknown[]) {
         current = next;
@@ -157,14 +159,14 @@ export class OnboardingDataSupport {
   } = {}) {
     let created = 0;
     let checks = 0;
-    await this.page.route(`${CONNECTION_BASE}/telegram-link-tokens`, (route) => {
+    await this.page.route(`${this.connectionBase}/telegram-link-tokens`, (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       const url = urls[Math.min(created, urls.length - 1)];
       created += 1;
       checks = 0;
       return route.fulfill({ status: 201, json: linkToken("waiting", { url }) });
     });
-    await this.page.route(`${CONNECTION_BASE}/telegram-link-tokens/${TRIAL_TOKEN_ID}`, (route) => {
+    await this.page.route(`${this.connectionBase}/telegram-link-tokens/${TRIAL_TOKEN_ID}`, (route) => {
       // A fresh link starts waiting again.
       const status = created > 1 ? "waiting" : statuses[Math.min(checks, statuses.length - 1)];
       checks += 1;

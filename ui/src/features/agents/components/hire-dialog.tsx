@@ -10,7 +10,7 @@ import { useOrganizationContext } from "@/features/organizations/providers/organ
 import type { HiredAgent } from "../hooks/use-hire-agent-form";
 import { DialogShell } from "./hire-dialog-primitives";
 import { HireFormDialog } from "./hire-form-dialog";
-import { HiredAgentDialog } from "./hired-agent-dialog";
+import { QuickStartDialog } from "./quick-start-dialog";
 
 export type HireChoice = "ready" | "custom";
 
@@ -26,7 +26,6 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
   const { organization, isLoading, isFetching, error, refetch } = useOrganization(isTrial ? selectedOrganization!.id : "");
   const [selected, setSelected] = useState<HireChoice>(initialChoice ?? "ready");
   const [started, setStarted] = useState<HireChoice | null>(isTrial ? null : initialChoice ?? null);
-  const [hired, setHired] = useState<HiredAgent | null>(null);
   const limit = organization?.trialAgentLimit;
   const full = isTrial && organization?.trialAgentLimitReached === true;
   const checking = isTrial && (isLoading || isFetching);
@@ -41,8 +40,7 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
   }
 
   if (started === "custom") return <HireFormDialog onClose={onClose} onHired={onHired} />;
-  if (hired) return <HiredAgentDialog agent={hired} onClose={onClose} onHired={onHired} />;
-  if (started === "ready") return <HireFormDialog title="Your ready-made assistant" initialTemplateKey="general-purpose" onClose={onClose} onHired={setHired} />;
+  if (started === "ready") return <QuickStartDialog onClose={onClose} onHired={onHired} />;
   if (initialChoice && !full && !unavailable) {
     return (
       <DialogShell shadeClick={onClose}>

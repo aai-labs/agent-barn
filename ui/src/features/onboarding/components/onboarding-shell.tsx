@@ -1,8 +1,18 @@
-import type { ReactNode } from "react";
-import { Check } from "lucide-react";
+"use client";
+
+import { createContext, useContext, type ReactNode } from "react";
+import { Check, X } from "lucide-react";
 
 import { FrameHeading, SplitFrame } from "@/components/split-frame";
 import { formatUsd } from "@/features/organizations/spend-limit";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+
+const DialogFrame = createContext<{ onClose: () => void; busy: boolean } | null>(null);
+
+/** Presents the same onboarding steps in the dashboard, without its page-sized rail. */
+export function OnboardingDialogFrame({ children, onClose, busy }: { children: ReactNode; onClose: () => void; busy: boolean }) {
+  return <DialogFrame.Provider value={{ onClose, busy }}>{children}</DialogFrame.Provider>;
+}
 
 /** Quick start sets up Ava in Telegram; "own" hires an Agent the user configures. */
 export type OnboardingPath = "quick" | "own";
@@ -43,7 +53,27 @@ export function OnboardingShell({
   footerEnd?: ReactNode;
   children?: ReactNode;
 }) {
+  const dialog = useContext(DialogFrame);
   const steps = stepsFor(path, email);
+  if (dialog) {
+    return (
+      <Dialog open onOpenChange={(open) => { if (!open && !dialog.busy) dialog.onClose(); }}>
+        <DialogContent showCloseButton={false} aria-describedby={undefined} className="flex max-h-[90svh] w-[calc(100%-2rem)] max-w-4xl flex-col gap-0 overflow-hidden rounded-2xl border-0 p-0" style={{ background: "var(--bg-elev)" }} onEscapeKeyDown={(event) => { if (dialog.busy) event.preventDefault(); }} onPointerDownOutside={(event) => { if (dialog.busy) event.preventDefault(); }}>
+          <header className="flex items-start justify-between gap-4 border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
+            <div>
+              <DialogTitle className="m-0 text-xl font-semibold tracking-tight">{title}</DialogTitle>
+              {subtitle && <p className="mb-0 mt-2 text-sm leading-relaxed" style={{ color: "var(--ink-3)" }}>{subtitle}</p>}
+            </div>
+            <button type="button" aria-label="Close hiring dialog" className="af-btn af-btn-ghost af-btn-icon" disabled={dialog.busy} onClick={dialog.onClose}><X size={18} aria-hidden /></button>
+          </header>
+          <div className="overflow-y-auto p-6">{children}</div>
+          <footer className="flex flex-wrap items-center gap-3 border-t px-6 py-4" style={{ borderColor: "var(--line)" }}>
+            {footerStart}<div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2.5">{footerEnd}</div>
+          </footer>
+        </DialogContent>
+      </Dialog>
+    );
+  }
   return (
     <SplitFrame
       rail={

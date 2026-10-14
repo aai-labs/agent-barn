@@ -11,21 +11,24 @@ General **Hire agent** entry points offer **Ready-made assistant** and **Build y
 own**, including after onboarding is complete and when the Organization already
 has Agents. The empty dashboard's two explicit buttons open their respective setup
 directly after the capacity check, without asking the user to choose again.
-Opening or cancelling the chooser creates nothing. Build your own
-opens the existing runtime/template/model/Skill form. Ready-made reuses that same
-form, preselecting the current `general-purpose` Template, Hermes, the Organization
-default model and automatic command approval. Every field remains editable, and
-the preset's required Skills and credential fields are initialized like an explicit
-Template selection. Both paths use ordinary Agent create/start APIs.
-API validation and Agent authorization apply
-to both paths. A failed start retries the newly created Agent within the same dialog.
+Opening or cancelling the chooser or ready-made confirmation creates nothing.
+Build your own opens the existing runtime/template/model/Skill form. Ready-made
+first explains the assistant's purpose, General Purpose Template, Hermes runtime,
+and Organization default model. Only **Hire assistant** creates and starts a new
+Agent with automatic command approval, even when the Organization already has
+Agents. Both paths use ordinary scoped Agent create/start APIs and retain their
+validation and Agent authorization. A failed start retries the newly created Agent
+within the same dialog.
 The hiring modal and onboarding share the same Hermes/OpenClaw segmented runtime
 control, including keyboard selection and disabled behavior during submission.
 
-After a ready-made Agent starts, users choose Web Chat or open channel setup to
-connect Telegram. Telegram is optional; no Telegram Connection is created merely
-by hiring. Native channel setup retains its existing apply-and-restart behavior.
-The ready-made path does not reopen or modify onboarding completion.
+The ready-made path creates its Agent Barn Telegram Connection before startup,
+then reuses onboarding's Telegram preparation, QR code, link-status polling,
+expiry recovery, and completion screens inside a dashboard dialog. Retrying setup
+retains the created Agent and reads existing Connections before creating one, so a
+lost Connection response does not duplicate it. Telegram is optional: users can
+skip linking and go directly to Web Chat. This path does not reopen or modify
+onboarding completion.
 
 Before setup begins, a Trial Organization's current read must succeed. Its
 `trial_agent_limit_reached` flag reports creation capacity across non-deleted Agents,

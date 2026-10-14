@@ -147,3 +147,8 @@ The Agent a trial gets is the hire dialog's choice made for the user: changing t
 runtime or naming here should stay consistent with it. Hermes and OpenClaw are both
 first-class; trials start on Hermes only because the Agent is created for the user, and the
 Agent Barn Telegram Connection works on both.
+
+The dashboard ready-made option reuses the Telegram and completion steps in a
+dialog after an explicit **Hire assistant** confirmation. It provisions a new Agent
+through ordinary scoped Agent/Connection APIs and leaves onboarding completion
+unchanged; see [Hiring choices](agents.md#hiring-choices).
