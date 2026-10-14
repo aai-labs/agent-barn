@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { XIcon } from "@/components/icons";
 import {
   Select,
@@ -13,47 +12,17 @@ import {
 import { useOrganization } from "@/features/organizations/hooks/use-organization";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
-import {
-  coerceBooleanFields,
-  expandGithubContent,
-  hasIncompleteIntegration,
-  isSignInOnlyProvider,
-  isAutoConfiguredProvider,
-  type IntegrationDraft,
-} from "../integrations";
-import { useAgentNameSuggestion } from "../hooks/use-agent-name-suggestion";
 import { useAgents } from "../hooks/use-agents";
-import { formatAgentName } from "../naming";
-import { useCreateAgent } from "../hooks/use-create-agent";
-import { useStartAgent } from "../hooks/use-start-agent";
-import { useModels } from "../hooks/use-models";
-import { useTemplates } from "../hooks/use-templates";
-import { splitRequiredSkills } from "../utils";
+import { useHireAgentForm, type HiredAgent } from "../hooks/use-hire-agent-form";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { AgentErrorBanner } from "./agent-error-banner";
-import { provisioningFailureOf } from "../provisioning-failure";
-import type { AgentProvisioningError } from "../schemas";
 import { DialogShell, FormField } from "./hire-dialog-primitives";
 import { SkillsStep } from "./hire-dialog-steps";
 import { ModelChoice } from "./model-choice";
 
 interface HireDialogProps {
   onClose: () => void;
-  onHired: (info: { name: string; role: string }) => void;
-}
-
-function credentialsForProviders(
-  providers: string[],
-  existing: IntegrationDraft[],
-): IntegrationDraft[] {
-  const existingByProvider = new Map(existing.map((draft) => [draft.provider, draft]));
-  return providers.map(
-    (provider) =>
-      existingByProvider.get(provider) ?? {
-        provider,
-        content: {},
-      },
-  );
+  onHired: (agent: HiredAgent) => void;
 }
 
 export function HireDialog({ onClose, onHired }: HireDialogProps) {
@@ -62,37 +31,37 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
   const { organization } = useOrganization(selectedOrganization?.isTrial ? selectedOrganization.id : "");
   const trialAgentLimit = organization?.trialAgentLimit ?? null;
   const { total: agentCount } = useAgents();
-  const { templates, isLoading } = useTemplates();
-  const createAgent = useCreateAgent();
-  const startAgent = useStartAgent();
-  const suggestion = useAgentNameSuggestion();
-  const [manualName, setManualName] = useState<string | null>(null);
-  const [templateKey, setTemplateKey] = useState("");
-  const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
-  const [model, setModel] = useState<string | null>(null);
-  const { defaultModel } = useModels();
-  const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
-  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
-  const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
-  const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
-  const [error, setError] = useState<string | null>(null);
-  const [provisioningFailure, setProvisioningFailure] =
-    useState<AgentProvisioningError | null>(null);
-  // Creation can succeed and the start still fail. Holding the Agent lets the retry
-  // start that Agent instead of creating a second one.
-  const [createdAgent, setCreatedAgent] = useState<{ id: string; name: string } | null>(null);
-
-  const template = templates.find((candidate) => candidate.templateKey === templateKey);
-  const name = manualName ?? (suggestion.firstName
-    ? formatAgentName(suggestion.firstName, template?.templateName)
-    : "");
-  const { standalone, groups } = splitRequiredSkills(template?.requiredSkills ?? []);
-  const missingGroupChoice = groups.some((group) => !(groupChoices[group.key]?.length));
-  const pending = createAgent.isPending || startAgent.isPending;
-  const canHire =
-    Boolean(template) &&
-    !missingGroupChoice &&
-    !hasIncompleteIntegration(skillCredentials);
+  const {
+    templates,
+    isLoadingTemplates: isLoading,
+    template,
+    templateKey,
+    handleTemplateChange,
+    name,
+    setName: setManualName,
+    suggestion,
+    agentType,
+    setAgentType,
+    model,
+    setModel,
+    defaultModel,
+    approvalMode,
+    setApprovalMode,
+    selectedSkillIds,
+    setSelectedSkillIds,
+    skillCredentials,
+    setSkillCredentials,
+    groupChoices,
+    handleGroupChoiceChange,
+    standalone,
+    groups,
+    error,
+    provisioningFailure,
+    createdAgent,
+    pending,
+    canHire,
+    hire,
+  } = useHireAgentForm({ onHired });
 
   const hireButtonLabel = createdAgent
     ? pending
@@ -101,120 +70,6 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
     : pending
       ? "Hiring…"
       : "Hire Agent";
-
-  function handleTemplateChange(nextKey: string) {
-    const nextTemplate = templates.find((candidate) => candidate.templateKey === nextKey);
-    setTemplateKey(nextKey);
-    setError(null);
-
-    if (!nextTemplate) {
-      setSelectedSkillIds([]);
-      setSkillCredentials([]);
-      setGroupChoices({});
-      return;
-    }
-
-    const { standalone: nextStandalone } = splitRequiredSkills(nextTemplate.requiredSkills);
-    const requiredProviders = [
-      ...new Set(nextStandalone.flatMap((skill) => skill.requiredProviders)),
-    ].filter((provider) => !isAutoConfiguredProvider(provider));
-    setSelectedSkillIds(nextStandalone.map((skill) => skill.id));
-    setGroupChoices({});
-    setSkillCredentials((current) => credentialsForProviders(requiredProviders, current));
-  }
-
-  function handleGroupChoiceChange(groupKey: string, skillId: string) {
-    setGroupChoices((current) => {
-      const selected = current[groupKey] ?? [];
-      const next = selected.includes(skillId)
-        ? selected.filter((id) => id !== skillId)
-        : [...selected, skillId];
-      return { ...current, [groupKey]: next };
-    });
-  }
-
-  async function hire() {
-    if (!template || !name.trim() || !canHire) return;
-    setError(null);
-    setProvisioningFailure(null);
-
-    if (createdAgent) {
-      await startCreatedAgent(createdAgent);
-      return;
-    }
-
-    const skillIds = [
-      ...new Set([
-        ...selectedSkillIds,
-        ...Object.values(groupChoices).flat(),
-      ]),
-    ];
-    const requiredSkillVersions = [
-      ...standalone,
-      ...groups.flatMap((group) =>
-        (groupChoices[group.key] ?? [])
-          .map((id) => group.members.find((member) => member.id === id))
-          .filter((skill): skill is (typeof standalone)[number] => skill !== undefined),
-      ),
-    ].map((skill) => ({ skillId: skill.id, version: skill.version }));
-    const manualSecrets = skillCredentials
-      .filter(
-        (draft) =>
-          !draft.sharedCredentialId &&
-          !isAutoConfiguredProvider(draft.provider) &&
-          !isSignInOnlyProvider(draft.provider),
-      )
-      .map((draft) => ({
-        provider: draft.provider,
-        content: coerceBooleanFields(
-          draft.provider === "github"
-            ? expandGithubContent(draft.content)
-            : draft.content,
-        ),
-      }));
-    const sharedCredentials = skillCredentials
-      .filter((draft) => draft.sharedCredentialId)
-      .map((draft) => ({ sharedCredentialId: draft.sharedCredentialId! }));
-
-    try {
-      const approval = agentType === "hermes" ? { approvalMode } : {};
-      const agent = await createAgent.mutateAsync({
-        name: name.trim(),
-        agentType,
-        templateKey: template.templateKey,
-        templateVersion: template.version,
-        ...(model ? { model } : {}),
-        ...(skillIds.length > 0 ? { skillIds } : {}),
-        ...(requiredSkillVersions.length > 0 ? { skillVersions: requiredSkillVersions } : {}),
-        ...(manualSecrets.length > 0 ? { secrets: manualSecrets } : {}),
-        ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
-        ...approval,
-      });
-      setCreatedAgent({ id: agent.id, name: agent.name });
-      await startCreatedAgent({ id: agent.id, name: agent.name });
-    } catch (cause) {
-      reportHireFailure(cause);
-    }
-  }
-
-  async function startCreatedAgent(agent: { id: string; name: string }) {
-    if (!template) return;
-    try {
-      await startAgent.mutateAsync(agent.id);
-      onHired({ name: agent.name, role: template.templateName });
-    } catch (cause) {
-      reportHireFailure(cause);
-    }
-  }
-
-  function reportHireFailure(cause: unknown) {
-    const failure = provisioningFailureOf(cause);
-    if (failure) {
-      setProvisioningFailure(failure);
-      return;
-    }
-    setError(cause instanceof Error ? cause.message : "Could not hire the Agent.");
-  }
 
   // A trial at its agent limit is refused by the API, so say so before the form.
   if (selectedOrganization?.isTrial && trialAgentLimit != null && agentCount >= trialAgentLimit) {
@@ -344,7 +199,7 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
 
       <footer className="flex justify-end gap-2 border-t px-6 py-4" style={{ borderColor: "var(--line)" }}>
         <button type="button" className="af-btn" disabled={pending} onClick={onClose}>Cancel</button>
-        <button type="button" className="af-btn af-btn-primary" disabled={pending || !template || !name.trim() || !canHire} onClick={() => void hire()}>
+        <button type="button" className="af-btn af-btn-primary" disabled={pending || !canHire} onClick={() => void hire()}>
           {hireButtonLabel}
         </button>
       </footer>

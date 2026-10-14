@@ -3,12 +3,14 @@ import { expect, test, type Page } from "@playwright/test";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import {
   agentReady,
+  TRIAL_AGENT_ID,
   onboarding,
   TRIAL_DEEP_LINK,
   TRIAL_FRESH_DEEP_LINK,
   TRIAL_ORG_ID,
   trialUserContext,
 } from "../pages/data-support/onboarding-data-support.po";
+import { mockAgent } from "../pages/data-support/agent-data-support.po";
 import { OnboardingPage } from "../pages/onboarding-page.po";
 
 const linkedAccount = {
@@ -33,13 +35,14 @@ test.describe("Trial sign-in", () => {
     await new DataSupport(page).auth.interceptLogoutRequest();
   });
 
-  test("signing up starts with Google, as step 1 of 3", async ({ page }) => {
+  test("the welcome screen shows Google and password login by default", async ({ page }) => {
     const onboardingPage = new OnboardingPage(page);
     await onboardingPage.gotoSignup();
 
-    await expect(onboardingPage.heading("Sign in to Agent Barn")).toBeVisible();
-    await expect(onboardingPage.stepCounter()).toHaveText("Step 1 of 3");
-    await expect(page.getByText("New here? Signing in creates your account.")).toBeVisible();
+    await expect(onboardingPage.heading("Welcome to Agent Barn")).toBeVisible();
+    await expect(onboardingPage.stepCounter()).toHaveCount(0);
+    await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
     await expect(onboardingPage.continueWithGoogle()).toHaveAttribute(
       "href",
       "/api/v1/auth/google/start?origin=signup",
@@ -75,12 +78,161 @@ test.describe("Trial sign-in", () => {
       "/api/v1/auth/google/start?origin=login",
     );
     await expect(new OnboardingPage(page).alert()).toHaveText(/Google sign-in was cancelled/);
-    await expect(page.getByRole("link", { name: "Create an account" })).toHaveAttribute("href", "/signup");
+    await expect(page.getByLabel("Email", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
   });
 });
 
 test.describe("Trial onboarding", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("explains the account wait and opens choices as soon as it is ready", async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 320, height: 740 });
+    const data = await signedInTrialUser(page);
+    const release = await data.onboarding.holdOnboardingResponse();
+    const setups = await data.onboarding.interceptSetUpAgent();
+    try {
+      await page.goto("/onboarding");
+      await expect(page.getByRole("status")).toContainText("We're loading your account and checking where you left off.");
+      await expect(page.getByText("Start with a ready-made assistant, or build an agent your way.")).toBeVisible();
+      await expect(page.getByText("Signed in. We'll take it from here.")).toBeVisible();
+      for (const width of [320, 768, 1024, 1440]) {
+        await page.setViewportSize({ width, height: 800 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        if (width === 320 || width === 1440) {
+          await testInfo.attach(`account-opening-${width}`, { body: await page.screenshot(), contentType: "image/png" });
+        }
+      }
+      expect(setups).toHaveLength(0);
+    } finally {
+      release();
+    }
+    await expect(new OnboardingPage(page).heading("How do you want to start?")).toBeVisible();
+    await expect(page.getByRole("status")).toHaveCount(0);
+    expect(setups).toHaveLength(0);
+  });
+
+  test("opening the choice screen creates no agent", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    const calls = await data.onboarding.interceptSetUpAgent();
+    await page.goto("/onboarding");
+    await expect(new OnboardingPage(page).heading("How do you want to start?")).toBeVisible();
+    expect(calls).toHaveLength(0);
+  });
+
+  test("builds a custom agent without consuming a quick-start slot", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    const setups = await data.onboarding.interceptSetUpAgent();
+    const completions = await data.onboarding.interceptCompleteOnboarding([204], {
+      required: false,
+      completed_at: "2026-10-14T12:00:00Z",
+    });
+    await data.agents.interceptGetTemplatesRequest();
+    await data.agents.interceptGetModelsRequest();
+    await data.agents.interceptNameSuggestionRequest();
+    await data.agents.interceptCreateAgentRequest({ body: { ...mockAgent, id: TRIAL_AGENT_ID, name: "My helper", status: "STOPPED" } });
+    await data.agents.interceptStartAgentRequest({ agentId: TRIAL_AGENT_ID });
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.chooseOwnAgent();
+    await wizard.agentName().fill("My helper");
+    await wizard.template().click();
+    await wizard.hireAction().click();
+    await expect(wizard.heading("My helper is ready")).toBeVisible();
+    expect(setups).toHaveLength(0);
+    expect(completions).toHaveLength(1);
+    await expect(page.getByRole("link", { name: "Chat with your agent" })).toHaveAttribute("href", `/dashboard/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}?tab=chat`);
+  });
+
+  test("retrying completion does not create or start the agent again", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    const setups = await data.onboarding.interceptSetUpAgent();
+    await data.onboarding.interceptLinkedAccounts([linkedAccount]);
+    const completions = await data.onboarding.interceptCompleteOnboarding([500, 204]);
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.chooseQuickStart();
+    await wizard.continueAction().click();
+    await expect(wizard.alert()).toContainText("save your progress");
+    await wizard.retryAction().click();
+    await expect(wizard.heading("Your agent is live in Telegram.")).toBeVisible();
+    expect(setups).toHaveLength(1);
+    expect(completions).toHaveLength(2);
+  });
+
+  test("completion stays ready when the server retires onboarding details", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    await data.onboarding.interceptSetUpAgent();
+    await data.onboarding.interceptLinkedAccounts([linkedAccount]);
+    await data.onboarding.interceptCompleteOnboarding([204], {
+      required: false,
+      completed_at: "2026-10-14T12:00:00Z",
+    });
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.chooseQuickStart();
+    const completedRead = page.waitForResponse(async (response) =>
+      response.url().endsWith("/api/v1/onboarding") && (await response.json()).required === false,
+    );
+    await wizard.continueAction().click();
+    await completedRead;
+    await expect(wizard.heading("Your agent is live in Telegram.")).toBeVisible();
+    await expect(wizard.summaryRow("credit")).toContainText("$10.00");
+    await expect(wizard.openTelegram()).toHaveAttribute("href", "https://t.me/AgentBarnTestBot");
+    await wizard.goToDashboard().click();
+    await expect(page).toHaveURL(`/dashboard/${TRIAL_ORG_ID}`);
+  });
+
+  test("linking from a QR scan is detected without opening the browser link", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    await data.onboarding.interceptSetUpAgent();
+    await data.onboarding.interceptLinkedAccounts();
+    await data.onboarding.interceptLinkTokens({ statuses: ["waiting", "linked"] });
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.chooseQuickStart();
+    await expect(page.getByText("Linked as @jane_doe")).toBeVisible();
+    await expect(wizard.continueAction()).toBeVisible();
+  });
+
+  for (const width of [320, 768, 1024, 1440]) {
+    test(`wizard fits a ${width}px viewport`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      const data = await signedInTrialUser(page);
+      await data.onboarding.interceptGetOnboarding();
+      await data.agents.interceptGetTemplatesRequest();
+      await data.agents.interceptGetModelsRequest();
+      await data.agents.interceptNameSuggestionRequest();
+      const wizard = new OnboardingPage(page);
+      await wizard.goto();
+      await expect(wizard.heading("How do you want to start?")).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await wizard.chooseOwnAgent();
+      await expect(wizard.agentName()).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    });
+  }
+
+  test("quick start can skip Telegram and open web chat", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    await data.onboarding.interceptSetUpAgent();
+    await data.onboarding.interceptLinkedAccounts();
+    await data.onboarding.interceptLinkTokens();
+    const completions = await data.onboarding.interceptCompleteOnboarding();
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.chooseQuickStart();
+    await wizard.skipAction().click();
+    await page.waitForURL(`/dashboard/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}?tab=chat`);
+    expect(completions).toHaveLength(1);
+  });
 
   test("sets up the agent, links Telegram, and finishes", async ({ page }) => {
     const data = await signedInTrialUser(page);
@@ -92,9 +244,10 @@ test.describe("Trial onboarding", () => {
     const onboardingPage = new OnboardingPage(page);
 
     await onboardingPage.goto();
+    await onboardingPage.chooseQuickStart();
 
-    await expect(onboardingPage.heading("Say hi to @AgentBarnTestBot.")).toBeVisible();
-    await expect(onboardingPage.stepCounter()).toHaveText("Step 2 of 3");
+    await expect(onboardingPage.heading("Say hi to @AgentBarnTestBot")).toBeVisible();
+    await expect(onboardingPage.stepCounter()).toHaveText("Step 3 of 4");
     await expect(onboardingPage.openInTelegram()).toHaveAttribute("href", TRIAL_DEEP_LINK);
     await expect(onboardingPage.openInTelegram()).toHaveAttribute("target", "_blank");
     expect(setUps).toHaveLength(1);
@@ -106,7 +259,7 @@ test.describe("Trial onboarding", () => {
     await onboardingPage.continueAction().click();
 
     await expect(onboardingPage.heading("Your agent is live in Telegram.")).toBeVisible();
-    await expect(onboardingPage.stepCounter()).toHaveText("Step 3 of 3");
+    await expect(onboardingPage.stepCounter()).toHaveText("Step 4 of 4");
     expect(completions).toHaveLength(1);
     await expect(onboardingPage.summaryRow("account")).toContainText("jane@example.com");
     await expect(onboardingPage.summaryRow("telegram")).toContainText("@jane_doe");
@@ -126,6 +279,7 @@ test.describe("Trial onboarding", () => {
     const onboardingPage = new OnboardingPage(page);
 
     await onboardingPage.goto();
+    await onboardingPage.chooseQuickStart();
     await onboardingPage.openInTelegram().click();
 
     await expect(onboardingPage.alert()).toHaveText(/That link expired after 10 minutes\. Here.s a fresh one\./);
@@ -147,6 +301,7 @@ test.describe("Trial onboarding", () => {
     const onboardingPage = new OnboardingPage(page);
 
     await onboardingPage.goto();
+    await onboardingPage.chooseQuickStart();
 
     await expect(onboardingPage.alert()).toHaveText(/We couldn.t start your agent/);
     await onboardingPage.retryAction().click();
@@ -162,6 +317,7 @@ test.describe("Trial onboarding", () => {
     const onboardingPage = new OnboardingPage(page);
 
     await onboardingPage.goto();
+    await onboardingPage.chooseQuickStart();
 
     await expect(onboardingPage.alert()).toHaveText(
       /We couldn.t set up your agent: Agent Barn Telegram is not available/,
@@ -178,6 +334,7 @@ test.describe("Trial onboarding", () => {
     const onboardingPage = new OnboardingPage(page);
 
     await onboardingPage.goto();
+    await onboardingPage.chooseQuickStart();
 
     await expect(page.getByText("Linked as @jane_doe")).toBeVisible();
     await expect(onboardingPage.continueAction()).toBeVisible();
@@ -195,6 +352,7 @@ test.describe("Trial onboarding", () => {
     const onboardingPage = new OnboardingPage(page);
 
     await onboardingPage.goto();
+    await onboardingPage.chooseQuickStart();
     await onboardingPage.continueAction().click();
     await onboardingPage.goToDashboard().click();
 
@@ -324,24 +482,43 @@ test.describe("Trial onboarding", () => {
     await data.users.interceptGetOrganizationsRequest();
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false, organization_id: null }));
 
+    await data.onboarding.interceptDefaultOrganizationTrialRefusal();
     await page.goto("/dashboard");
 
-    await expect(page.getByRole("heading", { name: "You're not in an organization" })).toBeVisible();
-    await expect(page.getByText(/free trial has ended/)).toBeVisible();
+    await expect(page.getByText("Trial accounts can't create more organizations.")).toBeVisible();
     await expect(page.getByText("Platform admin access required")).toHaveCount(0);
   });
 
-  test("an invited user left with no organization is asked to get an invitation", async ({ page }) => {
+  for (const entry of ["/dashboard", "/no-organization"]) {
+    test(`an existing user without an organization recovers from ${entry}`, async ({ page }) => {
+      const data = new DataSupport(page);
+      await data.auth.interceptRefreshRequest();
+      const account = { ...trialUserContext, signed_up_at: null, organization_users: [] as unknown[] };
+      await data.users.interceptGetUserContextRequest({ userContext: account });
+      const recovery = await data.onboarding.interceptDefaultOrganization(account);
+      await data.agents.interceptGetAgentsRequest();
+      await data.agents.interceptGetAgentHealthRequest();
+      await page.goto(entry);
+      await page.waitForURL(`/dashboard/${TRIAL_ORG_ID}`);
+      await expect(page.getByRole("heading", { name: /your team/i })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "You're not in an organization" })).toHaveCount(0);
+      expect(recovery.calls).toHaveLength(1);
+    });
+  }
+
+  test("default organization setup can be retried after a failure", async ({ page }) => {
     const data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
-    await data.users.interceptGetUserContextRequest({
-      userContext: { ...trialUserContext, signed_up_at: null, organization_users: [] },
-    });
-    await data.users.interceptGetOrganizationsRequest();
-
+    const account = { ...trialUserContext, signed_up_at: null, organization_users: [] as unknown[] };
+    await data.users.interceptGetUserContextRequest({ userContext: account });
+    const recovery = await data.onboarding.interceptDefaultOrganization(account, { failure: true });
+    await data.agents.interceptGetAgentsRequest();
+    await data.agents.interceptGetAgentHealthRequest();
     await page.goto("/dashboard");
-
-    await expect(page.getByRole("heading", { name: "You're not in an organization" })).toBeVisible();
-    await expect(page.getByText(/Ask someone to invite you/)).toBeVisible();
+    await expect(page.getByText("Organization setup unavailable").first()).toBeVisible();
+    recovery.recover();
+    await page.getByRole("button", { name: "Try again" }).click();
+    await page.waitForURL(`/dashboard/${TRIAL_ORG_ID}`);
+    expect(recovery.calls).toHaveLength(2);
   });
 });

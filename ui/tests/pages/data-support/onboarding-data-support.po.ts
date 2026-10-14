@@ -67,10 +67,37 @@ export function linkToken(status: "waiting" | "linked" | "expired", extra: Recor
 export class OnboardingDataSupport {
   constructor(private page: Page) {}
 
+  async interceptDefaultOrganization(userContext: { organization_users: unknown[] }, { failure = false } = {}) {
+    const calls: number[] = [];
+    let failed = failure;
+    await this.page.route("**/api/v1/organizations/default", (route) => {
+      calls.push(Date.now());
+      if (failed) return route.fulfill({ status: 503, json: { detail: "Organization setup unavailable" } });
+      userContext.organization_users = structuredClone(trialUserContext.organization_users);
+      return route.fulfill({ json: trialUserContext.organization_users[0].organization });
+    });
+    return { calls, recover: () => { failed = false; } };
+  }
+
+  async interceptDefaultOrganizationTrialRefusal() {
+    await this.page.route("**/api/v1/organizations/default", (route) => route.fulfill({ status: 403, json: { detail: "Trial accounts can't create more organizations." } }));
+  }
+
   async interceptGetOnboarding(body: unknown = onboarding()) {
     await this.page.route("**/api/v1/onboarding", (route) =>
       route.request().method() === "GET" ? route.fulfill({ json: body }) : route.fallback(),
     );
+  }
+
+  async holdOnboardingResponse() {
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    await this.page.route("**/api/v1/onboarding", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await ready;
+      await route.fulfill({ json: onboarding() });
+    });
+    return release;
   }
 
   /** Each call to set up the Agent answers with the next response, the last repeating. */
@@ -90,12 +117,14 @@ export class OnboardingDataSupport {
     );
   }
 
-  async interceptCompleteOnboarding() {
+  async interceptCompleteOnboarding(statuses: number[] = [204], completedOnboarding?: unknown) {
     const calls: number[] = [];
-    await this.page.route("**/api/v1/onboarding/complete", (route) => {
+    await this.page.route("**/api/v1/onboarding/complete", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       calls.push(Date.now());
-      return route.fulfill({ status: 204, body: "" });
+      const status = statuses[Math.min(calls.length - 1, statuses.length - 1)];
+      if (status === 204 && completedOnboarding) await this.interceptGetOnboarding(completedOnboarding);
+      return status === 204 ? route.fulfill({ status, body: "" }) : route.fulfill({ status, json: { detail: "Could not save progress" } });
     });
     return calls;
   }

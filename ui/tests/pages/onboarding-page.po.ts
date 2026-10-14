@@ -11,12 +11,26 @@ export class OnboardingPage {
     await this.page.goto("/onboarding");
   }
 
+  async chooseQuickStart() {
+    await this.continueAction().click();
+  }
+
+  async chooseOwnAgent() {
+    await this.page.getByRole("radio", { name: /Build my own agent/ }).click();
+    await this.continueAction().click();
+  }
+
+  agentName() { return this.page.getByLabel("Agent name"); }
+  template() { return this.page.getByRole("radio", { name: /General Purpose/ }); }
+  hireAction() { return this.page.getByRole("button", { name: "Hire agent", exact: true }); }
+  skipAction() { return this.page.getByRole("button", { name: "Skip, I'll chat on the web" }); }
+
   step(label: string): Locator {
     return this.page.getByText(label, { exact: true });
   }
 
   stepCounter(): Locator {
-    return this.page.getByText(/^Step \d of 3$/);
+    return this.page.getByText(/^Step \d of 4$/);
   }
 
   heading(name: string | RegExp): Locator {

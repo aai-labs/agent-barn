@@ -7,38 +7,63 @@ pages, or what a new user's Agent is set up with.
 
 ## Role in the system
 
-Someone new signs in with Google and, within a couple of minutes, is talking to their own
-Agent in Telegram through Agent Barn's shared bot. Signing in, the account, and the Trial
-Organization are described in
-[Identity and Organizations](identity-and-organizations.md#google-sign-in-and-self-signup);
+Someone new signs in with Google, then chooses a ready-made assistant or configures
+an Agent of their own. Signing in, the account, and the Trial Organization are described
+in [Identity and Organizations](identity-and-organizations.md#google-sign-in-and-self-signup);
 the shared bot and account linking in the AF-367 entry of the
-[Communications change log](communications/CHANGELOG.md). This page covers what happens
-between them.
+[Communications change log](communications/CHANGELOG.md).
 
 ## Flow
 
-The web app shows three steps: **Sign in → Telegram → Done**.
+`/login` and `/signup` share a welcome screen with Google sign-in followed by the
+email and password login form, visible by default. Google is the only way to sign up.
+Forgot, set, and reset password pages share its two-pane frame and return
+to the welcome screen. Google failures return to their origin
+with an explanation and nothing created.
 
-1. **Sign in** (`/signup`, or "Continue with Google" on `/login`). Google sign-in is the
-   only way to sign up. A failure comes back to the page it started from, saying why,
-   with nothing created.
-2. **Telegram** (`/onboarding`). On opening, onboarding asks the API to set up the
-   trial's Agent (`POST /onboarding/agent`). Each call does only what is still missing:
-   - creates a Hermes Agent from the `general-purpose` template, named like the hire
-     dialog names one ("Ava the Assistant");
-   - gives it an enabled Agent Barn Telegram Connection — before starting it, because
-     the runtime picks up its Connection when it starts;
-   - starts it if it is stopped or failed. A failed start is recorded on the Agent and
-     shown with a "Try again" that repeats the call.
+Before the choices appear, a branded waiting screen loads onboarding status and
+selects the trial Organization. It shows an animated mark and rotating previews of
+the setup choices, respects reduced motion, and advances as soon as data is ready.
+This stage does not create or start an Agent; errors retain the setup retry screen.
+After completion, the ready screen retains this visit's setup summary and navigation
+targets: the refreshed API status no longer includes the trial setup details.
 
-   It runs as the user, through the same services and authorization as the dashboard.
-   When the Agent is running, the step mints a link token, so "Open in Telegram" is a
-   plain link the browser opens straight away. It polls until the user presses Start
-   (linked), or until the 10-minute token expires, when a fresh link replaces it. Someone
-   already linked goes straight to "Continue". The welcome message is the AF-367 one.
-3. **Done**. "Continue" records `user.onboarding_completed_at`
-   (`POST /onboarding/complete`). The summary shows the account, the linked Telegram
-   username and the Trial Credit, with "Open Telegram" and "Go to dashboard".
+After sign-in, `/onboarding` uses four steps: **Signed in → Choose how to start →
+Connect Telegram or Set up your agent → You're ready**. Signed in is already complete.
+The frame shows a step rail on desktop and compact progress on small screens; Trial
+Credit appears in the desktop rail.
+
+1. **Choose how to start**. Quick start is recommended and preselected. Build my own
+   lets the user choose their Agent's name, runtime, template and model. The trial's
+   Agent limit is shown when available. Opening onboarding creates no Agent.
+2. **Quick start: Connect Telegram**. Only after Continue does the UI call
+   `POST /onboarding/agent`. Each call does what is still missing: creates a Hermes
+   Agent from `general-purpose`, names it like the hire dialog, gives it an enabled
+   Agent Barn Telegram Connection before starting, and starts it if stopped or failed.
+   Setup failures show an explanation and Try again.
+
+   Once running, the step mints a link token. Open in Telegram is a plain link; desktop
+   users can also scan its QR code. Status polling detects either route without a
+   browser click. Pressing Start links the account; expired 10-minute tokens are
+   replaced. Already-linked users can Continue. **Skip, I'll chat on the web** records
+   completion and opens this Agent's Web Chat without requiring a Telegram link.
+3. **Build my own: Set up your agent**. The wizard shares the hire dialog's form logic
+   and ordinary create/start calls, including template-required Skills, group choices,
+   credential validation, model inheritance and Hermes command approval. No quick-start
+   Agent or Telegram Connection is created. A failed start retries the created Agent
+   rather than consuming another trial slot. Back is available before creation.
+4. **You're ready**. Successful linking or hiring records `user.onboarding_completed_at`
+   through `POST /onboarding/complete`. A completion failure retries only that save,
+   without creating or starting another Agent. Quick start offers Open Telegram and
+   Go to dashboard; Build my own offers Web Chat and a link to configure channels.
+
+Returning with an existing Agent keeps that Agent: one with the shared Telegram
+Connection can resume Quick start, while a custom Agent can finish and return to the
+dashboard for any remaining setup. Neither recovery path hires another Agent.
+
+All create, start and linking calls run as the current user in the trial Organization,
+through the dashboard's existing authorization and validation. No API or schema changes
+are required by the wizard.
 
 `GET /onboarding` reports whether onboarding is still required: only for a self-signed-up
 user who has not finished, acting in the first Organization they created. Everyone else —
@@ -69,8 +94,8 @@ Organizations list marks trials.
 
 An Owner may delete their Trial Organization (after deleting its Agents). The delete
 dialog warns that this ends the free trial for good: the address keeps its trial grant and
-the user stays unable to create Organizations, so they land on `/no-organization` until
-someone invites them to an Organization.
+the user stays unable to create Organizations, so automatic dashboard recovery is refused until
+someone invites them to an Organization or a Platform Administrator ends their trial restriction.
 
 Ending a trial (409 for an Organization that is not one) stores the chosen spend limit
 through the ordinary spend-limit path, then lifts the agent limit and, by recording
@@ -83,8 +108,7 @@ alike, until their shared renewal (see [Costs](costs.md#organization-llm-budgets
 owner is not notified, and a trial cannot be restarted.
 
 Signup is off unless `SELF_SIGNUP_ENABLED` is true and the environment has Agent Barn's
-Telegram bot configured (`AGENTBARN_TELEGRAM_BOT_TOKEN` and `_USERNAME`), since a trial is
-used through it (`?error=signup_closed` otherwise); existing users can always sign in with
+Telegram bot configured (`AGENTBARN_TELEGRAM_BOT_TOKEN` and `_USERNAME`), because Quick start uses it (`?error=signup_closed` otherwise); existing users can always sign in with
 Google. If setting up an Agent fails anyway (say the bot was removed later), onboarding
 shows the API's reason with "Try again", and the API logs it. The chart default is off; the deploy workflows
 read the `SELF_SIGNUP_ENABLED`, `STAGING_SELF_SIGNUP_ENABLED` and
