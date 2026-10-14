@@ -300,6 +300,7 @@ def test_an_owner_on_credit_sees_their_balance_and_history():
             body,
             has_entries(
                 available=True,
+                on_credit=True,
                 credit_usd=10.0,
                 spend_usd=2.5,
                 balance_usd=7.5,
@@ -327,7 +328,7 @@ def test_an_organization_on_a_renewing_limit_cannot_buy_credit():
     ) as context:
         response = context.client.get(BILLING.format(organization_id=context.organization.id), headers=auth(context))
 
-        assert_that(response.json(), has_entries(available=False))
+        assert_that(response.json(), has_entries(available=False, on_credit=False))
         assert_that(buy(context, 20).status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
@@ -477,6 +478,11 @@ def test_a_purchase_by_someone_no_longer_here_still_grants_the_credit():
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
         assert_that(ledger(context)[-1], equal_to((CreditGrantKind.PURCHASE, Decimal(20))))
+        history = context.client.get(
+            BILLING.format(organization_id=context.organization.id), headers=auth(context)
+        ).json()["history"]
+        # Nobody to name, and never the payment provider's name instead.
+        assert_that(history[0], has_entries(kind="purchase", purchased_by=None))
 
 
 def test_a_redelivered_payment_is_granted_once():

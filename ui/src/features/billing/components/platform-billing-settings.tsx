@@ -11,14 +11,18 @@ import { useBillingSettings } from "../hooks/use-billing-settings";
 
 type Draft = { min: string; max: string; rate: string; fee: string };
 
-function parsePositive(raw: string): number | null {
-  const parsed = Number(raw.trim());
-  return raw.trim() !== "" && Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
+// The API's bounds: Stripe's smallest card payment, and caps that only stop a typo.
+const MIN_PURCHASE_FLOOR_USD = 0.5;
+const MAX_PURCHASE_CAP_USD = 100_000;
+const MAX_CREDIT_RATE = 100;
 
-function parseFee(raw: string): number | null {
-  const parsed = Number(raw.trim());
-  return raw.trim() !== "" && Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : null;
+function parseWithin(raw: string, { above, from, to }: { above?: number; from?: number; to: number }): number | null {
+  const trimmed = raw.trim();
+  const parsed = Number(trimmed);
+  if (trimmed === "" || !Number.isFinite(parsed) || parsed > to) return null;
+  if (above !== undefined && parsed <= above) return null;
+  if (from !== undefined && parsed < from) return null;
+  return parsed;
 }
 
 function Field({
@@ -85,10 +89,10 @@ export function PlatformBillingSettings() {
   if (error || !billingSettings)
     return <AppErrorState error={error} title="Could not load billing settings" onRetry={() => void reload()} />;
 
-  const min = draft === null ? null : parsePositive(draft.min);
-  const max = draft === null ? null : parsePositive(draft.max);
-  const rate = draft === null ? null : parsePositive(draft.rate);
-  const fee = draft === null ? null : parseFee(draft.fee);
+  const min = draft === null ? null : parseWithin(draft.min, { from: MIN_PURCHASE_FLOOR_USD, to: MAX_PURCHASE_CAP_USD });
+  const max = draft === null ? null : parseWithin(draft.max, { from: MIN_PURCHASE_FLOOR_USD, to: MAX_PURCHASE_CAP_USD });
+  const rate = draft === null ? null : parseWithin(draft.rate, { above: 0, to: MAX_CREDIT_RATE });
+  const fee = draft === null ? null : parseWithin(draft.fee, { from: 0, to: 100 });
   const minInvalid = draft !== null && min === null;
   const maxInvalid = draft !== null && (max === null || (min !== null && max < min));
   const rateInvalid = draft !== null && rate === null;
@@ -126,7 +130,7 @@ export function PlatformBillingSettings() {
               label="Smallest purchase"
               value={draft.min}
               invalid={minInvalid}
-              error="Enter an amount above $0."
+              error="Enter an amount from $0.50 to $100,000.00."
               help="The least credit an organization can buy at once, in US dollars."
               onChange={(value) => change({ min: value })}
             />
@@ -135,7 +139,7 @@ export function PlatformBillingSettings() {
               label="Largest purchase"
               value={draft.max}
               invalid={maxInvalid}
-              error="Enter an amount at least as large as the smallest purchase."
+              error="Enter an amount from the smallest purchase to $100,000.00."
               help="The most credit an organization can buy at once, in US dollars."
               onChange={(value) => change({ max: value })}
             />
@@ -144,7 +148,7 @@ export function PlatformBillingSettings() {
               label="Credit per dollar"
               value={draft.rate}
               invalid={rateInvalid}
-              error="Enter a number above 0."
+              error="Enter a number above 0, up to 100."
               help="1 sells credit at cost. Below 1 keeps a margin on every purchase."
               onChange={(value) => change({ rate: value })}
             />

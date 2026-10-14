@@ -52,7 +52,8 @@ from api.infrastructure.stripe.client import PaymentProviderUnavailable, StripeG
 logger = logging.getLogger(__name__)
 
 _STRIPE = ActorIdentity(type=ActorIdentityType.SYSTEM, id="stripe")
-_STRIPE_DISPLAY = "Stripe"
+# Shown wherever a change made by the payment provider is listed; never its name.
+_STRIPE_DISPLAY = "Payment provider"
 _CREDIT_PLACES = Decimal("0.000001")
 _NOT_FOUND = "Not found"
 # The smallest card payment Stripe takes in US dollars.
@@ -154,6 +155,7 @@ class BillingService:
         spend = self.budgets.get_organization_llm_budget(organization_id, context).spend_usd
         return OrganizationBillingRead(
             available=self.config.payments_enabled and credit.runs_on_credit,
+            on_credit=credit.runs_on_credit,
             credit_usd=credit.credit_usd,
             spend_usd=spend,
             balance_usd=None if spend is None else credit.credit_usd - spend,
@@ -166,7 +168,11 @@ class BillingService:
                     kind=grant.kind.value,
                     credit_usd=float(grant.credit_usd),
                     amount_paid_usd=None if grant.amount_paid_usd is None else float(grant.amount_paid_usd),
-                    purchased_by=grant.actor_display if grant.kind.value == "purchase" else None,
+                    purchased_by=(
+                        grant.actor_display
+                        if grant.kind.value == "purchase" and grant.actor_display != _STRIPE_DISPLAY
+                        else None
+                    ),
                     created_at=grant.created_at,
                 )
                 for grant in reversed(grants)

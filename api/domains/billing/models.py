@@ -95,7 +95,8 @@ class BillingSettingsUpdate(BaseModel):
 class CreditHistoryItem(BaseModel):
     kind: str
     credit_usd: float
-    # What was charged for it, and who bought it, for a purchase.
+    # What was charged for it, and who bought it, for a purchase. None when the buyer
+    # can't be named (a purchase from before buyers were recorded, or a deleted account).
     amount_paid_usd: float | None = None
     purchased_by: str | None = None
     created_at: datetime
@@ -109,7 +110,8 @@ class PlatformCreditRecordRead(BaseModel):
     kind: str
     credit_usd: float
     amount_paid_usd: float | None = None
-    # Who made the change: the buyer, a Platform Administrator, or the payment provider.
+    # Who made the change: the buyer, a Platform Administrator, or "Payment provider" for
+    # what the payment provider did on its own (refunds, disputes) or a buyer it can't name.
     by: str
     # The payment provider's reference (payment, refund or dispute), when there is one.
     reference: str | None = None
@@ -119,6 +121,8 @@ class PlatformCreditRecordRead(BaseModel):
 class OrganizationBillingRead(BaseModel):
     # Whether this Organization can buy credit: payments are on and it runs on credit.
     available: bool
+    # Whether it runs on credit at all, rather than on a limit its plan renews.
+    on_credit: bool
     credit_usd: float
     # None until spend has been observed.
     spend_usd: float | None = None

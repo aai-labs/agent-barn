@@ -12,8 +12,10 @@ export const CreditHistoryItemSchema = z.object({
 });
 
 export const OrganizationBillingSchema = z.object({
-  // Whether this organization can buy credit at all.
+  // Whether this organization can buy credit right now.
   available: z.boolean(),
+  // Whether it runs on credit at all, rather than on a limit its plan renews.
+  onCredit: z.boolean(),
   creditUsd: z.number(),
   // Null until spend has been observed.
   spendUsd: z.number().nullable().optional(),

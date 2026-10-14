@@ -73,7 +73,7 @@ export function PlatformCreditHistory() {
         <AppErrorState error={error} title="We couldn't load billing" onRetry={() => void refetch()} />
       ) : records.length === 0 ? (
         <p className="af-card p-4 text-[0.88rem]" style={{ color: "var(--ink-2)" }}>
-          Nothing here yet.
+          {kind || organization ? "Nothing matches these filters." : "No credit changes yet."}
         </p>
       ) : (
         <>
@@ -87,7 +87,7 @@ export function PlatformCreditHistory() {
                   <th className="px-4 py-2 text-left font-medium">By</th>
                   <th className="px-4 py-2 text-right font-medium">Credit</th>
                   <th className="px-4 py-2 text-right font-medium">Paid</th>
-                  <th className="px-4 py-2 text-left font-medium">Reference</th>
+                  <th className="px-4 py-2 text-left font-medium">Payment reference</th>
                 </tr>
               </thead>
               <tbody>

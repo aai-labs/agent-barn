@@ -13,11 +13,11 @@ export const organizationBillingKey = createQueryKeyStructure("organization-bill
 // Credit arrives with the payment provider's confirmation, usually seconds after the
 // owner is sent back; the page keeps reading until it has had time to.
 const PAYMENT_POLL_MS = 5_000;
-const PAYMENT_WAIT_MS = 60_000;
+export const PAYMENT_WAIT_MS = 60_000;
 
-/** The organization's credit and history. Only its owner may read it, so callers pass
- *  `enabled: false` for anyone else rather than draw a refusal. `awaitingPayment` keeps
- *  it fresh for a minute after the owner comes back from paying. */
+/** The organization's credit and history. Only those who manage its billing may read
+ *  it, so callers pass `enabled: false` for anyone else rather than draw a refusal.
+ *  `awaitingPayment` keeps it fresh for a minute after coming back from paying. */
 export function useOrganizationBilling(
   organizationId: string | undefined,
   { enabled = true, awaitingPayment = false } = {},

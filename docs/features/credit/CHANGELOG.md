@@ -11,13 +11,42 @@ Related context: [Credit](../credit.md), [Costs](../costs.md), [Trial onboarding
   Limit for every Organization; trial expiry when Trial Credit runs out, and a
   system-triggered trial conversion for the payment provider to call; buying credit
   through Stripe, with a Billing page, platform billing settings and an out-of-credit
-  banner that links to buying more; the out-of-credit reply on Hermes and OpenClaw; and
-  healed spend counted against credit.
+  banner that links to buying more; the out-of-credit reply on Hermes and OpenClaw;
+  healed spend counted against credit; a platform default Agent limit; and the review
+  fixes of 2026-10-14.
 - In transition: built on the AF-368 trial-onboarding branch, which is not yet on staging.
 - Next: review, then rebase onto staging once AF-368 merges; manual sandbox testing.
 - Blockers: none. A Stripe sandbox exists for manual testing.
 
 ## Changes
+
+### 2026-10-14 — AF-381 — Review fixes (PR pending)
+
+- Delivered:
+  - Organizations created by a self-signed-up user once their trial ends run on Credit,
+    starting with none, so a $5 purchase no longer unlocks Organizations on the
+    platform's budget.
+  - Exact checkout pricing (no extra cent); a $0.50 minimum; Stripe failures at checkout
+    are a 503 that says to try again; payments on without both Stripe secrets refuses to
+    boot.
+  - The webhook stays served while payments are off, settles refunds on their current
+    status (including `refund.updated`), retries refunds and disputes that arrive before
+    their purchase, gives back only the reinstated share of a dispute, and records a
+    payment for an Organization no longer on Credit as `platform.credit_purchase.unapplied`.
+  - A default Agent limit of 10 when `ORGANIZATION_DEFAULT_AGENT_LIMIT` is unset, and a
+    platform setting that replaces it (`/platform/settings/organizations`).
+  - Healing pushes credit limits as soon as it finds spend; the trial-expiry backfill
+    uses the 100% alert, as the live handler does.
+  - Billing page: dollars and cents accepted; what happened after paying (arrived, still
+    processing), shown once; no balance for an Organization on a renewing limit; empty
+    states; a plain message for anyone without access; the payment provider's name no
+    longer shown.
+  - Billing no longer imports Organizations models, and sign-up opens trial credit
+    through a service.
+- Changed: migration `a7d4e2c9b816_platform_organization_settings`; Stripe webhook events
+  (add `refund.updated`); a restricted Stripe key also needs read access to Refunds and
+  PaymentIntents.
+- Follow-up: none.
 
 ### 2026-10-13 — AF-381 — Healed spend on credit (PR pending)
 

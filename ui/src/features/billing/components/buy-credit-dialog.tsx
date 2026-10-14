@@ -3,13 +3,15 @@
 import { useState } from "react";
 
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
-import { formatUsd, parseAmount } from "@/features/organizations/spend-limit";
+import { formatUsd } from "@/features/organizations/spend-limit";
 import { MoneyInput } from "@/features/spend-limits/components/money-input";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { useStartCheckout } from "../hooks/use-organization-billing";
 import { chargeUsd } from "../pricing";
 import type { OrganizationBilling } from "../schemas";
+
+const DOLLARS_AND_CENTS = /^\d+(\.\d{1,2})?$/;
 
 /** Choose how much credit to add, see what it costs, and go to the payment page. */
 export function BuyCreditDialog({
@@ -25,18 +27,16 @@ export function BuyCreditDialog({
 }) {
   const [amount, setAmount] = useState("");
   const checkout = useStartCheckout(organizationId);
-  const parsed = parseAmount(amount);
-  const inBounds =
-    parsed !== null &&
-    !Number.isNaN(parsed) &&
-    parsed >= billing.minPurchaseUsd &&
-    parsed <= billing.maxPurchaseUsd &&
-    // Cents at most: the API refuses anything finer.
-    Math.round(parsed * 100) === parsed * 100;
+  const typed = amount.trim();
+  // Whole dollars or dollars and cents, nothing else: the API refuses anything finer.
+  const parsed = DOLLARS_AND_CENTS.test(typed) ? Number(typed) : null;
+  const inBounds = parsed !== null && parsed >= billing.minPurchaseUsd && parsed <= billing.maxPurchaseUsd;
   const error =
-    amount.trim() === "" || inBounds
+    typed === "" || inBounds
       ? null
-      : `Choose between ${formatUsd(billing.minPurchaseUsd, 2)} and ${formatUsd(billing.maxPurchaseUsd, 2)}.`;
+      : parsed === null
+        ? "Enter an amount in dollars and cents, like 20 or 20.50."
+        : `Choose between ${formatUsd(billing.minPurchaseUsd, 2)} and ${formatUsd(billing.maxPurchaseUsd, 2)}.`;
 
   return (
     <ConfirmationDialog
