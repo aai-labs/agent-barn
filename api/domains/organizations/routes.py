@@ -16,16 +16,38 @@ from api.domains.organizations.models import (
     OrganizationLlmCoverageRead,
     OrganizationOwnLlmBudgetUpdate,
     OrganizationRead,
+    OrganizationSettingsRead,
+    OrganizationSettingsUpdate,
     OrganizationTrialEnd,
     OrganizationUpdate,
     PlatformOrganizationRead,
     get_organization_filter,
 )
 from api.domains.organizations.service import OrganizationService
+from api.domains.organizations.settings_service import OrganizationSettingsService
 from api.infrastructure.shared.models import PaginatedItems
 
 org_router = APIRouter(prefix="/organizations", tags=["organizations"])
 platform_org_router = APIRouter(prefix="/platform/organizations", tags=["platform-organizations"])
+platform_organization_settings_router = APIRouter(prefix="/platform/settings/organizations", tags=["platform-settings"])
+
+
+@platform_organization_settings_router.get("", response_model=OrganizationSettingsRead)
+def read_organization_settings(
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[OrganizationSettingsService, Injected(OrganizationSettingsService)],
+):
+    """Settings for every Organization, such as how many Agents one may run by default."""
+    return service.read(context)
+
+
+@platform_organization_settings_router.put("", response_model=OrganizationSettingsRead)
+def update_organization_settings(
+    data: OrganizationSettingsUpdate,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[OrganizationSettingsService, Injected(OrganizationSettingsService)],
+):
+    return service.update(data, context)
 
 
 @org_router.post("", response_model=OrganizationRead, status_code=status.HTTP_201_CREATED)

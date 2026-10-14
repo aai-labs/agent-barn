@@ -69,7 +69,11 @@ Every Organization has an Agent Limit: how many live Agents it may run. It is th
 Organization's own `agent_limit` when a Platform Administrator has set one
 (`PUT /platform/organizations/{id}/agent-limit`, audited as
 `organization.agent_limit.changed`), otherwise the trial setting for a Trial Organization
-or `ORGANIZATION_DEFAULT_AGENT_LIMIT` for any other (unset: no limit). It is checked when
+or the platform's default Agent limit for any other. That default is a platform setting
+(`GET`/`PUT /platform/settings/organizations`, the Organizations section of the platform
+settings page, audited as `platform.organization_settings.changed`); until a Platform
+Administrator saves one it is the deployment's `ORGANIZATION_DEFAULT_AGENT_LIMIT` (unset:
+10). Every Organization therefore has a limit. It is checked when
 an Agent is hired, and again under a lock when the Agent is stored, so two concurrent hires
 cannot both take the last place. Lowering it never removes Agents; it only refuses new
 hires. Members read the limit in force on the Organization read, which the hire dialog

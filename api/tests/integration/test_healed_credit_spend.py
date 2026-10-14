@@ -14,6 +14,7 @@ from hamcrest import assert_that, equal_to, has_entries
 
 from api.domains.costs.models import CostRecord
 from api.domains.costs.repository import CostRepository
+from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import CreditGrantKind
 from api.domains.organizations.repository import OrganizationRepository
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
@@ -81,6 +82,30 @@ def test_the_balance_is_net_of_healed_spend():
         response = context.client.get(BILLING.format(organization_id=context.organization.id), headers=auth(context))
 
         assert_that(response.json(), has_entries(credit_usd=10.0, spend_usd=4.0, balance_usd=6.0))
+
+
+def test_spend_found_by_healing_lowers_the_credit_limit_straight_away():
+    with given(_setup(an_owner_on_credit())) as context:
+        calls(context, ("3", True, 0))
+        proxy(context).apply_team_budget.reset_mock()
+
+        with when("healing reports the Organization"):
+            context.injector.get(OrganizationLlmBudgetService).apply_healed_spend({context.organization.id})
+
+        with then("the team may spend its $10 of credit less the $3 found"):
+            proxy(context).apply_team_budget.assert_called_once_with(
+                str(context.organization.id), 7.0, ONE_OFF_BUDGET_WINDOW
+            )
+
+
+def test_healing_leaves_a_renewing_limit_to_the_reconciler():
+    with given(platform_admin()) as context:
+        calls(context, ("3", True, 0))
+        proxy(context).apply_team_budget.reset_mock()
+
+        context.injector.get(OrganizationLlmBudgetService).apply_healed_spend({context.organization.id})
+
+        proxy(context).apply_team_budget.assert_not_called()
 
 
 def test_a_renewing_limit_is_not_lowered_by_healed_spend():

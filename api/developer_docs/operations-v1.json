@@ -711,6 +711,11 @@
   ],
   [
     "GET",
+    "/platform/settings/organizations",
+    "read_organization_settings_platform_settings_organizations_get"
+  ],
+  [
+    "GET",
     "/platform/settings/trial",
     "read_trial_settings_platform_settings_trial_get"
   ],
@@ -1263,6 +1268,11 @@
     "PUT",
     "/platform/settings/billing",
     "update_billing_settings_platform_settings_billing_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/organizations",
+    "update_organization_settings_platform_settings_organizations_put"
   ],
   [
     "PUT",

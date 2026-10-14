@@ -9,6 +9,8 @@ from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+# How many Agents an Organization that isn't a trial may run when nothing else says.
+DEFAULT_ORGANIZATION_AGENT_LIMIT = 10
 load_dotenv(ROOT_ENV_PATH, override=False)
 
 DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_AjhfVLSegE5yXsARYYJsGJDC3bwBPdKfUD3dLvoLjbw7"
@@ -90,8 +92,9 @@ class Config(BaseSettings):
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
     # How many Agents an Organization that is not a trial may run, unless a Platform
-    # Administrator sets its own limit. Unset (or empty) means no limit.
-    organization_default_agent_limit: int | None = Field(default=None, ge=0)
+    # Administrator sets its own limit, until a Platform Administrator saves a default
+    # on the platform settings page. Unset (or empty) is 10.
+    organization_default_agent_limit: int = Field(default=DEFAULT_ORGANIZATION_AGENT_LIMIT, ge=1)
     # Trial credit (USD) until a Platform Administrator sets one on the platform settings page.
     trial_default_credit_usd: float = Field(default=10.0, ge=0, allow_inf_nan=False)
     # The API's own public base URL, used to show callers where to reach an Agent
@@ -264,9 +267,11 @@ class Config(BaseSettings):
 
     @field_validator("organization_default_agent_limit", mode="before")
     @classmethod
-    def empty_agent_limit_is_none(cls, value: object) -> object:
+    def empty_agent_limit_is_the_default(cls, value: object) -> object:
         """Deployments pass the variable through even when it is not set."""
-        return None if isinstance(value, str) and not value.strip() else value
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return DEFAULT_ORGANIZATION_AGENT_LIMIT
+        return value
 
     @field_validator("organization_llm_budget_alert_thresholds", mode="before")
     @classmethod

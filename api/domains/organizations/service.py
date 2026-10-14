@@ -2,6 +2,7 @@ import fnmatch
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -42,8 +43,10 @@ from api.domains.organizations.models import (
     PlatformOrganizationRead,
 )
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.organizations.settings_service import OrganizationSettingsService
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
@@ -71,6 +74,7 @@ class OrganizationService:
     agent_repository: AgentRepository
     memory_keys: MemoryKeyRepository
     trial_settings: TrialSettingsService
+    organization_settings: OrganizationSettingsService
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a platform administrator in explicit Organization context) may
@@ -102,7 +106,7 @@ class OrganizationService:
 
     def _agent_limit_in_force(self, own: int | None, is_trial: bool) -> int | None:
         return OrganizationAgentLimit(own=own, is_trial=is_trial).in_force(
-            trial_limit=self.trial_settings.agent_limit, default=get_config().organization_default_agent_limit
+            trial_limit=self.trial_settings.agent_limit, default=self.organization_settings.default_agent_limit
         )
 
     @staticmethod
@@ -202,8 +206,8 @@ class OrganizationService:
         still_on_trial = actor.user.signed_up_at is not None and actor.user.trial_ended_at is None
         if still_on_trial or self.organization_repository.owns_active_trial(actor.user.id):
             # Another Organization would be spend outside the trial's limits, including
-            # after deleting the trial. Once a Platform Administrator ends the trial, its
-            # owner is an ordinary user.
+            # after deleting the trial. Once the trial ends (a purchase, or a Platform
+            # Administrator), its owner creates Organizations that run on credit.
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Trial accounts can't create more organizations.",
@@ -217,6 +221,12 @@ class OrganizationService:
             created_by_user_id=actor.user.id,
             allowed_models=allowed_models,
         )
+        # Someone who signed themselves up pays for what their Organizations spend: each
+        # further one runs on credit, starting with none, never on the platform's budget.
+        on_credit = actor.user.signed_up_at is not None
+        if on_credit:
+            organization.llm_budget_usd = 0.0
+            organization.llm_budget_duration = ONE_OFF_BUDGET_WINDOW
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
@@ -225,6 +235,7 @@ class OrganizationService:
                 actor.user.id,
                 config.organization_creation_limit,
                 ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id),
+                opening_credit_usd=Decimal(0) if on_credit else None,
             )
         except OrganizationCreationLimitReached as error:
             raise HTTPException(

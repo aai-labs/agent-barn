@@ -121,7 +121,8 @@ GOOGLE_CLOUD_CLIENT_SECRET=
 # PUBLIC_SELF_SIGNUP_ENABLED (GitHub Variables) for their environments.
 SELF_SIGNUP_ENABLED=false
 # How many Agents an Organization that is not a trial may run, unless a Platform
-# Administrator sets its own. Empty means no limit. The deploy workflows read
+# Administrator sets its own, until a Platform Administrator saves a default on the
+# platform settings page (which then wins). Empty is 10. The deploy workflows read
 # ORGANIZATION_DEFAULT_AGENT_LIMIT, STAGING_ORGANIZATION_DEFAULT_AGENT_LIMIT and
 # PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT (GitHub Variables) for their environments.
 ORGANIZATION_DEFAULT_AGENT_LIMIT=

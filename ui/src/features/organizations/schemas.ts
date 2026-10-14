@@ -166,3 +166,11 @@ export type RenameOrganizationFormData = z.infer<typeof RenameOrganizationFormSc
 export type AgentLlmCoverage = z.infer<typeof AgentLlmCoverageSchema>;
 export type OrganizationLlmCoverage = z.infer<typeof OrganizationLlmCoverageSchema>;
 export type OrganizationLlmBudget = z.infer<typeof OrganizationLlmBudgetSchema>;
+
+export const OrganizationSettingsSchema = z.object({
+  // How many agents an organization that isn't a trial may run, unless it has its own.
+  defaultAgentLimit: z.number().int(),
+  updatedAt: z.string().nullable().optional(),
+});
+
+export type OrganizationSettings = z.infer<typeof OrganizationSettingsSchema>;

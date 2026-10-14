@@ -3,7 +3,7 @@ Agent, and creates no others, until a Platform Administrator ends the trial."""
 
 import threading
 from datetime import UTC, datetime
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_entries, has_length, not_none
@@ -16,6 +16,7 @@ from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.events.catalog import ORGANIZATION_TRIAL_ENDED
 from api.domains.events.models import OutboxMessage
 from api.domains.onboarding.repository import TrialSettingsRepository
+from api.domains.organizations.models import CreditGrantKind
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.repository import UserRepository
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW, LiteLLMClient, LiteLLMError
@@ -251,8 +252,15 @@ def test_a_self_signed_up_user_creates_organizations_once_their_trial_has_ended(
                 "/api/v1/organizations", json={"name": "Second Org"}, headers=auth(context, context.owner_token)
             )
 
-        with then("it is created"):
+        with then("it is created on credit, with none yet: it spends only what is bought for it"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+            created = context.injector.get(OrganizationRepository).get(UUID(response.json()["id"]))
+            assert created is not None
+            assert_that((created.llm_budget_duration, created.llm_budget_usd), equal_to((ONE_OFF_BUDGET_WINDOW, 0.0)))
+            grants = context.injector.get(OrganizationRepository).list_credit_grants(created.id)
+            assert_that(
+                [(grant.kind, grant.credit_usd) for grant in grants], equal_to([(CreditGrantKind.ADJUSTMENT, 0)])
+            )
 
 
 def test_a_user_brought_in_by_an_administrator_still_creates_organizations():
@@ -260,6 +268,9 @@ def test_a_user_brought_in_by_an_administrator_still_creates_organizations():
         response = context.client.post("/api/v1/organizations", json={"name": "Second Org"}, headers=auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+        created = context.injector.get(OrganizationRepository).get(UUID(response.json()["id"]))
+        assert created is not None
+        assert_that(created.runs_on_credit, equal_to(False))
 
 
 # --- ending a trial ---------------------------------------------------------------------

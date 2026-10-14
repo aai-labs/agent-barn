@@ -48,6 +48,7 @@ PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
 PLATFORM_TRIAL_SETTINGS_CHANGED = "platform.trial_settings.changed"
 PLATFORM_BILLING_SETTINGS_CHANGED = "platform.billing_settings.changed"
 PLATFORM_CREDIT_PURCHASE_UNAPPLIED = "platform.credit_purchase.unapplied"
+PLATFORM_ORGANIZATION_SETTINGS_CHANGED = "platform.organization_settings.changed"
 API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
 USER_LOGGED_IN = "user.logged_in"
@@ -883,15 +884,16 @@ def build_default_event_registry() -> DomainEventRegistry:
         )
     )
     # Same shape: one changed setting, before and after.
-    registry.register(
-        DomainEventDefinition(
-            event_name=PLATFORM_BILLING_SETTINGS_CHANGED,
-            schema_version=1,
-            payload_model=PlatformTrialSettingsChangedPayload,
-            handler_names=(SECURITY_AUDIT_HANDLER,),
-            event_scope=EventScope.PLATFORM,
+    for event_name in (PLATFORM_BILLING_SETTINGS_CHANGED, PLATFORM_ORGANIZATION_SETTINGS_CHANGED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=PlatformTrialSettingsChangedPayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.PLATFORM,
+            )
         )
-    )
     registry.register(
         DomainEventDefinition(
             event_name=PLATFORM_CREDIT_PURCHASE_UNAPPLIED,

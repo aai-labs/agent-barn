@@ -831,7 +831,11 @@ class OrganizationRepository:
         creator_id: UUID,
         creation_limit: int,
         actor: ActorIdentity,
+        *,
+        opening_credit_usd: Decimal | None = None,
     ) -> tuple[Organization, list[UUID]]:
+        """Create the Organization and its creator's Owner Membership, staging its creation
+        Event; with `opening_credit_usd`, also open its credit ledger, all in one commit."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             # Serialize creation attempts for one user. Without this lock, two
             # concurrent requests could both observe one remaining quota slot.
@@ -851,6 +855,14 @@ class OrganizationRepository:
                     role=OrganizationRole.OWNER,
                 )
             )
+            if opening_credit_usd is not None:
+                self._add_credit_grant(
+                    session,
+                    organization.id,
+                    CreditGrantKind.ADJUSTMENT,
+                    opening_credit_usd,
+                    actor_display="Opening balance",
+                )
             delivery_ids = self.stage_organization_created(session, organization, actor)
             session.commit()
             return organization, delivery_ids

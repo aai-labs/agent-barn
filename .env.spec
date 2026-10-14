@@ -145,7 +145,8 @@ SELF_SIGNUP_ENABLED=true
 # sets one on the platform settings page. Granted once; it never renews.
 TRIAL_DEFAULT_CREDIT_USD=10
 # How many Agents an Organization that is not a trial may run, unless a Platform
-# Administrator sets its own on the Organization's page. Empty means no limit.
+# Administrator sets its own on the Organization's page, until a Platform
+# Administrator saves a default on the platform settings page. Empty is 10.
 ORGANIZATION_DEFAULT_AGENT_LIMIT=
 # Buying credit with Stripe. Off unless true. Use a Stripe sandbox's secret key
 # (sk_test_…) locally; STRIPE_WEBHOOK_SECRET is the whsec_… that

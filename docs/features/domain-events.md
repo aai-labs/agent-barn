@@ -67,6 +67,15 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `platform.trial_settings.changed` — emitted atomically when a Platform Administrator changes a trial setting (`credit_usd`, `agent_limit` or `max_active_trials`), one event per setting that moved, with its previous and current value (`null` for no cap). The subject is the `SYSTEM` trial settings row. Not emitted when a save leaves the value unchanged.
 - `organization.trial.ended` — emitted atomically when a Platform Administrator ends a Trial Organization's trial. Not emitted when the Organization was not a trial.
 
+AF-381 (prepaid credit) adds, all projected by `security_audit.projection`:
+
+- `organization.trial.ended` is also emitted when a credit purchase converts a trial (actor: the payment system, `actor_display` "Credit purchase").
+- `organization.trial.expired` — emitted once when a trial runs out of credit; it then no longer counts toward the cap on active trials. Emitted by the `organization.trial_expiry.projection` Event Handler, which handles `organization.llm_budget.exhausted` (alongside the budget email handler).
+- `organization.agent_limit.changed` — emitted atomically when a Platform Administrator sets or clears an Organization's own Agent limit, with the previous and current limit (`null` follows the default).
+- `platform.billing_settings.changed` — emitted atomically when a Platform Administrator changes a billing setting (`min_purchase_usd`, `max_purchase_usd`, `credit_rate`, `purchase_fee_percent`), one event per setting that moved, same payload shape as `platform.trial_settings.changed`.
+- `platform.organization_settings.changed` — the same, for the platform's Organization settings (`default_agent_limit`).
+- `platform.credit_purchase.unapplied` — emitted when a paid credit purchase arrives for an Organization that no longer runs on Credit, so nothing was granted; carries the payment reference, the credit and the amount paid, and names the Organization in `subject_display` (a Platform event carries no Organization id).
+
 AF-167 broadens Security Audit Record coverage to additional mutations:
 
 - `agent.updated` — emitted when `update_agent` changes a tracked scalar field (name, model, approval_mode, template pin); carries a generic `field_changes` diff and is not emitted when no tracked field actually changed.

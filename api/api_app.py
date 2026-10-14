@@ -49,7 +49,7 @@ from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
 from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
-from api.domains.organizations.routes import org_router, platform_org_router
+from api.domains.organizations.routes import org_router, platform_org_router, platform_organization_settings_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.rbac.seeder import RbacSeeder
 from api.domains.resource_limits.routes import platform_resource_limits_router
@@ -140,6 +140,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(onboarding_router)
     subapi.include_router(billing_router)
     subapi.include_router(platform_billing_settings_router)
+    subapi.include_router(platform_organization_settings_router)
     subapi.include_router(platform_billing_router)
     subapi.include_router(stripe_webhook_router)
     subapi.include_router(agent_memory_router)

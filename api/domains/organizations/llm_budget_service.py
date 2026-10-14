@@ -154,6 +154,24 @@ class OrganizationLlmBudgetService:
         # Organization's must be right first.
         self.agent_budgets.reconcile_key_budgets()
 
+    def apply_healed_spend(self, organization_ids: set[UUID]) -> None:
+        """Push the limit of each Organization on credit that healing found spend for:
+        its credit less what the proxy never counted, which just went up. Renewing
+        limits don't depend on healed spend. Best effort: the reconciler repairs any
+        push that fails."""
+        if not self._litellm_configured():
+            return
+        for organization_id in organization_ids:
+            organization = self.organization_repository.get(organization_id)
+            if organization is None or not organization.runs_on_credit:
+                continue
+            try:
+                self.litellm.apply_team_budget(
+                    str(organization_id), self._proxy_limit(organization), organization.llm_budget_duration
+                )
+            except Exception:
+                logger.exception("Applying healed spend failed for Organization %s", organization_id)
+
     def set_llm_budget(
         self,
         organization_id: UUID,
@@ -295,6 +313,13 @@ class OrganizationLlmBudgetService:
             result.organization, result.delivery_ids, before=before, actor=actor, actor_display=actor_display
         )
         return True
+
+    def open_trial_credit(self, session: Session, organization_id: UUID, credit_usd: Decimal) -> None:
+        """Open a new trial's credit ledger with its trial credit, staged in the caller's
+        transaction so the trial and its credit commit together."""
+        self.organization_repository.record_opening_credit_with_session(
+            session, organization_id, CreditGrantKind.TRIAL, credit_usd
+        )
 
     def record_purchase(
         self,

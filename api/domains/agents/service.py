@@ -165,6 +165,7 @@ from api.domains.integrations.runtime import (
 )
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
+from api.domains.organizations.settings_service import OrganizationSettingsService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.constants import RESTORE_POINT_POD_TERMINATION_POLL_SECONDS
 from api.domains.restore_points.models import AgentRestorePointCreate, AgentRestorePointRestore
@@ -330,6 +331,7 @@ class AgentService:
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
     trial_settings: TrialSettingsService
+    organization_settings: OrganizationSettingsService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
     credential_gateway: CredentialGatewayService
@@ -870,7 +872,7 @@ class AgentService:
         limits = self.organization_lookup.get_agent_limit(org_id)
         agent_limit = (
             limits.in_force(
-                trial_limit=self.trial_settings.agent_limit, default=self.config.organization_default_agent_limit
+                trial_limit=self.trial_settings.agent_limit, default=self.organization_settings.default_agent_limit
             )
             if limits is not None
             else None

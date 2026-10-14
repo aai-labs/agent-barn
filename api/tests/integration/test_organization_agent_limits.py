@@ -1,9 +1,10 @@
 """How many Agents an Organization may run (AF-381).
 
 Every Organization has an Agent limit: its own, set by a Platform Administrator, else the
-default for its kind — the trial setting for a trial, the deployment's
-`ORGANIZATION_DEFAULT_AGENT_LIMIT` for any other (unset: no limit). Lowering a limit
-never removes Agents; it only stops new hires.
+default for its kind — the trial setting for a trial, the platform's default Agent limit
+for any other. That default is a platform setting, starting at the deployment's
+`ORGANIZATION_DEFAULT_AGENT_LIMIT` (10 when unset) until a Platform Administrator saves
+one. Lowering a limit never removes Agents; it only stops new hires.
 """
 
 import pytest
@@ -11,6 +12,7 @@ from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_entries
 
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.organizations.settings_repository import OrganizationSettingsRepository
 from api.domains.rbac.catalog import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -24,6 +26,7 @@ from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 PLATFORM_AGENT_LIMIT = "/api/v1/platform/organizations/{organization_id}/agent-limit"
+SETTINGS = "/api/v1/platform/settings/organizations"
 
 
 def _setup(*steps, default: str = ""):
@@ -115,11 +118,68 @@ def test_a_trials_own_limit_beats_the_trial_setting():
         assert_that([r.status_code for r in responses], equal_to([201, 201]))
 
 
-def test_no_default_means_no_limit():
+def test_without_a_deployment_default_an_organization_may_run_ten():
     with given(_setup()) as context:
-        responses = [hire(context, name) for name in ("First", "Second", "Third")]
+        response = context.client.get(f"/api/v1/organizations/{context.organization.id}", headers=auth(context))
 
-        assert_that([r.status_code for r in responses], equal_to([201, 201, 201]))
+        assert_that(response.json(), has_entries(agent_limit=10))
+
+
+# --- the platform's default --------------------------------------------------------------
+
+
+def test_a_platform_administrator_reads_the_deployment_default_until_one_is_saved():
+    with given(_setup(a_platform_administrator_is_signed_in(), default="3")) as context:
+        response = context.client.get(SETTINGS, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json(), has_entries(default_agent_limit=3, updated_at=None))
+
+
+def test_the_platforms_default_replaces_the_deployments_and_is_audited():
+    with given(_setup(a_platform_administrator_is_signed_in(), default="3")) as context:
+        with when("a Platform Administrator saves a default of 1"):
+            saved = context.client.put(SETTINGS, json={"default_agent_limit": 1}, headers=auth(context))
+
+        with then("it is the default in force, and the change is audited"):
+            assert_that(saved.json(), has_entries(default_agent_limit=1))
+            read = context.client.get(
+                f"/api/v1/platform/organizations/{context.organization.id}", headers=auth(context)
+            )
+            assert_that(read.json(), has_entries(agent_limit_in_force=1))
+            events = events_named(context, "platform.organization_settings.changed")
+            assert_that(
+                [(e.payload["setting"], e.payload["previous"], e.payload["current"]) for e in events],
+                equal_to([("default_agent_limit", 3.0, 1.0)]),
+            )
+
+
+def test_hires_are_held_to_the_platforms_default():
+    with given(_setup(default="5")) as context:
+        context.injector.get(OrganizationSettingsRepository).set_settings(
+            {"default_agent_limit": 1}, 5, context.user.id, "Platform Admin"
+        )
+
+        responses = [hire(context, name) for name in ("First", "Second")]
+
+        assert_that([r.status_code for r in responses], equal_to([201, 409]))
+
+
+@pytest.mark.parametrize("payload", [{"default_agent_limit": 0}, {"default_agent_limit": None}, {"other": 1}])
+def test_an_impossible_default_is_refused(payload):
+    with given(_setup(a_platform_administrator_is_signed_in())) as context:
+        response = context.client.put(SETTINGS, json=payload, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(422))
+
+
+def test_only_a_platform_administrator_sees_the_default():
+    with given(_setup()) as context:
+        assert_that(context.client.get(SETTINGS, headers=auth(context)).status_code, equal_to(403))
+        assert_that(
+            context.client.put(SETTINGS, json={"default_agent_limit": 2}, headers=auth(context)).status_code,
+            equal_to(403),
+        )
 
 
 def test_the_organization_read_gives_the_limit_in_force():

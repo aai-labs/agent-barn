@@ -65,12 +65,12 @@ class OrganizationAgentLimit:
     own: int | None
     is_trial: bool
 
-    def in_force(self, *, trial_limit: Callable[[], int], default: int | None) -> int | None:
-        """Its own limit, else the trial setting for a trial, else the deployment's
-        default. None means no limit."""
+    def in_force(self, *, trial_limit: Callable[[], int], default: Callable[[], int]) -> int:
+        """Its own limit, else the trial setting for a trial, else the platform's
+        default. Each default is read only when it is the one that applies."""
         if self.own is not None:
             return self.own
-        return trial_limit() if self.is_trial else default
+        return trial_limit() if self.is_trial else default()
 
 
 @inject

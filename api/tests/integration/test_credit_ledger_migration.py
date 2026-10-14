@@ -69,22 +69,34 @@ def test_the_migrated_schema_matches_the_models_for_af381():
     with engine.connect() as connection:
         differences = compare_metadata(MigrationContext.configure(connection), SQLModel.metadata)
     ours = [
-        diff for diff in differences if any(name in repr(diff) for name in (LEDGER, "agent_limit", "trial_expired_at"))
+        diff
+        for diff in differences
+        if any(
+            name in repr(diff) for name in (LEDGER, "agent_limit", "trial_expired_at", "platform_organization_settings")
+        )
     ]
     assert_that(ours, equal_to([]))
 
 
 def test_trials_already_out_of_credit_are_expired_by_the_migration(scratch_database):  # noqa: F811
+    """Out of credit is what the live alert said: it counts spend the proxy doesn't see,
+    so a trial alerted at 100% is expired even when its snapshot alone reads under."""
     command.upgrade(scratch_database.config, "d8b3f1a6c925")
     with scratch_database.engine.begin() as connection:
         spent = _insert_organization(connection, ceiling=10, window="once", is_trial=True)
+        spent_elsewhere = _insert_organization(connection, ceiling=10, window="once", is_trial=True)
         left = _insert_organization(connection, ceiling=10, window="once", is_trial=True)
         unobserved = _insert_organization(connection, ceiling=10, window="once", is_trial=True)
         ended = _insert_organization(connection, ceiling=10, window="once", is_trial=False)
-        for organization_id, spend in ((spent, 10.5), (left, 4.0), (ended, 12.0)):
+        for organization_id, spend, alerted in (
+            (spent, 10.5, 100),
+            (spent_elsewhere, 6.0, 100),
+            (left, 4.0, 80),
+            (ended, 12.0, 100),
+        ):
             connection.execute(
-                text("UPDATE organization SET llm_spend_usd = :spend WHERE id = :id"),
-                {"spend": spend, "id": organization_id},
+                text("UPDATE organization SET llm_spend_usd = :spend, llm_alerted_threshold = :alerted WHERE id = :id"),
+                {"spend": spend, "alerted": alerted, "id": organization_id},
             )
 
     command.upgrade(scratch_database.config, "e4a9c2d7b318")
@@ -94,5 +106,5 @@ def test_trials_already_out_of_credit_are_expired_by_the_migration(scratch_datab
         expired = {
             row[0] for row in connection.execute(text("SELECT id FROM organization WHERE trial_expired_at IS NOT NULL"))
         }
-    assert_that(expired, equal_to({spent}))
+    assert_that(expired, equal_to({spent, spent_elsewhere}))
     assert_that(unobserved in expired, equal_to(False))

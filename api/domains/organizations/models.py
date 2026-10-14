@@ -10,7 +10,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, model_validator
 from pydantic import Field as PydanticField
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import CheckConstraint, Field
+from sqlmodel import CheckConstraint, Field, SQLModel
 from sqlmodel import Field as SqlField
 
 from api.core.config import get_config
@@ -389,3 +389,39 @@ def get_organization_filter(
     search: str | None = Query(default=None),
 ) -> OrganizationFilter:
     return OrganizationFilter(search=search)
+
+
+ORGANIZATION_SETTINGS_SUBJECT_DISPLAY = "Organization settings"
+# A bound no real Organization reaches; it only stops a typo.
+MAX_DEFAULT_AGENT_LIMIT = 1000
+
+
+class PlatformOrganizationSettings(SQLModel, table=True):
+    """The one row of platform-wide Organization settings, created on first save. Without
+    a row, the deployment's defaults apply."""
+
+    __tablename__: str = "platform_organization_settings"
+    __table_args__ = (
+        sa.CheckConstraint("id = 1", name="ck_platform_organization_settings_singleton"),
+        sa.CheckConstraint(
+            "default_agent_limit >= 1", name="ck_platform_organization_settings_default_agent_limit_positive"
+        ),
+    )
+    id: int = SqlField(default=1, primary_key=True)
+    # How many Agents an Organization that is not a trial may run, unless it has its own.
+    default_agent_limit: int
+    updated_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+    updated_by: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
+
+
+class OrganizationSettingsRead(PydanticBaseModel):
+    default_agent_limit: int
+    # None until the first save.
+    updated_at: datetime | None = None
+
+
+class OrganizationSettingsUpdate(PydanticBaseModel):
+    """Omitting a setting leaves it as it is; none can be removed."""
+
+    model_config = ConfigDict(extra="forbid")
+    default_agent_limit: int = PydanticField(ge=1, le=MAX_DEFAULT_AGENT_LIMIT, strict=True)

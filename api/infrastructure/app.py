@@ -23,6 +23,7 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
 from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler, OrganizationTrialExpiryHandler
+from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
@@ -134,6 +135,7 @@ class AppModule(Module):
         litellm: LiteLLMClient,
         openrouter: OpenRouterClient,
         memory_keys: MemoryKeyRepository,
+        llm_budgets: OrganizationLlmBudgetService,
     ) -> CostSynchronizer:
         return CostSynchronizer(
             repository=repository,
@@ -143,6 +145,7 @@ class AppModule(Module):
             encryption_key=config.agent_token_encryption_key,
             memory_key_hashes=config.memory_cost_key_hashes,
             memory_key_source=memory_keys.hashes,
+            on_healed=llm_budgets.apply_healed_spend,
         )
 
     @provider
