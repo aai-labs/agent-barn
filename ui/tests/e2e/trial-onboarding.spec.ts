@@ -601,43 +601,32 @@ test.describe("Trial onboarding", () => {
     await data.users.interceptGetOrganizationsRequest();
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false, organization_id: null }));
 
-    await data.onboarding.interceptDefaultOrganizationTrialRefusal();
     await page.goto("/dashboard");
 
-    await expect(page.getByText("Trial accounts can't create more organizations.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "You're not in an organization" })).toBeVisible();
+    await expect(page.getByText(/its organization was deleted/)).toBeVisible();
     await expect(page.getByText("Platform admin access required")).toHaveCount(0);
   });
 
   for (const entry of ["/dashboard", "/no-organization"]) {
-    test(`an existing user without an organization recovers from ${entry}`, async ({ page }) => {
+    test(`a backfilled existing user opens their organization from ${entry} without creating one`, async ({ page }) => {
       const data = new DataSupport(page);
       await data.auth.interceptRefreshRequest();
-      const account = { ...trialUserContext, signed_up_at: null, organization_users: [] as unknown[] };
+      const account = { ...trialUserContext, signed_up_at: null, organization_users: trialUserContext.organization_users.map((membership) => ({
+        ...membership, organization: { ...membership.organization, is_trial: false },
+      })) };
       await data.users.interceptGetUserContextRequest({ userContext: account });
-      const recovery = await data.onboarding.interceptDefaultOrganization(account);
       await data.agents.interceptGetAgentsRequest();
       await data.agents.interceptGetAgentHealthRequest();
+      const writes: string[] = [];
+      page.on("request", (request) => {
+        if (request.method() === "POST" && new URL(request.url()).pathname.startsWith("/api/v1/organizations")) writes.push(request.url());
+      });
       await page.goto(entry);
       await page.waitForURL(`/dashboard/${TRIAL_ORG_ID}`);
       await expect(page.getByRole("heading", { name: /your team/i })).toBeVisible();
       await expect(page.getByRole("heading", { name: "You're not in an organization" })).toHaveCount(0);
-      expect(recovery.calls).toHaveLength(1);
+      expect(writes).toHaveLength(0);
     });
   }
-
-  test("default organization setup can be retried after a failure", async ({ page }) => {
-    const data = new DataSupport(page);
-    await data.auth.interceptRefreshRequest();
-    const account = { ...trialUserContext, signed_up_at: null, organization_users: [] as unknown[] };
-    await data.users.interceptGetUserContextRequest({ userContext: account });
-    const recovery = await data.onboarding.interceptDefaultOrganization(account, { failure: true });
-    await data.agents.interceptGetAgentsRequest();
-    await data.agents.interceptGetAgentHealthRequest();
-    await page.goto("/dashboard");
-    await expect(page.getByText("Organization setup unavailable").first()).toBeVisible();
-    recovery.recover();
-    await page.getByRole("button", { name: "Try again" }).click();
-    await page.waitForURL(`/dashboard/${TRIAL_ORG_ID}`);
-    expect(recovery.calls).toHaveLength(2);
-  });
 });

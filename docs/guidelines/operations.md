@@ -34,6 +34,14 @@ downgrade does not reconstruct removed requirements. These migrations complement
 the credential cleanup in `a85f48650d6a`; removing a provider from code alone
 does not retire database Skill metadata.
 
+Migration `d72b85f19c40` gives existing verified non-platform, non-self-signup users
+with no Membership an ordinary Organization and Owner Membership, using deployment
+model/spend defaults and respecting the Organization creation limit. It is a one-time
+data backfill; it leaves invitations, existing Memberships and self-signup accounts
+unchanged. Downgrade retains created Organizations and Memberships to preserve user
+work. It makes no external calls; existing reconciliation and first-Agent-key
+provisioning apply. See [Identity and Organizations](../features/identity-and-organizations.md#organization-creation-and-membership-flows).
+
 ```bash
 make migrate          # upgrade the configured database to head
 make makemigrations   # autogenerate a revision after prompting for its message

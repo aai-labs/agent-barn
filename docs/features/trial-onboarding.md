@@ -113,7 +113,7 @@ Organizations list marks trials.
 
 An Owner may delete their Trial Organization (after deleting its Agents). The delete
 dialog warns that this ends the free trial for good: the address keeps its trial grant and
-the user stays unable to create Organizations, so automatic dashboard recovery is refused until
+the user stays unable to create Organizations and receives no automatic replacement until
 someone invites them to an Organization or a Platform Administrator ends their trial restriction.
 
 Ending a trial (409 for an Organization that is not one) stores the chosen spend limit

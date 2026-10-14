@@ -921,11 +921,6 @@
   ],
   [
     "POST",
-    "/organizations/default",
-    "ensure_default_organization_organizations_default_post"
-  ],
-  [
-    "POST",
     "/organizations/{organization_id}/agents",
     "create_agent_organizations__organization_id__agents_post"
   ],

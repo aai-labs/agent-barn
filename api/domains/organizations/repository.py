@@ -558,22 +558,11 @@ class OrganizationRepository:
         creator_id: UUID,
         creation_limit: int,
         actor: ActorIdentity,
-        *,
-        reuse_existing_membership: bool = False,
     ) -> tuple[Organization, list[UUID]]:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             # Serialize creation attempts for one user. Without this lock, two
             # concurrent requests could both observe one remaining quota slot.
             creator = session.exec(select(User).where(col(User.id) == creator_id).with_for_update()).one()
-            if reuse_existing_membership:
-                existing = session.exec(
-                    select(Organization)
-                    .join(OrganizationUser, col(OrganizationUser.organization_id) == Organization.id)
-                    .where(col(OrganizationUser.user_id) == creator.id)
-                    .order_by(col(Organization.created_at), col(Organization.id))
-                ).first()
-                if existing is not None:
-                    return existing, []
             created_count = session.scalar(
                 select(func.count()).select_from(Organization).where(col(Organization.created_by_user_id) == creator.id)
             )

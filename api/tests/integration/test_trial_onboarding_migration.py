@@ -164,3 +164,109 @@ def test_signup_policy_upgrade_constraint_and_downgrade(scratch_database):
             connection.execute(text("SELECT self_signup_enabled FROM platform_trial_settings")).scalar_one(),
             equal_to(False),
         )
+
+
+# Existing membership-free users need a one-time data backfill, not a recovery API.
+LEGACY_ORG_BASE = "c61a94e72b30"
+
+
+def test_existing_users_receive_organizations_once_without_touching_trials_or_invitations(scratch_database):
+    command.upgrade(scratch_database.config, LEGACY_ORG_BASE)
+    users = {
+        "legacy": {"name": "  Jane Doe  ", "verified": True},
+        "unnamed": {"name": None, "verified": True},
+        "long_name": {"name": "L" * 300, "verified": True},
+        "owner": {"name": "Owner", "verified": True},
+        "invited": {"name": "Invited", "verified": True},
+        "pending_invite": {"name": "Pending", "verified": False},
+        "unverified": {"name": "Unverified", "verified": False},
+        "platform_admin": {"name": "Admin", "verified": True, "admin": True},
+        "deleted_trial": {"name": "Trial", "verified": True, "signup": True},
+        "ended_trial": {"name": "Ended", "verified": True, "signup": True, "ended": True},
+    }
+    user_ids = {key: uuid7() for key in users}
+    existing_org = uuid7()
+    with scratch_database.engine.begin() as connection:
+        for key, user in users.items():
+            connection.execute(
+                text(
+                    'INSERT INTO "user" (id, created_at, updated_at, full_name, email, hashed_password, '
+                    "security_stamp, is_platform_admin, email_verified_at, signed_up_at, trial_ended_at) "
+                    "VALUES (:id, now(), now(), :name, :email, :password, :stamp, :admin, "
+                    "CASE WHEN :verified THEN now() ELSE NULL END, "
+                    "CASE WHEN :signup THEN now() ELSE NULL END, CASE WHEN :ended THEN now() ELSE NULL END)"
+                ),
+                {
+                    "id": user_ids[key],
+                    "name": user["name"],
+                    "email": f"{key}@example.com",
+                    "password": "fixture-unusable-hash",
+                    "stamp": uuid7().hex,
+                    "admin": user.get("admin", False),
+                    "verified": user["verified"],
+                    "signup": user.get("signup", False),
+                    "ended": user.get("ended", False),
+                },
+            )
+        connection.execute(
+            text(
+                "INSERT INTO organization (id, created_at, updated_at, name, created_by_user_id, allowed_models, llm_budget_usd, llm_budget_duration) "
+                "VALUES (:id, now(), now(), 'Existing team', :creator, '[]', 50, '30d')"
+            ),
+            {"id": existing_org, "creator": user_ids["owner"]},
+        )
+        for key in ("owner", "invited", "pending_invite"):
+            connection.execute(
+                text(
+                    "INSERT INTO user_organization (id, created_at, updated_at, user_id, organization_id, role) "
+                    "VALUES (:id, now(), now(), :user_id, :org_id, :role)"
+                ),
+                {
+                    "id": uuid7(),
+                    "user_id": user_ids[key],
+                    "org_id": existing_org,
+                    "role": "OWNER" if key == "owner" else "MEMBER",
+                },
+            )
+
+    command.upgrade(scratch_database.config, "head")
+    with scratch_database.engine.connect() as connection:
+        memberships = (
+            connection.execute(
+                text(
+                    "SELECT m.user_id, m.role, o.id, o.name, o.created_by_user_id, o.is_trial, o.llm_budget_usd, o.llm_budget_duration, o.allowed_models "
+                    "FROM user_organization m JOIN organization o ON o.id = m.organization_id"
+                )
+            )
+            .mappings()
+            .all()
+        )
+        by_user = {row["user_id"]: row for row in memberships}
+        assert_that(len(memberships), equal_to(6))
+        for key, name in (
+            ("legacy", "Jane's Organization"),
+            ("unnamed", "My Organization"),
+            ("long_name", "L" * 240 + "'s Organization"),
+        ):
+            row = by_user[user_ids[key]]
+            assert_that(row["name"], equal_to(name))
+            assert_that(row["role"], equal_to("OWNER"))
+            assert_that(row["created_by_user_id"], equal_to(user_ids[key]))
+            assert_that(row["is_trial"], equal_to(False))
+            assert_that(row["llm_budget_usd"], equal_to(get_config().organization_default_llm_budget_usd))
+            assert_that(row["llm_budget_duration"], equal_to("30d"))
+            assert_that(
+                row["allowed_models"], equal_to([get_config().agent_default_model.removeprefix("litellm/openrouter/")])
+            )
+        for key in ("owner", "invited", "pending_invite"):
+            assert_that(by_user[user_ids[key]]["id"], equal_to(existing_org))
+        assert_that(connection.execute(text("SELECT count(*) FROM agent")).scalar_one(), equal_to(0))
+        assert_that(connection.execute(text("SELECT count(*) FROM trial_grant")).scalar_one(), equal_to(0))
+        snapshot = {row["user_id"]: row["id"] for row in memberships}
+
+    # Reapplying a data migration must preserve any Organization that can now hold work.
+    command.downgrade(scratch_database.config, LEGACY_ORG_BASE)
+    command.upgrade(scratch_database.config, "head")
+    with scratch_database.engine.connect() as connection:
+        actual = dict(connection.execute(text("SELECT user_id, organization_id FROM user_organization")).all())
+        assert_that(actual, equal_to(snapshot))

@@ -80,22 +80,6 @@ export class OnboardingDataSupport {
     return requests;
   }
 
-  async interceptDefaultOrganization(userContext: { organization_users: unknown[] }, { failure = false } = {}) {
-    const calls: number[] = [];
-    let failed = failure;
-    await this.page.route("**/api/v1/organizations/default", (route) => {
-      calls.push(Date.now());
-      if (failed) return route.fulfill({ status: 503, json: { detail: "Organization setup unavailable" } });
-      userContext.organization_users = structuredClone(trialUserContext.organization_users);
-      return route.fulfill({ json: trialUserContext.organization_users[0].organization });
-    });
-    return { calls, recover: () => { failed = false; } };
-  }
-
-  async interceptDefaultOrganizationTrialRefusal() {
-    await this.page.route("**/api/v1/organizations/default", (route) => route.fulfill({ status: 403, json: { detail: "Trial accounts can't create more organizations." } }));
-  }
-
   async interceptGetOnboarding(body: unknown = onboarding()) {
     await this.page.route("**/api/v1/onboarding", (route) =>
       route.request().method() === "GET" ? route.fulfill({ json: body }) : route.fallback(),

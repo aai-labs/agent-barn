@@ -57,17 +57,18 @@ Organization Owners and Admins can rename their Organization from its management
 
 Self-signup creates a **Trial Organization** (`is_trial`), at most one per email address and, when Platform Administrators set a cap, only while fewer trials than the cap are active: it runs up to the platform's trial agent limit (enforced under a lock when an Agent is stored) on a one-off spend limit set from the platform's trial credit. A Platform Administrator ends a trial with `POST /platform/organizations/{id}/end-trial`, giving the spend limit and window it moves to; that lifts the agent limit and its owner's Organization-creation block, and records `organization.trial.ended`. See [Trial onboarding](trial-onboarding.md#trials).
 
-`POST /organizations/default` requires a verified authenticated account, accepts no
-caller-selected owner or Organization ID, and creates a personally named ordinary
-Organization only when the user has no Memberships. Existing memberships are reused.
-The absence check, creation quota, Organization insert, Owner Membership and
-`organization.created` event use the same user lock and transaction as ordinary
-self-service creation, so concurrent recovery creates one Organization. New Organizations
-use the platform model and spend defaults. Recovery preserves the trial-creation
-restriction; deleting an unfinished trial never grants an unrestricted replacement.
-It creates no Agent. Platform administrators continue to enter Platform View automatically.
+Migration `d72b85f19c40` performs a one-time backfill for existing verified,
+non-platform accounts that never self-signed up and have no Memberships. Each
+eligible account receives a personally named ordinary Organization and its Owner
+Membership atomically, with immutable Creator provenance and the deployment's
+model/spend defaults, subject to the existing Organization creation limit. Existing
+Memberships, invitations, platform accounts and all self-signup accounts are untouched.
+It creates no Agent or Trial Grant and makes no external provisioning calls. A
+rollback retains these Organizations because they may now own user work. New
+signups and invitations continue through their existing provisioning paths.
+There is no automatic Organization-creation endpoint or dashboard write.
 
-All creation paths provision an Organization-scoped LiteLLM team after commit when the proxy is configured. Team identity, reconciliation, and the platform-administered spend ceiling stored on the Organization are owned by [Costs](costs.md#organization-llm-budgets).
+Runtime creation paths provision an Organization-scoped LiteLLM team after commit when the proxy is configured. Backfilled Organizations use the existing reconciliation/first-Agent-key provisioning paths. Team identity, reconciliation, and the platform-administered spend ceiling stored on the Organization are owned by [Costs](costs.md#organization-llm-budgets).
 
 Organization Name is a mutable display label and is intentionally not globally unique. Platform View disambiguates same-named Organizations with owner identity and Organization ID, and its allowlisted Organization detail projection exposes immutable Creator identity without exposing Organization configuration. A separate globally unique human-facing handle is deferred until a URL, CLI, API, or support workflow requires one.
 
@@ -75,7 +76,7 @@ Legacy Organizations backfill Organization Creator from their current Owner Memb
 
 Membership list, invite, role-update, and removal workflows require their corresponding Organization Permissions through real membership; seeded Owner/Admin roles receive them. Organization invitations and resends are delivered only by email: the add-member and resend-invite responses keep their `invite_link` field for v1 compatibility but always return null, so an inviter cannot enroll an address they don't control. Owner-only rules protect ownership and sensitive Admin operations. Removing a pending Member also revokes outstanding invite/reset links.
 
-The UI resolves Organization View from `/dashboard/[orgId]`; Platform View lives at `/dashboard/platform` and has no active Organization. A signed-in user with no Membership lands on Platform View if they are a Platform Administrator. For an ordinary user, the dashboard automatically calls `POST /organizations/default`, refreshes their account context and opens the returned Organization. The old `/no-organization` URL redirects to `/dashboard`; its standalone screen is removed. A recovery failure stays in the dashboard with an explanation and retry. The Organization selector is always membership-derived—even for Platform Administrators—and exposes self-service creation to every authenticated user. Platform-wide Organization results are never injected into the selector. Remembered organization state is only a navigation fallback for returning to Organization View. Organization-scoped hooks include the organization ID in API URLs. Organization switching removes known organization-scoped query caches because those keys are not organization-dimensioned.
+The UI resolves Organization View from `/dashboard/[orgId]`; Platform View lives at `/dashboard/platform` and has no active Organization. A signed-in user with no Membership lands on Platform View if they are a Platform Administrator. Backfilled users enter their Organization through their persisted Membership. An ordinary user who genuinely has no Membership sees a read-only explanation and invitation guidance; no Organization is created by visiting the dashboard. The old `/no-organization` URL redirects to `/dashboard` to resolve current Memberships. The Organization selector is always membership-derived—even for Platform Administrators—and exposes self-service creation to every authenticated user. Platform-wide Organization results are never injected into the selector. Remembered organization state is only a navigation fallback for returning to Organization View. Organization-scoped hooks include the organization ID in API URLs. Organization switching removes known organization-scoped query caches because those keys are not organization-dimensioned.
 
 ## Source map
 

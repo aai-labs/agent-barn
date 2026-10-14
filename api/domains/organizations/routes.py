@@ -39,16 +39,6 @@ def create_organization_for_current_user(
     return organization_service.create_organization_for_current_user(data, context)
 
 
-@org_router.post("/default", response_model=OrganizationRead)
-def ensure_default_organization(
-    context: Annotated[
-        CurrentUserContext, Depends(get_current_user(require_organization=False, verified_required=True))
-    ],
-    organization_service: Annotated[OrganizationService, Injected(OrganizationService)],
-):
-    return organization_service.ensure_default_organization(context)
-
-
 @org_router.get("/{organization_id}", response_model=OrganizationRead)
 def get_organization(
     organization_id: UUID,
