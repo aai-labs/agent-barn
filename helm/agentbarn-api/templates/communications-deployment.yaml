@@ -42,6 +42,12 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
+          env:
+            # Agent webhook URLs (Agent Barn Telegram, Teams) name the Agents'
+            # namespace; without this the hardcoded "agent-farm" default would
+            # send a staging pod's traffic to the prod namespace.
+            - name: K8S_NAMESPACE
+              value: {{ .Release.Namespace }}
           readinessProbe:
             httpGet:
               path: /health

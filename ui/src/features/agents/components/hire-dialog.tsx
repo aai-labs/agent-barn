@@ -10,6 +10,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useOrganization } from "@/features/organizations/hooks/use-organization";
+import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 import {
   coerceBooleanFields,
@@ -20,6 +22,7 @@ import {
   type IntegrationDraft,
 } from "../integrations";
 import { useAgentNameSuggestion } from "../hooks/use-agent-name-suggestion";
+import { useAgents } from "../hooks/use-agents";
 import { formatAgentName } from "../naming";
 import { useCreateAgent } from "../hooks/use-create-agent";
 import { useStartAgent } from "../hooks/use-start-agent";
@@ -54,6 +57,11 @@ function credentialsForProviders(
 }
 
 export function HireDialog({ onClose, onHired }: HireDialogProps) {
+  const { selectedOrganization } = useOrganizationContext();
+  // The membership list doesn't carry a trial's agent limit; the organization read does.
+  const { organization } = useOrganization(selectedOrganization?.isTrial ? selectedOrganization.id : "");
+  const trialAgentLimit = organization?.trialAgentLimit ?? null;
+  const { total: agentCount } = useAgents();
   const { templates, isLoading } = useTemplates();
   const createAgent = useCreateAgent();
   const startAgent = useStartAgent();
@@ -206,6 +214,26 @@ export function HireDialog({ onClose, onHired }: HireDialogProps) {
       return;
     }
     setError(cause instanceof Error ? cause.message : "Could not hire the Agent.");
+  }
+
+  // A trial at its agent limit is refused by the API, so say so before the form.
+  if (selectedOrganization?.isTrial && trialAgentLimit != null && agentCount >= trialAgentLimit) {
+    return (
+      <DialogShell shadeClick={onClose}>
+        <header className="flex items-start justify-between border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
+          <div>
+            <h2 className="m-0 text-xl font-semibold tracking-tight">Your trial has all its agents</h2>
+            <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>
+              Trial organizations can have {trialAgentLimit} {trialAgentLimit === 1 ? "agent" : "agents"}.
+            </p>
+          </div>
+          <button type="button" aria-label="Close hiring dialog" className="af-btn af-btn-ghost af-btn-icon" onClick={onClose}><XIcon /></button>
+        </header>
+        <footer className="flex justify-end px-6 py-4">
+          <button type="button" className="af-btn" onClick={onClose}>Close</button>
+        </footer>
+      </DialogShell>
+    );
   }
 
   return (

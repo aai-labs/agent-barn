@@ -32,6 +32,18 @@ _Avoid_: budget, allowance, quota, cap
 The most an Organization may spend on model calls in one renewal period, set by a Platform Administrator. Every Organization has one, starting at the deployment default. The Organization may set a lower Model Spend Limit of its own, never a higher one, and lowering the ceiling beneath that limit pulls it down.
 _Avoid_: allowance, plan limit, platform budget
 
+**Trial Organization**:
+The one Organization a self-signed-up user gets; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A Platform Administrator ends the trial, choosing the spend limit it goes on to, after which it is an ordinary Organization.
+_Avoid_: free plan, trial account, demo org
+
+**Trial Credit**:
+The one-off Model Spend Limit a new Trial Organization starts with, set by Platform Administrators for trials created afterwards. When it is spent the trial's Agent stops; it never renews.
+_Avoid_: free credits, balance, allowance
+
+**Trial Onboarding**:
+The steps a self-signed-up user goes through after their first sign-in: their Agent is set up and started, they link Telegram to it, and they finish. Returning users who finished go straight to the dashboard.
+_Avoid_: signup wizard, setup flow
+
 **Spend Limit Coverage**:
 Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.
 _Avoid_: enrolment status, team membership
@@ -151,6 +163,14 @@ _Avoid_: runtime
 **Communication Connection**:
 An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have one active Communication Connection per Platform; retired Connections preserve history and may be replaced.
 _Avoid_: channel, integration, platform config
+
+**Agent Barn Telegram**:
+The Platform through which Agents use one Telegram bot owned by Agent Barn and shared by every Organization, instead of a bot the Organization brings to the `telegram` Platform. Its Connections hold no credentials. People reach an Agent on it only after Telegram Account Linking, and only in private chats.
+_Avoid_: shared Telegram, Agent Barn bot Connection
+
+**Telegram Account Linking**:
+Tying one person's Telegram account to one Agent's Agent Barn Telegram Connection, by opening a single-use link that a Member with `agent.update` issued and pressing Start. The link acts on that Member's authority and ends when they lose it. A Telegram account is linked to at most one Agent at a time; linking another ends the previous link, and that Agent keeps its own messages and files in the chat.
+_Avoid_: pairing, Telegram login
 
 **Agent Webhook**:
 An Agent-owned HTTP endpoint through which an authenticated external system submits discrete work to that Agent. It is not a Platform or Communication Connection.
@@ -375,6 +395,8 @@ _Avoid_: webhook
 - An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections** and **Agent Webhooks**.
 - Each **Communication Connection** belongs to one **Agent**, targets one **Platform**, and is interpreted by that Platform's **Platform Plugin**.
 - A **Communication Connection** on a mailbox-addressed **Platform** holds at most one active **Agent Email Address**.
+- An **Agent** holds at most one non-retired Telegram-type **Communication Connection**, on `telegram` or **Agent Barn Telegram** but not both, because a Runtime runs one Telegram adapter. A disabled Connection still counts; it must be removed before the Agent can take the other type.
+- A Telegram account has at most one active **Telegram Account Linking** to an **Agent Barn Telegram** Connection, and each link records the Membership that issued it.
 - Each **Agent Webhook** belongs to one **Agent** and owns zero or more **Webhook Invocations**.
 - Each **Webhook Invocation** may submit one **Agent Trigger Job** per dispatch generation.
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.

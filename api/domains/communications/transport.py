@@ -11,6 +11,8 @@ PLATFORM_TRANSPORTS: MappingProxyType[str, PlatformTransport] = MappingProxyType
         "discord": "native",
         "telegram": "native",
         "teams": "native",
+        # The runtime's own Telegram adapter, behind Agent Barn's shared-bot relay and proxy.
+        "agentbarn_telegram": "native",
         "web": "gateway",
         "email": "gateway",
     }

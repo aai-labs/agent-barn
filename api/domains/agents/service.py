@@ -24,8 +24,12 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
+    HERMES_DEFAULT_MAX_TURNS,
     HERMES_WORKSPACE_DIR,
     OPENCLAW_WORKSPACE_DIR,
+    agentbarn_telegram_channel,
+    agentbarn_telegram_channel_env,
+    agentbarn_telegram_env,
     build_config_map,
     build_deployment,
     build_hermes_config_map,
@@ -47,7 +51,7 @@ from api.domains.agents.builders import (
     runtime_teams_env,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
-from api.domains.agents.exceptions import AgentProvisioningPrecondition
+from api.domains.agents.exceptions import AgentProvisioningPrecondition, TrialAgentLimitReached
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -125,12 +129,19 @@ from api.domains.agents.runtime_policy import (
 from api.domains.agents.selection import (
     SelectionValidator,
     ensure_approval_mode_supported,
+    ensure_max_turns_supported,
     ensure_verbose_mode_supported,
     is_model_allowed,
 )
 from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
+from api.domains.communications.plugins.agentbarn_telegram import (
+    AgentBarnTelegramRuntime,
+    runtime_api_token,
+    runtime_webhook_secret,
+)
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
@@ -152,6 +163,7 @@ from api.domains.integrations.runtime import (
     materialize_integrations,
     select_egress_mode,
 )
+from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.constants import RESTORE_POINT_POD_TERMINATION_POLL_SECONDS
@@ -317,6 +329,7 @@ class AgentService:
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    trial_settings: TrialSettingsService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
     credential_gateway: CredentialGatewayService
@@ -327,6 +340,7 @@ class AgentService:
     conversation_repository: ConversationRepository
     activity_repository: ActivityRepository
     plugins: PlatformPluginRegistry
+    agentbarn_telegram_secrets: AgentBarnTelegramService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -367,6 +381,10 @@ class AgentService:
     @staticmethod
     def _ensure_verbose_mode_supported(agent_type: AgentType, verbose_mode: bool | None) -> None:
         ensure_verbose_mode_supported(agent_type, verbose_mode)
+
+    @staticmethod
+    def _ensure_max_turns_supported(agent_type: AgentType, max_turns: int | None) -> None:
+        ensure_max_turns_supported(agent_type, max_turns)
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -609,6 +627,13 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            # Same for max_turns: only the Hermes builder reads it.
+            max_turns=agent.max_turns if agent.agent_type == AgentType.HERMES else None,
+            effective_max_turns=(
+                agent.max_turns
+                if agent.agent_type == AgentType.HERMES and agent.max_turns is not None
+                else HERMES_DEFAULT_MAX_TURNS
+            ),
             memory_enabled=agent.memory_enabled,
             last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
@@ -824,6 +849,7 @@ class AgentService:
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
+        self._ensure_max_turns_supported(data.agent_type, data.max_turns)
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -834,6 +860,11 @@ class AgentService:
             missing_detail = f"Template {data.template_key} not found"
         if template is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
+        # Checked again under a lock when the Agent is stored; checked here too so a
+        # refused create never allocates a LiteLLM key.
+        agent_limit = self.trial_settings.agent_limit() if self.organization_lookup.is_trial(org_id) else None
+        if agent_limit is not None and self.repository.count_active_by_org(org_id) >= agent_limit:
+            raise TrialAgentLimitReached(agent_limit)
 
         agent = Agent(
             organization_id=org_id,
@@ -843,6 +874,7 @@ class AgentService:
             agent_type=data.agent_type,
             approval_mode=data.approval_mode,
             verbose_mode=data.verbose_mode,
+            max_turns=data.max_turns,
         )
         self._set_pin(agent, template)
 
@@ -995,6 +1027,7 @@ class AgentService:
                 secrets=prepared_secrets,
                 skills=prepared_skills,
                 actor_display=secret_actor_display,
+                agent_limit=agent_limit,
             )
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
@@ -1737,6 +1770,9 @@ class AgentService:
         if "verbose_mode" in updated:
             self._ensure_verbose_mode_supported(agent.agent_type, updated["verbose_mode"])
 
+        if "max_turns" in updated:
+            self._ensure_max_turns_supported(agent.agent_type, updated["max_turns"])
+
         # Validate every requested skill pin before mutating the Agent, its
         # template pin, or any attached credential.
         current_skill_rows = self.repository.get_skills_for_agent(agent.id)
@@ -1779,6 +1815,10 @@ class AgentService:
 
         if "verbose_mode" in updated:
             agent.verbose_mode = updated["verbose_mode"]
+
+        if "max_turns" in updated:
+            # Nullable column: null is the Agent returning to the platform default.
+            agent.max_turns = updated["max_turns"]
 
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
@@ -1998,6 +2038,31 @@ class AgentService:
         )
         return _NativeConnectionConfiguration(settings=connection.settings, credentials=credentials)
 
+    def _agentbarn_telegram_runtime(self, agent_id: UUID) -> AgentBarnTelegramRuntime | None:
+        """Runtime settings for an enabled Agent Barn Telegram Connection.
+
+        The runtime gets a stand-in token and the proxy's address; the shared
+        bot's real token is only ever sent to Telegram, by the Communications process.
+        """
+        bot_token = self.config.agentbarn_telegram_bot_token.strip()
+        if not bot_token or not self.config.agentbarn_telegram_bot_username.strip():
+            return None
+        connection = self.connection_repository.get_active_by_platform_key(agent_id, "agentbarn_telegram")
+        if connection is None or not connection.enabled:
+            return None
+        # Created on the Agent's first start with this Connection and kept after
+        # that, so a restarted pod presents the same credentials.
+        connection_secret = self.agentbarn_telegram_secrets.runtime_secret(connection.id, create=True)
+        assert connection_secret is not None
+        return AgentBarnTelegramRuntime(
+            api_root=f"{self.config.communications_base_url.rstrip('/')}/telegram/{connection.id}",
+            api_token=runtime_api_token(connection_secret, bot_token),
+            webhook_secret=runtime_webhook_secret(connection_secret),
+            webhook_url=self.config.agentbarn_telegram_runtime_webhook_url.format(
+                agent_id=agent_id, namespace=self.config.k8s_namespace
+            ),
+        )
+
     def _native_slack_connection(self, agent_id: UUID) -> tuple[dict, dict, ConversationLocation | None] | None:
         """The settings, credentials, and resolved home channel of a native Slack Connection."""
         connection = self._native_connection_configuration(agent_id, "slack")
@@ -2133,11 +2198,13 @@ class AgentService:
 
         runtime_api_key = secrets.token_urlsafe(32)
         runtime_teams = self._native_connection_configuration(agent.id, "teams")
+        agentbarn_telegram = self._agentbarn_telegram_runtime(agent.id)
         service = build_service(
             agent.id,
             org_id,
             ns,
             include_webhook_port=runtime_teams is not None,
+            include_telegram_webhook_port=agentbarn_telegram is not None,
             org_name=org_name,
             agent_name=agent.name,
         )
@@ -2158,7 +2225,9 @@ class AgentService:
                 telegram_settings=native_telegram.settings if native_telegram else None,
                 runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,
+                agentbarn_telegram=agentbarn_telegram,
                 memory_enabled=agent.memory_enabled,
+                max_turns=agent.max_turns,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -2179,6 +2248,8 @@ class AgentService:
                 secret.string_data.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
             if runtime_teams is not None:
                 secret.string_data.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
+            if agentbarn_telegram is not None:
+                secret.string_data.update(agentbarn_telegram_env(agentbarn_telegram))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -2201,6 +2272,10 @@ class AgentService:
             if runtime_teams is not None:
                 native_credentials["msteams"] = runtime_teams.credentials
                 native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
+            if agentbarn_telegram is not None:
+                # The runtime's Telegram channel, carried through Agent Barn's proxy.
+                native_credentials["telegram"] = {"bot_token": agentbarn_telegram.api_token}
+                native_channels["telegram"] = agentbarn_telegram_channel(agentbarn_telegram)
             overlay = build_openclaw_gateway_config(
                 effective_model, llm_proxy_url, native_channels, memory_enabled=agent.memory_enabled
             )
@@ -2215,6 +2290,8 @@ class AgentService:
             )
             if native_credentials:
                 secret.string_data.update(native_channel_env(native_credentials))
+            if agentbarn_telegram is not None:
+                secret.string_data.update(agentbarn_telegram_channel_env(agentbarn_telegram))
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -2452,7 +2529,9 @@ class AgentService:
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_file_delivery_policy_md(
                 # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
-                workspace_dir if any(c is not None for c in (native_slack, native_discord, native_telegram)) else None
+                workspace_dir
+                if any(c is not None for c in (native_slack, native_discord, native_telegram, agentbarn_telegram))
+                else None
             )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()

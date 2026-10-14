@@ -5,6 +5,10 @@ import yaml
 from kubernetes import client
 
 from api.domains.communications.models import ConversationLocation
+from api.domains.communications.plugins.agentbarn_telegram import (
+    RUNTIME_WEBHOOK_PORT,
+    AgentBarnTelegramRuntime,
+)
 
 from .common import _labels, _resource_name, _setting_ids
 from .memory import (
@@ -51,6 +55,9 @@ AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").rea
 
 
 _HERMES_APPROVAL_MODE = {"manual": "manual", "auto": "smart", "off": "off"}
+# Turns one Hermes run may take before the runtime stops it. An Agent's own
+# `max_turns` replaces it; a review of a large pull request needs more than this.
+HERMES_DEFAULT_MAX_TURNS = 50
 _HERMES_APPROVAL_TIMEOUT_SECONDS = 300
 _HERMES_HEADLESS_APPROVAL_MODE = "deny"
 # Hermes shows a first-message onboarding notice whenever this variable is
@@ -90,6 +97,7 @@ def _hermes_config_core(
     litellm_base_url: str,
     enabled_plugins: list[str],
     approval_mode: str = "auto",
+    max_turns: int | None = None,
 ) -> dict:
     _, sep, model_name = model.partition("/")
     if not sep:
@@ -124,7 +132,7 @@ def _hermes_config_core(
             "enabled": False,
         },
         "agent": {
-            "max_turns": 50,
+            "max_turns": max_turns if max_turns is not None else HERMES_DEFAULT_MAX_TURNS,
         },
         "display": {
             "tool_progress": "all",
@@ -168,12 +176,16 @@ def build_hermes_gateway_config(
     telegram_settings: dict | None = None,
     runtime_teams: bool = False,
     verbose_mode: bool = False,
+    agentbarn_telegram: AgentBarnTelegramRuntime | None = None,
     memory_enabled: bool = False,
+    max_turns: int | None = None,
 ) -> dict:
     plugins = ["telemetry-push"]
-    if native_slack or native_discord or telegram_settings is not None or runtime_teams:
+    if native_slack or native_discord or telegram_settings is not None or runtime_teams or agentbarn_telegram:
         plugins.append("agentbarn-observer")
-    config = _hermes_config_core(model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode)
+    config = _hermes_config_core(
+        model, litellm_base_url, enabled_plugins=plugins, approval_mode=approval_mode, max_turns=max_turns
+    )
     config["memory"]["provider"] = "hindsight" if memory_enabled else ""
     if memory_enabled:
         config["memory"]["hindsight"] = hermes_memory_settings()
@@ -217,6 +229,21 @@ def build_hermes_gateway_config(
             # sender allowlist is the only gate that turns groups off entirely.
             telegram["group_allow_from"] = []
         config["telegram"] = telegram
+        config["display"]["platforms"]["telegram"] = {
+            "tool_progress": "all" if verbose_mode else "off",
+            "tool_progress_grouping": "accumulate",
+            "interim_assistant_messages": verbose_mode,
+        }
+    if agentbarn_telegram is not None:
+        # Linking already admitted every sender, and groups are not part of Agent
+        # Barn Telegram; an empty group sender allowlist is Hermes' only group off switch.
+        config["telegram"] = {"unauthorized_dm_behavior": "ignore", "group_allow_from": []}
+        config.setdefault("platforms", {})["telegram"] = {
+            "extra": {
+                "base_url": f"{agentbarn_telegram.api_root}/bot",
+                "base_file_url": f"{agentbarn_telegram.api_root}/file/bot",
+            }
+        }
         config["display"]["platforms"]["telegram"] = {
             "tool_progress": "all" if verbose_mode else "off",
             "tool_progress_grouping": "accumulate",
@@ -290,6 +317,27 @@ def native_discord_env(settings: dict, credentials: dict) -> dict[str, str]:
     else:
         env["DISCORD_HOME_CHANNEL"] = _NO_HOME_CHANNEL
     return env
+
+
+def agentbarn_telegram_env(runtime: AgentBarnTelegramRuntime) -> dict[str, str]:
+    """Run the native Hermes Telegram adapter behind Agent Barn's shared bot.
+
+    Webhook mode receives the updates Agent Barn forwards; ``base_url`` in the
+    gateway config sends every Bot API call to Agent Barn's proxy with a
+    stand-in token. Groups are closed in the gateway config.
+    """
+    return {
+        "TELEGRAM_BOT_TOKEN": runtime.api_token,
+        "TELEGRAM_ALLOW_ALL_USERS": "true",
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        "TELEGRAM_WEBHOOK_URL": runtime.webhook_url,
+        "TELEGRAM_WEBHOOK_PORT": str(RUNTIME_WEBHOOK_PORT),
+        "TELEGRAM_WEBHOOK_HOST": "0.0.0.0",
+        "TELEGRAM_WEBHOOK_SECRET": runtime.webhook_secret,
+        "TELEGRAM_HOME_CHANNEL": _NO_HOME_CHANNEL,
+        # Native Hermes delivers scheduled results to their origin.
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }
 
 
 def native_telegram_env(settings: dict, credentials: dict) -> dict[str, str]:
