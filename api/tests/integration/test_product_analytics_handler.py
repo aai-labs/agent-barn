@@ -24,6 +24,7 @@ from api.domains.events.catalog import (
     TELEGRAM_ACCOUNT_UNLINKED,
     TELEGRAM_FIRST_MESSAGE_RECEIVED,
     USER_ONBOARDING_COMPLETED,
+    USER_SIGNED_UP,
 )
 from api.domains.events.handlers import (
     EventDeliveryContext,
@@ -769,3 +770,25 @@ def test_telegram_link_events_are_sent_as_the_linker_with_the_agent_and_connecti
             equal_to({"agent_id": agent_id, "connection_id": connection_id, **expected}),
         )
         assert_that(capture["properties"], is_not(has_key("link_id")))
+
+
+def test_a_signup_is_sent_with_its_method():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        event = DomainEventEnvelope(
+            event_name=USER_SIGNED_UP,
+            schema_version=1,
+            occurred_at=OCCURRED_AT,
+            event_scope=EventScope.PLATFORM,
+            organization_id=None,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
+            subject=SubjectIdentity(type=SubjectIdentityType.USER, id=context.user.id),
+            correlation_id=uuid4(),
+            payload={"user_id": str(context.user.id), "method": "google"},
+        )
+
+        _handle(context, event)
+
+        capture = posthog.batches[0][0]
+        assert_that(capture["properties"]["method"], equal_to("google"))
+        assert_that(capture["properties"], is_not(has_key("user_id")))

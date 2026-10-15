@@ -12,6 +12,7 @@ from api.domains.events.catalog import (
     PLATFORM_USER_PRIVILEGE_GRANTED,
     PLATFORM_USER_PRIVILEGE_REVOKED,
     USER_ONBOARDING_COMPLETED,
+    USER_SIGNED_UP,
 )
 from api.domains.events.models import (
     ActorIdentity,
@@ -34,6 +35,9 @@ from api.domains.users.organization_users.models import (
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+INVITE_SIGNUP_METHOD = "invite"
+GOOGLE_SIGNUP_METHOD = "google"
 
 
 @dataclass(frozen=True)
@@ -232,6 +236,20 @@ class UserRepository:
                 user=subject,
                 delivery_ids=delivery_ids,
             )
+
+    def stage_user_signed_up(self, session: Session, user_id: UUID, method: str) -> list[UUID]:
+        event = EVENT_REGISTRY.build_event(
+            event_name=USER_SIGNED_UP,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=None,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=user_id),
+            subject=SubjectIdentity(type=SubjectIdentityType.USER, id=user_id),
+            correlation_id=uuid4(),
+            payload={"user_id": user_id, "method": method},
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return self.outbox_repository.delivery_ids_for_event(session, event.event_id)
 
     def complete_onboarding(self, user_id: UUID, organization_id: UUID | None) -> list[UUID]:
         with Session(self.delegate.engine) as session:

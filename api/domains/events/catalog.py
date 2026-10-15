@@ -557,6 +557,7 @@ class UserSignedUpPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_id: UUID
+    method: Literal["invite", "google"] = "invite"
 
 
 class UserOnboardingCompletedPayload(BaseModel):

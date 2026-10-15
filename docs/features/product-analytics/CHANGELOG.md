@@ -43,11 +43,42 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered (AF-374): `user.onboarding.completed`, sent once per user on the first onboarding completion.
 - Also delivered (AF-374): `telegram.account.linked`, and `telegram.account.unlinked` with reason `relinked`, `user_removed`, `blocked_bot` or `access_lost`.
 - Also delivered (AF-374): `telegram.first_message.received`, once per Telegram link (migration `a78bcde4b918`).
+- Also delivered (AF-374): a Google self-signup records `user.signed_up` (`method: google`) and `organization.created` for its trial Organization. An invitee enrolled through Google records `user.signed_up` (`method: invite`).
 - In progress (AF-374): onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
 - Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-15 — AF-374 — Google sign-up events
+
+- Delivered: `GoogleSignInService._sign_up` stages two events in the transaction that creates the User, the trial Organization and the Owner Membership:
+  - `user.signed_up` with `method: "google"`
+  - `organization.created`, with the new user as a User actor
+- Delivered: `_link` stages `user.signed_up` with `method: "invite"` when it enrolls a pending invitee.
+- Delivery: `complete()` enqueues both after sign-in. Refusals (signup closed, trial used, trials full) raise before anything is staged. Returning sign-ins and the losing side of simultaneous first sign-ins stage nothing.
+- `UserSignedUpPayload` gains `method: Literal["invite", "google"] = "invite"`. The default keeps queued rows valid. The invitation path (`PasswordResetTokenRepository.redeem`) now sends `"invite"` explicitly.
+- The handler sends `method`.
+- New `UserRepository.stage_user_signed_up(session, user_id, method)`, mirroring `OrganizationRepository.stage_organization_created`.
+- Known gap: Organizations inserted by migration `d72b85f19c40`'s backfill never emit `organization.created`.
+- Changed:
+  - `events/catalog.py`
+  - `users/repository.py`
+  - `auth/repository.py`
+  - `auth/google_sign_in.py` (gains `EventDeliveryDispatcher`)
+  - `analytics/event_handlers.py`
+  - `domain-events.md`, `product-analytics.md`, `identity-and-organizations.md`
+- Verified:
+  - New `test_google_signup_events.py`:
+    - both events with the right scopes, actors, payloads and handler
+    - both deliveries enqueued
+    - closed, used and full refusals record nothing
+    - an enrolled invitee gets `invite` and no `organization.created`
+    - a returning user records no second signup
+    - simultaneous first sign-ins record one of each
+  - New handler test (`method` is sent). `test_user_signed_up_event.py` now expects `method: "invite"`.
+  - 7 tests failed before the change.
+  - The sign-up, signed-up, Google login, handler and wiring suites pass (80).
 
 ### 2026-10-15 — AF-374 — First Telegram message
 

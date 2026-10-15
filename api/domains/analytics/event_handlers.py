@@ -67,7 +67,7 @@ _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     ORGANIZATION_DELETED: (),
     ORGANIZATION_LLM_BUDGET_EXHAUSTED: ("limit_usd",),
     USER_LOGGED_IN: ("method",),
-    USER_SIGNED_UP: (),
+    USER_SIGNED_UP: ("method",),
     USER_ONBOARDING_COMPLETED: (),
     TELEGRAM_ACCOUNT_LINKED: ("agent_id", "connection_id"),
     TELEGRAM_ACCOUNT_UNLINKED: ("agent_id", "connection_id", "reason"),
