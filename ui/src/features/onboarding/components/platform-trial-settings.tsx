@@ -14,7 +14,7 @@ const MAX_CREDIT_USD = 10_000;
 const MAX_AGENT_LIMIT = 50;
 const MAX_ACTIVE_TRIALS = 100_000;
 
-type Draft = { credit: string; agentLimit: string; cap: string };
+type Draft = { selfSignupEnabled: boolean; credit: string; agentLimit: string; cap: string };
 
 function agentsLabel(count: number) {
   return `${count} ${count === 1 ? "agent" : "agents"}`;
@@ -56,6 +56,7 @@ export function PlatformTrialSettings() {
 
   const credit = draft === null ? null : parseAmount(draft.credit);
   const creditInvalid = draft !== null && (credit === null || Number.isNaN(credit) || credit > MAX_CREDIT_USD);
+  const signupCreditInvalid = draft !== null && draft.selfSignupEnabled && credit === 0;
   const agentLimit = draft === null ? null : parseWholeNumber(draft.agentLimit, MAX_AGENT_LIMIT);
   const agentLimitInvalid = draft !== null && agentLimit === null;
   const savedCap = trialSettings.maxActiveTrials ?? null;
@@ -64,7 +65,7 @@ export function PlatformTrialSettings() {
   const cap = draft === null || capCleared ? null : parseWholeNumber(draft.cap, MAX_ACTIVE_TRIALS);
   const capInvalid = draft !== null && !capCleared && cap === null;
   const unchanged =
-    credit === trialSettings.creditUsd && agentLimit === trialSettings.agentLimit && cap === savedCap;
+    draft?.selfSignupEnabled === trialSettings.selfSignupEnabled && credit === trialSettings.creditUsd && agentLimit === trialSettings.agentLimit && cap === savedCap;
 
   function change(next: Partial<Draft>) {
     setDraft((current) => (current ? { ...current, ...next } : current));
@@ -73,9 +74,9 @@ export function PlatformTrialSettings() {
   }
 
   async function submit() {
-    if (credit === null || Number.isNaN(credit) || agentLimit === null || capInvalid) return;
+    if (draft === null || creditInvalid || signupCreditInvalid || credit === null || agentLimit === null || capInvalid) return;
     try {
-      await saveSettings({ creditUsd: credit, agentLimit, maxActiveTrials: cap });
+      await saveSettings({ selfSignupEnabled: draft.selfSignupEnabled, creditUsd: credit, agentLimit, maxActiveTrials: cap });
       setDraft(null);
       setSaved(true);
     } catch {
@@ -84,10 +85,31 @@ export function PlatformTrialSettings() {
   }
 
   return (
-    <section className="af-card overflow-hidden" aria-label="Trial settings">
+    <section className="af-card overflow-hidden" aria-label="Signup and trial settings">
       <div className="p-5">
         {draft !== null ? (
           <div className="flex flex-col gap-5">
+            <div>
+              <div className="flex items-center justify-between gap-4">
+                <label htmlFor="self-signup" className="text-sm font-medium">Allow self-signup</label>
+                <button
+                  id="self-signup"
+                  type="button"
+                  role="switch"
+                  aria-checked={draft.selfSignupEnabled}
+                  aria-describedby="self-signup-description"
+                  disabled={isSaving}
+                  onClick={() => change({ selfSignupEnabled: !draft.selfSignupEnabled })}
+                  className="relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50"
+                  style={{ backgroundColor: draft.selfSignupEnabled ? "var(--ink)" : "var(--line)" }}
+                >
+                  <span aria-hidden className={`absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform ${draft.selfSignupEnabled ? "translate-x-5" : ""}`} />
+                </button>
+              </div>
+              <p id="self-signup-description" className="mb-0 mt-2 text-sm" style={{ color: "var(--ink-3)" }}>
+                Let new users sign up with Google and receive a trial. Existing users can always sign in.
+              </p>
+            </div>
             <div>
               <label className="mb-2 block text-sm font-medium" htmlFor="trial-credit">
                 Trial credit (USD)
@@ -97,12 +119,17 @@ export function PlatformTrialSettings() {
                 inputMode="decimal"
                 className="af-input max-w-[12rem]"
                 value={draft.credit}
-                aria-invalid={creditInvalid}
+                aria-invalid={creditInvalid || signupCreditInvalid}
                 onChange={(event) => change({ credit: event.target.value })}
               />
               {creditInvalid && (
                 <p className="mt-2 text-sm" style={{ color: "var(--err)" }}>
                   Enter an amount from $0 to {formatUsd(MAX_CREDIT_USD, 0)}.
+                </p>
+              )}
+              {signupCreditInvalid && (
+                <p role="alert" className="mt-2 text-sm" style={{ color: "var(--err)" }}>
+                  Set a trial credit amount greater than $0 before enabling self-signup.
                 </p>
               )}
               <p className="mb-0 mt-2 text-sm" style={{ color: "var(--ink-3)" }}>
@@ -158,6 +185,14 @@ export function PlatformTrialSettings() {
           </div>
         ) : (
           <dl className="m-0 grid gap-x-8 gap-y-5 sm:grid-cols-2">
+            <div>
+              <dt className="mb-2 text-[0.7rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>
+                Self-signup
+              </dt>
+              <dd className="m-0 text-[0.9rem]" data-testid="saved-self-signup">
+                {trialSettings.selfSignupEnabled ? "Enabled" : "Disabled"}
+              </dd>
+            </div>
             <div>
               <dt
                 className="mb-2 text-[0.7rem] font-semibold uppercase tracking-[0.08em]"
@@ -222,7 +257,7 @@ export function PlatformTrialSettings() {
             </button>
             <button
               className="af-btn af-btn-primary"
-              disabled={creditInvalid || agentLimitInvalid || capInvalid || isSaving || unchanged}
+              disabled={creditInvalid || signupCreditInvalid || agentLimitInvalid || capInvalid || isSaving || unchanged}
               onClick={() => void submit()}
             >
               {isSaving ? "Saving…" : "Save"}
@@ -233,6 +268,7 @@ export function PlatformTrialSettings() {
             className="af-btn"
             onClick={() => {
               setDraft({
+                selfSignupEnabled: trialSettings.selfSignupEnabled,
                 credit: String(trialSettings.creditUsd),
                 agentLimit: String(trialSettings.agentLimit),
                 cap: savedCap === null ? "" : String(savedCap),

@@ -8,9 +8,9 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
+import { AuthField, AuthFrame } from "@/auth/components/auth-frame";
 import { strongPasswordSchema } from "@/auth/schemas";
 import { EyeIcon, EyeOffIcon } from "@/components/icons";
-import { LogoMark } from "@/components/logo-mark";
 import type { ApiError } from "@/shared/api/error/errors";
 
 function makeSchema(collectName: boolean) {
@@ -33,26 +33,6 @@ type TokenPasswordFormData = {
   newPassword: string;
   confirmPassword: string;
 };
-
-function AuthCard({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="w-full max-w-sm">
-      <div
-        className="rounded-2xl px-8 py-9"
-        style={{
-          background: "var(--bg-elev)",
-          border: "1px solid var(--line)",
-          boxShadow: "var(--shadow)",
-        }}
-      >
-        <div className="mb-4 flex justify-center">
-          <LogoMark size={36} />
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
 
 export interface TokenPasswordCardProps {
   /** Heading + subtext for the form state. */
@@ -114,25 +94,11 @@ export function TokenPasswordCard({
 
   if (!token) {
     return (
-      <AuthCard>
-        <div className="text-center">
-          <h1
-            className="m-0 mb-1 text-[22px] font-semibold tracking-tight"
-            style={{ color: "var(--ink)" }}
-          >
-            {invalidTitle}
-          </h1>
-          <p className="m-0 text-[13.5px]" style={{ color: "var(--ink-3)" }}>
-            {invalidSubtitle}
-          </p>
-          <Link
-            href="/login"
-            className="af-btn af-btn-primary af-btn-lg mt-6 w-full justify-center"
-          >
-            Back to login
-          </Link>
-        </div>
-      </AuthCard>
+      <AuthFrame title={invalidTitle} subtitle={invalidSubtitle}>
+        <Link href="/login?method=email" className="af-btn af-btn-primary af-btn-lg w-full justify-center">
+          Back to login
+        </Link>
+      </AuthFrame>
     );
   }
 
@@ -144,7 +110,7 @@ export function TokenPasswordCard({
     })
       .then(() => {
         toast.success(successMessage);
-        router.push("/login");
+        router.push("/login?method=email");
       })
       .catch((error) => {
         toast.error((error as ApiError).message || errorFallback);
@@ -152,59 +118,29 @@ export function TokenPasswordCard({
   };
 
   return (
-    <AuthCard>
-      <div className="mb-7 text-center">
-        <h1
-          className="m-0 mb-1 text-[22px] font-semibold tracking-tight"
-          style={{ color: "var(--ink)" }}
-        >
-          {title}
-        </h1>
-        <p className="m-0 text-[13.5px]" style={{ color: "var(--ink-3)" }}>
-          {subtitle}
-        </p>
-      </div>
-
+    <AuthFrame title={title} subtitle={subtitle}>
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
         {collectName && (
-          <div>
-            <label
-              htmlFor="fullName"
-              className="mb-1.5 block text-[13.5px] font-medium"
-              style={{ color: "var(--ink)" }}
-            >
-              Full name
-            </label>
+          <AuthField id="fullName" label="Full name" error={errors.fullName?.message}>
             <input
               id="fullName"
               type="text"
               autoComplete="name"
               placeholder="Jane Doe"
-              className="af-input w-full"
+              className="af-input"
               aria-invalid={!!errors.fullName}
               {...register("fullName")}
             />
-            {errors.fullName && (
-              <p className="mt-1 text-[12.5px]" style={{ color: "var(--err)" }}>
-                {errors.fullName.message}
-              </p>
-            )}
-          </div>
+          </AuthField>
         )}
 
-        <div>
-          <label
-            htmlFor="newPassword"
-            className="mb-1.5 block text-[13.5px] font-medium"
-            style={{ color: "var(--ink)" }}
-          >
-            New password
-          </label>
+        <AuthField id="newPassword" label="New password" error={errors.newPassword?.message}>
           <div className="relative">
             <input
               id="newPassword"
               type={showPassword ? "text" : "password"}
-              className="af-input w-full pr-9"
+              autoComplete="new-password"
+              className="af-input pr-9"
               aria-invalid={!!errors.newPassword}
               {...register("newPassword")}
             />
@@ -213,49 +149,33 @@ export function TokenPasswordCard({
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5"
               style={{ color: "var(--ink-4)" }}
               onClick={() => setShowPassword((v) => !v)}
-              tabIndex={-1}
               aria-label={showPassword ? "Hide password" : "Show password"}
             >
               {showPassword ? <EyeOffIcon size={15} /> : <EyeIcon size={15} />}
             </button>
           </div>
-          {errors.newPassword && (
-            <p className="mt-1 text-[12.5px]" style={{ color: "var(--err)" }}>
-              {errors.newPassword.message}
-            </p>
-          )}
-        </div>
+        </AuthField>
 
-        <div>
-          <label
-            htmlFor="confirmPassword"
-            className="mb-1.5 block text-[13.5px] font-medium"
-            style={{ color: "var(--ink)" }}
-          >
-            Confirm password
-          </label>
+        <AuthField id="confirmPassword" label="Confirm password" error={errors.confirmPassword?.message}>
           <input
             id="confirmPassword"
             type={showPassword ? "text" : "password"}
-            className="af-input w-full"
+            autoComplete="new-password"
+            className="af-input"
             aria-invalid={!!errors.confirmPassword}
             {...register("confirmPassword")}
           />
-          {errors.confirmPassword && (
-            <p className="mt-1 text-[12.5px]" style={{ color: "var(--err)" }}>
-              {errors.confirmPassword.message}
-            </p>
-          )}
-        </div>
+        </AuthField>
 
-        <button
-          type="submit"
-          disabled={isPending}
-          className="af-btn af-btn-primary af-btn-lg mt-1 w-full justify-center"
-        >
-          {isPending ? pendingLabel : submitLabel}
-        </button>
+        <div className="mt-2 flex items-center gap-3">
+          <Link href="/login?method=email" className="text-[12.5px]" style={{ color: "var(--ink-3)" }}>
+            Back to login
+          </Link>
+          <button type="submit" disabled={isPending} className="af-btn af-btn-primary af-btn-lg ml-auto">
+            {isPending ? pendingLabel : submitLabel}
+          </button>
+        </div>
       </form>
-    </AuthCard>
+    </AuthFrame>
   );
 }

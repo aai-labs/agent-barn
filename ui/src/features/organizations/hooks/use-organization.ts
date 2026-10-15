@@ -20,5 +20,5 @@ export function useOrganization(organizationId: string) {
     enabled: !!organizationId,
   });
 
-  return { organization: query.data ?? null, isLoading: query.isPending };
+  return { organization: query.data ?? null, isLoading: query.isPending, isFetching: query.isFetching, error: query.error, refetch: query.refetch };
 }
