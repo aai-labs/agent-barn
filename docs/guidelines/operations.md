@@ -512,7 +512,8 @@ The [integration contract](../features/integrations.md#optional-credential-isola
 Isolated Apollo requires both runtime images to be rebuilt with `aai-apollo-routing.patch`. Publish new immutable image versions before rollout; an older image can send `apollo health` outside the gateway. Migration `0d612dc60e9a` preserves direct routing for pre-existing Apollo credentials and leaves existing policy choices unchanged.
 
 Custom API connections require both runtime images to include the pinned aai-cli
-revision with `custom-api request`. Rebuild and verify both images before enabling
+revision from `main` with `custom-api request` (aai-cli PR #30). Hermes 0.2.10
+and OpenClaw 0.7.7 pin merged commit `69d280f0762200fde5bea164adee83573eef5ea1`. Rebuild and verify both images before enabling
 these connections; older images do not include the command. During release
 preparation, assign new immutable runtime versions under the versioning rules below
 and deploy the connection migration, API, credential gateway and UI together.

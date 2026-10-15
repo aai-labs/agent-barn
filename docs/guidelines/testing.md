@@ -410,7 +410,7 @@ revocation live in `../../api/tests/integration/test_custom_api.py`. Custom API 
 consumed by aai-cli's generic `custom-api request` command. The focused
 `runtime_tests/test_custom_api_cli.py` contract executes a real CLI binary with
 materialized encrypted-store references; set `AAI_CLI_TEST_BINARY` to a binary built
-from the CLI feature branch when it is not installed on PATH. Run it explicitly with
+from the runtime Dockerfiles' pinned `main` revision when it is not installed on PATH. Run it explicitly with
 `cd api && AAI_CLI_TEST_BINARY=/path/to/aai-cli uv run python -m pytest runtime_tests/test_custom_api_cli.py -q`.
 This prerequisite-bearing subprocess contract is outside ordinary `make test-api`.
 The pinned-image

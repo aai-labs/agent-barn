@@ -20,7 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git pkg-config libssl-dev ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-ARG AAI_CLI_COMMIT=e56a42739814ab6980fe6d900029a98416797e58
+# aai-cli main after Custom API landed (PR #30); keep both runtimes on this revision.
+ARG AAI_CLI_COMMIT=69d280f0762200fde5bea164adee83573eef5ea1
 COPY aai-token-url.patch /tmp/aai-token-url.patch
 COPY aai-apollo-routing.patch /tmp/aai-apollo-routing.patch
 RUN git init repo && \
