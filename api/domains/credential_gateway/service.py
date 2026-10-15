@@ -269,6 +269,7 @@ class CredentialGatewayService:
             params=outbound.query,
             content=request.body,
             sensitive_headers=outbound.sensitive_headers,
+            timeout=plugin.upstream_timeout_seconds,
         )
 
     # --- token brokering, called once per agent process start ---

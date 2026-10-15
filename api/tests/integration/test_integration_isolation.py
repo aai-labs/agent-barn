@@ -523,8 +523,14 @@ def test_backfill_preserves_routes_shared_sources_and_gateway_tokens():
                 policies = session.exec(select(AgentIntegrationIsolation)).all()
                 assert_that(
                     {p.provider: p.isolated for p in policies},
+                    # The round trip passes below the migration that adds Merkys, whose downgrade deletes
+                    # Merkys secrets, so a Merkys provider has no policy row to backfill.
                     equal_to(
-                        {p.value: p not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO} for p in SecretProvider}
+                        {
+                            p.value: p not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO}
+                            for p in SecretProvider
+                            if p is not SecretProvider.MERKYS
+                        }
                     ),
                 )
                 assert_that(all(p.agent_id != deleted_agent_id for p in policies), is_(True))

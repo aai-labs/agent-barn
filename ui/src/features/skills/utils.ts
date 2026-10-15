@@ -27,6 +27,7 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   sharepoint: "SharePoint",
   pipedrive: "Pipedrive",
   apollo: "Apollo",
+  merkys: "Merkys",
 };
 
 export const ALL_PROVIDERS = Object.entries(SKILL_PROVIDER_LABELS).map(

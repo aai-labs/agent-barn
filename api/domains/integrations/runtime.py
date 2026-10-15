@@ -90,8 +90,7 @@ class AaiCliAdapter:
             decrypted[binding.provider] = binding.content
             if binding.mode == EgressMode.DIRECT:
                 # Missing scoped Atlassian metadata must fail, not silently skip a profile.
-                if plugin.egress_mode == EgressMode.GATEWAY_PROXY:
-                    plugin.upstream_base_url(binding.content)
+                plugin.validate_direct_content(binding.content)
                 if isinstance(binding.content, SharePointContent) and binding.content.mode == "selected_sites":
                     assert isinstance(plugin, SharePointPlugin)
                     blocks.append(plugin.aai_cli_selected_sites_profile_block(context.sharepoint_token_url))

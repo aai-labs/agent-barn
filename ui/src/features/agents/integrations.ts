@@ -197,6 +197,15 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API key", type: "secret", required: true, hint: "Create one in Apollo under Settings → Integrations → API Keys." },
     ],
   },
+  {
+    id: "merkys",
+    label: "Merkys",
+    scopeNote: "The agent acts as the Merkys user who owns the API key and can read only what that user can. Use a dedicated user limited to the knowledge the agent needs, rather than a personal key. Isolated mode is available only for Agent Barn-hosted Merkys.",
+    fields: [
+      { key: "baseUrl", label: "Merkys URL", type: "text", required: true, placeholder: "https://slack-chatbot.k8s.aai-labs.com", hint: "The https address of your Merkys deployment. No path." },
+      { key: "apiKey", label: "API key", type: "secret", required: true, hint: "Create one in Merkys under API keys. It starts with cb_." },
+    ],
+  },
 ];
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
