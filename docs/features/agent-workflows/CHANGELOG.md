@@ -15,7 +15,7 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ### 2026-10-15 — AF-388 — [PR #308](https://github.com/aai-labs/agent-barn/pull/308)
 
-- Evidence: Added [seven inspected screenshots](../../evidence/workflow-authoring/README.md) covering editor/inputs, desktop/mobile saved cards, immutable-version history, Platform enablement and hidden disabled navigation. The real rendered UI uses synthetic request fixtures; three capture scenarios passed. No live persistence or execution is inferred from screenshots.
+- Evidence: Seven inspected screenshots are included in [PR #308](https://github.com/aai-labs/agent-barn/pull/308), covering editor/inputs, desktop/mobile saved cards, immutable-version history, Platform enablement and hidden disabled navigation. Screenshots remain PR evidence rather than repository files. The rendered UI uses synthetic request fixtures; three capture scenarios passed. No live persistence or execution is inferred from screenshots.
 - Verification: Latest affected runs passed 64 workflow/settings/public-contract API tests, 29 Platform trial settings API tests and 148 workflow/Platform settings/Agent detail browser tests. API lint/format/types, UI types/lint, migration-head and whitespace checks passed; full suites were not repeated after the follow-ups.
 - Scope: Excluded an unrelated inherited memory-test change from the PR diff. Preserved the original committed MDP-119 research files without alteration. No release or deployment changes accompany PR preparation.
 
