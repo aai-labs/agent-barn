@@ -39,11 +39,35 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: hourly message counts (CronJob).
 - Also delivered (AF-374, trial funnel): every Organization-scoped event carries `is_trial`, and the `organization` group gets `$group_set: {is_trial}`.
 - Also delivered (AF-374): `organization.llm_budget.exhausted` reaches PostHog, attributed to the Organization's creator.
-- In progress (AF-374): Google sign-in, onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
+- Also delivered (AF-374): a Google sign-in to an existing, verified account records `user.logged_in` with `method: "google"`.
+- In progress (AF-374): onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
 - Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-15 — AF-374 — Google sign-in records a login
+
+- Delivered: `GoogleSignInService.complete` records `user.logged_in` with `method: "google"` after issuing the session. It does so only when the account already existed and was verified: one found by its Google id, or an existing verified account linked to Google by its address.
+- Not logins:
+  - a first sign-in that creates the account
+  - an invitee enrolled through Google
+  - the losing side of two simultaneous first sign-ins
+
+  The first two are sign-ups, which come in PR 3.
+- `AuthService._record_login` is now the public `record_login(user_id, method)`. Password login passes `"password"`, so its behaviour is unchanged. A failure to record is still logged and never fails the sign-in.
+- Changed: `auth/service.py`, `auth/google_sign_in.py` (`_sign_in` / `_find_or_create` return the user and whether they were returning), `domain-events.md` (User login events), `product-analytics.md` (`user.logged_in` row).
+- Verified:
+  - New `test_google_login_event.py`:
+    - a returning Google user records one `google` login with the right scope, actor, payload and handler
+    - a first sign-in records none
+    - linking a verified password account records one
+    - an enrolling invitee records none
+    - simultaneous first sign-ins are both "not returning"
+    - an outbox failure still signs in
+  - 3 of these tests failed before the change.
+  - `test_google_sign_in.py` now reads `.user` from `_sign_in`.
+  - The Google sign-in, Google login and password login suites pass (46). Ruff and ty are clean.
 
 ### 2026-10-15 — AF-374 — Credit exhaustion reaches PostHog
 

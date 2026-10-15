@@ -330,6 +330,9 @@ Platform-scoped `api_key.created` and `api_key.revoked` events record account cr
 
 ## User login events
 
-Platform-scoped `user.logged_in` records each successful password login (`POST /auth/login`), with a User actor and User subject and the payload `user_id` and `method`. `AuthService.login` writes it through `OutboxMessageRepository.create` after the credential check and enqueues it. A failure to record it is logged and never fails the login. Its only intended handler is `product_analytics.posthog`. Failed logins, token refresh and API-key authentication emit nothing.
+Platform-scoped `user.logged_in` records each successful login, with a User actor and User subject and the payload `user_id` and `method`. It is written through `AuthService.record_login`, which uses `OutboxMessageRepository.create` and enqueues the event. A failure to record it is logged and never fails the login. Its only intended handler is `product_analytics.posthog`. Failed logins, token refresh and API-key authentication emit nothing.
+
+- **Password login** (`POST /auth/login`) records `method: "password"` after the credential check.
+- **Google sign-in** (`GET /auth/google/callback`) records `method: "google"` after the session is issued, but only when the account already existed and was verified. That covers an account found by its Google id and an existing verified account linked to Google by its address. A first sign-in that creates the account, and an invitee enrolled through Google, are not logins. Nor is the losing side of two simultaneous first sign-ins.
 
 Platform-scoped `user.signed_up` records an invitee's first enrollment. `PasswordResetTokenRepository.redeem` handles both invite acceptance and password reset in one transaction. It locks the token and the user, applies the password, marks the token used, and stages the event only for invite acceptance when the email was not yet verified. A reused token is rejected, and a password reset never emits it. Its only intended handler is `product_analytics.posthog`.
