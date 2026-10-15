@@ -9,8 +9,6 @@ export const TRIAL_TOKEN_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 export const TRIAL_DEEP_LINK = "https://t.me/AgentBarnTestBot?start=abcDEF123";
 export const TRIAL_FRESH_DEEP_LINK = "https://t.me/AgentBarnTestBot?start=freshXYZ789";
 
-const CONNECTION_BASE = `**/api/v1/organizations/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}/connections/${TRIAL_CONNECTION_ID}`;
-
 /** A self-signed-up user whose only Organization is their trial. */
 export const trialUserContext = {
   ...UserContext,
@@ -65,12 +63,38 @@ export function linkToken(status: "waiting" | "linked" | "expired", extra: Recor
 }
 
 export class OnboardingDataSupport {
-  constructor(private page: Page) {}
+  private connectionBase: string;
+
+  constructor(private page: Page, { organizationId = TRIAL_ORG_ID, agentId = TRIAL_AGENT_ID, connectionId = TRIAL_CONNECTION_ID } = {}) {
+    this.connectionBase = `**/api/v1/organizations/${organizationId}/agents/${agentId}/connections/${connectionId}`;
+  }
+
+  trackAgentCreationRequests() {
+    const requests: string[] = [];
+    this.page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST" && (path.endsWith("/agents") || path === "/api/v1/onboarding/agent")) {
+        requests.push(path);
+      }
+    });
+    return requests;
+  }
 
   async interceptGetOnboarding(body: unknown = onboarding()) {
     await this.page.route("**/api/v1/onboarding", (route) =>
       route.request().method() === "GET" ? route.fulfill({ json: body }) : route.fallback(),
     );
+  }
+
+  async holdOnboardingResponse() {
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    await this.page.route("**/api/v1/onboarding", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await ready;
+      await route.fulfill({ json: onboarding() });
+    });
+    return release;
   }
 
   /** Each call to set up the Agent answers with the next response, the last repeating. */
@@ -84,26 +108,35 @@ export class OnboardingDataSupport {
     return calls;
   }
 
-  async interceptSetUpAgentFailure(status: number, detail: string) {
-    await this.page.route("**/api/v1/onboarding/agent", (route) =>
-      route.request().method() === "POST" ? route.fulfill({ status, json: { detail } }) : route.fallback(),
-    );
+  async interceptSetUpAgentFailure(status: number, detail: string, partialOnboarding?: unknown) {
+    await this.page.route("**/api/v1/onboarding/agent", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      if (partialOnboarding) await this.interceptGetOnboarding(partialOnboarding);
+      return route.fulfill({ status, json: { detail } });
+    });
   }
 
-  async interceptCompleteOnboarding() {
+  async interceptCompleteOnboarding(statuses: number[] = [204], completedOnboarding?: unknown) {
     const calls: number[] = [];
-    await this.page.route("**/api/v1/onboarding/complete", (route) => {
+    await this.page.route("**/api/v1/onboarding/complete", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       calls.push(Date.now());
-      return route.fulfill({ status: 204, body: "" });
+      const status = statuses[Math.min(calls.length - 1, statuses.length - 1)];
+      if (status === 204 && completedOnboarding) await this.interceptGetOnboarding(completedOnboarding);
+      return status === 204 ? route.fulfill({ status, body: "" }) : route.fulfill({ status, json: { detail: "Could not save progress" } });
     });
     return calls;
   }
 
   async interceptLinkedAccounts(accounts: unknown[] = []) {
     let current = accounts;
-    await this.page.route(`${CONNECTION_BASE}/telegram-links`, (route) => route.fulfill({ json: current }));
+    const checks: number[] = [];
+    await this.page.route(`${this.connectionBase}/telegram-links`, (route) => {
+      checks.push(Date.now());
+      return route.fulfill({ json: current });
+    });
     return {
+      checks,
       set(next: unknown[]) {
         current = next;
       },
@@ -117,14 +150,14 @@ export class OnboardingDataSupport {
   } = {}) {
     let created = 0;
     let checks = 0;
-    await this.page.route(`${CONNECTION_BASE}/telegram-link-tokens`, (route) => {
+    await this.page.route(`${this.connectionBase}/telegram-link-tokens`, (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       const url = urls[Math.min(created, urls.length - 1)];
       created += 1;
       checks = 0;
       return route.fulfill({ status: 201, json: linkToken("waiting", { url }) });
     });
-    await this.page.route(`${CONNECTION_BASE}/telegram-link-tokens/${TRIAL_TOKEN_ID}`, (route) => {
+    await this.page.route(`${this.connectionBase}/telegram-link-tokens/${TRIAL_TOKEN_ID}`, (route) => {
       // A fresh link starts waiting again.
       const status = created > 1 ? "waiting" : statuses[Math.min(checks, statuses.length - 1)];
       checks += 1;

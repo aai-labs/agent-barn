@@ -108,6 +108,8 @@ class OrganizationRead(PydanticBaseModel):
     is_trial: bool = False
     # How many Agents the trial may run; None for an Organization that is not a trial.
     trial_agent_limit: int | None = None
+    # Creation capacity, independent of which Agents this member may read.
+    trial_agent_limit_reached: bool = False
 
 
 class PlatformOrganizationRead(PydanticBaseModel):

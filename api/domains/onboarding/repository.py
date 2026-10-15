@@ -11,6 +11,7 @@ from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, 
 from api.domains.events.catalog import EVENT_REGISTRY, PLATFORM_TRIAL_SETTINGS_CHANGED
 from api.domains.events.models import EventScope
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.onboarding.exceptions import TrialSignupCreditRequired
 from api.domains.onboarding.models import (
     TRIAL_SETTINGS_SUBJECT_DISPLAY,
     PlatformTrialSettings,
@@ -32,20 +33,26 @@ class TrialSettingsRepository:
     delegate: PostgresRepositoryDelegate
     outbox: OutboxMessageRepository
 
-    def read(self, default_credit_usd: float) -> TrialSettingsRead:
+    def read(self) -> TrialSettingsRead:
         with Session(self.delegate.engine) as session:
-            return self._current(session.get(PlatformTrialSettings, 1), default_credit_usd)
+            return self._current(session.get(PlatformTrialSettings, 1))
 
     @staticmethod
-    def _current(row: PlatformTrialSettings | None, default_credit_usd: float) -> TrialSettingsRead:
+    def _current(row: PlatformTrialSettings | None) -> TrialSettingsRead:
         if row is None:
-            return TrialSettingsRead(credit_usd=default_credit_usd)
+            return TrialSettingsRead()
         return TrialSettingsRead(
+            self_signup_enabled=row.self_signup_enabled,
             credit_usd=row.credit_usd,
             agent_limit=row.agent_limit,
             max_active_trials=row.max_active_trials,
             updated_at=row.updated_at,
         )
+
+    def read_for_signup(self, session: Session) -> TrialSettingsRead:
+        """Keep the admitted signup's policy and credit stable until its transaction ends."""
+        session.connection().execute(sa.text(f"SELECT pg_advisory_xact_lock_shared({_TRIAL_SETTINGS_LOCK})"))
+        return self._current(session.get(PlatformTrialSettings, 1))
 
     def lock_trial_admission(self, session: Session) -> None:
         """Held until the caller's transaction ends, so concurrent sign-ups count active
@@ -54,8 +61,7 @@ class TrialSettingsRepository:
 
     def set_settings(
         self,
-        changes: Mapping[str, float | int | None],
-        default_credit_usd: float,
+        changes: Mapping[str, bool | float | int | None],
         actor_id: UUID,
         actor_display: str,
     ) -> tuple[TrialSettingsRead, list[UUID]]:
@@ -64,7 +70,7 @@ class TrialSettingsRepository:
         with Session(self.delegate.engine) as session:
             session.connection().execute(sa.text(f"SELECT pg_advisory_xact_lock({_TRIAL_SETTINGS_LOCK})"))
             row = session.get(PlatformTrialSettings, 1)
-            current = self._current(row, default_credit_usd)
+            current = self._current(row)
             moved = [
                 (setting, getattr(current, setting), value)
                 for setting, value in changes.items()
@@ -74,9 +80,14 @@ class TrialSettingsRepository:
                 return current, []
             now = datetime.now(UTC)
             stored = current.model_copy(update={**dict(changes), "updated_at": now})
+            if stored.self_signup_enabled and stored.credit_usd <= 0:
+                raise TrialSignupCreditRequired(
+                    "Set a trial credit amount greater than $0 before enabling self-signup."
+                )
             session.merge(
                 PlatformTrialSettings(
                     id=1,
+                    self_signup_enabled=stored.self_signup_enabled,
                     credit_usd=stored.credit_usd,
                     agent_limit=stored.agent_limit,
                     max_active_trials=stored.max_active_trials,
@@ -101,8 +112,8 @@ class TrialSettingsRepository:
                         "actor_display": actor_display,
                         "subject_display": TRIAL_SETTINGS_SUBJECT_DISPLAY,
                         "setting": setting,
-                        "previous": None if previous is None else float(previous),
-                        "current": None if value is None else float(value),
+                        "previous": previous,
+                        "current": value,
                     },
                 )
                 self.outbox.stage(session=session, registry=EVENT_REGISTRY, event=event)

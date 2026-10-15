@@ -198,7 +198,7 @@ export function TopNav({ onHire }: TopNavProps) {
       <div className={`flex-1 ${drawerTrigger}`} />
 
       <div className="flex flex-shrink-0 items-center gap-2.5">
-        {!isPlatformView && (
+        {!isPlatformView && pathname !== orgBase && (
           <button className="af-btn af-btn-primary" onClick={onHire} aria-label="Hire agent">
             <PlusIcon /> <span className="hidden sm:inline">Hire agent</span>
           </button>

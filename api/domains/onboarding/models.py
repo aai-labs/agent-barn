@@ -18,17 +18,21 @@ MAX_ACTIVE_TRIALS_CAP = 100_000
 
 
 class PlatformTrialSettings(SQLModel, table=True):
-    """The one row of trial settings, created on first save. Without a row, the
-    deployment default applies."""
+    """The one row of trial settings, created on first save. Without a row,
+    signup is disabled and trial credit is zero."""
 
     __tablename__: str = "platform_trial_settings"
     __table_args__ = (
         sa.CheckConstraint("id = 1", name="ck_platform_trial_settings_singleton"),
         sa.CheckConstraint("credit_usd >= 0", name="ck_platform_trial_settings_credit_non_negative"),
+        sa.CheckConstraint(
+            "NOT self_signup_enabled OR credit_usd > 0", name="ck_platform_trial_settings_signup_credit"
+        ),
         sa.CheckConstraint("agent_limit >= 1", name="ck_platform_trial_settings_agent_limit_positive"),
         sa.CheckConstraint("max_active_trials >= 1", name="ck_platform_trial_settings_max_active_trials_positive"),
     )
     id: int = SqlField(default=1, primary_key=True)
+    self_signup_enabled: bool = SqlField(default=False, sa_column_kwargs={"server_default": "false"})
     credit_usd: float
     # How many Agents a Trial Organization may run, checked whenever one is hired.
     agent_limit: int = SqlField(default=DEFAULT_TRIAL_AGENT_LIMIT, sa_column_kwargs={"server_default": "1"})
@@ -49,7 +53,8 @@ class TrialGrant(SQLModel, table=True):
 
 
 class TrialSettingsRead(BaseModel):
-    credit_usd: float
+    self_signup_enabled: bool = False
+    credit_usd: float = 0.0
     agent_limit: int = DEFAULT_TRIAL_AGENT_LIMIT
     # None: any number of trials may be active at once.
     max_active_trials: int | None = None
@@ -61,21 +66,22 @@ class TrialSettingsRead(BaseModel):
 
 class TrialSettingsUpdate(BaseModel):
     """Omitting a setting leaves it as it is. `max_active_trials: null` removes the cap;
-    the credit and the agent limit always have a value."""
+    signup, credit and the agent limit always have a value."""
 
     model_config = ConfigDict(extra="forbid")
+    self_signup_enabled: bool | None = None
     credit_usd: float | None = Field(default=None, ge=0, le=MAX_TRIAL_CREDIT_USD, allow_inf_nan=False)
     agent_limit: int | None = Field(default=None, ge=1, le=MAX_TRIAL_AGENT_LIMIT)
     max_active_trials: int | None = Field(default=None, ge=1, le=MAX_ACTIVE_TRIALS_CAP)
 
     @model_validator(mode="after")
     def _required_settings_keep_a_value(self) -> Self:
-        for setting in ("credit_usd", "agent_limit"):
+        for setting in ("self_signup_enabled", "credit_usd", "agent_limit"):
             if setting in self.model_fields_set and getattr(self, setting) is None:
                 raise ValueError(f"{setting} can't be removed")
         return self
 
-    def changes(self) -> dict[str, float | int | None]:
+    def changes(self) -> dict[str, bool | float | int | None]:
         """The settings this update sets, a removed cap included."""
         return self.model_dump(include=self.model_fields_set)
 
