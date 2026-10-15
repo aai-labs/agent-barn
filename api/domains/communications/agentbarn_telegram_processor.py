@@ -347,6 +347,7 @@ class AgentBarnTelegramUpdateProcessor:
             payload=payload,
             messages=[(chat_id, message["message_id"])] if isinstance(message.get("message_id"), int) else [],
             files=file_ids(message),
+            first_message_link_id=None if isinstance(edited, dict) else link.id,
         )
         return True
 

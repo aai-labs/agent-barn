@@ -22,6 +22,7 @@ from api.domains.events.catalog import (
     PRODUCT_ANALYTICS_HANDLER,
     TELEGRAM_ACCOUNT_LINKED,
     TELEGRAM_ACCOUNT_UNLINKED,
+    TELEGRAM_FIRST_MESSAGE_RECEIVED,
     USER_ONBOARDING_COMPLETED,
 )
 from api.domains.events.handlers import (
@@ -739,6 +740,7 @@ def test_onboarding_completed_is_sent_as_the_user_with_no_extra_fields():
     ("event_name", "extra", "expected"),
     [
         (TELEGRAM_ACCOUNT_LINKED, {}, {}),
+        (TELEGRAM_FIRST_MESSAGE_RECEIVED, {}, {}),
         (TELEGRAM_ACCOUNT_UNLINKED, {"reason": "relinked"}, {"reason": "relinked"}),
     ],
 )

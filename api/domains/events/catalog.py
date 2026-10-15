@@ -53,6 +53,7 @@ USER_SIGNED_UP = "user.signed_up"
 USER_ONBOARDING_COMPLETED = "user.onboarding.completed"
 TELEGRAM_ACCOUNT_LINKED = "telegram.account.linked"
 TELEGRAM_ACCOUNT_UNLINKED = "telegram.account.unlinked"
+TELEGRAM_FIRST_MESSAGE_RECEIVED = "telegram.first_message.received"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
 COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconnect.requested"
 COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
@@ -573,6 +574,15 @@ class TelegramAccountLinkedPayload(BaseModel):
     link_id: UUID
 
 
+class TelegramFirstMessageReceivedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    link_id: UUID
+
+
 class TelegramAccountUnlinkedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -904,6 +914,7 @@ def build_default_event_registry() -> DomainEventRegistry:
     for event_name, payload_model in (
         (TELEGRAM_ACCOUNT_LINKED, TelegramAccountLinkedPayload),
         (TELEGRAM_ACCOUNT_UNLINKED, TelegramAccountUnlinkedPayload),
+        (TELEGRAM_FIRST_MESSAGE_RECEIVED, TelegramFirstMessageReceivedPayload),
     ):
         registry.register(
             DomainEventDefinition(

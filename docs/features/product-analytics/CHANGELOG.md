@@ -42,11 +42,41 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered (AF-374): a Google sign-in to an existing, verified account records `user.logged_in` with `method: "google"`.
 - Also delivered (AF-374): `user.onboarding.completed`, sent once per user on the first onboarding completion.
 - Also delivered (AF-374): `telegram.account.linked`, and `telegram.account.unlinked` with reason `relinked`, `user_removed`, `blocked_bot` or `access_lost`.
+- Also delivered (AF-374): `telegram.first_message.received`, once per Telegram link (migration `a78bcde4b918`).
 - In progress (AF-374): onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
 - Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-15 — AF-374 — First Telegram message
+
+- Delivered: `telegram.first_message.received`, Organization-scoped and attributed to the link's issuing Member. It carries `agent_id` and `connection_id`, and never content, Telegram id or username. It is the trial funnel's "first message" step for the user.
+- How it fires: once per link. In the transaction that queues a linked user's new message, a conditional update sets `agentbarn_telegram_link.first_message_at` only while the link is active and the column is null, and stages the event only when that update changed the row.
+  - Edits, button presses and messages that reach no Agent don't count.
+  - A new link has its own first message.
+  - It is delivered by the outbox reconciler.
+- Migration `a78bcde4b918` (down `b3d8e1f4a6c2`) adds the column and sets it to `created_at` for existing links, so their next message is not reported as a first.
+  - **Coordination:** Kalkidan's onboarding redesign adds `c61a94e72b30` on the same parent. Whichever merges second re-points its `down_revision`.
+- Changed:
+  - `communications/models.py`, `agentbarn_telegram_repository.py` (`queue_update` takes `first_message_link_id` and returns delivery ids), `agentbarn_telegram_processor.py`
+  - `events/catalog.py`, `analytics/event_handlers.py`
+  - the new migration
+  - `domain-events.md`, `product-analytics.md`, `communications/CHANGELOG.md`
+- Verified:
+  - New migration tests: existing links get `created_at`, upgrade and downgrade, and the model matches the schema.
+  - New processor tests:
+    - the first message is recorded once, as the linker
+    - each new link gets its own first message
+    - a message reaching no Agent records nothing
+  - New repository tests:
+    - no link id records nothing
+    - only the first queued message stages, and returns its ids
+    - simultaneous first messages record one
+    - an ended link records nothing
+  - Handler and wiring rows.
+  - All failed before the change.
+  - `make check-migrations` shows one head. The Telegram, ingest, handler, wiring and outbox suites pass (361). Ruff and ty are clean.
 
 ### 2026-10-15 — AF-374 — Every Telegram unlink path
 

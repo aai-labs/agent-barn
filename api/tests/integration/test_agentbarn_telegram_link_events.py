@@ -22,7 +22,7 @@ from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
-from api.tests.steps.telegram_link_events import unlink_reasons, unlinked_events
+from api.tests.steps.telegram_link_events import first_message_events, unlink_reasons, unlinked_events
 
 _NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 _TELEGRAM_USER = 5550001
@@ -310,3 +310,77 @@ def test_ending_a_link_that_already_ended_records_nothing():
 
         assert_that((again, for_connection), equal_to(((), ())))
         assert_that(unlink_reasons(context), equal_to(["blocked_bot"]))
+
+
+_next_update = iter(range(90_000, 99_000))
+
+
+def _stored_update(context) -> int:
+    update_id = next(_next_update)
+    _repo(context).store_updates([{"update_id": update_id, "message": {"message_id": update_id}}])
+    return update_id
+
+
+def _queue(context, link, *, first_message: bool) -> tuple:
+    return _repo(context).queue_update(
+        _stored_update(context),
+        telegram_user_id=_TELEGRAM_USER,
+        agent_id=link.agent_id,
+        connection_id=link.connection_id,
+        payload={"message": {}},
+        first_message_link_id=link.id if first_message else None,
+    )
+
+
+def test_queueing_without_a_first_message_link_records_nothing():
+    with given(_GIVEN) as context:
+        _token(context, context.first, "raw-1", context.first_membership)
+        link = _consume(context, "raw-1").link
+
+        delivery_ids = _queue(context, link, first_message=False)
+
+        assert_that((delivery_ids, first_message_events(context)), equal_to(((), [])))
+
+
+def test_the_first_queued_message_returns_its_staged_delivery():
+    with given(_GIVEN) as context:
+        _token(context, context.first, "raw-1", context.first_membership)
+        link = _consume(context, "raw-1").link
+
+        first = _queue(context, link, first_message=True)
+        second = _queue(context, link, first_message=True)
+
+        events = first_message_events(context)
+        assert_that(events, has_length(1))
+        _assert_no_telegram_identity(events[0])
+        assert_that((sorted(first), second), equal_to((sorted(_delivery_ids(context, events[0])), ())))
+
+
+def test_simultaneous_first_messages_record_one_event():
+    with given(_GIVEN) as context:
+        _token(context, context.first, "raw-1", context.first_membership)
+        link = _consume(context, "raw-1").link
+        barrier = threading.Barrier(2)
+
+        def queue() -> None:
+            barrier.wait()
+            _queue(context, link, first_message=True)
+
+        threads = [threading.Thread(target=queue) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert_that(first_message_events(context), has_length(1))
+
+
+def test_an_ended_link_gets_no_first_message():
+    with given(_GIVEN) as context:
+        _token(context, context.first, "raw-1", context.first_membership)
+        link = _consume(context, "raw-1").link
+        _repo(context).end_active_link(_TELEGRAM_USER, now=_NOW, reason="blocked_bot")
+
+        _queue(context, link, first_message=True)
+
+        assert_that(first_message_events(context), equal_to([]))

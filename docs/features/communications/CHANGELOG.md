@@ -24,6 +24,9 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
   - `access_lost`: the linking Member lost `agent.update`, seen by the poller, the forwarder, or the proxy
 
   `end_active_link` and `end_link_for_connection` now take a `reason` and return the staged delivery ids. `unlink_in_scope` takes the actor and returns them, or `None` when no link was found.
+- Added: `agentbarn_telegram_link.first_message_at` (migration `a78bcde4b918`). Existing links are set to their `created_at`.
+  - `queue_update` takes `first_message_link_id` and returns staged delivery ids. When given an active link whose `first_message_at` is null, it sets the column and stages `telegram.first_message.received`.
+  - The processor passes it for a new message only, not for an edit or a button press.
 
 ### 2026-10-09 — Spend-limit notice on native chat — [PR #284](https://github.com/aai-labs/agent-barn/pull/284)
 

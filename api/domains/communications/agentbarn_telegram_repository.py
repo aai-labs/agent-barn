@@ -1,7 +1,7 @@
 import enum
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -26,7 +26,12 @@ from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationPlatform,
 )
-from api.domains.events.catalog import EVENT_REGISTRY, TELEGRAM_ACCOUNT_LINKED, TELEGRAM_ACCOUNT_UNLINKED
+from api.domains.events.catalog import (
+    EVENT_REGISTRY,
+    TELEGRAM_ACCOUNT_LINKED,
+    TELEGRAM_ACCOUNT_UNLINKED,
+    TELEGRAM_FIRST_MESSAGE_RECEIVED,
+)
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.rbac.policy import AuthorizationScope
@@ -407,7 +412,8 @@ class AgentBarnTelegramRepository:
         payload: dict[str, Any],
         messages: Iterable[tuple[int, int]] = (),
         files: Iterable[str] = (),
-    ) -> None:
+        first_message_link_id: UUID | None = None,
+    ) -> tuple[UUID, ...]:
         """Queue an update, as the Agent may see it, and make its messages and files the Connection's."""
         with Session(self.delegate.engine) as session:
             session.exec(
@@ -425,7 +431,25 @@ class AgentBarnTelegramRepository:
                 )
             )  # type: ignore[call-overload]
             self._insert_ownership(session, connection_id, messages, files)
+            delivery_ids = (
+                self._stage_first_message(session, first_message_link_id) if first_message_link_id is not None else []
+            )
             session.commit()
+            return tuple(delivery_ids)
+
+    def _stage_first_message(self, session: Session, link_id: UUID) -> list[UUID]:
+        now = datetime.now(UTC)
+        link = session.scalars(
+            sa.update(AgentBarnTelegramLink)
+            .where(
+                col(AgentBarnTelegramLink.id) == link_id,
+                col(AgentBarnTelegramLink.unlinked_at).is_(None),
+                col(AgentBarnTelegramLink.first_message_at).is_(None),
+            )
+            .values(first_message_at=now)
+            .returning(AgentBarnTelegramLink)
+        ).first()
+        return self._stage_link_event(session, TELEGRAM_FIRST_MESSAGE_RECEIVED, link, now) if link is not None else []
 
     def find_routable_link(self, telegram_user_id: int) -> AgentBarnTelegramLink | None:
         """The user's active link, while its Connection is in use and its Agent exists."""

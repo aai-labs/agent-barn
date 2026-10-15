@@ -34,7 +34,7 @@ from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
-from api.tests.steps.telegram_link_events import unlink_reasons
+from api.tests.steps.telegram_link_events import first_message_events, unlink_reasons
 
 _JANE = 5550001
 _WEB_APP_URL = "https://app.agentbarn.test"
@@ -638,3 +638,58 @@ def test_a_failed_update_without_a_sender_waits_out_its_own_backoff() -> None:
 
         with then("it was tried once"):
             assert_that(_stored(context, update_id).attempt_count, equal_to(1))
+
+
+def test_a_linked_users_first_message_is_recorded_once_as_their_linker():
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-sales")
+        _receive(context, _private("/start token-sales"))
+        (link,) = _active_links(context)
+
+        _receive(context, _private("first"))
+        _receive(context, _private("second"))
+
+        events = first_message_events(context)
+        assert_that(len(events), equal_to(1))
+        assert_that(
+            (events[0].organization_id, events[0].actor, events[0].payload),
+            equal_to(
+                (
+                    context.sales.organization_id,
+                    {
+                        "type": "MEMBERSHIP",
+                        "id": str(context.organization_user.id),
+                        "organization_id": str(context.sales.organization_id),
+                    },
+                    {
+                        "organization_id": str(context.sales.organization_id),
+                        "agent_id": str(context.sales.agent_id),
+                        "connection_id": str(context.sales.id),
+                        "link_id": str(link.id),
+                    },
+                )
+            ),
+        )
+
+
+def test_each_new_link_has_its_own_first_message():
+    with given(_GIVEN) as context:
+        _issue(context, context.sales, "token-sales")
+        _receive(context, _private("/start token-sales"))
+        _receive(context, _private("hello sales"))
+        _issue(context, context.support, "token-support")
+        _receive(context, _private("/start token-support"))
+
+        _receive(context, _private("hello support"))
+
+        assert_that(
+            [event.payload["agent_id"] for event in first_message_events(context)],
+            equal_to([str(context.sales.agent_id), str(context.support.agent_id)]),
+        )
+
+
+def test_a_message_that_reaches_no_agent_is_not_a_first_message():
+    with given(_GIVEN) as context:
+        _receive(context, _private("hello, anyone?"))
+
+        assert_that(first_message_events(context), equal_to([]))
