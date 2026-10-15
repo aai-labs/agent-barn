@@ -61,12 +61,6 @@ Use this index to load only the context required by the task. `../AGENTS.md` rem
 | Per-Agent integration isolation, restart/recovery, provider adapters and SharePoint token handoff | [`features/integrations.md`](features/integrations.md#optional-credential-isolation) | [`adr/2026-10-08-optional-agent-integration-isolation.md`](adr/2026-10-08-optional-agent-integration-isolation.md), `../api/domains/integrations/` |
 | Domain terminology                                                  | [`../CONTEXT.md`](../CONTEXT.md)                                                   | Relevant feature document                                                                           |
 
-## Research
-
-| When working on | Read |
-| --- | --- |
-| MDP-119 Agent-owned workflows: proposed nontechnical creation, individual approvals with written guidance, artifacts, and runtime evaluation | [`research/mdp-119-workflows/README.md`](research/mdp-119-workflows/README.md) — research and prototype; not delivered behavior |
-
 ## Maintenance
 
 Update this map in the same change when a routed document, API domain, UI feature, runtime, or major responsibility is added, removed, renamed, or moved. Update the relevant feature or architecture document when its invariants, boundaries, state model, or change-impact surface changes.
