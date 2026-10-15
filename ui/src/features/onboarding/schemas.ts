@@ -13,6 +13,7 @@ export const OnboardingSchema = z.object({
 });
 
 export const TrialSettingsSchema = z.object({
+  selfSignupEnabled: z.boolean(),
   creditUsd: z.number(),
   agentLimit: z.number().int(),
   // Null: no cap on how many trials may be active at once.

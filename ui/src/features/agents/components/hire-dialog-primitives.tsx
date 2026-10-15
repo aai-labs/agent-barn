@@ -2,6 +2,7 @@
 
 import React, { useRef, useState } from "react";
 import { EyeIcon, EyeOffIcon, PlusIcon, XIcon } from "@/components/icons";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { useGoogleOAuth, type GoogleOAuthResult } from "../hooks/use-google-oauth";
 
@@ -13,19 +14,19 @@ export function DialogShell({
   shadeClick: (() => void) | undefined;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0"
-        style={{ background: "rgba(20,16,10,.4)" }}
-        onClick={shadeClick}
-      />
-      <div
-        className="relative flex flex-col w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl"
+    <Dialog open onOpenChange={(open) => { if (!open) shadeClick?.(); }}>
+      <DialogContent
+        showCloseButton={false}
+        aria-describedby={undefined}
+        className="flex w-[calc(100%-2rem)] max-w-4xl max-h-[90svh] flex-col gap-0 overflow-hidden rounded-2xl border-0 p-0 shadow-2xl"
         style={{ background: "var(--bg-elev)" }}
+        onEscapeKeyDown={(event) => { if (!shadeClick) event.preventDefault(); }}
+        onPointerDownOutside={(event) => { if (!shadeClick) event.preventDefault(); }}
       >
+        <DialogTitle className="sr-only">Hire an agent</DialogTitle>
         {children}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -207,9 +207,8 @@ class GoogleSignInService:
             if user is not None:
                 returning = user.email_verified_at is not None
                 return _SignedIn(user=self._link(user, identity, session), returning=returning)
-            # A trial is used through Agent Barn's Telegram bot: without one, a new user
-            # could never finish onboarding.
-            if not self.config.self_signup_enabled or not self.telegram.is_offered():
+            # Quick start still needs the shared bot configured.
+            if not self.telegram.is_offered():
                 raise _SignInRefused(SignInError.SIGNUP_CLOSED)
             user, organization = self._sign_up(identity, session)
         # With its limit already on it. Best effort: the Organization is committed, and
@@ -234,6 +233,9 @@ class GoogleSignInService:
         return user
 
     def _sign_up(self, identity: GoogleIdentity, session: Session) -> tuple[User, Organization]:
+        settings = self.trial_settings.signup_settings(session)
+        if not settings.self_signup_enabled:
+            raise _SignInRefused(SignInError.SIGNUP_CLOSED)
         # One trial per address, even after its account is deleted.
         if self.trial_settings.has_had_trial(identity.email, session):
             raise _SignInRefused(SignInError.TRIAL_USED)
@@ -252,7 +254,7 @@ class GoogleSignInService:
             signed_up_at=now,
         )
         self.user_repository.save_with_session(user, session)
-        credit = self.trial_settings.credit_usd()
+        credit = settings.credit_usd
         organization = Organization(
             name=AuthService._default_organization_name(identity.name),
             created_by_user_id=user.id,

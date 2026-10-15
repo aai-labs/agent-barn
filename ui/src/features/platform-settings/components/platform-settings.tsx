@@ -15,9 +15,9 @@ const SECTIONS = {
     description: "Long-term memory settings shared by every Agent and Organization.",
   },
   trials: {
-    label: "Trials",
+    label: "Signup & trials",
     icon: <Sparkles size={15} aria-hidden />,
-    description: "What a new organization gets when someone signs themselves up.",
+    description: "Manage public signup and what each new trial organization receives.",
   },
 } as const;
 

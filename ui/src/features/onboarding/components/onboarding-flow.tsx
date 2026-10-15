@@ -1,58 +1,56 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
 
-import { AuthLoadingFallback } from "@/auth/components/auth-loading-fallback";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { AppErrorState } from "@/components/app-error-state";
+import type { HiredAgent } from "@/features/agents/hooks/use-hire-agent-form";
+import { useOrganization } from "@/features/organizations/hooks/use-organization";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { useOrgStore } from "@/features/organizations/stores/org-store";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { useOnboarding, useOnboardingActions } from "../hooks/use-onboarding";
+import type { Onboarding } from "../schemas";
+import { AccountOpeningScreen } from "./account-opening-screen";
+import { ChooseStep, ContinueButton } from "./choose-step";
 import { DoneStep } from "./done-step";
-import { OnboardingShell, StepAlert, StepHeading } from "./onboarding-shell";
+import { OnboardingShell, StepAlert, type OnboardingPath } from "./onboarding-shell";
+import { SetupStep } from "./setup-step";
 import { TelegramStep } from "./telegram-step";
 
-/** Steps 2 and 3, for someone signed in whose trial still needs setting up. */
 export function OnboardingFlow() {
   const router = useRouter();
   const { user } = useCurrentUser();
   const { selectedOrganization } = useOrganizationContext();
   const setOrganizationId = useOrgStore((state) => state.setOrganizationId);
-  const { onboarding, isLoadingOnboarding, onboardingError, reloadOnboarding } = useOnboarding();
+  const { onboarding: currentOnboarding, isLoadingOnboarding, onboardingError, reloadOnboarding } = useOnboarding();
   const { setUpAgent, complete } = useOnboardingActions();
+  const [path, setPath] = useState<OnboardingPath>("quick");
+  const [stage, setStage] = useState<"choose" | "setup" | "finish" | "done">("choose");
+  const [hired, setHired] = useState<HiredAgent | null>(null);
   const [telegramUsername, setTelegramUsername] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
-
+  const [skipping, setSkipping] = useState(false);
+  const [returnToDashboard, setReturnToDashboard] = useState(false);
+  // Completion retires the API's setup details. Keep this visit's summary and
+  // navigation targets while the completed status refreshes in the query cache.
+  const [finishedSetup, setFinishedSetup] = useState<Onboarding | null>(null);
+  const onboarding = finishedSetup ?? currentOnboarding;
   const trialOrganizationId = onboarding?.organizationId ?? null;
-  const required = onboarding?.required ?? false;
+  const { organization } = useOrganization(trialOrganizationId ?? "");
+  const organizationReady = selectedOrganization?.id === trialOrganizationId;
 
-  // Nothing (left) to do here: the dashboard is home.
   useEffect(() => {
-    if (onboarding && !required && !done) router.replace("/dashboard");
-  }, [onboarding, required, done, router]);
+    if (onboarding && !onboarding.required && stage === "choose") router.replace("/dashboard");
+  }, [onboarding, stage, router]);
 
-  // Telegram linking acts in the trial's organization.
   useEffect(() => {
-    if (trialOrganizationId && selectedOrganization?.id !== trialOrganizationId) {
-      setOrganizationId(user.id, trialOrganizationId);
-    }
-  }, [trialOrganizationId, selectedOrganization?.id, setOrganizationId, user.id]);
+    if (trialOrganizationId && !organizationReady) setOrganizationId(user.id, trialOrganizationId);
+  }, [trialOrganizationId, organizationReady, setOrganizationId, user.id]);
 
-  // Set up whatever is still missing, once per visit. It is safe to repeat, and also
-  // restarts an Agent that stopped.
-  const setUpRequested = useRef(false);
-  useEffect(() => {
-    if (!required || setUpRequested.current) return;
-    setUpRequested.current = true;
-    setUpAgent.mutate();
-  }, [required, setUpAgent]);
-
-  if (isLoadingOnboarding) return <AuthLoadingFallback message="Loading your account…" />;
-  if (onboardingError)
+  if (isLoadingOnboarding) return <AccountOpeningScreen />;
+  if (onboardingError && !finishedSetup) {
     return (
       <AppErrorState
         error={onboardingError}
@@ -61,73 +59,145 @@ export function OnboardingFlow() {
         className="min-h-svh"
       />
     );
-  if (!onboarding || (!required && !done)) return <AuthLoadingFallback message="Opening your dashboard…" />;
+  }
+  if (!onboarding || (!onboarding.required && stage === "choose") || !organizationReady) {
+    return <AccountOpeningScreen opening />;
+  }
 
-  if (done) {
+  const home = trialOrganizationId ? `/dashboard/${trialOrganizationId}` : "/dashboard";
+  const agentId = hired?.id ?? onboarding.agentId;
+  const agentName = hired?.name ?? onboarding.agentName ?? "your agent";
+  const shell = { email: user.email, creditUsd: onboarding.creditUsd ?? null };
+
+  function finish(username: string | null = null, dashboard = returnToDashboard) {
+    setFinishedSetup(onboarding ?? null);
+    setTelegramUsername(username);
+    setReturnToDashboard(dashboard);
+    setStage("finish");
+    complete.mutate(undefined, {
+      onSuccess: () => dashboard ? router.push(home) : setStage("done"),
+    });
+  }
+
+  function choosePath() {
+    setStage("setup");
+    if (onboarding?.agentId || path === "quick") {
+      setPath("quick");
+      setUpAgent.mutate();
+    }
+  }
+
+  if (stage === "done") {
     return (
-      <OnboardingShell step={3}>
-        <DoneStep
-          email={user.email}
-          telegramUsername={telegramUsername}
-          creditUsd={onboarding.creditUsd ?? null}
-          botUsername={onboarding.telegramBotUsername ?? null}
-          onDashboard={() => router.push(trialOrganizationId ? `/dashboard/${trialOrganizationId}` : "/dashboard")}
-        />
+      <DoneStep
+        {...shell}
+        path={path}
+        agentName={agentName}
+        telegramUsername={telegramUsername}
+        botUsername={onboarding.telegramBotUsername ?? null}
+        onDashboard={() => router.push(home)}
+        chatHref={`${home}/agents/${agentId}?tab=chat`}
+        channelsHref={`${home}/agents/${agentId}/configuration?section=channels&connect=true`}
+      />
+    );
+  }
+
+  // Retry only completion: creating or starting the Agent again could consume a
+  // trial slot or fail because it is already running.
+  if (stage === "finish") {
+    return (
+      <OnboardingShell
+        {...shell}
+        path={path}
+        step={3}
+        title="Finishing your setup"
+        footerEnd={
+          <button
+            type="button"
+            className="af-btn af-btn-primary af-btn-lg"
+            disabled={complete.isPending}
+            onClick={() => finish(telegramUsername)}
+          >
+            {complete.isPending ? "Saving…" : "Try again"}
+          </button>
+        }
+      >
+        {complete.isError && <StepAlert>We couldn&apos;t save your progress. Try again.</StepAlert>}
       </OnboardingShell>
     );
   }
 
-  const agentFailed = onboarding.agentStatus === "ERROR";
-  // An Agent already running stays on screen while setup re-checks it: unmounting the
-  // Telegram step mid-way would drop the link it is preparing.
-  const ready =
-    onboarding.agentStatus === "RUNNING" &&
-    onboarding.agentId &&
-    onboarding.connectionId &&
-    selectedOrganization?.id === trialOrganizationId;
+  if (stage === "choose") {
+    return (
+      <OnboardingShell
+        {...shell}
+        path={path}
+        step={1}
+        title="How do you want to start?"
+        subtitle="Start with an assistant that's ready to go, or make one your own."
+        footerStart={
+          <button type="button" className="af-btn af-btn-ghost" onClick={() => finish(null, true)}>
+            I&apos;ll do this later
+          </button>
+        }
+        footerEnd={onboarding.agentId && !onboarding.connectionId ? (
+          <button
+            type="button"
+            className="af-btn af-btn-primary af-btn-lg"
+            onClick={() => { setPath("own"); finish(null, true); }}
+          >
+            Go to dashboard
+          </button>
+        ) : <ContinueButton onClick={choosePath} />}
+      >
+        {onboarding.agentId ? (
+          <p>You already have {agentName}. Continue with this agent to keep your trial slot.</p>
+        ) : (
+          <ChooseStep path={path} onPathChange={setPath} agentLimit={organization?.trialAgentLimit ?? null} />
+        )}
+      </OnboardingShell>
+    );
+  }
+
+  if (path === "own") {
+    return (
+      <SetupStep
+        {...shell}
+        onBack={() => setStage("choose")}
+        onLater={() => finish(null, true)}
+        onHired={(agent) => { setHired(agent); finish(); }}
+      />
+    );
+  }
+
+  const ready = onboarding.agentStatus === "RUNNING" && onboarding.agentId && onboarding.connectionId;
+  const setUpError = setUpAgent.isError
+    ? `We couldn't set up your agent: ${getErrorDisplay(setUpAgent.error).description}`
+    : onboarding.agentStatus === "ERROR" && !setUpAgent.isPending
+      ? "We couldn't start your agent. Try again in a moment."
+      : null;
 
   return (
-    <OnboardingShell step={2}>
-      {ready && onboarding.agentId && onboarding.connectionId ? (
-        <TelegramStep
-          agentId={onboarding.agentId}
-          connectionId={onboarding.connectionId}
-          botUsername={onboarding.telegramBotUsername ?? null}
-          isContinuing={complete.isPending}
-          onContinue={(username) => {
-            setTelegramUsername(username);
-            complete.mutate(undefined, { onSuccess: () => setDone(true) });
-          }}
-        />
-      ) : (
-        <>
-          <StepHeading title="Setting up your agent">This takes a few seconds.</StepHeading>
-          {setUpAgent.isError || (agentFailed && !setUpAgent.isPending) ? (
-            <div className="flex flex-col gap-4">
-              <StepAlert>
-                {setUpAgent.isError
-                  ? `We couldn't set up your agent: ${getErrorDisplay(setUpAgent.error).description}`
-                  : "We couldn't start your agent. Try again in a moment."}
-              </StepAlert>
-              <div>
-                <button type="button" className="af-btn af-btn-lg" onClick={() => setUpAgent.mutate()}>
-                  Try again
-                </button>
-              </div>
-            </div>
-          ) : (
-            <p className="m-0 flex items-center gap-2 text-[13.5px]" role="status" style={{ color: "var(--ink-2)" }}>
-              <Loader2 width={15} height={15} className="animate-spin" aria-hidden />
-              Starting your agent…
-            </p>
-          )}
-        </>
-      )}
-      {complete.isError && (
-        <div className="mt-4">
-          <StepAlert>We couldn&apos;t save your progress. Try again.</StepAlert>
-        </div>
-      )}
-    </OnboardingShell>
+    <TelegramStep
+      {...shell}
+      agentName={agentName}
+      botUsername={onboarding.telegramBotUsername ?? null}
+      agent={ready ? { id: onboarding.agentId!, connectionId: onboarding.connectionId! } : null}
+      setUpError={setUpError}
+      hasAgent={!!agentId}
+      onLater={() => finish(null, true)}
+      onRetrySetUp={() => setUpAgent.mutate()}
+      onContinue={(username) => finish(username)}
+      isContinuing={complete.isPending}
+      onSkip={() => {
+        setSkipping(true);
+        complete.mutate(undefined, {
+          onSuccess: () => router.push(`${home}/agents/${agentId}?tab=chat`),
+          onError: () => setSkipping(false),
+        });
+      }}
+      isSkipping={skipping}
+      finishError={complete.isError}
+    />
   );
 }
