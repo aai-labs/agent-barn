@@ -26,6 +26,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/{connection_id}",
+    "delete_connection_organizations__organization_id__agents__agent_id__custom_api_connections__connection_id__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/agents/{agent_id}/restore-points/{restore_point_id}",
     "delete_restore_point_organizations__organization_id__agents__agent_id__restore_points__restore_point_id__delete"
   ],
@@ -308,6 +313,11 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/conversations/connections/{connection_id}/channels/{channel_id}/messages",
     "list_channel_messages_organizations__organization_id__agents__agent_id__conversations_connections__connection_id__channels__channel_id__messages_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections",
+    "list_connections_organizations__organization_id__agents__agent_id__custom_api_connections_get"
   ],
   [
     "GET",
@@ -786,6 +796,11 @@
   ],
   [
     "PATCH",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/{connection_id}",
+    "update_connection_organizations__organization_id__agents__agent_id__custom_api_connections__connection_id__patch"
+  ],
+  [
+    "PATCH",
     "/organizations/{organization_id}/agents/{agent_id}/skills/{skill_id}",
     "update_agent_skill_organizations__organization_id__agents__agent_id__skills__skill_id__patch"
   ],
@@ -963,6 +978,16 @@
     "POST",
     "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-link-tokens",
     "create_telegram_link_token_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_link_tokens_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections",
+    "create_connection_organizations__organization_id__agents__agent_id__custom_api_connections_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/{connection_id}/apply",
+    "apply_connection_organizations__organization_id__agents__agent_id__custom_api_connections__connection_id__apply_post"
   ],
   [
     "POST",

@@ -7,6 +7,7 @@ import { ArrowLeft, CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { CustomApiSettings } from "@/features/custom-api/components/custom-api-settings";
 import { AgentMemorySettings } from "@/features/agent-memory/components/agent-memory-settings";
 import { AgentWebhookSettings } from "@/features/agent-webhooks/components/agent-webhook-settings";
 
@@ -257,12 +258,15 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
               />
             )}
             {activeSection === "keys" && (
+              <>
               <AgentKeysSettings
                 agent={agent}
                 canEdit={canManageSecrets}
                 editing={editingSection === "keys"}
                 onEdit={() => toggleEditing("keys")}
               />
+              <CustomApiSettings agent={agent} canEdit={canEdit && canManageSecrets} />
+              </>
             )}
             {activeSection === "override" && (
               <AgentOverrideSettings

@@ -403,3 +403,16 @@ concurrent bank attribution. Run `make check-memory` for bridge/chart wiring and
 ## Failure handling
 
 Fix failures introduced by the change. If an unrelated pre-existing failure blocks verification, report the exact command and failure without reshaping unrelated code to make the suite green.
+
+Custom API scope, DNS pinning and redirect contracts live in
+`../../api/tests/unit/test_custom_api_request.py`; CRUD, authorization and generation
+revocation live in `../../api/tests/integration/test_custom_api.py`. Custom API runtime profiles are
+consumed by aai-cli's generic `custom-api request` command. The focused
+`runtime_tests/test_custom_api_cli.py` contract executes a real CLI binary with
+materialized encrypted-store references; set `AAI_CLI_TEST_BINARY` to a binary built
+from the CLI feature branch when it is not installed on PATH. Run it explicitly with
+`cd api && AAI_CLI_TEST_BINARY=/path/to/aai-cli uv run python -m pytest runtime_tests/test_custom_api_cli.py -q`.
+This prerequisite-bearing subprocess contract is outside ordinary `make test-api`.
+The pinned-image
+`runtime_tests/test_{hermes,openclaw}_custom_api.py` contracts require images built
+with that CLI feature and exercise the installed binary as the runtime user.
