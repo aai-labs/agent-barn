@@ -571,6 +571,7 @@ def test_platform_workflow_setting_audits_changes_once_and_blocks_read_only_keys
 
     from api.domains.events.models import EventDelivery, EventScope, OutboxMessage
     from api.domains.events.processor import EventDeliveryProcessor
+    from api.domains.events.repository import OutboxMessageRepository
     from api.domains.events.security_audit import SecurityAuditRecord
     from api.tests.helpers.workflows import platform_admin_headers
 
@@ -591,7 +592,9 @@ def test_platform_workflow_setting_audits_changes_once_and_blocks_read_only_keys
             assert_that(events[0].payload["previous"], is_(True))
             assert_that(events[0].payload["current"], is_(False))
             delivery = session.exec(select(EventDelivery).where(EventDelivery.event_id == events[0].event_id)).one()
-            context.injector.get(EventDeliveryProcessor).process(delivery.id)
+            # Projection tests drive delivery explicitly; CI has no Redis broker.
+            context.injector.get(OutboxMessageRepository).mark_delivery_enqueued(delivery.id)
+            assert_that(context.injector.get(EventDeliveryProcessor).process(delivery.id), is_(True))
             audits = session.exec(
                 select(SecurityAuditRecord).where(SecurityAuditRecord.action == "platform.workflow_authoring.changed")
             ).all()

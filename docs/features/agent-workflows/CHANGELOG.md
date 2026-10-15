@@ -13,6 +13,13 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-15 — AF-388 — CI audit projection test setup
+
+- Reproduced: `ci-api / Test` failed because Redis was unavailable, leaving the workflow-setting event delivery pending. The audit test attempted processing without establishing its required enqueued state, so no projection was produced. The same assertion failed locally with `REDIS_URL=redis://127.0.0.1:1/0` before the fix.
+- Changed: The test explicitly marks the persisted delivery enqueued before invoking the real processor, following neighboring audit tests, and asserts successful processing before checking the durable audit record. Production delivery/admission behavior is unchanged.
+- Verification: The exact failing case and all 64 affected workflow/settings/public-contract tests pass with Redis still unavailable. API lint/format/types and whitespace checks pass. The full CI suite will rerun on the pushed fix.
+
+
 ### 2026-10-15 — AF-388 — [PR #308](https://github.com/aai-labs/agent-barn/pull/308)
 
 - Evidence: Seven inspected screenshots are included in [PR #308](https://github.com/aai-labs/agent-barn/pull/308), covering editor/inputs, desktop/mobile saved cards, immutable-version history, Platform enablement and hidden disabled navigation. Screenshots remain PR evidence rather than repository files. The rendered UI uses synthetic request fixtures; three capture scenarios passed. No live persistence or execution is inferred from screenshots.
