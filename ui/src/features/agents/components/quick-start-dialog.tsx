@@ -20,6 +20,7 @@ import { api } from "@/shared/api";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { useAgentNameSuggestion } from "../hooks/use-agent-name-suggestion";
+import { useFetchAgent } from "../hooks/use-agent";
 import { useCreateAgent } from "../hooks/use-create-agent";
 import type { HiredAgent } from "../hooks/use-hire-agent-form";
 import { useStartAgent } from "../hooks/use-start-agent";
@@ -34,6 +35,7 @@ export function QuickStartDialog({ onClose, onHired }: { onClose: () => void; on
   const suggestion = useAgentNameSuggestion();
   const create = useCreateAgent();
   const start = useStartAgent();
+  const fetchAgent = useFetchAgent();
   const { createConnection } = useCommunicationConnectionActions();
   const savedAgent = useRef<HiredAgent | null>(null);
   const [agent, setAgent] = useState<HiredAgent | null>(null);
@@ -60,7 +62,8 @@ export function QuickStartDialog({ onClose, onHired }: { onClose: () => void; on
       const telegram = existing.data.find((item) => item.platformKey === "agentbarn_telegram")
         ?? await createConnection.mutateAsync({ agentId: current.id, platformKey: "agentbarn_telegram", displayName: "Telegram", enabled: true, settings: {}, credentials: {} });
       setConnection(telegram);
-      const started = await start.mutateAsync(current.id);
+      const latest = await fetchAgent(current.id);
+      const started = latest.status === "RUNNING" ? latest : await start.mutateAsync(current.id);
       if (started.status !== "RUNNING") throw new Error("We couldn't start your agent. Try again.");
       setRunning(true);
     },
@@ -101,7 +104,7 @@ export function QuickStartDialog({ onClose, onHired }: { onClose: () => void; on
       {done && agent ? (
         <DoneStep email={user.email} creditUsd={null} path="quick" agentName={agent.name} telegramUsername={username} botUsername={botUsername} onDashboard={() => { onHired(agent); router.push(home); }} chatHref={`${home}/agents/${agent.id}?tab=chat`} channelsHref={`${home}/agents/${agent.id}/configuration?section=channels&connect=true`} />
       ) : (
-        <TelegramStep email={user.email} creditUsd={null} botUsername={botUsername} agentName={agent?.name ?? "your assistant"} agent={running && agent && connection ? { id: agent.id, connectionId: connection.id } : null} setUpError={setup.error ? getErrorDisplay(setup.error).description : null} onRetrySetUp={() => setup.mutate()} onContinue={(linked) => { setUsername(linked); setDone(true); }} isContinuing={false} onSkip={openChat} isSkipping={false} finishError={false} />
+        <TelegramStep email={user.email} creditUsd={null} botUsername={botUsername} agentName={agent?.name ?? "your assistant"} agent={running && agent && connection ? { id: agent.id, connectionId: connection.id } : null} hasAgent={!!agent} onLater={onClose} setUpError={setup.error ? getErrorDisplay(setup.error).description : null} onRetrySetUp={() => setup.mutate()} onContinue={(linked) => { setUsername(linked); setDone(true); }} isContinuing={false} onSkip={openChat} isSkipping={false} finishError={false} />
       )}
     </OnboardingDialogFrame>
   );

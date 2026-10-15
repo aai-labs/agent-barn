@@ -45,12 +45,18 @@ Credit appears in the desktop rail.
    `POST /onboarding/agent`. Each call does what is still missing: creates a Hermes
    Agent from `general-purpose`, names it like the hire dialog, gives it an enabled
    Agent Barn Telegram Connection before starting, and starts it if stopped or failed.
-   Setup failures show an explanation and Try again.
+   Setup failures show an explanation and Try again. **I'll do this later** records
+   completion and opens the dashboard, preserving any Agent already created.
+   Setup status refreshes after a failed request so an Agent created before the
+   failure can also be opened in Web Chat through **Skip, I'll chat on the web**.
+   If saving completion fails, retrying an exit saves completion only.
 
    Once running, the step mints a link token. Open in Telegram is a plain link; desktop
    users can also scan its QR code. Status polling detects either route without a
    browser click. Pressing Start links the account; expired 10-minute tokens are
-   replaced. Already-linked users can Continue. **Skip, I'll chat on the web** records
+   replaced. Only links opened from this step show an expiry warning; unopened
+   links refresh silently. Account polling stops once linking succeeds.
+   Already-linked users can Continue. **Skip, I'll chat on the web** records
    completion and opens this Agent's Web Chat without requiring a Telegram link.
 3. **Build my own: Set up your agent**. The wizard shares the hire dialog's form logic
    and ordinary create/start calls, including template-required Skills, group choices,

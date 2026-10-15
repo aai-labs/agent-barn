@@ -30,7 +30,9 @@ The ready-made path creates its Agent Barn Telegram Connection before startup,
 then reuses onboarding's Telegram preparation, QR code, link-status polling,
 expiry recovery, and completion screens inside a dashboard dialog. Retrying setup
 retains the created Agent and reads existing Connections before creating one, so a
-lost Connection response does not duplicate it. Telegram is optional: users can
+lost Connection response does not duplicate it. Setup reads the Agent's current
+status before starting and skips start when it is already running, including after
+a lost start response. Telegram is optional: users can
 skip linking and go directly to Web Chat. This path does not reopen or modify
 onboarding completion.
 

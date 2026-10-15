@@ -184,6 +184,8 @@ export function OnboardingFlow() {
       botUsername={onboarding.telegramBotUsername ?? null}
       agent={ready ? { id: onboarding.agentId!, connectionId: onboarding.connectionId! } : null}
       setUpError={setUpError}
+      hasAgent={!!agentId}
+      onLater={() => finish(null, true)}
       onRetrySetUp={() => setUpAgent.mutate()}
       onContinue={(username) => finish(username)}
       isContinuing={complete.isPending}

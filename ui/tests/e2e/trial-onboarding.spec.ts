@@ -27,6 +27,7 @@ async function signedInTrialUser(page: Page) {
   await data.auth.interceptRefreshRequest();
   await data.users.interceptGetUserContextRequest({ userContext: trialUserContext });
   await data.users.interceptGetOrganizationsRequest();
+  await data.organizations.interceptGetOrganization({ organization: trialUserContext.organization_users[0].organization });
   return data;
 }
 
@@ -396,6 +397,43 @@ test.describe("Trial onboarding", () => {
     );
   });
 
+  test("an unopened expired link is refreshed without an expiry warning", async ({ page }) => {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    await data.onboarding.interceptSetUpAgent();
+    await data.onboarding.interceptLinkedAccounts();
+    await data.onboarding.interceptLinkTokens({
+      urls: [TRIAL_DEEP_LINK, TRIAL_FRESH_DEEP_LINK], statuses: ["waiting", "expired"],
+    });
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.chooseQuickStart();
+    await expect(wizard.openInTelegram()).toHaveAttribute("href", TRIAL_FRESH_DEEP_LINK);
+    await expect(wizard.alert()).toHaveCount(0);
+    await expect(wizard.openInTelegram()).toHaveText("Open in Telegram");
+  });
+
+  for (const source of ["token", "accounts"] as const) {
+    test(`Telegram account polling stops after linking through ${source}`, async ({ page }) => {
+      const data = await signedInTrialUser(page);
+      await data.onboarding.interceptGetOnboarding();
+      await data.onboarding.interceptSetUpAgent();
+      const accounts = await data.onboarding.interceptLinkedAccounts();
+      await data.onboarding.interceptLinkTokens({ statuses: source === "token" ? ["waiting", "linked"] : ["waiting"] });
+      const wizard = new OnboardingPage(page);
+      await wizard.goto();
+      await wizard.chooseQuickStart();
+      await expect(wizard.openInTelegram()).toBeVisible();
+      if (source === "accounts") accounts.set([linkedAccount]);
+      await expect(page.getByText("Linked as @jane_doe")).toBeVisible();
+      // Allow an in-flight account refresh, then observe two full polling intervals.
+      await page.waitForTimeout(500);
+      const checks = accounts.checks.length;
+      await page.waitForTimeout(4500);
+      expect(accounts.checks).toHaveLength(checks);
+    });
+  }
+
   test("an agent that failed to start can be retried", async ({ page }) => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding();
@@ -431,6 +469,35 @@ test.describe("Trial onboarding", () => {
     );
     await expect(onboardingPage.retryAction()).toBeVisible();
   });
+
+  for (const exit of ["later without Agent", "later with Agent", "Web Chat", "Web Chat after partial setup"] as const) {
+    test(`a setup failure allows ${exit}`, async ({ page }) => {
+      const data = await signedInTrialUser(page);
+      const existing = exit !== "later without Agent";
+      const partialSetup = onboarding({ ...agentReady, agent_status: "ERROR", connection_id: null });
+      await data.onboarding.interceptGetOnboarding(onboarding(existing && exit !== "Web Chat after partial setup" ? { ...agentReady, agent_status: "ERROR" } : {}));
+      await data.onboarding.interceptSetUpAgentFailure(400, "Telegram setup unavailable", exit === "Web Chat after partial setup" ? partialSetup : undefined);
+      const completions = await data.onboarding.interceptCompleteOnboarding([500, 204], onboarding({ required: false }));
+      const creations = data.onboarding.trackAgentCreationRequests();
+      const wizard = new OnboardingPage(page);
+      await wizard.goto();
+      await wizard.chooseQuickStart();
+      await expect(wizard.alert()).toContainText("Telegram setup unavailable");
+      await expect(wizard.laterAction()).toBeVisible();
+      await expect(wizard.skipAction()).toHaveCount(existing ? 1 : 0);
+      const chat = exit.startsWith("Web Chat");
+      const action = chat ? wizard.skipAction() : wizard.laterAction();
+      await action.click();
+      await expect(wizard.alert().filter({ hasText: /save your progress/ })).toBeVisible();
+      if (chat) await action.click();
+      else await wizard.retryAction().click();
+      await expect(page).toHaveURL(chat
+        ? `/dashboard/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}?tab=chat`
+        : `/dashboard/${TRIAL_ORG_ID}`);
+      expect(completions).toHaveLength(2);
+      expect(creations).toHaveLength(1);
+    });
+  }
 
   test("someone already linked goes straight to Continue", async ({ page }) => {
     const data = await signedInTrialUser(page);

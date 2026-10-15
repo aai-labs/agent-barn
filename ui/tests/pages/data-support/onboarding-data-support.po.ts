@@ -108,10 +108,12 @@ export class OnboardingDataSupport {
     return calls;
   }
 
-  async interceptSetUpAgentFailure(status: number, detail: string) {
-    await this.page.route("**/api/v1/onboarding/agent", (route) =>
-      route.request().method() === "POST" ? route.fulfill({ status, json: { detail } }) : route.fallback(),
-    );
+  async interceptSetUpAgentFailure(status: number, detail: string, partialOnboarding?: unknown) {
+    await this.page.route("**/api/v1/onboarding/agent", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      if (partialOnboarding) await this.interceptGetOnboarding(partialOnboarding);
+      return route.fulfill({ status, json: { detail } });
+    });
   }
 
   async interceptCompleteOnboarding(statuses: number[] = [204], completedOnboarding?: unknown) {
@@ -128,8 +130,13 @@ export class OnboardingDataSupport {
 
   async interceptLinkedAccounts(accounts: unknown[] = []) {
     let current = accounts;
-    await this.page.route(`${this.connectionBase}/telegram-links`, (route) => route.fulfill({ json: current }));
+    const checks: number[] = [];
+    await this.page.route(`${this.connectionBase}/telegram-links`, (route) => {
+      checks.push(Date.now());
+      return route.fulfill({ json: current });
+    });
     return {
+      checks,
       set(next: unknown[]) {
         current = next;
       },

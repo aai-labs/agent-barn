@@ -30,6 +30,7 @@ test.describe("Hiring choices", () => {
     await data.agents.interceptGetTemplatesRequest();
     await data.agents.interceptGetModelsRequest();
     await data.agents.interceptCreateAgentRequest();
+    await data.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
     await data.communicationConnections.interceptQuickStartConnections(MOCK_AGENT_ID, TRIAL_CONNECTION_ID);
     const links = new OnboardingDataSupport(page, { organizationId: TEST_ORG_ID, agentId: MOCK_AGENT_ID, connectionId: TRIAL_CONNECTION_ID });
     await links.interceptLinkedAccounts();
@@ -83,7 +84,6 @@ test.describe("Hiring choices", () => {
   test("closing Telegram setup leaves a way to resume from the Agent detail page", async ({ page }, testInfo) => {
     const data = new DataSupport(page);
     const requests = data.agents.trackHiringRequests();
-    await data.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "RUNNING" } });
     await data.agents.interceptGetConversationChannelsRequest();
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
@@ -92,6 +92,7 @@ test.describe("Hiring choices", () => {
     await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
     await expect(page.getByRole("link", { name: "Open in Telegram", exact: true })).toBeVisible();
     await dashboard.closeHireDialog();
+    await data.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "RUNNING" } });
     await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}`);
     await expect(page.getByText("Finish connecting Telegram", { exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("telegram-reminder.png"), fullPage: true, animations: "disabled" });
@@ -172,6 +173,24 @@ test.describe("Hiring choices", () => {
     expect(connections).toHaveLength(1);
   });
 
+  test("a lost start response recovers an already running Agent", async ({ page }) => {
+    const data = new DataSupport(page);
+    await data.agents.interceptStartAgentRequest({ networkError: true });
+    const requests = data.agents.trackHiringRequests();
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+    await dashboard.openHireChoices();
+    await dashboard.chooseReadyMadeHiring();
+    await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: /reach the server/ })).toBeVisible();
+    await data.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "RUNNING" } });
+    await data.agents.interceptStartAgentRequest({ status: 409, detail: "Agent is already running" });
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect(page.getByRole("link", { name: "Open in Telegram", exact: true })).toBeVisible();
+    expect(requests.creations).toHaveLength(1);
+    expect(requests.starts).toHaveLength(1);
+  });
+
   test("a lost connection-create response is recovered without creating duplicates", async ({ page }) => {
     const data = new DataSupport(page);
     const connections = await data.communicationConnections.interceptQuickStartConnections(MOCK_AGENT_ID, TRIAL_CONNECTION_ID, { loseFirstResponse: true });
@@ -196,6 +215,7 @@ test.describe("Hiring choices", () => {
     await dashboard.openHireChoices();
     await dashboard.chooseReadyMadeHiring();
     await page.getByRole("button", { name: "Hire assistant", exact: true }).click();
+    await page.getByRole("link", { name: "Open in Telegram", exact: true }).click();
     await expect(page.getByRole("alert").filter({ hasText: /link expired/ })).toBeVisible();
     await expect(page.getByRole("link", { name: "Open in Telegram again" })).toHaveAttribute("href", TRIAL_FRESH_DEEP_LINK);
   });

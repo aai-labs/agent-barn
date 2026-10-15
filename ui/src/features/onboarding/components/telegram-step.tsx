@@ -24,6 +24,9 @@ type TelegramStepProps = ShellProps & {
   agent: { id: string; connectionId: string } | null;
   /** Why setting the Agent up failed, if it did. */
   setUpError: string | null;
+  /** Setup may have created an Agent before failing to connect or start it. */
+  hasAgent?: boolean;
+  onLater?: () => void;
   onRetrySetUp: () => void;
   onContinue: (telegramUsername: string | null) => void;
   isContinuing: boolean;
@@ -139,7 +142,11 @@ function SkipLink({ onSkip, isSkipping }: { onSkip: () => void; isSkipping: bool
 }
 
 /** Before the Agent runs: creating and starting it, or why that failed. */
-function AgentSetUp({ email, creditUsd, botUsername, agentName, setUpError, onRetrySetUp }: TelegramStepProps) {
+function AgentSetUp({
+  email, creditUsd, botUsername, agentName, setUpError, onRetrySetUp,
+  hasAgent, onLater, onSkip, isSkipping, isContinuing, finishError,
+}: TelegramStepProps) {
+  const busy = isSkipping || isContinuing;
   return (
     <TelegramShell
       email={email}
@@ -148,7 +155,10 @@ function AgentSetUp({ email, creditUsd, botUsername, agentName, setUpError, onRe
       link={null}
       status={
         setUpError ? (
-          <StepAlert>{setUpError}</StepAlert>
+          <>
+            <StepAlert>{setUpError}</StepAlert>
+            {finishError && <StepAlert>We couldn&apos;t save your progress. Try again.</StepAlert>}
+          </>
         ) : (
           <StateBox>
             <StepStatus>Starting {agentName}…</StepStatus>
@@ -156,9 +166,19 @@ function AgentSetUp({ email, creditUsd, botUsername, agentName, setUpError, onRe
           </StateBox>
         )
       }
+      footerStart={setUpError ? (
+        <div className="flex flex-wrap items-center gap-3">
+          {onLater && (
+            <button type="button" className="af-btn af-btn-ghost" disabled={busy} onClick={onLater}>
+              I&apos;ll do this later
+            </button>
+          )}
+          {hasAgent && <SkipLink onSkip={onSkip} isSkipping={busy} />}
+        </div>
+      ) : undefined}
       footerEnd={
         setUpError ? (
-          <button type="button" className="af-btn af-btn-primary af-btn-lg" onClick={onRetrySetUp}>
+          <button type="button" className="af-btn af-btn-primary af-btn-lg" disabled={busy} onClick={onRetrySetUp}>
             Try again
           </button>
         ) : (
@@ -200,7 +220,8 @@ function TelegramLinking({
     pending?.id ?? null,
   );
   const { linkedAccounts, isLoadingLinkedAccounts } = useTelegramLinkedAccounts(agent.id, agent.connectionId, {
-    whileLinking: !!pending,
+    whileLinking: !!pending && linkStatus?.status !== "linked",
+    stopWhenLinked: true,
   });
 
   const linkedUsername = linkStatus?.status === "linked" ? linkStatus.telegramUsername : linkedAccounts[0]?.telegramUsername;
@@ -231,16 +252,16 @@ function TelegramLinking({
   // The opened link ran out before anyone pressed Start: have a fresh one ready.
   const expiredTokenId = linkStatus?.status === "expired" ? pending?.id : undefined;
   useEffect(() => {
-    if (!expiredTokenId) return;
+    if (!expiredTokenId || linked) return;
     queryClient.removeQueries({
       queryKey: telegramLinkTokenKey.detail(`${selectedOrganization?.id ?? ""}:${agent.connectionId}:${expiredTokenId}`),
     });
     newLink(() => {
       setPhase("idle");
-      setExpired(true);
+      setExpired(phase === "waiting");
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per expired link
-  }, [expiredTokenId]);
+  }, [expiredTokenId, linked]);
 
   let status: React.ReactNode;
   let footerEnd: React.ReactNode;
