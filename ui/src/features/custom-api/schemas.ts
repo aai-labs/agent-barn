@@ -20,7 +20,6 @@ export const CustomApiConnectionSchema = z.object({
 });
 export type CustomApiConnection = z.infer<typeof CustomApiConnectionSchema>;
 export const CustomApiWriteSchema = z.object({
-  slug: z.string().optional(),
   name: z.string(),
   baseUrl: z.string(),
   isolated: z.boolean(),

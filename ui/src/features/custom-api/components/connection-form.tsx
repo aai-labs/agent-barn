@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { IntegrationIsolationControl } from "@/features/agents/components/integration-isolation-control";
+import type { Agent } from "@/features/agents/schemas";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -13,98 +13,48 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
 
 import { ConnectionHeaders } from "./connection-headers";
 
 import type { CustomApiConnection, CustomApiWrite } from "../schemas";
 
 export function ConnectionForm({
+  agent,
   connection,
-  pending,
-  onSave,
-  onCancel,
+  value,
+  onChange,
+  prefix,
 }: {
+  agent: Agent;
   connection?: CustomApiConnection;
-  pending: boolean;
-  onSave: (data: CustomApiWrite) => void;
-  onCancel: () => void;
+  value: CustomApiWrite;
+  onChange: (value: CustomApiWrite) => void;
+  prefix: string;
 }) {
-  const [slug, setSlug] = useState(connection?.slug ?? "");
-  const [name, setName] = useState(connection?.name ?? "");
-  const [baseUrl, setBaseUrl] = useState(connection?.baseUrl ?? "");
-  const [isolated, setIsolated] = useState(connection?.isolated ?? false);
-  const [authType, setAuthType] = useState<CustomApiWrite["auth"]["type"]>(
-    connection?.authType ?? "none",
-  );
-  const [headerName, setHeaderName] = useState(
-    connection?.authHeaderName ?? "X-API-Key",
-  );
-  const [token, setToken] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [headers, setHeaders] = useState(
-    () =>
-      connection?.headers.map((h) => ({ ...h, value: h.value ?? "" })) ?? [],
-  );
+  const { name, baseUrl, isolated, headers, auth } = value;
+  const authType = auth.type;
+  const headerName = auth.headerName ?? "X-API-Key";
+  const token = auth.token ?? "";
+  const username = auth.username ?? "";
+  const password = auth.password ?? "";
+  const setName = (name: string) => onChange({ ...value, name });
+  const setBaseUrl = (baseUrl: string) => onChange({ ...value, baseUrl });
+  const setIsolated = (isolated: boolean) => onChange({ ...value, isolated });
+  const setAuthType = (type: CustomApiWrite["auth"]["type"]) => onChange({ ...value, auth: { type, ...(type === "api_key" ? { headerName: "X-API-Key" } : {}) } });
+  const setHeaderName = (headerName: string) => onChange({ ...value, auth: { ...auth, headerName } });
+  const setToken = (token: string) => onChange({ ...value, auth: { ...auth, token } });
+  const setUsername = (username: string) => onChange({ ...value, auth: { ...auth, username } });
+  const setPassword = (password: string) => onChange({ ...value, auth: { ...auth, password } });
   const retainsToken =
     connection?.authType === authType &&
     (authType !== "api_key" ||
       connection.authHeaderName?.toLowerCase() === headerName.toLowerCase());
-  const prefix = `custom-api-${connection?.id ?? "new"}`;
   return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSave({
-          ...(connection ? {} : { slug }),
-          name,
-          baseUrl,
-          isolated,
-          auth: {
-            type: authType,
-            ...(authType === "api_key" ? { headerName } : {}),
-            ...((authType === "bearer" || authType === "api_key") && token
-              ? { token }
-              : {}),
-            ...(authType === "basic" && username ? { username } : {}),
-            ...(authType === "basic" && password ? { password } : {}),
-          },
-          headers: headers.map((h) => ({
-            name: h.name,
-            secret: h.secret,
-            ...(!h.secret || h.value ? { value: h.value } : {}),
-          })),
-        });
-      }}
-      aria-label="Custom API connection"
-      className="space-y-4 rounded-xl border p-4"
-    >
-      <fieldset disabled={pending} className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor={`${prefix}-name`}>Connection name</Label>
-            <Input
-              id={`${prefix}-name`}
-              required
-              maxLength={120}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor={`${prefix}-slug`}>Stable identifier</Label>
-            <Input
-              id={`${prefix}-slug`}
-              required
-              maxLength={64}
-              pattern="[a-z][a-z0-9_-]{0,63}"
-              disabled={Boolean(connection)}
-              value={slug}
-              onChange={(e) => setSlug(e.target.value)}
-              placeholder="inventory"
-            />
-          </div>
+    <div className="flex flex-col gap-3.5" role="group" aria-label="Custom API connection">
+        <div className="space-y-2">
+          <Label htmlFor={`${prefix}-name`}>Connection name</Label>
+          <Input id={`${prefix}-name`} required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
+          <p className="text-xs text-muted-foreground">Identifier: {connection?.slug ?? (name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[-_]+|[-_]+$/g, "").slice(0, 64).replace(/[-_]+$/g, "") || "derived from the connection name")}</p>
         </div>
         <div className="space-y-2">
           <Label htmlFor={`${prefix}-url`}>Allowed base URL</Label>
@@ -209,32 +159,18 @@ export function ConnectionForm({
         )}
         <ConnectionHeaders
           prefix={prefix}
-          headers={headers}
+          headers={headers.map((header) => ({ ...header, value: header.value ?? "" }))}
           savedHeaders={connection?.headers}
-          setHeaders={setHeaders}
+          setHeaders={(headers) => onChange({ ...value, headers })}
         />
-        <div className="flex items-center gap-3">
-          <Checkbox
-            id={`${prefix}-isolation`}
-            checked={isolated}
-            onCheckedChange={(checked) => setIsolated(checked === true)}
-          />
-          <Label htmlFor={`${prefix}-isolation`}>Isolate credentials</Label>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {isolated
-            ? "Credentials stay in Agent Barn. This Agent sends requests through the credential gateway."
-            : "This Agent receives credentials and connects directly. Enable isolation to keep credentials outside the Agent."}
-        </p>
-        <div className="flex gap-2">
-          <Button type="submit">
-            {pending ? "Saving…" : "Save connection"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={onCancel}>
-            Cancel
-          </Button>
-        </div>
-      </fieldset>
-    </form>
+        <IntegrationIsolationControl agent={agent} isolated={isolated} onChange={setIsolated} secret={{
+          provider: "custom_api", secretName: name || "Custom API", isolation: {
+            desired: isolated, applied: connection?.appliedIsolated,
+            pending: connection?.pendingApply ?? true, switchAvailable: true, supportedModes: ["direct", "isolated"],
+            directDescription: "This Agent receives credentials and connects directly.",
+            isolatedDescription: "Credentials stay in Agent Barn. This Agent sends requests through the credential gateway.",
+          },
+        }} />
+    </div>
   );
 }

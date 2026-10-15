@@ -1,3 +1,4 @@
+import re
 from typing import Any, Literal, Self
 from uuid import UUID
 
@@ -42,7 +43,6 @@ class AuthInput(DTO):
 
 class CustomApiConnectionCreate(DTO):
     model_config = ConfigDict(extra="forbid")
-    slug: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     name: str = Field(min_length=1, max_length=120)
     base_url: str = Field(max_length=2048)
     isolated: bool = False
@@ -53,7 +53,14 @@ class CustomApiConnectionCreate(DTO):
     @model_validator(mode="after")
     def validate_url(self) -> Self:
         parse_url(self.base_url, base=True)
+        self.name = self.name.strip()
+        if not self.slug:
+            raise ValueError("Connection name must contain a letter or number")
         return self
+
+    @property
+    def slug(self) -> str:
+        return re.sub(r"[^a-z0-9_-]+", "-", self.name.lower()).strip("-_")[:64].rstrip("-_")
 
 
 class CustomApiConnectionUpdate(DTO):

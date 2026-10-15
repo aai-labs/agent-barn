@@ -1,6 +1,6 @@
 export const mockCustomApiConnection = {
   id: "55555555-5555-4555-8555-555555555555",
-  slug: "inventory",
+  slug: "inventory-api",
   name: "Inventory API",
   base_url: "https://api.example.com/v1",
   isolated: false,

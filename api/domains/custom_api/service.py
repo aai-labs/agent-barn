@@ -101,7 +101,9 @@ class CustomApiService:
                 raise HTTPException(409, "An Agent lifecycle operation is already in progress")
             scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
             if any(row.slug == data.slug for row in self.repository.list_in_scope(agent_id, scope)):
-                raise HTTPException(409, "A connection with this identifier already exists")
+                raise HTTPException(
+                    409, "This connection name produces an identifier already in use. Choose another name."
+                )
             config = {
                 "auth": data.auth.model_dump(exclude_none=True),
                 "headers": [h.model_dump() for h in data.headers],
@@ -119,7 +121,9 @@ class CustomApiService:
                 self._apply_locked(row, context, "created", data.restart)
                 return self._read(row)
             except IntegrityError:
-                raise HTTPException(409, "A connection with this identifier already exists") from None
+                raise HTTPException(
+                    409, "This connection name produces an identifier already in use. Choose another name."
+                ) from None
 
     def update(
         self, agent_id: UUID, connection_id: UUID, data: CustomApiConnectionUpdate, context: CurrentUserContext

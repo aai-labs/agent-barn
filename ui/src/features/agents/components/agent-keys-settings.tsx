@@ -1,6 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+
+import { useCustomApi } from "@/features/custom-api/hooks/use-custom-api";
+import { ConnectionIntegrations } from "@/features/custom-api/components/connection-integrations";
+import { connectionDraft, connectionPayload, type ConnectionDraft } from "@/features/custom-api/components/connection-drafts";
 
 import { AgentConfigurationSection } from "./agent-configuration-section";
 import { IntegrationsStep } from "./hire-dialog-steps";
@@ -34,6 +38,9 @@ function newSecret(provider: string): AgentSecretRead {
 export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   agent: Agent; canEdit: boolean; editing: boolean; onEdit: () => void;
 }) {
+  const customApi = useCustomApi(agent.id, agent.status === "RUNNING");
+  const [customDrafts, setCustomDrafts] = useState<ConnectionDraft[]>([]);
+  const formRef = useRef<HTMLFormElement>(null);
   const updateAgent = useUpdateAgent();
   const isolation = useIntegrationIsolation(agent.id);
   const stopAgent = useStopAgent();
@@ -53,29 +60,47 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const changedPolicies = drafts.filter((draft) => (draft.isolated ?? false) !== (savedSecret(draft)?.isolation?.desired ?? false));
   const hasCredentialChanges = changedCredentials.length > 0 || removedProviders.length > 0;
   const failed = agent.status === "ERROR";
-  const hasChanges = hasCredentialChanges || changedPolicies.length > 0 || (failed && drafts.length > 0);
-  const pending = saving || updateAgent.isPending || isolation.isPending || stopAgent.isPending || startAgent.isPending;
+  const customChanges = customDrafts.filter((draft) => draft.changed);
+  const removedConnections = (customApi.connections ?? []).filter((connection) => !customDrafts.some((draft) => draft.connection?.id === connection.id));
+  const hasCustomChanges = customChanges.length > 0 || removedConnections.length > 0;
+  const hasChanges = hasCustomChanges || hasCredentialChanges || changedPolicies.length > 0 || (failed && drafts.length > 0);
+  const pending = customApi.connectionMutation.isPending || saving || updateAgent.isPending || isolation.isPending || stopAgent.isPending || startAgent.isPending;
   const canRestart = agent.allowedActions.includes("agent.lifecycle.manage");
   const restart = agent.status === "RUNNING" || (failed && drafts.length > 0);
 
   function beginEditing() {
+    if (customApi.isLoadingConnections || customApi.connectionsError) return;
     setDrafts(setupDrafts(agent));
+    setCustomDrafts((customApi.connections ?? []).map(connectionDraft));
     setSaveError(null);
     onEdit();
   }
 
   async function applyChanges() {
     if (!hasChanges || hasIncompleteIntegration(drafts)) return;
+    if (!formRef.current?.reportValidity()) throw new Error("Complete the integration fields before applying.");
     setSaveError(null);
     setSaving(true);
     try {
       // A single policy change uses the server's complete preflight/restart flow.
-      if (!hasCredentialChanges && changedPolicies.length <= 1) {
+      if (!hasCredentialChanges && changedPolicies.length === 0 && customChanges.length + removedConnections.length === 1) {
+        const draft = customChanges[0];
+        await customApi.connectionMutation.mutateAsync(draft
+          ? { id: draft.connection?.id, data: connectionPayload(draft.value), restart }
+          : { id: removedConnections[0].id, remove: true, restart });
+      } else if (!hasCustomChanges && !hasCredentialChanges && changedPolicies.length <= 1) {
         const draft = changedPolicies[0] ?? drafts[0];
         if (!draft) return;
         await isolation.mutateAsync({ provider: draft.provider, isolated: draft.isolated ?? false, restart });
       } else {
         if (agent.status === "RUNNING") await stopAgent.mutateAsync(agent.id);
+        for (const connection of removedConnections) {
+          await customApi.connectionMutation.mutateAsync({ id: connection.id, remove: true, restart: false });
+        }
+        for (const draft of customChanges) {
+          const saved = await customApi.connectionMutation.mutateAsync({ id: draft.connection?.id, data: connectionPayload(draft.value), restart: false });
+          setCustomDrafts((current) => current.map((item) => item.key === draft.key ? connectionDraft(saved.data) : item));
+        }
         if (hasCredentialChanges) {
           await updateAgent.mutateAsync({ agentId: agent.id,
             secrets: changedCredentials.filter((draft) => !draft.sharedCredentialId && !isSignInOnlyProvider(draft.provider)).map((draft) => ({ provider: draft.provider,
@@ -89,6 +114,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
         // A failed save leaves the Agent stopped; never boot with a partly saved choice.
         if (restart) await startAgent.mutateAsync(agent.id);
       }
+      setCustomDrafts([]);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "Could not save the integration setup.");
       throw error;
@@ -99,9 +125,9 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
 
   return (
     <AgentConfigurationSection title="Integrations" description="Runtime integration credentials are separate from communication connection credentials. Secret values remain write-only and encrypted at rest."
-      canEdit={canEdit} editing={editing} onEdit={beginEditing} onApply={applyChanges}
-      onCancel={() => { setDrafts(setupDrafts(agent)); setSaveError(null); onEdit(); }} onApplied={onEdit}
-      applyDisabled={agent.updateInProgress || !hasChanges || hasIncompleteIntegration(drafts) || pending || (restart && !canRestart)} restartOnApply={restart}>
+      canEdit={canEdit && !customApi.isLoadingConnections && !customApi.connectionsError} editing={editing} onEdit={beginEditing} onApply={applyChanges}
+      onCancel={() => { setCustomDrafts([]); setDrafts(setupDrafts(agent)); setSaveError(null); onEdit(); }} onApplied={onEdit}
+      applyDisabled={customApi.isLoadingConnections || Boolean(customApi.connectionsError) || agent.updateInProgress || !hasChanges || hasIncompleteIntegration(drafts) || pending || (restart && !canRestart)} restartOnApply={restart}>
       {!editing || !canEdit ? (
         <div className="flex flex-col gap-3">
           {secrets.length > 0 ? secrets.map((secret) => (
@@ -109,17 +135,25 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
               <span className="font-medium text-[0.86rem]" style={{ color: "var(--ink-2)" }}>{secret.secretName}</span>
               <span className="text-[0.78rem]" style={{ color: "var(--ink-4)" }}>{secret.source === "platform_default" ? "Platform default" : secret.sharedCredentialName ? `Shared · ${secret.sharedCredentialName}` : "Configured · value hidden"}</span>
             </div>
-          )) : <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-4)" }}>No integration credentials are configured.</p>}
+          )) : !customApi.connections?.length && <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-4)" }}>No integration credentials are configured.</p>}
+          {customApi.connections?.map((connection) => <div key={connection.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3.5 py-3"><span className="font-medium text-[0.86rem]">Custom API · {connection.name}</span><span className="text-[0.78rem] text-muted-foreground">{connection.isolated ? "Isolated" : "Direct credentials"} · {connection.pendingApply ? "Pending apply" : "Applied"}</span></div>)}
+          {customApi.isLoadingConnections && <p role="status">Loading Custom API connections…</p>}
+          {customApi.connectionsError && <div role="alert">Could not load Custom API connections. <button type="button" className="af-btn af-btn-sm" onClick={() => void customApi.refetchConnections()}>Retry</button></div>}
         </div>
       ) : (
         <div className="flex flex-col gap-4">
         {saveError && <p role="alert" className="m-0 text-sm" style={{ color: "var(--err)" }}>{saveError}</p>}
-        <fieldset disabled={pending} className="m-0 min-w-0 border-0 p-0">
-        <IntegrationsStep agentId={agent.id} integrations={drafts} onChange={(next) => setDrafts(next.map((draft) => ({ ...draft, isolated: draft.isolated ?? savedSecret(draft)?.isolation?.desired ?? false })))}
+        {customApi.connectionsError && <div role="alert">Could not load Custom API connections. Cancel and retry before editing.</div>}
+        <form ref={formRef} onInvalidCapture={(event) => { const details = (event.target as HTMLElement).closest("details"); if (details) details.open = true; }} onSubmit={(event) => event.preventDefault()}>
+        <fieldset disabled={pending || customApi.isLoadingConnections || Boolean(customApi.connectionsError)} className="m-0 min-w-0 border-0 p-0">
+        <IntegrationsStep agentId={agent.id}
+          onAddCustomApi={() => setCustomDrafts((current) => [...current, connectionDraft()])}
+          extraIntegrations={<ConnectionIntegrations agent={agent} drafts={customDrafts} onChange={setCustomDrafts} />} integrations={drafts} onChange={(next) => setDrafts(next.map((draft) => ({ ...draft, isolated: draft.isolated ?? savedSecret(draft)?.isolation?.desired ?? false })))}
           canRemoveProvider={(provider) => provider !== "sharepoint" || (!sharepointAccess.isPending && !sharepointAccess.isError && sharepointAccess.data?.mode !== "selected_sites")}
           renderIsolation={(draft) => <IntegrationIsolationControl agent={agent} secret={savedSecret(draft) ?? newSecret(draft.provider)}
             isolated={draft.isolated ?? false} onChange={(isolated) => setDrafts((current) => current.map((item) => item.provider === draft.provider ? { ...item, isolated } : item))} />} />
         </fieldset>
+        </form>
         </div>
       )}
     </AgentConfigurationSection>

@@ -16,6 +16,8 @@ export class CustomApiDataSupport {
     url: string;
   }[] = [];
 
+  readonly lifecycleRequests: string[] = [];
+
   constructor(private page: Page) {}
 
   async open(
@@ -26,6 +28,7 @@ export class CustomApiDataSupport {
       empty?: boolean;
       fail?: boolean;
       loadError?: boolean;
+
     } = {},
   ) {
     const data = new DataSupport(this.page);
@@ -45,6 +48,12 @@ export class CustomApiDataSupport {
         update_in_progress: options.updating ?? false,
       },
     });
+    for (const operation of ["stop", "start"]) {
+      await this.page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/${operation}`, (route) => {
+        this.lifecycleRequests.push(operation);
+        return route.fulfill({ json: { ...mockAgent, status: operation === "start" ? "RUNNING" : "STOPPED" } });
+      });
+    }
     let connections: Record<string, unknown>[] = options.empty
       ? []
       : [{ ...mockCustomApiConnection }];
@@ -71,12 +80,14 @@ export class CustomApiDataSupport {
             json: { detail: "Invalid Custom API configuration" },
           });
         if (request.method() === "DELETE") {
-          connections = [];
+          connections = connections.filter((connection) => !request.url().includes(String(connection.id)));
           return route.fulfill({ status: 204 });
         }
         const connection = {
           ...mockCustomApiConnection,
           ...body,
+          id: request.url().endsWith("custom-api-connections") ? `55555555-5555-4555-8555-${String(this.requests.length).padStart(12, "0")}` : mockCustomApiConnection.id,
+          slug: body.name.toLowerCase().replace(/\s+/g, "-"),
           auth_type: body.auth.type,
           auth_header_name: body.auth.header_name ?? null,
           pending_apply: !body.restart,
@@ -87,7 +98,7 @@ export class CustomApiDataSupport {
             }),
           ),
         };
-        connections = [connection];
+        connections = [...connections.filter((saved) => saved.id !== connection.id), connection];
         return route.fulfill({
           status:
             request.method() === "POST" && !request.url().endsWith("/apply")

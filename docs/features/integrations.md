@@ -183,6 +183,11 @@ Custom API connections configure arbitrary public HTTPS APIs without adding a
 provider-specific CLI or generating tools from OpenAPI. An Agent may have multiple
 connections. Each has an immutable, Agent-scoped identifier (`inventory`, for
 example), a display name, and a base URL that defines its allowed origin and path.
+Creation derives the identifier from the name by lowercasing it and replacing
+spaces and other unsupported characters with hyphens (up to 64 characters).
+Identifiers are not editable and remain unchanged when the display name changes;
+names producing an existing identifier are rejected. Custom API setup is part of
+the existing Integrations editor, with the same Add, Apply and Cancel workflow.
 API-specific instructions belong in the assigned Template or Skills.
 
 Connections live in `api/domains/custom_api/`, independently of the one-Secret-per-
@@ -230,8 +235,8 @@ connection, stopping the Agent, or replacing its generation invalidates its toke
 
 Both Hermes and OpenClaw use the generic Custom API command in aai-cli. Profiles
 use `custom-api-<connection_identifier>` to avoid collisions with built-in providers.
-This requires a runtime image whose aai-cli includes the `custom-api` command;
-older images must be rebuilt after the CLI feature is available. The shared command is:
+This requires a runtime image whose aai-cli includes the `custom-api` command:
+`openclaw-base` 0.7.6 or `hermes-base` 0.2.9 or later. The shared command is:
 
 ```sh
 aai-cli --profile custom-api-inventory custom-api request --request-json - <<'JSON'

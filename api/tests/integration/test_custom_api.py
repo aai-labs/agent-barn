@@ -61,8 +61,7 @@ def _create(context, slug="inventory", isolated=False):
         _path(context),
         headers=_headers(context),
         json={
-            "slug": slug,
-            "name": "Inventory API",
+            "name": slug.replace("-", " ").title(),
             "base_url": "https://api.example.com/v1",
             "isolated": isolated,
             "auth": {"type": "bearer", "token": "fixture-private-token"},
@@ -121,6 +120,30 @@ def test_duplicate_slug_and_ambiguous_auth_fail_without_echoing_secrets():
         )
         assert_that(response.status_code, equal_to(422))
         assert_that(response.text, not_(contains_string("fixture-private-token")))
+
+
+def test_identifier_is_derived_from_name_and_retained_after_rename():
+    with given(_GIVEN) as context:
+        created = context.client.post(
+            _path(context),
+            headers=_headers(context),
+            json={"name": "Agent Barn Production", "base_url": "https://api.example.com/v1"},
+        )
+        assert_that(created.status_code, equal_to(201))
+        assert_that(created.json()["slug"], equal_to("agent-barn-production"))
+        updated = context.client.patch(
+            _path(context, "/" + created.json()["id"]),
+            headers=_headers(context),
+            json={"name": "Reporting API"},
+        )
+        assert_that(updated.status_code, equal_to(200))
+        assert_that(updated.json()["slug"], equal_to("agent-barn-production"))
+        manual = context.client.post(
+            _path(context),
+            headers=_headers(context),
+            json={"name": "Other API", "slug": "manually-set", "base_url": "https://api.example.com/v1"},
+        )
+        assert_that(manual.status_code, equal_to(422))
 
 
 def test_wrong_agent_and_unauthenticated_requests_are_concealed():
@@ -215,7 +238,6 @@ def test_invalid_payload_never_echoes_nested_credential_input():
             _path(context),
             headers=_headers(context),
             json={
-                "slug": "invalid",
                 "name": "Invalid",
                 "base_url": "https://api.example.com/v1",
                 "auth": {"type": "unsupported", "token": "sensitive-fixture-value"},
@@ -289,8 +311,7 @@ def test_duplicate_identifier_does_not_stop_running_agent():
             _path(context),
             headers=_headers(context),
             json={
-                "slug": "inventory",
-                "name": "Conflicting inventory",
+                "name": "INVENTORY",
                 "base_url": "https://api.example.com/v1",
                 "restart": True,
             },
