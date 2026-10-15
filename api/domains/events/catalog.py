@@ -50,6 +50,7 @@ API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
 USER_LOGGED_IN = "user.logged_in"
 USER_SIGNED_UP = "user.signed_up"
+USER_ONBOARDING_COMPLETED = "user.onboarding.completed"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
 COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconnect.requested"
 COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
@@ -555,6 +556,12 @@ class UserSignedUpPayload(BaseModel):
     user_id: UUID
 
 
+class UserOnboardingCompletedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID
+
+
 class CommunicationConnectionHealthChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -863,6 +870,14 @@ def build_default_event_registry() -> DomainEventRegistry:
             payload_model=UserSignedUpPayload,
             handler_names=(PRODUCT_ANALYTICS_HANDLER,),
             event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=USER_ONBOARDING_COMPLETED,
+            schema_version=1,
+            payload_model=UserOnboardingCompletedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
         )
     )
     for event_name, payload_model in (

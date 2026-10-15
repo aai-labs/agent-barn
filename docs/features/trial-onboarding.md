@@ -37,7 +37,8 @@ The web app shows three steps: **Sign in → Telegram → Done**.
    (linked), or until the 10-minute token expires, when a fresh link replaces it. Someone
    already linked goes straight to "Continue". The welcome message is the AF-367 one.
 3. **Done**. "Continue" records `user.onboarding_completed_at`
-   (`POST /onboarding/complete`). The summary shows the account, the linked Telegram
+   (`POST /onboarding/complete`). The first completion also emits
+   `user.onboarding.completed` for product analytics; a repeat writes and emits nothing. The summary shows the account, the linked Telegram
    username and the Trial Credit, with "Open Telegram" and "Go to dashboard".
 
 `GET /onboarding` reports whether onboarding is still required: only for a self-signed-up

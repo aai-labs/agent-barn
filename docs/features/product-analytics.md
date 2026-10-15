@@ -63,6 +63,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `organization.updated` | `changed_fields` (`name` and/or `description`; field names only, never values) |
 | `organization.deleted` | none (the Owner who deleted it is the person; sent after the Organization and its Memberships are gone) |
 | `organization.llm_budget.exhausted` | `limit_usd`; the Organization's creator is the person. Sent once per budget window when spend reaches the limit; a trial's one-off credit running out is this event with `is_trial = true`. `organization.llm_budget.threshold_reached` is not sent |
+| `user.onboarding.completed` | none; the user who finished is the person. Sent once, on the first `POST /onboarding/complete`. Organization-scoped to the trial the user created (so it carries `is_trial`), or platform-scoped when they created no Organization. It records that onboarding was closed, not that every step was done |
 | `user.logged_in` | `method` (`password` or `google`); platform-scoped, so installation group only. A Google sign-in counts only for an existing, verified account; a Google sign-in that creates the account or enrolls an invitee is a sign-up, not a login. Failed logins, token refresh and API-key requests are not logins |
 | `user.signed_up` | none; platform-scoped. Public signup is disabled, so this is the first invite acceptance (`POST /auth/set-password` on a user whose email is not yet verified). Known gap: an invitee who first gets in through forgot-password never emits it |
 

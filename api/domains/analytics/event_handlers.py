@@ -25,6 +25,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_UPDATED,
     PRODUCT_ANALYTICS_HANDLER,
     USER_LOGGED_IN,
+    USER_ONBOARDING_COMPLETED,
     USER_SIGNED_UP,
 )
 from api.domains.events.handlers import (
@@ -64,6 +65,7 @@ _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     ORGANIZATION_LLM_BUDGET_EXHAUSTED: ("limit_usd",),
     USER_LOGGED_IN: ("method",),
     USER_SIGNED_UP: (),
+    USER_ONBOARDING_COMPLETED: (),
     ORGANIZATION_MEMBER_ADDED: ("membership_id", "role"),
     ORGANIZATION_MEMBER_REMOVED: ("membership_id", "role"),
     ORGANIZATION_ROLE_CHANGED: ("membership_id", "previous_role", "new_role"),

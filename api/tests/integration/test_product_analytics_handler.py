@@ -20,6 +20,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_ROLE_CHANGED,
     PRODUCT_ANALYTICS_HANDLER,
+    USER_ONBOARDING_COMPLETED,
 )
 from api.domains.events.handlers import (
     EventDeliveryContext,
@@ -711,3 +712,22 @@ def test_a_reached_budget_threshold_is_not_sent():
         _handle(context, _budget_event(context, ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED))
 
         assert_that(posthog.batches, equal_to([]))
+
+
+def test_onboarding_completed_is_sent_as_the_user_with_no_extra_fields():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        event = _envelope(
+            context,
+            USER_ONBOARDING_COMPLETED,
+            {"user_id": str(context.user.id)},
+            ActorIdentity(type=ActorIdentityType.USER, id=context.user.id),
+        )
+
+        _handle(context, event)
+
+        capture = posthog.batches[0][0]
+        assert_that(capture["event"], equal_to(USER_ONBOARDING_COMPLETED))
+        assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
+        assert_that(capture["properties"], is_not(has_key("user_id")))
+        assert_that(capture["properties"]["is_trial"], equal_to(False))

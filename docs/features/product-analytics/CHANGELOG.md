@@ -40,11 +40,35 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered (AF-374, trial funnel): every Organization-scoped event carries `is_trial`, and the `organization` group gets `$group_set: {is_trial}`.
 - Also delivered (AF-374): `organization.llm_budget.exhausted` reaches PostHog, attributed to the Organization's creator.
 - Also delivered (AF-374): a Google sign-in to an existing, verified account records `user.logged_in` with `method: "google"`.
+- Also delivered (AF-374): `user.onboarding.completed`, sent once per user on the first onboarding completion.
 - In progress (AF-374): onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
 - Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-15 — AF-374 — Onboarding completion event
+
+- Delivered: new Domain Event `user.onboarding.completed` (payload `user_id`, User actor and subject), handled only by `product_analytics.posthog` with no extra properties.
+- How it fires: `POST /onboarding/complete` now goes through `UserRepository.complete_onboarding`. That sets `onboarding_completed_at` with a conditional update (only while null) and stages the event in the same transaction only when the row changed. A repeat or a simultaneous second call emits nothing.
+- Scope: the first Organization the user created (the trial, so it carries `is_trial`), otherwise the platform. The definition has no fixed scope.
+- Meaning: it records that onboarding was closed. After the onboarding redesign merges, that also covers skipping or deferring setup (user decision: no extra flags).
+- Changed:
+  - `events/catalog.py`
+  - `users/repository.py`, `users/service.py` (`complete_onboarding(user_id, organization_id)` enqueues the deliveries)
+  - `onboarding/service.py`
+  - `analytics/event_handlers.py`
+  - `domain-events.md`, `product-analytics.md`, `trial-onboarding.md`
+- Verified:
+  - New `test_onboarding_completed_event.py`:
+    - one event in the trial Organization with the right actor, payload and handler
+    - a repeat records nothing more
+    - a user who created no Organization gets a platform event
+    - simultaneous completions record one event
+  - New handler test: sent as the user with no extra fields, carrying `is_trial`.
+  - New wiring row.
+  - All of them failed before the change, because the event didn't exist.
+  - The onboarding, handler, wiring and outbox suites pass (100). Ruff and ty are clean.
 
 ### 2026-10-15 — AF-374 — Google sign-in records a login
 
