@@ -28,6 +28,10 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 - **Groups.** Every event belongs to the `installation` group, keyed by the Installation id and named with the same value as `installation_name`.
   - Organization-scoped events also belong to the `organization` group, keyed by the Organization id, and carry `organization_id`.
   - Platform-scoped events (`organization_id` is null) carry neither. They are sent only for a User Actor, because a Membership Actor cannot be resolved without an Organization.
+- **Trial flag.** Every Organization-scoped event carries `is_trial`, read from the Organization when the event is sent, not when it happened. An event whose Organization no longer exists carries no `is_trial`.
+  - The `organization` group gets the same value as a group property (`$group_set: {is_trial}`). Each worker process sends that `$groupidentify` the first time it sends the Organization's current value, and again only after the value changes. A failed send does not count. Its `uuid` is `uuid5(event_id, "organization")`, so a redelivery repeats it.
+  - Funnels can filter on the `is_trial` event property without Group Analytics. The group property needs the Group Analytics add-on.
+  - Ending a trial is not itself sent, so the group property updates with that Organization's next event.
 - **Labels and privacy flags.** Every event carries `source: agentbarn-api` and `$lib: agentbarn-api`, so app events can be separated from website events. It also carries `$geoip_disable: true`.
 - **Redelivery.** A redelivered event sends the same capture ids: the capture's `uuid` is the `event_id` and its timestamp is `occurred_at`. PostHog de-duplicates matching events eventually, not immediately.
 - **Installation naming.** Each worker process names the Installation group once, with a `$groupidentify` in the first batch it sends successfully. It names it again only if the resolved hostname or fallback changes. Changing the URL never changes the Installation id or group key. The naming check, send, and successful update are synchronized across worker threads; captures for an already-named Installation can send concurrently. A failed or dropped send does not count, so the next batch retries the naming.
@@ -40,7 +44,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 1. A business mutation commits its Domain Event together with one Event Delivery per intended handler.
 2. The worker claims the `product_analytics.posthog` delivery.
-3. The handler resolves the actor to a user and builds one `/batch/` request. The request holds the event capture, plus a `$groupidentify` naming the Installation group when this process has not named it yet.
+3. The handler resolves the actor to a user, reads the Organization's trial flag for Organization-scoped events, and builds one `/batch/` request. The request holds the event capture, plus a `$groupidentify` naming the Installation group when this process has not named it yet, and a `$groupidentify` setting the Organization's `is_trial` when this process has not sent that value yet.
 4. `PostHogClient` posts the batch to `{ANALYTICS_POSTHOG_HOST}/batch/` with a 5-second limit.
 
 ## Events
@@ -59,7 +63,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `user.logged_in` | `method` (`password`); platform-scoped, so installation group only. Failed logins, token refresh and API-key requests are not logins |
 | `user.signed_up` | none; platform-scoped. Public signup is disabled, so this is the first invite acceptance (`POST /auth/set-password` on a user whose email is not yet verified). Known gap: an invitee who first gets in through forgot-password never emits it |
 
-The common set is `source`, `installation_id`, `installation_name`, `installation_environment`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`.
+The common set is `source`, `installation_id`, `installation_name`, `installation_environment`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id` and `is_trial`.
 
 ## Message counts
 

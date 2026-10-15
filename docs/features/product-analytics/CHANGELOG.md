@@ -37,10 +37,33 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: the handler supports platform-scoped events (installation group only).
 - Also delivered: `organization.created`, `organization.updated`, `organization.deleted`, `user.logged_in`, `user.signed_up`.
 - Also delivered: hourly message counts (CronJob).
+- Also delivered (AF-374, trial funnel): every Organization-scoped event carries `is_trial`, and the `organization` group gets `$group_set: {is_trial}`.
+- In progress (AF-374): credit exhaustion, Google sign-in, onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
 - Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-15 — AF-374 — Trial flag on Organization events
+
+- Delivered: every Organization-scoped capture carries `is_trial`, read from the Organization when the event is sent. An event whose Organization is gone carries none.
+- Delivered: the `organization` group gets `$group_set: {is_trial}` in a `$groupidentify`.
+  - Each worker process sends it once per Organization value, and again after the value changes.
+  - A failed send does not count.
+  - Its `uuid` is `uuid5(event_id, "organization")`.
+- Changed: `analytics/event_handlers.py` (reads the Organization through `OrganizationRepository`, with its own cache lock separate from the Installation naming lock), `product-analytics.md` (Trial flag invariant, data flow, common properties).
+- Verified:
+  - New handler tests:
+    - `is_trial` true and false
+    - the organization `$groupidentify` shape and its deterministic uuid
+    - sent once, and resent after a trial change
+    - resent after a failed send
+    - a deleted Organization sends no flag
+    - platform events carry neither
+  - Existing tests that assumed a fixed batch shape now select messages by `$group_type`.
+  - 8 of the new and updated tests failed before the change: 7 handler tests and the registry wiring test.
+  - Handler, wiring, message-count and organization-event suites pass (60). Ruff and ty are clean.
+- Known limit: ending a trial is not sent, so the group property updates with that Organization's next event.
 
 ### 2026-10-12 — AF-357 — Staging and local stacks report analytics
 

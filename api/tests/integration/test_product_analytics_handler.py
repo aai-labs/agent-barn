@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Barrier, Event, Lock
 from unittest.mock import patch
-from uuid import UUID, uuid4, uuid7
+from uuid import UUID, uuid4, uuid5, uuid7
 
 import pytest
 from hamcrest import assert_that, contains_string, equal_to, has_entries, has_key, is_not
@@ -33,6 +33,7 @@ from api.domains.events.models import (
     SubjectIdentity,
     SubjectIdentityType,
 )
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.infrastructure.posthog.exceptions import RetryablePostHogException, TerminalPostHogException
@@ -116,6 +117,26 @@ def _handle(context, event: DomainEventEnvelope, attempt_count: int = 1) -> None
     context.injector.get(ProductAnalyticsHandler).handle(event, _delivery(event, attempt_count))
 
 
+def _identifies(batch: list[dict], group_type: str) -> list[dict]:
+    return [
+        message
+        for message in batch
+        if message["event"] == "$groupidentify" and message["properties"]["$group_type"] == group_type
+    ]
+
+
+def _identify(batch: list[dict], group_type: str) -> dict:
+    (message,) = _identifies(batch, group_type)
+    return message
+
+
+def _set_trial(context, is_trial: bool) -> None:
+    organizations = context.injector.get(OrganizationRepository)
+    organization = organizations.get(context.organization.id)
+    organization.is_trial = is_trial
+    organizations.save(organization)
+
+
 def _platform_event(context) -> DomainEventEnvelope:
     return DomainEventEnvelope(
         event_name=API_KEY_CREATED,
@@ -140,6 +161,8 @@ def test_a_platform_event_is_sent_with_only_the_installation_group():
         assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
         assert_that(capture["properties"]["$groups"], equal_to({"installation": installation_id}))
         assert_that(capture["properties"], is_not(has_key("organization_id")))
+        assert_that(capture["properties"], is_not(has_key("is_trial")))
+        assert_that(_identifies(posthog.batches[0], "organization"), equal_to([]))
         assert_that(
             (capture["properties"]["installation_name"], capture["properties"]["installation_environment"]),
             equal_to(("app.example.com", "remote")),
@@ -152,7 +175,7 @@ def test_a_local_installation_is_named_local_and_its_short_id():
         _handle(context, _agent_created(context))
 
         expected = f"local-{str(context.injector.get(InstallationRepository).get_id())[:8]}"
-        capture, group_identify = posthog.batches[0]
+        capture, group_identify = posthog.batches[0][0], _identify(posthog.batches[0], "installation")
         assert_that(
             (capture["properties"]["installation_name"], capture["properties"]["installation_environment"]),
             equal_to((expected, "local")),
@@ -169,8 +192,8 @@ def test_a_domain_change_renames_the_group_without_changing_installation_identit
 
         _handle(context, _agent_created(context))
 
-        first_capture, first_identify = posthog.batches[0]
-        second_capture, second_identify = posthog.batches[1]
+        first_capture, first_identify = posthog.batches[0][0], _identify(posthog.batches[0], "installation")
+        second_capture, second_identify = posthog.batches[1][0], _identify(posthog.batches[1], "installation")
         assert_that(
             second_capture["properties"]["installation_id"], equal_to(first_capture["properties"]["installation_id"])
         )
@@ -196,7 +219,7 @@ def test_sends_the_event_as_the_acting_user_with_installation_and_organization_g
 
         installation_id = str(context.injector.get(InstallationRepository).get_id())
         assert_that(len(posthog.batches), equal_to(1))
-        capture, group_identify = posthog.batches[0]
+        capture, group_identify = posthog.batches[0][0], _identify(posthog.batches[0], "installation")
         assert_that(
             capture,
             has_entries(
@@ -216,6 +239,7 @@ def test_sends_the_event_as_the_acting_user_with_installation_and_organization_g
                     "runtime": "HERMES",
                     "source": "agentbarn-api",
                     "organization_id": str(context.organization.id),
+                    "is_trial": False,
                     "installation_id": installation_id,
                     "installation_name": "app.example.com",
                     "installation_environment": "remote",
@@ -417,7 +441,7 @@ def test_a_redelivered_event_carries_the_same_ids():
             [(m["uuid"], m["timestamp"], m["distinct_id"]) for m in second if m["event"] == AGENT_CREATED],
             equal_to([(m["uuid"], m["timestamp"], m["distinct_id"]) for m in first if m["event"] == AGENT_CREATED]),
         )
-        assert_that(UUID(first[1]["uuid"]), is_not(equal_to(event.event_id)))
+        assert_that(UUID(_identify(first, "installation")["uuid"]), is_not(equal_to(event.event_id)))
 
 
 def test_the_installation_is_identified_once_per_process():
@@ -427,8 +451,8 @@ def test_the_installation_is_identified_once_per_process():
         _handle(context, _agent_created(context))
 
         first, second = posthog.batches
-        assert_that([message["event"] for message in first], equal_to([AGENT_CREATED, "$groupidentify"]))
-        assert_that([message["event"] for message in second], equal_to([AGENT_CREATED]))
+        assert_that(len(_identifies(first, "installation")), equal_to(1))
+        assert_that(_identifies(second, "installation"), equal_to([]))
 
 
 def test_concurrent_first_deliveries_identify_the_installation_only_once():
@@ -475,7 +499,13 @@ def test_concurrent_first_deliveries_identify_the_installation_only_once():
             sorted(message["uuid"] for message in captures if message["event"] == AGENT_CREATED),
             equal_to(sorted(str(event.event_id) for event in events)),
         )
-        assert_that(sum(message["event"] == "$groupidentify" for message in captures), equal_to(1))
+        assert_that(
+            sum(
+                message["event"] == "$groupidentify" and message["properties"]["$group_type"] == "installation"
+                for message in captures
+            ),
+            equal_to(1),
+        )
 
 
 def test_the_installation_is_identified_again_after_a_failed_send():
@@ -487,7 +517,7 @@ def test_the_installation_is_identified_again_after_a_failed_send():
 
         _handle(context, _agent_created(context))
 
-        assert_that([message["event"] for message in posthog.batches[0]], equal_to([AGENT_CREATED, "$groupidentify"]))
+        assert_that(len(_identifies(posthog.batches[0], "installation")), equal_to(1))
 
 
 def test_organization_created_is_sent_with_the_organization_group_and_no_extra_fields():
@@ -514,9 +544,90 @@ def test_organization_created_is_sent_with_the_organization_group_and_no_extra_f
                     "installation_name",
                     "installation_environment",
                     "organization_id",
+                    "is_trial",
                     "$groups",
                     "$geoip_disable",
                     "$lib",
                 }
             ),
         )
+
+
+@pytest.mark.parametrize("is_trial", [True, False])
+def test_an_organization_event_carries_whether_the_organization_is_a_trial(is_trial):
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        _set_trial(context, is_trial)
+
+        _handle(context, _agent_created(context))
+
+        assert_that(posthog.batches[0][0]["properties"]["is_trial"], equal_to(is_trial))
+
+
+def test_the_organization_group_is_identified_with_its_trial_flag():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        _set_trial(context, True)
+        event = _agent_created(context)
+
+        _handle(context, event)
+
+        identify = _identify(posthog.batches[0], "organization")
+        assert_that(
+            identify,
+            has_entries(
+                {
+                    "distinct_id": str(context.user.id),
+                    "uuid": str(uuid5(event.event_id, "organization")),
+                    "timestamp": OCCURRED_AT.isoformat(),
+                }
+            ),
+        )
+        assert_that(
+            identify["properties"],
+            has_entries(
+                {
+                    "$group_type": "organization",
+                    "$group_key": str(context.organization.id),
+                    "$group_set": {"is_trial": True},
+                }
+            ),
+        )
+
+
+def test_the_organization_is_identified_once_and_again_after_its_trial_flag_changes():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        _handle(context, _agent_created(context))
+        _handle(context, _agent_created(context))
+        _set_trial(context, True)
+        _handle(context, _agent_created(context))
+
+        first, second, third = posthog.batches
+        assert_that(_identify(first, "organization")["properties"]["$group_set"], equal_to({"is_trial": False}))
+        assert_that(_identifies(second, "organization"), equal_to([]))
+        assert_that(_identify(third, "organization")["properties"]["$group_set"], equal_to({"is_trial": True}))
+
+
+def test_the_organization_is_identified_again_after_a_failed_send():
+    posthog = MockPostHogModule(error=RetryablePostHogException("down"))
+    with given(_given(posthog)) as context:
+        with pytest.raises(RetryableEventHandlerError):
+            _handle(context, _agent_created(context))
+        posthog.error = None
+
+        _handle(context, _agent_created(context))
+
+        assert_that(len(_identifies(posthog.batches[0], "organization")), equal_to(1))
+
+
+def test_a_deleted_organization_sends_no_trial_flag_and_no_organization_identify():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        event = _agent_created(context, ActorIdentity(type=ActorIdentityType.USER, id=context.user.id))
+        context.injector.get(OrganizationRepository).delete(context.organization.id)
+
+        _handle(context, event)
+
+        assert_that(posthog.batches[0][0]["properties"], is_not(has_key("is_trial")))
+        assert_that(_identifies(posthog.batches[0], "organization"), equal_to([]))

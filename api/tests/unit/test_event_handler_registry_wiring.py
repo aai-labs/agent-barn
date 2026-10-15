@@ -59,6 +59,7 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
                 config=Mock(),
                 installation_repository=Mock(),
                 organization_user_repository=Mock(),
+                organization_repository=Mock(),
                 user_repository=Mock(),
                 posthog_client=Mock(),
             ),

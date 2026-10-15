@@ -33,6 +33,7 @@ from api.domains.events.handlers import (
     TerminalEventHandlerError,
 )
 from api.domains.events.models import ActorIdentityType, DomainEventEnvelope
+from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.models import User
 from api.domains.users.organization_users.repository import OrganizationUserRepository
 from api.domains.users.repository import UserRepository
@@ -92,10 +93,13 @@ class ProductAnalyticsHandler:
     config: Config
     installation_repository: InstallationRepository
     organization_user_repository: OrganizationUserRepository
+    organization_repository: OrganizationRepository
     user_repository: UserRepository
     posthog_client: PostHogClient
     _identified_installation_name: str | None = field(default=None, init=False)
     _installation_naming_lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
+    _identified_organization_trials: dict[UUID, bool] = field(default_factory=dict, init=False, repr=False)
+    _organization_trials_lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
 
     name: ClassVar[str] = PRODUCT_ANALYTICS_HANDLER
     supported_events: ClassVar[Sequence[SupportedEvent]] = tuple(
@@ -132,15 +136,43 @@ class ProductAnalyticsHandler:
             raise TerminalEventHandlerError(str(exc)) from exc
 
     def _send_messages(self, event: DomainEventEnvelope, user: User) -> None:
+        is_trial = self._is_trial(event.organization_id)
+        identify_organization = is_trial is not None and self._organization_needs_identify(
+            event.organization_id, is_trial
+        )
         # The singleton is shared by worker threads. Hold the lock through a
         # naming send so another delivery cannot name the same Installation too.
         with self._installation_naming_lock:
             name = self._installation_name()
             if name != self._identified_installation_name:
-                self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify=True))
+                self.posthog_client.send_batch(
+                    self._messages(event, user, is_trial, identify=True, identify_organization=identify_organization)
+                )
                 self._identified_installation_name = name
+                self._remember_organization_trial(event.organization_id, is_trial, identify_organization)
                 return
-        self.posthog_client.send_batch(self._messages(event, event.organization_id, user, identify=False))
+        self.posthog_client.send_batch(
+            self._messages(event, user, is_trial, identify=False, identify_organization=identify_organization)
+        )
+        self._remember_organization_trial(event.organization_id, is_trial, identify_organization)
+
+    def _is_trial(self, organization_id: UUID | None) -> bool | None:
+        if organization_id is None:
+            return None
+        organization = self.organization_repository.get(organization_id)
+        return organization.is_trial if organization is not None else None
+
+    def _organization_needs_identify(self, organization_id: UUID | None, is_trial: bool) -> bool:
+        with self._organization_trials_lock:
+            return self._identified_organization_trials.get(organization_id) != is_trial
+
+    def _remember_organization_trial(
+        self, organization_id: UUID | None, is_trial: bool | None, identified: bool
+    ) -> None:
+        if not identified or organization_id is None or is_trial is None:
+            return
+        with self._organization_trials_lock:
+            self._identified_organization_trials[organization_id] = is_trial
 
     def _installation_name(self) -> str:
         return installation_name(self.config, self.installation_repository.get_id())
@@ -160,8 +192,14 @@ class ProductAnalyticsHandler:
         return member[1] if member is not None else None
 
     def _messages(
-        self, event: DomainEventEnvelope, organization_id: UUID | None, user: User, identify: bool
+        self,
+        event: DomainEventEnvelope,
+        user: User,
+        is_trial: bool | None,
+        identify: bool,
+        identify_organization: bool,
     ) -> list[dict[str, Any]]:
+        organization_id = event.organization_id
         installation_id = str(self.installation_repository.get_id())
         common = {"source": SOURCE, "$geoip_disable": True, "$lib": SOURCE}
         groups = {INSTALLATION_GROUP: installation_id}
@@ -176,25 +214,38 @@ class ProductAnalyticsHandler:
         if organization_id is not None:
             groups[ORGANIZATION_GROUP] = str(organization_id)
             properties["organization_id"] = str(organization_id)
+        if is_trial is not None:
+            properties["is_trial"] = is_trial
         properties["$groups"] = groups
         envelope = {"distinct_id": str(user.id), "timestamp": event.occurred_at.isoformat()}
         messages = [{**envelope, "event": event.event_name, "uuid": str(event.event_id), "properties": properties}]
-        if not identify:
-            return messages
-        return [
-            *messages,
-            {
-                **envelope,
-                "event": "$groupidentify",
-                "uuid": str(uuid5(event.event_id, INSTALLATION_GROUP)),
-                "properties": {
-                    **common,
-                    "$group_type": INSTALLATION_GROUP,
-                    "$group_key": installation_id,
-                    "$group_set": {"name": name},
-                },
-            },
-        ]
+        if identify:
+            messages.append(
+                self._group_identify(event, envelope, common, INSTALLATION_GROUP, installation_id, {"name": name})
+            )
+        if identify_organization and organization_id is not None:
+            messages.append(
+                self._group_identify(
+                    event, envelope, common, ORGANIZATION_GROUP, str(organization_id), {"is_trial": is_trial}
+                )
+            )
+        return messages
+
+    @staticmethod
+    def _group_identify(
+        event: DomainEventEnvelope,
+        envelope: dict[str, Any],
+        common: dict[str, Any],
+        group_type: str,
+        group_key: str,
+        group_set: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            **envelope,
+            "event": "$groupidentify",
+            "uuid": str(uuid5(event.event_id, group_type)),
+            "properties": {**common, "$group_type": group_type, "$group_key": group_key, "$group_set": group_set},
+        }
 
     @staticmethod
     def _event_fields(event: DomainEventEnvelope) -> dict[str, Any]:
