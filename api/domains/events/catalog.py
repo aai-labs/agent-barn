@@ -732,13 +732,16 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_scope=EventScope.ORGANIZATION,
         )
     )
-    for event_name in (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, ORGANIZATION_LLM_BUDGET_EXHAUSTED):
+    for event_name, handler_names in (
+        (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,)),
+        (ORGANIZATION_LLM_BUDGET_EXHAUSTED, (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER)),
+    ):
         registry.register(
             DomainEventDefinition(
                 event_name=event_name,
                 schema_version=1,
                 payload_model=OrganizationLlmBudgetPayload,
-                handler_names=(ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,),
+                handler_names=handler_names,
                 event_scope=EventScope.ORGANIZATION,
             )
         )

@@ -38,11 +38,30 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: `organization.created`, `organization.updated`, `organization.deleted`, `user.logged_in`, `user.signed_up`.
 - Also delivered: hourly message counts (CronJob).
 - Also delivered (AF-374, trial funnel): every Organization-scoped event carries `is_trial`, and the `organization` group gets `$group_set: {is_trial}`.
-- In progress (AF-374): credit exhaustion, Google sign-in, onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
+- Also delivered (AF-374): `organization.llm_budget.exhausted` reaches PostHog, attributed to the Organization's creator.
+- In progress (AF-374): Google sign-in, onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
 - Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-15 — AF-374 — Credit exhaustion reaches PostHog
+
+- Delivered: `organization.llm_budget.exhausted` now also lists `product_analytics.posthog`. `organization.llm_budget.threshold_reached` stays email-only.
+- The event's actor is the System budget-alert job, so the handler makes one exception to its human-actor rule:
+  - It is sent as the Organization's `created_by_user_id`, with the organization group, `is_trial`, and `limit_usd`.
+  - Spend, threshold, renewal time and the Organization name are not sent.
+  - An Organization that is gone, or that has no recorded creator, is skipped.
+- The handler now reads the Organization once per event, and uses it for both the creator and `is_trial`.
+- Changed: `events/catalog.py` (exhausted gets both handlers), `analytics/event_handlers.py`, `product-analytics.md` (attribution invariant, events table), `domain-events.md`, `costs.md`.
+- Verified:
+  - New handler tests:
+    - sent as the creator with the allowlisted fields only
+    - no creator is skipped
+    - a reached threshold is not sent
+  - New wiring rows: exhausted → email + analytics, threshold → email. Both are in the "every handler is registered" loop, with the email handler added to the test registry.
+  - 2 of these tests failed before the change.
+  - Handler, wiring, message-count, organization-event, `test_organization_llm.py` and `test_outbox_messages.py` suites pass (198). Ruff and ty are clean.
 
 ### 2026-10-15 — AF-374 — Trial flag on Organization events
 

@@ -17,6 +17,7 @@ from api.domains.events.catalog import (
     AGENT_UPDATED,
     ORGANIZATION_CREATED,
     ORGANIZATION_DELETED,
+    ORGANIZATION_LLM_BUDGET_EXHAUSTED,
     ORGANIZATION_MEMBER_ADDED,
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_OWNERSHIP_TRANSFERRED,
@@ -33,6 +34,7 @@ from api.domains.events.handlers import (
     TerminalEventHandlerError,
 )
 from api.domains.events.models import ActorIdentityType, DomainEventEnvelope
+from api.domains.organizations.models import Organization
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.models import User
 from api.domains.users.organization_users.repository import OrganizationUserRepository
@@ -59,6 +61,7 @@ _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     ORGANIZATION_CREATED: (),
     ORGANIZATION_UPDATED: ("changed_fields",),
     ORGANIZATION_DELETED: (),
+    ORGANIZATION_LLM_BUDGET_EXHAUSTED: ("limit_usd",),
     USER_LOGGED_IN: ("method",),
     USER_SIGNED_UP: (),
     ORGANIZATION_MEMBER_ADDED: ("membership_id", "role"),
@@ -67,6 +70,7 @@ _EVENT_FIELDS: dict[str, tuple[str, ...]] = {
     ORGANIZATION_OWNERSHIP_TRANSFERRED: ("previous_owner_membership_id", "new_owner_membership_id"),
 }
 _HUMAN_ACTORS = frozenset({ActorIdentityType.MEMBERSHIP, ActorIdentityType.USER})
+_ORGANIZATION_CREATOR_EVENTS = frozenset({ORGANIZATION_LLM_BUDGET_EXHAUSTED})
 
 
 def installation_name(config: Config, installation_id: UUID | str) -> str:
@@ -109,9 +113,12 @@ class ProductAnalyticsHandler:
     def handle(self, event: DomainEventEnvelope, context: EventDeliveryContext) -> None:
         if not self.config.is_analytics_enabled:
             return
-        if event.actor.type not in _HUMAN_ACTORS:
+        if event.actor.type not in _HUMAN_ACTORS and not self._is_organization_creator_event(event):
             return
-        user = self._resolve_user(event, event.organization_id)
+        organization = (
+            self.organization_repository.get(event.organization_id) if event.organization_id is not None else None
+        )
+        user = self._resolve_user(event, organization)
         if user is None:
             logger.info(
                 "Product analytics skipped: event_id=%s event_name=%s reason=actor_not_found",
@@ -121,7 +128,7 @@ class ProductAnalyticsHandler:
             return
 
         try:
-            self._send_messages(event, user)
+            self._send_messages(event, user, organization)
         except RetryablePostHogException as exc:
             if context.attempt_count < MAX_DELIVERY_ATTEMPTS:
                 raise RetryableEventHandlerError(str(exc)) from exc
@@ -135,8 +142,8 @@ class ProductAnalyticsHandler:
         except TerminalPostHogException as exc:
             raise TerminalEventHandlerError(str(exc)) from exc
 
-    def _send_messages(self, event: DomainEventEnvelope, user: User) -> None:
-        is_trial = self._is_trial(event.organization_id)
+    def _send_messages(self, event: DomainEventEnvelope, user: User, organization: Organization | None) -> None:
+        is_trial = organization.is_trial if organization is not None else None
         identify_organization = is_trial is not None and self._organization_needs_identify(
             event.organization_id, is_trial
         )
@@ -156,12 +163,6 @@ class ProductAnalyticsHandler:
         )
         self._remember_organization_trial(event.organization_id, is_trial, identify_organization)
 
-    def _is_trial(self, organization_id: UUID | None) -> bool | None:
-        if organization_id is None:
-            return None
-        organization = self.organization_repository.get(organization_id)
-        return organization.is_trial if organization is not None else None
-
     def _organization_needs_identify(self, organization_id: UUID | None, is_trial: bool) -> bool:
         with self._organization_trials_lock:
             return self._identified_organization_trials.get(organization_id) != is_trial
@@ -177,7 +178,14 @@ class ProductAnalyticsHandler:
     def _installation_name(self) -> str:
         return installation_name(self.config, self.installation_repository.get_id())
 
-    def _resolve_user(self, event: DomainEventEnvelope, organization_id: UUID | None) -> User | None:
+    @staticmethod
+    def _is_organization_creator_event(event: DomainEventEnvelope) -> bool:
+        return event.actor.type == ActorIdentityType.SYSTEM and event.event_name in _ORGANIZATION_CREATOR_EVENTS
+
+    def _resolve_user(self, event: DomainEventEnvelope, organization: Organization | None) -> User | None:
+        if self._is_organization_creator_event(event):
+            creator_id = organization.created_by_user_id if organization is not None else None
+            return self.user_repository.get(creator_id) if creator_id is not None else None
         actor_id = _as_uuid(event.actor.id)
         if actor_id is None:
             return None
@@ -186,9 +194,11 @@ class ProductAnalyticsHandler:
         if event.event_name == ORGANIZATION_MEMBER_REMOVED and actor_id == _as_uuid(event.payload.get("membership_id")):
             leaver_id = _as_uuid(event.payload.get("user_id"))
             return self.user_repository.get(leaver_id) if leaver_id is not None else None
-        if organization_id is None:
+        if event.organization_id is None:
             return None
-        member = self.organization_user_repository.get_member_with_user_by_membership_id(actor_id, organization_id)
+        member = self.organization_user_repository.get_member_with_user_by_membership_id(
+            actor_id, event.organization_id
+        )
         return member[1] if member is not None else None
 
     def _messages(

@@ -12,7 +12,9 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 - **On switch.** Analytics is on by default when a project token is set; `ANALYTICS_ENABLED=false` opts out. A blank `ANALYTICS_ENABLED` counts as off in Config; Helmfile treats blank as unset and uses the on default. When it is off, the handler completes every delivery without sending anything. Config, Helm, Helmfile, and deployment installs default it to on. Staging and local development stacks report to the real project too: staging under its own `installation_name`, local stacks as `installation_environment=local`. Only tests turn it off. Per-deployment defaults and the opt-out are in [`../guidelines/operations.md`](../guidelines/operations.md#product-analytics).
 - **Who an event is attributed to.**
-  - Only events with a human actor (Membership or User) are sent. System and Runtime actors are skipped. The one exception is hourly message counts (see [Message counts](#message-counts)), which have no person and are attributed to the Installation.
+  - Only events with a human actor (Membership or User) are sent. System and Runtime actors are skipped, with two exceptions:
+    - Hourly message counts (see [Message counts](#message-counts)) have no person and are attributed to the Installation.
+    - `organization.llm_budget.exhausted`, raised by the budget-alert job as a System actor, is attributed to the Organization's creator (`created_by_user_id`), so running out of trial credit lands on the trial user's timeline. It is skipped when the Organization is gone or has no recorded creator.
   - `distinct_id` is the acting user's UUID.
   - A Membership actor is resolved only within the event's Organization.
   - A member who removed themselves is attributed through the event's `user_id`.
@@ -60,6 +62,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `organization.created` | none (the creator is the person; for `POST /platform/users`, the Platform Administrator) |
 | `organization.updated` | `changed_fields` (`name` and/or `description`; field names only, never values) |
 | `organization.deleted` | none (the Owner who deleted it is the person; sent after the Organization and its Memberships are gone) |
+| `organization.llm_budget.exhausted` | `limit_usd`; the Organization's creator is the person. Sent once per budget window when spend reaches the limit; a trial's one-off credit running out is this event with `is_trial = true`. `organization.llm_budget.threshold_reached` is not sent |
 | `user.logged_in` | `method` (`password`); platform-scoped, so installation group only. Failed logins, token refresh and API-key requests are not logins |
 | `user.signed_up` | none; platform-scoped. Public signup is disabled, so this is the first invite acceptance (`POST /auth/set-password` on a user whose email is not yet verified). Known gap: an invitee who first gets in through forgot-password never emits it |
 

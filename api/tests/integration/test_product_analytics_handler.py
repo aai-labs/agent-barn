@@ -15,6 +15,8 @@ from api.domains.events.catalog import (
     AGENT_UPDATED,
     API_KEY_CREATED,
     ORGANIZATION_CREATED,
+    ORGANIZATION_LLM_BUDGET_EXHAUSTED,
+    ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED,
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_ROLE_CHANGED,
     PRODUCT_ANALYTICS_HANDLER,
@@ -631,3 +633,81 @@ def test_a_deleted_organization_sends_no_trial_flag_and_no_organization_identify
 
         assert_that(posthog.batches[0][0]["properties"], is_not(has_key("is_trial")))
         assert_that(_identifies(posthog.batches[0], "organization"), equal_to([]))
+
+
+def _created_by(context, user_id) -> None:
+    organizations = context.injector.get(OrganizationRepository)
+    organization = organizations.get(context.organization.id)
+    organization.created_by_user_id = user_id
+    organizations.save(organization)
+
+
+def _budget_event(context, event_name: str = ORGANIZATION_LLM_BUDGET_EXHAUSTED) -> DomainEventEnvelope:
+    return _envelope(
+        context,
+        event_name,
+        {
+            "organization_id": str(context.organization.id),
+            "threshold_percent": 100,
+            "spend_usd": 10.25,
+            "limit_usd": 10.0,
+            "renews_at": None,
+            "subject_display": "Secret Organization Name",
+        },
+        ActorIdentity(type=ActorIdentityType.SYSTEM, id="llm-budget-alerts"),
+    )
+
+
+def test_exhausted_credit_is_sent_as_the_organization_creator():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        _created_by(context, context.user.id)
+        _set_trial(context, True)
+        event = _budget_event(context)
+
+        _handle(context, event)
+
+        capture = posthog.batches[0][0]
+        assert_that(
+            capture,
+            has_entries(
+                {
+                    "event": ORGANIZATION_LLM_BUDGET_EXHAUSTED,
+                    "distinct_id": str(context.user.id),
+                    "uuid": str(event.event_id),
+                }
+            ),
+        )
+        assert_that(
+            capture["properties"],
+            has_entries(
+                {
+                    "limit_usd": 10.0,
+                    "is_trial": True,
+                    "organization_id": str(context.organization.id),
+                }
+            ),
+        )
+        assert_that(capture["properties"]["$groups"], has_entries({"organization": str(context.organization.id)}))
+        for key in ("spend_usd", "threshold_percent", "renews_at", "subject_display"):
+            assert_that(capture["properties"], is_not(has_key(key)))
+
+
+def test_exhausted_credit_of_an_organization_without_a_creator_is_skipped():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        _created_by(context, None)
+
+        _handle(context, _budget_event(context))
+
+        assert_that(posthog.batches, equal_to([]))
+
+
+def test_a_reached_budget_threshold_is_not_sent():
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        _created_by(context, context.user.id)
+
+        _handle(context, _budget_event(context, ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED))
+
+        assert_that(posthog.batches, equal_to([]))

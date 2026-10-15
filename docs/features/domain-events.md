@@ -101,7 +101,7 @@ These events carry scoped resource IDs, lifecycle status, attempt/error metadata
 
 RBAC, Platform Privilege, and the AF-167 events above are intended for the `security_audit.projection` Event Handler, which persists deletion-independent Security Audit Records. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
-`agent.created`, `agent.updated`, `agent.started`, `agent.stopped`, `agent.deleted`, `organization.member.added`, `organization.member.removed`, `organization.role.changed`, and `organization.ownership_transferred` are also intended for the `product_analytics.posthog` Event Handler. That handler forwards them to PostHog when analytics is enabled. See [`product-analytics.md`](product-analytics.md).
+`agent.created`, `agent.updated`, `agent.started`, `agent.stopped`, `agent.deleted`, `organization.member.added`, `organization.member.removed`, `organization.role.changed`, `organization.ownership_transferred`, and `organization.llm_budget.exhausted` are also intended for the `product_analytics.posthog` Event Handler. That handler forwards them to PostHog when analytics is enabled. See [`product-analytics.md`](product-analytics.md).
 
 ## Delivery worker contract
 

@@ -29,6 +29,9 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
     ORGANIZATION_CREATED,
     ORGANIZATION_DELETED,
+    ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,
+    ORGANIZATION_LLM_BUDGET_EXHAUSTED,
+    ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED,
     ORGANIZATION_MEMBER_ADDED,
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
@@ -48,6 +51,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.security_audit import SecurityAuditProjection
+from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
 
 
 def _build_production_handler_registry() -> EventHandlerRegistry:
@@ -55,6 +59,7 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
         [
             AgentLifecycleEmailHandler(repository=Mock(), email_service=Mock()),
             SecurityAuditProjection(repository=Mock()),
+            OrganizationBudgetEmailHandler(repository=Mock(), email_service=Mock()),
             ProductAnalyticsHandler(
                 config=Mock(),
                 installation_repository=Mock(),
@@ -84,6 +89,8 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
         (ORGANIZATION_MEMBER_REMOVED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (ORGANIZATION_ROLE_CHANGED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (ORGANIZATION_OWNERSHIP_TRANSFERRED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
+        (ORGANIZATION_LLM_BUDGET_EXHAUSTED, {ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
+        (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, {ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER}),
         (AGENT_ACCESS_GRANTED, {SECURITY_AUDIT_HANDLER}),
         (TEMPLATE_CREATED, {SECURITY_AUDIT_HANDLER}),
     ],
@@ -129,6 +136,8 @@ def test_every_catalog_handler_name_has_a_registered_handler():
         COMMUNICATION_DELIVERY_DEAD_LETTERED,
         COMMUNICATION_DELIVERY_RETRY_REQUESTED,
         COMMUNICATION_DELIVERY_RECOVERED,
+        ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED,
+        ORGANIZATION_LLM_BUDGET_EXHAUSTED,
     ):
         for handler_name in EVENT_REGISTRY.handler_names_for(event_name, 1):
             assert_that(handlers.supports(handler_name, event_name, 1), is_(True))
