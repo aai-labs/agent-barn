@@ -23,6 +23,7 @@ from api.tests.steps.google_sign_in import (
     google_returns,
     redirect_target,
 )
+from api.tests.steps.onboarding import trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization
 from api.tests.steps.user import there_is_a_user
 
@@ -34,7 +35,6 @@ def _setup(*steps):
         set_env_variable(
             {
                 "WEB_APP_URL": WEB_APP_URL,
-                "SELF_SIGNUP_ENABLED": "true",
                 "AGENTBARN_TELEGRAM_BOT_TOKEN": "424242:the-shared-bot-token",
                 "AGENTBARN_TELEGRAM_BOT_USERNAME": "AgentBarnTestBot",
             }
@@ -44,6 +44,7 @@ def _setup(*steps):
         create_test_client(),
         database_repo_is_ready(),
         database_is_clean(),
+        trial_settings_are_configured(),
         *steps,
     ]
 

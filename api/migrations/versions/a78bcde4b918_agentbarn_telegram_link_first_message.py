@@ -1,7 +1,7 @@
 """agentbarn telegram link first message
 
 Revision ID: a78bcde4b918
-Revises: b3d8e1f4a6c2
+Revises: d72b85f19c40
 Create Date: 2026-10-15 12:00:00.000000
 
 When a linked Telegram user's first message was accepted for their Agent, so product
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a78bcde4b918"
-down_revision: str | Sequence[str] | None = "b3d8e1f4a6c2"
+down_revision: str | Sequence[str] | None = "d72b85f19c40"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

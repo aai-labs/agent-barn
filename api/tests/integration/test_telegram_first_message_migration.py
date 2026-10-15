@@ -19,7 +19,7 @@ from sqlmodel import SQLModel
 import api.domains.communications.models  # noqa: F401
 from api.core.config import get_config
 
-PREVIOUS_REVISION = "b3d8e1f4a6c2"
+PREVIOUS_REVISION = "d72b85f19c40"
 REVISION = "a78bcde4b918"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 CREATED_AT = datetime(2026, 10, 7, 9, 30, tzinfo=UTC)

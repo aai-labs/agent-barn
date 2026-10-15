@@ -16,6 +16,7 @@ from api.tests.core.givenpy import given
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.google_sign_in import GOOGLE_EMAIL, WEB_APP_URL, FakeGoogleIdentityModule, finish_google_sign_in
+from api.tests.steps.onboarding import trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 
 COMPLETE = "/api/v1/onboarding/complete"
@@ -26,7 +27,6 @@ def _setup(*steps):
         set_env_variable(
             {
                 "WEB_APP_URL": WEB_APP_URL,
-                "SELF_SIGNUP_ENABLED": "true",
                 "AGENTBARN_TELEGRAM_BOT_TOKEN": "424242:the-shared-bot-token",
                 "AGENTBARN_TELEGRAM_BOT_USERNAME": "AgentBarnTestBot",
             }
@@ -36,6 +36,7 @@ def _setup(*steps):
         create_test_client(),
         database_repo_is_ready(),
         database_is_clean(),
+        trial_settings_are_configured(),
         *steps,
     ]
 
