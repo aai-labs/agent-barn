@@ -1,5 +1,69 @@
 # Agents
 
+The Home page shows a single first-Agent panel when the user's visible team is empty,
+with example use cases and direct ready-made/custom hiring choices. Once
+Agents exist, Home shows the Agent grid and its hire tile. Home owns its hire entry
+point; the top navigation keeps its hire action on other Organization pages.
+
+## Hiring choices
+
+For active Trial Organizations, general **Hire agent** entry points offer
+**Ready-made assistant** and **Build your own**, including after onboarding is
+complete and when the Organization already has Agents. Neither option is preselected; **Continue** requires an explicit choice. The empty dashboard's two explicit buttons open their respective setup
+directly after the capacity check, without asking the user to choose again.
+Ready-made hiring is offered only while the Organization is on a trial. For ordinary
+Organizations, including after a trial ends, every hiring entry point opens
+**Build your own agent** directly, and the empty dashboard shows only that action.
+Existing ready-made Agents and their Telegram linking remain available after a trial ends.
+Opening or cancelling the chooser or ready-made confirmation creates nothing.
+Build your own opens the existing runtime/template/model/Skill form. Ready-made
+first explains the assistant's purpose, General Purpose Template, Hermes runtime,
+and Organization default model. Only **Hire assistant** creates and starts a new
+Agent with automatic command approval, even when the Organization already has
+Agents. Both paths use ordinary scoped Agent create/start APIs and retain their
+validation and Agent authorization. A failed start retries the newly created Agent
+within the same dialog.
+The hiring modal and onboarding share the same Hermes/OpenClaw segmented runtime
+control, including keyboard selection and disabled behavior during submission.
+
+The ready-made path creates its Agent Barn Telegram Connection before startup,
+then reuses onboarding's Telegram preparation, QR code, link-status polling,
+expiry recovery, and completion screens inside a dashboard dialog. Retrying setup
+retains the created Agent and reads existing Connections before creating one, so a
+lost Connection response does not duplicate it. Setup reads the Agent's current
+status before starting and skips start when it is already running, including after
+a lost start response. Telegram is optional: users can
+skip linking and go directly to Web Chat. This path does not reopen or modify
+onboarding completion.
+
+The Agent detail page shows **Finish connecting Telegram** for an enabled Agent
+Barn Telegram Connection with no linked accounts, including after a refresh or a
+closed setup dialog. Members with `agent.update` can reopen the same QR/linking
+screen using **Connect Telegram**. This links the existing Connection and never
+creates or starts an Agent. A stopped Agent must first be started through its
+lifecycle controls; linked Connections do not show the reminder. Skipping returns
+to the detail page's Web Chat tab.
+
+Before setup begins, a Trial Organization's current read must succeed. Its
+`trial_agent_limit_reached` flag reports creation capacity across non-deleted Agents,
+including stopped Agents and ones hidden from this member; it exposes neither their
+identities nor an unfiltered Agent count. When full, both choices stay visible and
+disabled, with the limit explained and **View your agents** as the action. The notice
+states that deleting an Agent frees a slot and stopping one does not. A failed capacity
+check offers retry and keeps both choices disabled. Creation still enforces the quota
+under the existing database lock, including when capacity changes after the check.
+Creating or deleting an Agent invalidates the Organization read as well as Agent lists.
+
+## Messaging connection choices
+
+The general Messaging picker offers users' own Telegram bots and other supported
+platforms. Agent Barn Telegram is reserved for ready-made setup and is excluded
+from this picker; existing shared-bot Connections can still be managed and linked.
+An Agent has one Telegram adapter, so either Telegram Connection type hides
+Telegram from the add picker, including when disabled. Deleting the existing
+Connection frees that choice. The API/database independently reject conflicting
+Telegram types; picker filtering does not replace that enforcement.
+
 ## Read when
 
 Read before changing agent creation, Agent Access Roles, explicit Agent Access assignments, Agent General Access, lifecycle, runtime or platform selection, template pinning, Agent Template Overrides, model selection, skill assignment, credentials, logs, health, Agent Restore Points, or Kubernetes resources.
@@ -23,6 +87,7 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - Agent Webhooks are Agent-subordinate machine-ingress resources, separate from Platforms and Communication Connections. Their configuration follows Agent read/update/secret authority, while invocation content follows activity-read authority. See [`agent-webhooks.md`](agent-webhooks.md).
 - The Dashboard Web Chat composer accepts new messages only while the Agent is `RUNNING` and its health status is `ok` (shown as Working). A thread remains visibly awaiting a reply while its latest durable inbound Communication Delivery is `PENDING` or `PROCESSING`, so the working indicator survives tab navigation and page remounts until an outbound reply arrives or the user stops generation. Stop is durable and suppresses late replies for both runtimes; neither pinned runtime currently exposes a proven abort handle for this chat-completions path, so the product does not promise compute interruption. A Web Chat message that is a command-approval prompt exposes its `approval` (identity, command and offered choices), read from its outbound delivery, and renders one button per offered choice; clicking one sends that choice with the `approval_id` it answers. Answering requires the same Agent update permission as any send, and the buttons are not shown without it. A stored approval that no longer validates is omitted rather than failing the thread.
 - Command approval is currently Hermes-only: the persisted `approval_mode` field maps onto the Hermes runtime's approval policy. OpenClaw has no user-configurable command-approval control, so create/update reject an explicit non-default `approval_mode` for an OpenClaw Agent (HTTP 400) rather than silently ignoring it, and reads report the effective `AUTO` default for OpenClaw regardless of the stored value. OpenClaw command approval is deferred to a future task.
+- The turn limit is Hermes-only for the same reason. `max_turns` caps how many turns one run may take before the runtime stops it; null follows the platform default, `HERMES_DEFAULT_MAX_TURNS` in the Hermes builder, which reads expose as `effective_max_turns` next to the Agent's own `max_turns`. The value is bounded (1 to 500). Create, update, and template selection reject a value for an OpenClaw Agent (HTTP 400), and reads report null for OpenClaw regardless of the stored value. Sending `max_turns: null` on update returns the Agent to the default, as `model: null` does for the model. A change takes effect at the next start, like every other runtime setting.
 - Answering a Hermes approval prompt with `always` is permanent: the pattern is retained across Agent restarts and is not re-prompted. It covers the whole category of command, not the one command shown. Manual mode ignores these grants and asks for every flagged command, offering only `once` and `deny`; the grants return when the Agent leaves manual mode, and removing one is permanent. Scheduled and heartbeat runs have no one to prompt, so a dangerous command reached from cron or the heartbeat is denied rather than parked; a `BOOT.md` command is parked until it times out, so startup work should avoid flagged commands. See [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - Persisted lifecycle states are `STOPPED`, `RUNNING`, and `ERROR`.
 - A provisioning failure is normalized before it is persisted or returned. Every failed start is classified into one bounded category (quota exhaustion, cluster RBAC denial, rejected manifest, unreachable cluster, or an unclassified failure) whose user-facing copy is a property of that category, not of the cluster's text. That copy states what the reader can do: a failure only an administrator can clear says so, and one worth retrying says to try again. Image-pull and retryable container-configuration failures remain Kubernetes observations rather than persisted provisioning failures: Kubernetes accepts a Deployment naming an image that cannot be pulled and fails it later on the pod, which the health surface reports, while each resource creation resolves a leftover-object 409 by reading the existing object. For provisioned or ready integration generations, detail and health reads can reconcile an actual runtime exit (`CrashLoopBackOff` or a Failed pod with a terminated runtime container) into a durable startup failure under the lifecycle lock. Image-pull and container-configuration retries remain provisioned/unverified and keep their deployment. Agents without integration bindings retain their existing health-only reporting. See the [integration readiness and recovery contract](integrations.md#restart-and-recovery). Raw Kubernetes text never reaches a client: the only variable part is a bounded `detail` rebuilt from allowlisted resource names and quantities in a complete quota format. Quota names and unfamiliar formats are omitted; stored details must match the same category-specific grammar, so credentials, Secret values, tokens, and kubeconfig content cannot be exposed. The full exception stays in the API logs.
@@ -30,7 +95,7 @@ An Agent is the central execution aggregate. It connects organization tenancy, a
 - An Agent's model is either inherited or overridden. An empty `model` means the Agent follows its Organization's default runtime model, resolved at every start; a non-empty `model` is an explicit override that no default change touches. Agent read DTOs expose `model_source` and the resolved `effective_model` so no client re-derives this. Sending `model: null` on update clears an override and returns the Agent to the default. See [`agent-settings.md`](agent-settings.md).
 - A running Agent reports whether the platform has moved on beneath it. `running_config_digest` records the digest of the code and runtime images the Agent's pod was actually built from, and `update_available` is true when a running Agent's recorded digest differs from what the API would build now. The signal is advisory: it blocks no operation, changes no Agent behaviour, and clears when the Agent restarts. It covers platform-authored code and runtime images only, so the Agent's own configuration keeps its existing surfaces — `pending_model`, Template `source_update`, and the Skill-level `update_available` are unaffected. An Agent already running before its digest was first recorded reports an available update, because its pod genuinely predates the record. See [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - The start-time model allowlist re-check applies only to Agents carrying an explicit override. An inheriting Agent runs Organization policy: its Organization's own default is held inside the allowlist by invariant, and a platform default it may instead be following is outside any Organization's control.
-- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram and Discord agents require a bot token. Native Telegram answers group messages only when the bot is mentioned or replied to, and answers DMs without a mention. Runtime-owned Teams keeps its Azure messaging endpoint on Agent Barn: the authenticated relay applies the Connection's DM/channel policy and forwards accepted activities to the private runtime listener. Discord bots must enable Message Content Intent; bots using role-based access must also enable Server Members Intent so native admission can establish membership. Discord uses Hermes' native user, role, and channel gates: access is closed unless an allowlist matches or Allow all users is enabled. User allowlists apply in DMs and server messages; role and channel allowlists apply in server messages. It has no separate guild or DM policy switches.
+- Slack agents require bot and app tokens. Teams agents require app ID, app password, and tenant ID. Telegram and Discord agents require a bot token. Agent Barn Telegram agents use Agent Barn's own shared bot and need no token; an Agent holds either Telegram type, never both. Native Telegram answers group messages only when the bot is mentioned or replied to, and answers DMs without a mention. Runtime-owned Teams keeps its Azure messaging endpoint on Agent Barn: the authenticated relay applies the Connection's DM/channel policy and forwards accepted activities to the private runtime listener. Discord bots must enable Message Content Intent; bots using role-based access must also enable Server Members Intent so native admission can establish membership. Discord uses Hermes' native user, role, and channel gates: access is closed unless an allowlist matches or Allow all users is enabled. User allowlists apply in DMs and server messages; role and channel allowlists apply in server messages. It has no separate guild or DM policy switches.
 - Agents apply their Connection policy in shared channels and groups. Slack exposes every-message and start-only thread mention policies; Telegram accepts a mention or reply to the bot in groups, with DMs exempt. Native admission configuration is generated at start, while Teams policy remains at the authenticated public relay; see [`../architecture/runtime-and-deployment.md`](../architecture/runtime-and-deployment.md).
 - Each active Slack or Discord agent must use a distinct bot token within its platform (enforced globally); creating or updating with a duplicate returns 409. Deleting an agent releases its token for reuse.
 - Platform is not changed through agent update. Runtime/platform compatibility is schema-validated.
@@ -196,7 +261,7 @@ Restore first captures the current volume as a Pre-Restore Restore Point, then v
 
 Two consequences are worth stating plainly. The runtime's own session history lives on the volume and rolls back with it, while Agent Barn's conversation record does not — after a restore the product's history is ahead of the runtime's, which is correct because the product record is the audit trail. And deleting an Agent destroys its restore points irreversibly even though the Agent row itself is only soft-deleted, so deletion is the one path this feature cannot undo.
 
-Each Restore Point also records the Agent's pins at capture time — template pin, model, command approval, verbose mode, and skill version pins — in a versioned, display-oriented configuration manifest. The manifest never holds credentials. It records the template pin's scope (platform, organization, or Agent-owned override) rather than the display pin type, because an Organization fork shares its platform lineage's template key and restarts its own version numbering, so scope is what separates two pins that otherwise read alike. Manifest version 1 predates the template and skill pins; a Restore Point carrying one reports those fields as unrecorded, which is not the same as recorded-and-empty, and cannot be replayed.
+Each Restore Point also records the Agent's pins at capture time — template pin, model, command approval, verbose mode, turn limit, and skill version pins — in a versioned, display-oriented configuration manifest. The manifest never holds credentials. It records the template pin's scope (platform, organization, or Agent-owned override) rather than the display pin type, because an Organization fork shares its platform lineage's template key and restarts its own version numbering, so scope is what separates two pins that otherwise read alike. Manifest version 1 predates the template and skill pins; a Restore Point carrying one reports those fields as unrecorded, which is not the same as recorded-and-empty, and cannot be replayed. The turn limit arrived within version 2 as an optional key: a manifest without it reports the limit as unrecorded and leaves the Agent's limit alone on replay, while a recorded null replays as the platform default.
 
 A restore point's status is resolved by reading it, and also on a schedule, so a capture nobody watches still reaches a terminal state and still gives its volume back. The scheduled pass also applies a configuration replay a restore still owes, and deletes restore point volumes and Jobs that no row owns — matching each back to its row through a label, or through the resource's own name when that label is absent, because the stored Job name is cleared once a row goes terminal. Because it deletes storage from a comparison rather than from an instruction, it leaves recently created resources alone, caps how much it removes per run, refuses to delete anything it cannot positively identify, and fails no rows when the listing it compares against is empty or failed.
 

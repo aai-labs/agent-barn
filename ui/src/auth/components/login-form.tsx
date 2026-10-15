@@ -6,11 +6,22 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 
+import { AuthField, AuthFrame } from "@/auth/components/auth-frame";
 import { useAuthActions } from "@/auth/hooks/use-auth-actions";
 import { LoginFormData, LoginSchema } from "@/auth/schemas";
-import { LogoMark } from "@/components/logo-mark";
+import { GoogleSignInButton, SignInError } from "@/features/onboarding/components/google-sign-in";
 
-export function LoginForm() {
+/**
+ * The one front door, at /login and /signup: Google signs anyone in (and signs someone new
+ * up for a trial); a password logs in an existing account.
+ */
+export function LoginForm({
+  signInError,
+  origin,
+}: {
+  signInError?: string | null;
+  origin: "login" | "signup";
+}) {
   const router = useRouter();
   const { login, isLoggingIn } = useAuthActions();
   const {
@@ -36,93 +47,54 @@ export function LoginForm() {
     });
   };
 
-  const onFormKeyDown = (event: React.KeyboardEvent<HTMLFormElement>) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void handleSubmit(onSubmit)();
-    }
-  };
-
   return (
-    <div className="w-full max-w-sm">
-      <div
-        className="rounded-2xl px-8 py-9"
-        style={{ background: "var(--bg-elev)", border: "1px solid var(--line)", boxShadow: "var(--shadow)" }}
-      >
-        <div className="text-center mb-7">
-          <div className="flex justify-center mb-4">
-            <LogoMark size={36} />
-          </div>
-          <h1 className="text-[22px] font-semibold tracking-tight m-0 mb-1" style={{ color: "var(--ink)" }}>
-            Welcome back
-          </h1>
-          <p className="text-[13.5px] m-0" style={{ color: "var(--ink-3)" }}>
-            Enter your credentials to continue.
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit(onSubmit)} onKeyDown={onFormKeyDown}>
-          <div className="flex flex-col gap-4">
-            <div>
-              <label className="block font-medium text-[13.5px] mb-1.5" style={{ color: "var(--ink)" }}>
-                Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                placeholder="you@example.com"
-                className="af-input"
-                aria-invalid={!!errors.email}
-                {...register("email")}
-              />
-              {errors.email && (
-                <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
-                  {errors.email.message}
-                </p>
-              )}
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="font-medium text-[13.5px]" style={{ color: "var(--ink)" }}>
-                  Password
-                </label>
-                <Link href="/forgot-password" className="text-[12.5px]" style={{ color: "var(--accent-ink)" }}>
-                  Forgot password?
-                </Link>
-              </div>
-              <input
-                id="password"
-                type="password"
-                className="af-input"
-                aria-invalid={!!errors.password}
-                {...register("password")}
-              />
-              {errors.password && (
-                <p className="text-[12.5px] mt-1" style={{ color: "var(--err)" }}>
-                  {errors.password.message}
-                </p>
-              )}
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoggingIn}
-              className="af-btn af-btn-primary af-btn-lg w-full justify-center mt-1"
-            >
-              {isLoggingIn ? "Logging in…" : "Log in"}
-            </button>
-          </div>
-        </form>
-
+    <AuthFrame title="Welcome to Agent Barn" subtitle="Log in, or sign up with Google to start a free trial.">
+      <div className="flex flex-col gap-2.5">
+        <SignInError code={signInError} />
+        <GoogleSignInButton origin={origin} />
       </div>
 
-      <p className="text-center text-[12.5px] mt-5 px-4" style={{ color: "var(--ink-4)" }}>
-        By continuing, you agree to our{" "}
-        <Link href="#" style={{ color: "var(--ink-3)" }}>Terms of Service</Link>
-        {" "}and{" "}
-        <Link href="#" style={{ color: "var(--ink-3)" }}>Privacy Policy</Link>.
-      </p>
-    </div>
+      <div className="my-5 flex items-center gap-3 text-[12px]" style={{ color: "var(--ink-4)" }}>
+        <span className="h-px flex-1" style={{ background: "var(--line)" }} />
+        or log in with your password
+        <span className="h-px flex-1" style={{ background: "var(--line)" }} />
+      </div>
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+        <AuthField id="email" label="Email" error={errors.email?.message}>
+          <input
+            id="email"
+            type="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            className="af-input"
+            aria-invalid={!!errors.email}
+            autoFocus
+            {...register("email")}
+          />
+        </AuthField>
+        <AuthField
+          id="password"
+          label="Password"
+          error={errors.password?.message}
+          aside={
+            <Link href="/forgot-password" className="text-[12.5px]" style={{ color: "var(--accent-ink)" }}>
+              Forgot password?
+            </Link>
+          }
+        >
+          <input
+            id="password"
+            type="password"
+            autoComplete="current-password"
+            className="af-input"
+            aria-invalid={!!errors.password}
+            {...register("password")}
+          />
+        </AuthField>
+        <button type="submit" disabled={isLoggingIn} className="af-btn af-btn-primary af-btn-lg w-full justify-center">
+          {isLoggingIn ? "Logging in…" : "Log in"}
+        </button>
+      </form>
+    </AuthFrame>
   );
 }

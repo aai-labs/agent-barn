@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
+from api.domains.agents.exceptions import TrialAgentLimitReached
 from api.domains.agents.models import (
     MANAGED_UPDATE_STALE_SECONDS,
     Agent,
@@ -264,6 +265,15 @@ class AgentRepository:
         with Session(self.delegate.engine) as session:
             query = select(Agent).where(col(Agent.id) == agent_id).where(col(Agent.deleted_at).is_(None))
             return session.exec(query).first()
+
+    def find_membership_with_user(self, membership_id: UUID) -> tuple[OrganizationUser, User | None] | None:
+        with Session(self.delegate.engine) as session:
+            row = session.exec(
+                select(OrganizationUser, User)
+                .join(User, col(User.id) == col(OrganizationUser.user_id), isouter=True)
+                .where(col(OrganizationUser.id) == membership_id)
+            ).first()
+            return (row[0], row[1]) if row is not None else None
 
     def get_active_in_scope(self, agent_id: UUID, authorization_scope: AuthorizationScope) -> Agent | None:
         with Session(self.delegate.engine) as session:
@@ -876,6 +886,7 @@ class AgentRepository:
         secrets: list[AgentSecret] | None = None,
         skills: list[AgentSkill] | None = None,
         actor_display: str | None = None,
+        agent_limit: int | None = None,
     ) -> AgentLifecycleEventResult:
         """Create an Agent and its initial resources in one transaction.
 
@@ -883,8 +894,23 @@ class AgentRepository:
         Keeping the Agent, access row, initial secrets, skills, and their outbox
         deliveries in one transaction means a failure cannot leave a persisted
         Agent pointing at a key that create-agent compensation has deleted.
+
+        With `agent_limit`, the Organization's live Agents are counted under a lock
+        held to commit, so two concurrent creates cannot both fit under it.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
+            if agent_limit is not None:
+                session.scalar(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+                    {"lock_key": f"agent-limit:{agent.organization_id}"},
+                )
+                live = session.scalar(
+                    select(func.count())
+                    .select_from(Agent)
+                    .where(col(Agent.organization_id) == agent.organization_id, col(Agent.deleted_at).is_(None))
+                )
+                if (live or 0) >= agent_limit:
+                    raise TrialAgentLimitReached(agent_limit)
             session.add(agent)
             session.flush()
             if membership_id is not None:
@@ -1137,6 +1163,7 @@ class AgentRepository:
         "model",
         "approval_mode",
         "verbose_mode",
+        "max_turns",
         "agent_template_id",
         "platform_template_id",
     )

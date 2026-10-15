@@ -57,6 +57,9 @@ class RestorePointConfigManifest(PydanticBaseModel):
     effective_model: str = ""
     approval_mode: str = ""
     verbose_mode: bool = False
+    # None is both "follows the platform default" and "recorded before this field
+    # existed"; selection_from_manifest tells them apart by the key's presence.
+    max_turns: int | None = None
     skills: list[RestorePointSkill] = Field(default_factory=list)
 
 
@@ -91,9 +94,8 @@ def selection_from_manifest(
     skill_ids = [skill.skill_id for skill in parsed.skills]
     skill_versions = [SkillVersionPin(skill_id=skill.skill_id, version=skill.pinned_version) for skill in parsed.skills]
     approval_mode = CommandApprovalMode(parsed.approval_mode) if parsed.approval_mode else None
-
     if parsed.template_selection_type == "override":
-        return AgentTemplateSelection(
+        selection = AgentTemplateSelection(
             selection_type="override",
             override_version=parsed.override_version or parsed.template_version,
             expected_agent_updated_at=expected_agent_updated_at,
@@ -103,19 +105,26 @@ def selection_from_manifest(
             approval_mode=approval_mode,
             verbose_mode=parsed.verbose_mode,
         )
-    if parsed.template_selection_type not in ("platform", "organization"):
+    elif parsed.template_selection_type in ("platform", "organization"):
+        selection = AgentTemplateSelection(
+            selection_type=parsed.template_selection_type,
+            template_key=parsed.template_key,
+            template_version=parsed.template_version,
+            expected_agent_updated_at=expected_agent_updated_at,
+            skill_ids=skill_ids,
+            skill_versions=skill_versions,
+            model=parsed.model or None,
+            approval_mode=approval_mode,
+            verbose_mode=parsed.verbose_mode,
+        )
+    else:
         return None
-    return AgentTemplateSelection(
-        selection_type=parsed.template_selection_type,
-        template_key=parsed.template_key,
-        template_version=parsed.template_version,
-        expected_agent_updated_at=expected_agent_updated_at,
-        skill_ids=skill_ids,
-        skill_versions=skill_versions,
-        model=parsed.model or None,
-        approval_mode=approval_mode,
-        verbose_mode=parsed.verbose_mode,
-    )
+    # A manifest written before the turn limit existed says nothing about it, and
+    # replaying it must not reset a limit the Agent has since been given. Only a
+    # recorded key marks the field as set, which is what the selection acts on.
+    if "max_turns" in manifest:
+        selection = selection.model_copy(update={"max_turns": parsed.max_turns})
+    return selection
 
 
 class AgentRestorePointRead(PydanticBaseModel):

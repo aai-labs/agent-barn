@@ -99,7 +99,8 @@ export function platformIcon(platformKey: string, props: BrandIconProps = {}): R
   switch (platformKey) {
     case "slack": return <SlackIcon {...props} />;
     case "discord": return <DiscordIcon {...props} />;
-    case "telegram": return <TelegramIcon {...props} />;
+    case "telegram":
+    case "agentbarn_telegram": return <TelegramIcon {...props} />;
     case "teams": return <TeamsIcon {...props} />;
     case "email": return <EmailIcon {...props} />;
     default: return null;

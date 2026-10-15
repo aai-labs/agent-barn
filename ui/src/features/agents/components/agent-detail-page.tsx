@@ -29,6 +29,7 @@ import { ActivityTab } from "./activity-tab";
 import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
+import { AgentTelegramSetup } from "./agent-telegram-setup";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
 
 interface AgentDetailPageProps {
@@ -127,6 +128,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   // The built-in Chat tab lazily provisions a "web" Connection on first send so people
   // can try the Agent without setting anything up; it is not a real messaging platform
   // for this nudge.
+  const telegramConnection = connections.data?.find((connection) => connection.platformKey === "agentbarn_telegram" && connection.enabled);
   const externalConnections = connections.data?.filter((connection) => connection.platformKey !== "web");
   const needsMessagingSetup =
     !connections.isPending && externalConnections?.length === 0;
@@ -228,6 +230,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 health?.status === "crashed" ||
                 health?.status === "error") &&
               health?.reason && <AgentHealthErrorBanner reason={health.reason} />
+            )}
+
+            {canManageConnections && telegramConnection && (
+              <AgentTelegramSetup key={telegramConnection.id} agent={agent} connection={telegramConnection} onOpenChat={() => selectTab("chat")} />
             )}
 
             {needsMessagingSetup && (

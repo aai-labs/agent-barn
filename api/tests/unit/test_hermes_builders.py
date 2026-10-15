@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from api.domains.agents.builders import (
+    agentbarn_telegram_env,
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
@@ -10,8 +11,9 @@ from api.domains.agents.builders import (
     native_telegram_env,
     runtime_teams_env,
 )
-from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_START_SH
+from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_DEFAULT_MAX_TURNS, HERMES_START_SH
 from api.domains.communications.models import ConversationLocation
+from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -266,6 +268,22 @@ def test_gateway_config_maps_approval_mode_onto_approvals_policy() -> None:
     assert approvals("off") == {"mode": "off", **policy}
 
 
+def test_gateway_config_caps_turns_at_the_platform_default_unless_the_agent_sets_its_own() -> None:
+    """A run stops at `agent.max_turns`; an Agent reviewing large pull requests
+    needs more than the default, so its own limit replaces it rather than adding to it.
+    """
+    default = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert default["agent"]["max_turns"] == HERMES_DEFAULT_MAX_TURNS == 50
+
+    own = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", max_turns=150)
+    assert own["agent"]["max_turns"] == 150
+
+
+def test_gateway_config_delivers_scheduled_results_without_the_cron_header_and_footer() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert config["cron"] == {"wrap_response": False}
+
+
 def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
     """Auxiliary tasks left on the openrouter lane reach the proxy without the
     agent's key; smart approval then escalates every flagged command to the user.
@@ -405,3 +423,47 @@ def test_deployment_recreates_rather_than_rolling_update() -> None:
 def test_deployment_carries_the_hermes_runtime_label() -> None:
     deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
     assert deployment.metadata.labels["agentbarn.io/runtime"] == "hermes"
+
+
+_AGENTBARN_TELEGRAM = AgentBarnTelegramRuntime(
+    api_root="http://communications:8002/communications/v1/telegram/c0ffee",
+    api_token="424242:stand-in",
+    webhook_secret="derived-secret",
+    webhook_url="http://agent-x.agent-farm.svc.cluster.local:8443/telegram",
+)
+
+
+def test_agentbarn_telegram_points_hermes_at_the_proxy_and_closes_groups() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", agentbarn_telegram=_AGENTBARN_TELEGRAM)
+
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
+    assert config["platforms"]["telegram"]["extra"] == {
+        "base_url": "http://communications:8002/communications/v1/telegram/c0ffee/bot",
+        "base_file_url": "http://communications:8002/communications/v1/telegram/c0ffee/file/bot",
+    }
+    # Linking already admitted the sender; groups are not part of Agent Barn Telegram.
+    assert config["telegram"] == {"unauthorized_dm_behavior": "ignore", "group_allow_from": []}
+    assert config["display"]["platforms"]["telegram"]["tool_progress"] == "off"
+
+
+def test_agentbarn_telegram_keeps_other_hermes_platform_settings() -> None:
+    config = build_hermes_gateway_config(
+        "litellm/gpt-5", "http://litellm:4000", native_slack=True, agentbarn_telegram=_AGENTBARN_TELEGRAM
+    )
+
+    assert config["platforms"]["slack"] == {"extra": {"markdown_blocks": True}}
+    assert "telegram" in config["platforms"]
+
+
+def test_agentbarn_telegram_env_runs_hermes_in_webhook_mode_with_the_stand_in_token() -> None:
+    assert agentbarn_telegram_env(_AGENTBARN_TELEGRAM) == {
+        "TELEGRAM_BOT_TOKEN": "424242:stand-in",
+        "TELEGRAM_ALLOW_ALL_USERS": "true",
+        "TELEGRAM_REQUIRE_MENTION": "true",
+        "TELEGRAM_WEBHOOK_URL": "http://agent-x.agent-farm.svc.cluster.local:8443/telegram",
+        "TELEGRAM_WEBHOOK_PORT": "8443",
+        "TELEGRAM_WEBHOOK_HOST": "0.0.0.0",
+        "TELEGRAM_WEBHOOK_SECRET": "derived-secret",
+        "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
+        "AGENTBARN_SCHEDULED_DELIVERY": "0",
+    }

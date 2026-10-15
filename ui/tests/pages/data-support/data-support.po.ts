@@ -8,6 +8,7 @@ import { CommunicationConnectionDataSupport } from "./communication-connection-d
 import { CostDataSupport } from "./cost-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
 import { KpisDataSupport } from "./kpis-data-support.po";
+import { OnboardingDataSupport } from "./onboarding-data-support.po";
 import { OrganizationDataSupport } from "./organization-data-support.po";
 import { OrgTemplateDataSupport } from "./org-template-data-support.po";
 import { PlatformMemoryDataSupport } from "./platform-memory-data-support.po";
@@ -25,6 +26,7 @@ export class DataSupport {
   public agentWebhooks: AgentWebhookDataSupport;
   public communicationConnections: CommunicationConnectionDataSupport;
   public skills: SkillDataSupport;
+  public onboarding: OnboardingDataSupport;
   public organizations: OrganizationDataSupport;
   public costs: CostDataSupport;
   public eventDeliveries: EventDeliveryDataSupport;
@@ -43,6 +45,7 @@ export class DataSupport {
     this.agentWebhooks = new AgentWebhookDataSupport(page);
     this.communicationConnections = new CommunicationConnectionDataSupport(page);
     this.skills = new SkillDataSupport(page);
+    this.onboarding = new OnboardingDataSupport(page);
     this.organizations = new OrganizationDataSupport(page);
     this.costs = new CostDataSupport(page);
     this.eventDeliveries = new EventDeliveryDataSupport(page);

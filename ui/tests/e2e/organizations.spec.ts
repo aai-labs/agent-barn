@@ -325,7 +325,7 @@ test.describe("Organization detail — members", () => {
     await data.organizations.interceptRemoveMember();
   });
 
-  test("adds a member and surfaces the invite link", async ({ page }) => {
+  test("adds a member, who is emailed the invitation rather than shown a link", async ({ page }) => {
     await page.goto(DETAIL_URL);
 
     await page.getByRole("button", { name: /add member/i }).click();
@@ -338,9 +338,32 @@ test.describe("Organization detail — members", () => {
     await expect(
       page.getByRole("heading", { name: /member invited/i }),
     ).toBeVisible();
+    await expect(page.getByText(/get an email with a link to set their password/i)).toBeVisible();
     await expect(
       page.getByRole("dialog").locator("input[readonly]"),
-    ).toHaveValue(/set-password\?token=/);
+    ).toHaveCount(0);
+  });
+
+  test("resending an invitation emails it and shows no link", async ({ page }) => {
+    await data.organizations.interceptGetMembers({
+      members: [
+        { user_id: "77777777-7777-4777-8777-777777777777", email: "still-pending@example.com",
+          full_name: null, role: "MEMBER", is_pending: true },
+      ],
+    });
+    const resent: string[] = [];
+    await page.route("**/api/v1/organizations/*/members/*/resend-invite", (route) => {
+      resent.push(route.request().method());
+      return route.fulfill({ json: { invite_link: null } });
+    });
+    await page.goto(DETAIL_URL);
+
+    await page.getByRole("button", { name: "Member actions" }).first().click();
+    await page.getByRole("button", { name: /resend invite/i }).click();
+
+    await expect(page.getByText("Invitation emailed to still-pending@example.com.")).toBeVisible();
+    await expect(page.locator("input[readonly]")).toHaveCount(0);
+    expect(resent).toEqual(["POST"]);
   });
 
   test("adding an existing active user reports no invite was sent", async ({ page }) => {
@@ -406,10 +429,10 @@ test.describe("Organization detail — members", () => {
       .click();
 
     await expect(
-      page.getByRole("heading", { name: /member added/i }),
+      page.getByRole("heading", { name: /member invited/i }),
     ).toBeVisible();
     await expect(
-      page.getByText(/outstanding invite from before/i),
+      page.getByText(/earlier invitation still works/i),
     ).toBeVisible();
     await expect(page.getByText(/resend invite/i)).toBeVisible();
     await expect(

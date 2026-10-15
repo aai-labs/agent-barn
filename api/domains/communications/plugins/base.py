@@ -111,6 +111,15 @@ class PlatformPlugin(ABC):
     credentials_model: type[PlatformCredentials]
     credential_uniqueness_scope: CredentialUniquenessScope = CredentialUniquenessScope.NONE
 
+    def is_offered(self) -> bool:
+        """Whether new Connections may be created on this platform in this environment.
+
+        An unoffered plugin stays registered so existing Connections remain
+        readable and manageable; it is only hidden from the catalogue and
+        refused on create.
+        """
+        return True
+
     def resolve_outbound_target(
         self,
         settings: PlatformSettings,

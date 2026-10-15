@@ -21,6 +21,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-links/{link_id}",
+    "unlink_telegram_account_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_links__link_id__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/agents/{agent_id}/restore-points/{restore_point_id}",
     "delete_restore_point_organizations__organization_id__agents__agent_id__restore_points__restore_point_id__delete"
   ],
@@ -116,6 +121,16 @@
   ],
   [
     "GET",
+    "/auth/google/callback",
+    "finish_google_sign_in_auth_google_callback_get"
+  ],
+  [
+    "GET",
+    "/auth/google/start",
+    "start_google_sign_in_auth_google_start_get"
+  ],
+  [
+    "GET",
     "/auth/me",
     "get_current_user_context_auth_me_get"
   ],
@@ -173,6 +188,11 @@
     "GET",
     "/llms.txt",
     "llms_txt_llms_txt_get"
+  ],
+  [
+    "GET",
+    "/onboarding",
+    "read_onboarding_onboarding_get"
   ],
   [
     "GET",
@@ -268,6 +288,16 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/summary",
     "get_communication_connection_summary_organizations__organization_id__agents__agent_id__connections__connection_id__summary_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-link-tokens/{token_id}",
+    "get_telegram_link_token_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_link_tokens__token_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-links",
+    "list_telegram_links_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_links_get"
   ],
   [
     "GET",
@@ -666,6 +696,11 @@
   ],
   [
     "GET",
+    "/platform/settings/trial",
+    "read_trial_settings_platform_settings_trial_get"
+  ],
+  [
+    "GET",
     "/platform/skills",
     "list_global_skills_for_platform_admin_platform_skills_get"
   ],
@@ -871,6 +906,16 @@
   ],
   [
     "POST",
+    "/onboarding/agent",
+    "set_up_onboarding_agent_onboarding_agent_post"
+  ],
+  [
+    "POST",
+    "/onboarding/complete",
+    "complete_onboarding_onboarding_complete_post"
+  ],
+  [
+    "POST",
     "/organizations",
     "create_organization_for_current_user_organizations_post"
   ],
@@ -913,6 +958,11 @@
     "POST",
     "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/reconnect",
     "reconnect_communication_connection_organizations__organization_id__agents__agent_id__connections__connection_id__reconnect_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/telegram-link-tokens",
+    "create_telegram_link_token_organizations__organization_id__agents__agent_id__connections__connection_id__telegram_link_tokens_post"
   ],
   [
     "POST",
@@ -1081,6 +1131,11 @@
   ],
   [
     "POST",
+    "/platform/organizations/{organization_id}/end-trial",
+    "end_organization_trial_platform_organizations__organization_id__end_trial_post"
+  ],
+  [
+    "POST",
     "/platform/organizations/{organization_id}/llm-budget/enroll",
     "enroll_organization_llm_keys_platform_organizations__organization_id__llm_budget_enroll_post"
   ],
@@ -1173,5 +1228,10 @@
     "PUT",
     "/platform/settings/agent-memory",
     "update_settings_platform_settings_agent_memory_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/trial",
+    "update_trial_settings_platform_settings_trial_put"
   ]
 ]
