@@ -22,6 +22,7 @@ from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.telegram_link_events import unlink_reasons, unlinked_events
 
 _NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 _TELEGRAM_USER = 5550001
@@ -263,3 +264,49 @@ def test_the_bot_enqueues_the_link_events_it_staged():
 
         enqueue.assert_called_once_with(list(result.delivery_ids))
         assert_that(result.delivery_ids, has_length(1))
+
+
+def test_ending_an_active_link_records_its_reason_as_its_linker():
+    with given(_GIVEN) as context:
+        _token(context, context.first, "raw-1", context.first_membership)
+        link = _consume(context, "raw-1").link
+        assert link is not None
+
+        delivery_ids = _repo(context).end_active_link(_TELEGRAM_USER, now=_NOW, reason="blocked_bot")
+
+        events = unlinked_events(context)
+        assert_that(unlink_reasons(context), equal_to(["blocked_bot"]))
+        assert_that(
+            (events[0].organization_id, events[0].actor["id"], events[0].payload["link_id"]),
+            equal_to((context.first.organization_id, str(context.first_membership.id), str(link.id))),
+        )
+        _assert_no_telegram_identity(events[0])
+        assert_that(sorted(delivery_ids), equal_to(sorted(_delivery_ids(context, events[0]))))
+
+
+def test_ending_a_connections_link_records_its_reason():
+    with given(_GIVEN) as context:
+        _token(context, context.first, "raw-1", context.first_membership)
+        _consume(context, "raw-1")
+
+        delivery_ids = _repo(context).end_link_for_connection(
+            context.first.id, _TELEGRAM_USER, now=_NOW, reason="access_lost"
+        )
+
+        assert_that(unlink_reasons(context), equal_to(["access_lost"]))
+        assert_that(delivery_ids, has_length(1))
+
+
+def test_ending_a_link_that_already_ended_records_nothing():
+    with given(_GIVEN) as context:
+        _token(context, context.first, "raw-1", context.first_membership)
+        _consume(context, "raw-1")
+        _repo(context).end_active_link(_TELEGRAM_USER, now=_NOW, reason="blocked_bot")
+
+        again = _repo(context).end_active_link(_TELEGRAM_USER, now=_NOW, reason="blocked_bot")
+        for_connection = _repo(context).end_link_for_connection(
+            context.first.id, _TELEGRAM_USER, now=_NOW, reason="access_lost"
+        )
+
+        assert_that((again, for_connection), equal_to(((), ())))
+        assert_that(unlink_reasons(context), equal_to(["blocked_bot"]))

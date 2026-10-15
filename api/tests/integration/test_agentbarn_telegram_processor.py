@@ -34,6 +34,7 @@ from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.telegram_link_events import unlink_reasons
 
 _JANE = 5550001
 _WEB_APP_URL = "https://app.agentbarn.test"
@@ -290,6 +291,7 @@ def test_a_user_whose_linker_lost_access_is_unlinked() -> None:
             assert_that(_active_links(context), equal_to([]))
             assert_that(_stored(context, update_id), has_properties(status=AgentBarnTelegramUpdateStatus.HANDLED))
             assert_that(context.bot.sent[-1][1], contains_string("sign up at"))
+            assert_that(unlink_reasons(context), equal_to(["access_lost"]))
 
 
 def test_blocking_the_bot_ends_the_link_silently() -> None:
@@ -312,6 +314,7 @@ def test_blocking_the_bot_ends_the_link_silently() -> None:
         with then("her link ends and nothing is sent to her"):
             assert_that(_active_links(context), equal_to([]))
             assert_that(len(context.bot.sent), equal_to(sent_before))
+            assert_that(unlink_reasons(context), equal_to(["blocked_bot"]))
 
 
 def test_group_messages_get_no_reply() -> None:

@@ -15,6 +15,8 @@ from api.domains.agents.authorization import AgentAuthorization
 from api.domains.communications.agentbarn_telegram_messages import file_ids
 from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
 from api.domains.communications.agentbarn_telegram_repository import (
+    ACCESS_LOST,
+    BLOCKED_BOT,
     AgentBarnTelegramRepository,
     LinkTokenOutcome,
 )
@@ -232,7 +234,7 @@ class AgentBarnTelegramUpdateProcessor:
         if classified.kind == UpdateKind.LINK and user_id is not None and chat_id is not None:
             self._link(classified, user_id, chat_id)
         elif classified.kind == UpdateKind.BLOCKED and user_id is not None:
-            self.repository.end_active_link(user_id, now=datetime.now(UTC))
+            self.repository.end_active_link(user_id, now=datetime.now(UTC), reason=BLOCKED_BOT)
         elif (
             classified.kind == UpdateKind.ROUTE
             and user_id is not None
@@ -285,7 +287,7 @@ class AgentBarnTelegramUpdateProcessor:
             return self._queue_own_part(update, user_id, chat_id, link)
         if link is not None:
             # The Member who linked this account lost access to the Agent.
-            self.repository.end_active_link(user_id, now=datetime.now(UTC))
+            self.repository.end_active_link(user_id, now=datetime.now(UTC), reason=ACCESS_LOST)
         if self._courtesy_due("sign_up", user_id, _SIGN_UP_REPLY_COOLDOWN_SECONDS):
             self._reply(
                 chat_id,

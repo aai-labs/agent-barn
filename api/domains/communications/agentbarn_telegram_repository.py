@@ -37,6 +37,9 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 _CONSUME_ATTEMPTS = 2
 _INGRESS_LEASE_KEY = "shared_bot"
 RELINKED = "relinked"
+USER_REMOVED = "user_removed"
+BLOCKED_BOT = "blocked_bot"
+ACCESS_LOST = "access_lost"
 
 
 class LinkTokenOutcome(str, enum.Enum):
@@ -205,6 +208,7 @@ class AgentBarnTelegramRepository:
         link: AgentBarnTelegramLink,
         now: datetime,
         reason: str | None = None,
+        actor: ActorIdentity | None = None,
     ) -> list[UUID]:
         payload: dict[str, Any] = {
             "organization_id": link.organization_id,
@@ -219,7 +223,8 @@ class AgentBarnTelegramRepository:
             schema_version=1,
             occurred_at=now,
             organization_id=link.organization_id,
-            actor=ActorIdentity(
+            actor=actor
+            or ActorIdentity(
                 type=ActorIdentityType.MEMBERSHIP, id=link.linked_by_membership_id, organization_id=link.organization_id
             ),
             subject=SubjectIdentity(
@@ -260,7 +265,8 @@ class AgentBarnTelegramRepository:
         authorization_scope: AuthorizationScope,
         *,
         now: datetime,
-    ) -> bool:
+        actor: ActorIdentity,
+    ) -> tuple[UUID, ...] | None:
         with Session(self.delegate.engine) as session:
             link = session.exec(
                 select(AgentBarnTelegramLink)
@@ -275,11 +281,12 @@ class AgentBarnTelegramRepository:
                 .with_for_update(of=AgentBarnTelegramLink)
             ).one_or_none()
             if link is None:
-                return False
+                return None
             link.unlinked_at = now
             session.add(link)
+            delivery_ids = self._stage_link_event(session, TELEGRAM_ACCOUNT_UNLINKED, link, now, USER_REMOVED, actor)
             session.commit()
-            return True
+            return tuple(delivery_ids)
 
     def claim_ingress_lease(self, owner: str, *, now: datetime, lease_seconds: int = 60) -> bool:
         """Take or renew the right to poll the shared bot; False while another replica holds it."""
@@ -439,19 +446,31 @@ class AgentBarnTelegramRepository:
                 )
             ).one_or_none()
 
-    def end_active_link(self, telegram_user_id: int, *, now: datetime) -> bool:
+    def end_active_link(self, telegram_user_id: int, *, now: datetime, reason: str) -> tuple[UUID, ...]:
+        return self._end_link(
+            [
+                col(AgentBarnTelegramLink.telegram_user_id) == telegram_user_id,
+                col(AgentBarnTelegramLink.unlinked_at).is_(None),
+            ],
+            now=now,
+            reason=reason,
+        )
+
+    def _end_link(self, conditions: list[Any], *, now: datetime, reason: str) -> tuple[UUID, ...]:
         with Session(self.delegate.engine) as session:
-            ended = session.exec(
+            link = session.scalars(
                 sa.update(AgentBarnTelegramLink)
-                .where(
-                    col(AgentBarnTelegramLink.telegram_user_id) == telegram_user_id,
-                    col(AgentBarnTelegramLink.unlinked_at).is_(None),
-                )
+                .where(*conditions)
                 .values(unlinked_at=now)
-                .returning(col(AgentBarnTelegramLink.id))
-            ).first()  # type: ignore[call-overload]
+                .returning(AgentBarnTelegramLink)
+            ).first()
+            delivery_ids = (
+                self._stage_link_event(session, TELEGRAM_ACCOUNT_UNLINKED, link, now, reason)
+                if link is not None
+                else []
+            )
             session.commit()
-            return ended is not None
+            return tuple(delivery_ids)
 
     def agent_names(self, agent_ids: list[UUID]) -> dict[UUID, str]:
         with Session(self.delegate.engine) as session:
@@ -688,18 +707,18 @@ class AgentBarnTelegramRepository:
                 )
             )
 
-    def end_link_for_connection(self, connection_id: UUID, telegram_user_id: int, *, now: datetime) -> None:
-        with Session(self.delegate.engine) as session:
-            session.exec(
-                sa.update(AgentBarnTelegramLink)
-                .where(
-                    col(AgentBarnTelegramLink.connection_id) == connection_id,
-                    col(AgentBarnTelegramLink.telegram_user_id) == telegram_user_id,
-                    col(AgentBarnTelegramLink.unlinked_at).is_(None),
-                )
-                .values(unlinked_at=now)
-            )  # type: ignore[call-overload]
-            session.commit()
+    def end_link_for_connection(
+        self, connection_id: UUID, telegram_user_id: int, *, now: datetime, reason: str
+    ) -> tuple[UUID, ...]:
+        return self._end_link(
+            [
+                col(AgentBarnTelegramLink.connection_id) == connection_id,
+                col(AgentBarnTelegramLink.telegram_user_id) == telegram_user_id,
+                col(AgentBarnTelegramLink.unlinked_at).is_(None),
+            ],
+            now=now,
+            reason=reason,
+        )
 
     def record_ownership(
         self,

@@ -41,12 +41,45 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered (AF-374): `organization.llm_budget.exhausted` reaches PostHog, attributed to the Organization's creator.
 - Also delivered (AF-374): a Google sign-in to an existing, verified account records `user.logged_in` with `method: "google"`.
 - Also delivered (AF-374): `user.onboarding.completed`, sent once per user on the first onboarding completion.
-- Also delivered (AF-374): `telegram.account.linked`, and `telegram.account.unlinked` (`relinked`) when a new link replaces one.
+- Also delivered (AF-374): `telegram.account.linked`, and `telegram.account.unlinked` with reason `relinked`, `user_removed`, `blocked_bot` or `access_lost`.
 - In progress (AF-374): onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
 - Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-15 — AF-374 — Every Telegram unlink path
+
+- Delivered: every path that ends a Telegram link now stages `telegram.account.unlinked` in the same transaction, and only when a link actually ended. An already-ended link stages nothing.
+
+  | Reason | Where it comes from | Attributed to |
+  |---|---|---|
+  | `user_removed` | the web app's unlink (`DELETE …/telegram-links/{id}`) | the clicking user, via `resolve_actor_identity`; enqueued by the service |
+  | `blocked_bot` | the poller seeing `my_chat_member` "kicked", or the proxy getting Telegram's "bot was blocked by the user" | the link's issuing Membership |
+  | `access_lost` | the poller, forwarder or proxy finding that the linking Member lost `agent.update` | the link's issuing Membership |
+
+  The poller, forwarder and proxy paths rely on the outbox reconciler.
+- Not covered, and documented as known gaps:
+  - a Membership deletion cascading its links away
+  - links left active when their Connection is retired or their Agent deleted
+- Changed:
+  - `agentbarn_telegram_repository.py`:
+    - `unlink_in_scope` takes `actor` and returns delivery ids or `None`
+    - `end_active_link` and `end_link_for_connection` take `reason` and return delivery ids, through one `_end_link` that uses `UPDATE … RETURNING` of the whole link
+  - `agentbarn_telegram_service.py`, `_processor.py`, `_forwarder.py`, `_proxy.py`
+  - `domain-events.md`, `product-analytics.md`, `communications/CHANGELOG.md`
+- Verified:
+  - Event assertions added to the existing tests for each path:
+    - processor: blocked and lost access
+    - forwarder: lost access
+    - proxy: blocked and lost access
+    - link API: user removed, as the clicking Member
+  - New repository tests:
+    - both end methods record their reason as the linker, with no Telegram identity, and return the staged ids
+    - an already-ended link records nothing
+  - `test_agentbarn_telegram_links.py` and one forwarder call were updated for the new signatures.
+  - 11 tests failed before the change.
+  - All Telegram suites plus the handler, wiring and outbox suites pass (293). Ruff and ty are clean.
 
 ### 2026-10-15 — AF-374 — Telegram link events
 

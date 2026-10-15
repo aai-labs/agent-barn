@@ -18,6 +18,12 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 ### 2026-10-15 — Telegram link events for product analytics (AF-374)
 
 - Added: spending a link token stages `telegram.account.linked` in the same transaction as the link, and `telegram.account.unlinked` with `reason: "relinked"` for a link it replaces. Each event is in its link's own Organization, with the Membership that issued the link as actor. Payloads carry Organization, Agent, Connection and link ids only, never the Telegram user id or username. `AgentBarnTelegramService.consume_link_token` enqueues the deliveries after commit; the outbox reconciler picks up any it could not. See [Product analytics](../product-analytics.md).
+- Added: every other way a link ends also stages `telegram.account.unlinked` in the ending transaction, only when a link actually ended:
+  - `user_removed`: the web app's unlink, attributed to the clicking user
+  - `blocked_bot`: a `my_chat_member` "kicked" update, or Telegram refusing a proxied send because the user blocked the bot
+  - `access_lost`: the linking Member lost `agent.update`, seen by the poller, the forwarder, or the proxy
+
+  `end_active_link` and `end_link_for_connection` now take a `reason` and return the staged delivery ids. `unlink_in_scope` takes the actor and returns them, or `None` when no link was found.
 
 ### 2026-10-09 — Spend-limit notice on native chat — [PR #284](https://github.com/aai-labs/agent-barn/pull/284)
 
