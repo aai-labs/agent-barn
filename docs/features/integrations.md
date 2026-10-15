@@ -233,6 +233,22 @@ mode and a credential revision hash; only a ready generation counts as applied, 
 the existing last verified snapshot remains available during recovery. Removing a
 connection, stopping the Agent, or replacing its generation invalidates its token.
 
+The editor submits multiple Custom API changes to `POST /custom-api-connections/apply`
+with `creates`, `updates` (`id` plus `data`), `deletes` (connection IDs), and an
+outer `restart` choice. The server checks all targets, resulting identifiers,
+credentials, and runtime artifacts under the Agent lifecycle lock before stopping
+the Agent, then persists the connection changes and their events in one transaction.
+Invalid batches leave the running Agent and saved connections unchanged. A running
+Agent requires explicit restart authorization and is restarted once for the batch;
+a stopped Agent stays stopped unless `restart` is requested.
+For edits combining Custom API and built-in provider changes, the editor first
+uses `POST /custom-api-connections/preflight` with the same batch body. This validates
+the resulting Custom API configuration without saving or stopping, before entering
+the shared provider stop/save/start workflow. The batch is revalidated when saved;
+this preflight does not reserve configuration across requests or make built-in
+provider and Custom API writes atomic together. Failed mixed saves retain the
+restart choice for retry within the editor.
+
 Both Hermes and OpenClaw use the generic Custom API command in aai-cli. Profiles
 use `custom-api-<connection_identifier>` to avoid collisions with built-in providers.
 This requires a runtime image whose aai-cli includes the `custom-api` command:

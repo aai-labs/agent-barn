@@ -12,6 +12,11 @@ export class CustomApiPage {
   get dialog() { return this.page.getByRole("dialog"); }
   field(name: string) { return this.form.getByLabel(name, { exact: true }); }
   async beginEditing() { await this.edit.click(); }
+  async addGithubCredential() {
+    await this.section.getByRole("button", { name: /GitHub/ }).click();
+    await this.section.getByPlaceholder("github_pat_… or ghp_…").fill("fixture-token");
+    await this.section.getByPlaceholder("owner-or-org").fill("fixture-org");
+  }
   async expandConnection() { await this.section.locator("summary").filter({ hasText: "Custom API · Inventory API" }).click(); }
   async selectAuth(name: string) {
     await this.field("Authentication").click();

@@ -79,6 +79,30 @@ export class CustomApiDataSupport {
             status: 422,
             json: { detail: "Invalid Custom API configuration" },
           });
+        if (request.url().endsWith("/preflight")) return route.fulfill({ status: 204 });
+        if (request.url().endsWith("/apply") && Array.isArray(body.creates)) {
+          connections = connections.filter((connection) => !body.deletes.includes(connection.id));
+          const writes = [
+            ...body.updates,
+            ...body.creates.map((data: Record<string, unknown>, index: number) => ({
+              id: `55555555-5555-4555-8555-${String(index + this.requests.length).padStart(12, "0")}`, data,
+            })),
+          ];
+          for (const { id, data } of writes) {
+            const previous = connections.find((connection) => connection.id === id);
+            const connection = {
+              ...mockCustomApiConnection, ...previous, ...data, id,
+              slug: previous?.slug ?? data.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[-_]+|[-_]+$/g, ""),
+              auth_type: data.auth.type, auth_header_name: data.auth.header_name ?? null,
+              pending_apply: !body.restart,
+              headers: data.headers.map((header: { secret: boolean; value?: string }) => ({
+                ...header, value: header.secret ? null : (header.value ?? ""),
+              })),
+            };
+            connections = [...connections.filter((saved) => saved.id !== id), connection];
+          }
+          return route.fulfill({ json: connections });
+        }
         if (request.method() === "DELETE") {
           connections = connections.filter((connection) => !request.url().includes(String(connection.id)));
           return route.fulfill({ status: 204 });

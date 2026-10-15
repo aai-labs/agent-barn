@@ -206,6 +206,9 @@ def test_member_access_permissions_are_enforced(access_role, read_status, write_
             there_is_agent_access(access_role_id=access_role)(context)
         assert_that(context.client.get(_path(context), headers=_headers(context)).status_code, equal_to(read_status))
         assert_that(_create(context).status_code, equal_to(write_status))
+        for suffix, success in [("/apply", 200), ("/preflight", 204)]:
+            response = context.client.post(_path(context, suffix), headers=_headers(context), json={})
+            assert_that(response.status_code, equal_to(success if write_status == 201 else write_status))
 
 
 def test_cross_organization_connection_cannot_be_read_or_mutated():
@@ -230,6 +233,11 @@ def test_read_only_api_key_can_list_but_cannot_mutate():
         context.access_token = key
         assert_that(context.client.get(_path(context), headers=_headers(context)).status_code, equal_to(200))
         assert_that(_create(context).status_code, equal_to(403))
+        for suffix in ["/apply", "/preflight"]:
+            assert_that(
+                context.client.post(_path(context, suffix), headers=_headers(context), json={}).status_code,
+                equal_to(403),
+            )
 
 
 def test_invalid_payload_never_echoes_nested_credential_input():
@@ -321,6 +329,168 @@ def test_duplicate_identifier_does_not_stop_running_agent():
         assert_that(
             context.injector.get(AgentRepository).get_by_id(context.agent.id).status, equal_to(AgentStatus.RUNNING)
         )
+
+
+@pytest.mark.parametrize("suffix", ["/apply", "/preflight"])
+def test_invalid_bulk_changes_do_not_stop_or_partially_save(suffix):
+    from api.infrastructure.kubernetes.client import KubernetesClient
+
+    with given(_GIVEN) as context:
+        original = _create(context).json()
+        context.agent.status = AgentStatus.RUNNING
+        context.injector.get(AgentRepository).save(context.agent)
+        response = context.client.post(
+            _path(context, suffix),
+            headers=_headers(context),
+            json={
+                "creates": [
+                    {"name": name, "base_url": "https://api.example.com/v1"}
+                    for name in ["Inventory API", "Inventory/API"]
+                ],
+                "updates": [{"id": original["id"], "data": {"name": "Must not persist"}}],
+                "restart": True,
+            },
+        )
+        assert_that(response.status_code, equal_to(409))
+        assert_that(context.injector.get(KubernetesClient).delete_deployment.called, is_(False))
+        assert_that(
+            context.injector.get(AgentRepository).get_by_id(context.agent.id).status, equal_to(AgentStatus.RUNNING)
+        )
+        rows = context.injector.get(CustomApiRepository).runtime_connections(context.agent.id)
+        assert_that(rows, has_length(1))
+        assert_that(rows[0].name, equal_to(original["name"]))
+
+
+def test_successful_bulk_preflight_leaves_running_agent_and_connections_unchanged():
+    from api.infrastructure.kubernetes.client import KubernetesClient
+
+    with given(_GIVEN) as context:
+        original = _create(context).json()
+        context.agent.status = AgentStatus.RUNNING
+        context.injector.get(AgentRepository).save(context.agent)
+        response = context.client.post(
+            _path(context, "/preflight"),
+            headers=_headers(context),
+            json={
+                "updates": [{"id": original["id"], "data": {"name": "Preview only"}}],
+                "creates": [{"name": "Reporting", "base_url": "https://api.example.com/v1"}],
+                "restart": True,
+            },
+        )
+        assert_that(response.status_code, equal_to(204))
+        assert_that(response.content, equal_to(b""))
+        assert_that(context.client.get(_path(context), headers=_headers(context)).json(), equal_to([original]))
+        assert_that(
+            context.injector.get(AgentRepository).get_by_id(context.agent.id).status, equal_to(AgentStatus.RUNNING)
+        )
+        k8s = context.injector.get(KubernetesClient)
+        assert_that(k8s.delete_deployment.called, is_(False))
+        assert_that(k8s.create_deployment.called, is_(False))
+
+
+@pytest.mark.parametrize("suffix", ["/apply", "/preflight"])
+def test_bulk_rejects_connection_updated_and_deleted_together(suffix):
+    with given(_GIVEN) as context:
+        original = _create(context).json()
+        response = context.client.post(
+            _path(context, suffix),
+            headers=_headers(context),
+            json={
+                "updates": [{"id": original["id"], "data": {"name": "Conflicting update"}}],
+                "deletes": [original["id"]],
+            },
+        )
+        assert_that(response.status_code, equal_to(422))
+        assert_that(context.client.get(_path(context), headers=_headers(context)).json(), equal_to([original]))
+
+
+def test_bulk_apply_restarts_once_and_keeps_secrets_private():
+    from api.infrastructure.kubernetes.client import KubernetesClient
+
+    with given(_GIVEN) as context:
+        context.agent.status = AgentStatus.RUNNING
+        context.injector.get(AgentRepository).save(context.agent)
+        response = context.client.post(
+            _path(context, "/apply"),
+            headers=_headers(context),
+            json={
+                "creates": [
+                    {
+                        "name": name,
+                        "base_url": "https://api.example.com/v1",
+                        "auth": {"type": "bearer", "token": "fixture-batch-secret"},
+                    }
+                    for name in ["Inventory API", "Reporting API"]
+                ],
+                "restart": True,
+            },
+        )
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json(), has_length(2))
+        assert_that(response.text, not_(contains_string("fixture-batch-secret")))
+        k8s = context.injector.get(KubernetesClient)
+        # Start also removes any stale Deployment before creating the new one.
+        assert_that(k8s.delete_deployment.call_count, equal_to(2))
+        assert_that(k8s.create_deployment.call_count, equal_to(1))
+
+
+def test_bulk_preflight_failure_does_not_write_or_stop():
+    from unittest.mock import patch
+
+    from api.domains.agents.service import AgentService
+    from api.infrastructure.kubernetes.client import KubernetesClient
+
+    with given(_GIVEN) as context:
+        original = _create(context).json()
+        context.agent.status = AgentStatus.RUNNING
+        context.injector.get(AgentRepository).save(context.agent)
+        service = context.injector.get(AgentService)
+        with patch.object(service, "_provision_and_start", side_effect=ValueError("private fixture failure")):
+            response = context.client.post(
+                _path(context, "/apply"),
+                headers=_headers(context),
+                json={
+                    "deletes": [original["id"]],
+                    "creates": [{"name": "Replacement", "base_url": "https://api.example.com/v1"}],
+                    "restart": True,
+                },
+            )
+        assert_that(response.status_code, equal_to(400))
+        assert_that(response.text, not_(contains_string("private fixture")))
+        assert_that(context.injector.get(KubernetesClient).delete_deployment.called, is_(False))
+        rows = context.injector.get(CustomApiRepository).runtime_connections(context.agent.id)
+        assert_that([str(row.id) for row in rows], equal_to([original["id"]]))
+
+
+def test_bulk_apply_updates_deletes_and_reuses_deleted_identifier():
+    with given(_GIVEN) as context:
+        original = _create(context).json()
+        other = _create(context, "reporting").json()
+        response = context.client.post(
+            _path(context, "/apply"),
+            headers=_headers(context),
+            json={
+                "deletes": [original["id"]],
+                "updates": [{"id": other["id"], "data": {"name": "Renamed reporting"}}],
+                "creates": [{"name": "Inventory", "base_url": "https://other.example.com/v2"}],
+            },
+        )
+        assert_that(response.status_code, equal_to(200))
+        rows = {row["slug"]: row for row in response.json()}
+        assert_that(sorted(rows), equal_to(["inventory", "reporting"]))
+        assert_that(rows["inventory"]["id"], not_(equal_to(original["id"])))
+        assert_that(rows["reporting"]["name"], equal_to("Renamed reporting"))
+
+
+@pytest.mark.parametrize("suffix", ["/apply", "/preflight"])
+def test_bulk_targets_cannot_reference_another_agent(suffix):
+    with given(_GIVEN) as context:
+        original = _create(context).json()
+        there_is_an_agent(status=AgentStatus.STOPPED)(context)
+        response = context.client.post(
+            _path(context, suffix), headers=_headers(context), json={"deletes": [original["id"]]}
+        )
+        assert_that(response.status_code, equal_to(404))
 
 
 def test_ordinary_header_can_be_cleared_while_saved_secret_is_retained():

@@ -106,3 +106,17 @@ class CustomApiRequest(DTO):
 
 class CustomApiConnectionApply(CustomApiConnectionUpdate):
     restart: bool = False
+
+
+class CustomApiConnectionChange(DTO):
+    model_config = ConfigDict(extra="forbid")
+    id: UUID
+    data: CustomApiConnectionUpdate
+
+
+class CustomApiConnectionsApply(DTO):
+    model_config = ConfigDict(extra="forbid")
+    creates: list[CustomApiConnectionCreate] = Field(default_factory=list, max_length=100)
+    updates: list[CustomApiConnectionChange] = Field(default_factory=list, max_length=100)
+    deletes: list[UUID] = Field(default_factory=list, max_length=100)
+    restart: bool = False

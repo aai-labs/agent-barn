@@ -13,6 +13,7 @@ from api.domains.custom_api.models import (
     CustomApiConnectionApply,
     CustomApiConnectionCreate,
     CustomApiConnectionRead,
+    CustomApiConnectionsApply,
     CustomApiConnectionUpdate,
 )
 from api.domains.custom_api.service import CustomApiService
@@ -66,6 +67,26 @@ def update_connection(
     service: Annotated[CustomApiService, Injected(CustomApiService)],
 ):
     return service.update(agent_id, connection_id, data, context)
+
+
+@custom_api_router.post("/apply", response_model=list[CustomApiConnectionRead])
+def apply_connections(
+    agent_id: UUID,
+    data: CustomApiConnectionsApply,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CustomApiService, Injected(CustomApiService)],
+):
+    return service.apply_many(agent_id, data, context)
+
+
+@custom_api_router.post("/preflight", status_code=204)
+def preflight_connections(
+    agent_id: UUID,
+    data: CustomApiConnectionsApply,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[CustomApiService, Injected(CustomApiService)],
+):
+    service.apply_many(agent_id, data, context, preflight=True)
 
 
 @custom_api_router.delete("/{connection_id}", status_code=204)

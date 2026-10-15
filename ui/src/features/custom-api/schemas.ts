@@ -39,3 +39,11 @@ export const CustomApiWriteSchema = z.object({
   ),
 });
 export type CustomApiWrite = z.infer<typeof CustomApiWriteSchema>;
+
+export const CustomApiBatchSchema = z.object({
+  creates: z.array(CustomApiWriteSchema),
+  updates: z.array(z.object({ id: z.string(), data: CustomApiWriteSchema })),
+  deletes: z.array(z.string()),
+  restart: z.boolean(),
+});
+export type CustomApiBatch = z.infer<typeof CustomApiBatchSchema>;

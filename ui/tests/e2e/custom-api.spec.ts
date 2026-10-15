@@ -110,7 +110,7 @@ test.describe("Custom API integrations", () => {
     expect(data.requests[0].url).toMatch(/\?restart=true$/);
   });
 
-  test("multiple connections use a single stop and start", async ({ page }) => {
+  test("multiple connections use server bulk Apply with one restart", async ({ page }) => {
     const data = new CustomApiDataSupport(page);
     const ui = new CustomApiPage(page);
     await data.open({ running: true, empty: true });
@@ -123,10 +123,33 @@ test.describe("Custom API integrations", () => {
     }
     await ui.confirmApply();
     await expect(ui.form).toHaveCount(0);
-    expect(data.requests).toHaveLength(2);
-    expect(data.lifecycleRequests).toEqual(["stop", "start"]);
-    expect(data.requests.every((request) => !request.body?.restart)).toBe(true);
+    expect(data.requests).toHaveLength(1);
+    expect(data.lifecycleRequests).toEqual([]);
+    expect(data.requests[0].url).toMatch(/\/custom-api-connections\/apply$/);
+    expect(data.requests[0].body).toMatchObject({ restart: true, creates: [
+      { name: "Inventory API" }, { name: "Reporting API" },
+    ] });
   });
+
+  for (const mixed of [false, true]) {
+    test(`invalid ${mixed ? "mixed provider and API" : "bulk API"} changes leave the running Agent and drafts intact`, async ({ page }) => {
+      const data = new CustomApiDataSupport(page);
+      const ui = new CustomApiPage(page);
+      await data.open({ running: true, empty: true, fail: true });
+      await ui.beginEditing();
+      if (mixed) await ui.addGithubCredential();
+      for (const name of ["Inventory API", "Inventory/API"]) {
+        await ui.add.click();
+        await ui.form.last().getByLabel("Connection name", { exact: true }).fill(name);
+        await ui.form.last().getByLabel("Allowed base URL", { exact: true }).fill("https://api.example.com/v1");
+      }
+      await ui.confirmApply();
+      await expect(ui.section.getByRole("alert")).toContainText("Invalid Custom API configuration");
+      await expect(ui.form).toHaveCount(2);
+      expect(data.lifecycleRequests).toEqual([]);
+      expect(data.requests[0].url).toMatch(mixed ? /\/preflight$/ : /\/apply$/);
+    });
+  }
 
   test("failed saves retain edits and do not restart", async ({ page }) => {
     const data = new CustomApiDataSupport(page);

@@ -14,6 +14,7 @@ import {
   CustomApiConnectionSchema,
   type CustomApiConnection,
   type CustomApiWrite,
+  type CustomApiBatch,
 } from "../schemas";
 
 export const customApiKey = createQueryKeyStructure("custom-api-connections");
@@ -97,11 +98,27 @@ export function useCustomApi(agentId: string, running: boolean) {
       ]);
     },
   });
+  const batchMutation = useMutation({
+    mutationFn: (data: CustomApiBatch) => api.post(`${url}/apply`, data, {
+      schema: z.array(CustomApiConnectionSchema), timeout: 120_000,
+    }),
+    onMutate: () => { polling.current = null; },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: customApiKey.all }),
+        queryClient.invalidateQueries({ queryKey: agentsKey.detail(agentId) }),
+        queryClient.invalidateQueries({ queryKey: agentsKey.lists() }),
+        queryClient.invalidateQueries({ queryKey: agentsKey.health(agentId) }),
+      ]);
+    },
+  });
   return {
     connections: query.data,
     isLoadingConnections: query.isLoading,
     connectionsError: query.error,
     refetchConnections: query.refetch,
     connectionMutation: mutation,
+    batchMutation,
+    preflight: (data: CustomApiBatch) => api.post(`${url}/preflight`, data, { timeout: 120_000 }),
   };
 }

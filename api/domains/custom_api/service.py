@@ -20,6 +20,7 @@ from api.domains.custom_api.models import (
     CustomApiConnectionApply,
     CustomApiConnectionCreate,
     CustomApiConnectionRead,
+    CustomApiConnectionsApply,
     CustomApiConnectionUpdate,
     HeaderRead,
     validate_credentials,
@@ -92,6 +93,50 @@ class CustomApiService:
         if self.lifecycle.restore_points.has_blocking_operation(agent_id):
             raise HTTPException(409, "An Agent restore operation is in progress")
 
+    def apply_many(
+        self, agent_id: UUID, data: CustomApiConnectionsApply, context: CurrentUserContext, *, preflight: bool = False
+    ) -> list[CustomApiConnectionRead]:
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        self.authorization.require_action(context, agent_id, PermissionKey.AGENT_SECRET_MANAGE)
+        with self.agents.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(409, "An Agent lifecycle operation is already in progress")
+            scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
+            rows = {row.id: row for row in self.repository.list_in_scope(agent_id, scope)}
+            targets = [update.id for update in data.updates] + data.deletes
+            if len(targets) != len(set(targets)):
+                raise HTTPException(422, "Each connection may only be changed once")
+            if any(target not in rows for target in targets):
+                raise HTTPException(404, "Custom API connection not found")
+            changes: list[tuple[CustomApiConnection, str]] = [(rows.pop(key), "deleted") for key in data.deletes]
+            for update in data.updates:
+                row = rows[update.id]
+                self._prepare_update(row, update.data)
+                changes.append((row, "updated"))
+            for create in data.creates:
+                row = self._new_connection(agent_id, create)
+                rows[row.id] = row
+                changes.append((row, "created"))
+            slugs = [row.slug for row in rows.values()]
+            if len(slugs) != len(set(slugs)):
+                raise HTTPException(
+                    409, "This connection name produces an identifier already in use. Choose another name."
+                )
+            self._apply_changes_locked(agent_id, changes, context, data.restart, preflight=preflight)
+            return [] if preflight else self.list_connections(agent_id, context)
+
+    def _new_connection(self, agent_id: UUID, data: CustomApiConnectionCreate) -> CustomApiConnection:
+        config = {"auth": data.auth.model_dump(exclude_none=True), "headers": [h.model_dump() for h in data.headers]}
+        self._validate(config, data.base_url)
+        return CustomApiConnection(
+            agent_id=agent_id,
+            slug=data.slug,
+            name=data.name,
+            base_url=data.base_url,
+            isolated=data.isolated,
+            credentials_encrypted=encrypt_token(json.dumps(config), self.config.agent_token_encryption_key),
+        )
+
     def create(
         self, agent_id: UUID, data: CustomApiConnectionCreate, context: CurrentUserContext
     ) -> CustomApiConnectionRead:
@@ -104,19 +149,7 @@ class CustomApiService:
                 raise HTTPException(
                     409, "This connection name produces an identifier already in use. Choose another name."
                 )
-            config = {
-                "auth": data.auth.model_dump(exclude_none=True),
-                "headers": [h.model_dump() for h in data.headers],
-            }
-            self._validate(config, data.base_url)
-            row = CustomApiConnection(
-                agent_id=agent_id,
-                slug=data.slug,
-                name=data.name,
-                base_url=data.base_url,
-                isolated=data.isolated,
-                credentials_encrypted=encrypt_token(json.dumps(config), self.config.agent_token_encryption_key),
-            )
+            row = self._new_connection(agent_id, data)
             try:
                 self._apply_locked(row, context, "created", data.restart)
                 return self._read(row)
@@ -201,7 +234,18 @@ class CustomApiService:
     def _apply_locked(
         self, row: CustomApiConnection, context: CurrentUserContext, operation: str, restart: bool
     ) -> None:
-        agent = self.authorization.require_action(context, row.agent_id, PermissionKey.AGENT_UPDATE)
+        self._apply_changes_locked(row.agent_id, [(row, operation)], context, restart)
+
+    def _apply_changes_locked(
+        self,
+        agent_id: UUID,
+        changes: list[tuple[CustomApiConnection, str]],
+        context: CurrentUserContext,
+        restart: bool,
+        *,
+        preflight: bool = False,
+    ) -> None:
+        agent = self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_SECRET_MANAGE)
         self.lifecycle.restore_points.reconcile_agent(agent.id)
         _refuse_during_managed_update(agent)
@@ -214,7 +258,9 @@ class CustomApiService:
             raise HTTPException(409, "Applying to a running Agent requires an explicit restart")
         try:
             self.lifecycle._provision_and_start(
-                agent, preflight=True, custom_api_overrides={row.id: None if operation == "deleted" else row}
+                agent,
+                preflight=True,
+                custom_api_overrides={row.id: None if operation == "deleted" else row for row, operation in changes},
             )
         except ValueError, TypeError:
             raise HTTPException(400, "Invalid Custom API runtime configuration") from None
@@ -222,6 +268,8 @@ class CustomApiService:
             raise
         except Exception:
             raise HTTPException(400, "The resulting Agent configuration could not be prepared") from None
+        if preflight or not changes:
+            return
         actor = resolve_actor_identity(context, agent.organization_id)
         if running:
             self.lifecycle._observe_integration_readiness(agent)
@@ -231,7 +279,11 @@ class CustomApiService:
             self.lifecycle.k8s.delete_deployment(name, self.lifecycle.config.k8s_namespace)
             self.lifecycle.k8s.wait_for_termination(name, self.lifecycle.config.k8s_namespace)
             self.lifecycle.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
-        self._persist(row, context, operation)
+        try:
+            deliveries = self.repository.mutate_many_with_events(changes, actor)
+        except IntegrityError:
+            raise HTTPException(409, "A connection identifier is already in use") from None
+        self.lifecycle.event_delivery_dispatcher.enqueue_immediate(deliveries)
         if running or restart:
             self.lifecycle._start_agent_unchecked(agent, actor)
 

@@ -77,33 +77,46 @@ class CustomApiRepository:
             return row
 
     def mutate_with_event(self, row: CustomApiConnection, actor: ActorIdentity, operation: str) -> list[UUID]:
+        return self.mutate_many_with_events([(row, operation)], actor)
+
+    def mutate_many_with_events(
+        self, changes: list[tuple[CustomApiConnection, str]], actor: ActorIdentity
+    ) -> list[UUID]:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            agent = session.get(Agent, row.agent_id)
-            if agent is None:
-                raise ValueError("Agent no longer exists")
-            if operation == "deleted":
-                session.delete(row)
-            else:
-                session.add(row)
-            event = EVENT_REGISTRY.build_event(
-                event_name=AGENT_UPDATED,
-                schema_version=1,
-                occurred_at=datetime.now(UTC),
-                organization_id=agent.organization_id,
-                actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.AGENT, id=agent.id, organization_id=agent.organization_id
-                ),
-                correlation_id=uuid4(),
-                payload={
-                    "organization_id": agent.organization_id,
-                    "agent_id": agent.id,
-                    "field_changes": {"custom_api_connections." + row.slug: {"previous": None, "new": operation}},
-                    "actor_display": actor.type.value,
-                    "subject_display": agent.name,
-                },
-            )
-            self.outbox.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            deliveries = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            deliveries: list[UUID] = []
+            for row, operation in sorted(changes, key=lambda change: change[1] != "deleted"):
+                deliveries.extend(self._stage_change(session, row, actor, operation))
+                # A deleted identifier can be reused by a create in this transaction.
+                session.flush()
             session.commit()
             return deliveries
+
+    def _stage_change(
+        self, session: Session, row: CustomApiConnection, actor: ActorIdentity, operation: str
+    ) -> list[UUID]:
+        agent = session.get(Agent, row.agent_id)
+        if agent is None:
+            raise ValueError("Agent no longer exists")
+        if operation == "deleted":
+            session.delete(row)
+        else:
+            session.add(row)
+        event = EVENT_REGISTRY.build_event(
+            event_name=AGENT_UPDATED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=agent.organization_id,
+            actor=actor,
+            subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=agent.id, organization_id=agent.organization_id),
+            correlation_id=uuid4(),
+            payload={
+                "organization_id": agent.organization_id,
+                "agent_id": agent.id,
+                "field_changes": {"custom_api_connections." + row.slug: {"previous": None, "new": operation}},
+                "actor_display": actor.type.value,
+                "subject_display": agent.name,
+            },
+        )
+        self.outbox.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        deliveries = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+        return deliveries
