@@ -1086,6 +1086,35 @@ test.describe("Agent configuration page", () => {
       expect(saved.content.client_id).toBe("own.apps.googleusercontent.com");
       expect(saved.content.client_secret).toBe("own-secret");
     });
+
+    test("refuses a client ID that isn't a Google client ID", async ({ page }) => {
+      const { section, sent } = await openIntegrationsAndAddGmail(page);
+
+      await section.getByRole("button", { name: /Use your own Google client/ }).click();
+      // What a browser autofills from a saved login: the email in the ID field, the password in the secret.
+      await section.getByPlaceholder(/apps\.googleusercontent\.com/).fill("someone@example.com");
+      await section.getByPlaceholder(/GOCSPX/).fill("a-saved-password");
+      await section.getByRole("button", { name: "Authenticate with Google" }).click();
+
+      await expect(section.getByText(/client ID ends in \.apps\.googleusercontent\.com/)).toBeVisible();
+      expect(sent.authorizeQuery).toBeUndefined();
+    });
+
+    test("keeps saved logins out of the client fields", async ({ page }) => {
+      const { section } = await openIntegrationsAndAddGmail(page);
+
+      await section.getByRole("button", { name: /Use your own Google client/ }).click();
+      const clientId = section.getByPlaceholder(/apps\.googleusercontent\.com/);
+      const clientSecret = section.getByPlaceholder(/GOCSPX/);
+      // Browsers skip autocomplete="off" on a password field, but never fill a saved
+      // password into a "new-password" one; the data- attributes opt out of password managers.
+      await expect(clientSecret).toHaveAttribute("autocomplete", "new-password");
+      for (const field of [clientId, clientSecret]) {
+        await expect(field).toHaveAttribute("data-1p-ignore", "true");
+        await expect(field).toHaveAttribute("data-lpignore", "true");
+        await expect(field).toHaveAttribute("data-form-type", "other");
+      }
+    });
   });
 
   test.describe("SharePoint", () => {
