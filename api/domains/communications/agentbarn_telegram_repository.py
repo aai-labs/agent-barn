@@ -3,7 +3,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from injector import inject, singleton
@@ -26,6 +26,9 @@ from api.domains.communications.models import (
     CommunicationConnection,
     CommunicationPlatform,
 )
+from api.domains.events.catalog import EVENT_REGISTRY, TELEGRAM_ACCOUNT_LINKED, TELEGRAM_ACCOUNT_UNLINKED
+from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -33,6 +36,7 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 # the loser retries once and then replaces the winner like any later link.
 _CONSUME_ATTEMPTS = 2
 _INGRESS_LEASE_KEY = "shared_bot"
+RELINKED = "relinked"
 
 
 class LinkTokenOutcome(str, enum.Enum):
@@ -48,6 +52,7 @@ class LinkTokenConsumption:
     link: AgentBarnTelegramLink | None = None
     # The Telegram user's previous active link, ended by this one.
     replaced_link: AgentBarnTelegramLink | None = None
+    delivery_ids: tuple[UUID, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,7 @@ class ForwardTarget:
 @dataclass
 class AgentBarnTelegramRepository:
     delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
 
     def create_link_token(
         self,
@@ -184,8 +190,46 @@ class AgentBarnTelegramRepository:
             token.consumed_at = now
             token.link_id = link.id
             session.add(token)
+            delivery_ids = self._stage_link_event(session, TELEGRAM_ACCOUNT_LINKED, link, now)
+            if previous is not None:
+                delivery_ids += self._stage_link_event(session, TELEGRAM_ACCOUNT_UNLINKED, previous, now, RELINKED)
             session.commit()
-            return LinkTokenConsumption(LinkTokenOutcome.LINKED, link=link, replaced_link=previous)
+            return LinkTokenConsumption(
+                LinkTokenOutcome.LINKED, link=link, replaced_link=previous, delivery_ids=tuple(delivery_ids)
+            )
+
+    def _stage_link_event(
+        self,
+        session: Session,
+        event_name: str,
+        link: AgentBarnTelegramLink,
+        now: datetime,
+        reason: str | None = None,
+    ) -> list[UUID]:
+        payload: dict[str, Any] = {
+            "organization_id": link.organization_id,
+            "agent_id": link.agent_id,
+            "connection_id": link.connection_id,
+            "link_id": link.id,
+        }
+        if reason is not None:
+            payload["reason"] = reason
+        event = EVENT_REGISTRY.build_event(
+            event_name=event_name,
+            schema_version=1,
+            occurred_at=now,
+            organization_id=link.organization_id,
+            actor=ActorIdentity(
+                type=ActorIdentityType.MEMBERSHIP, id=link.linked_by_membership_id, organization_id=link.organization_id
+            ),
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT, id=link.agent_id, organization_id=link.organization_id
+            ),
+            correlation_id=uuid4(),
+            payload=payload,
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return self.outbox_repository.delivery_ids_for_event(session, event.event_id)
 
     def list_active_links_in_scope(
         self,

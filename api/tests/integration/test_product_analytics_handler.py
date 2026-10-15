@@ -20,6 +20,8 @@ from api.domains.events.catalog import (
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_ROLE_CHANGED,
     PRODUCT_ANALYTICS_HANDLER,
+    TELEGRAM_ACCOUNT_LINKED,
+    TELEGRAM_ACCOUNT_UNLINKED,
     USER_ONBOARDING_COMPLETED,
 )
 from api.domains.events.handlers import (
@@ -731,3 +733,37 @@ def test_onboarding_completed_is_sent_as_the_user_with_no_extra_fields():
         assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
         assert_that(capture["properties"], is_not(has_key("user_id")))
         assert_that(capture["properties"]["is_trial"], equal_to(False))
+
+
+@pytest.mark.parametrize(
+    ("event_name", "extra", "expected"),
+    [
+        (TELEGRAM_ACCOUNT_LINKED, {}, {}),
+        (TELEGRAM_ACCOUNT_UNLINKED, {"reason": "relinked"}, {"reason": "relinked"}),
+    ],
+)
+def test_telegram_link_events_are_sent_as_the_linker_with_the_agent_and_connection(event_name, extra, expected):
+    posthog = MockPostHogModule()
+    with given(_given(posthog)) as context:
+        agent_id, connection_id, link_id = str(uuid7()), str(uuid7()), str(uuid7())
+        event = _envelope(
+            context,
+            event_name,
+            {
+                "organization_id": str(context.organization.id),
+                "agent_id": agent_id,
+                "connection_id": connection_id,
+                "link_id": link_id,
+                **extra,
+            },
+        )
+
+        _handle(context, event)
+
+        capture = posthog.batches[0][0]
+        assert_that(capture["distinct_id"], equal_to(str(context.user.id)))
+        assert_that(
+            {key: capture["properties"].get(key) for key in ("agent_id", "connection_id", *expected)},
+            equal_to({"agent_id": agent_id, "connection_id": connection_id, **expected}),
+        )
+        assert_that(capture["properties"], is_not(has_key("link_id")))

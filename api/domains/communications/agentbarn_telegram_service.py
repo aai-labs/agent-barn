@@ -28,6 +28,7 @@ from api.domains.communications.models import (
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.events.dispatch import EventDeliveryDispatcher
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 
@@ -53,6 +54,7 @@ class AgentBarnTelegramService:
     connections: CommunicationConnectionRepository
     repository: AgentBarnTelegramRepository
     plugins: PlatformPluginRegistry
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def is_offered(self) -> bool:
         """Whether this environment has Agent Barn's own bot configured."""
@@ -157,12 +159,14 @@ class AgentBarnTelegramService:
         There is no user context: the bot's ingress calls this with the sender
         Telegram reported, and the token itself carries the Member's authority.
         """
-        return self.repository.consume_link_token(
+        result = self.repository.consume_link_token(
             hash_link_token(raw_token),
             telegram_user_id=telegram_user_id,
             telegram_username=telegram_username,
             now=datetime.now(UTC),
         )
+        self.event_delivery_dispatcher.enqueue_immediate(list(result.delivery_ids))
+        return result
 
     def _plugin(self) -> AgentBarnTelegramPlatformPlugin:
         plugin = self.plugins.require(CommunicationPlatform.AGENTBARN_TELEGRAM.value)

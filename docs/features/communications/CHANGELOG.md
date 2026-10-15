@@ -15,6 +15,10 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-15 — Telegram link events for product analytics (AF-374)
+
+- Added: spending a link token stages `telegram.account.linked` in the same transaction as the link, and `telegram.account.unlinked` with `reason: "relinked"` for a link it replaces. Each event is in its link's own Organization, with the Membership that issued the link as actor. Payloads carry Organization, Agent, Connection and link ids only, never the Telegram user id or username. `AgentBarnTelegramService.consume_link_token` enqueues the deliveries after commit; the outbox reconciler picks up any it could not. See [Product analytics](../product-analytics.md).
+
 ### 2026-10-09 — Spend-limit notice on native chat — [PR #284](https://github.com/aai-labs/agent-barn/pull/284)
 
 - Corrected: native Slack, Discord, Telegram, and Teams no longer show OpenClaw's "top up your API key" billing text when a model spend limit is reached. Both runtimes' in-pod LLM proxies answer a refused chat completion with the spend-limit notice as an ordinary assistant reply (JSON or SSE, matching the request), which the native gateway posts. Other refused endpoints keep the terminal `402`.

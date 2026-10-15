@@ -41,11 +41,40 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered (AF-374): `organization.llm_budget.exhausted` reaches PostHog, attributed to the Organization's creator.
 - Also delivered (AF-374): a Google sign-in to an existing, verified account records `user.logged_in` with `method: "google"`.
 - Also delivered (AF-374): `user.onboarding.completed`, sent once per user on the first onboarding completion.
+- Also delivered (AF-374): `telegram.account.linked`, and `telegram.account.unlinked` (`relinked`) when a new link replaces one.
 - In progress (AF-374): onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
 - Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-15 — AF-374 — Telegram link events
+
+- Delivered: new Organization-scoped Domain Events `telegram.account.linked` and `telegram.account.unlinked`, handled only by `product_analytics.posthog`.
+  - Sent properties: `agent_id`, `connection_id`, and `reason` on unlink.
+  - `link_id` stays in the payload and is not sent.
+  - The Telegram user id and username are never in either.
+- **Linked:** `AgentBarnTelegramRepository._consume` stages it in the transaction that spends the link token. The actor is the Membership that issued the token.
+- **Relinked:** the same transaction stages `unlinked` with `reason: "relinked"` for the link it ends. That link can be in another Organization, so the event uses the ended link's own Organization and linker; otherwise the registry would reject it and break linking.
+- **Delivery:** the delivery ids come back on `LinkTokenConsumption.delivery_ids`, and `AgentBarnTelegramService.consume_link_token` enqueues them after commit. This runs in the Communications process; the outbox reconciler covers anything not enqueued.
+- Changed:
+  - `events/catalog.py`
+  - `communications/agentbarn_telegram_repository.py` (gains `OutboxMessageRepository`)
+  - `communications/agentbarn_telegram_service.py` (gains `EventDeliveryDispatcher`)
+  - `analytics/event_handlers.py`
+  - `domain-events.md`, `product-analytics.md`, `rbac/IMPLEMENTATION-BRIEF.md`, `communications/CHANGELOG.md`
+- Verified:
+  - New `test_agentbarn_telegram_link_events.py`:
+    - the linked event's scope, actor, subject, payload, handler and returned delivery ids
+    - no Telegram id or username in any payload
+    - a replaced link gives `relinked`
+    - a link replaced from another Organization is recorded in its own Organization, by its own linker
+    - expired, unknown and used tokens record nothing
+    - racing first links record each link once
+    - the service enqueues the staged deliveries
+  - New handler test for both events, which never sends `link_id`, plus 2 wiring rows. The repository unit test now passes the new dependency.
+  - All failed before the change, because the events didn't exist.
+  - Every Telegram suite plus the handler, wiring and outbox suites pass (255). Ruff and ty are clean.
 
 ### 2026-10-15 — AF-374 — Onboarding completion event
 
