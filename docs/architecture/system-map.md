@@ -32,6 +32,7 @@ Organization
     ├── Communication Connections ── Platform Plugins
     │   ├── Web Chat/Email Deliveries ── Communications Gateway
     │   └── Native chat transport ── Agent runtime
+    ├── Workflows ── immutable Workflow Versions
     ├── Agent Webhooks ── Webhook Invocations
     ├── Runtime resources ── Kubernetes
     ├── Conversation Messages ← Communications Gateway / native Ingest
@@ -43,6 +44,10 @@ Organization
 The Agent domain owns lifecycle, templates, skills, runtime builders, Kubernetes resources, LiteLLM keys, and runtime credentials. The Communications domain independently owns provider credentials, Platform Plugins, Communication Connections, canonical gateway messages, and durable Web Chat/Email delivery. Native provider sessions and sends belong to the Agent runtime; authenticated Ingest mirrors native transcripts. See the [transport contract](runtime-and-deployment.md#platform-plugin-boundary). The Agent Webhooks domain owns signed machine ingress and durable Webhook Invocations; an Agent Webhook is not a Platform or Communication Connection. Cross-domain orchestration belongs in services rather than routes or repositories.
 
 The Agent Memory domain owns the persisted opt-in and Organization-managed Memory Grants, with atomic audit events. These product APIs are registered in `api_app.py`; the separate memory process enforces runtime credentials and proxies to Hindsight, and opted-in runtimes recall and retain through their pinned Hindsight plugins alongside native memory. See [`Agent Memory`](../features/agent-memory.md) and its [delivery log](../features/agent-memory/CHANGELOG.md).
+
+The Workflows domain owns Agent-scoped authoring, immutable versions and manual
+workflow building. WF01 has no execution API or runtime dispatch. See
+[Agent workflows](../features/agent-workflows.md) for validation, authority and capability gates.
 
 ## Dependency direction
 

@@ -1,18 +1,24 @@
 "use client";
 
-import { useState } from "react";
-import { Brain, Sparkles } from "lucide-react";
+import { Brain, Sparkles, Workflow } from "lucide-react";
+import { parseAsStringLiteral, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { PlatformMemorySettings } from "@/features/agent-memory/components/platform-memory-settings";
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
+import { PlatformWorkflowSettings } from "@/features/workflows/components/platform-workflow-settings";
 
 const SECTIONS = {
   "agent-memory": {
     label: "Agent Memory",
     icon: <Brain size={15} aria-hidden />,
     description: "Long-term memory settings shared by every Agent and Organization.",
+  },
+  workflows: {
+    label: "Workflows",
+    icon: <Workflow size={15} aria-hidden />,
+    description: "Workflow authoring shared by every Agent and Organization.",
   },
   trials: {
     label: "Signup & trials",
@@ -21,10 +27,11 @@ const SECTIONS = {
   },
 } as const;
 
-type SectionKey = keyof typeof SECTIONS;
-
 export function PlatformSettings() {
-  const [active, setActive] = useState<SectionKey>("agent-memory");
+  const [active, setActive] = useQueryState(
+    "section",
+    parseAsStringLiteral(["agent-memory", "workflows", "trials"]).withDefault("agent-memory"),
+  );
   const section = SECTIONS[active];
 
   return (
@@ -51,13 +58,19 @@ export function PlatformSettings() {
             eyebrow="Platform"
             items={Object.entries(SECTIONS).map(([key, item]) => ({ key, label: item.label, icon: item.icon }))}
             activeKey={active}
-            onSelect={(key) => setActive(key as SectionKey)}
+            onSelect={(key) => void setActive(key === "workflows" || key === "trials" ? key : "agent-memory")}
           />
         }
         heading={section.label}
         description={section.description}
       >
-        {active === "agent-memory" ? <PlatformMemorySettings /> : <PlatformTrialSettings />}
+        {active === "agent-memory" ? (
+          <PlatformMemorySettings />
+        ) : active === "workflows" ? (
+          <PlatformWorkflowSettings />
+        ) : (
+          <PlatformTrialSettings />
+        )}
       </SettingsPageLayout>
     </div>
   );

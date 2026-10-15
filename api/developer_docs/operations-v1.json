@@ -451,6 +451,26 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-capabilities",
+    "get_workflow_capabilities_organizations__organization_id__agents__agent_id__workflow_capabilities_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows",
+    "list_workflows_organizations__organization_id__agents__agent_id__workflows_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}",
+    "get_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
+    "list_workflow_versions_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/communication-platforms",
     "list_communication_platforms_organizations__organization_id__communication_platforms_get"
   ],
@@ -698,6 +718,11 @@
     "GET",
     "/platform/settings/trial",
     "read_trial_settings_platform_settings_trial_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/workflows",
+    "read_settings_platform_settings_workflows_get"
   ],
   [
     "GET",
@@ -1056,6 +1081,21 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows",
+    "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/archive",
+    "archive_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__archive_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
+    "save_workflow_version_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/members",
     "add_member_organizations__organization_id__members_post"
   ],
@@ -1233,5 +1273,10 @@
     "PUT",
     "/platform/settings/trial",
     "update_trial_settings_platform_settings_trial_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/workflows",
+    "update_settings_platform_settings_workflows_put"
   ]
 ]
