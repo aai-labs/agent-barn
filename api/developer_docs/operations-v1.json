@@ -986,6 +986,16 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/apply",
+    "apply_connections_organizations__organization_id__agents__agent_id__custom_api_connections_apply_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/preflight",
+    "preflight_connections_organizations__organization_id__agents__agent_id__custom_api_connections_preflight_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/custom-api-connections/{connection_id}/apply",
     "apply_connection_organizations__organization_id__agents__agent_id__custom_api_connections__connection_id__apply_post"
   ],

@@ -223,6 +223,10 @@ installing current values, including after isolation, auth/header changes and
 connection deletion. Built-in integration entries are preserved. Old managed
 Kubernetes Secrets are replaced on start.
 
+Startup installs an aai-cli configuration containing only encrypted-store paths
+even when no CLI integrations remain. This clears stale profiles while the setup
+script removes former Custom API entries and any removed SharePoint sign-in.
+
 `POST /{connection_id}/apply` accepts the update fields plus `restart`. Applying to
 a running Agent requires `restart: true` and `agent.lifecycle.manage`. The server
 prepares the complete resulting runtime configuration before stopping the old pod,
