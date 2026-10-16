@@ -9,6 +9,7 @@ provider credential on the agent's behalf. See
 import datetime
 import hashlib
 import secrets
+from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -152,24 +153,27 @@ class BrokeredTokenRead(PydanticBaseModel):
     scopes: list[str] = []
 
 
-class MailSummaryRead(PydanticBaseModel):
-    """One inbox message's headers, as listed for an agent."""
-
-    id: str
-    sender: str
-    subject: str
-    date: str
+class CustomApiHeader(PydanticBaseModel):
+    name: str = Field(max_length=256)
+    value: str = Field(max_length=8192)
 
 
-class MailListRead(PydanticBaseModel):
-    messages: list[MailSummaryRead]
+class CustomApiRequest(PydanticBaseModel):
+    """The complete request object aai-cli's isolated Custom API profile posts.
+
+    ``url`` names the provider resource inside the profile's base URL; the gateway never
+    fetches it. Headers are accepted because aai-cli always sends the list, and ignored.
+    """
+
+    method: str = Field(min_length=1, max_length=10)
+    url: str = Field(min_length=1, max_length=4096)
+    query: dict[str, Any] = Field(default_factory=dict)
+    body: Any = None
+    headers: list[CustomApiHeader] = Field(default_factory=list, max_length=32)
 
 
-class MailMessageRead(MailSummaryRead):
-    """One inbox message's readable text. Attachments are named, never returned."""
+class ServedResponseRead(PydanticBaseModel):
+    """aai-cli's result envelope: the provider's status and body."""
 
-    to: str
-    cc: str
-    body: str
-    truncated: bool
-    attachments: list[str]
+    status: int
+    body: Any

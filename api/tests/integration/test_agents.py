@@ -5340,9 +5340,12 @@ def test_start_agent_reads_gmail_through_the_gateway_without_the_app_password(gi
             assert_that(pod, is_not(contains_string("abcdefghijklmnop")))
             assert_that(pod, is_not(contains_string("abcd efgh")))
 
-        with then("it gets the read-only helper and is told to use it"):
-            assert_that(config_map.data["gmail-read.sh"], contains_string("/mail/messages"))
-            assert_that(config_map.data["AGENTS.md"], contains_string("sh /app/config/gmail-read.sh list"))
+        with then("aai-cli is pointed at the gateway and the agent is told how to read mail"):
+            assert_that(config_map.data["aai-cli-config.toml"], contains_string('provider = "custom_api"'))
+            assert_that(config_map.data["aai-cli-config.toml"], contains_string("/custom-api/request"))
+            assert_that(
+                config_map.data["AGENTS.md"], contains_string("aai-cli --profile gmail-inbox custom-api request")
+            )
 
 
 def test_create_agent_signs_in_to_gmail_before_saving_the_app_password():

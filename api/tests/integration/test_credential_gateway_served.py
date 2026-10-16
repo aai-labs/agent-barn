@@ -1,16 +1,19 @@
-"""The credential gateway reads Gmail for an agent holding only its gateway token.
+"""The credential gateway answers aai-cli Custom API requests for gateway-served providers.
 
-The app password stays in the database; the agent presents its gateway token and gets
-mail back. Every token problem gets the same opaque 403 as the proxy routes.
+aai-cli posts the complete request with only the agent's gateway token; the gateway hands
+it to the provider's plugin with the decrypted credential and returns ``{status, body}``.
+Gmail with an app password is the one such provider: the password stays in the database.
+Every token problem gets the same opaque 403 as the proxy routes.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import status
 from hamcrest import assert_that, equal_to
-from injector import Module, provider, singleton
 from sqlmodel import Session
 
 from api.domains.agents.models import (
@@ -24,15 +27,13 @@ from api.domains.agents.models import (
 from api.domains.agents.repository import AgentRepository
 from api.domains.credential_gateway.models import GatewayToken, hash_token, issue_token_value
 from api.domains.credential_gateway.repository import GatewayTokenRepository
+from api.domains.integrations.plugins.providers import GMAIL_SERVED_BASE_URL
 from api.domains.integrations.repository import IntegrationRepository
 from api.infrastructure.google.gmail_imap import (
     GmailInbox,
-    InvalidMailQuery,
     MailMessage,
-    MailNotFound,
     MailSignInFailed,
     MailSummary,
-    MailUnavailable,
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -67,16 +68,6 @@ _MESSAGE = MailMessage(
 )
 
 
-class FakeInboxModule(Module):
-    @provider
-    @singleton
-    def provide_inbox(self) -> GmailInbox:
-        inbox: Any = MagicMock(spec=GmailInbox)
-        inbox.list_messages.return_value = [_SUMMARY]
-        inbox.get_message.return_value = _MESSAGE
-        return inbox
-
-
 _GIVEN = [
     set_env_variable(
         {
@@ -87,7 +78,7 @@ _GIVEN = [
             "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
         }
     ),
-    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule(), FakeInboxModule()]),
+    prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
     prepare_api_server(),
     create_test_client(),
     prepare_gateway_server(),
@@ -140,18 +131,40 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _inbox(context) -> Any:
-    return context.injector.get(GmailInbox)
+_ROUTE = "/gateway/v1/custom-api/request"
+
+
+def _request(method: str, path: str, query: dict | None = None, body: Any = None) -> dict:
+    """The complete request object aai-cli's isolated Custom API profile posts."""
+    return {
+        "method": method,
+        "url": f"{GMAIL_SERVED_BASE_URL}{path}",
+        "query": query or {},
+        "body": body,
+        "headers": [],
+    }
+
+
+@contextmanager
+def _inbox() -> Iterator[Any]:
+    inbox: Any = MagicMock(spec=GmailInbox)
+    inbox.list_messages.return_value = [_SUMMARY]
+    inbox.get_message.return_value = _MESSAGE
+    with (
+        patch.object(GmailInbox, "list_messages", inbox.list_messages),
+        patch.object(GmailInbox, "get_message", inbox.get_message),
+    ):
+        yield inbox
 
 
 def test_an_agent_lists_its_inbox_with_only_its_gateway_token():
-    with given(_GIVEN) as context:
+    with given(_GIVEN) as context, _inbox() as inbox:
         _gmail(context)
         token = _token_for(context)
 
-        with when("the agent lists recent mail matching a search"):
-            response = context.gateway_client.get(
-                "/gateway/v1/mail/messages", params={"q": "from:google", "limit": 5}, headers=_auth(token)
+        with when("aai-cli asks the gateway for recent mail matching a search"):
+            response = context.gateway_client.post(
+                _ROUTE, json=_request("GET", "/messages", {"q": "from:google", "limit": "5"}), headers=_auth(token)
             )
 
         with then("the gateway signs in with the stored app password and returns the headers"):
@@ -159,54 +172,74 @@ def test_an_agent_lists_its_inbox_with_only_its_gateway_token():
             assert_that(
                 response.json(),
                 equal_to(
-                    {"messages": [{"id": "3753", "sender": _SUMMARY.sender, "subject": "Security alert", "date": "d"}]}
+                    {
+                        "status": 200,
+                        "body": {
+                            "messages": [
+                                {"id": "3753", "sender": _SUMMARY.sender, "subject": "Security alert", "date": "d"}
+                            ]
+                        },
+                    }
                 ),
             )
-            _inbox(context).list_messages.assert_called_once_with(
+            inbox.list_messages.assert_called_once_with(
                 "someone@gmail.com", "abcdefghijklmnop", query="from:google", limit=5
             )
 
 
 def test_an_agent_reads_one_message():
-    with given(_GIVEN) as context:
+    with given(_GIVEN) as context, _inbox() as inbox:
         _gmail(context)
         token = _token_for(context)
 
-        response = context.gateway_client.get("/gateway/v1/mail/messages/3753", headers=_auth(token))
+        response = context.gateway_client.post(_ROUTE, json=_request("GET", "/messages/3753"), headers=_auth(token))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
-        body = response.json()
+        body = response.json()["body"]
         assert_that(body["body"], equal_to("An app password was created."))
         assert_that(body["attachments"], equal_to(["notice.pdf"]))
         assert_that(body["to"], equal_to("someone@gmail.com"))
-        _inbox(context).get_message.assert_called_once_with("someone@gmail.com", "abcdefghijklmnop", "3753")
+        inbox.get_message.assert_called_once_with("someone@gmail.com", "abcdefghijklmnop", "3753")
 
 
-def test_another_providers_token_cannot_read_mail():
-    with given(_GIVEN) as context:
+def test_a_write_is_refused_without_contacting_gmail():
+    with given(_GIVEN) as context, _inbox() as inbox:
+        _gmail(context)
+        token = _token_for(context)
+
+        response = context.gateway_client.post(_ROUTE, json=_request("DELETE", "/messages/3753"), headers=_auth(token))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json()["status"], equal_to(405))
+        inbox.get_message.assert_not_called()
+        inbox.list_messages.assert_not_called()
+
+
+def test_a_proxied_providers_token_is_refused():
+    with given(_GIVEN) as context, _inbox() as inbox:
         _gmail(context)
         _secret(context, SecretProvider.GITHUB, GithubContent(token="ghp_x", owner="acme", repos=[], org="acme"))
         github_token = _token_for(context, SecretProvider.GITHUB)
 
-        response = context.gateway_client.get("/gateway/v1/mail/messages", headers=_auth(github_token))
+        response = context.gateway_client.post(_ROUTE, json=_request("GET", "/messages"), headers=_auth(github_token))
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
         assert_that(response.json()["detail"]["error"], equal_to("gateway_token_rejected"))
-        _inbox(context).list_messages.assert_not_called()
+        inbox.list_messages.assert_not_called()
 
 
 @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer agt_unknown"}, {"Authorization": "Basic Zm9v"}])
-def test_a_missing_or_unknown_token_cannot_read_mail(headers):
-    with given(_GIVEN) as context:
+def test_a_missing_or_unknown_token_is_refused(headers):
+    with given(_GIVEN) as context, _inbox() as inbox:
         _gmail(context)
 
-        response = context.gateway_client.get("/gateway/v1/mail/messages", headers=headers)
+        response = context.gateway_client.post(_ROUTE, json=_request("GET", "/messages"), headers=headers)
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
-        _inbox(context).list_messages.assert_not_called()
+        inbox.list_messages.assert_not_called()
 
 
-def test_a_mail_token_cannot_use_the_proxy_route():
+def test_a_served_providers_token_cannot_use_the_proxy_route():
     with given(_GIVEN) as context:
         _gmail(context)
         token = _token_for(context)
@@ -216,47 +249,37 @@ def test_a_mail_token_cannot_use_the_proxy_route():
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
 
 
-@pytest.mark.parametrize(
-    "failure,code,error",
-    [
-        (MailSignInFailed(), status.HTTP_502_BAD_GATEWAY, "mail_sign_in_failed"),
-        (MailUnavailable("down"), status.HTTP_502_BAD_GATEWAY, "upstream_unreachable"),
-        (InvalidMailQuery("bad"), status.HTTP_400_BAD_REQUEST, "invalid_query"),
-    ],
-)
-def test_gmail_failures_are_reported_without_detail(failure, code, error):
-    with given(_GIVEN) as context:
+def test_a_gmail_failure_is_reported_in_the_envelope_without_the_password():
+    # aai-cli shows the agent nothing from a gateway error status, so a provider failure
+    # is returned as the upstream status inside a successful envelope.
+    with given(_GIVEN) as context, _inbox() as inbox:
         _gmail(context)
         token = _token_for(context)
-        _inbox(context).list_messages.side_effect = failure
+        inbox.list_messages.side_effect = MailSignInFailed()
 
-        response = context.gateway_client.get("/gateway/v1/mail/messages", headers=_auth(token))
+        response = context.gateway_client.post(_ROUTE, json=_request("GET", "/messages"), headers=_auth(token))
 
-        assert_that(response.status_code, equal_to(code))
-        assert_that(response.json()["detail"]["error"], equal_to(error))
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["status"], equal_to(502))
+        assert_that(response.json()["body"]["error"], equal_to("mail_sign_in_failed"))
         assert_that("abcdefghijklmnop" in response.text, equal_to(False))
 
 
-def test_a_missing_message_is_not_found():
-    with given(_GIVEN) as context:
-        _gmail(context)
-        token = _token_for(context)
-        _inbox(context).get_message.side_effect = MailNotFound("9")
-
-        response = context.gateway_client.get("/gateway/v1/mail/messages/9", headers=_auth(token))
-
-        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
-
-
-@pytest.mark.parametrize("limit", [0, 51])
-def test_the_list_limit_is_bounded(limit):
-    with given(_GIVEN) as context:
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"url": f"{GMAIL_SERVED_BASE_URL}/messages"},
+        {"method": "GET"},
+        {"method": "GET", "url": "x" * 4097},
+        {"method": "G" * 11, "url": f"{GMAIL_SERVED_BASE_URL}/messages"},
+    ],
+)
+def test_a_malformed_request_object_is_rejected(payload):
+    with given(_GIVEN) as context, _inbox() as inbox:
         _gmail(context)
         token = _token_for(context)
 
-        response = context.gateway_client.get(
-            "/gateway/v1/mail/messages", params={"limit": limit}, headers=_auth(token)
-        )
+        response = context.gateway_client.post(_ROUTE, json=payload, headers=_auth(token))
 
         assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
-        _inbox(context).list_messages.assert_not_called()
+        inbox.list_messages.assert_not_called()

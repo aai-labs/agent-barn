@@ -13,6 +13,11 @@ Related context: [`../../adr/2026-09-02-credential-gateway-egress-modes.md`](../
 
 ## Changes
 
+### 2026-10-16 — Gateway-served Gmail with an app password (AF-400)
+
+- Added: `EgressMode.GATEWAY_SERVED` and the plugin `serve` hook. The generic `POST /gateway/v1/custom-api/request` route takes aai-cli's Custom API request object, refuses providers that are not gateway-served, audits `served`, and returns `{status, body}`.
+- Added: Gmail with an app password as the first gateway-served provider. Its plugin answers only inbox list and read, over read-only IMAP; it has no direct route. Needs `hermes-base` 0.2.9 / `openclaw-base` 0.7.6 for aai-cli's Custom API gateway mode.
+
 ### 2026-10-08 — Remaining optional-isolation slices
 
 - Activated: desired policy selects direct, proxy or broker artifacts; new stored and operator-default bindings start OFF while migrated bindings retain prior routing.

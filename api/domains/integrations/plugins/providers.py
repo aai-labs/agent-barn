@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import base64
 import re
-from urllib.parse import urlsplit, urlunsplit
+from collections.abc import Callable
+from dataclasses import asdict
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import httpx
 
@@ -41,8 +43,18 @@ from api.domains.integrations.plugins.base import (
     IntegrationPlugin,
     MintedToken,
     OutboundRequest,
+    ServedRequest,
+    ServedResponse,
     TokenBrokerService,
     UpstreamAuthenticationError,
+)
+from api.infrastructure.google.gmail_imap import (
+    MAX_LIST_LIMIT,
+    GmailInbox,
+    InvalidMailQuery,
+    MailNotFound,
+    MailSignInFailed,
+    MailUnavailable,
 )
 from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
@@ -60,8 +72,12 @@ GOG = "gog"
 #: Providers reached by no agent-side CLI: the credential is platform infrastructure
 #: injected as plain environment.
 NO_TOOL = "none"
-# Read through the credential gateway's own mail endpoints with a small helper script.
-MAIL_GATEWAY = "mail-gateway"
+#: The address an agent's aai-cli Custom API profile uses for Gmail read with an app
+#: password. A label only: aai-cli posts the request to the credential gateway and never
+#: contacts this host, and the gateway answers it from IMAP.
+GMAIL_SERVED_BASE_URL = "https://gmail.internal/v1"
+_GMAIL_MESSAGE_PATH = re.compile(r"/v1/messages/(\d{1,20})")
+_GMAIL_DEFAULT_LIMIT = 20
 
 _PIPEDRIVE_DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -695,11 +711,14 @@ class SharePointPlugin(AaiCliPlugin[SharePointContent]):
         )
 
 
-class GmailAppPasswordPlugin(IntegrationPlugin[GmailAppPasswordContent]):
+class GmailAppPasswordPlugin(AaiCliPlugin[GmailAppPasswordContent]):
     """Gmail read over IMAP by the credential gateway with a Google app password.
 
     An app password cannot be limited to reading, so it is gateway-served only: the
-    gateway signs in and reads on the agent's behalf, and the pod never holds it.
+    agent's aai-cli posts Custom API requests to the gateway, which signs in and reads on
+    its behalf, and the pod never holds the password. ``serve`` answers exactly two
+    requests and refuses everything else before Gmail is contacted; ``GmailInbox`` opens
+    the inbox read-only and never marks mail read.
     """
 
     key = "gmail_app_password"
@@ -707,10 +726,101 @@ class GmailAppPasswordPlugin(IntegrationPlugin[GmailAppPasswordContent]):
     provider = SecretProvider.GMAIL_APP_PASSWORD
     display_name = "Gmail app password"
     credentials_model = GmailAppPasswordContent
-    runtime_tool = MAIL_GATEWAY
+    aai_cli_slug = "gmail-inbox"
+    aai_cli_label = "Gmail (app password)"
+    aai_cli_capability = (
+        "read-only inbox. List: `aai-cli --profile gmail-inbox custom-api request --method GET "
+        f"--url {GMAIL_SERVED_BASE_URL}/messages` (optionally `--query q=<Gmail search>` and "
+        f"`--query limit=<1-{MAX_LIST_LIMIT}>`). Read one: `aai-cli --profile gmail-inbox custom-api request "
+        f"--method GET --url {GMAIL_SERVED_BASE_URL}/messages/<id>` with an id from the list. Results are "
+        "`{status, body}`; sending, deleting and marking mail read are refused"
+    )
+    inbox = GmailInbox()
 
     def validate_external(self, content: GmailAppPasswordContent) -> IntegrationValidationResult:
         return validate_gmail_app_password(content)
+
+    def aai_cli_gateway_profile_block(self, content: GmailAppPasswordContent, *, base_url: str, token_env: str) -> str:
+        """An isolated ``custom_api`` profile: no credential, only the gateway and its token."""
+        del content
+        return (
+            f"[profiles.{self.aai_cli_slug}]\n"
+            'provider = "custom_api"\n'
+            f"base_url = {quote(GMAIL_SERVED_BASE_URL)}\n"
+            f"gateway_url = {quote(base_url)}\n"
+            f"gateway_token_env = {quote(token_env)}\n"
+        )
+
+    def aai_cli_context_line(self, content: GmailAppPasswordContent) -> str:
+        return f"- **Gmail** (`{self.aai_cli_slug}`): inbox of {content.email} (read-only)"
+
+    def serve(self, content: GmailAppPasswordContent, request: ServedRequest) -> ServedResponse:
+        if request.method.upper() != "GET":
+            return _served_error(405, "read_only", "Gmail is read-only here. Only GET requests are accepted.")
+        target = urlsplit(request.url)
+        base = urlsplit(GMAIL_SERVED_BASE_URL)
+        if (target.scheme, target.netloc) != (base.scheme, base.netloc) or target.fragment:
+            return _GMAIL_NOT_FOUND
+        if request.body is not None:
+            return _served_error(400, "invalid_request", "A request body is not accepted.")
+        query: dict[str, object] = {
+            key: values[0] if len(values) == 1 else values for key, values in parse_qs(target.query).items()
+        }
+        query.update(request.query)
+        if target.path == "/v1/messages":
+            return self._list(content, query)
+        message = _GMAIL_MESSAGE_PATH.fullmatch(target.path)
+        if message is None:
+            return _GMAIL_NOT_FOUND
+        if query:
+            return _served_error(400, "invalid_request", "Reading one message takes no query.")
+        return _read_mail(lambda: asdict(self.inbox.get_message(content.email, content.app_password, message[1])))
+
+    def _list(self, content: GmailAppPasswordContent, query: dict[str, object]) -> ServedResponse:
+        if set(query) - {"q", "limit"}:
+            return _served_error(400, "invalid_request", "Only the q and limit queries are accepted.")
+        search = query.get("q")
+        raw_limit = query.get("limit", _GMAIL_DEFAULT_LIMIT)
+        if search is not None and not isinstance(search, str):
+            return _served_error(400, "invalid_request", "q must be one Gmail search.")
+        if isinstance(raw_limit, bool) or not isinstance(raw_limit, int | str) or not str(raw_limit).isdigit():
+            return _served_error(400, "invalid_request", f"limit must be a whole number from 1 to {MAX_LIST_LIMIT}.")
+        limit = int(raw_limit)
+        if not 1 <= limit <= MAX_LIST_LIMIT:
+            return _served_error(400, "invalid_request", f"limit must be a whole number from 1 to {MAX_LIST_LIMIT}.")
+        return _read_mail(
+            lambda: {
+                "messages": [
+                    asdict(m)
+                    for m in self.inbox.list_messages(content.email, content.app_password, query=search, limit=limit)
+                ]
+            }
+        )
+
+
+def _served_error(status: int, error: str, message: str) -> ServedResponse:
+    return ServedResponse(status, {"error": error, "message": message})
+
+
+_GMAIL_NOT_FOUND = _served_error(
+    404, "not_found", f"Only {GMAIL_SERVED_BASE_URL}/messages and {GMAIL_SERVED_BASE_URL}/messages/<id> exist."
+)
+
+
+def _read_mail(read: Callable[[], object]) -> ServedResponse:
+    """Run one inbox read, mapping Gmail failures to a status the agent can act on."""
+    try:
+        return ServedResponse(200, read())
+    except InvalidMailQuery:
+        return _served_error(400, "invalid_query", "That search cannot be used.")
+    except MailNotFound:
+        return _served_error(404, "not_found", "No inbox message with that id.")
+    except MailSignInFailed:
+        return _served_error(
+            502, "mail_sign_in_failed", "Gmail rejected the app password. Ask the owner to reconnect Gmail."
+        )
+    except MailUnavailable:
+        return _served_error(502, "upstream_unreachable", "Gmail could not be reached.")
 
 
 SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (

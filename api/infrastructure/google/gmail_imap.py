@@ -16,8 +16,6 @@ from email.message import EmailMessage
 from email.policy import default as default_policy
 from html.parser import HTMLParser
 
-from injector import singleton
-
 GMAIL_IMAP_HOST = "imap.gmail.com"
 MAX_LIST_LIMIT = 50
 MAX_QUERY_LENGTH = 500
@@ -64,7 +62,6 @@ class MailMessage:
     attachments: list[str] = field(default_factory=list)
 
 
-@singleton
 class GmailInbox:
     """Reads one Gmail inbox for the credential gateway. Holds no state between calls."""
 

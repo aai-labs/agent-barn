@@ -33,7 +33,7 @@ from api.domains.integrations.capabilities import ISOLATION_CAPABILITIES
 from api.domains.integrations.gog_direct import build_direct_gog_env, build_direct_gog_setup_sh
 from api.domains.integrations.plugins.aai_cli_support import AaiCliIntegration, secrets_dir
 from api.domains.integrations.plugins.base import EgressMode, RuntimeArtifacts
-from api.domains.integrations.plugins.providers import AAI_CLI, GOG, MAIL_GATEWAY, NO_TOOL, SharePointPlugin
+from api.domains.integrations.plugins.providers import AAI_CLI, GOG, NO_TOOL, SharePointPlugin
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 
 
@@ -103,11 +103,7 @@ class AaiCliAdapter:
                 blocks.append(
                     cli_plugin.aai_cli_gateway_profile_block(
                         binding.content,
-                        base_url=(
-                            f"{context.gateway_base_url.rstrip('/')}/token"
-                            if binding.mode == EgressMode.TOKEN_BROKER
-                            else f"{context.gateway_base_url.rstrip('/')}/p/{plugin.key}"
-                        ),
+                        base_url=_gateway_endpoint(context.gateway_base_url, binding.mode, plugin.key),
                         token_env=gateway_token_env_var(binding.provider),
                     )
                 )
@@ -124,6 +120,17 @@ class AaiCliAdapter:
         if bindings:
             files["aai-cli-config.toml"] = "\n".join(blocks)
         return RuntimeArtifacts(files=files, env=build_env(direct), policy_md=build_integrations_policy_md(decrypted))
+
+
+def _gateway_endpoint(gateway_base_url: str, mode: EgressMode, key: str) -> str:
+    """Where an isolated aai-cli profile sends its requests on the credential gateway."""
+    base = gateway_base_url.rstrip("/")
+    if mode == EgressMode.TOKEN_BROKER:
+        return f"{base}/token"
+    if mode == EgressMode.GATEWAY_SERVED:
+        # aai-cli's Custom API gateway mode posts the complete request object here.
+        return f"{base}/custom-api/request"
+    return f"{base}/p/{key}"
 
 
 class GogAdapter:
@@ -181,61 +188,10 @@ class NoToolAdapter:
         return RuntimeArtifacts(env={"FIRECRAWL_API_KEY": api_key, "FIRECRAWL_API_URL": base_url})
 
 
-GMAIL_READ_SH = """#!/bin/sh
-# Read-only Gmail through Agent Barn's credential gateway. The app password never
-# enters this pod; the gateway reads the inbox for it and cannot send or change mail.
-set -eu
-usage() { echo "usage: gmail-read.sh list [gmail search] | get <id>" >&2; exit 2; }
-base="${AF_GATEWAY_URL:?}"
-auth="Authorization: Bearer ${AF_GATEWAY_TOKEN_GMAIL_APP_PASSWORD:?}"
-case "${1:-}" in
-  list)
-    shift
-    if [ "$#" -gt 0 ]; then
-      curl -sS -G -H "$auth" --data-urlencode "limit=20" --data-urlencode "q=$*" "$base/mail/messages"
-    else
-      curl -sS -G -H "$auth" --data-urlencode "limit=20" "$base/mail/messages"
-    fi
-    ;;
-  get)
-    case "${2:-}" in ''|*[!0-9]*) usage ;; esac
-    curl -sS -H "$auth" "$base/mail/messages/$2"
-    ;;
-  *) usage ;;
-esac
-echo
-"""
-
-_GMAIL_POLICY_MD = (
-    "\n## Gmail (read-only)\n\n"
-    "You can read the connected Gmail inbox. You cannot send, delete, or change mail, "
-    "including marking messages read. Use this helper for Gmail rather than any other email skill or tool:\n\n"
-    "- List recent messages: `sh /app/config/gmail-read.sh list`. Add Gmail search terms to filter, "
-    "for example `sh /app/config/gmail-read.sh list from:alice newer_than:7d`.\n"
-    "- Read one message: `sh /app/config/gmail-read.sh get <id>` with an `id` from the list.\n"
-)
-
-
-class MailGatewayAdapter:
-    """A read-only Gmail helper for the pod, which never receives the app password.
-
-    ``materialize_integrations`` adds the gateway URL and this provider's gateway token
-    for every isolated binding. The instructions name only the helper: Hermes refuses an
-    AGENTS.md that shows ``curl`` sending a token variable, and would drop all of it.
-    """
-
-    def materialize(self, bindings: list[RuntimeBinding], context: RuntimeContext) -> RuntimeArtifacts:
-        del context
-        if any(binding.mode != EgressMode.GATEWAY_SERVED for binding in bindings):
-            raise ValueError("Gmail app passwords are only read through the gateway")
-        return RuntimeArtifacts(files={"gmail-read.sh": GMAIL_READ_SH}, policy_md=_GMAIL_POLICY_MD)
-
-
 RUNTIME_TOOL_ADAPTERS: Mapping[str, RuntimeToolAdapter] = {
     AAI_CLI: AaiCliAdapter(),
     GOG: GogAdapter(),
     NO_TOOL: NoToolAdapter(),
-    MAIL_GATEWAY: MailGatewayAdapter(),
 }
 
 
