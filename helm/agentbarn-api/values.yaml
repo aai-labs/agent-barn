@@ -69,7 +69,7 @@ googleCloudClientSecret: ""
 
 # Multi-tenant Microsoft Entra app for Organization OneDrive sync. Leave blank to
 # disable. Registered Web redirect URI must be
-# "<webAppUrl>/api/v1/integrations/onedrive-sync/callback".
+# "<webAppUrl>/api/v1/integrations/sync-provider/onedrive/callback".
 onedriveSyncClientId: ""
 onedriveSyncClientSecret: ""
 

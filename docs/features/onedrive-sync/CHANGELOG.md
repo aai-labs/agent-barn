@@ -37,6 +37,30 @@ Acceptance criteria amendment: another Organization's caller gets **403**, not 4
 
 ## Changes
 
+### 2026-10-16 — AF-383 — Generic sync provider service and routes; `onedrive_sync` removed
+
+- Delivered: `SyncProviderService` and provider-keyed routes in `api/domains/sync_provider/`, replacing `api/domains/onedrive_sync/`:
+  - `GET /organizations/{organization_id}/sync-providers` lists every offered provider with its descriptor, `approval_url`, `connection`, `can_connect` and `blocked_reason`;
+  - `…/sync-providers/{provider_key}/connection/` `authorize-url`, `sign-in`, `locations`, `location`, `disconnect`, and `DELETE` to abandon;
+  - the callback is `GET /api/v1/integrations/sync-provider/{provider_key}/callback`.
+
+  Plugin failures map to the same status codes as before. The SharePoint location guard is bound in the service, from the plugin's `SyncLocationGuard`. A provider without a location picker is provisioned at sign-in.
+- Delivered: one connection at a time, in `SyncProviderService._blocking_connection` and the partial unique index. Another provider's live connection blocks with 409 "Disconnect OneDrive first.", or "Finish connecting OneDrive, or start over, first." while it's pending. Expired sign-ins don't block and are cleared at the next sign-in (`SyncProviderRepository.delete_expired_pending`).
+- Changed:
+  - an unconfigured provider is left out of the list, and its routes are 404 instead of 503;
+  - the popup message type is `sync-provider-oauth`;
+  - migration `734b0f2b3793` (renamed `…_add_sync_provider_connection.py`) creates only `sync_provider_connection`;
+  - `SharePointService` reads the folder site through `SyncProviderLookupService`;
+  - the redirect URI in `.env.spec`, `.env.deploy.spec` and the API chart values is `<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback`;
+  - `README.md` (routes, one connection at a time, changing to several providers, source map), `docs/INDEX.md`, and `api/developer_docs/operations-v1.json` (8 operations removed, 8 added, nothing else changed).
+- Verified:
+  - `api/tests/integration/test_sync_provider_connection.py` (82 tests): every ported OneDrive case on the new routes, the provider list, unknown and unoffered providers, another provider's state, a provider without a picker, and the one-connection-at-a-time group, using a test-only second provider (`api/tests/steps/sync_provider.py`);
+  - `test_sync_provider_repository.py` (20); the plugin, config and contract tests; `test_sharepoint_selected_sites.py`, `test_sharepoint_sign_in.py` and `test_sharepoint_token_endpoint.py`;
+  - ruff, format and ty (only the existing Unix-only errors remain); one Alembic head;
+  - a one-off autogenerate comparison found no difference for `sync_provider_connection`.
+- In transition: the Organization settings UI still calls the removed `/onedrive-sync` routes until the next slice. The Microsoft app needs the new redirect URI registered before a manual run.
+- Follow-up: the Sync settings UI (Option B connection list).
+
 ### 2026-10-16 — AF-383 — Sync provider connection table, repository and lookup
 
 - Delivered: `SyncProviderConnection` (`sync_provider_connection`) in `api/domains/sync_provider/models.py`:

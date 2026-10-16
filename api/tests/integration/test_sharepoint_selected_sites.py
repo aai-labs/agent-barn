@@ -18,7 +18,7 @@ from api.domains.agents.microsoft_graph_sites import (
 from api.domains.agents.models import SecretProvider, SharePointContent, decrypt_content
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.sharepoint_service import decode_sign_in_state
-from api.domains.onedrive_sync.repository import OneDriveSyncRepository
+from api.domains.sync_provider.repository import SyncProviderRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import (
@@ -670,22 +670,24 @@ def _onedrive_folder_is_on(site_id: str, organization_id=None):
     """The Organization (or another one) keeps its OneDrive sync folder on ``site_id``."""
 
     def step(context):
-        repository = context.injector.get(OneDriveSyncRepository)
+        repository = context.injector.get(SyncProviderRepository)
         pending = repository.create_pending(
             organization_id or context.organization.id,
-            tenant_id=TEAMS_TENANT_ID,
+            "onedrive",
+            schema_version=1,
+            account_id=TEAMS_TENANT_ID,
             connected_by_user_id=context.user.id,
-            pending_access_token="encrypted",
+            credentials_encrypted="encrypted",
             pending_expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
         repository.activate(
             pending.id,
-            site_id=site_id,
-            site_name="Finance",
-            site_url=_FINANCE,
-            folder_item_id="folder-item-1",
+            location_id=site_id,
+            location_name="Finance",
+            location_url=_FINANCE,
+            folder_id="folder-item-1",
             folder_web_url=f"{_FINANCE}/Shared%20Documents/Agent%20Barn",
-            permission_id="onedrive-perm-1",
+            provider_data={"permission_id": "onedrive-perm-1"},
         )
 
     return step

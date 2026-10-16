@@ -189,6 +189,39 @@ def test_abandoning_removes_only_that_providers_pending_connection():
         assert_that(_repository(context).get_open(context.organization.id, _ONEDRIVE), none())
 
 
+def test_clearing_expired_sign_ins_removes_only_expired_pending_connections():
+    with given(_GIVEN) as context:
+        expired = _repository(context).create_pending(
+            context.organization.id,
+            _ONEDRIVE,
+            schema_version=1,
+            account_id=_ACCOUNT_ID,
+            connected_by_user_id=context.user.id,
+            credentials_encrypted="token",
+            pending_expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+
+        _repository(context).delete_expired_pending(context.organization.id)
+
+        with Session(context.postgres_delegate.engine) as session:
+            assert_that(session.get(SyncProviderConnection, expired.id), none())
+        fresh = _create_pending(context)
+        _repository(context).delete_expired_pending(context.organization.id)
+        found = _repository(context).get_open(context.organization.id, _ONEDRIVE)
+        assert found is not None
+        assert_that(found.id, equal_to(fresh.id))
+
+
+def test_clearing_expired_sign_ins_leaves_an_active_connection():
+    with given(_GIVEN) as context:
+        active = _activate(context, _create_pending(context))
+        assert active is not None
+
+        _repository(context).delete_expired_pending(context.organization.id)
+
+        assert_that(_repository(context).get_open(context.organization.id, _ONEDRIVE), not_none())
+
+
 def test_abandoning_leaves_an_active_connection_in_place():
     with given(_GIVEN) as context:
         active = _activate(context, _create_pending(context))

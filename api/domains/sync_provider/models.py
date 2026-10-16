@@ -78,3 +78,39 @@ class SyncProviderDescriptorRead(PydanticBaseModel):
     folder_hint: str
     schema_version: int
     capabilities: list[SyncProviderCapability]
+
+
+class SyncProviderConnectionRead(PydanticBaseModel):
+    """What every Organization Member may see of a connection. Never tokens, the account or provider data."""
+
+    status: SyncProviderStatus
+    location_name: str | None = None
+    location_url: str | None = None
+    folder_web_url: str | None = None
+    connected_at: datetime | None = None
+
+
+class SyncProviderRead(SyncProviderDescriptorRead):
+    approval_url: str | None = None
+    connection: SyncProviderConnectionRead | None = None
+    can_connect: bool
+    blocked_reason: str | None = None
+
+
+class SyncProviderAuthorizeUrlRead(PydanticBaseModel):
+    authorize_url: str
+
+
+class SyncProviderSignInCreate(PydanticBaseModel):
+    code: str
+    state: str
+
+
+class SyncLocationRead(PydanticBaseModel):
+    id: str
+    name: str
+    web_url: str
+
+
+class SyncLocationChoice(PydanticBaseModel):
+    location_id: str

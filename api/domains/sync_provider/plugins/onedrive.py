@@ -42,6 +42,7 @@ from api.domains.sync_provider.plugins.base import (
 
 logger = logging.getLogger(__name__)
 
+ONEDRIVE_PROVIDER_KEY = "onedrive"
 MULTI_TENANT_AUTHORITY = "organizations"
 SIGN_IN_SCOPES: tuple[str, ...] = tuple(
     sorted(
@@ -80,7 +81,7 @@ class OneDriveSyncProviderPlugin(SyncProviderPlugin):
     """OneDrive through one SharePoint site: the platform Microsoft app is granted ``write`` on
     the chosen site with Sites.Selected, and creates its folder there as the app."""
 
-    key = "onedrive"
+    key = ONEDRIVE_PROVIDER_KEY
     display_name = "OneDrive"
     tagline = "Sync to a SharePoint site"
     folder_hint = "In OneDrive, choose Add shortcut to My files to keep this folder next to your own files."

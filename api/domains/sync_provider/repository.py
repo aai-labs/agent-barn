@@ -113,6 +113,18 @@ class SyncProviderRepository:
             session.commit()
             return result.rowcount > 0
 
+    def delete_expired_pending(self, organization_id: UUID) -> None:
+        """Forget the Organization's pending connections whose sign-in has lapsed, of any provider."""
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.delete(SyncProviderConnection).where(
+                    col(SyncProviderConnection.organization_id) == organization_id,
+                    col(SyncProviderConnection.status) == SyncProviderStatus.PENDING,
+                    col(SyncProviderConnection.pending_expires_at) <= datetime.now(UTC),
+                )
+            )
+            session.commit()
+
     @staticmethod
     def _open(organization_id: UUID):
         return select(SyncProviderConnection).where(

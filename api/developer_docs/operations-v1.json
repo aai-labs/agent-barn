@@ -66,11 +66,6 @@
   ],
   [
     "DELETE",
-    "/organizations/{organization_id}/onedrive-sync/connection",
-    "abandon_onedrive_sync_connection_organizations__organization_id__onedrive_sync_connection_delete"
-  ],
-  [
-    "DELETE",
     "/organizations/{organization_id}/shared-credentials/{credential_id}",
     "delete_shared_credential_organizations__organization_id__shared_credentials__credential_id__delete"
   ],
@@ -88,6 +83,11 @@
     "DELETE",
     "/organizations/{organization_id}/skills/{skill_id}/versions/{version}",
     "delete_skill_version_organizations__organization_id__skills__skill_id__versions__version__delete"
+  ],
+  [
+    "DELETE",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection",
+    "abandon_sync_provider_connection_organizations__organization_id__sync_providers__provider_key__connection_delete"
   ],
   [
     "DELETE",
@@ -186,8 +186,8 @@
   ],
   [
     "GET",
-    "/integrations/onedrive-sync/callback",
-    "onedrive_sync_callback_integrations_onedrive_sync_callback_get"
+    "/integrations/sync-provider/{provider_key}/callback",
+    "sync_provider_callback_integrations_sync_provider__provider_key__callback_get"
   ],
   [
     "GET",
@@ -536,21 +536,6 @@
   ],
   [
     "GET",
-    "/organizations/{organization_id}/onedrive-sync/connection",
-    "onedrive_sync_status_organizations__organization_id__onedrive_sync_connection_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/onedrive-sync/connection/authorize-url",
-    "onedrive_sync_authorize_url_organizations__organization_id__onedrive_sync_connection_authorize_url_get"
-  ],
-  [
-    "GET",
-    "/organizations/{organization_id}/onedrive-sync/connection/sites",
-    "search_onedrive_sync_sites_organizations__organization_id__onedrive_sync_connection_sites_get"
-  ],
-  [
-    "GET",
     "/organizations/{organization_id}/shared-credentials",
     "list_shared_credentials_organizations__organization_id__shared_credentials_get"
   ],
@@ -593,6 +578,21 @@
     "GET",
     "/organizations/{organization_id}/skills/{skill_id}/versions/{version}",
     "get_skill_version_organizations__organization_id__skills__skill_id__versions__version__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/sync-providers",
+    "list_sync_providers_organizations__organization_id__sync_providers_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/authorize-url",
+    "sync_provider_authorize_url_organizations__organization_id__sync_providers__provider_key__connection_authorize_url_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/locations",
+    "search_sync_provider_locations_organizations__organization_id__sync_providers__provider_key__connection_locations_get"
   ],
   [
     "GET",
@@ -1096,21 +1096,6 @@
   ],
   [
     "POST",
-    "/organizations/{organization_id}/onedrive-sync/connection/disconnect",
-    "disconnect_onedrive_sync_organizations__organization_id__onedrive_sync_connection_disconnect_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/onedrive-sync/connection/sign-in",
-    "complete_onedrive_sync_sign_in_organizations__organization_id__onedrive_sync_connection_sign_in_post"
-  ],
-  [
-    "POST",
-    "/organizations/{organization_id}/onedrive-sync/connection/site",
-    "choose_onedrive_sync_site_organizations__organization_id__onedrive_sync_connection_site_post"
-  ],
-  [
-    "POST",
     "/organizations/{organization_id}/shared-credentials",
     "create_shared_credential_organizations__organization_id__shared_credentials_post"
   ],
@@ -1143,6 +1128,21 @@
     "POST",
     "/organizations/{organization_id}/skills/{skill_id}/source-update",
     "apply_source_update_organizations__organization_id__skills__skill_id__source_update_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/disconnect",
+    "disconnect_sync_provider_organizations__organization_id__sync_providers__provider_key__connection_disconnect_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/location",
+    "choose_sync_provider_location_organizations__organization_id__sync_providers__provider_key__connection_location_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/sync-providers/{provider_key}/connection/sign-in",
+    "complete_sync_provider_sign_in_organizations__organization_id__sync_providers__provider_key__connection_sign_in_post"
   ],
   [
     "POST",
