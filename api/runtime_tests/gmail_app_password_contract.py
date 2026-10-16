@@ -100,7 +100,7 @@ def gmail_should_be_read_through_the_gateway(runtime: str, root: Path) -> None:
             assert_that(observed["listed"], equal_to({"status": 200, "body": {"messages": [{"id": "7"}]}}))
             assert_that(observed["read"], equal_to({"status": 200, "body": {"id": "7"}}))
             requests = observed["requests"]
-            assert_that([r["path"] for r in requests], equal_to(["/gateway/v1/custom-api/request"] * 2))
+            assert_that([r["path"] for r in requests], equal_to(["/gateway/v1/served/request"] * 2))
             assert_that({r["auth"] for r in requests}, equal_to({f"Bearer {_TOKEN}"}))
             assert_that(
                 [(r["json"]["method"], r["json"]["url"]) for r in requests],

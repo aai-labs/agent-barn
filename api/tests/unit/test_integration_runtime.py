@@ -175,7 +175,7 @@ def test_gmail_app_password_gives_the_pod_only_its_gateway_token_and_an_aai_cli_
     assert_that(set(artifacts.files), equal_to({"aai-cli-setup.sh", "aai-cli-config.toml"}))
     config = artifacts.files["aai-cli-config.toml"]
     assert_that(config, contains_string('provider = "custom_api"'))
-    assert_that(config, contains_string(f'gateway_url = "{_CONTEXT.gateway_base_url.rstrip("/")}/custom-api/request"'))
+    assert_that(config, contains_string(f'gateway_url = "{_CONTEXT.gateway_base_url.rstrip("/")}/served/request"'))
     assert_that(config, contains_string(f'gateway_token_env = "{token}"'))
     serialized = json.dumps({"env": artifacts.env, "files": artifacts.files, "policy": artifacts.policy_md})
     assert_that(serialized, is_not(contains_string("gmail-app-password-provider-secret")))

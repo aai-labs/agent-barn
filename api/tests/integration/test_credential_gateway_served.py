@@ -131,7 +131,7 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-_ROUTE = "/gateway/v1/custom-api/request"
+_ROUTE = "/gateway/v1/served/request"
 
 
 def _request(method: str, path: str, query: dict | None = None, body: Any = None) -> dict:
@@ -254,6 +254,21 @@ def test_a_missing_or_unknown_token_is_refused(headers):
         _gmail(context)
 
         response = context.gateway_client.post(_ROUTE, json=_request("GET", "/messages"), headers=headers)
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        inbox.list_messages.assert_not_called()
+
+
+def test_a_served_providers_token_is_not_a_custom_api_connection_credential():
+    # Custom API connections own /custom-api/request with their own credentials; a
+    # gateway token for a served provider must not reach mail through it.
+    with given(_GIVEN) as context, _inbox() as inbox:
+        _gmail(context)
+        token = _token_for(context)
+
+        response = context.gateway_client.post(
+            "/gateway/v1/custom-api/request", json=_request("GET", "/messages"), headers=_auth(token)
+        )
 
         assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
         inbox.list_messages.assert_not_called()
