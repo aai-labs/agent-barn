@@ -9,6 +9,7 @@ import { AppErrorState } from "@/components/app-error-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AgentMemorySettings } from "@/features/agent-memory/components/agent-memory-settings";
 import { AgentWebhookSettings } from "@/features/agent-webhooks/components/agent-webhook-settings";
+import { useNavVariant } from "@/features/navigation/providers/nav-variant-provider";
 
 import { useAgent } from "../hooks/use-agent";
 import { useAgentConfiguration } from "../hooks/use-agent-configuration";
@@ -20,6 +21,7 @@ import { AgentConfigurationSidebar } from "./agent-configuration-sidebar";
 import {
   AGENT_CONFIGURATION_SECTIONS,
   configurationSectionLabel,
+  visibleAgentConfigurationSections,
   type AgentConfigurationSectionKey,
 } from "./agent-configuration-utils";
 import { AgentDangerZoneSettings } from "./agent-danger-zone-settings";
@@ -51,13 +53,9 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
     agentId,
     canReadActivity && agent?.status === "ERROR",
   );
-  // Restore points read from the activity surface and the spend limit from the cost
-  // surface, so an Agent the viewer can see without that access does not offer them.
   const canReadCosts = canAgent(agent, "cost.read");
-  const sections = AGENT_CONFIGURATION_SECTIONS.filter(
-    (item) =>
-      (item.key !== "restore" || canReadActivity) && (item.key !== "spend" || canReadCosts),
-  );
+  const sections = visibleAgentConfigurationSections(agent);
+  const { sectionsInNav } = useNavVariant();
   // Parsed against every section, and narrowed to the visible ones below: the visible
   // list depends on the Agent, which has not loaded on first render, and parsing
   // against it then would discard a deep link like ?section=spend.
@@ -130,13 +128,16 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   return (
     <div style={{ background: "var(--bg)" }}>
       <main className="af-page">
-        <Link
-          href={`${homeHref}/agents/${agent.id}`}
-          className="mb-6 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[0.8125rem] transition-colors hover:bg-[var(--bg-soft)]"
-          style={{ color: "var(--ink-3)" }}
-        >
-          <ArrowLeft size={14} /> Back to {agent.name}
-        </Link>
+        {/* The sidebar and rail layouts carry the way back, and the sections, in navigation. */}
+        {!sectionsInNav && (
+          <Link
+            href={`${homeHref}/agents/${agent.id}`}
+            className="mb-6 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[0.8125rem] transition-colors hover:bg-[var(--bg-soft)]"
+            style={{ color: "var(--ink-3)" }}
+          >
+            <ArrowLeft size={14} /> Back to {agent.name}
+          </Link>
+        )}
 
         <div className="mb-8 flex flex-wrap items-start gap-4">
           <AgentAvatar agent={agent} size="lg" />
@@ -195,12 +196,14 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
             </Alert>
           ))}
 
-        <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
-          <AgentConfigurationSidebar
-            activeSection={activeSection}
-            onSectionChange={selectSection}
-            sections={sections}
-          />
+        <div className={sectionsInNav ? "grid gap-8" : "grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start"}>
+          {!sectionsInNav && (
+            <AgentConfigurationSidebar
+              activeSection={activeSection}
+              onSectionChange={selectSection}
+              sections={sections}
+            />
+          )}
 
           <div className="min-w-0">
             <div className="mb-4">

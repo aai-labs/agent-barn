@@ -1,6 +1,5 @@
 "use client";
 
-import { Brain, FileCode2, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
@@ -11,6 +10,7 @@ import { AgentDefaultsPanel } from "@/features/agent-settings/components/agent-d
 import { TemplatesPanel } from "@/features/templates/components/templates-panel";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import {
+  ORGANIZATION_SETTINGS_ICONS,
   ORGANIZATION_SETTINGS_SECTION_KEYS,
   visibleOrganizationSettingsSections,
   type OrganizationSettingsSectionKey,
@@ -19,15 +19,6 @@ import { SharedCredentialsPanel } from "@/features/shared-credentials/components
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
 import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limits-panel";
 
-const ICONS = {
-  agents: UserRound,
-  "spend-limits": Wallet,
-  templates: FileCode2,
-  skills: Sparkles,
-  "memory-access": Brain,
-  "organization-memory": Brain,
-  "shared-credentials": KeyRound,
-} as const;
 
 export default function SettingsPage() {
   const { role, canManage, selectedOrganization } = useActiveOrgRole();
@@ -75,7 +66,7 @@ export default function SettingsPage() {
             <SettingsSidebar
               eyebrow="Organization"
               items={visibleSections.map((item) => {
-                const Icon = ICONS[item.key];
+                const Icon = ORGANIZATION_SETTINGS_ICONS[item.key];
                 return {
                   key: item.key,
                   label: item.label,

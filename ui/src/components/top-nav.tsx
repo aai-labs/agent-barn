@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useLogout } from "@/auth/hooks/use-logout";
-import { PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
+import { CheckIcon, PlusIcon, UserIcon, UsersIcon, BuildingIcon, LogOutIcon, ShieldIcon, ServerIcon } from "@/components/icons";
 import { Activity, FileText, Menu, Receipt, Settings, Sparkles } from "lucide-react";
 import { LogoMark } from "@/components/logo-mark";
 import {
@@ -15,6 +15,11 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import {
+  NAV_VARIANTS,
+  NAV_VARIANT_LABELS,
+  useNavVariant,
+} from "@/features/navigation/providers/nav-variant-provider";
 import { OrgSwitcher } from "@/features/organizations/components/org-switcher";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
@@ -31,6 +36,7 @@ export function TopNav({ onHire }: TopNavProps) {
   const { user } = useCurrentUser();
   const { selectedOrganization } = useOrganizationContext();
   const { logout, isLoggingOut } = useLogout();
+  const { variant, setVariant } = useNavVariant();
 
   const orgId = selectedOrganization?.id;
   const orgBase = orgId ? `/dashboard/${orgId}` : "/dashboard";
@@ -327,6 +333,27 @@ export function TopNav({ onHire }: TopNavProps) {
                   </Link>
                 </div>
               )}
+
+              <div style={{ borderTop: "1px solid var(--line)" }} className="py-1">
+                <div className="px-3.5 py-1 text-[11px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--ink-5)" }}>
+                  Navigation preview
+                </div>
+                {NAV_VARIANTS.map((option) => (
+                  <button
+                    key={option}
+                    className="af-hover-bg w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-[13.5px]"
+                    style={{ color: "var(--ink-2)" }}
+                    aria-pressed={variant === option}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setVariant(option);
+                    }}
+                  >
+                    <span className="grid w-3.5 place-items-center">{variant === option && <CheckIcon />}</span>
+                    {NAV_VARIANT_LABELS[option]}
+                  </button>
+                ))}
+              </div>
 
               <div style={{ borderTop: "1px solid var(--line)" }} className="py-1">
                 <button

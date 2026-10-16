@@ -18,7 +18,7 @@ import {
   type AgentConfigurationSectionKey,
 } from "./agent-configuration-utils";
 
-const ICONS = {
+export const AGENT_CONFIGURATION_ICONS = {
   template: FileCode2,
   profile: UserRound,
   channels: MessageSquare,
@@ -48,7 +48,7 @@ export function AgentConfigurationSidebar({
       </div>
       <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible">
         {sections.map((section) => {
-          const Icon = ICONS[section.key];
+          const Icon = AGENT_CONFIGURATION_ICONS[section.key];
           const isActive = activeSection === section.key;
           return (
             <button

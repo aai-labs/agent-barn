@@ -1,8 +1,11 @@
 interface LogoMarkProps {
   size?: number;
+  /** Override the tile and line colors, e.g. to invert the mark on a dark surface. */
+  background?: string;
+  foreground?: string;
 }
 
-export function LogoMark({ size = 26 }: LogoMarkProps) {
+export function LogoMark({ size = 26, background = "var(--ink)", foreground = "var(--bg)" }: LogoMarkProps) {
   const radius = size <= 28 ? 8 : 12;
   const padding = Math.round(size * 0.14);
 
@@ -12,7 +15,7 @@ export function LogoMark({ size = 26 }: LogoMarkProps) {
       style={{
         width: size,
         height: size,
-        background: "var(--ink)",
+        background,
         borderRadius: radius,
         display: "grid",
         placeItems: "center",
@@ -31,7 +34,7 @@ export function LogoMark({ size = 26 }: LogoMarkProps) {
         {/* Outer barn silhouette */}
         <path
           d="M50,8 L82,28 L88,88 L12,88 L18,28 Z"
-          stroke="var(--bg)"
+          stroke={foreground}
           strokeWidth="8"
           strokeLinejoin="round"
           strokeLinecap="round"
@@ -40,13 +43,13 @@ export function LogoMark({ size = 26 }: LogoMarkProps) {
         {/* Inner house outline */}
         <path
           d="M50,30 L70,43 L70,70 L30,70 L30,43 Z"
-          stroke="var(--bg)"
+          stroke={foreground}
           strokeWidth="6"
           strokeLinejoin="round"
           fill="none"
         />
         {/* Door / focal dot */}
-        <circle cx="50" cy="55" r="6" fill="var(--bg)" />
+        <circle cx="50" cy="55" r="6" fill={foreground} />
       </svg>
     </div>
   );

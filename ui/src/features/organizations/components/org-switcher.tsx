@@ -1,34 +1,26 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
 import { PlusIcon } from "lucide-react";
 
 import { BuildingIcon, CheckIcon, ChevronDownIcon, ShieldIcon } from "@/components/icons";
-import { useCurrentUser } from "@/auth/providers/user-context-provider";
-import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
+import { useOrganizationSwitch } from "@/features/organizations/hooks/use-organization-switch";
 import type { Organization } from "../schemas";
 import { CreateOrganizationDialog } from "./create-organization-dialog";
 
-// Segments directly under /dashboard/ that are NOT an org id (global admin / personal).
-const GLOBAL_DASHBOARD_SEGMENTS = new Set(["account", "platform"]);
-
 export function OrgSwitcher() {
-  const { organizations, selectedOrganization } = useOrganizationContext();
-  const { user } = useCurrentUser();
-  // Mirrors the API: a self-signed-up user stays on their trial (even after deleting
-  // it) until a platform admin ends it, and nobody owning a running trial creates more.
-  const onTrial =
-    (Boolean(user.signedUpAt) && !user.trialEndedAt) ||
-    (user.organizationUsers ?? []).some(
-      (membership) => membership.role === "OWNER" && membership.organization.isTrial,
-    );
-  const router = useRouter();
-  const pathname = usePathname() ?? "";
+  const {
+    organizations,
+    selectedOrganization,
+    isPlatformView,
+    isPlatformAdmin,
+    canCreateOrganization,
+    selectOrganization,
+    selectPlatform,
+  } = useOrganizationSwitch();
   const [open, setOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const isPlatformView = pathname.startsWith("/dashboard/platform");
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -42,29 +34,12 @@ export function OrgSwitcher() {
 
   const onSelect = (org: Organization) => {
     setOpen(false);
-    if (!isPlatformView && org.id === selectedOrganization?.id) return;
-
-    // Stay on the same sub-page under the new org by swapping the org segment; from a
-    // global page (no org in the URL) land on the new org's home.
-    const parts = pathname.split("/"); // ["", "dashboard", <seg>, ...]
-    const isOrgScopedRoute =
-      parts[1] === "dashboard" &&
-      !!parts[2] &&
-      !GLOBAL_DASHBOARD_SEGMENTS.has(parts[2]);
-
-    if (isOrgScopedRoute) {
-      parts[2] = org.id;
-      router.push(parts.join("/"));
-    } else {
-      router.push(`/dashboard/${org.id}`);
-    }
+    selectOrganization(org);
   };
 
   const onSelectPlatform = () => {
     setOpen(false);
-    if (!isPlatformView) {
-      router.push("/dashboard/platform");
-    }
+    selectPlatform();
   };
 
   return (
@@ -98,7 +73,7 @@ export function OrgSwitcher() {
               boxShadow: "var(--shadow-pop)",
             }}
           >
-          {user.isPlatformAdmin && (
+          {isPlatformAdmin && (
             <>
               <div
                 className="px-3.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em]"
@@ -149,7 +124,7 @@ export function OrgSwitcher() {
             );
           })}
             {/* The owner of a running trial creates no other organizations; the API refuses them. */}
-            {!onTrial && (
+            {canCreateOrganization && (
               <>
                 <div className="mx-3 my-1" style={{ borderTop: "1px solid var(--line)" }} />
                 <button

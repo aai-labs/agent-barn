@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -13,6 +14,7 @@ import { AgentCard } from "@/features/agents/components/agent-card";
 import { HireDialog } from "@/features/agents/components/hire-dialog";
 import { HireTeammateCard } from "@/features/agents/components/hire-teammate-card";
 import { isQuiet } from "@/features/agents/utils";
+import { useNavVariant } from "@/features/navigation/providers/nav-variant-provider";
 
 function LoadingCard() {
   return (
@@ -42,6 +44,7 @@ export default function DashboardPage() {
   const [search, setSearch] = useState("");
   const { user } = useCurrentUser();
   const { agents, total, isLoading, error, refetch } = useAgents();
+  const { sectionsInNav } = useNavVariant();
 
   const hour = new Date().getHours();
   const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -68,9 +71,17 @@ export default function DashboardPage() {
       <div className="mb-12">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3 pb-4" style={{ borderBottom: "1px solid var(--line)" }}>
           <h2 className="text-lg font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>Your team</h2>
-          {!isLoading && !error && agents.length > 0 && (
-            <Input className="w-48" type="search" aria-label="Search displayed teammates" placeholder="Search teammates…" value={search} onChange={(event) => setSearch(event.target.value)} />
-          )}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {!isLoading && !error && agents.length > 0 && (
+              <Input className="w-48" type="search" aria-label="Search displayed teammates" placeholder="Search teammates…" value={search} onChange={(event) => setSearch(event.target.value)} />
+            )}
+            {/* The sidebar and rail layouts have no global Hire button, so hiring starts here. */}
+            {sectionsInNav && (
+              <button type="button" className="af-btn af-btn-primary" onClick={() => setHireOpen(true)}>
+                <Plus size={14} aria-hidden /> Hire agent
+              </button>
+            )}
+          </div>
         </div>
         {total > agents.length && !isLoading && !error && (
           <p className="mb-4 text-xs" style={{ color: "var(--ink-3)" }}>

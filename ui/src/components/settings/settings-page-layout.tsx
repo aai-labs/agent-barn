@@ -2,6 +2,8 @@
 
 import type { ReactNode } from "react";
 
+import { useNavVariant } from "@/features/navigation/providers/nav-variant-provider";
+
 /**
  * The two-column body of a settings surface: the sidebar rail beside one mounted
  * section, headed by the section's own name and description.
@@ -9,6 +11,9 @@ import type { ReactNode } from "react";
  * The `14rem` track must stay equal to the sidebar's `lg:w-56`, and `minmax(0,1fr)`
  * is what stops a wide table or code block in the content column from pushing the
  * page sideways.
+ *
+ * The sidebar and rail navigation layouts list the sections in navigation, so there
+ * this sidebar is left out and the section takes the full width.
  */
 export function SettingsPageLayout({
   sidebar,
@@ -21,9 +26,11 @@ export function SettingsPageLayout({
   description: string;
   children: ReactNode;
 }) {
+  const { sectionsInNav } = useNavVariant();
+
   return (
-    <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
-      {sidebar}
+    <div className={sectionsInNav ? "grid gap-8" : "grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start"}>
+      {!sectionsInNav && sidebar}
 
       <div className="min-w-0">
         <div className="mb-4">

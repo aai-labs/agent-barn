@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { BuildingIcon, ServerIcon, UsersIcon } from "@/components/icons";
 import { PlatformAdminOnly } from "@/auth/components/platform-admin-only";
+import { TopBarNavigationOnly } from "@/features/navigation/components/top-bar-navigation-only";
 import { PlatformStatsPanel } from "@/features/platform-stats/components/platform-stats-panel";
 import { Activity, FileText, Receipt, Settings, Sparkles } from "lucide-react";
 
@@ -69,36 +70,39 @@ export default function PlatformPage() {
           </p>
         </div>
 
-        <div
-          className="grid gap-4 mb-10"
-          style={{
-            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-          }}
-        >
-          {platformLinks.map(({ href, title, description, Icon }) => (
-            <Link
-              key={href}
-              href={href}
-              className="af-card af-card-hover block px-5 py-[18px]"
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <Icon size={15} style={{ color: "var(--ink-4)" }} />
-                <span
-                  className="font-semibold text-[15px]"
-                  style={{ color: "var(--ink)" }}
-                >
-                  {title}
-                </span>
-              </div>
-              <p
-                className="text-[13.5px] leading-[1.45]"
-                style={{ color: "var(--ink-3)" }}
+        {/* The rail lists these pages in every other layout. */}
+        <TopBarNavigationOnly>
+          <div
+            className="grid gap-4 mb-10"
+            style={{
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            }}
+          >
+            {platformLinks.map(({ href, title, description, Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className="af-card af-card-hover block px-5 py-[18px]"
               >
-                {description}
-              </p>
-            </Link>
-          ))}
-        </div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Icon size={15} style={{ color: "var(--ink-4)" }} />
+                  <span
+                    className="font-semibold text-[15px]"
+                    style={{ color: "var(--ink)" }}
+                  >
+                    {title}
+                  </span>
+                </div>
+                <p
+                  className="text-[13.5px] leading-[1.45]"
+                  style={{ color: "var(--ink-3)" }}
+                >
+                  {description}
+                </p>
+              </Link>
+            ))}
+          </div>
+        </TopBarNavigationOnly>
 
         <Suspense fallback={null}>
           <PlatformStatsPanel />

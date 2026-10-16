@@ -13,14 +13,16 @@ export function DialogShell({
   shadeClick: (() => void) | undefined;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    // On a phone the dialog fills the screen; its header and footer stay put while the
+    // fields between them scroll.
+    <div className="fixed inset-0 z-50 flex items-center justify-center sm:p-4">
       <div
         className="absolute inset-0"
         style={{ background: "rgba(20,16,10,.4)" }}
         onClick={shadeClick}
       />
       <div
-        className="relative flex flex-col w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl"
+        className="relative flex h-dvh w-full max-w-4xl flex-col shadow-2xl sm:h-auto sm:max-h-[90vh] sm:rounded-2xl"
         style={{ background: "var(--bg-elev)" }}
       >
         {children}

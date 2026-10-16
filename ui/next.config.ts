@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
   // refuses to start. Isolate it so `make test-ui` works alongside a running dev server.
   ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
   allowedDevOrigins: ["127.0.0.1", "localhost"],
+  // The rail layouts keep the account menu in the bottom-left corner, where the dev
+  // indicator would otherwise sit on top of it.
+  devIndicators: { position: "bottom-right" },
   async rewrites() {
     const backendUrl =
       process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";

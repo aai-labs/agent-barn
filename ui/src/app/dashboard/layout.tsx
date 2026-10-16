@@ -2,21 +2,17 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { TopNav } from "@/components/top-nav";
 import { HireDialog } from "@/features/agents/components/hire-dialog";
-import { LlmBudgetBanner } from "@/features/organizations/components/llm-budget-banner";
+import { AppShell } from "@/features/navigation/components/app-shell";
+import { NavVariantProvider } from "@/features/navigation/providers/nav-variant-provider";
 import { toast } from "sonner";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [hireOpen, setHireOpen] = useState(false);
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: "var(--bg)" }}>
-      <TopNav onHire={() => setHireOpen(true)} />
-      {/* Exhausted only — the approaching-limit warning lives on the Costs page,
-          where someone is already thinking about spend. */}
-      <LlmBudgetBanner show="exhausted" />
-      <main className="flex-1">{children}</main>
+    <NavVariantProvider>
+      <AppShell onHire={() => setHireOpen(true)}>{children}</AppShell>
 
       {hireOpen && (
         <HireDialog
@@ -27,6 +23,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           }}
         />
       )}
-    </div>
+    </NavVariantProvider>
   );
 }

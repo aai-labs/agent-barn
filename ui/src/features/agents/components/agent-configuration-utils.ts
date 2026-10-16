@@ -1,11 +1,13 @@
 import type { TemplateFileKey } from "@/features/templates/utils";
 
 import type {
+  Agent,
   AgentConfigurationVersion,
   AgentOverrideDraft,
   AgentOverrideVersion,
   AgentTemplateRead,
 } from "../schemas";
+import { canAgent } from "../utils";
 
 export type ArtifactKey = TemplateFileKey;
 export type ConfigurationSnapshot =
@@ -94,6 +96,22 @@ export function configurationSectionLabel(
   key: AgentConfigurationSectionKey,
 ): string {
   return AGENT_CONFIGURATION_SECTIONS.find((section) => section.key === key)?.label ?? key;
+}
+
+/**
+ * The configuration sections this viewer may open. Restore points read from the
+ * activity surface and the spend limit from the cost surface, so an Agent the viewer
+ * can see without that access does not offer them.
+ */
+export function visibleAgentConfigurationSections(
+  agent: Pick<Agent, "allowedActions"> | null | undefined,
+): AgentConfigurationSection[] {
+  const canReadActivity = canAgent(agent, "activity.read");
+  const canReadCosts = canAgent(agent, "cost.read");
+  return AGENT_CONFIGURATION_SECTIONS.filter(
+    (item) =>
+      (item.key !== "restore" || canReadActivity) && (item.key !== "spend" || canReadCosts),
+  );
 }
 
 export type RequiredSkillGroupDraft = { groupKey: string; skillIds: string[] };
