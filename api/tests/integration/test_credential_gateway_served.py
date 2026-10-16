@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import status
 from hamcrest import assert_that, equal_to
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -25,7 +25,7 @@ from api.domains.agents.models import (
     encrypt_content,
 )
 from api.domains.agents.repository import AgentRepository
-from api.domains.credential_gateway.models import GatewayToken, hash_token, issue_token_value
+from api.domains.credential_gateway.models import GatewayAuditEvent, GatewayToken, hash_token, issue_token_value
 from api.domains.credential_gateway.repository import GatewayTokenRepository
 from api.domains.integrations.plugins.providers import GMAIL_SERVED_BASE_URL
 from api.domains.integrations.repository import IntegrationRepository
@@ -185,6 +185,26 @@ def test_an_agent_lists_its_inbox_with_only_its_gateway_token():
             inbox.list_messages.assert_called_once_with(
                 "someone@gmail.com", "abcdefghijklmnop", query="from:google", limit=5
             )
+
+
+def test_a_served_request_is_audited_without_the_password():
+    with given(_GIVEN) as context, _inbox():
+        _gmail(context)
+        token = _token_for(context)
+
+        with when("the agent reads its inbox"):
+            context.gateway_client.post(_ROUTE, json=_request("GET", "/messages"), headers=_auth(token))
+
+        with then("a durable lifecycle row names the agent and provider"):
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+                events = list(
+                    session.exec(select(GatewayAuditEvent).where(col(GatewayAuditEvent.kind) == "lifecycle")).all()
+                )
+            served = [e for e in events if e.detail == "served"]
+            assert_that(len(served), equal_to(1))
+            assert_that(served[0].provider, equal_to("gmail_app_password"))
+            assert_that(served[0].agent_id, equal_to(context.agent.id))
+            assert_that("abcdefghijklmnop" in str([e.model_dump() for e in events]), equal_to(False))
 
 
 def test_an_agent_reads_one_message():

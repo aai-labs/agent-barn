@@ -118,6 +118,8 @@ def test_anything_but_a_read_is_refused_before_gmail_is_contacted(method):
     [
         f"{GMAIL_SERVED_BASE_URL}/messages/3753/delete",
         f"{GMAIL_SERVED_BASE_URL}/messages/abc",
+        f"{GMAIL_SERVED_BASE_URL}/messages/\u0661\u0662",
+        f"{GMAIL_SERVED_BASE_URL}/messages/{'1' * 21}",
         f"{GMAIL_SERVED_BASE_URL}/send",
         f"{GMAIL_SERVED_BASE_URL}",
         "https://gmail.googleapis.com/gmail/v1/users/me/messages",
@@ -137,7 +139,17 @@ def test_an_unknown_address_is_not_found(url):
 
 @pytest.mark.parametrize(
     "query",
-    [{"limit": "0"}, {"limit": "51"}, {"limit": "ten"}, {"limit": True}, {"q": ["a", "b"]}, {"label": "INBOX"}],
+    [
+        {"limit": "0"},
+        {"limit": "51"},
+        {"limit": "ten"},
+        {"limit": True},
+        {"limit": "\u00b2"},
+        {"limit": "9" * 5000},
+        {"limit": 5.0},
+        {"q": ["a", "b"]},
+        {"label": "INBOX"},
+    ],
 )
 def test_a_bad_listing_query_is_refused(query):
     plugin, inbox = _plugin()
