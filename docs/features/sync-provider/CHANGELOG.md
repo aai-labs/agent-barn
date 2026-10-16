@@ -30,6 +30,12 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
 
 ## Changes
 
+### 2026-10-16 — AF-383 — OneDrive logo in the Sync list
+
+- Delivered: `ui/public/brand/onedrive.svg` (a drawn cloud mark in OneDrive's blues), `OneDriveIcon` and `syncProviderIcon` in `ui/src/components/brand-icons.tsx`. The Sync row shows the mark for `onedrive` and keeps the letter tile for a provider without one.
+- Changed: `README.md` (row description, "Adding a provider" step 7).
+- Verified: a new test in `ui/tests/e2e/sync-provider.spec.ts` (the OneDrive logo is an image named "OneDrive" that loads; a provider without a mark has no image) failed first. The spec's 21 tests pass, and `tsc` and eslint pass.
+
 ### 2026-10-16 — AF-383 — Docs move to `docs/features/sync-provider/`, ADR
 
 - Changed:

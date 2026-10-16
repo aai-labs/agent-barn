@@ -83,7 +83,7 @@ The UI holds no rule of its own; it renders `can_connect` and `blocked_reason`.
 Settings → **Sync** (`?tab=sync`) is visible to every Organization Member. It reads the provider list and shows one row per offered provider (`ui/src/features/sync-provider/`). The UI has no provider-specific branches: every text it shows about a provider comes from the provider's entry.
 
 - No provider offered on this server: "No sync providers are available on this server."
-- Each row has a letter tile, the provider's name, and a subtitle: its `tagline`, "Connecting…" while pending, or "● Connected to {location}" in green when active.
+- Each row has the provider's brand mark (OneDrive's logo; a letter tile for a provider without one), the provider's name, and a subtitle: its `tagline`, "Connecting…" while pending, or "● Connected to {location}" in green when active.
 - Not connected:
   - Owners and Admins get **Connect**. It opens the provider's sign-in popup and then posts the code to the sign-in route. Connect is enabled only when `can_connect` is true:
     - when it's false, the row shows `blocked_reason`;
@@ -115,7 +115,7 @@ A new provider is a plugin, its provider client, and tests. No route, table, mig
 4. **Guards.** A check owned by another domain is declared as a `SyncLocationGuard` member and bound in `SyncProviderService._guard`. The plugin never imports that domain.
 5. **Register it.** Add it to `shipped_plugins` in `plugins/providers.py`. The contract sweep in `api/tests/unit/test_sync_provider_plugins.py` then covers it. Add unit tests for its provider requests and failure mapping.
 6. **Redirect URI.** Register `<WEB_APP_URL>/api/v1/integrations/sync-provider/<key>/callback` with the provider.
-7. **Optional brand mark.** The UI shows a letter tile until a mark is added.
+7. **Optional brand mark.** Add ui/public/brand/<key>.svg and a case in syncProviderIcon (ui/src/components/brand-icons.tsx); until then the UI shows a letter tile.
 
 ## OneDrive provider
 

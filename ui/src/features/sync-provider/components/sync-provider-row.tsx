@@ -58,7 +58,7 @@ export function SyncProviderRow({ provider, canManage }: { provider: SyncProvide
       style={{ borderColor: "var(--line)" }}
     >
       <div className="flex flex-wrap items-center gap-3">
-        <SyncProviderIcon displayName={provider.displayName} />
+        <SyncProviderIcon providerKey={provider.key} displayName={provider.displayName} />
         <div className="min-w-0 flex-1">
           <div className="text-[0.92rem] font-medium" style={{ color: "var(--ink)" }}>
             {provider.displayName}

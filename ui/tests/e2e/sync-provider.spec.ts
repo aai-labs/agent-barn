@@ -59,6 +59,19 @@ test.describe("Settings · Sync · the provider list", () => {
     ).toBeVisible();
   });
 
+  test("OneDrive shows its logo and a provider without one shows its initial", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.syncProviders.interceptProviders({ providers: [oneDriveEntry(), otherDriveEntry()] });
+
+    await sync.open();
+
+    const logo = sync.row(ONEDRIVE).getByRole("img", { name: "OneDrive" });
+    await expect(logo).toBeVisible();
+    await expect.poll(() => logo.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+    await expect(sync.row(OTHER_DRIVE).getByRole("img")).toHaveCount(0);
+    await expect(sync.row(OTHER_DRIVE)).toContainText("O");
+  });
+
   test("says so when no provider is offered on this server", async () => {
     await data.users.interceptGetUserContextRequest();
     await data.syncProviders.interceptProviders({ providers: [] });
