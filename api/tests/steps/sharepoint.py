@@ -9,7 +9,7 @@ from injector import Module, provider, singleton
 from sqlmodel import Session, col, select
 
 from api.core.config import Config
-from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites, SiteNotFound
+from api.domains.agents.microsoft_graph_sites import FolderRef, MicrosoftGraphSites, SiteNotFound, SiteSummary
 from api.domains.agents.microsoft_identity import MicrosoftIdentityClient, MicrosoftIdentityError, MicrosoftTokens
 from api.domains.agents.models import AgentSecret, SecretProvider, SharePointContent, encrypt_content
 from api.domains.agents.sharepoint_service import SignInState, encode_sign_in_state
@@ -89,9 +89,16 @@ def site_id_for(url: str) -> str:
     return f"id:{url}"
 
 
+FOLDER_WEB_URL = "https://contoso.sharepoint.com/sites/AgentBarnTest/Shared%20Documents/Agent%20Barn"
+
+
+def site_summary(site_id: str) -> SiteSummary:
+    return SiteSummary(id=site_id, name="Agent Barn Test", web_url="https://contoso.sharepoint.com/sites/AgentBarnTest")
+
+
 @dataclass
 class FakeMicrosoftGraphSites(MicrosoftGraphSites):
-    """Stands in for Graph's site permission API and records what it was asked."""
+    """Stands in for Graph's site, site permission and driveItem APIs and records what it was asked."""
 
     unknown_sites: set[str] = field(default_factory=set)
     # Raised by the grant (or revoke) of the named site.
@@ -100,6 +107,28 @@ class FakeMicrosoftGraphSites(MicrosoftGraphSites):
     grants: list[dict] = field(default_factory=list)
     revokes: list[dict] = field(default_factory=list)
     role_updates: list[dict] = field(default_factory=list)
+    search_results: list[SiteSummary] = field(default_factory=list)
+    searches: list[dict] = field(default_factory=list)
+    search_failure: Exception | None = None
+    folder_failure: Exception | None = None
+    folders: list[dict] = field(default_factory=list)
+
+    def search_sites(self, token: str, query: str) -> list[SiteSummary]:
+        self.searches.append({"token": token, "query": query})
+        if self.search_failure is not None:
+            raise self.search_failure
+        return list(self.search_results)
+
+    def get_site(self, token: str, site_id: str) -> SiteSummary:
+        if site_id in self.unknown_sites:
+            raise SiteNotFound(site_id)
+        return site_summary(site_id)
+
+    def ensure_folder(self, token: str, *, site_id: str, name: str) -> FolderRef:
+        self.folders.append({"token": token, "site_id": site_id, "name": name})
+        if self.folder_failure is not None:
+            raise self.folder_failure
+        return FolderRef(item_id="folder-item-1", web_url=FOLDER_WEB_URL)
 
     def resolve_site_id(self, token: str, site_url: str) -> str:
         if site_url in self.unknown_sites:
@@ -109,7 +138,9 @@ class FakeMicrosoftGraphSites(MicrosoftGraphSites):
     def grant_site(self, token: str, *, site_id: str, app_id: str, display_name: str, role: str) -> str:
         if site_id in self.grant_failures:
             raise self.grant_failures[site_id]
-        self.grants.append({"token": token, "site_id": site_id, "app_id": app_id, "role": role})
+        self.grants.append(
+            {"token": token, "site_id": site_id, "app_id": app_id, "role": role, "display_name": display_name}
+        )
         return f"perm-{len(self.grants)}"
 
     def update_site_role(self, token: str, *, site_id: str, permission_id: str, role: str) -> None:

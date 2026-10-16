@@ -26,6 +26,7 @@ import api.domains.organizations.models
 import api.domains.rbac.models
 import api.domains.shared_credentials.models
 import api.domains.skills.models
+import api.domains.sync_provider.models
 import api.domains.templates.models
 import api.domains.tool_calls.models
 import api.domains.users.models

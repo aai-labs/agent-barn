@@ -21,6 +21,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Self
@@ -79,6 +80,8 @@ from api.domains.communications.service import CommunicationsService
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import AGENT_SECRET_ADDED, AGENT_SECRET_UPDATED
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.sync_provider.lookup import SyncProviderLookupService
+from api.domains.sync_provider.plugins.onedrive import ONEDRIVE_PROVIDER_KEY
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
@@ -125,6 +128,9 @@ _NOT_AN_ADMINISTRATOR = (
 )
 _THROTTLED = "Microsoft is limiting requests right now. Wait a few minutes, then sign in again."
 _ANOTHER_SIGN_IN = "Another SharePoint sign-in for this agent is finishing. Try again in a moment."
+ONEDRIVE_FOLDER_SITE = (
+    "This site holds the Organization's OneDrive folder, so Agents can't be given SharePoint access to it."
+)
 SITES_STILL_GRANTED = (
     "SharePoint sites are still granted to this agent's Microsoft Teams app. Remove all sites under "
     "SharePoint in the agent's Integrations first; an administrator signs in to do it."
@@ -304,6 +310,7 @@ class SharePointService:
     identity: MicrosoftIdentityClient
     graph_sites: MicrosoftGraphSites
     event_delivery_dispatcher: EventDeliveryDispatcher
+    sync_provider: SyncProviderLookupService
     config: Config
     # App-only tokens per Teams app, until shortly before they lapse: pods ask for one per
     # command. Keyed by a hash of the secret too, so a rotated secret is never served a token
@@ -547,6 +554,7 @@ class SharePointService:
         granted: dict[str, GrantedSite] = {}
         try:
             site_ids = {url: self.graph_sites.resolve_site_id(token, url) for url in state.sites if url not in kept}
+            self._refuse_onedrive_folder_site(agent.organization_id, site_ids.values())
             try:
                 if level_changed:
                     for site in kept.values():
@@ -753,8 +761,26 @@ class SharePointService:
         except SiteAccessRefused, SiteNotFound, SitesUnavailable:
             logger.warning("SharePoint site access level could not be put back after a failed sign-in")
 
+    def _refuse_onedrive_folder_site(self, organization_id: UUID, site_ids: Iterable[str]) -> None:
+        """No Agent may be granted the site holding the Organization's OneDrive sync folder."""
+        folder_site_id = self.sync_provider.folder_location_id(organization_id, ONEDRIVE_PROVIDER_KEY)
+        if folder_site_id is not None and folder_site_id.lower() in {site_id.lower() for site_id in site_ids}:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ONEDRIVE_FOLDER_SITE)
+
+    def organization_site_ids(self, organization_id: UUID) -> set[str]:
+        """Graph ids (lower-cased) of every site an Agent's SharePoint integration in the
+        Organization holds a recorded grant on, including Agents since deleted."""
+        site_ids: set[str] = set()
+        for secret in self.repository.list_secrets_for_organization(organization_id, SecretProvider.SHAREPOINT):
+            content = self._content_of(secret)
+            if content is not None and content.mode == "selected_sites":
+                site_ids.update(site.site_id.lower() for site in content.sites)
+        return site_ids
+
     def _stored_content(self, agent_id: UUID) -> SharePointContent | None:
-        secret = self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT)
+        return self._content_of(self.repository.get_secret(agent_id, SecretProvider.SHAREPOINT))
+
+    def _content_of(self, secret: AgentSecret | None) -> SharePointContent | None:
         if secret is None or secret.content is None:
             return None
         content = decrypt_content(SecretProvider.SHAREPOINT, secret.content, self.config.agent_token_encryption_key)
