@@ -109,11 +109,14 @@ class FakeMicrosoftGraphSites(MicrosoftGraphSites):
     role_updates: list[dict] = field(default_factory=list)
     search_results: list[SiteSummary] = field(default_factory=list)
     searches: list[dict] = field(default_factory=list)
+    search_failure: Exception | None = None
     folder_failure: Exception | None = None
     folders: list[dict] = field(default_factory=list)
 
     def search_sites(self, token: str, query: str) -> list[SiteSummary]:
         self.searches.append({"token": token, "query": query})
+        if self.search_failure is not None:
+            raise self.search_failure
         return list(self.search_results)
 
     def get_site(self, token: str, site_id: str) -> SiteSummary:

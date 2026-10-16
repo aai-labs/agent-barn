@@ -37,6 +37,19 @@ Acceptance criteria amendment: another Organization's caller gets **403**, not 4
 
 ## Changes
 
+### 2026-10-16 — AF-383 — Sync provider seam and OneDrive plugin
+
+- Delivered: `api/domains/sync_provider/plugins/`, modelled on the Communications Platform Plugins:
+  - `SyncProviderPlugin` (`base.py`) with capabilities `location_picker` and `admin_approval`, the location guard `SyncLocationGuard.SHAREPOINT_AGENT_SITES`, and typed failures;
+  - `SyncProviderPluginRegistry` (`registry.py`), which checks keys, schema versions, the location guard, and that each declared capability's methods are implemented;
+  - `OneDriveSyncProviderPlugin` (`onedrive.py`), holding the Microsoft sign-in, site search, grant, folder, rollback and revoke logic from `OneDriveSyncService`;
+  - `shipped_plugins` (`providers.py`), registered in `AppModule`.
+
+  Nothing calls the seam yet; `onedrive_sync` behaves as before.
+- Changed: the test fake `FakeMicrosoftGraphSites` can fail a site search (`search_failure`).
+- Verified: `api/tests/unit/test_sync_provider_plugins.py` (53 tests) covers the contract sweep over shipped plugins, every registry rejection, and the OneDrive plugin's requests and failure mapping. `test_onedrive_sync_connection.py` and `test_sharepoint_selected_sites.py` pass unchanged.
+- Follow-up: the generic `sync_provider_connection` table, repository and lookup.
+
 ### 2026-10-14 — AF-383 — Merge staging: imports and migration heads
 
 - Changed: merge revision `0219de43e2c9` joins `734b0f2b3793` (OneDrive sync connection) and staging's `b3d8e1f4a6c2` (trial onboarding) into one Alembic head. `api/api_app.py` and `api/migrations/env.py` import `onboarding` before `onedrive_sync`, as ruff requires.
