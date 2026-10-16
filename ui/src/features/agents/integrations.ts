@@ -34,6 +34,10 @@ export interface IntegrationProvider {
   authMethod?: "google_oauth" | "microsoft_sign_in";
   // Fallback shown next to the ✓ when an OAuth provider connects without an identity.
   oauthConnectedNote?: string;
+  // The credential can never be given to the agent, so credential isolation is always on.
+  // Mirrors the server, which refuses to turn it off. Its two descriptions replace the
+  // generic ones before the credential is first saved.
+  alwaysIsolated?: { isolatedDescription: string; directDescription: string };
 }
 
 export interface IntegrationDraft {
@@ -157,6 +161,27 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     scopeNote: "Read-only access to one Gmail inbox. Sign in with Google; there's nothing else to set up.",
     oauthConnectedNote: "Gmail connected",
     fields: [],
+  },
+  {
+    id: "gmail_app_password",
+    label: "Gmail (app password)",
+    scopeNote:
+      "Read-only access to one Gmail inbox. The agent can read mail but never send, delete or change it, and the app password is never given to the agent.",
+    fields: [
+      { key: "email", label: "Gmail address", type: "text", required: true, placeholder: "you@gmail.com" },
+      {
+        key: "appPassword",
+        label: "App password",
+        type: "secret",
+        required: true,
+        placeholder: "abcd efgh ijkl mnop",
+        hint: "Create one at myaccount.google.com/apppasswords. Your Google account needs 2-Step Verification turned on.",
+      },
+    ],
+    alwaysIsolated: {
+      isolatedDescription: "The app password stays outside this Agent; Agent Barn reads the inbox for it, read-only.",
+      directDescription: "An app password cannot be limited to reading, so it is never given to this Agent.",
+    },
   },
   {
     id: "sharepoint",
