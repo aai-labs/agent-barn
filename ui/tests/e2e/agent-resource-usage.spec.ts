@@ -40,11 +40,11 @@ test.describe("Agent Detail Page — Resource usage tab", () => {
     await dataSupportPage.resourceUsage.interceptAgentResourceUsage();
   });
 
-  test("sits between Costs and About", async () => {
+  test("closes the Health sections, after Activity and Costs", async () => {
     await agentDetailPage.gotoResourceUsage();
 
     await expect(agentDetailPage.resourceUsageTab()).toBeVisible();
-    expect((await agentDetailPage.tabLabels()).slice(-3)).toEqual(["Costs", "Resource usage", "About"]);
+    expect((await agentDetailPage.tabLabels()).slice(-3)).toEqual(["Activity", "Costs", "Resource usage"]);
   });
 
   test("shows current usage against the container's limits", async ({ page }) => {

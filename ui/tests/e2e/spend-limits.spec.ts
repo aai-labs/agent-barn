@@ -221,7 +221,7 @@ test.describe("An Agent's spend limit", () => {
 
   async function openSpendLimit() {
     await configuration.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configuration.sectionButton("Model spend limit").click();
+    await configuration.sectionLink("Model spend limit").click();
   }
 
   test("a deep link opens the tab directly", async ({ page }) => {
@@ -327,6 +327,6 @@ test.describe("An Agent's spend limit", () => {
     await configuration.goto(MOCK_AGENT_ID, TEST_ORG_ID);
 
     await expect(configuration.profileHeading()).toBeVisible();
-    await expect(configuration.sectionButton("Model spend limit")).toHaveCount(0);
+    await expect(configuration.sectionLink("Model spend limit")).toHaveCount(0);
   });
 });

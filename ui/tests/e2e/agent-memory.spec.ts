@@ -339,7 +339,7 @@ test.describe("Memory access settings", () => {
     const memory = new AgentMemoryPage(page);
     await memory.gotoMemoryAccess();
 
-    await expect(page.getByRole("button", { name: "Memory access" })).toHaveCount(0);
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Memory access", exact: true })).toHaveCount(0);
     await expect(page.getByText("can read Triage")).toHaveCount(0);
     expect(grants.requests).toHaveLength(0);
   });
@@ -354,8 +354,8 @@ test.describe("Memory access settings", () => {
     const memory = new AgentMemoryPage(page);
     await memory.gotoMemoryAccess();
 
-    await expect(page.getByRole("button", { name: "Shared Credentials" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Memory access" })).toHaveCount(0);
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Shared Credentials", exact: true })).toBeVisible();
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Memory access", exact: true })).toHaveCount(0);
     expect(grants.requests).toHaveLength(0);
   });
 
@@ -370,12 +370,12 @@ test.describe("Memory access settings", () => {
     await memory.gotoMemoryAccess(ORG_A_ID);
     await expect(memory.grantsSection()).toContainText("Billing can read Triage's private memories");
 
-    const switcher = page.locator('button[aria-haspopup="listbox"]');
+    const switcher = page.getByRole("button", { name: /^Switch organization/ });
     await switcher.click();
-    await page.getByRole("listbox").getByRole("option", { name: /globex/i }).click();
+    await page.getByRole("menuitem", { name: /globex/i }).click();
     await expect(page).toHaveURL(new RegExp(`/dashboard/${ORG_B_ID}`));
     await page.getByRole("link", { name: "Settings", exact: true }).click();
-    await page.getByRole("button", { name: "Memory access" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Memory access", exact: true }).click();
 
     await expect(page.getByText("No memory access granted")).toBeVisible();
     await expect(page.getByText("Triage's private memories")).toHaveCount(0);
@@ -614,7 +614,7 @@ test.describe("Organization Memory viewer", () => {
       const mock = await data.agentMemory.interceptMemoryItems({ organization: true });
       const memory = new AgentMemoryPage(page);
       await memory.gotoOrganizationMemory();
-      await expect(page.getByRole("button", { name: "Organization Memory", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("complementary").getByRole("link", { name: "Organization Memory", exact: true })).toHaveCount(0);
       expect(mock.requests).toHaveLength(0);
     });
   }

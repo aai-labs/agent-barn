@@ -64,7 +64,7 @@ test.describe("Agent configuration page", () => {
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
     await expect(configurationPage.profileHeading()).toBeVisible();
 
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(page).toHaveURL(/section=override/);
 
     await page.reload();
@@ -157,7 +157,7 @@ test.describe("Agent configuration page", () => {
     await expect(configurationPage.profileHeading()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Runtime & deployment" })).toBeVisible();
 
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(page.getByRole("heading", { name: "No active override" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
     await configurationPage.startDraftButton().click();
@@ -176,14 +176,14 @@ test.describe("Agent configuration page", () => {
     await expect(page.getByText("A private Agent-owned configuration based on the source template below.")).toBeVisible();
     await expect(page.getByText("Published by")).toBeVisible();
     await expect(page.getByText("Template key").last()).toBeVisible();
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /Maya.*v1.*Agent override/i }).click();
     await configurationPage.applyButton().click();
     await expect(configurationPage.applyConfirmationButton()).toBeVisible();
     await configurationPage.applyConfirmationButton().click();
     await expect(configurationPage.applyButton()).toBeDisabled();
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(page.getByRole("heading", { name: "No override draft" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create new draft" })).toBeVisible();
   });
@@ -222,7 +222,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
 
     await expect(page.getByRole("heading", { name: "Override draft" })).toBeVisible();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
@@ -310,7 +310,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await expect(page.getByText(/newer Platform source version \(v2\)/)).toBeVisible();
     await configurationPage.versionSelect().click();
     await expect(page.getByText("Platform update").first()).toBeVisible();
@@ -319,7 +319,7 @@ test.describe("Agent configuration page", () => {
     await configurationPage.applyConfirmationButton().click();
     await expect(configurationPage.applyButton()).toBeDisabled();
 
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(configurationPage.draftHeading()).toBeVisible();
     await expect(configurationPage.artifact("SOUL.md").last()).toHaveValue("# Local draft change");
   });
@@ -371,7 +371,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2.*Organization update/i }).click();
     await configurationPage.applyButton().click();
@@ -402,10 +402,10 @@ test.describe("Agent configuration page", () => {
     await dataSupport.agents.interceptStartAgentRequest();
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(page.getByRole("button", { name: "Create override", exact: true })).toBeVisible();
 
-    await configurationPage.sectionButton("Profile").click();
+    await configurationPage.sectionLink("Profile").click();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Agent name").fill("Maya running");
 
@@ -441,7 +441,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.skills.interceptGetAgentSkillsRequest();
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
 
     const section = page.locator('section[aria-label="Skills"]');
     await expect(section.getByPlaceholder("Search skills…")).toBeVisible();
@@ -481,7 +481,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.skills.interceptGetAgentSkillsRequest();
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
 
     const section = page.locator('section[aria-label="Skills"]');
     const applyButton = section.getByRole("button", { name: "Apply", exact: true });
@@ -521,7 +521,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
     await expect(page.getByText("paged-skill-0", { exact: true })).toBeVisible();
 
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
@@ -552,7 +552,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.skills.interceptGetAgentSkillsRequest();
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
     const search = page.getByPlaceholder("Search skills…");
     await expect(search).toBeVisible();
     await expect.poll(() => skillRequests.length).toBe(1);
@@ -612,7 +612,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
     await expect(page.getByRole("combobox", { name: "Version for my-tool" })).toHaveText("Version v1");
     await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
 
@@ -725,7 +725,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
     await configurationPage.applyButton().click();
@@ -764,7 +764,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
     await configurationPage.applyButton().click();
@@ -795,7 +795,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
 
@@ -830,7 +830,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
 
@@ -869,7 +869,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
 
@@ -899,7 +899,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
 
@@ -924,7 +924,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
 
     const versionSelect = page.getByRole("combobox", { name: "Version for my-tool" });
     await expect(versionSelect).toBeDisabled();
@@ -1000,7 +1000,7 @@ test.describe("Agent configuration page", () => {
       const sent = await mockGoogleSignIn(page);
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Integrations").click();
+      await configurationPage.sectionLink("Integrations").click();
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
       await section.getByRole("button", { name: "Gmail", exact: true }).click();
@@ -1054,7 +1054,7 @@ test.describe("Agent configuration page", () => {
       const sent = await mockGoogleSignIn(page);
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Skills").click();
+      await configurationPage.sectionLink("Skills").click();
       const section = page.locator('section[aria-label="Skills"]');
       await section.getByRole("button", { name: "Add", exact: true }).click();
       await section.getByRole("button", { name: "Authenticate with Google" }).click();
@@ -1186,7 +1186,7 @@ test.describe("Agent configuration page", () => {
       await mockTeamsAndSetup(page, connections, access);
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Skills").click();
+      await configurationPage.sectionLink("Skills").click();
       const section = page.locator('section[aria-label="Skills"]');
       await section.getByRole("button", { name: "Add", exact: true }).click();
       return section;
@@ -1352,7 +1352,7 @@ test.describe("Agent configuration page", () => {
       await mockTeamsAndSetup(page, [teamsConnection]);
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Integrations").click();
+      await configurationPage.sectionLink("Integrations").click();
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
       await section.getByRole("button", { name: "SharePoint" }).click();
@@ -1551,7 +1551,7 @@ test.describe("Agent configuration page", () => {
       });
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Integrations").click();
+      await configurationPage.sectionLink("Integrations").click();
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
 
@@ -1582,7 +1582,7 @@ test.describe("Agent configuration page", () => {
       });
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Danger zone").click();
+      await configurationPage.sectionLink("Danger zone").click();
       await page.getByRole("button", { name: "Retire Agent" }).click();
 
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));

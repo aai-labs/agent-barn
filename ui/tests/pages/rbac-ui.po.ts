@@ -29,6 +29,11 @@ export class RbacUiPage {
     return this.page.getByRole("button", { name });
   }
 
+  /** A section in the navigation panel beside the page. */
+  sectionLink(name: string): Locator {
+    return this.page.getByRole("complementary").getByRole("link", { name, exact: true });
+  }
+
   agentConfigurationLink(): Locator {
     return this.page.getByRole("complementary").getByRole("link", { name: "Agent settings", exact: true });
   }

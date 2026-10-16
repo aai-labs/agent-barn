@@ -51,6 +51,11 @@ export class AppNavigation {
     return this.page.getByRole("menuitem", { name, exact: true });
   }
 
+  /** A menu item whose name includes more than its label, such as an Agent's avatar initials. */
+  menuItemMatching(name: RegExp): Locator {
+    return this.page.getByRole("menuitem", { name });
+  }
+
   async chooseMenuItem(name: string) {
     await this.menuItem(name).click();
   }

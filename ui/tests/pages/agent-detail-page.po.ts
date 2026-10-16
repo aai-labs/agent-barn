@@ -9,6 +9,11 @@ export class AgentDetailPage {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}`);
   }
 
+  /** The Agent's Chat; an Agent opens on its Overview. */
+  async gotoChat(agentId = "33333333-3333-4333-8333-333333333333") {
+    await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=chat`);
+  }
+
   async openFocusedActivity(agentId: string) {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=activity` +
       "&from=2026-09-10T00:00:00Z&to=2026-09-13T00:00:00Z" +
@@ -24,9 +29,16 @@ export class AgentDetailPage {
     return this.page.getByTestId("agent-runtime-diagnostics");
   }
 
-  /** The Agent's step in the desktop path bar, which names it. */
+  /** The Agent's name: its step in the desktop path bar, or the page heading on a phone. */
   agentName(name: string): Locator {
-    return this.page.getByRole("button", { name: `Switch agent. Current: ${name}` });
+    return this.page
+      .getByRole("button", { name: `Switch agent. Current: ${name}` })
+      .or(this.page.getByRole("heading", { name, level: 1 }));
+  }
+
+  /** The path bar's chip with the Agent's status, runtime and model. */
+  runtimeChip(): Locator {
+    return this.page.getByTestId("agent-runtime-chip");
   }
 
   /** A section link in the navigation panel beside the page. */
@@ -36,6 +48,15 @@ export class AgentDetailPage {
 
   async openSection(name: string) {
     await this.sectionLink(name).click();
+  }
+
+  /**
+   * Opens a section of the Agent's settings. The panel link changes the URL, so this
+   * waits for the section's own heading before anything acts on the section.
+   */
+  async openConfigurationSection(name: string) {
+    await this.sectionLink(name).click();
+    await this.page.getByRole("heading", { name, level: 2, exact: true }).waitFor();
   }
 
   configureButton(): Locator {
@@ -102,6 +123,16 @@ export class AgentDetailPage {
 
   lifecycleMenu(): Locator {
     return this.page.getByTestId("agent-lifecycle-menu");
+  }
+
+  /** The desktop path bar's "Update available" button. */
+  updateNotice(): Locator {
+    return this.page.getByTestId("agent-update-notice");
+  }
+
+  /** The details the notice opens: the explanation, release notes and Update. */
+  updateNoticeDetails(): Locator {
+    return this.page.getByRole("dialog");
   }
 
   updateBanner(): Locator {
@@ -264,7 +295,7 @@ export class AgentDetailPage {
   }
 
   skillsTab(): Locator {
-    return this.page.getByRole("button", { name: /^skills$/i });
+    return this.sectionLink("Skills");
   }
 
   skillsSearchInput(): Locator {
@@ -301,7 +332,7 @@ export class AgentDetailPage {
   }
 
   keysTab(): Locator {
-    return this.page.getByRole("button", { name: "Integrations", exact: true });
+    return this.page.getByRole("complementary").getByRole("link", { name: "Integrations", exact: true });
   }
 
   appTokenInput(): Locator {

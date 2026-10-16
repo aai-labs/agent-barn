@@ -210,6 +210,7 @@ function AgentRuntimeChip({ agent }: { agent: Agent }) {
   return (
     <span
       title={`${status.label} · ${RUNTIME_LABELS[agent.agentType]} runtime, running ${model}`}
+      data-testid="agent-runtime-chip"
       className="inline-flex max-w-[340px] items-center gap-1.5 rounded-full px-3 py-1 text-[12.5px]"
       style={{ border: "1px solid var(--line-strong)", color: "var(--ink-3)" }}
     >

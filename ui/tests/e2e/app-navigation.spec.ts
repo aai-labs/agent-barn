@@ -53,7 +53,7 @@ test.describe("App navigation", () => {
       await navigation.contextSwitcher().click();
       await navigation.chooseMenuItem("Platform admin");
 
-      await expect(page).toHaveURL(/\/dashboard\/platform$/);
+      await expect(page).toHaveURL(/\/dashboard\/platform(\?|$)/);
       await expect(navigation.mainLink("Users")).toBeVisible();
       await expect(navigation.mainLink("Orgs")).toBeVisible();
       await expect(navigation.mainLink("Team")).toHaveCount(0);
@@ -95,7 +95,7 @@ test.describe("App navigation", () => {
       await navigation.gotoAgent(MOCK_AGENT_ID);
 
       await navigation.agentSwitcher().click();
-      await expect(navigation.menuItem("Maya")).toBeVisible();
+      await expect(navigation.menuItemMatching(/Maya/)).toBeVisible();
       await expect(navigation.menuItem("All agents")).toBeVisible();
     });
 
