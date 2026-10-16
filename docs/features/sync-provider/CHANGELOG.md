@@ -1,41 +1,45 @@
-# OneDrive sync — change log
+# Sync providers — change log
 
 Status: Active
 Epic: AF-383 — Connect an Organization to OneDrive
-Related context: [Integrations](../integrations.md), [RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md), [epic guideline](../../guidelines/epics.md)
+Related context: [Sync providers](README.md), [ADR](../../adr/2026-10-16-sync-provider-plugin-seam.md), [Integrations](../integrations.md), [RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md), [epic guideline](../../guidelines/epics.md)
 
 ## Current state
 
-- Delivered: the platform app settings `ONEDRIVE_SYNC_CLIENT_ID` and `ONEDRIVE_SYNC_CLIENT_SECRET` in `api/core/config.py`. `Config.is_onedrive_sync_enabled` is true only when both are non-blank. Nothing reads the settings yet.
-- Delivered: deploy wiring. The API chart Secret renders `ONEDRIVE_SYNC_CLIENT_ID` / `ONEDRIVE_SYNC_CLIENT_SECRET` from `onedriveSyncClientId` / `onedriveSyncClientSecret`; Helmfile reads them from the environment; `deploy.yml` and `deploy-public.yml` pass the shared `vars.ONEDRIVE_SYNC_CLIENT_ID` and `secrets.ONEDRIVE_SYNC_CLIENT_SECRET`. Unset values render blank, leaving OneDrive sync unavailable.
-- Delivered: verification of the Microsoft flow (T-1, T-5) against a real tenant, recorded in the 2026-10-14 entry.
-- Delivered: `MicrosoftIdentityClient.exchange_code(..., client_secret=None)` redeems as a confidential client when a secret is given (still with the PKCE verifier), and `build_app_permission_consent_url(..., state=None)` carries a `state`. Existing SharePoint callers pass neither and are unchanged.
-- Delivered: `MicrosoftGraphSites.search_sites`, `get_site` (both return `SiteSummary(id, name, web_url)`, the name preferring `displayName`) and `ensure_folder` (returns `FolderRef(item_id, web_url)`). `ensure_folder` reads the folder by path at the root of the site's default library, creates it on 404 with `conflictBehavior: fail`, and reuses one created in between.
-- Delivered: the `onedrive_sync_connection` table (migration `734b0f2b3793`) with statuses `pending`, `active` and `disconnected`. The partial unique index `uq_onedrive_sync_connection_open` allows one open (non-disconnected) row per Organization; rows cascade on Organization delete.
-- Delivered: `OneDriveSyncRepository` in `api/domains/onedrive_sync/`:
-  - `create_pending` replaces a pending row in the same transaction and raises `OneDriveSyncConnectionConflict` while one is active;
-  - `activate` (pending only) records the site, folder and grant id and clears the delegated token;
-  - `mark_disconnected` (active only), `delete_pending` and `get_open`.
-- Delivered: `OneDriveSyncLookupService.folder_site_id(organization_id)`, the active connection's site id or None, for other domains.
-- Delivered: `GET /organizations/{organization_id}/onedrive-sync/connection` (status, `organization.read`), `GET …/connection/authorize-url?purpose=connect|disconnect` (`organization.update`), and the unauthenticated `GET /api/v1/integrations/onedrive-sync/callback`. The behaviour contract is [`README.md`](README.md).
-- Delivered: `POST …/connection/sign-in` redeems the administrator's code into a pending connection holding their encrypted delegated token, and `DELETE …/connection` abandons a pending connection.
-- Delivered: `GET …/connection/sites?search=` and `POST …/connection/site`. Choosing a site grants the platform app `write` on it, ensures the "Agent Barn" folder as the app, and activates the connection; a failure after the grant revokes it.
-- Delivered: choosing a site is refused (409, one line) when any Agent in the Organization, including a deleted one, has a recorded SharePoint selected-sites grant on it.
-- Delivered: `POST …/connection/disconnect` revokes the platform app's site grant with the administrator's fresh delegated token from the same Microsoft tenant, then marks the connection disconnected. The folder stays.
-- Delivered: the SharePoint integration refuses (409) to grant an Agent the Organization's OneDrive folder site; other SharePoint behaviour is unchanged. The API side of AF-383 is complete.
-- Delivered: Settings → OneDrive shows the unavailable, not connected, pending and active states to every Member, with "Open in OneDrive" and the "Add shortcut to My files" hint.
-- Delivered: Owners and Admins connect from the section: **Connect OneDrive** (one popup for consent and sign-in), then the site picker, then the connected state.
-- Delivered: Owners and Admins disconnect (confirmation dialog, then a Microsoft sign-in) and start over from a pending connection. Every AF-383 slice is implemented.
-- Delivered: connecting starts at Microsoft sign-in. A Global Administrator approves the app once per Microsoft organization, through the approval link in Organization settings; after that any SharePoint Administrator who is a site member connects without them.
+- Delivered: the sync provider seam (`api/domains/sync_provider/`). `SyncProviderPlugin`, `SyncProviderPluginRegistry` and `shipped_plugins` are registered in `AppModule`, with OneDrive (`OneDriveSyncProviderPlugin`) as the only shipped provider.
+- Delivered: the `sync_provider_connection` table (migration `734b0f2b3793`), keyed by `provider_key`, with statuses `pending`, `active` and `disconnected`. One open connection per Organization across providers; rows cascade on Organization delete.
+- Delivered: the provider list `GET /organizations/{organization_id}/sync-providers` (`organization.read`), the provider-keyed connection routes under `…/sync-providers/{provider_key}/connection` (`organization.update`), and the unauthenticated callback `GET /api/v1/integrations/sync-provider/{provider_key}/callback`. The behaviour contract is [`README.md`](README.md).
+- Delivered (OneDrive):
+  - **Connect:** sign-in at the `organizations` authority, then a site picker. Choosing a site grants the platform app `write` on it and ensures the "Agent Barn" folder as the app; a failure after the grant revokes it.
+  - **Disconnect:** revokes the grant with a fresh sign-in from the same tenant. The folder stays.
+  - **Approval:** a one-time approval link for a Global Administrator.
+- Delivered: the SharePoint guard in both directions:
+  - connecting refuses a site any Agent in the Organization (including a deleted one) holds a selected-sites grant on;
+  - the SharePoint integration refuses to grant an Agent the folder site.
+- Delivered: Settings → **Sync**. One row per offered provider, with Connect, Open and Disconnect by role, the inline picker, Start over, and the server's `blocked_reason`.
+- Delivered: the platform app settings `ONEDRIVE_SYNC_CLIENT_ID` / `ONEDRIVE_SYNC_CLIENT_SECRET` and their deploy wiring (chart Secret, Helmfile, `deploy.yml`, `deploy-public.yml`). Unset values render blank, which leaves OneDrive out of the list.
 - In transition: no GitHub variable or secret is set yet, so every deployed environment renders the settings blank.
-- Next: the manual run against the test tenant (acceptance criteria 3 to 6, and disconnect); then close this log.
+- Next: the manual run against the test tenant with the new redirect URI (acceptance criteria 3 to 6, and disconnect); then close this log.
+- Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: the ticket orders the flow "Microsoft admin consent → Microsoft sign-in". Starting every connect at admin consent shows "Need admin approval" to anyone who isn't a Global Administrator, even after their organization approved the app (seen in the 2026-10-14 verification). So connecting starts at sign-in, and admin consent is a one-time step per organization via `approval_url`. There is still no second consent prompt, and the tenant still comes from `tid`.
-- Blockers: none. Enabling an environment later needs the GitHub variable and secret, and that environment's `<WEB_APP_URL>/api/v1/integrations/onedrive-sync/callback` registered on the Microsoft app.
 
 Acceptance criteria amendment: another Organization's caller gets **403**, not 404. `get_current_user()` refuses a caller outside the path Organization before any route runs, as for every Organization-scoped resource; 404 concealment applies to Agent resources only ([RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md)).
 
+Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a generic sync provider seam, so Dropbox and Google Drive can be added as plugins; an Organization connects one provider at a time. See the [ADR](../../adr/2026-10-16-sync-provider-plugin-seam.md).
+
 ## Changes
+
+### 2026-10-16 — AF-383 — Docs move to `docs/features/sync-provider/`, ADR
+
+- Changed:
+  - `docs/features/onedrive-sync/` moved to `docs/features/sync-provider/`. The README is now generic (provider list and routes, connection lifecycle, failure mapping, one connection at a time, Sync settings, **Adding a provider**), with an **OneDrive provider** section for everything Microsoft.
+  - This log's current state is rewritten for the seam.
+  - `CONTEXT.md` replaces "OneDrive Sync Connection" with **Sync Provider** and **Sync Provider Connection**.
+  - `docs/INDEX.md` routes to the new folder and the ADR, and `docs/features/integrations.md` links the OneDrive section.
+- Delivered: [ADR 2026-10-16 — sync provider plugin seam](../../adr/2026-10-16-sync-provider-plugin-seam.md), recording the maintainer's reason (Dropbox and Google Drive will be added and should be simple to add) and the one-connection-at-a-time rule.
+- Verified: every relative link in the moved README, this log, the ADR, `docs/INDEX.md`, `CONTEXT.md` and `integrations.md` resolves to an existing file. No doc names the removed `onedrive_sync` domain or `onedrive-sync` paths outside the history below.
+- Follow-up: the manual run against the test tenant.
 
 ### 2026-10-16 — AF-383 — Sync settings: the provider list (Option B)
 
