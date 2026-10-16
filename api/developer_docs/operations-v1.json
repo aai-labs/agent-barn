@@ -361,6 +361,21 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions",
+    "list_agent_playbook_extractions_organizations__organization_id__agents__agent_id__playbook_extractions_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions/preview",
+    "preview_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions_preview_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions/{extraction_id}",
+    "get_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions__extraction_id__get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/resource-usage",
     "get_agent_resource_usage_organizations__organization_id__agents__agent_id__resource_usage_get"
   ],
@@ -523,6 +538,11 @@
     "GET",
     "/organizations/{organization_id}/memory/items",
     "list_organization_memories_organizations__organization_id__memory_items_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/playbook-extractions",
+    "list_playbook_extractions_organizations__organization_id__playbook_extractions_get"
   ],
   [
     "GET",
@@ -693,6 +713,16 @@
     "GET",
     "/platform/settings/agent-memory/models",
     "list_models_platform_settings_agent_memory_models_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/playbooks",
+    "read_settings_platform_settings_playbooks_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/playbooks/models",
+    "list_models_platform_settings_playbooks_models_get"
   ],
   [
     "GET",
@@ -981,6 +1011,16 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions",
+    "create_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/playbook-extractions/{extraction_id}/cancel",
+    "cancel_playbook_extraction_organizations__organization_id__agents__agent_id__playbook_extractions__extraction_id__cancel_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/restore-points",
     "create_restore_point_organizations__organization_id__agents__agent_id__restore_points_post"
   ],
@@ -1116,6 +1156,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/templates/{template_key}/draft/conventions",
+    "add_organization_conventions_organizations__organization_id__templates__template_key__draft_conventions_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/templates/{template_key}/draft/publish",
     "publish_org_draft_organizations__organization_id__templates__template_key__draft_publish_post"
   ],
@@ -1228,6 +1273,11 @@
     "PUT",
     "/platform/settings/agent-memory",
     "update_settings_platform_settings_agent_memory_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/playbooks",
+    "update_settings_platform_settings_playbooks_put"
   ],
   [
     "PUT",

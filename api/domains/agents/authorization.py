@@ -118,22 +118,25 @@ class AgentAuthorization:
         account, so revoking their access also stops that work. Resolves the
         Membership exactly as ``_scope`` resolves a signed-in Member.
         """
+        scope = self.membership_scope(membership_id, permission)
+        return scope is not None and self.repository.get_active_in_scope(agent_id, scope) is not None
+
+    def membership_scope(self, membership_id: UUID, permission: PermissionKey) -> AuthorizationScope | None:
+        """The repository scope a Membership would have when signed in, or None if it no longer exists."""
         found = self.repository.find_membership_with_user(membership_id)
         if found is None:
-            return False
+            return None
         membership, user = found
         if user is None:
-            return False
+            return None
         if membership.role in IMPLICIT_AGENT_OWNER_ROLES:
-            scope = AuthorizationScope(organization_id=membership.organization_id)
-        else:
-            scope = AuthorizationScope(
-                organization_id=membership.organization_id,
-                membership_id=membership.id,
-                permission=permission,
-                include_general_access=user.email_verified_at is not None,
-            )
-        return self.repository.get_active_in_scope(agent_id, scope) is not None
+            return AuthorizationScope(organization_id=membership.organization_id)
+        return AuthorizationScope(
+            organization_id=membership.organization_id,
+            membership_id=membership.id,
+            permission=permission,
+            include_general_access=user.email_verified_at is not None,
+        )
 
     def allowed_actions(self, context: CurrentUserContext, agents: list[Agent]) -> dict[UUID, list[PermissionKey]]:
         if not agents:
