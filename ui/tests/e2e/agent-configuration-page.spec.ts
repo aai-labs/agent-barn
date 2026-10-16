@@ -1117,6 +1117,77 @@ test.describe("Agent configuration page", () => {
     });
   });
 
+  test.describe("Gmail (app password)", () => {
+    const savedIsolation = {
+      desired: true, applied: null, last_verified: null, reconnect_required: false, generation: null, pending: true,
+      switch_available: false, supported_modes: ["isolated"],
+      direct_description: "An app password cannot be limited to reading, so it is never given to this Agent.",
+      isolated_description: "The app password stays outside this Agent; Agent Barn reads the inbox for it, read-only.",
+    };
+
+    async function openIntegrations(page: Page, secrets: unknown[]) {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED", secrets } });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      const sent: { patchBody?: Record<string, unknown>; isolation: unknown[] } = { isolation: [] };
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+        if (route.request().method() !== "PATCH") return route.fallback();
+        sent.patchBody = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({ json: { ...mockAgent, status: "STOPPED", secrets: [
+          { provider: "gmail_app_password", secret_name: "Gmail app password", source: "agent_secret", isolation: savedIsolation },
+        ] } });
+      });
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/gmail_app_password/isolation`, async (route) => {
+        sent.isolation.push(route.request().postDataJSON());
+        await route.fulfill({ json: { ...mockAgent, status: "STOPPED" } });
+      });
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionButton("Integrations").click();
+      const section = page.locator('section[aria-label="Integrations"]');
+      await section.getByRole("button", { name: "Edit", exact: true }).click();
+      return { section, sent };
+    }
+
+    test("connects with an address and app password, always isolated", async ({ page }) => {
+      const { section, sent } = await openIntegrations(page, []);
+      await section.getByRole("button", { name: "Gmail (app password)", exact: true }).click();
+
+      await expect(section.getByText("myaccount.google.com/apppasswords", { exact: false })).toBeVisible();
+      const isolation = section.getByRole("switch", { name: "Gmail (app password) isolation" });
+      await expect(isolation).toBeChecked();
+      await expect(isolation).toBeDisabled();
+      await expect(section.getByText("The app password stays outside this Agent", { exact: false })).toBeVisible();
+
+      await section.getByPlaceholder("you@gmail.com").fill("someone@gmail.com");
+      await section.getByPlaceholder("abcd efgh ijkl mnop").fill("abcd efgh ijkl mnop");
+      await section.getByRole("button", { name: "Apply", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Apply", exact: true }).click();
+
+      await expect.poll(() => sent.patchBody).toBeDefined();
+      expect(sent.patchBody?.secrets).toEqual([
+        { provider: "gmail_app_password", content: { email: "someone@gmail.com", app_password: "abcd efgh ijkl mnop" } },
+      ]);
+      await expect.poll(() => sent.isolation).toEqual([{ isolated: true, restart: false }]);
+    });
+
+    test("a saved app password stays isolated with nothing to apply", async ({ page }) => {
+      const { section, sent } = await openIntegrations(page, [
+        { provider: "gmail_app_password", secret_name: "Gmail app password", source: "agent_secret", isolation: savedIsolation },
+      ]);
+      await page.locator("summary").filter({ hasText: "Gmail (app password)" }).click();
+
+      const isolation = section.getByRole("switch", { name: "Gmail app password isolation" });
+      await expect(isolation).toBeChecked();
+      await expect(isolation).toBeDisabled();
+      await expect(section.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+      expect(sent.isolation).toEqual([]);
+    });
+  });
+
   test.describe("SharePoint", () => {
     const APP_ID = "5ff671c1-57c7-44ef-a7b5-8fe4f81227f9";
     const TENANT_ID = "b6f28f4f-97fe-41e6-903a-ff6cc7633ae3";
