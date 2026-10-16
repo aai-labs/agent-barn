@@ -76,23 +76,25 @@ class CustomApiRepository:
                 return None
             return row
 
-    def mutate_with_event(self, row: CustomApiConnection, actor: ActorIdentity, operation: str) -> list[UUID]:
-        return self.mutate_many_with_events([(row, operation)], actor)
+    def mutate_with_event(
+        self, row: CustomApiConnection, actor: ActorIdentity, actor_display: str, operation: str
+    ) -> list[UUID]:
+        return self.mutate_many_with_events([(row, operation)], actor, actor_display)
 
     def mutate_many_with_events(
-        self, changes: list[tuple[CustomApiConnection, str]], actor: ActorIdentity
+        self, changes: list[tuple[CustomApiConnection, str]], actor: ActorIdentity, actor_display: str
     ) -> list[UUID]:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             deliveries: list[UUID] = []
             for row, operation in sorted(changes, key=lambda change: change[1] != "deleted"):
-                deliveries.extend(self._stage_change(session, row, actor, operation))
+                deliveries.extend(self._stage_change(session, row, actor, actor_display, operation))
                 # A deleted identifier can be reused by a create in this transaction.
                 session.flush()
             session.commit()
             return deliveries
 
     def _stage_change(
-        self, session: Session, row: CustomApiConnection, actor: ActorIdentity, operation: str
+        self, session: Session, row: CustomApiConnection, actor: ActorIdentity, actor_display: str, operation: str
     ) -> list[UUID]:
         agent = session.get(Agent, row.agent_id)
         if agent is None:
@@ -113,7 +115,7 @@ class CustomApiRepository:
                 "organization_id": agent.organization_id,
                 "agent_id": agent.id,
                 "field_changes": {"custom_api_connections." + row.slug: {"previous": None, "new": operation}},
-                "actor_display": actor.type.value,
+                "actor_display": actor_display,
                 "subject_display": agent.name,
             },
         )

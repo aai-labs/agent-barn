@@ -64,7 +64,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
   const customChanges = customDrafts.filter((draft) => draft.changed);
   const removedConnections = (customApi.connections ?? []).filter((connection) => !customDrafts.some((draft) => draft.connection?.id === connection.id));
   const hasCustomChanges = customChanges.length > 0 || removedConnections.length > 0;
-  const hasChanges = hasCustomChanges || hasCredentialChanges || changedPolicies.length > 0 || restartRequired || (failed && drafts.length > 0);
+  const hasChanges = hasCustomChanges || hasCredentialChanges || changedPolicies.length > 0 || restartRequired || (failed && (drafts.length > 0 || customDrafts.length > 0));
   const pending = customApi.connectionMutation.isPending || customApi.batchMutation.isPending || saving || updateAgent.isPending || isolation.isPending || stopAgent.isPending || startAgent.isPending;
   const canRestart = agent.allowedActions.includes("agent.lifecycle.manage");
   const restart = restartRequired || agent.status === "RUNNING" || (failed && (drafts.length > 0 || customDrafts.length > 0));
@@ -93,7 +93,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
       } else if (!hasCustomChanges && !hasCredentialChanges && changedPolicies.length <= 1) {
         const draft = changedPolicies[0] ?? drafts[0];
         if (draft) await isolation.mutateAsync({ provider: draft.provider, isolated: draft.isolated ?? false, restart });
-        else if (restartRequired) await startAgent.mutateAsync(agent.id);
+        else if (restart) await startAgent.mutateAsync(agent.id);
       } else {
         const batch = {
           creates: customChanges.filter((draft) => !draft.connection).map((draft) => connectionPayload(draft.value)),

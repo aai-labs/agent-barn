@@ -23,6 +23,7 @@ export class CustomApiDataSupport {
   async open(
     options: {
       running?: boolean;
+      failed?: boolean;
       actions?: string[];
       updating?: boolean;
       empty?: boolean;
@@ -43,7 +44,7 @@ export class CustomApiDataSupport {
     await data.agents.interceptGetAgentRequest({
       body: {
         ...mockAgent,
-        status: options.running ? "RUNNING" : "STOPPED",
+        status: options.failed ? "ERROR" : options.running ? "RUNNING" : "STOPPED",
         allowed_actions: options.actions ?? mockAgentAllowedActions,
         update_in_progress: options.updating ?? false,
       },

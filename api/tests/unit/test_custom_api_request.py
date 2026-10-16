@@ -1,8 +1,30 @@
+import json
 import socket
 
 import pytest
+from hamcrest import assert_that, equal_to
 
+from api.domains.custom_api import request as engine
 from api.domains.custom_api.request import RequestRefused, check_scope, credential_headers, public_addresses
+
+
+class EchoUpstream:
+    status = 200
+
+    def __init__(self, *args):
+        self.headers = {}
+
+    def request(self, method, path, body=None, headers=None):
+        self.headers = headers or {}
+
+    def getresponse(self):
+        return self
+
+    def read(self, limit):
+        return json.dumps({"user": "alice", "auth": self.headers["authorization"]}).encode()
+
+    def close(self):
+        pass
 
 
 @pytest.mark.parametrize(
@@ -174,3 +196,16 @@ def test_json_and_text_response_values_are_bounded_and_known_secrets_redacted(mo
         {"url": "https://api.example.com/v1/items"},
     )
     assert_that(result, equal_to({"status": 200, "body": {"echo": "[REDACTED]", "items": [1]}}))
+
+
+def test_basic_auth_username_is_not_redacted_from_responses(monkeypatch):
+    monkeypatch.setattr(engine, "public_addresses", lambda *args: ["8.8.8.8"])
+    monkeypatch.setattr(engine, "PinnedHTTPSConnection", EchoUpstream)
+    result = engine.execute(
+        {
+            "base_url": "https://api.example.com/v1",
+            "auth": {"type": "basic", "username": "alice", "password": "wonderland"},
+        },
+        {"url": "https://api.example.com/v1/items"},
+    )
+    assert_that(result, equal_to({"status": 200, "body": {"user": "alice", "auth": "[REDACTED]"}}))

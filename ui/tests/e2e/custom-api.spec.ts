@@ -97,6 +97,17 @@ test.describe("Custom API integrations", () => {
     expect(data.lifecycleRequests).toEqual([]);
   });
 
+  test("failed Agent with only Custom API connections can retry start", async ({ page }) => {
+    const data = new CustomApiDataSupport(page);
+    const ui = new CustomApiPage(page);
+    await data.open({ failed: true });
+    await ui.beginEditing();
+    await ui.confirmApply();
+    await expect(ui.form).toHaveCount(0);
+    expect(data.lifecycleRequests).toEqual(["start"]);
+    expect(data.requests).toHaveLength(0);
+  });
+
   test("stages deletion until shared Apply and restart", async ({ page }) => {
     const data = new CustomApiDataSupport(page);
     const ui = new CustomApiPage(page);

@@ -29,21 +29,12 @@ export function useCustomApi(agentId: string, running: boolean) {
   const query = useQuery({
     queryKey,
     enabled: Boolean(agentId && organizationId),
-    queryFn: async () => {
-      const previous =
-        queryClient.getQueryData<CustomApiConnection[]>(queryKey);
-      // Agent detail reads reconcile runtime readiness before connection metadata is read.
-      if (running && previous?.some((connection) => connection.pendingApply)) {
-        await queryClient.invalidateQueries({
-          queryKey: agentsKey.detail(agentId),
-        });
-      }
-      return (
+    queryFn: async () =>
+      (
         await api.get<CustomApiConnection[]>(url, {
           schema: z.array(CustomApiConnectionSchema),
         })
-      ).data;
-    },
+      ).data,
     refetchInterval: (query) => {
       if (
         !running ||

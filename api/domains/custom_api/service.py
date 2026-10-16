@@ -73,7 +73,8 @@ class CustomApiService:
         )
 
     def list_connections(self, agent_id: UUID, context: CurrentUserContext) -> list[CustomApiConnectionRead]:
-        self.authorization.require_visible(context, agent_id)
+        agent = self.authorization.require_visible(context, agent_id)
+        self.lifecycle._observe_integration_readiness(agent)
         scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         return [self._read(row) for row in self.repository.list_in_scope(agent_id, scope)]
 
@@ -280,7 +281,9 @@ class CustomApiService:
             self.lifecycle.k8s.wait_for_termination(name, self.lifecycle.config.k8s_namespace)
             self.lifecycle.credential_gateway.revoke_for_agent(agent.id, agent.organization_id)
         try:
-            deliveries = self.repository.mutate_many_with_events(changes, actor)
+            deliveries = self.repository.mutate_many_with_events(
+                changes, actor, context.user.full_name or context.user.email
+            )
         except IntegrityError:
             raise HTTPException(409, "A connection identifier is already in use") from None
         self.lifecycle.event_delivery_dispatcher.enqueue_immediate(deliveries)
@@ -290,6 +293,9 @@ class CustomApiService:
     def _persist(self, row: CustomApiConnection, context: CurrentUserContext, operation: str) -> None:
         agent = self.authorization.require_visible(context, row.agent_id)
         deliveries = self.repository.mutate_with_event(
-            row, resolve_actor_identity(context, agent.organization_id), operation
+            row,
+            resolve_actor_identity(context, agent.organization_id),
+            context.user.full_name or context.user.email,
+            operation,
         )
         self.lifecycle.event_delivery_dispatcher.enqueue_immediate(deliveries)

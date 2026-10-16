@@ -128,7 +128,7 @@ def credential_headers(config: dict) -> tuple[dict[str, str], list[str]]:
             raise RequestRefused("Basic auth username cannot contain a colon")
         encoded = base64.b64encode(f"{user}:{password}".encode()).decode()
         headers["authorization"] = "Basic " + encoded
-        sensitive.extend([user, password, encoded])
+        sensitive.extend([password, encoded])
     elif kind != "none":
         raise RequestRefused("Unsupported authentication type")
     for item in config.get("headers", []):

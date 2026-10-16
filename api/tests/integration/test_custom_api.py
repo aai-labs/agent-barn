@@ -10,9 +10,12 @@ from api.domains.agents.models import AgentStatus
 from api.domains.agents.repository import AgentRepository
 from api.domains.custom_api.repository import CustomApiRepository
 from api.domains.custom_api.runtime import connection_snapshot, materialize_custom_api
+from api.domains.events.catalog import AGENT_UPDATED
+from api.domains.events.models import OutboxMessage
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import (
@@ -185,6 +188,36 @@ def test_gateway_tokens_are_connection_and_generation_bound_and_revoked_on_stop(
 
 def _create_id(rows):
     return str(rows[0].id)
+
+
+def test_listing_reconciles_a_ready_generation_as_applied():
+    with given(_GIVEN) as context:
+        assert_that(_create(context).status_code, equal_to(201))
+        repository = context.injector.get(CustomApiRepository)
+        integrations = context.injector.get(IntegrationRepository)
+        rows = repository.runtime_connections(context.agent.id)
+        generation = integrations.begin(context.agent.id, connection_snapshot(rows))
+        materialize_custom_api(rows, TEST_ENCRYPTION_KEY, "http://gateway.test", repository, generation.generation)
+        integrations.set_state(context.agent.id, "provisioned")
+        context.agent.status = AgentStatus.RUNNING
+        context.injector.get(AgentRepository).save(context.agent)
+
+        response = context.client.get(_path(context), headers=_headers(context))
+
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json()[0]["pending_apply"], equal_to(False))
+        assert_that(integrations.runtime(context.agent.id).state, equal_to("ready"))
+
+
+def test_connection_events_name_the_acting_user():
+    with given(_GIVEN) as context:
+        assert_that(_create(context).status_code, equal_to(201))
+
+        messages = context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+
+        updated = [message for message in messages if message.event_name == AGENT_UPDATED]
+        assert_that(updated, has_length(1))
+        assert_that(updated[0].payload["actor_display"], equal_to("Test User"))
 
 
 @pytest.mark.parametrize(
