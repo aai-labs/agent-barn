@@ -10,7 +10,13 @@ from uuid import UUID
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.agents.models import FirecrawlContent, SecretContent, SecretProvider, decrypt_content
+from api.domains.agents.models import (
+    FirecrawlContent,
+    GmailAppPasswordContent,
+    SecretContent,
+    SecretProvider,
+    decrypt_content,
+)
 from api.domains.agents.repository import AgentRepository
 from api.domains.credential_gateway.audit import GatewayAuditSink, ResolutionOutcome
 from api.domains.credential_gateway.forwarding import (
@@ -24,6 +30,9 @@ from api.domains.credential_gateway.models import (
     GatewayToken,
     GatewayTokenResolution,
     IssuedGatewayToken,
+    MailListRead,
+    MailMessageRead,
+    MailSummaryRead,
     hash_token,
     issue_token_value,
 )
@@ -43,6 +52,7 @@ from api.domains.integrations.plugins.base import (
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.shared_credentials.repository import SharedCredentialRepository
+from api.infrastructure.google.gmail_imap import GmailInbox
 
 
 class GatewayTokenRejected(Exception):
@@ -65,6 +75,7 @@ class CredentialGatewayService:
     forwarder: UpstreamForwarder
     integrations: IntegrationRepository
     sharepoint_broker: SharePointBroker
+    inbox: GmailInbox
 
     # --- issuance, called from agent start ---
 
@@ -305,6 +316,33 @@ class CredentialGatewayService:
             organization_id=resolution.organization_id,
         )
         return minted
+
+    # --- read-only Gmail, read by the gateway itself for app-password credentials ---
+
+    def list_mail(self, authorization: str | None, *, query: str | None, limit: int) -> MailListRead:
+        address, app_password = self._gmail_app_password(authorization)
+        messages = self.inbox.list_messages(address, app_password, query=query, limit=limit)
+        return MailListRead(messages=[MailSummaryRead(**vars(m)) for m in messages])
+
+    def get_mail(self, authorization: str | None, message_id: str) -> MailMessageRead:
+        address, app_password = self._gmail_app_password(authorization)
+        return MailMessageRead(**vars(self.inbox.get_message(address, app_password, message_id)))
+
+    def _gmail_app_password(self, authorization: str | None) -> tuple[str, str]:
+        """Resolve a token to its Gmail app password; a token for any other provider is refused."""
+        resolution = self.resolve(authorization)
+        if resolution.provider != SecretProvider.GMAIL_APP_PASSWORD:
+            raise GatewayForwardRefused(f"token is for {resolution.provider.value}, not gmail_app_password")
+        content = self._decrypt_credential(resolution.agent_id, resolution.organization_id, resolution.provider)
+        if not isinstance(content, GmailAppPasswordContent):
+            raise GatewayForwardRefused("no gmail_app_password credential for this agent")
+        self.audit.record_lifecycle(
+            "mail_read",
+            provider=resolution.provider,
+            agent_id=resolution.agent_id,
+            organization_id=resolution.organization_id,
+        )
+        return content.email, content.app_password
 
     def handoff_sharepoint(self, authorization: str | None, data: SharePointHandoff) -> None:
         resolution = self.resolve(authorization)

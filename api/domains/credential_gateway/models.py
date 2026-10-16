@@ -150,3 +150,26 @@ class BrokeredTokenRead(PydanticBaseModel):
     access_token: str
     expires_in: int
     scopes: list[str] = []
+
+
+class MailSummaryRead(PydanticBaseModel):
+    """One inbox message's headers, as listed for an agent."""
+
+    id: str
+    sender: str
+    subject: str
+    date: str
+
+
+class MailListRead(PydanticBaseModel):
+    messages: list[MailSummaryRead]
+
+
+class MailMessageRead(MailSummaryRead):
+    """One inbox message's readable text. Attachments are named, never returned."""
+
+    to: str
+    cc: str
+    body: str
+    truncated: bool
+    attachments: list[str]

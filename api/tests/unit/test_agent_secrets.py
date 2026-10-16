@@ -11,6 +11,7 @@ from api.domains.agents.models import (
     BitbucketContent,
     FirecrawlContent,
     GithubContent,
+    GmailAppPasswordContent,
     GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
@@ -412,6 +413,69 @@ def test_apollo_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "apollo-test-key" not in blob
     assert decrypt_content(SecretProvider.APOLLO, blob, _KEY) == original
+
+
+# --- Gmail app password ---
+
+_GMAIL_APP_PASSWORD_BASE = {"email": "someone@gmail.com", "app_password": "abcdefghijklmnop"}
+
+
+def test_gmail_app_password_content_validates():
+    content = validate_content(SecretProvider.GMAIL_APP_PASSWORD, _GMAIL_APP_PASSWORD_BASE)
+    assert isinstance(content, GmailAppPasswordContent)
+    assert content.email == "someone@gmail.com"
+    assert content.app_password == "abcdefghijklmnop"
+
+
+def test_gmail_app_password_drops_the_spaces_google_displays():
+    # Google shows the 16 characters in groups of four; the spaces are not part of it.
+    content = validate_content(
+        SecretProvider.GMAIL_APP_PASSWORD, {**_GMAIL_APP_PASSWORD_BASE, "app_password": " abcd efgh ijkl mnop "}
+    )
+    assert isinstance(content, GmailAppPasswordContent)
+    assert content.app_password == "abcdefghijklmnop"
+
+
+def test_gmail_app_password_trims_the_address():
+    content = validate_content(
+        SecretProvider.GMAIL_APP_PASSWORD, {**_GMAIL_APP_PASSWORD_BASE, "email": " someone@gmail.com "}
+    )
+    assert isinstance(content, GmailAppPasswordContent)
+    assert content.email == "someone@gmail.com"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {},
+        {"email": "someone@gmail.com"},
+        {"app_password": "abcdefghijklmnop"},
+        {"email": "someone@gmail.com", "app_password": "    "},
+        {"email": "not-an-address", "app_password": "abcdefghijklmnop"},
+        {"email": "", "app_password": "abcdefghijklmnop"},
+    ],
+)
+def test_gmail_app_password_content_rejects_incomplete_credentials(raw):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GMAIL_APP_PASSWORD, raw)
+
+
+@pytest.mark.parametrize("field", ["host", "extra"])
+def test_gmail_app_password_content_rejects_extra_fields(field):
+    # A host would let a caller send the password to a server other than Gmail's.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GMAIL_APP_PASSWORD, {**_GMAIL_APP_PASSWORD_BASE, field: "imap.evil.example"})
+
+
+def test_gmail_app_password_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.GMAIL_APP_PASSWORD, _GMAIL_APP_PASSWORD_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "abcdefghijklmnop" not in blob
+    assert decrypt_content(SecretProvider.GMAIL_APP_PASSWORD, blob, _KEY) == original
+
+
+def test_gmail_app_password_has_its_own_display_name():
+    assert PROVIDER_DISPLAY_NAMES[SecretProvider.GMAIL_APP_PASSWORD] == "Gmail app password"
 
 
 def test_retired_google_providers_are_gone():

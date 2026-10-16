@@ -107,3 +107,41 @@ def test_memory_writer_instructions_are_only_in_enabled_agents_startup_context(b
     assert (MEMORY_TOOL_INSTRUCTIONS in data["AGENTS.md"]) == enabled
     assert data["AGENTS.md"].startswith("agents")
     assert data["TOOLS.md"] == "tools"
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_gmail_helper_ships_only_for_agents_that_read_gmail(runtime):
+    build = _hermes_config_map if runtime == "hermes" else _openclaw_config_map
+    assert "gmail-read.sh" not in build().data
+    if runtime == "hermes":
+        data = build_hermes_config_map(
+            _AGENT_ID,
+            _ORG_ID,
+            _NS,
+            "soul",
+            "identity",
+            "user",
+            "tools",
+            "agents",
+            "boot",
+            "heartbeat",
+            build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+            gmail_read_sh="helper",
+        ).data
+    else:
+        data = build_config_map(
+            _AGENT_ID,
+            _ORG_ID,
+            _NS,
+            "soul",
+            "identity",
+            "user",
+            "tools",
+            "agents",
+            "boot",
+            "bootstrap",
+            "heartbeat",
+            openclaw_config_overlay=build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+            gmail_read_sh="helper",
+        ).data
+    assert data["gmail-read.sh"] == "helper"

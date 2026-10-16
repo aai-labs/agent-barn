@@ -2460,6 +2460,7 @@ class AgentService:
         aai_setup_sh = artifacts.files["aai-cli-setup.sh"] + custom_artifacts.files["custom-api-setup.sh"]
         gog_setup_sh = artifacts.files.get("gog-setup.sh")
         gog_shim_sh = artifacts.files.get("gog-shim.sh")
+        gmail_read_sh = artifacts.files.get("gmail-read.sh")
         fc_api_key = artifacts.env.get("FIRECRAWL_API_KEY", self.config.agent_firecrawl_api_key)
         fc_base_url = artifacts.env.get("FIRECRAWL_API_URL", self.config.agent_firecrawl_base_url)
         if fc_api_key and fc_base_url:
@@ -2596,6 +2597,7 @@ class AgentService:
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
                 gog_shim_sh=gog_shim_sh,
+                gmail_read_sh=gmail_read_sh,
                 skills_json=skills_json,
             )
         else:
@@ -2617,6 +2619,7 @@ class AgentService:
                 aai_cli_setup_sh=aai_setup_sh,
                 gog_setup_sh=gog_setup_sh,
                 gog_shim_sh=gog_shim_sh,
+                gmail_read_sh=gmail_read_sh,
                 skills_json=skills_json,
             )
 

@@ -410,6 +410,7 @@ def build_hermes_config_map(
     aai_cli_setup_sh: str | None = None,
     gog_setup_sh: str | None = None,
     gog_shim_sh: str | None = None,
+    gmail_read_sh: str | None = None,
     skills_json: str | None = None,
     memory_enabled: bool = False,
 ) -> client.V1ConfigMap:
@@ -449,6 +450,9 @@ def build_hermes_config_map(
         # Installed onto PATH by gog-setup.sh; start.sh puts that directory ahead of
         # /usr/local/bin so every agent command resolves the wrapper first.
         data["gog-shim.sh"] = gog_shim_sh
+    if gmail_read_sh is not None:
+        # Run by the agent as `sh /app/config/gmail-read.sh`; it is never executed at start.
+        data["gmail-read.sh"] = gmail_read_sh
     if skills_json is not None:
         data["skills.json"] = skills_json
     return client.V1ConfigMap(
