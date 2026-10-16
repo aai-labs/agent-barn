@@ -5342,7 +5342,7 @@ def test_start_agent_reads_gmail_through_the_gateway_without_the_app_password(gi
 
         with then("aai-cli is pointed at the gateway and the agent is told how to read mail"):
             assert_that(config_map.data["aai-cli-config.toml"], contains_string('provider = "custom_api"'))
-            assert_that(config_map.data["aai-cli-config.toml"], contains_string("/custom-api/request"))
+            assert_that(config_map.data["aai-cli-config.toml"], contains_string("/served/request"))
             assert_that(
                 config_map.data["AGENTS.md"], contains_string("aai-cli --profile gmail-inbox custom-api request")
             )

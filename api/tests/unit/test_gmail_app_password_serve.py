@@ -201,7 +201,7 @@ def test_gmail_failures_become_a_status_the_agent_can_read(failure, status, erro
 
 def test_the_gateway_profile_holds_no_credential_and_points_at_the_gateway():
     block = GmailAppPasswordPlugin().aai_cli_gateway_profile_block(
-        _CONTENT, base_url="http://gateway/gateway/v1/custom-api/request", token_env="AF_GATEWAY_TOKEN_X"
+        _CONTENT, base_url="http://gateway/gateway/v1/served/request", token_env="AF_GATEWAY_TOKEN_X"
     )
 
     assert_that(
@@ -210,7 +210,7 @@ def test_the_gateway_profile_holds_no_credential_and_points_at_the_gateway():
             "[profiles.gmail-inbox]\n"
             'provider = "custom_api"\n'
             f'base_url = "{GMAIL_SERVED_BASE_URL}"\n'
-            'gateway_url = "http://gateway/gateway/v1/custom-api/request"\n'
+            'gateway_url = "http://gateway/gateway/v1/served/request"\n'
             'gateway_token_env = "AF_GATEWAY_TOKEN_X"\n'
         ),
     )

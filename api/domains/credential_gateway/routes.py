@@ -17,8 +17,8 @@ from starlette.concurrency import run_in_threadpool
 from api.domains.credential_gateway.forwarding import UpstreamUnreachable
 from api.domains.credential_gateway.models import (
     BrokeredTokenRead,
-    CustomApiRequest,
     GatewayTokenResolution,
+    ServedRequestBody,
     ServedResponseRead,
 )
 from api.domains.credential_gateway.service import (
@@ -111,18 +111,20 @@ async def forward_to_provider(
     )
 
 
-@gateway_router.post("/custom-api/request", response_model=ServedResponseRead)
-async def serve_custom_api_request(
-    data: CustomApiRequest,
+@gateway_router.post("/served/request", response_model=ServedResponseRead)
+async def serve_request(
+    data: ServedRequestBody,
     service: Annotated[CredentialGatewayService, Injected(CredentialGatewayService)],
     authorization: Annotated[str | None, Header()] = None,
 ) -> ServedResponseRead:
-    """Answer an aai-cli Custom API request for a provider the gateway serves itself.
+    """Answer an aai-cli request for a provider the gateway serves itself.
 
-    An isolated ``custom_api`` profile posts the complete request here with only the
-    agent's gateway token. The provider's plugin answers it with the stored credential,
-    which never leaves the gateway. A provider failure comes back as the upstream status
-    inside a successful envelope, because aai-cli hides the body of a gateway error.
+    The provider's isolated aai-cli ``custom_api`` profile posts the complete request here
+    with only the agent's gateway token. Custom API connections, which forward to a
+    user-configured API with their own credentials, keep ``/custom-api/request``. The
+    provider's plugin answers with the stored credential, which never leaves the gateway.
+    A provider failure comes back as the upstream status inside a successful envelope,
+    because aai-cli hides the body of a gateway error.
     """
     request = ServedRequest(method=data.method, url=data.url, query=data.query, body=data.body)
     try:

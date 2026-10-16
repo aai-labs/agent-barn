@@ -129,7 +129,8 @@ def _gateway_endpoint(gateway_base_url: str, mode: EgressMode, key: str) -> str:
         return f"{base}/token"
     if mode == EgressMode.GATEWAY_SERVED:
         # aai-cli's Custom API gateway mode posts the complete request object here.
-        return f"{base}/custom-api/request"
+        # /custom-api/request belongs to Custom API connections and their own credentials.
+        return f"{base}/served/request"
     return f"{base}/p/{key}"
 
 

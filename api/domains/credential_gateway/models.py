@@ -153,13 +153,13 @@ class BrokeredTokenRead(PydanticBaseModel):
     scopes: list[str] = []
 
 
-class CustomApiHeader(PydanticBaseModel):
+class ServedRequestHeader(PydanticBaseModel):
     name: str = Field(max_length=256)
     value: str = Field(max_length=8192)
 
 
-class CustomApiRequest(PydanticBaseModel):
-    """The complete request object aai-cli's isolated Custom API profile posts.
+class ServedRequestBody(PydanticBaseModel):
+    """The complete request object an isolated aai-cli ``custom_api`` profile posts.
 
     ``url`` names the provider resource inside the profile's base URL; the gateway never
     fetches it. Headers are accepted because aai-cli always sends the list, and ignored.
@@ -169,7 +169,7 @@ class CustomApiRequest(PydanticBaseModel):
     url: str = Field(min_length=1, max_length=4096)
     query: dict[str, Any] = Field(default_factory=dict)
     body: Any = None
-    headers: list[CustomApiHeader] = Field(default_factory=list, max_length=32)
+    headers: list[ServedRequestHeader] = Field(default_factory=list, max_length=32)
 
 
 class ServedResponseRead(PydanticBaseModel):
