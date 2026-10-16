@@ -1,6 +1,7 @@
 import io
 import json
 import re
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -10,7 +11,6 @@ _COLOR_ICON = _ASSETS / "teams-color.png"
 _OUTLINE_ICON = _ASSETS / "teams-outline.png"
 _SCHEMA_URL = "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json"
 _MANIFEST_VERSION = "1.17"
-_PACKAGE_VERSION = "1.0.1"
 _MANIFEST_NAMESPACE = uuid.UUID("6ba7b812-9dad-11d1-80b4-00c04fd430c8")
 _SHORT_NAME_MAX = 30
 _SHORT_DESCRIPTION_MAX = 80
@@ -43,9 +43,11 @@ def build_app_package(
     manifest = {
         "$schema": _SCHEMA_URL,
         "manifestVersion": _MANIFEST_VERSION,
-        "version": _PACKAGE_VERSION,
-        # Stable per Connection so re-downloading updates the existing app
-        # rather than registering a second one in the tenant catalogue.
+        # Teams accepts an uploaded package as an update only when its version
+        # is higher than the installed one, so every download outranks the last.
+        "version": f"1.0.{int(time.time())}",
+        # Stable for the given Connection so re-downloading updates the existing
+        # app rather than registering a second one in the tenant catalogue.
         "id": str(uuid.uuid5(_MANIFEST_NAMESPACE, str(connection_id))),
         "developer": {
             "name": publisher_name,

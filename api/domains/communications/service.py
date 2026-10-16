@@ -529,13 +529,25 @@ class CommunicationsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{plugin.display_name} does not provide an installable app package",
             )
+        # The provider binds an app to its bot, not to our Connection. Packaging
+        # under the bot's first Connection keeps the app's identity when a
+        # Connection is retired and re-created for the same bot, so the package
+        # updates the installed app instead of registering a conflicting second one.
+        package_connection_id = connection.id
+        if connection.external_identity:
+            package_connection_id = (
+                self.repository.first_connection_id_for_identity(
+                    connection.organization_id, connection.platform_key, connection.external_identity
+                )
+                or connection.id
+            )
         try:
             return plugin.build_app_package(
                 plugin.settings_model.model_validate(connection.settings),
                 plugin.credentials_model.model_validate(
                     self._decrypt_credentials(plugin, connection.credentials_encrypted)
                 ),
-                connection_id=connection.id,
+                connection_id=package_connection_id,
                 # The package names the bot as people see it in the provider, so
                 # it carries the Agent's name, not the Connection's UI label.
                 display_name=agent.name,
