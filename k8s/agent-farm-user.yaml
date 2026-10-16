@@ -41,6 +41,12 @@ rules:
     resources: ["secrets"]
     resourceNames: ["litellm-metrics-key"]
     verbs: ["get"]
+  # The hindsight chart's litellm-key hook Job reads the retained key hashes
+  # so rotating the platform key keeps attributing late calls to old keys.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["hindsight-litellm-hashes"]
+    verbs: ["get"]
   # Read access for the monitoring release: Prometheus service discovery and
   # kube-state-metrics run under this SA (the tenant deployer may not create
   # new RBAC, so they reuse the identity that already has namespaced read).
