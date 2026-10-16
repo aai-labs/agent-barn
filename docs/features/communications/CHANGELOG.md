@@ -14,6 +14,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-16 — Keep a Teams app across re-created Connections — PR pending
+
+- Fixed: a Teams app package's manifest `id` now derives from the organization's first Connection for the same Microsoft App ID, including retired ones, instead of from the current Connection. Re-creating a Connection for a bot previously produced a second Teams app for that bot. Once both reached the org catalogue, Teams reported "Invalid Bot" on the new one, even though the bot was healthy.
+- Fixed: the package `version` increases with every download (`1.0.<unix seconds>`). It was fixed at `1.0.1`, so Teams Admin Center could not accept a re-downloaded package as an update.
+- Changed: Teams stores the App ID as the Connection's external identity even when `SKIP_TEAMS_TOKEN_VALIDATION` skips the credential check, so packages key on the bot in every environment. The post-setup guidance explains that reconnecting an existing bot only needs its messaging endpoint updated, and that a new package should replace the installed app, not be added beside it.
+- Follow-up: the webhook URL still contains the Connection ID, so re-creating a Connection still requires updating the Azure Bot's messaging endpoint.
+
 ### 2026-10-09 — Spend-limit notice on native chat — [PR #284](https://github.com/aai-labs/agent-barn/pull/284)
 
 - Corrected: native Slack, Discord, Telegram, and Teams no longer show OpenClaw's "top up your API key" billing text when a model spend limit is reached. Both runtimes' in-pod LLM proxies answer a refused chat completion with the spend-limit notice as an ordinary assistant reply (JSON or SSE, matching the request), which the native gateway posts. Other refused endpoints keep the terminal `402`.
