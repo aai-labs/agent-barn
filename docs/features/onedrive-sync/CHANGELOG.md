@@ -37,6 +37,20 @@ Acceptance criteria amendment: another Organization's caller gets **403**, not 4
 
 ## Changes
 
+### 2026-10-16 — AF-383 — Sync provider connection table, repository and lookup
+
+- Delivered: `SyncProviderConnection` (`sync_provider_connection`) in `api/domains/sync_provider/models.py`:
+  - keyed by `provider_key`, with `schema_version` (checked positive), `account_id`, the location and folder, JSON `provider_data` and `credentials_encrypted` for the pending token;
+  - the partial unique index `uq_sync_provider_connection_open` keeps one open connection per Organization across providers.
+- Delivered: `SyncProviderRepository` (every method takes the provider key; `list_open` lists an Organization's open connections) and `SyncProviderLookupService.folder_location_id(organization_id, provider_key)`.
+- Changed: unreleased migration `734b0f2b3793` now also creates `sync_provider_connection`. `onedrive_sync_connection` stays until the old domain is removed in the next slice. `api/migrations/env.py` imports the new models.
+- Verified:
+  - `api/tests/integration/test_sync_provider_repository.py` (18 tests, run through the migrations), including one open connection across providers;
+  - `test_onedrive_sync_repository.py` still passes;
+  - a one-off autogenerate comparison found no difference between the model and the migrated schema. Server defaults were left out of that comparison, because Alembic can't compare JSON defaults on Postgres.
+  - One Alembic head.
+- Follow-up: the generic service and provider-keyed routes; remove `api/domains/onedrive_sync/` and its table.
+
 ### 2026-10-16 — AF-383 — Sync provider seam and OneDrive plugin
 
 - Delivered: `api/domains/sync_provider/plugins/`, modelled on the Communications Platform Plugins:
