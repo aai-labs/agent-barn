@@ -10,9 +10,12 @@ from api.domains.integrations.isolation import default_isolation, isolation_read
 from api.domains.integrations.models import AgentIntegrationIsolation
 from api.domains.integrations.plugins.base import EgressMode
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
+from api.domains.integrations.runtime import select_egress_mode
+
+_ISOLATED_ONLY = {SecretProvider.GMAIL_APP_PASSWORD}
 
 
-@pytest.mark.parametrize("provider", list(SecretProvider))
+@pytest.mark.parametrize("provider", [p for p in SecretProvider if p not in _ISOLATED_ONLY])
 def test_foundation_default_preserves_current_route(provider):
     read = isolation_read(provider, None)
     # Providers added after the isolation rollout have no legacy rows to preserve.
@@ -22,6 +25,24 @@ def test_foundation_default_preserves_current_route(provider):
     assert_that(read.switch_available, is_(ISOLATION_CAPABILITIES[provider].supports_isolated))
     assert_that(read.applied, is_(none()))
     assert_that(default_isolation(provider), is_(False))
+
+
+@pytest.mark.parametrize("provider", sorted(_ISOLATED_ONLY))
+def test_provider_without_a_direct_route_is_always_isolated(provider):
+    # Its credential must never reach the pod, so there is nothing to opt out to.
+    read = isolation_read(provider, None)
+    assert_that(read.desired, is_(True))
+    assert_that(read.supported_modes, equal_to(["isolated"]))
+    assert_that(read.switch_available, is_(False))
+    assert_that(default_isolation(provider), is_(True))
+    assert_that(legacy_isolation(provider), is_(True))
+    assert_that(select_egress_mode(provider, isolated=True), is_(INTEGRATION_PLUGINS.require(provider).egress_mode))
+    with pytest.raises(ValueError, match="does not support direct"):
+        select_egress_mode(provider, isolated=False)
+
+
+def test_isolated_only_set_matches_the_capability_catalogue():
+    assert_that({p for p in SecretProvider if not ISOLATION_CAPABILITIES[p].supports_direct}, equal_to(_ISOLATED_ONLY))
 
 
 def test_legacy_default_is_independent_of_later_plugin_changes(monkeypatch):

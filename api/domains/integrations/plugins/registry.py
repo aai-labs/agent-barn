@@ -13,11 +13,11 @@ from collections.abc import Iterable
 from api.domains.agents.models import SecretProvider
 from api.domains.integrations.plugins.aai_cli_support import AaiCliIntegration
 from api.domains.integrations.plugins.base import EgressMode, IntegrationPlugin, TokenBrokerService
-from api.domains.integrations.plugins.providers import AAI_CLI, GOG, NO_TOOL, SHIPPED_PLUGINS
+from api.domains.integrations.plugins.providers import AAI_CLI, GOG, MAIL_GATEWAY, NO_TOOL, SHIPPED_PLUGINS
 
 #: Adapters that exist to materialize a provider's runtime artifacts. A plugin naming
 #: anything else is a startup error rather than a silently tool-less provider.
-KNOWN_RUNTIME_TOOLS = frozenset({AAI_CLI, GOG, NO_TOOL})
+KNOWN_RUNTIME_TOOLS = frozenset({AAI_CLI, GOG, NO_TOOL, MAIL_GATEWAY})
 
 
 class IntegrationPluginRegistry:

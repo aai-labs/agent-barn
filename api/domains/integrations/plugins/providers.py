@@ -22,6 +22,7 @@ from api.domains.agents.models import (
     ConfluenceContent,
     FirecrawlContent,
     GithubContent,
+    GmailAppPasswordContent,
     GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
@@ -48,6 +49,7 @@ from api.infrastructure.integration_validators.bitbucket import validate_bitbuck
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
 from api.infrastructure.integration_validators.gmail import validate_gmail
+from api.infrastructure.integration_validators.gmail_app_password import validate_gmail_app_password
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
@@ -58,6 +60,8 @@ GOG = "gog"
 #: Providers reached by no agent-side CLI: the credential is platform infrastructure
 #: injected as plain environment.
 NO_TOOL = "none"
+# Read through the credential gateway's own mail endpoints with a small helper script.
+MAIL_GATEWAY = "mail-gateway"
 
 _PIPEDRIVE_DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -691,6 +695,24 @@ class SharePointPlugin(AaiCliPlugin[SharePointContent]):
         )
 
 
+class GmailAppPasswordPlugin(IntegrationPlugin[GmailAppPasswordContent]):
+    """Gmail read over IMAP by the credential gateway with a Google app password.
+
+    An app password cannot be limited to reading, so it is gateway-served only: the
+    gateway signs in and reads on the agent's behalf, and the pod never holds it.
+    """
+
+    key = "gmail_app_password"
+    egress_mode = EgressMode.GATEWAY_SERVED
+    provider = SecretProvider.GMAIL_APP_PASSWORD
+    display_name = "Gmail app password"
+    credentials_model = GmailAppPasswordContent
+    runtime_tool = MAIL_GATEWAY
+
+    def validate_external(self, content: GmailAppPasswordContent) -> IntegrationValidationResult:
+        return validate_gmail_app_password(content)
+
+
 SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
     GithubPlugin(),
     JiraPlugin(),
@@ -701,5 +723,6 @@ SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
     ApolloPlugin(),
     GoogleWorkspacePlugin(),
     GmailPlugin(),
+    GmailAppPasswordPlugin(),
     SharePointPlugin(),
 )

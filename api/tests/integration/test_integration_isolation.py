@@ -521,14 +521,14 @@ def test_backfill_preserves_routes_shared_sources_and_gateway_tokens():
             command.upgrade(config, "head")
             with Session(context.postgres_delegate.engine) as session:
                 policies = session.exec(select(AgentIntegrationIsolation)).all()
-                # Downgrading below Gmail's migration deletes Gmail credentials, so none are backfilled.
+                # Downgrading below the Gmail migrations deletes their credentials, so none are backfilled.
                 assert_that(
                     {p.provider: p.isolated for p in policies},
                     equal_to(
                         {
                             p.value: p not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO}
                             for p in SecretProvider
-                            if p != SecretProvider.GMAIL
+                            if p not in {SecretProvider.GMAIL, SecretProvider.GMAIL_APP_PASSWORD}
                         }
                     ),
                 )
@@ -889,7 +889,14 @@ def test_default_firecrawl_choice_survives_stored_credential_attachment_and_remo
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
-@pytest.mark.parametrize("provider", [p for p in SecretProvider if ISOLATION_CAPABILITIES[p].supports_isolated])
+@pytest.mark.parametrize(
+    "provider",
+    [
+        p
+        for p in SecretProvider
+        if ISOLATION_CAPABILITIES[p].supports_isolated and ISOLATION_CAPABILITIES[p].supports_direct
+    ],
+)
 def test_each_provider_applies_both_directions_in_each_runtime(runtime, provider):
     from api.domains.agents.models import AgentType, encrypt_content
     from api.domains.credential_gateway.models import gateway_token_env_var

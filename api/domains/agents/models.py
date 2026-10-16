@@ -98,6 +98,7 @@ class SecretProvider(str, enum.Enum):
     SHAREPOINT = "sharepoint"
     APOLLO = "apollo"
     GMAIL = "gmail"
+    GMAIL_APP_PASSWORD = "gmail_app_password"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -117,6 +118,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.SHAREPOINT: "SharePoint credential",
     SecretProvider.APOLLO: "Apollo credential",
     SecretProvider.GMAIL: "Gmail credential",
+    SecretProvider.GMAIL_APP_PASSWORD: "Gmail app password",
 }
 
 
@@ -345,6 +347,37 @@ class ApolloContent(SecretContent):
     api_token: str = Field(min_length=1)
 
 
+class GmailAppPasswordContent(SecretContent):
+    """A Gmail address and Google app password, read over IMAP by the credential gateway.
+
+    An app password cannot be limited to reading, so it never enters the agent pod: the
+    gateway signs in on the agent's behalf and only opens the mailbox read-only. There is
+    no host field, so the password can only ever be sent to Gmail.
+    """
+
+    email: str = Field(min_length=3)
+    app_password: str = Field(min_length=1)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _trim_email(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("email")
+    @classmethod
+    def _require_address(cls, value: str) -> str:
+        local, _, domain = value.partition("@")
+        if not local or "." not in domain:
+            raise ValueError("email must be an email address")
+        return value
+
+    @field_validator("app_password", mode="before")
+    @classmethod
+    def _drop_display_spaces(cls, value: object) -> object:
+        # Google displays the password in groups of four; the spaces are not part of it.
+        return "".join(value.split()) if isinstance(value, str) else value
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
@@ -356,6 +389,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.SHAREPOINT: SharePointContent,
     SecretProvider.APOLLO: ApolloContent,
     SecretProvider.GMAIL: GmailContent,
+    SecretProvider.GMAIL_APP_PASSWORD: GmailAppPasswordContent,
 }
 
 

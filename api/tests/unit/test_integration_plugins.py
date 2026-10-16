@@ -17,7 +17,7 @@ from api.domains.agents.models import (
 )
 from api.domains.integrations.plugins.aai_cli_support import AaiCliIntegration, AaiCliPlugin
 from api.domains.integrations.plugins.base import EgressMode, IntegrationPlugin, OutboundRequest
-from api.domains.integrations.plugins.providers import AAI_CLI, GOG, NO_TOOL
+from api.domains.integrations.plugins.providers import AAI_CLI, GOG, MAIL_GATEWAY, NO_TOOL
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, IntegrationPluginRegistry
 from api.infrastructure.integration_validators import PROVIDER_VALIDATORS
 
@@ -46,7 +46,7 @@ def test_plugins_are_returned_in_fixed_provider_order():
 
 def test_for_tool_partitions_the_catalogue():
     partitioned = _ids(INTEGRATION_PLUGINS.for_tool(AAI_CLI)) + _ids(INTEGRATION_PLUGINS.for_tool(GOG))
-    partitioned += _ids(INTEGRATION_PLUGINS.for_tool(NO_TOOL))
+    partitioned += _ids(INTEGRATION_PLUGINS.for_tool(NO_TOOL)) + _ids(INTEGRATION_PLUGINS.for_tool(MAIL_GATEWAY))
     assert_that(sorted(partitioned), is_(equal_to(sorted(_ids(ALL_PLUGINS)))))
 
 
@@ -141,6 +141,31 @@ def test_a_provider_without_gateway_support_refuses_the_seams(plugin: Integratio
         plugin.upstream_base_url(content)
     with pytest.raises(NotImplementedError):
         plugin.apply_upstream_auth(content, OutboundRequest("GET", "/"))
+
+
+# --- gateway-served providers: the gateway performs the operation itself ---
+
+_GATEWAY_SERVED = [p for p in ALL_PLUGINS if p.egress_mode is EgressMode.GATEWAY_SERVED]
+
+
+def test_gmail_app_password_is_served_by_the_gateway():
+    plugin = INTEGRATION_PLUGINS.require(SecretProvider.GMAIL_APP_PASSWORD)
+    assert_that(plugin.egress_mode, is_(EgressMode.GATEWAY_SERVED))
+    assert_that(plugin.runtime_tool, equal_to(MAIL_GATEWAY))
+    # One person's mailbox: never reusable across an Organization's agents.
+    assert_that(plugin.shared_credential_eligible, is_(False))
+    assert_that(plugin.bundled_skill_slugs, equal_to(()))
+
+
+@pytest.mark.parametrize("plugin", _GATEWAY_SERVED, ids=_ids(_GATEWAY_SERVED))
+def test_a_gateway_served_provider_neither_forwards_nor_mints(plugin: IntegrationPlugin):
+    content = object()
+    with pytest.raises(NotImplementedError):
+        plugin.upstream_base_url(content)
+    with pytest.raises(NotImplementedError):
+        plugin.apply_upstream_auth(content, OutboundRequest("GET", "/"))
+    with pytest.raises(NotImplementedError):
+        plugin.mint_upstream_token(content)
 
 
 # --- registry validation ---

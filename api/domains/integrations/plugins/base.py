@@ -36,6 +36,10 @@ class EgressMode(str, enum.Enum):
     #: The gateway mints a short-lived upstream token the pod uses directly. The pod
     #: never holds a renewable grant.
     TOKEN_BROKER = "token_broker"
+    #: The gateway performs the operation itself through a dedicated endpoint, for a
+    #: credential that cannot be narrowed (a Gmail app password). Nothing is forwarded or
+    #: minted: the pod holds only its gateway token.
+    GATEWAY_SERVED = "gateway_served"
     #: The credential is materialized into the pod. Retained as the rollout fallback
     #: and as the recorded escape hatch for a CLI whose auth cannot be redirected.
     DIRECT = "direct"
