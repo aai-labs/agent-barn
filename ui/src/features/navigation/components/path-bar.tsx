@@ -25,6 +25,7 @@ import { canAgent, currentModelOf } from "@/features/agents/utils";
 
 import { useCachedAgent, useCachedAgentHealth } from "../hooks/use-cached-agent";
 import { useContextPanel } from "../hooks/use-context-panel";
+import { useIsDesktop } from "../hooks/use-is-desktop";
 import { useRailModel } from "../hooks/use-rail-model";
 import { ContextSwitcher } from "./context-switcher";
 import { UserMenu } from "./user-menu";
@@ -32,7 +33,7 @@ import { UserMenu } from "./user-menu";
 const AGENT_ROUTE = /^\/dashboard\/([^/]+)\/agents\/([^/]+)(?:\/(.*))?$/;
 
 /**
- * D2's desktop top bar: where you are, as a path you can switch at each step. The
+ * The desktop path bar: where you are, as a path you can switch at each step. The
  * first step is the Organization (or Platform View), the second the Agent when you are
  * inside one (its avatar carries the status dot), and the last the page or section you
  * are on. Inside an Agent a chip with its status, runtime and model follows, beside
@@ -44,6 +45,9 @@ export function PathBar() {
   const panel = useContextPanel();
   const rail = useRailModel();
   const agentMatch = AGENT_ROUTE.exec(pathname);
+  // Mounted on desktop only: phones show the Agent's header and actions on the page, and
+  // two copies of the lifecycle and Share controls must not coexist.
+  const isDesktop = useIsDesktop();
 
   // The deepest selected entry names the page: a section inside a context, otherwise
   // the rail destination.
@@ -53,13 +57,15 @@ export function PathBar() {
       .filter((item) => item.active)
       .at(-1)?.label ?? (agentMatch ? undefined : rail.items.find((item) => item.active)?.label);
 
+  if (!isDesktop) return null;
+
   return (
     <header
       className="sticky top-0 z-20 hidden h-14 flex-shrink-0 items-center gap-0.5 px-4 lg:flex"
       style={{ background: "var(--bg)", borderBottom: "1px solid var(--line)" }}
     >
       <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-0.5">
-        <ContextSwitcher appearance="crumb" />
+        <ContextSwitcher />
         {agentMatch && (
           <>
             <Separator />
@@ -77,7 +83,7 @@ export function PathBar() {
       </nav>
       {agentMatch && <AgentActions agentId={agentMatch[2]} />}
       <div className="ml-2">
-        <UserMenu placement="below" />
+        <UserMenu />
       </div>
     </header>
   );

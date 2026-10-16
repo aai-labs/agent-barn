@@ -41,7 +41,7 @@ interface ChatTabProps {
   isAgentWorking: boolean;
   /**
    * Fill the page and leave the thread list to the navigation panel, which shows it in
-   * place of the Agent's sections (the D2 layout on desktop).
+   * place of the Agent's sections (on desktop).
    */
   fullScreen?: boolean;
 }

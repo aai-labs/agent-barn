@@ -14,7 +14,6 @@ import { AgentCard } from "@/features/agents/components/agent-card";
 import { HireDialog } from "@/features/agents/components/hire-dialog";
 import { HireTeammateCard } from "@/features/agents/components/hire-teammate-card";
 import { isQuiet } from "@/features/agents/utils";
-import { useNavVariant } from "@/features/navigation/providers/nav-variant-provider";
 
 function LoadingCard() {
   return (
@@ -44,7 +43,6 @@ export default function DashboardPage() {
   const [search, setSearch] = useState("");
   const { user } = useCurrentUser();
   const { agents, total, isLoading, error, refetch } = useAgents();
-  const { sectionsInNav } = useNavVariant();
 
   const hour = new Date().getHours();
   const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
@@ -75,12 +73,10 @@ export default function DashboardPage() {
             {!isLoading && !error && agents.length > 0 && (
               <Input className="w-48" type="search" aria-label="Search displayed teammates" placeholder="Search teammates…" value={search} onChange={(event) => setSearch(event.target.value)} />
             )}
-            {/* The sidebar and rail layouts have no global Hire button, so hiring starts here. */}
-            {sectionsInNav && (
-              <button type="button" className="af-btn af-btn-primary" onClick={() => setHireOpen(true)}>
-                <Plus size={14} aria-hidden /> Hire agent
-              </button>
-            )}
+            {/* Hiring starts here, with the team; no other page offers it. */}
+            <button type="button" className="af-btn af-btn-primary" onClick={() => setHireOpen(true)}>
+              <Plus size={14} aria-hidden /> Hire agent
+            </button>
           </div>
         </div>
         {total > agents.length && !isLoading && !error && (

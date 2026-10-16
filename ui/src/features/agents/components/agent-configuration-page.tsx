@@ -3,13 +3,12 @@
 import Link from "next/link";
 import { useState } from "react";
 import { parseAsBoolean, parseAsStringEnum, useQueryState } from "nuqs";
-import { ArrowLeft, CircleAlert } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AgentMemorySettings } from "@/features/agent-memory/components/agent-memory-settings";
 import { AgentWebhookSettings } from "@/features/agent-webhooks/components/agent-webhook-settings";
-import { useNavVariant } from "@/features/navigation/providers/nav-variant-provider";
 
 import { useAgent } from "../hooks/use-agent";
 import { useAgentConfiguration } from "../hooks/use-agent-configuration";
@@ -17,7 +16,6 @@ import { useAgentHealth } from "../hooks/use-agent-health";
 import { canAgent } from "../utils";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentChannelSettings } from "./agent-channel-settings";
-import { AgentConfigurationSidebar } from "./agent-configuration-sidebar";
 import {
   AGENT_CONFIGURATION_SECTIONS,
   configurationSectionLabel,
@@ -55,11 +53,10 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   );
   const canReadCosts = canAgent(agent, "cost.read");
   const sections = visibleAgentConfigurationSections(agent);
-  const { sectionsInNav } = useNavVariant();
   // Parsed against every section, and narrowed to the visible ones below: the visible
   // list depends on the Agent, which has not loaded on first render, and parsing
   // against it then would discard a deep link like ?section=spend.
-  const [requestedSection, setActiveSection] = useQueryState(
+  const [requestedSection] = useQueryState(
     "section",
     parseAsStringEnum<AgentConfigurationSectionKey>(AGENT_CONFIGURATION_SECTIONS.map((item) => item.key))
       .withDefault("profile")
@@ -112,11 +109,6 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
   const section = sections.find((item) => item.key === activeSection) ?? sections[0];
 
-  function selectSection(nextSection: AgentConfigurationSectionKey) {
-    void setActiveSection(nextSection);
-    setEditingSection(null);
-  }
-
   function toggleEditing(sectionKey: AgentConfigurationSectionKey) {
     setEditingSection((current) => (current === sectionKey ? null : sectionKey));
   }
@@ -128,16 +120,6 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   return (
     <div style={{ background: "var(--bg)" }}>
       <main className="af-page">
-        {/* The sidebar and rail layouts carry the way back, and the sections, in navigation. */}
-        {!sectionsInNav && (
-          <Link
-            href={`${homeHref}/agents/${agent.id}`}
-            className="mb-6 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[0.8125rem] transition-colors hover:bg-[var(--bg-soft)]"
-            style={{ color: "var(--ink-3)" }}
-          >
-            <ArrowLeft size={14} /> Back to {agent.name}
-          </Link>
-        )}
 
         <div className="mb-8 flex flex-wrap items-start gap-4">
           <AgentAvatar agent={agent} size="lg" />
@@ -196,15 +178,8 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
             </Alert>
           ))}
 
-        <div className={sectionsInNav ? "grid gap-8" : "grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start"}>
-          {!sectionsInNav && (
-            <AgentConfigurationSidebar
-              activeSection={activeSection}
-              onSectionChange={selectSection}
-              sections={sections}
-            />
-          )}
-
+        {/* The navigation panel lists the sections and leads back to the Agent. */}
+        <div className="grid gap-8">
           <div className="min-w-0">
             <div className="mb-4">
               <h2 className="m-0 text-[1.25rem] font-semibold" style={{ color: "var(--ink)" }}>

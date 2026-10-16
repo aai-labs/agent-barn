@@ -87,7 +87,7 @@ export function MobileTopBar() {
             <PanelGroups panel={panel} onNavigate={() => setOpen(false)} />
             {panel.footer && (
               <div className="mt-3 pt-2" style={{ borderTop: "1px solid var(--line)" }}>
-                <PanelLink item={panel.footer} tone={panel.tone} trailing onNavigate={() => setOpen(false)} />
+                <PanelLink item={panel.footer} trailing onNavigate={() => setOpen(false)} />
               </div>
             )}
           </nav>

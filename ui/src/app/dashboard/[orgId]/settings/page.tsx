@@ -3,14 +3,12 @@
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
-import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { MemoryItemsViewer } from "@/features/agent-memory/components/memory-items-viewer";
 import { MemoryAccessPanel } from "@/features/agent-memory/components/memory-access-panel";
 import { AgentDefaultsPanel } from "@/features/agent-settings/components/agent-defaults-panel";
 import { TemplatesPanel } from "@/features/templates/components/templates-panel";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import {
-  ORGANIZATION_SETTINGS_ICONS,
   ORGANIZATION_SETTINGS_SECTION_KEYS,
   visibleOrganizationSettingsSections,
   type OrganizationSettingsSectionKey,
@@ -23,7 +21,7 @@ import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limit
 export default function SettingsPage() {
   const { role, canManage, selectedOrganization } = useActiveOrgRole();
   const isMembershipAdmin = role === "OWNER" || role === "ADMIN";
-  const [activeSection, setActiveSection] = useQueryState(
+  const [activeSection] = useQueryState(
     "tab",
     parseAsStringEnum<OrganizationSettingsSectionKey>(ORGANIZATION_SETTINGS_SECTION_KEYS)
       .withDefault("agents")
@@ -62,21 +60,6 @@ export default function SettingsPage() {
         </div>
 
         <SettingsPageLayout
-          sidebar={
-            <SettingsSidebar
-              eyebrow="Organization"
-              items={visibleSections.map((item) => {
-                const Icon = ORGANIZATION_SETTINGS_ICONS[item.key];
-                return {
-                  key: item.key,
-                  label: item.label,
-                  icon: <Icon size={15} aria-hidden />,
-                };
-              })}
-              activeKey={section.key}
-              onSelect={(key) => void setActiveSection(key as OrganizationSettingsSectionKey)}
-            />
-          }
           heading={section.label}
           description={section.description}
         >

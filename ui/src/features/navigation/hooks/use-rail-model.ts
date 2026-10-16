@@ -7,41 +7,37 @@ import {
   House,
   Receipt,
   Settings2,
-  Shield,
   Target,
   Users,
 } from "lucide-react";
 
-import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 
 import { PLATFORM_AREAS, PLATFORM_BASE, isPlatformPageActive, type NavItem } from "../nav-model";
-import { useNavVariant } from "../providers/nav-variant-provider";
 
 export type RailModel = {
-  /** `platform` tints the rail: D2 gives Platform View a rail of its own. */
+  /** `platform` tints the rail: Platform View has a rail of its own. */
   tone: "neutral" | "platform";
   items: NavItem[];
-  /** The way into Platform View, for platform administrators outside it (D only). */
-  platform?: NavItem;
-  /** The way back to the Organization from D2's Platform rail. */
+  /**
+   * The way back to the Organization from Platform View. Phones list it under More;
+   * on desktop the path bar's switcher does this.
+   */
   exit?: NavItem;
 };
 
 /**
- * The rail's destinations for the current route. Organization pages are the same in
- * D and D2; inside Platform View, D keeps them and D2 swaps in Platform's own areas.
+ * The rail's destinations for the current route: the Organization's pages, or inside
+ * Platform View Platform's own areas.
  */
 export function useRailModel(): RailModel {
   const pathname = usePathname() ?? "";
-  const { variant } = useNavVariant();
-  const { user } = useCurrentUser();
   // Owners/admins (and platform admins) manage members and see org spend; plain members can't.
   const { canManage, selectedOrganization } = useActiveOrgRole();
   const isPlatformView = pathname.startsWith(PLATFORM_BASE);
   const orgBase = selectedOrganization ? `/dashboard/${selectedOrganization.id}` : "/dashboard";
 
-  if (isPlatformView && variant === "d2") {
+  if (isPlatformView) {
     return {
       tone: "platform",
       items: PLATFORM_AREAS.map((area) => ({
@@ -115,15 +111,5 @@ export function useRailModel(): RailModel {
   return {
     tone: "neutral",
     items,
-    // D2 reaches Platform View from the context switcher in its top bar instead.
-    platform: user.isPlatformAdmin && variant !== "d2"
-      ? {
-          key: "platform",
-          label: "Platform",
-          href: PLATFORM_BASE,
-          icon: Shield,
-          active: isPlatformView,
-        }
-      : undefined,
   };
 }

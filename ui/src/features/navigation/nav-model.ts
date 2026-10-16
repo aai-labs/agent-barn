@@ -31,8 +31,6 @@ export type NavItem = {
   href: string;
   icon: LucideIcon;
   active: boolean;
-  /** A second line under the label, used where a panel lists only a few pages. */
-  description?: string;
   tone?: "danger";
   /** Shown nested under the item while it is active. */
   children?: NavItem[];
@@ -40,7 +38,7 @@ export type NavItem = {
 
 export type NavGroup = { key: string; label?: string; items: NavItem[] };
 
-/** The Platform's tint: the D2 rail and every active Platform panel item use it. */
+/** The Platform's tint, for its rail. */
 export const PLATFORM_RAIL_BACKGROUND = "#1e1a4d";
 export const RAIL_BACKGROUND = "#1a1815";
 
@@ -51,22 +49,18 @@ type PlatformPage = {
   label: string;
   href: string;
   icon: LucideIcon;
-  description: string;
 };
 
 export type PlatformArea = {
   key: string;
   label: string;
   icon: LucideIcon;
-  /** The heading D's panel lists the area under, when it differs from the area's label. */
-  group?: string;
   pages: PlatformPage[];
 };
 
 /**
- * Platform View's pages, grouped into the areas that D2 puts on its rail; an area with
- * more than one page gets a panel listing them. D lists the same pages in its panel,
- * under each area's group.
+ * Platform View's pages, grouped into the areas its rail lists; an area with more than
+ * one page gets a panel listing them.
  */
 export const PLATFORM_AREAS: PlatformArea[] = [
   {
@@ -79,7 +73,6 @@ export const PLATFORM_AREAS: PlatformArea[] = [
         label: "Overview",
         href: PLATFORM_BASE,
         icon: LayoutGrid,
-        description: "Every organization at a glance",
       },
     ],
   },
@@ -87,14 +80,12 @@ export const PLATFORM_AREAS: PlatformArea[] = [
     key: "users",
     label: "Users",
     icon: Users,
-    group: "People",
     pages: [
       {
         key: "users",
         label: "Users",
         href: `${PLATFORM_BASE}/users`,
         icon: Users,
-        description: "Everyone with a login",
       },
     ],
   },
@@ -102,14 +93,12 @@ export const PLATFORM_AREAS: PlatformArea[] = [
     key: "organizations",
     label: "Orgs",
     icon: Building2,
-    group: "People",
     pages: [
       {
         key: "organizations",
         label: "Organizations",
         href: `${PLATFORM_BASE}/organizations`,
         icon: Building2,
-        description: "Customers and trials",
       },
     ],
   },
@@ -123,14 +112,12 @@ export const PLATFORM_AREAS: PlatformArea[] = [
         label: "Costs",
         href: `${PLATFORM_BASE}/costs`,
         icon: Receipt,
-        description: "LLM spend by organization",
       },
       {
         key: "resources",
         label: "Resources",
         href: `${PLATFORM_BASE}/resource-usage`,
         icon: Cpu,
-        description: "CPU, memory and capacity",
       },
     ],
   },
@@ -144,14 +131,12 @@ export const PLATFORM_AREAS: PlatformArea[] = [
         label: "Templates",
         href: `${PLATFORM_BASE}/templates`,
         icon: FileText,
-        description: "Agent definitions for every organization",
       },
       {
         key: "skills",
         label: "Skills",
         href: `${PLATFORM_BASE}/skills`,
         icon: Sparkles,
-        description: "Tools shared with every organization",
       },
     ],
   },
@@ -165,14 +150,12 @@ export const PLATFORM_AREAS: PlatformArea[] = [
         label: "Event deliveries",
         href: `${PLATFORM_BASE}/event-deliveries`,
         icon: Send,
-        description: "Domain Events and their handlers",
       },
       {
         key: "settings",
         label: "Settings",
         href: `${PLATFORM_BASE}/settings`,
         icon: Settings2,
-        description: "Memory, Playbooks and Trials",
       },
     ],
   },

@@ -11,7 +11,7 @@ import { PendingModelBanner } from "./pending-model-note";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
 import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
-import { ChevLeftIcon, CogIcon, ShareIcon } from "@/components/icons";
+import { ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
 import { AgentResourceUsageTab } from "@/features/resource-usage/components/agent-resource-usage-tab";
@@ -33,12 +33,10 @@ import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
 import { useIsDesktop } from "@/features/navigation/hooks/use-is-desktop";
-import { useNavVariant } from "@/features/navigation/providers/nav-variant-provider";
 import {
   AGENT_PAGE_TABS,
   AGENT_PAGE_TAB_LABELS,
-  NAV_DEFAULT_AGENT_TAB,
-  agentPageTabLabel,
+  DEFAULT_AGENT_TAB,
   visibleAgentPageTabs,
   type AgentPageTab,
 } from "../agent-page-tabs";
@@ -53,12 +51,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { role } = useActiveOrgRole();
   const tabs = visibleAgentPageTabs(agent, role);
   const canExtractPlaybooks = tabs.includes("playbooks");
-  // The sidebar and rail layouts list the sections in navigation instead of a tab row.
-  const { variant, sectionsInNav } = useNavVariant();
-  // D2's desktop top bar carries the update notice, lifecycle and Share actions, and
-  // gives Chat and Conversations the whole page.
+  // The desktop path bar carries the Agent's name, status, update notice, lifecycle and
+  // Share actions, and Chat and Conversations take the whole page there.
   const isDesktop = useIsDesktop();
-  const actionsInTopBar = variant === "d2";
   const { health } = useAgentHealth(
     agentId,
     canReadActivity &&
@@ -67,7 +62,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const [tab, setTab] = useQueryState(
     "tab",
     parseAsStringEnum<AgentPageTab>(AGENT_PAGE_TABS)
-      .withDefault(sectionsInNav ? NAV_DEFAULT_AGENT_TAB : "chat")
+      .withDefault(DEFAULT_AGENT_TAB)
       .withOptions({ scroll: false, history: "replace" }),
   );
   const [, setChannel] = useQueryState(
@@ -108,7 +103,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const homeHref = orgId ? `/dashboard/${orgId}` : "/dashboard";
 
   const fullScreenTab =
-    variant === "d2" && isDesktop && (resolvedTab === "chat" || resolvedTab === "conversations")
+    isDesktop && (resolvedTab === "chat" || resolvedTab === "conversations")
       ? resolvedTab
       : null;
   if (agent && fullScreenTab) {
@@ -120,7 +115,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
         health?.reason && <AgentHealthErrorBanner reason={health.reason} />
       );
     return (
-      // The page below D2's 3.5rem top bar, given entirely to the conversation.
+      // The page below the 3.5rem path bar, given entirely to the conversation.
       <div className="flex h-[calc(100vh-3.5rem)] flex-col" style={{ background: "var(--bg)" }}>
         {failure && <div className="px-6 pt-4">{failure}</div>}
         <div className="min-h-0 flex-1">
@@ -137,18 +132,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   return (
     <div style={{ background: "var(--bg)" }}>
       <div className="af-page">
-        {/* The sidebar and rail layouts carry the way back in navigation. */}
-        {!sectionsInNav && (
-          <Link
-            href={homeHref}
-            className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
-            style={{ color: "var(--ink-3)" }}
-          >
-            <ChevLeftIcon />
-            Your team
-          </Link>
-        )}
-
         {isLoading && <AgentDetailHeaderSkeleton />}
 
         {error && (
@@ -168,9 +151,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           <>
             {/* Identity and actions wrap onto separate rows when they do not fit side
                 by side, so on a phone the buttons sit under the name, not over it. */}
-            {/* D2's desktop top bar names the Agent and shows its status, runtime and
-                model, so there the header is left to phones. */}
-            <div className={`flex flex-wrap items-start gap-x-5.5 gap-y-4 pb-8 ${actionsInTopBar ? "lg:hidden" : ""}`}>
+            {/* The desktop path bar names the Agent and shows its status, runtime and
+                model and its actions, so the header is left to phones. */}
+            {!isDesktop && (
+            <div className="flex flex-wrap items-start gap-x-5.5 gap-y-4 pb-8">
               <div className="flex min-w-0 flex-1 basis-[20rem] items-start gap-4 sm:gap-5.5">
               <AgentAvatar agent={agent} size="xl" />
               <div className="flex-1 min-w-0">
@@ -196,17 +180,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 </div>
               </div>
               </div>
-              <div className={`flex flex-wrap gap-2 ${actionsInTopBar ? "lg:hidden" : ""}`}>
+              <div className="flex flex-wrap gap-2">
                 {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
-                {/* Navigation already offers Agent settings in every layout but the top bar. */}
-                {!sectionsInNav && (
-                  <Link
-                    href={`${homeHref}/agents/${agent.id}/configuration`}
-                    className="af-btn"
-                  >
-                    <CogIcon /> Configuration
-                  </Link>
-                )}
                 {canManageAccess && (
                   <button className="af-btn" onClick={() => setShareOpen(true)}>
                     <ShareIcon /> Share
@@ -214,14 +189,14 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 )}
               </div>
             </div>
+            )}
 
             <PendingModelBanner agent={agent} canRestart={canManageLifecycle} />
 
             {canManageLifecycle && (
               <>
-                <div className={actionsInTopBar ? "lg:hidden" : undefined}>
-                  <AgentUpdateBanner agent={agent} />
-                </div>
+                {/* The path bar offers the update on desktop. */}
+                {!isDesktop && <AgentUpdateBanner agent={agent} />}
                 <AgentUpdateOutcomeNote
                   agent={agent}
                   restorePointsHref={`${homeHref}/agents/${agent.id}/configuration?section=restore`}
@@ -310,32 +285,14 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               </div>
             )}
 
-            {sectionsInNav ? (
+            {/* The path bar names the section on desktop. */}
+            {!isDesktop && (
               <h2
-                className={`m-0 mb-7 pb-3 text-[1.125rem] font-semibold ${actionsInTopBar ? "lg:hidden" : ""}`}
+                className="m-0 mb-7 pb-3 text-[1.125rem] font-semibold"
                 style={{ color: "var(--ink)", borderBottom: "1px solid var(--line)" }}
               >
-                {agentPageTabLabel(resolvedTab, true)}
+                {AGENT_PAGE_TAB_LABELS[resolvedTab]}
               </h2>
-            ) : (
-              <div className="mb-7" style={{ borderBottom: "1px solid var(--line)" }}>
-                {/* Scrolls sideways instead of widening the page on a phone. A page wider
-                    than the screen also stretched the fixed-position dialogs past it. */}
-                <div className="no-scrollbar -mb-px flex items-center gap-1 overflow-x-auto pb-px">
-                  {tabs.map((key) => (
-                    <button
-                      key={key}
-                      className="ap-tab flex-shrink-0 whitespace-nowrap"
-                      data-active={resolvedTab === key}
-                      onClick={() => {
-                        selectTab(key);
-                      }}
-                    >
-                      {AGENT_PAGE_TAB_LABELS[key]}
-                    </button>
-                  ))}
-                </div>
-              </div>
             )}
 
             {resolvedTab === "chat" && (

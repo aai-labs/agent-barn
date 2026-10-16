@@ -274,7 +274,7 @@ test.describe("Agent Detail Page — Resource usage tab", () => {
       await dataSupportPage.agents.interceptGetAgentRequest({ body: withoutActivityRead });
       await agentDetailPage.goto();
 
-      await expect(page.getByRole("button", { name: "About", exact: true })).toBeVisible();
+      await expect(page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true })).toBeVisible();
       await expect(agentDetailPage.resourceUsageTab()).toHaveCount(0);
     });
 
@@ -284,7 +284,7 @@ test.describe("Agent Detail Page — Resource usage tab", () => {
       await dataSupportPage.costs.interceptAgentCosts(MOCK_AGENT_ID);
       await agentDetailPage.gotoResourceUsage();
 
-      await expect(page.getByRole("button", { name: "Costs", exact: true })).toBeVisible();
+      await expect(page.getByRole("complementary").getByRole("link", { name: "Costs", exact: true })).toBeVisible();
       await expect(page.getByTestId("agent-resource-usage-tab")).toHaveCount(0);
       expect(requests).toEqual([]);
     });

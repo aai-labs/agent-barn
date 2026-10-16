@@ -14,7 +14,7 @@ interface ConversationsTabProps {
   agent: Agent;
   /**
    * Fill the page and leave the channel list to the navigation panel, which shows it in
-   * place of the Agent's sections (the D2 layout on desktop).
+   * place of the Agent's sections (on desktop).
    */
   fullScreen?: boolean;
 }

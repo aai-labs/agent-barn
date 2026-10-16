@@ -4,13 +4,13 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { Settings2 } from "lucide-react";
 
 import {
-  NAV_DEFAULT_AGENT_TAB,
-  agentPageTabLabel,
+  AGENT_PAGE_TAB_LABELS,
+  DEFAULT_AGENT_TAB,
   visibleAgentPageTabs,
   type AgentPageTab,
 } from "@/features/agents/agent-page-tabs";
-import { AGENT_CONFIGURATION_ICONS } from "@/features/agents/components/agent-configuration-sidebar";
 import {
+  AGENT_CONFIGURATION_ICONS,
   configurationSectionLabel,
   visibleAgentConfigurationSections,
 } from "@/features/agents/components/agent-configuration-utils";
@@ -35,13 +35,11 @@ import {
   type NavGroup,
   type NavItem,
 } from "../nav-model";
-import { useNavVariant } from "../providers/nav-variant-provider";
 import { useCachedAgent } from "./use-cached-agent";
 
 export type ContextPanelModel = {
   title: string;
   subtitle?: string;
-  tone: "neutral" | "platform";
   /** The way up a level, shown above the title. */
   crumb?: { label: string; href: string };
   /** Shown as the panel's header instead of the title when the panel is an Agent's. */
@@ -60,13 +58,12 @@ const AGENT_ROUTE = /^\/dashboard\/([^/]+)\/agents\/([^/]+)(?:\/(.*))?$/;
 export function useContextPanel(): ContextPanelModel | null {
   const pathname = usePathname() ?? "";
   const searchParams = useSearchParams();
-  const { variant } = useNavVariant();
   const { role, canManage, selectedOrganization } = useActiveOrgRole();
   const agentMatch = AGENT_ROUTE.exec(pathname);
   const agent = useCachedAgent(agentMatch?.[2]);
 
   if (pathname.startsWith(PLATFORM_BASE)) {
-    return platformPanel(pathname, searchParams.get("section"), variant === "d2");
+    return platformPanel(pathname, searchParams.get("section"));
   }
 
   if (agentMatch) {
@@ -83,7 +80,6 @@ export function useContextPanel(): ContextPanelModel | null {
       return {
         title: agent?.name ?? "Agent",
         subtitle: "Agent settings",
-        tone: "neutral",
         crumb: { label: `Back to ${agent?.name ?? "Agent"}`, href: agentBase },
         agent,
         groups: agent
@@ -113,10 +109,9 @@ export function useContextPanel(): ContextPanelModel | null {
       ? null
       : requested && tabs.includes(requested)
         ? requested
-        : NAV_DEFAULT_AGENT_TAB;
+        : DEFAULT_AGENT_TAB;
     return {
       title: agent?.name ?? "Agent",
-      tone: "neutral",
       crumb: { label: "Your team", href: orgBase },
       agent,
       groups: AGENT_TAB_GROUPS.map((group) => ({
@@ -126,8 +121,8 @@ export function useContextPanel(): ContextPanelModel | null {
           .filter((tab) => tabs.includes(tab))
           .map((tab) => ({
             key: tab,
-            label: agentPageTabLabel(tab, true),
-            href: tab === NAV_DEFAULT_AGENT_TAB ? agentBase : `${agentBase}?tab=${tab}`,
+            label: AGENT_PAGE_TAB_LABELS[tab],
+            href: tab === DEFAULT_AGENT_TAB ? agentBase : `${agentBase}?tab=${tab}`,
             icon: AGENT_TAB_ICONS[tab],
             active: tab === activeTab,
           })),
@@ -159,7 +154,6 @@ export function useContextPanel(): ContextPanelModel | null {
     return {
       title: "Settings",
       subtitle: selectedOrganization?.name,
-      tone: "neutral",
       groups: [
         {
           key: "sections",
@@ -178,16 +172,12 @@ export function useContextPanel(): ContextPanelModel | null {
   return null;
 }
 
-function platformPanel(
-  pathname: string,
-  requestedSection: string | null,
-  areaRail: boolean,
-): ContextPanelModel | null {
+function platformPanel(pathname: string, requestedSection: string | null): ContextPanelModel | null {
   const settingsSection: PlatformSettingsSectionKey =
     requestedSection && requestedSection in PLATFORM_SETTINGS_SECTIONS
       ? (requestedSection as PlatformSettingsSectionKey)
       : "agent-memory";
-  const toItem = (page: (typeof PLATFORM_AREAS)[number]["pages"][number], withDescription: boolean): NavItem => {
+  const toItem = (page: (typeof PLATFORM_AREAS)[number]["pages"][number]): NavItem => {
     const active = isPlatformPageActive(pathname, page.href);
     return {
       key: page.key,
@@ -195,7 +185,6 @@ function platformPanel(
       href: page.href,
       icon: page.icon,
       active,
-      description: withDescription ? page.description : undefined,
       children:
         page.key === "settings" && pathname === page.href
           ? (Object.entries(PLATFORM_SETTINGS_SECTIONS) as [
@@ -212,33 +201,15 @@ function platformPanel(
     };
   };
 
-  if (areaRail) {
-    // D2: the rail picks the area, the panel lists that area's pages, styled like every
-    // other panel. An area of one page needs no panel, as with the Organization's pages.
-    const area = PLATFORM_AREAS.find((candidate) =>
-      candidate.pages.some((page) => isPlatformPageActive(pathname, page.href)),
-    );
-    if (!area || area.pages.length < 2) return null;
-    return {
-      title: area.label,
-      subtitle: "Platform",
-      tone: "neutral",
-      groups: [{ key: area.key, items: area.pages.map((page) => toItem(page, false)) }],
-    };
-  }
-
-  const groups: NavGroup[] = [];
-  for (const area of PLATFORM_AREAS) {
-    const label = area.key === "overview" ? undefined : (area.group ?? area.label);
-    const items = area.pages.map((page) => toItem(page, false));
-    const previous = groups.at(-1);
-    if (previous && label && previous.label === label) previous.items.push(...items);
-    else groups.push({ key: area.key, label, items });
-  }
+  // The rail picks the area, the panel lists that area's pages, styled like every other
+  // panel. An area of one page needs no panel, as with the Organization's pages.
+  const area = PLATFORM_AREAS.find((candidate) =>
+    candidate.pages.some((page) => isPlatformPageActive(pathname, page.href)),
+  );
+  if (!area || area.pages.length < 2) return null;
   return {
-    title: "Platform",
-    subtitle: "All organizations",
-    tone: "platform",
-    groups,
+    title: area.label,
+    subtitle: "Platform",
+    groups: [{ key: area.key, items: area.pages.map((page) => toItem(page)) }],
   };
 }

@@ -569,7 +569,7 @@ test.describe("Agent memory viewer", () => {
       tab: "memory",
     });
 
-    await expect(page.getByRole("button", { name: "Costs", exact: true })).toBeVisible();
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Costs", exact: true })).toBeVisible();
     await expect(memory.tab()).toHaveCount(0);
     await expect(memory.viewer()).toHaveCount(0);
     expect(mock.requests).toHaveLength(0);

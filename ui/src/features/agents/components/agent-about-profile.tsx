@@ -55,7 +55,7 @@ export function AgentAboutProfile({
   agent: Agent;
   /**
    * Open the Overview with the Agent's avatar, blueprint and description, and leave out
-   * what the page already shows elsewhere (D2's top bar names the Agent and shows its
+   * what the page already shows elsewhere (the path bar names the Agent and shows its
    * runtime, model and status).
    */
   profileHeader?: boolean;

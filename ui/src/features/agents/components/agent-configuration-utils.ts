@@ -1,3 +1,17 @@
+import {
+  Brain,
+  FileCode2,
+  History,
+  KeyRound,
+  MessageSquare,
+  ShieldAlert,
+  SlidersHorizontal,
+  Sparkles,
+  UserRound,
+  Wallet,
+  Webhook,
+} from "lucide-react";
+
 import type { TemplateFileKey } from "@/features/templates/utils";
 
 import type {
@@ -91,6 +105,20 @@ export const AGENT_CONFIGURATION_SECTIONS: AgentConfigurationSection[] = [
     description: "Irreversible lifecycle actions.",
   },
 ];
+
+export const AGENT_CONFIGURATION_ICONS = {
+  template: FileCode2,
+  profile: UserRound,
+  channels: MessageSquare,
+  webhooks: Webhook,
+  skills: Sparkles,
+  memory: Brain,
+  keys: KeyRound,
+  override: SlidersHorizontal,
+  restore: History,
+  spend: Wallet,
+  danger: ShieldAlert,
+} as const;
 
 export function configurationSectionLabel(
   key: AgentConfigurationSectionKey,

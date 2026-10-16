@@ -38,22 +38,15 @@ export const AGENT_PAGE_TAB_LABELS: Record<AgentPageTab, string> = {
   activity: "Activity",
   costs: "Costs",
   "resource-usage": "Resource usage",
-  about: "About",
+  about: "Overview",
 };
 
-/**
- * Where the sidebar and rail layouts open an Agent, and what they call the About
- * section there: its Overview, listed first. The shipped top bar opens on Chat.
- */
-export const NAV_DEFAULT_AGENT_TAB: AgentPageTab = "about";
-
-export function agentPageTabLabel(tab: AgentPageTab, sectionsInNav: boolean) {
-  return sectionsInNav && tab === "about" ? "Overview" : AGENT_PAGE_TAB_LABELS[tab];
-}
+/** Where an Agent opens: its Overview, listed first in the navigation panel. */
+export const DEFAULT_AGENT_TAB: AgentPageTab = "about";
 
 /**
- * The Agent page sections this viewer may open, in display order. Shared by the
- * page's own tab row and the navigation panel, so both gate on the same Permissions.
+ * The Agent page sections this viewer may open. Shared by the page and the navigation
+ * panel, so both gate on the same Permissions.
  */
 export function visibleAgentPageTabs(
   agent: Pick<Agent, "allowedActions"> | null | undefined,

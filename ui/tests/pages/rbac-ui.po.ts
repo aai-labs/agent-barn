@@ -30,11 +30,11 @@ export class RbacUiPage {
   }
 
   agentConfigurationLink(): Locator {
-    return this.page.getByRole("link", { name: "Configuration", exact: true });
+    return this.page.getByRole("complementary").getByRole("link", { name: "Agent settings", exact: true });
   }
 
   async openSettingsSection(name: "Templates" | "Skills") {
-    await this.page.getByRole("button", { name, exact: true }).click();
+    await this.page.getByRole("complementary").getByRole("link", { name, exact: true }).click();
   }
 
   newTemplateButton(): Locator {

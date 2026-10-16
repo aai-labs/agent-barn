@@ -24,12 +24,22 @@ export class AgentDetailPage {
     return this.page.getByTestId("agent-runtime-diagnostics");
   }
 
+  /** The Agent's step in the desktop path bar, which names it. */
   agentName(name: string): Locator {
-    return this.page.getByRole("heading", { name });
+    return this.page.getByRole("button", { name: `Switch agent. Current: ${name}` });
+  }
+
+  /** A section link in the navigation panel beside the page. */
+  sectionLink(name: string): Locator {
+    return this.page.getByRole("complementary").getByRole("link", { name, exact: true });
+  }
+
+  async openSection(name: string) {
+    await this.sectionLink(name).click();
   }
 
   configureButton(): Locator {
-    return this.page.getByRole("link", { name: "Configuration", exact: true });
+    return this.sectionLink("Agent settings");
   }
 
   configDrawerHeading(): Locator {
@@ -45,7 +55,7 @@ export class AgentDetailPage {
   }
 
   costsTab(): Locator {
-    return this.page.getByRole("button", { name: "Costs", exact: true });
+    return this.sectionLink("Costs");
   }
 
   async openCostsTab() {
@@ -53,7 +63,7 @@ export class AgentDetailPage {
   }
 
   resourceUsageTab(): Locator {
-    return this.page.getByRole("button", { name: "Resource usage", exact: true });
+    return this.sectionLink("Resource usage");
   }
 
   async gotoResourceUsage(agentId = "33333333-3333-4333-8333-333333333333", range?: string) {
@@ -61,13 +71,13 @@ export class AgentDetailPage {
     await this.page.goto(`/dashboard/${TEST_ORG_ID}/agents/${agentId}?tab=resource-usage${query}`);
   }
 
-  /** The labels of the tab bar, in the order they are drawn. */
+  /** The labels of the Agent's sections in the navigation panel, in the order they are drawn. */
   tabLabels(): Promise<string[]> {
-    return this.page.locator("button.ap-tab").allTextContents();
+    return this.page.getByRole("complementary").getByRole("navigation").getByRole("link").allTextContents();
   }
 
   toolCallsTab(): Locator {
-    return this.page.getByRole("button", { name: /tool calls/i });
+    return this.sectionLink("Tool calls");
   }
 
   toolCallRow(toolName: string): Locator {
@@ -75,7 +85,7 @@ export class AgentDetailPage {
   }
 
   channelsTab(): Locator {
-    return this.page.getByRole("button", { name: /^messaging$/i });
+    return this.sectionLink("Messaging");
   }
 
   connectionDetailsLink(): Locator {

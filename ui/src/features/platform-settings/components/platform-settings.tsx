@@ -4,7 +4,6 @@ import { BookOpenCheck, Brain, Sparkles } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
-import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { PlatformMemorySettings } from "@/features/agent-memory/components/platform-memory-settings";
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
 import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
@@ -32,7 +31,7 @@ type SectionKey = PlatformSettingsSectionKey;
 
 export function PlatformSettings() {
   // In the URL so a section can be linked to, e.g. ?section=playbooks.
-  const [active, setActive] = useQueryState(
+  const [active] = useQueryState(
     "section",
     parseAsStringEnum<SectionKey>(Object.keys(PLATFORM_SETTINGS_SECTIONS) as SectionKey[])
       .withDefault("agent-memory")
@@ -59,14 +58,6 @@ export function PlatformSettings() {
         </div>
       </div>
       <SettingsPageLayout
-        sidebar={
-          <SettingsSidebar
-            eyebrow="Platform"
-            items={Object.entries(PLATFORM_SETTINGS_SECTIONS).map(([key, item]) => ({ key, label: item.label, icon: <item.Icon size={15} aria-hidden /> }))}
-            activeKey={active}
-            onSelect={(key) => void setActive(key as SectionKey)}
-          />
-        }
         heading={section.label}
         description={section.description}
       >

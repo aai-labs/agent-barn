@@ -13,11 +13,6 @@ import { useOrganizationSwitch } from "@/features/organizations/hooks/use-organi
 
 import { useRailModel } from "../hooks/use-rail-model";
 import { PLATFORM_RAIL_BACKGROUND, RAIL_BACKGROUND, type NavItem } from "../nav-model";
-import {
-  NAV_VARIANTS,
-  NAV_VARIANT_SHORT_LABELS,
-  useNavVariant,
-} from "../providers/nav-variant-provider";
 import { PanelLink } from "./context-panel";
 
 const PRIMARY_COUNT = 3;
@@ -30,11 +25,7 @@ export function MobileBottomBar() {
   const rail = useRailModel();
   const [moreOpen, setMoreOpen] = useState(false);
   const primary = rail.items.slice(0, PRIMARY_COUNT);
-  const overflow = [
-    ...rail.items.slice(PRIMARY_COUNT),
-    ...(rail.platform ? [rail.platform] : []),
-    ...(rail.exit ? [rail.exit] : []),
-  ];
+  const overflow = [...rail.items.slice(PRIMARY_COUNT), ...(rail.exit ? [rail.exit] : [])];
   const moreActive = overflow.some((item) => item.active);
   const idle = rail.tone === "platform" ? "text-[#b9b3f0]" : "text-[#a8a296]";
 
@@ -89,7 +80,6 @@ function MoreSheetBody({ overflow, onNavigate }: { overflow: NavItem[]; onNaviga
   const router = useRouter();
   const { user } = useCurrentUser();
   const { logout, isLoggingOut } = useLogout();
-  const { variant, setVariant } = useNavVariant();
   const { organizations, selectedOrganization, isPlatformView, selectOrganization } =
     useOrganizationSwitch();
 
@@ -98,7 +88,7 @@ function MoreSheetBody({ overflow, onNavigate }: { overflow: NavItem[]; onNaviga
       {overflow.length > 0 && (
         <SheetSection label="Go to">
           {overflow.map((item) => (
-            <PanelLink key={item.key} item={item} tone="neutral" onNavigate={onNavigate} />
+            <PanelLink key={item.key} item={item} onNavigate={onNavigate} />
           ))}
         </SheetSection>
       )}
@@ -127,27 +117,6 @@ function MoreSheetBody({ overflow, onNavigate }: { overflow: NavItem[]; onNaviga
         </SheetSection>
       )}
 
-      <SheetSection label="Navigation preview">
-        <div className="grid grid-cols-3 gap-1 rounded-xl p-1" style={{ background: "var(--bg-sunken)" }}>
-          {NAV_VARIANTS.map((option) => (
-            <button
-              key={option}
-              type="button"
-              aria-pressed={variant === option}
-              className="min-h-10 rounded-lg px-1 text-[12.5px]"
-              style={{
-                background: variant === option ? "var(--bg-elev)" : "transparent",
-                color: variant === option ? "var(--ink)" : "var(--ink-3)",
-                fontWeight: variant === option ? 600 : 500,
-              }}
-              onClick={() => setVariant(option)}
-            >
-              {NAV_VARIANT_SHORT_LABELS[option]}
-            </button>
-          ))}
-        </div>
-      </SheetSection>
-
       <SheetSection label={user.fullName ?? user.email}>
         <Link
           href="/dashboard/account"
@@ -157,7 +126,7 @@ function MoreSheetBody({ overflow, onNavigate }: { overflow: NavItem[]; onNaviga
         >
           <User size={16} aria-hidden style={{ color: "var(--ink-3)" }} /> Account
         </Link>
-        {user.isPlatformAdmin && !overflow.some((item) => item.key === "platform" || item.key === "exit") && (
+        {user.isPlatformAdmin && !overflow.some((item) => item.key === "exit") && (
           <Link
             href="/dashboard/platform"
             onClick={onNavigate}

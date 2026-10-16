@@ -117,8 +117,8 @@ test.describe("Agent Detail Page", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Chat", exact: true }).click();
 
     await expect(page.getByRole("status").filter({ hasText: "Maya is working" })).toBeVisible();
   });
@@ -154,8 +154,8 @@ test.describe("Agent Detail Page", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
-    await page.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Chat", exact: true }).click();
 
     const failureNotice = page.getByRole("alert").filter({ hasText: "I couldn't process that message" });
     await expect(failureNotice).toContainText(errorMessage);
@@ -2301,7 +2301,7 @@ test.describe("Agent Detail Page — About tab", () => {
 
   test("leaves spend to the Costs tab", async ({ page }) => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     await expect(page.getByTestId("agent-about-overview")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Spend over time" })).toHaveCount(0);
@@ -2309,7 +2309,7 @@ test.describe("Agent Detail Page — About tab", () => {
 
   test("summarises how the agent is set up", async ({ page }) => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const overview = page.getByTestId("agent-about-overview");
     await expect(overview).toContainText("OpenClaw");
@@ -2336,7 +2336,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const overview = page.getByTestId("agent-about-overview");
     await expect(overview).toContainText("Hermes");
@@ -2371,7 +2371,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const skills = page.getByTestId("agent-about-skills");
     await expect(skills.getByRole("heading", { name: "Skills (2)" })).toBeVisible();
@@ -2388,7 +2388,7 @@ test.describe("Agent Detail Page — About tab", () => {
 
   test("says so plainly when the agent has no skills", async ({ page }) => {
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     await expect(page.getByTestId("agent-about-skills")).toContainText(
       "No skills assigned yet",
@@ -2401,7 +2401,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const messaging = page.getByTestId("agent-about-messaging");
     await expect(messaging).toContainText(mockCommunicationConnection.display_name);
@@ -2426,7 +2426,7 @@ test.describe("Agent Detail Page — About tab", () => {
     );
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const messaging = page.getByTestId("agent-about-messaging");
     await expect(messaging).toContainText("Slack");
@@ -2450,7 +2450,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const integrations = page.getByTestId("agent-about-integrations");
     await expect(integrations).toContainText("GitHub");
@@ -2480,7 +2480,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const overview = page.getByTestId("agent-about-overview");
     // Precondition: the blueprint has resolved from its key to its display
@@ -2499,7 +2499,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     await expect(
       page.getByTestId("agent-about-skills").getByRole("link", { name: "View skills" }),
@@ -2523,7 +2523,7 @@ test.describe("Agent Detail Page — About tab", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     await expect(
       page.getByTestId("agent-about-skills").getByRole("link", { name: "Manage skills" }),
@@ -2562,7 +2562,7 @@ test.describe("Agent Detail Page — About tab", () => {
     );
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "About", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true }).click();
 
     const messaging = page.getByTestId("agent-about-messaging");
     await expect(messaging).toContainText("Microsoft Teams");
