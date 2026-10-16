@@ -811,3 +811,37 @@ runs it.
 - Classifier code changes that alter how a command is split into invocations can shift
   ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
   instead of updating them.
+
+## Workflow authoring (WF01)
+
+After migrating and verifying WF01, Platform Administrators can enable authoring
+at **Platform Settings → Workflows** and save the choice. It takes effect on
+subsequent API requests without a redeploy and allows manual definition creation,
+version saving and archive across all Organizations. Definition/version reads
+remain available when disabled. `WORKFLOW_AUTHORING_ENABLED` defaults to `false`
+and supplies the initial deployment default only until a Platform Admin saves a
+choice; the persisted choice then overrides the environment value in either
+direction, including after restarts. Changing the environment alone cannot
+override a saved choice. Disable authoring through Platform Settings for rollback
+of admission; requests already admitted may finish.
+This gate never enables execution; WF01 has no run endpoint. Natural-language
+draft generation is deferred to a separate PR, with no model setting or provider
+credential required for manual building. The [feature specification](../features/agent-workflows.md)
+owns the product contract.
+
+Local Compose passes `.env` through; `.env.spec` documents the authoring gate.
+Helm exposes `workflows.authoringEnabled`; Helmfile passes the corresponding
+environment variable. No runtime image, worker, storage service or cluster
+permission is added for workflow authoring.
+
+Migration `a38801c6e001` adds the authoring tables and immutable-version trigger
+after `c42e91b7a603`, preserving existing Agent data. Use `make check-migrations`
+and the migrated WF01 API contracts before rollout. Migration `a38802d7f002`
+follows it and creates the singleton Platform workflow setting. Merge revision
+`c32e42bb0396` joins that workflow branch with staging head `d72b85f19c40`,
+so fresh installs and upgrades retain a single migration head. Downgrading only
+that migration removes the saved choice and restores the environment default;
+workflow definitions and versions remain. Schema downgrade of WF01 drops
+WF01 records and is appropriate only for a disposable/empty installation or an
+explicitly approved data-removal operation; take a backup before intentional
+removal. Release versions are unchanged until release preparation is requested.

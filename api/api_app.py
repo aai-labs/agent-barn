@@ -61,6 +61,8 @@ from api.domains.users.organization_users.routes import member_router, platform_
 from api.domains.users.routes import users_router
 from api.domains.users.service import UserService
 from api.domains.web_chat.routes import web_chat_router
+from api.domains.workflows.platform_routes import platform_workflow_router
+from api.domains.workflows.routes import router as workflows_router
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -128,10 +130,12 @@ def create_app(injector: Injector | None = None):
 
     subapi.include_router(agents_router)
     subapi.include_router(agent_webhooks_router)
+    subapi.include_router(workflows_router)
     subapi.include_router(agent_settings_router)
     subapi.include_router(platform_memory_router)
     subapi.include_router(platform_trial_settings_router)
     subapi.include_router(onboarding_router)
+    subapi.include_router(platform_workflow_router)
     subapi.include_router(agent_memory_router)
     subapi.include_router(memory_grants_router)
     subapi.include_router(organization_memory_router)
