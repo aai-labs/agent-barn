@@ -38,6 +38,7 @@ from api.domains.communications.runtime_webhook_routes import runtime_provider_w
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
+from api.domains.custom_api.routes import custom_api_router
 from api.domains.discovery.routes import router as discovery_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
@@ -127,6 +128,7 @@ def create_app(injector: Injector | None = None):
     app_v1.mount("/api/v1", subapi)
 
     subapi.include_router(agents_router)
+    subapi.include_router(custom_api_router)
     subapi.include_router(agent_webhooks_router)
     subapi.include_router(agent_settings_router)
     subapi.include_router(platform_memory_router)
