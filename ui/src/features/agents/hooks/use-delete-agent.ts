@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
+import { organizationsKey } from "@/features/organizations/utils";
 
 import { agentsKey } from "../utils";
 
@@ -17,6 +18,7 @@ export function useDeleteAgent() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
+      void queryClient.invalidateQueries({ queryKey: organizationsKey.all });
     },
   });
 }

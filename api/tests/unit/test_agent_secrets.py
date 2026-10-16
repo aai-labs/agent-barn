@@ -11,6 +11,7 @@ from api.domains.agents.models import (
     BitbucketContent,
     FirecrawlContent,
     GithubContent,
+    GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
@@ -414,10 +415,10 @@ def test_apollo_encrypt_decrypt_round_trip():
 
 
 def test_retired_google_providers_are_gone():
-    """The per-service Google providers were removed outright, rows and all (their
-    secrets are deleted by migration). Nothing may resurrect them as a provider value:
-    one google_workspace credential covers Gmail, Calendar, Drive and Sheets."""
-    for retired in ("gmail", "google_calendar", "google_sheets"):
+    """The per-service Calendar and Sheets providers were removed outright, rows and all
+    (their secrets are deleted by migration); google_workspace covers them. Gmail is a
+    provider again, as the read-only one-click integration beside Google Workspace."""
+    for retired in ("google_calendar", "google_sheets"):
         with pytest.raises(ValueError):
             SecretProvider(retired)
 
@@ -532,3 +533,61 @@ def test_google_workspace_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "rt-123" not in blob
     assert decrypt_content(SecretProvider.GOOGLE_WORKSPACE, blob, _KEY) == original
+
+
+_GMAIL_BASE = {
+    "email": "alice@example.com",
+    "scopes": ["openid", "https://www.googleapis.com/auth/gmail.readonly"],
+    "refresh_token": "gmail-rt-123",
+}
+
+
+def test_gmail_parses_with_the_shared_client_by_default():
+    content = validate_content(SecretProvider.GMAIL, _GMAIL_BASE)
+    assert isinstance(content, GmailContent)
+    assert content.email == "alice@example.com"
+    # Empty means the deployment's shared Google client is filled in at agent start.
+    assert content.client_id == ""
+    assert content.client_secret == ""
+
+
+def test_gmail_keeps_a_user_supplied_client():
+    content = validate_content(
+        SecretProvider.GMAIL,
+        {**_GMAIL_BASE, "client_id": "own.apps.googleusercontent.com", "client_secret": "own-secret"},
+    )
+    assert isinstance(content, GmailContent)
+    assert content.client_id == "own.apps.googleusercontent.com"
+    assert content.client_secret == "own-secret"
+
+
+def test_gmail_rejects_a_grant_without_read_only_gmail():
+    with pytest.raises(ValidationError, match="gmail.readonly"):
+        validate_content(SecretProvider.GMAIL, {**_GMAIL_BASE, "scopes": ["openid", "email"]})
+
+
+def test_gmail_requires_refresh_token_and_email():
+    for missing in ("refresh_token", "email"):
+        payload = {k: v for k, v in _GMAIL_BASE.items() if k != missing}
+        with pytest.raises(ValidationError):
+            validate_content(SecretProvider.GMAIL, payload)
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GMAIL, {**_GMAIL_BASE, "email": ""})
+
+
+def test_gmail_rejects_workspace_fields():
+    # Gmail is read-only and single-service; it must not silently accept Workspace's knobs.
+    for extra in ({"services": ["gmail"]}, {"read_only": False}):
+        with pytest.raises(ValidationError):
+            validate_content(SecretProvider.GMAIL, {**_GMAIL_BASE, **extra})
+
+
+def test_gmail_has_a_display_name():
+    assert PROVIDER_DISPLAY_NAMES[SecretProvider.GMAIL] == "Gmail credential"
+
+
+def test_gmail_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.GMAIL, _GMAIL_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "gmail-rt-123" not in blob
+    assert decrypt_content(SecretProvider.GMAIL, blob, _KEY) == original

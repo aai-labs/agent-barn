@@ -9,7 +9,7 @@ import { openOAuthPopup, waitForOAuthPopupMessage } from "./use-oauth-popup";
 
 const AuthorizeUrlSchema = z.object({ authorizeUrl: z.string().url() });
 // email/grantedScopes are absent unless the openid scopes were requested, which
-// google_workspace always does.
+// every Google provider does.
 const TokenSchema = z.object({
   refreshToken: z.string().min(1),
   email: z.string().nullish(),
@@ -34,7 +34,7 @@ export type GoogleOAuthResult = {
   clientId: string;
   clientSecret: string;
   // Connected account's email, when the flow requested the openid scopes. Stored with
-  // the credential for providers keyed by account (google_workspace).
+  // the credential (google_workspace, gmail).
   email: string;
   // Scopes Google actually granted — may be narrower than requested, since the consent
   // screen lets the user uncheck individual ones.
@@ -59,7 +59,7 @@ export function useGoogleOAuth() {
     async (
       creds?: GoogleClientCredentials,
       // Which Google integration is being connected — decides the scopes the backend
-      // requests. google_workspace is the only Google provider left.
+      // requests: google_workspace or gmail.
       provider: string = "google_workspace",
       // Extra authorize-url query params. google_workspace derives its scopes from the
       // user's service selection, so it passes services + read_only here.

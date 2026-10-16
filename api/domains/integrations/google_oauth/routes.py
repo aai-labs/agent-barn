@@ -1,6 +1,6 @@
 """Google OAuth 2.0 authorization-code flow for the Google-backed skills.
 
-Serves the google_workspace provider; the caller picks it with the
+Serves the google_workspace and gmail providers; the caller picks one with the
 ``provider`` query parameter and the only thing that varies is the requested scope.
 
 Replaces the old hand-pasted client_id/client_secret/refresh_token fields with a
@@ -41,7 +41,11 @@ from jwt.exceptions import InvalidTokenError
 from pydantic import BaseModel
 
 from api.core.config import Config
-from api.domains.agents.google_workspace_scopes import GOOGLE_SCOPE_PREFIX, WORKSPACE_SERVICE_SCOPES
+from api.domains.agents.google_workspace_scopes import (
+    GMAIL_READONLY_SCOPE,
+    GOOGLE_SCOPE_PREFIX,
+    WORKSPACE_SERVICE_SCOPES,
+)
 from api.domains.agents.models import GOOGLE_WORKSPACE_SERVICES, SecretProvider
 from api.domains.api_keys.models import ApiKeyAccessMode
 from api.domains.auth.models import CurrentUserContext
@@ -50,9 +54,9 @@ from api.domains.auth.utils import get_current_user
 
 integrations_router = APIRouter(prefix="/integrations", tags=["integrations"])
 
-# google_workspace is the only Google provider; it derives its scopes per request from
-# the services the user selected (see _WORKSPACE_SERVICE_SCOPES below). The retired
-# per-service providers (gmail, google_sheets) had fixed scope tuples here.
+# google_workspace derives its scopes per request from the services the user selected
+# (see _WORKSPACE_SERVICE_SCOPES below). gmail asks for one fixed read-only scope. The
+# retired per-service providers (google_sheets, google_calendar) are rejected.
 DEFAULT_PROVIDER = SecretProvider.GOOGLE_WORKSPACE.value
 
 _SCOPE_PREFIX = GOOGLE_SCOPE_PREFIX
@@ -64,7 +68,16 @@ _WORKSPACE_SERVICE_SCOPES = WORKSPACE_SERVICE_SCOPES
 _IDENTITY_SCOPES: tuple[str, ...] = ("openid", "email", f"{_SCOPE_PREFIX}userinfo.email")
 
 # Providers a signed state may name.
-_VALID_PROVIDERS: frozenset[str] = frozenset({SecretProvider.GOOGLE_WORKSPACE.value})
+_VALID_PROVIDERS: frozenset[str] = frozenset({SecretProvider.GOOGLE_WORKSPACE.value, SecretProvider.GMAIL.value})
+
+
+def gmail_scopes() -> tuple[str, ...]:
+    """Read-only Gmail plus identity, sorted for a deterministic authorize URL.
+
+    Fixed: Gmail has no service or access-level choice, so nothing the caller passes can
+    widen the grant. Identity scopes let the token exchange report the account email.
+    """
+    return tuple(sorted({*_IDENTITY_SCOPES, GMAIL_READONLY_SCOPE}))
 
 
 def _parse_services(raw: str | None) -> list[str]:
@@ -208,9 +221,9 @@ def google_authorize_url(
 ):
     """Return the Google OAuth authorize URL for the popup to navigate to.
 
-    ``google_workspace`` is the only supported provider; its scopes are derived per
-    request from ``services`` (comma-separated) and ``read_only`` rather than being fixed
-    per provider. The retired per-service Google providers are rejected here rather than
+    ``google_workspace`` derives its scopes per request from ``services``
+    (comma-separated) and ``read_only``. ``gmail`` always asks for read-only Gmail and
+    ignores both. The retired per-service Google providers are rejected here rather than
     silently served, so a stale caller fails loudly instead of consenting to scopes no
     integration can use.
 
@@ -221,12 +234,15 @@ def google_authorize_url(
     """
     if _context is not None and _context.api_key_access_mode == ApiKeyAccessMode.READ_ONLY:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This API key is read-only")
-    if provider != SecretProvider.GOOGLE_WORKSPACE.value:
+    if provider == SecretProvider.GMAIL.value:
+        scopes = gmail_scopes()
+    elif provider == SecretProvider.GOOGLE_WORKSPACE.value:
+        scopes = workspace_scopes(_parse_services(services), read_only)
+    else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported Google provider: {provider}",
         )
-    scopes = workspace_scopes(_parse_services(services), read_only)
     resolved_client_id = client_id or config.google_cloud_client_id
     # For the app-owned client, also require its secret to be configured so we fail
     # before opening consent. A custom client carries its own secret to /token.
@@ -320,8 +336,7 @@ def google_token_exchange(
     — it never appears in a URL, the authorize request, or our logs.
 
     Also returns the scopes Google actually granted and, when an ``openid`` scope was
-    requested, the account's email address. Both are additive: callers predating them
-    (gmail, google_sheets) still read ``refresh_token`` and get ``email: null``.
+    requested, the account's email address.
     """
     client_id = body.client_id or config.google_cloud_client_id
     client_secret = body.client_secret or config.google_cloud_client_secret
