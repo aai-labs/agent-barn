@@ -7,6 +7,7 @@ from api.infrastructure.integration_validators.confluence import validate_conflu
 from api.infrastructure.integration_validators.github import validate_github
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
+from api.infrastructure.integration_validators.merkys import validate_merkys
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 
@@ -18,6 +19,7 @@ PROVIDER_VALIDATORS: dict[SecretProvider, Any] = {
     SecretProvider.GOOGLE_WORKSPACE: validate_google_workspace,
     SecretProvider.PIPEDRIVE: validate_pipedrive,
     SecretProvider.APOLLO: validate_apollo,
+    SecretProvider.MERKYS: validate_merkys,
 }
 
 
@@ -46,5 +48,6 @@ __all__ = [
     "validate_github",
     "validate_google_workspace",
     "validate_jira",
+    "validate_merkys",
     "validate_pipedrive",
 ]

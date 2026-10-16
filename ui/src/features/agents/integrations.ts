@@ -18,6 +18,9 @@ export interface IntegrationField {
   required: boolean;
   placeholder?: string;
   hint?: string;
+  // A value the user cannot change. The field renders read-only, the value is put into
+  // the draft for the request, and "required" counts it as filled. Only for "text" fields.
+  fixedValue?: string;
 }
 
 export interface IntegrationProvider {
@@ -197,6 +200,15 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API key", type: "secret", required: true, hint: "Create one in Apollo under Settings → Integrations → API Keys." },
     ],
   },
+  {
+    id: "merkys",
+    label: "Merkys",
+    scopeNote: "The agent acts as the Merkys user who owns the API key and can read only what that user can. Use a dedicated user limited to the knowledge the agent needs, rather than a personal key.",
+    fields: [
+      { key: "baseUrl", label: "Merkys URL", type: "text", required: true, fixedValue: "https://slack-chatbot.k8s.aai-labs.com", hint: "Agent Barn's Merkys. This address is fixed." },
+      { key: "apiKey", label: "API key", type: "secret", required: true, hint: "Create one in Merkys under API keys. It starts with cb_." },
+    ],
+  },
 ];
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
@@ -253,7 +265,7 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     // (google_workspace picks services before consent) — still have them filled in.
     if (provider.authMethod && !isOAuthConnected(draft)) return true;
     return provider.fields.some((f) => {
-      if (!f.required) return false;
+      if (!f.required || f.fixedValue !== undefined) return false;
 
       // If the field depends on another field, check if the condition is met
       if (f.dependsOn) {

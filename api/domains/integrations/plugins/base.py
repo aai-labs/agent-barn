@@ -134,6 +134,9 @@ class IntegrationPlugin[ContentT: SecretContent](ABC):
     shared_credential_eligible: bool = False
     #: Bundled skill slugs auto-mounted when this provider is configured.
     bundled_skill_slugs: tuple[str, ...] = ()
+    #: Seconds the gateway waits on this provider's upstream before giving up. Providers
+    #: whose calls run long (an LLM answering a question) raise it.
+    upstream_timeout_seconds: int = 30
 
     def validate_external(self, content: ContentT) -> IntegrationValidationResult | None:
         """Check the credential against the live provider.
@@ -143,6 +146,17 @@ class IntegrationPlugin[ContentT: SecretContent](ABC):
         """
         del content
         return None
+
+    def validate_direct_content(self, content: ContentT) -> None:
+        """Raise ``ValueError`` if this credential cannot be materialized directly.
+
+        A gateway-capable plugin defaults to resolving its upstream, because a credential
+        that names no usable upstream (for example a scoped Atlassian token with no cloud id)
+        must fail rather than silently skip its profile. A plugin whose gateway route is
+        narrower than its direct route overrides this.
+        """
+        if self.egress_mode == EgressMode.GATEWAY_PROXY:
+            self.upstream_base_url(content)
 
     # --- GATEWAY_PROXY seam ---
 

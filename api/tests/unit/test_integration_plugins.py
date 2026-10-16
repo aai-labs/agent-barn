@@ -216,3 +216,90 @@ def test_google_workspace_is_not_shared_credential_eligible():
     # Its consent is per-agent, so an org-scoped Shared Credential would attach the
     # wrong person's Google account.
     assert_that(INTEGRATION_PLUGINS.require(SecretProvider.GOOGLE_WORKSPACE).shared_credential_eligible, is_(False))
+
+
+# --- Merkys ---
+
+
+def _merkys(base_url: str):
+    from api.domains.agents.models import MerkysContent
+
+    return MerkysContent(base_url=base_url, api_key="cb_key")
+
+
+def _merkys_plugin():
+    return INTEGRATION_PLUGINS.require(SecretProvider.MERKYS)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://merkys.aai-labs.com",
+        "https://slack-chatbot.k8s.aai-labs.com",
+        "https://Merkys.AAI-Labs.com:443",
+    ],
+)
+def test_merkys_gateway_forwards_only_to_approved_hosts(url):
+    assert_that(_merkys_plugin().upstream_base_url(_merkys(url)).startswith("https://"), is_(True))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://merkys.customer.example",
+        "https://aai-labs.com",  # the bare apex is not a subdomain of the approved suffix
+        "https://evilaai-labs.com",
+        "https://aai-labs.com.evil.example",
+        "https://merkys.aai-labs.com:8443",
+        "https://10.0.0.5",
+    ],
+)
+def test_merkys_gateway_refuses_hosts_off_the_allowlist(url):
+    with pytest.raises(ValueError):
+        _merkys_plugin().upstream_base_url(_merkys(url))
+
+
+def test_merkys_off_list_host_still_works_in_direct_mode():
+    # An on-prem Merkys is reached by the agent's own aai-cli; only the shared gateway is limited.
+    _merkys_plugin().validate_direct_content(_merkys("https://merkys.customer.example"))
+
+
+def test_other_gateway_plugins_still_resolve_their_upstream_for_direct_mode():
+    # The default hook keeps the "missing scoped cloud id must fail" behaviour.
+    from api.domains.agents.models import JiraContent
+
+    scoped = JiraContent(
+        site_url="https://acme.atlassian.net", email="a@b.c", api_token="t", use_scoped_token=True, cloud_id=""
+    )
+    jira = INTEGRATION_PLUGINS.require(SecretProvider.JIRA)
+    assert_that(
+        jira.validate_direct_content(JiraContent(site_url="https://acme.atlassian.net", email="a@b.c", api_token="t")),
+        is_(None),
+    )
+    del scoped
+
+
+def test_merkys_gateway_sets_the_key_as_a_sensitive_x_api_key_header():
+    request = _merkys_plugin().apply_upstream_auth(_merkys("https://merkys.aai-labs.com"), OutboundRequest("GET", "/x"))
+    assert_that(request.headers["X-API-Key"], equal_to("cb_key"))
+    assert_that("x-api-key" in request.sensitive_headers, is_(True))
+
+
+def test_merkys_gateway_profile_refuses_an_off_list_host_before_the_pod_starts():
+    with pytest.raises(ValueError):
+        _merkys_plugin().aai_cli_gateway_profile_block(
+            _merkys("https://merkys.customer.example"), base_url="http://gw/p/merkys", token_env="TOK"
+        )
+
+
+def test_only_merkys_extends_the_gateway_timeout():
+    # An LLM answer takes 5–30 s; every other provider keeps the short default.
+    timeouts = {p.key: p.upstream_timeout_seconds for p in ALL_PLUGINS}
+    assert_that(timeouts["merkys"], is_(equal_to(180)))
+    assert_that(
+        {k: v for k, v in timeouts.items() if k != "merkys"}, equal_to({k: 30 for k in timeouts if k != "merkys"})
+    )
+
+
+def test_merkys_is_shared_credential_eligible():
+    assert_that(_merkys_plugin().shared_credential_eligible, is_(True))

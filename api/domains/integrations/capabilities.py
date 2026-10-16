@@ -37,6 +37,11 @@ ISOLATION_CAPABILITIES = {
         "This Agent receives the Apollo API key and connects to Apollo directly.",
         "The Apollo API key stays outside this Agent; Agent Barn authenticates requests.",
     ),
+    SecretProvider.MERKYS: IsolationCapabilities(
+        "This Agent receives the Merkys API key and connects to Merkys directly.",
+        "The Merkys API key stays outside this Agent; Agent Barn authenticates requests. "
+        "Only available when the Merkys URL is on an Agent Barn–approved host.",
+    ),
     SecretProvider.PIPEDRIVE: IsolationCapabilities(
         "This Agent receives the Pipedrive API token and connects to Pipedrive directly.",
         "The Pipedrive API token stays outside this Agent; Agent Barn authenticates requests.",

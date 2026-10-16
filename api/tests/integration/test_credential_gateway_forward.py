@@ -22,6 +22,7 @@ from api.domains.agents.models import (
     GithubContent,
     GoogleWorkspaceContent,
     JiraContent,
+    MerkysContent,
     PipedriveContent,
     SecretProvider,
     encrypt_content,
@@ -222,6 +223,14 @@ _ALL_AAI_GIVEN[0] = set_env_variable(
             "apollo-real",
         ),
         (
+            SecretProvider.MERKYS,
+            MerkysContent(base_url="https://merkys.aai-labs.com", api_key="cb_merkys-real"),
+            "api/conversation/",
+            "https://merkys.aai-labs.com/api/conversation/",
+            "X-API-Key",
+            "cb_merkys-real",
+        ),
+        (
             SecretProvider.PIPEDRIVE,
             PipedriveContent(api_token="pd-real", domain="acme"),
             "v1/deals",
@@ -245,6 +254,47 @@ def test_each_non_oauth_aai_provider_is_reauthorized_and_forwarded(
         assert_that(call.args[1], equal_to(expected_url))
         assert_that(call.kwargs["headers"][auth_header], equal_to(auth_value))
         assert_that(token in str(call.kwargs["headers"]), is_(False))
+
+
+def test_merkys_gets_a_long_upstream_timeout_and_others_the_default():
+    with given(_ALL_AAI_GIVEN) as context:
+        _provider_secret(
+            context,
+            SecretProvider.MERKYS,
+            MerkysContent(base_url="https://merkys.aai-labs.com", api_key="cb_merkys-real"),
+        )
+        _provider_secret(
+            context, SecretProvider.GITHUB, GithubContent(token=REAL_TOKEN, owner="acme", repos=["r1"], org="acme-org")
+        )
+        merkys_token = _token_for(context, SecretProvider.MERKYS)
+        github_token = _token_for(context, SecretProvider.GITHUB)
+
+        with when("the agent calls Merkys and then GitHub through the gateway"):
+            context.gateway_client.post("/gateway/v1/p/merkys/api/chat/c1", headers=_auth(merkys_token), json={})
+            merkys_call = _sent(context)
+            context.gateway_client.get("/gateway/v1/p/github/user", headers=_auth(github_token))
+            github_call = _sent(context)
+
+        with then("Merkys may take longer than the default before the gateway gives up"):
+            assert_that(merkys_call.kwargs["timeout"], equal_to(180))
+            assert_that(github_call.kwargs["timeout"], equal_to(30))
+
+
+def test_merkys_off_the_allowlist_is_never_forwarded_to():
+    with given(_ALL_AAI_GIVEN) as context:
+        _provider_secret(
+            context,
+            SecretProvider.MERKYS,
+            MerkysContent(base_url="https://merkys.customer.example", api_key="cb_merkys-real"),
+        )
+        token = _token_for(context, SecretProvider.MERKYS)
+
+        with when("the agent's stored Merkys URL is not on the approved list"):
+            response = context.gateway_client.get("/gateway/v1/p/merkys/api/conversation/", headers=_auth(token))
+
+        with then("the gateway refuses and the key never leaves"):
+            assert_that(response.status_code, is_not(equal_to(status.HTTP_200_OK)))
+            assert_that(context.injector.get(UpstreamForwarder).send.called, is_(False))
 
 
 def test_query_parameters_survive_the_hop():

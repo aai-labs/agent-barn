@@ -29,7 +29,7 @@ HOP_BY_HOP_HEADERS = frozenset(
 #: ``host`` and ``content-length`` are recomputed for the upstream request.
 GATEWAY_OWNED_REQUEST_HEADERS = frozenset({"authorization", "host", "content-length"})
 
-_TIMEOUT = 30
+DEFAULT_TIMEOUT = 30
 #: Bounded so a redirect loop cannot pin a gateway worker.
 _MAX_REDIRECTS = 5
 
@@ -74,6 +74,7 @@ class UpstreamForwarder:
         params: dict[str, str],
         content: bytes,
         sensitive_headers: frozenset[str] = frozenset({"authorization"}),
+        timeout: float = DEFAULT_TIMEOUT,
     ) -> UpstreamResponse:
         """Send one upstream request, following redirects with care.
 
@@ -86,7 +87,7 @@ class UpstreamForwarder:
         confinement.
         """
         try:
-            with httpx.Client(timeout=_TIMEOUT, follow_redirects=False) as client:
+            with httpx.Client(timeout=timeout, follow_redirects=False) as client:
                 current_url = url
                 current_headers = dict(headers)
                 origin = httpx.URL(url)
