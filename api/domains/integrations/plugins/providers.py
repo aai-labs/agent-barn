@@ -22,6 +22,7 @@ from api.domains.agents.models import (
     ConfluenceContent,
     FirecrawlContent,
     GithubContent,
+    GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
@@ -46,6 +47,7 @@ from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
+from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
@@ -542,6 +544,51 @@ class GoogleWorkspacePlugin(IntegrationPlugin[GoogleWorkspaceContent]):
         return MintedToken(value=token, expires_in=max(1, expires_in), scopes=scopes)
 
 
+class GmailPlugin(AaiCliPlugin[GmailContent]):
+    """Read-only Gmail through aai-cli's ``email`` commands.
+
+    Separate from Google Workspace (gog): one grant, Gmail only, always read-only, so
+    connecting it is a single sign-in on the deployment's shared Google client. Direct
+    only — the refresh token and client secret go into aai-cli's encrypted store, which
+    refreshes access tokens itself.
+    """
+
+    key = "gmail"
+    provider = SecretProvider.GMAIL
+    display_name = "Gmail credential"
+    credentials_model = GmailContent
+    #: OAuth-based, so its consent is per-agent and it cannot be an org-scoped
+    #: Shared Credential.
+    shared_credential_eligible = False
+    bundled_skill_slugs = ("aai-gmail",)
+    aai_cli_slug = "gmail-work"
+    aai_cli_label = "Gmail"
+    aai_cli_capability = (
+        "list, read and search mail (read-only; sending and deleting are refused) — read `./skills/aai-gmail/SKILL.md`"
+    )
+    aai_cli_secret_entries = (
+        ("google.gmail_client_secret", "client_secret"),
+        ("google.gmail_refresh_token", "refresh_token"),
+    )
+
+    def validate_external(self, content: GmailContent) -> IntegrationValidationResult:
+        return validate_gmail(content)
+
+    def aai_cli_profile_block(self, content: GmailContent) -> str:
+        return (
+            f"[profiles.{self.aai_cli_slug}]\n"
+            'provider = "google"\n'
+            'auth_type = "bearer_token"\n'
+            f"client_id = {quote(content.client_id)}\n"
+            'client_secret_secret = "google.gmail_client_secret"\n'
+            'refresh_token_secret = "google.gmail_refresh_token"\n'
+            'user_id = "me"\n'
+        )
+
+    def aai_cli_context_line(self, content: GmailContent) -> str:
+        return f"- **Gmail** (`{self.aai_cli_slug}`): signed in as {content.email} (read-only)"
+
+
 class FirecrawlPlugin(IntegrationPlugin[FirecrawlContent]):
     """Infrastructure-level web fetch/search, reached by the pod's built-in web backend
     and the openclaw firecrawl plugin rather than any CLI.
@@ -653,5 +700,6 @@ SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
     PipedrivePlugin(),
     ApolloPlugin(),
     GoogleWorkspacePlugin(),
+    GmailPlugin(),
     SharePointPlugin(),
 )

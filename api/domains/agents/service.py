@@ -94,6 +94,7 @@ from api.domains.agents.models import (
     CommandApprovalMode,
     ConfluenceContent,
     FirecrawlContent,
+    GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
     ManagedUpdateOutcome,
@@ -211,6 +212,10 @@ _CREDENTIAL_FIELDS = frozenset(
 
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
+
+# Google-backed providers whose credential may omit its OAuth client, in which case the
+# server-owned client is filled in at agent start and before live validation.
+_GOOGLE_OAUTH_PROVIDERS = (SecretProvider.GOOGLE_WORKSPACE, SecretProvider.GMAIL)
 
 RESTORE_POINT_IN_FLIGHT_DETAIL = (
     "A restore point capture or restore is still running for this Agent. Wait for it to finish."
@@ -2345,21 +2350,21 @@ class AgentService:
                     ),
                 ) from exc
         self._backfill_google_client_credentials(decrypted)
-        # Only google_workspace is materialized. The retired per-service Google providers
-        # and their rows were deleted by migration; affected agents must reconnect through
-        # Google Workspace.
-        gws_content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
-        if isinstance(gws_content, GoogleWorkspaceContent) and (
-            not gws_content.client_id or not gws_content.client_secret
-        ):
-            raise AgentProvisioningPrecondition(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
-                    "and Google OAuth is not configured on this server. Reconnect via "
-                    "Authenticate with Google, or configure google_cloud_client_id/secret."
-                ),
-            )
+        # A Google refresh token is useless without the client it was issued under: either
+        # the credential's own, or the server-owned one backfilled just above.
+        for google_provider in _GOOGLE_OAUTH_PROVIDERS:
+            google_content = decrypted.get(google_provider)
+            if isinstance(google_content, (GoogleWorkspaceContent, GmailContent)) and (
+                not google_content.client_id or not google_content.client_secret
+            ):
+                raise AgentProvisioningPrecondition(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"{PROVIDER_DISPLAY_NAMES[google_provider]} is missing a client id/secret "
+                        "and Google OAuth is not configured on this server. Reconnect via "
+                        "Authenticate with Google, or configure google_cloud_client_id/secret."
+                    ),
+                )
         policies = self.integrations.policies(agent.id)
         default_firecrawl = SecretProvider.FIRECRAWL not in decrypted and bool(
             self.config.agent_firecrawl_api_key and self.config.agent_firecrawl_base_url
@@ -3238,17 +3243,18 @@ class AgentService:
         return options
 
     def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
-        """Inject the server-owned OAuth client when a Google Workspace secret omits it.
+        """Inject the server-owned OAuth client when a Google-backed secret omits it.
 
         Backfill only when empty so a user-supplied client (the one the refresh token
         was issued under) keeps working.
         """
-        content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
-        if isinstance(content, GoogleWorkspaceContent):
-            if not content.client_id:
-                content.client_id = self.config.google_cloud_client_id
-            if not content.client_secret:
-                content.client_secret = self.config.google_cloud_client_secret
+        for provider in _GOOGLE_OAUTH_PROVIDERS:
+            content = decrypted.get(provider)
+            if isinstance(content, (GoogleWorkspaceContent, GmailContent)):
+                if not content.client_id:
+                    content.client_id = self.config.google_cloud_client_id
+                if not content.client_secret:
+                    content.client_secret = self.config.google_cloud_client_secret
 
     def _refuse_forgetting_granted_sites(self, agent_id: UUID) -> None:
         """Removing SharePoint would forget sites still granted to the Teams app, which its next
@@ -3274,7 +3280,7 @@ class AgentService:
             return
 
         validation_content = content
-        if provider == SecretProvider.GOOGLE_WORKSPACE and isinstance(content, GoogleWorkspaceContent):
+        if provider in _GOOGLE_OAUTH_PROVIDERS and isinstance(content, (GoogleWorkspaceContent, GmailContent)):
             # The stored payload may intentionally omit the deployment-owned OAuth client;
             # validate with the same server-side backfill used during runtime materialization
             # without changing the caller's encrypted payload.
