@@ -113,10 +113,9 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
-  // gmail, google_sheets and google_calendar are retired: one google_workspace
-  // credential (below) now covers Gmail, Calendar, Drive and Sheets through gog under a
-  // single consent. The retired providers and their rows were deleted by migration;
-  // affected agents must reconnect, so they must not be offered here.
+  // google_sheets and google_calendar are retired: one google_workspace credential
+  // (below) covers Gmail, Calendar, Drive and Sheets through gog under a single consent.
+  // gmail is separate: read-only Gmail alone, connected with one Google sign-in.
   {
     id: "google_workspace",
     label: "Google Workspace",
@@ -150,6 +149,14 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
         hint: "Read-only requests view-only scopes; Google enforces this, so writes are refused even if the agent tries.",
       },
     ],
+  },
+  {
+    id: "gmail",
+    label: "Gmail",
+    authMethod: "google_oauth",
+    scopeNote: "Read-only access to one Gmail inbox. Sign in with Google; there's nothing else to set up.",
+    oauthConnectedNote: "Gmail connected",
+    fields: [],
   },
   {
     id: "sharepoint",

@@ -12,14 +12,17 @@ from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
+    GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
 )
+from api.domains.integrations.plugins.providers import GmailPlugin
 from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
+from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
@@ -856,8 +859,8 @@ def test_apollo_network_error_returns_error():
 
 # ── Google Workspace (gog) ────────────────────────────────────────────────────
 
-_GWS_TOKEN_MOD = "api.infrastructure.integration_validators.google_workspace.httpx.post"
-_GWS_USERINFO_MOD = "api.infrastructure.integration_validators.google_workspace.httpx.get"
+_GWS_TOKEN_MOD = "api.infrastructure.integration_validators.google_grant.httpx.post"
+_GWS_USERINFO_MOD = "api.infrastructure.integration_validators.google_grant.httpx.get"
 
 _GWS_SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
@@ -982,3 +985,103 @@ def test_google_workspace_unexpected_status_returns_error():
 
     assert result.valid is False
     assert "500" in (result.error or "")
+
+
+# ── Gmail ─────────────────────────────────────────────────────────────────────
+
+_GRANT_TOKEN_MOD = "api.infrastructure.integration_validators.google_grant.httpx.post"
+_GRANT_USERINFO_MOD = "api.infrastructure.integration_validators.google_grant.httpx.get"
+_GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+_GMAIL = GmailContent(
+    email="alice@example.com",
+    scopes=["openid", _GMAIL_READONLY],
+    refresh_token="gmail-rt",
+    client_id="client-id",
+    client_secret="client-secret",
+)
+
+
+def _gmail_token_ok(scope: str = f"openid {_GMAIL_READONLY}") -> dict:
+    return {"access_token": "at-gmail", "scope": scope, "token_type": "Bearer"}
+
+
+def test_gmail_valid_refresh_token_returns_identity():
+    with (
+        patch(_GRANT_TOKEN_MOD, return_value=_resp(_gmail_token_ok())) as mock_post,
+        patch(_GRANT_USERINFO_MOD, return_value=_resp({"email": "alice@example.com"})),
+    ):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is True
+    assert result.identity == "alice@example.com"
+    assert result.missing_scopes == []
+    assert mock_post.call_args.kwargs["data"]["refresh_token"] == "gmail-rt"
+
+
+def test_gmail_missing_client_credentials_returns_error():
+    no_client = GmailContent(email="alice@example.com", scopes=[_GMAIL_READONLY], refresh_token="gmail-rt")
+    with patch(_GRANT_TOKEN_MOD) as mock_post:
+        result = validate_gmail(no_client)
+
+    assert result.valid is False
+    assert "configured" in (result.error or "").lower()
+    mock_post.assert_not_called()
+
+
+def test_gmail_invalid_grant_asks_to_reconnect():
+    with patch(_GRANT_TOKEN_MOD, return_value=_resp({"error": "invalid_grant"}, status=400)):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is False
+    assert "reconnect" in (result.error or "").lower()
+
+
+def test_gmail_reports_read_access_revoked_after_consent():
+    with (
+        patch(_GRANT_TOKEN_MOD, return_value=_resp(_gmail_token_ok(scope="openid"))),
+        patch(_GRANT_USERINFO_MOD, return_value=_resp({"email": "alice@example.com"})),
+    ):
+        result = validate_gmail(_GMAIL)
+
+    assert result.missing_scopes == [_GMAIL_READONLY]
+
+
+def test_gmail_flags_a_different_account():
+    with (
+        patch(_GRANT_TOKEN_MOD, return_value=_resp(_gmail_token_ok())),
+        patch(_GRANT_USERINFO_MOD, return_value=_resp({"email": "bob@example.com"})),
+    ):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is False
+    assert "bob@example.com" in (result.error or "")
+
+
+def test_gmail_plugin_validates_through_the_gmail_validator():
+    with (
+        patch(_GRANT_TOKEN_MOD, return_value=_resp(_gmail_token_ok())),
+        patch(_GRANT_USERINFO_MOD, return_value=_resp({"email": "alice@example.com"})),
+    ):
+        result = GmailPlugin().validate_external(_GMAIL)
+
+    assert result.valid is True
+    assert result.identity == "alice@example.com"
+
+
+def test_google_grant_without_an_access_token_is_invalid():
+    with patch(_GRANT_TOKEN_MOD, return_value=_resp({"scope": _GMAIL_READONLY})):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is False
+    assert "access token" in (result.error or "")
+
+
+def test_google_grant_falls_back_to_stored_email_when_identity_lookup_fails():
+    with (
+        patch(_GRANT_TOKEN_MOD, return_value=_resp(_gmail_token_ok())),
+        patch(_GRANT_USERINFO_MOD, return_value=_resp({}, status=500)),
+    ):
+        result = validate_gmail(_GMAIL)
+
+    assert result.valid is True
+    assert result.identity == "alice@example.com"

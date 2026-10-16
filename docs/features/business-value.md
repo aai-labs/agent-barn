@@ -6,14 +6,14 @@ Read before changing how Agent Barn derives Business Actions from Tool Calls, th
 
 ## Role in the system
 
-Business Value measures what an Agent actually did rather than what it says it did. Every aai-cli or gog command an Agent runs through a shell tool reaches Ingest as a Tool Call: Hermes reports `terminal` calls and OpenClaw reports `exec` calls, both with `arguments.command`. aai-cli reaches most Integrations; gog reaches Google Workspace, the only way Agent Barn connects Gmail, Calendar, Drive, and Sheets ([`integrations.md`](integrations.md)). Ingest classifies each completed Tool Call on the server into content-free Business Actions and stores them in the same transaction. No runtime image or plugin release is involved, and both runtimes are covered at once.
+Business Value measures what an Agent actually did rather than what it says it did. Every aai-cli or gog command an Agent runs through a shell tool reaches Ingest as a Tool Call: Hermes reports `terminal` calls and OpenClaw reports `exec` calls, both with `arguments.command`. aai-cli reaches most Integrations, including the read-only Gmail integration; gog reaches Google Workspace, which connects Gmail, Calendar, Drive, and Sheets ([`integrations.md`](integrations.md)). Ingest classifies each completed Tool Call on the server into content-free Business Actions and stores them in the same transaction. No runtime image or plugin release is involved, and both runtimes are covered at once.
 
 This is not the per-Agent Activity tab ([`agent-activity.md`](agent-activity.md)). Activity reads billed model calls to show when an Agent was working. Business Value reads Tool Calls to show which business actions the Agent completed.
 
 ## Invariants
 
 - A Business Action records only these fields:
-  - `integration`: the aai-cli command group, for example `jira` or `microsoft`, or `google-<service>` for gog, for example `google-gmail`. The `google-` prefix keeps gog apart from aai-cli's own `drive` (Google Drive) group. The retired Zoho Mail `email` group is no longer catalogued. This is not the glossary's **Integration**.
+  - `integration`: the aai-cli command group, for example `jira` or `microsoft`, or `google-<service>` for gog, for example `google-gmail`. The `google-` prefix keeps gog apart from aai-cli's own `drive` (Google Drive) group. The `email` group is catalogued for the Gmail integration's reads; the retired Zoho Mail integration used the same group. This is not the glossary's **Integration**.
   - `resource` and `verb`
   - `is_write` and `outcome_type`
   - `status`
