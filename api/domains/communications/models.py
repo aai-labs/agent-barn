@@ -313,6 +313,11 @@ class AgentBarnTelegramLink(BaseModel, table=True):
         nullable=True,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+    first_message_at: datetime | None = SqlField(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
 
 
 class AgentBarnTelegramLinkToken(BaseModel, table=True):

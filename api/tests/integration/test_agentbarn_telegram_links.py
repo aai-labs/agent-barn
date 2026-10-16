@@ -15,6 +15,7 @@ from api.domains.communications.models import (
     AgentBarnTelegramLinkToken,
     CommunicationConnection,
 )
+from api.domains.events.models import ActorIdentity, ActorIdentityType
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
@@ -236,14 +237,19 @@ def test_unlinking_ends_the_link_once_and_only_within_scope() -> None:
         _token(context, context.first, "hash-1")
         link = _consume(context, "hash-1").link
         args = (link.id, context.first.id, context.first.agent_id)
+        actor = ActorIdentity(
+            type=ActorIdentityType.MEMBERSHIP, id=context.organization_user.id, organization_id=context.organization.id
+        )
 
         with when("someone outside the Organization tries to unlink it, then I unlink it twice"):
-            outsider = _repo(context).unlink_in_scope(*args, AuthorizationScope(organization_id=uuid4()), now=_NOW)
-            first = _repo(context).unlink_in_scope(*args, _scope(context), now=_NOW)
-            again = _repo(context).unlink_in_scope(*args, _scope(context), now=_NOW)
+            outsider = _repo(context).unlink_in_scope(
+                *args, AuthorizationScope(organization_id=uuid4()), now=_NOW, actor=actor
+            )
+            first = _repo(context).unlink_in_scope(*args, _scope(context), now=_NOW, actor=actor)
+            again = _repo(context).unlink_in_scope(*args, _scope(context), now=_NOW, actor=actor)
 
         with then("only my first unlink takes effect"):
-            assert_that((outsider, first, again), equal_to((False, True, False)))
+            assert_that((outsider is not None, first is not None, again is not None), equal_to((False, True, False)))
             assert_that(_links(context)[0].unlinked_at, equal_to(_NOW))
             assert_that(
                 _repo(context).list_active_links_in_scope(context.first.id, context.first.agent_id, _scope(context)),

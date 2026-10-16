@@ -12,7 +12,9 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 - **On switch.** Analytics is on by default when a project token is set; `ANALYTICS_ENABLED=false` opts out. A blank `ANALYTICS_ENABLED` counts as off in Config; Helmfile treats blank as unset and uses the on default. When it is off, the handler completes every delivery without sending anything. Config, Helm, Helmfile, and deployment installs default it to on. Staging and local development stacks report to the real project too: staging under its own `installation_name`, local stacks as `installation_environment=local`. Only tests turn it off. Per-deployment defaults and the opt-out are in [`../guidelines/operations.md`](../guidelines/operations.md#product-analytics).
 - **Who an event is attributed to.**
-  - Only events with a human actor (Membership or User) are sent. System and Runtime actors are skipped. The one exception is hourly message counts (see [Message counts](#message-counts)), which have no person and are attributed to the Installation.
+  - Only events with a human actor (Membership or User) are sent. System and Runtime actors are skipped, with two exceptions:
+    - Hourly message counts (see [Message counts](#message-counts)) have no person and are attributed to the Installation.
+    - `organization.llm_budget.exhausted`, raised by the budget-alert job as a System actor, is attributed to the Organization's creator (`created_by_user_id`), so running out of trial credit lands on the trial user's timeline. It is skipped when the Organization is gone or has no recorded creator.
   - `distinct_id` is the acting user's UUID.
   - A Membership actor is resolved only within the event's Organization.
   - A member who removed themselves is attributed through the event's `user_id`.
@@ -28,6 +30,10 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 - **Groups.** Every event belongs to the `installation` group, keyed by the Installation id and named with the same value as `installation_name`.
   - Organization-scoped events also belong to the `organization` group, keyed by the Organization id, and carry `organization_id`.
   - Platform-scoped events (`organization_id` is null) carry neither. They are sent only for a User Actor, because a Membership Actor cannot be resolved without an Organization.
+- **Trial flag.** Every Organization-scoped event carries `is_trial`, read from the Organization when the event is sent, not when it happened. An event whose Organization no longer exists carries no `is_trial`.
+  - The `organization` group gets the same value as a group property (`$group_set: {is_trial}`). Each worker process sends that `$groupidentify` the first time it sends the Organization's current value, and again only after the value changes. A failed send does not count. Its `uuid` is `uuid5(event_id, "organization")`, so a redelivery repeats it.
+  - Funnels can filter on the `is_trial` event property without Group Analytics. The group property needs the Group Analytics add-on.
+  - Ending a trial is not itself sent, so the group property updates with that Organization's next event.
 - **Labels and privacy flags.** Every event carries `source: agentbarn-api` and `$lib: agentbarn-api`, so app events can be separated from website events. It also carries `$geoip_disable: true`.
 - **Redelivery.** A redelivered event sends the same capture ids: the capture's `uuid` is the `event_id` and its timestamp is `occurred_at`. PostHog de-duplicates matching events eventually, not immediately.
 - **Installation naming.** Each worker process names the Installation group once, with a `$groupidentify` in the first batch it sends successfully. It names it again only if the resolved hostname or fallback changes. Changing the URL never changes the Installation id or group key. The naming check, send, and successful update are synchronized across worker threads; captures for an already-named Installation can send concurrently. A failed or dropped send does not count, so the next batch retries the naming.
@@ -40,7 +46,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 1. A business mutation commits its Domain Event together with one Event Delivery per intended handler.
 2. The worker claims the `product_analytics.posthog` delivery.
-3. The handler resolves the actor to a user and builds one `/batch/` request. The request holds the event capture, plus a `$groupidentify` naming the Installation group when this process has not named it yet.
+3. The handler resolves the actor to a user, reads the Organization's trial flag for Organization-scoped events, and builds one `/batch/` request. The request holds the event capture, plus a `$groupidentify` naming the Installation group when this process has not named it yet, and a `$groupidentify` setting the Organization's `is_trial` when this process has not sent that value yet.
 4. `PostHogClient` posts the batch to `{ANALYTICS_POSTHOG_HOST}/batch/` with a 5-second limit.
 
 ## Events
@@ -53,13 +59,18 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 | `organization.member.added`, `organization.member.removed` | `membership_id`, `role` |
 | `organization.role.changed` | `membership_id`, `previous_role`, `new_role` |
 | `organization.ownership_transferred` | `previous_owner_membership_id`, `new_owner_membership_id` |
-| `organization.created` | none (the creator is the person; for `POST /platform/users`, the Platform Administrator) |
+| `organization.created` | none (the creator is the person; for `POST /platform/users`, the Platform Administrator). A Google self-signup's trial Organization sends it as the new user. Organizations inserted by migration `d72b85f19c40`'s backfill never send it |
 | `organization.updated` | `changed_fields` (`name` and/or `description`; field names only, never values) |
 | `organization.deleted` | none (the Owner who deleted it is the person; sent after the Organization and its Memberships are gone) |
-| `user.logged_in` | `method` (`password`); platform-scoped, so installation group only. Failed logins, token refresh and API-key requests are not logins |
-| `user.signed_up` | none; platform-scoped. Public signup is disabled, so this is the first invite acceptance (`POST /auth/set-password` on a user whose email is not yet verified). Known gap: an invitee who first gets in through forgot-password never emits it |
+| `organization.llm_budget.exhausted` | `limit_usd`; the Organization's creator is the person. Sent once per budget window when spend reaches the limit; a trial's one-off credit running out is this event with `is_trial = true`. `organization.llm_budget.threshold_reached` is not sent |
+| `user.onboarding.completed` | none; the user who finished is the person. Sent once, on the first `POST /onboarding/complete`. Organization-scoped to the trial the user created (so it carries `is_trial`), or platform-scoped when they created no Organization. It records that onboarding was closed, not that every step was done |
+| `telegram.account.linked` | `agent_id`, `connection_id`; the Member who issued the link is the person. Sent when the shared bot spends a link token. Never the Telegram user id or username |
+| `telegram.account.unlinked` | `agent_id`, `connection_id`, `reason`, in the ended link's Organization. Never the Telegram user id or username. Reasons: `user_removed` (unlinked in the web app; the Member who clicked is the person), and the following, where the Member who issued the link is the person: `relinked` (a new link replaced it), `blocked_bot` (the user blocked the shared bot, seen by the bot or by Telegram refusing a send), `access_lost` (that Member lost `agent.update` on the Agent). Known gaps: no event when a Membership deletion cascades its links away, and a link whose Connection is retired or whose Agent is deleted is not ended, so it sends none. An `access_lost` or `relinked` event whose Member is deleted before delivery is skipped as unresolvable |
+| `telegram.first_message.received` | `agent_id`, `connection_id`; the Member who issued the link is the person. Sent once per link, when the shared bot first accepts a new message from the linked Telegram user for their Agent; edits and button presses do not count, and a new link has its own first message. Links made before this event existed count as already messaged. Never message content, the Telegram user id or username |
+| `user.logged_in` | `method` (`password` or `google`); platform-scoped, so installation group only. A Google sign-in counts only for an existing, verified account; a Google sign-in that creates the account or enrolls an invitee is a sign-up, not a login. Failed logins, token refresh and API-key requests are not logins |
+| `user.signed_up` | `method`; platform-scoped. `google` for a Google self-signup, which also sends `organization.created` for the new trial Organization (`is_trial = true`). `invite` for an invitee's first enrollment, by accepting the invitation (`POST /auth/set-password` on a user whose email is not yet verified) or by signing in with Google. Known gap: an invitee who first gets in through forgot-password never emits it |
 
-The common set is `source`, `installation_id`, `installation_name`, `installation_environment`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id`.
+The common set is `source`, `installation_id`, `installation_name`, `installation_environment`, `$groups`, `$geoip_disable`, and `$lib`. Organization-scoped events add `organization_id` and `is_trial`.
 
 ## Message counts
 

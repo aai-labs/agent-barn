@@ -34,6 +34,7 @@ from api.tests.steps.agent import (
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.telegram_link_events import unlink_reasons
 
 _REAL_TOKEN = "424242:the-real-shared-bot-token"
 _JANE = 5550001
@@ -439,6 +440,7 @@ def test_a_user_who_blocked_the_bot_is_unlinked_when_telegram_says_so() -> None:
                     )
                 ).all()
             assert_that(active, equal_to([]))
+            assert_that(unlink_reasons(context), equal_to(["blocked_bot"]))
 
 
 def test_query_string_parameters_are_checked_and_forwarded_like_a_body() -> None:
@@ -954,3 +956,4 @@ def test_an_agent_stops_reaching_a_user_once_the_member_who_linked_them_loses_ac
             assert_that(response.status_code, equal_to(403))
             assert_that(context.telegram.received, equal_to([]))
             assert_that(_jane_is_linked_to_sales(context), equal_to(False))
+            assert_that(unlink_reasons(context), equal_to(["access_lost"]))

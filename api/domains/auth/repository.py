@@ -10,6 +10,7 @@ from api.domains.events.catalog import EVENT_REGISTRY, USER_SIGNED_UP
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.users.models import User
+from api.domains.users.repository import INVITE_SIGNUP_METHOD
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -81,7 +82,7 @@ class PasswordResetTokenRepository:
                     actor=ActorIdentity(type=ActorIdentityType.USER, id=user.id),
                     subject=SubjectIdentity(type=SubjectIdentityType.USER, id=user.id),
                     correlation_id=uuid4(),
-                    payload={"user_id": user.id},
+                    payload={"user_id": user.id, "method": INVITE_SIGNUP_METHOD},
                 )
                 self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
                 delivery_ids = self.outbox_repository.delivery_ids_for_event(session, event.event_id)
