@@ -23,7 +23,7 @@ When either setting is blank, OneDrive is left out of the provider list and its 
 
 ## Invariants
 
-- The provider list (`GET /organizations/{organization_id}/sync-providers`) requires `organization.read`, so every Organization Member sees the folder link. It has one entry per provider offered on this server: the descriptor (`key`, `display_name`, `tagline`, `folder_hint`, `schema_version`, `capabilities`), `approval_url`, `connection` (status, location name and URL, folder link, connected time, or `null`), `can_connect` and `blocked_reason`. Every route under `…/sync-providers/{provider_key}/connection` requires `organization.update`, and an unknown or unoffered provider is 404. A caller outside the Organization gets 403, like every Organization-scoped route; 404 concealment applies to Agent resources only.
+- The provider list (`GET /organizations/{organization_id}/sync-providers`) requires `organization.read`, so every Organization Member sees the folder link. It has one entry per provider offered on this server: the descriptor (`key`, `display_name`, `tagline`, `folder_hint`, `connect_hint`, `location_noun`, `schema_version`, `capabilities`), `approval_url`, `connection` (status, location name and URL, folder link, connected time, or `null`), `can_connect` and `blocked_reason`. Every route under `…/sync-providers/{provider_key}/connection` requires `organization.update`, and an unknown or unoffered provider is 404. A caller outside the Organization gets 403, like every Organization-scoped route; 404 concealment applies to Agent resources only.
 - The list never includes tokens, the account (tenant) or provider data such as the grant id. A pending connection whose sign-in has expired reads as not connected.
 - Connections are stored in `sync_provider_connection`, keyed by `provider_key`. Disconnected rows are kept.
 - The tenant is never taken from Microsoft's admin-consent redirect, which an attacker can alter, and the callback never echoes it. It comes from the sign-in `id_token`'s `tid`, stored as the connection's `account_id`.
@@ -89,21 +89,20 @@ Searching or choosing without a fresh pending connection is 409: the administrat
 
 ## Organization settings
 
-This section still describes the OneDrive-only UI, which calls the removed `/onedrive-sync` routes until the Sync settings UI replaces it (see [`CHANGELOG.md`](CHANGELOG.md)).
+Settings → **Sync** (`?tab=sync`) is visible to every Organization Member. It reads the provider list and shows one row per offered provider (`ui/src/features/sync-provider/`). The UI has no provider-specific branches: every text it shows about a provider comes from the provider's entry.
 
-Settings → OneDrive (`?tab=onedrive-sync`) is visible to every Organization Member, and reads the status route.
-
-- Server without the app: "OneDrive sync isn't available on this server."
+- No provider offered on this server: "No sync providers are available on this server."
+- Each row has a letter tile, the provider's name, and a subtitle: its `tagline`, "Connecting…" while pending, or "● Connected to {location}" in green when active.
 - Not connected:
-  - Owners and Admins are told that a Microsoft Global Administrator approves Agent Barn once, and that the person connecting must be a SharePoint Administrator and a member of the site. They get the **approval link** to forward, and **Connect OneDrive**, which opens a sign-in popup and then posts the code to the sign-in route. A Microsoft error from the callback, such as the Global Administrator message, is shown inline.
+  - Owners and Admins get **Connect**. It opens the provider's sign-in popup and then posts the code to the sign-in route. Connect is enabled only when `can_connect` is true; otherwise the row shows `blocked_reason`, for example "Disconnect OneDrive first.". Otherwise the row shows the provider's `connect_hint`; for OneDrive that is who must approve and who may connect. When the provider has `approval_url`, the row offers it as the **approval link** to forward. A provider error from the callback, such as the Global Administrator message, is shown inline.
   - Members are told an Owner or Admin can connect.
 - Pending:
-  - Owners and Admins get the site picker: a search that needs a term, a result list, and **Use this site**. The API's `detail` is shown inline when choosing fails, for example a site an Agent already holds. Reloading the page resumes at the picker while the sign-in is fresh.
-  - Members are told no SharePoint site has been chosen yet.
-- Pending (Owners and Admins): **Start over** abandons the unfinished connection.
-- Active: the site name, an "Open in OneDrive" link to the folder (new tab), and the hint to choose "Add shortcut to My files" in OneDrive. Owners and Admins also get **Disconnect**, confirmed in a dialog that says the folder and its files stay in SharePoint. It then opens the Microsoft sign-in popup and posts the code to the disconnect route. A refusal, such as a signer who isn't a SharePoint Administrator and site member, is shown inline and the connection stays.
+  - Owners and Admins of a provider with `location_picker` get the picker inline: a search that needs a term (labelled from `location_noun`, "Search SharePoint sites"), a result list, and **Use**. The API's `detail` is shown inline when choosing fails, for example a site an Agent already holds. Reloading the page resumes at the picker while the sign-in is fresh. **Start over** abandons the unfinished connection.
+  - Members are told no {location_noun} has been chosen yet.
+- Active: **Open** (labelled "Open in OneDrive") links to the folder in a new tab, with the provider's `folder_hint` underneath ("Add shortcut to My files" for OneDrive). Owners and Admins also get **Disconnect**, confirmed in a dialog that says the folder and its files stay where they are. It then opens the sign-in popup and posts the code to the disconnect route. A refusal, such as a signer who isn't a SharePoint Administrator and site member, is shown inline and the connection stays.
+- Connecting or disconnecting one provider refetches the list, because it changes whether the others may connect.
 
-The query is keyed by Organization id, so switching Organization never shows the previous one's connection.
+The query is keyed by Organization id, so switching Organization never shows the previous one's providers.
 
 ## Keeping Agents out of the folder site
 
@@ -131,8 +130,8 @@ The query is keyed by Organization id, so switching Organization never shows the
 | Routes | `../../../api/domains/sync_provider/routes.py` |
 | Folder site for other domains | `../../../api/domains/sync_provider/lookup.py`, used by `../../../api/domains/agents/sharepoint_service.py` |
 | Microsoft identity and Graph calls | `../../../api/domains/agents/microsoft_identity.py`, `microsoft_graph_sites.py` |
-| UI | `../../../ui/src/features/onedrive-sync/`, registered in `../../../ui/src/features/organizations/components/organization-settings-utils.ts` and `../../../ui/src/app/dashboard/[orgId]/settings/page.tsx` |
-| Tests | `../../../api/tests/unit/test_sync_provider_plugins.py`, `../../../api/tests/integration/test_sync_provider_connection.py`, `test_sync_provider_repository.py`, `../../../ui/tests/e2e/onedrive-sync.spec.ts` |
+| UI | `../../../ui/src/features/sync-provider/`, registered as `sync` in `../../../ui/src/features/organizations/components/organization-settings-utils.ts` and `../../../ui/src/app/dashboard/[orgId]/settings/page.tsx` |
+| Tests | `../../../api/tests/unit/test_sync_provider_plugins.py`, `../../../api/tests/integration/test_sync_provider_connection.py`, `test_sync_provider_repository.py`, `../../../ui/tests/e2e/sync-provider.spec.ts` |
 
 ## Change impact
 

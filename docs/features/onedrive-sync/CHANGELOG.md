@@ -37,6 +37,21 @@ Acceptance criteria amendment: another Organization's caller gets **403**, not 4
 
 ## Changes
 
+### 2026-10-16 — AF-383 — Sync settings: the provider list (Option B)
+
+- Delivered: Settings → **Sync** (`?tab=sync`), replacing Settings → OneDrive. It's built from `ui/src/features/sync-provider/` and shows one row per offered provider from `GET …/sync-providers`:
+  - each row has a letter tile, the provider's name, and a subtitle (tagline, "Connecting…" or "● Connected to {location}");
+  - **Connect**, **Open** and **Disconnect** appear by role;
+  - the row expands with the inline location picker and **Start over**, the folder hint, the connect hint, the approval link, or the server's `blocked_reason`.
+
+  The UI has no provider-specific branches.
+- Changed: the provider entry carries `connect_hint` and `location_noun` from the plugin, so provider wording stays in the plugin; the registry requires `location_noun` for a location picker. The disconnect dialog says the folder stays "where it is" rather than "in SharePoint". The popup message type is `sync-provider-oauth`. `ui/src/features/onedrive-sync/` and its Playwright spec, page object and data support are removed. `README.md` (Organization settings, list fields, source map) and `docs/INDEX.md` are updated.
+- Verified:
+  - `ui/tests/e2e/sync-provider.spec.ts` (20 tests, all failing before the UI existed). It covers the list, empty and failing states, both roles, the connect hint and approval link, a second provider blocked with the server's reason, no picker without the capability, a provider without a picker connecting at sign-in, the full OneDrive connect flow with exactly one search, the callback error, a refused site, disconnect, a refused disconnect, and Start over.
+  - The Shared Credentials, Spend limits and Agent defaults specs pass. `tsc` and eslint pass.
+  - API: plugin tests (`connect_hint`, `location_noun` and the registry check), `test_sync_provider_connection.py` and the contract test pass.
+- Follow-up: docs move to `docs/features/sync-provider/`, the ADR, and the manual run with the new redirect URI.
+
 ### 2026-10-16 — AF-383 — Generic sync provider service and routes; `onedrive_sync` removed
 
 - Delivered: `SyncProviderService` and provider-keyed routes in `api/domains/sync_provider/`, replacing `api/domains/onedrive_sync/`:

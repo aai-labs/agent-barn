@@ -15,10 +15,10 @@ import {
   visibleOrganizationSettingsSections,
   type OrganizationSettingsSectionKey,
 } from "@/features/organizations/components/organization-settings-utils";
-import { OneDriveSyncPanel } from "@/features/onedrive-sync/components/onedrive-sync-panel";
 import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
 import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limits-panel";
+import { SyncProvidersPanel } from "@/features/sync-provider/components/sync-providers-panel";
 
 const ICONS = {
   agents: UserRound,
@@ -28,7 +28,7 @@ const ICONS = {
   "memory-access": Brain,
   "organization-memory": Brain,
   "shared-credentials": KeyRound,
-  "onedrive-sync": FolderSync,
+  sync: FolderSync,
 } as const;
 
 export default function SettingsPage() {
@@ -100,7 +100,7 @@ export default function SettingsPage() {
           {section.key === "organization-memory" && <MemoryItemsViewer key={selectedOrganization?.id} enabled={isMembershipAdmin} />}
           {section.key === "memory-access" && <MemoryAccessPanel canManage={isMembershipAdmin} />}
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
-          {section.key === "onedrive-sync" && <OneDriveSyncPanel canManage={canManage} />}
+          {section.key === "sync" && <SyncProvidersPanel canManage={canManage} />}
         </SettingsPageLayout>
       </main>
     </div>

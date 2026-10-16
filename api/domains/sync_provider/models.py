@@ -76,6 +76,8 @@ class SyncProviderDescriptorRead(PydanticBaseModel):
     display_name: str
     tagline: str
     folder_hint: str
+    connect_hint: str | None = None
+    location_noun: str | None = None
     schema_version: int
     capabilities: list[SyncProviderCapability]
 

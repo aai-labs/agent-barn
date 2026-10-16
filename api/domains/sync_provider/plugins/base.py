@@ -86,6 +86,8 @@ class SyncProviderPlugin(ABC):
     display_name: str
     tagline: str
     folder_hint: str
+    connect_hint: str | None = None
+    location_noun: str | None = None
     schema_version: int = 1
     capabilities: frozenset[SyncProviderCapability] = frozenset()
     location_guard: SyncLocationGuard | None = None
@@ -100,6 +102,8 @@ class SyncProviderPlugin(ABC):
             display_name=self.display_name,
             tagline=self.tagline,
             folder_hint=self.folder_hint,
+            connect_hint=self.connect_hint,
+            location_noun=self.location_noun,
             schema_version=self.schema_version,
             capabilities=sorted(self.capabilities, key=lambda item: item.value),
         )

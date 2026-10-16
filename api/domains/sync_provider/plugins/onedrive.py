@@ -85,6 +85,11 @@ class OneDriveSyncProviderPlugin(SyncProviderPlugin):
     display_name = "OneDrive"
     tagline = "Sync to a SharePoint site"
     folder_hint = "In OneDrive, choose Add shortcut to My files to keep this folder next to your own files."
+    connect_hint = (
+        "A Microsoft Global Administrator approves Agent Barn for your organization once, and the person "
+        "connecting must be a SharePoint Administrator and a member of the site they pick."
+    )
+    location_noun = "SharePoint site"
     capabilities = frozenset({SyncProviderCapability.LOCATION_PICKER, SyncProviderCapability.ADMIN_APPROVAL})
     location_guard = SyncLocationGuard.SHAREPOINT_AGENT_SITES
 

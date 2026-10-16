@@ -156,6 +156,19 @@ def test_registry_rejects_a_location_picker_without_location_search():
     assert_that(message, contains_string("never overrides search_locations"))
 
 
+def test_registry_rejects_a_location_picker_without_a_location_noun():
+    class _Picker(_Stub):
+        capabilities = frozenset({SyncProviderCapability.LOCATION_PICKER})
+
+        def search_locations(self, token: str, query: str) -> list[SyncLocation]:
+            return []
+
+        def resolve_location(self, token: str, location_id: str) -> SyncLocation:
+            return SyncLocation(id=location_id, name="n", web_url="u")
+
+    assert_that(_registry_error(_Picker()), contains_string("names no location_noun"))
+
+
 def test_registry_rejects_admin_approval_without_an_approval_link():
     message = _registry_error(_stub(capabilities=frozenset({SyncProviderCapability.ADMIN_APPROVAL})))
 
@@ -201,6 +214,11 @@ def test_onedrive_declares_the_picker_the_approval_link_and_the_sharepoint_guard
     assert_that(plugin.location_guard, is_(SyncLocationGuard.SHAREPOINT_AGENT_SITES))
     assert_that(plugin.descriptor.tagline, is_(equal_to("Sync to a SharePoint site")))
     assert_that(plugin.descriptor.folder_hint, contains_string("Add shortcut to My files"))
+    assert_that(plugin.descriptor.location_noun, is_(equal_to("SharePoint site")))
+    connect_hint = plugin.descriptor.connect_hint
+    assert connect_hint is not None
+    assert_that(connect_hint, contains_string("Microsoft Global Administrator"))
+    assert_that(connect_hint, contains_string("SharePoint Administrator"))
 
 
 def test_onedrive_signs_in_at_any_work_organization_with_the_site_scopes():

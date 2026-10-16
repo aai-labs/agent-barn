@@ -3,22 +3,23 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
-import { useChooseOneDriveSite, useOneDriveSyncSites } from "../hooks/use-onedrive-sync-actions";
+import { useChooseSyncLocation, useSyncLocations } from "../hooks/use-sync-provider-actions";
+import type { SyncProvider } from "../schemas";
 
-/** Finishes a pending connection: search the signed-in administrator's sites and pick one. */
-export function OneDriveSitePicker() {
+/** Finishes a pending connection: search the signed-in person's locations and pick one. */
+export function SyncLocationPicker({ provider, noun }: { provider: SyncProvider; noun: string }) {
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const { sites, isSearching, error: searchError } = useOneDriveSyncSites(search);
-  const { chooseSite, isChoosing } = useChooseOneDriveSite();
+  const { locations, isSearching, error: searchError } = useSyncLocations(provider, search);
+  const { chooseLocation, isChoosing } = useChooseSyncLocation(provider);
 
-  async function handleChoose(siteId: string) {
+  async function handleChoose(locationId: string) {
     setError(null);
     try {
-      await chooseSite(siteId);
+      await chooseLocation(locationId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Connecting the site failed.");
+      setError(err instanceof Error ? err.message : "Connecting the location failed.");
     }
   }
 
@@ -27,7 +28,7 @@ export function OneDriveSitePicker() {
   return (
     <div className="flex flex-col gap-3">
       <p className="m-0 text-[0.84rem] leading-[1.5]" style={{ color: "var(--ink-3)" }}>
-        Pick the SharePoint site where Agent Barn keeps its folder. Search by part of the site&apos;s name.
+        Pick the {noun} where Agent Barn keeps its folder. Search by part of its name.
       </p>
       <form
         className="flex items-center gap-2"
@@ -39,7 +40,7 @@ export function OneDriveSitePicker() {
       >
         <input
           className="af-input flex-1"
-          aria-label="Search SharePoint sites"
+          aria-label={`Search ${noun}s`}
           placeholder="e.g. Marketing"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -61,36 +62,36 @@ export function OneDriveSitePicker() {
         </p>
       )}
 
-      {sites && sites.length === 0 && search && !isSearching && (
+      {locations && locations.length === 0 && search && !isSearching && (
         <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
-          No sites match &ldquo;{search}&rdquo;.
+          Nothing matches &ldquo;{search}&rdquo;.
         </p>
       )}
 
-      {sites && sites.length > 0 && (
+      {locations && locations.length > 0 && (
         <ul className="m-0 flex list-none flex-col gap-2 p-0">
-          {sites.map((site) => (
+          {locations.map((location) => (
             <li
-              key={site.id}
+              key={location.id}
               className="flex items-center gap-3 rounded-lg border px-3 py-2"
               style={{ borderColor: "var(--line)" }}
             >
               <div className="min-w-0 flex-1">
                 <div className="text-[0.88rem] font-medium" style={{ color: "var(--ink)" }}>
-                  {site.name}
+                  {location.name}
                 </div>
                 <div className="truncate text-[0.78rem]" style={{ color: "var(--ink-3)" }}>
-                  {site.webUrl}
+                  {location.webUrl}
                 </div>
               </div>
               <button
                 type="button"
                 className="af-btn af-btn-primary af-btn-sm"
-                aria-label={`Use ${site.name}`}
+                aria-label={`Use ${location.name}`}
                 disabled={isChoosing}
-                onClick={() => void handleChoose(site.id)}
+                onClick={() => void handleChoose(location.id)}
               >
-                Use this site
+                Use
               </button>
             </li>
           ))}

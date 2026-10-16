@@ -8,7 +8,6 @@ import { CommunicationConnectionDataSupport } from "./communication-connection-d
 import { CostDataSupport } from "./cost-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
 import { KpisDataSupport } from "./kpis-data-support.po";
-import { OneDriveSyncDataSupport } from "./onedrive-sync-data-support.po";
 import { OnboardingDataSupport } from "./onboarding-data-support.po";
 import { OrganizationDataSupport } from "./organization-data-support.po";
 import { OrgTemplateDataSupport } from "./org-template-data-support.po";
@@ -17,6 +16,7 @@ import { PlatformStatsDataSupport } from "./platform-stats-data-support.po";
 import { PlatformTemplateDataSupport } from "./platform-template-data-support.po";
 import { ResourceUsageDataSupport } from "./resource-usage-data-support.po";
 import { SkillDataSupport } from "./skill-data-support.po";
+import { SyncProviderDataSupport } from "./sync-provider-data-support.po";
 import { UserDataSupport } from "./user-data-support.po";
 
 export class DataSupport {
@@ -32,7 +32,7 @@ export class DataSupport {
   public costs: CostDataSupport;
   public eventDeliveries: EventDeliveryDataSupport;
   public kpis: KpisDataSupport;
-  public oneDriveSync: OneDriveSyncDataSupport;
+  public syncProviders: SyncProviderDataSupport;
   public orgTemplates: OrgTemplateDataSupport;
   public platformTemplates: PlatformTemplateDataSupport;
   public platformMemory: PlatformMemoryDataSupport;
@@ -52,7 +52,7 @@ export class DataSupport {
     this.costs = new CostDataSupport(page);
     this.eventDeliveries = new EventDeliveryDataSupport(page);
     this.kpis = new KpisDataSupport(page);
-    this.oneDriveSync = new OneDriveSyncDataSupport(page);
+    this.syncProviders = new SyncProviderDataSupport(page);
     this.orgTemplates = new OrgTemplateDataSupport(page);
     this.platformTemplates = new PlatformTemplateDataSupport(page);
     this.platformMemory = new PlatformMemoryDataSupport(page);

@@ -30,6 +30,8 @@ class SyncProviderPluginRegistry:
                         raise ValueError(
                             f"Sync Provider Plugin {key!r} declares {capability.value} but never overrides {method}"
                         )
+            if SyncProviderCapability.LOCATION_PICKER in plugin.capabilities and not plugin.location_noun:
+                raise ValueError(f"Sync Provider Plugin {key!r} declares location_picker but names no location_noun")
             by_key[key] = plugin
         self._plugins = by_key
 

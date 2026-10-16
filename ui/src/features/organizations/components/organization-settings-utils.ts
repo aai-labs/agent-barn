@@ -6,7 +6,7 @@ export type OrganizationSettingsSectionKey =
   | "organization-memory"
   | "memory-access"
   | "shared-credentials"
-  | "onedrive-sync";
+  | "sync";
 
 export type OrganizationSettingsSection = {
   key: OrganizationSettingsSectionKey;
@@ -70,9 +70,9 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
     adminOnly: true,
   },
   {
-    key: "onedrive-sync",
-    label: "OneDrive",
-    description: "Where Agent Barn keeps your organization's files in SharePoint.",
+    key: "sync",
+    label: "Sync",
+    description: "Connect storage providers to keep your organization's files in sync.",
     adminOnly: false,
   },
 ];

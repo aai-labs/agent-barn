@@ -1,24 +1,25 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { z } from "zod";
 
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
-import { OneDriveSyncConnectionSchema, type OneDriveSyncConnection } from "../schemas";
-import { oneDriveSyncKey } from "../utils";
+import { SyncProviderSchema, type SyncProvider } from "../schemas";
+import { syncProviderKey } from "../utils";
 
-export function useOneDriveSyncQuery() {
+export function useSyncProvidersQuery() {
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();
   const organizationId = selectedOrganization?.id ?? "";
 
   const query = useQuery({
-    queryKey: oneDriveSyncKey.detail(organizationId),
+    queryKey: syncProviderKey.detail(organizationId),
     queryFn: async () => {
-      const response = await api.get<OneDriveSyncConnection>(`${orgApiBase}/onedrive-sync/connection`, {
-        schema: OneDriveSyncConnectionSchema,
+      const response = await api.get<SyncProvider[]>(`${orgApiBase}/sync-providers`, {
+        schema: z.array(SyncProviderSchema),
       });
       return response.data;
     },
@@ -26,7 +27,7 @@ export function useOneDriveSyncQuery() {
   });
 
   return {
-    connection: query.data,
+    providers: query.data,
     isLoading: query.isPending,
     error: query.error,
     refetch: query.refetch,

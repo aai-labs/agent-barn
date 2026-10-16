@@ -86,6 +86,8 @@ _ENTRY_KEYS = {
     "display_name",
     "tagline",
     "folder_hint",
+    "connect_hint",
+    "location_noun",
     "schema_version",
     "capabilities",
     "approval_url",
@@ -229,6 +231,7 @@ def test_onedrive_is_listed_not_connected_when_configured():
             has_entries(
                 display_name="OneDrive",
                 tagline="Sync to a SharePoint site",
+                location_noun="SharePoint site",
                 schema_version=1,
                 capabilities=["admin_approval", "location_picker"],
                 connection=None,
