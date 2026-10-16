@@ -535,6 +535,17 @@ export function mockVersionsForKey(templateKey: string) {
 }
 
 export class AgentDataSupport {
+  trackHiringRequests() {
+    const creations: Record<string, unknown>[] = [];
+    const starts: string[] = [];
+    this.page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const path = new URL(request.url()).pathname;
+      if (/\/organizations\/[^/]+\/agents$/.test(path)) creations.push(request.postDataJSON());
+      if (/\/organizations\/[^/]+\/agents\/[^/]+\/start$/.test(path)) starts.push(path);
+    });
+    return { creations, starts };
+  }
   constructor(private page: Page) {}
 
   async interceptWebChatApprovalPrompt({
@@ -1249,10 +1260,12 @@ export class AgentDataSupport {
     status = 200,
     detail = "Unable to load templates",
     body,
+    catalog,
   }: {
     status?: number;
     detail?: string;
     body?: unknown;
+    catalog?: { template_key: string; template_name: string; template_source: string }[];
   } = {}) {
     await this.page.route("**/api/v1/organizations/*/templates*", async (route) => {
       if (route.request().method() !== "GET") {
@@ -1267,7 +1280,7 @@ export class AgentDataSupport {
       // Apply search/source params so specs can assert filtering behavior.
       const search = url.searchParams.get("search")?.toLowerCase();
       const source = url.searchParams.get("source");
-      let items = mockTemplates;
+      let items = catalog ?? mockTemplates;
       if (search) {
         items = items.filter(
           (t) =>
@@ -1278,6 +1291,8 @@ export class AgentDataSupport {
       if (source) {
         items = items.filter((t) => t.template_source === source);
       }
+      const page = Number(url.searchParams.get("page") ?? 1);
+      const pageSize = Number(url.searchParams.get("page_size") ?? 50);
       await route.fulfill({
         status,
         contentType: "application/json",
@@ -1285,10 +1300,10 @@ export class AgentDataSupport {
           status >= 400
             ? { detail }
             : (body ?? {
-                page: 1,
-                page_size: 50,
+                page,
+                page_size: pageSize,
                 total: items.length,
-                items,
+                items: items.slice((page - 1) * pageSize, page * pageSize),
               }),
         ),
       });

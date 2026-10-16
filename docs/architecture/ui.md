@@ -12,6 +12,12 @@ App Router pages are composition points. Feature behavior belongs under `../../u
 
 The active organization comes from `/dashboard/[orgId]`. Platform View lives under `/dashboard/platform` and has no active Organization. `OrganizationProvider` keeps remembered organization state only so `/dashboard` and the switcher can return to Organization View; org-scoped API hooks build `/api/v1/organizations/{organization_id}/...` URLs instead of mutating shared request headers. Inaccessible organization URLs redirect to an available fallback.
 
+The welcome, password and onboarding pages compose the shared `SplitFrame` from
+`ui/src/components/split-frame.tsx`. Agent creation in onboarding reuses
+`use-hire-agent-form.ts` with the dashboard hire dialog. Telegram QR codes are rendered
+locally with `qrcode.react`; link tokens are not sent to an external QR service.
+See [Trial onboarding](../features/trial-onboarding.md#flow) for the user flow.
+
 ## API and query invariants
 
 - Normal application HTTP calls use the singleton exported from `../../ui/src/shared/api`.

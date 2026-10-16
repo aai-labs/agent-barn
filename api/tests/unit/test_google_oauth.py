@@ -1,4 +1,5 @@
 import json
+import urllib.parse
 from types import SimpleNamespace
 from typing import cast
 
@@ -67,10 +68,10 @@ def test_state_rejects_unknown_provider():
 
 
 def test_state_naming_a_retired_provider_is_rejected():
-    # gmail/google_sheets states may still be in flight from an old popup; they must not
-    # resolve now that nothing materializes those providers.
+    # google_sheets/google_calendar states may still be in flight from an old popup; they
+    # must not resolve now that nothing materializes those providers.
     cfg = _config()
-    for retired in ("gmail", "google_sheets", "google_calendar"):
+    for retired in ("google_sheets", "google_calendar"):
         assert oauth._provider_from_state(oauth._encode_state(cfg, retired), cfg) is None
 
 
@@ -89,7 +90,7 @@ def test_authorize_url_contains_expected_params():
 def test_authorize_url_rejects_retired_provider():
     # The per-service Google providers are gone; a stale caller must fail loudly rather
     # than consent to scopes no integration can use.
-    for retired in ("gmail", "google_sheets", "google_calendar"):
+    for retired in ("google_sheets", "google_calendar"):
         with pytest.raises(HTTPException) as exc:
             oauth.google_authorize_url(_context=_NO_CONTEXT, provider=retired, services="gmail", config=_config())
         assert exc.value.status_code == 400
@@ -375,3 +376,54 @@ def test_token_exchange_tolerates_unreadable_id_token(monkeypatch):
     )
     result = oauth.google_token_exchange(body=_token_request(), _context=_NO_CONTEXT, config=_config())
     assert result["email"] is None
+
+
+# --- gmail ---
+
+_GMAIL = "gmail"
+_GMAIL_SCOPES = {
+    "openid",
+    "email",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/gmail.readonly",
+}
+
+
+def _scopes_in(url: str) -> set[str]:
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    return set(query["scope"][0].split())
+
+
+def test_gmail_authorize_url_asks_only_for_read_only_gmail_and_identity():
+    url = oauth.google_authorize_url(_context=_NO_CONTEXT, provider=_GMAIL, config=_config())["authorize_url"]
+    assert _scopes_in(url) == _GMAIL_SCOPES
+    # The one-click path: no client was passed, so the shared client signs the user in.
+    assert "client-id.apps.googleusercontent.com" in url
+
+
+def test_gmail_authorize_url_ignores_workspace_choices():
+    # Gmail has no service or access-level choice; nothing a caller passes may widen it.
+    url = oauth.google_authorize_url(
+        _context=_NO_CONTEXT, provider=_GMAIL, services="gmail,drive", read_only=False, config=_config()
+    )["authorize_url"]
+    assert _scopes_in(url) == _GMAIL_SCOPES
+
+
+def test_gmail_authorize_url_accepts_a_user_supplied_client():
+    url = oauth.google_authorize_url(
+        _context=_NO_CONTEXT,
+        provider=_GMAIL,
+        client_id="own.apps.googleusercontent.com",
+        config=_config(google_cloud_client_id="", google_cloud_client_secret=""),
+    )["authorize_url"]
+    assert "own.apps.googleusercontent.com" in url
+
+
+def test_state_round_trips_and_callback_echoes_gmail_provider():
+    cfg = _config()
+    state = oauth._encode_state(cfg, _GMAIL)
+    assert oauth._provider_from_state(state, cfg) == _GMAIL
+    resp = oauth.google_callback(config=cfg, code="abc", state=state, error=None)
+    msg = _extract_message(resp.body.decode())
+    assert msg["provider"] == _GMAIL
+    assert msg["code"] == "abc"

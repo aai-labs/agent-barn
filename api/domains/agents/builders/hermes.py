@@ -138,6 +138,9 @@ def _hermes_config_core(
             "tool_progress": "all",
             "platforms": {},
         },
+        # Deliver scheduled results as the agent wrote them, without Hermes'
+        # "Cronjob Response" header and "stop reminder" footer.
+        "cron": {"wrap_response": False},
         "group_sessions_per_user": False,
         "plugins": {
             "enabled": enabled_plugins,

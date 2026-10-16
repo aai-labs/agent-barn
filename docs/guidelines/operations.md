@@ -34,6 +34,14 @@ downgrade does not reconstruct removed requirements. These migrations complement
 the credential cleanup in `a85f48650d6a`; removing a provider from code alone
 does not retire database Skill metadata.
 
+Migration `d72b85f19c40` gives existing verified non-platform, non-self-signup users
+with no Membership an ordinary Organization and Owner Membership, using deployment
+model/spend defaults and respecting the Organization creation limit. It is a one-time
+data backfill; it leaves invitations, existing Memberships and self-signup accounts
+unchanged. Downgrade retains created Organizations and Memberships to preserve user
+work. It makes no external calls; existing reconciliation and first-Agent-key
+provisioning apply. See [Identity and Organizations](../features/identity-and-organizations.md#organization-creation-and-membership-flows).
+
 ```bash
 make migrate          # upgrade the configured database to head
 make makemigrations   # autogenerate a revision after prompting for its message
@@ -63,6 +71,16 @@ Testing and verification commands live in [`testing.md`](testing.md).
 The deployable services have independent Helm charts. `../../helmfile.yaml.gotmpl` controls release ordering, and `../../.github/workflows/deploy.yml` builds images and applies Helmfile. Read `../architecture/runtime-and-deployment.md` before changing runtime images, agent Kubernetes resources, chart wiring, migrations, or deployment order.
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
+
+## Public signup configuration
+
+Configure public self-signup and Trial Credit in **Platform settings → Signup & trials**.
+New installations default to signup disabled and $0 credit. A Platform Administrator
+must set positive credit before enabling signup; both can be saved together. These
+settings take effect without redeployment and are audited. They are no longer read
+from environment variables, Helm values, or GitHub Variables. Google OAuth and the
+shared Telegram bot still require deployment credentials as described in
+[Trial onboarding](../features/trial-onboarding.md#trials).
 
 ## Local Communications reload
 

@@ -82,6 +82,11 @@ Explicit Agent Access and Agent General Access scope the complete Agent aggregat
 
 ## Data-access enforcement
 
+The Organization read's `trial_agent_limit_reached` boolean is creation-capacity
+metadata for members who may create Agents. It accounts for every non-deleted Agent,
+including ones hidden from that member, without exposing identities or an unfiltered
+Agent count. See [Hiring choices](../agents.md#hiring-choices) for its UI contract.
+
 Visibility belongs in repository queries rather than post-fetch filtering. Member list, search, count, and detail queries must constrain by Organization, soft-deletion state, and either explicit Agent Access or applicable Agent General Access before ordering, totals, or pagination. Organization Owner/Admin use implicit Organization-wide visibility.
 
 Subordinate repositories must join or use an accessible-Agent query so alternate endpoints cannot reveal conversations, tool calls, costs, logs, Skills, configuration, or credential metadata.
