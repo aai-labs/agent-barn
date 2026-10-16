@@ -915,15 +915,16 @@ def test_patch_agent_upserts_existing_secret():
 
 
 def test_patch_agent_removes_secret():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I add then remove a jira secret"):
-            client.patch(
+            saved = client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
                 headers=_auth(context),
             )
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
             response = client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={"removed_secret_providers": ["jira"]},
@@ -3449,17 +3450,19 @@ def test_start_agent_does_not_auto_attach_credential_free_skill():
                 global_skill=True,
                 tools_pointer="\nFor Excel (.xlsx) files, use the aai-cli tool.\n",
             ),
+            providers_accept_credentials(),
         ]
     ) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("a jira secret is configured and the excel skill is not assigned"):
-            client.patch(
+            saved = client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
                 headers=_auth(context),
             )
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("the excel skill is not mounted"):
@@ -3479,17 +3482,19 @@ def test_start_agent_does_not_auto_attach_skill_for_unconfigured_provider():
                 global_skill=True,
                 tools_pointer="\nFor GitHub, use the aai-cli tool.\n",
             ),
+            providers_accept_credentials(),
         ]
     ) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("a jira secret is configured but no github secret"):
-            client.patch(
+            saved = client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
                 headers=_auth(context),
             )
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("the GitHub skill is not mounted (its provider is not configured)"):
@@ -3516,17 +3521,19 @@ def test_start_agent_auto_attach_does_not_duplicate_explicitly_assigned_skill():
                 tools_pointer=_JIRA_POINTER,
             ),
             skill_is_assigned_to_agent(),
+            providers_accept_credentials(),
         ]
     ) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("the jira skill is both explicitly assigned and provider-configured"):
-            client.patch(
+            saved = client.patch(
                 f"{_BASE}/{context.agent.id}",
                 json={"secrets": [{"provider": "jira", "content": _JIRA_CONTENT}]},
                 headers=_auth(context),
             )
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("the skill is mounted exactly once and the pointer appears once"):
@@ -5468,12 +5475,13 @@ def test_start_agent_without_google_workspace_has_no_gog_artifacts():
 
 def test_start_agent_with_only_google_workspace_omits_aai_cli_policy():
     """gog takes no --profile, so the aai-cli block must not claim to cover it."""
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("Google Workspace is the agent's only integration"):
-            _configure_gws(client, context)
+            saved = _configure_gws(client, context)
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("the aai-cli integrations block and config.toml are absent"):

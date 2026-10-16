@@ -220,17 +220,18 @@ def test_creating_an_agent_with_a_shared_credential_that_no_longer_validates_ret
 
 
 def test_update_agent_detach_shared_credential():
-    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential()]) as ctx:
+    with given([*_GIVEN, there_is_an_agent(), there_is_a_shared_credential(), providers_accept_credentials()]) as ctx:
         client: TestClient = ctx.client
 
         with when("I attach then detach a shared credential"):
-            client.patch(
+            saved = client.patch(
                 f"{_AGENTS}/{ctx.agent.id}",
                 json={
                     "shared_credentials": [{"shared_credential_id": str(ctx.shared_credential.id)}],
                 },
                 headers=_auth(ctx),
             )
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
             response = client.patch(
                 f"{_AGENTS}/{ctx.agent.id}",
                 json={"removed_secret_providers": ["jira"]},
