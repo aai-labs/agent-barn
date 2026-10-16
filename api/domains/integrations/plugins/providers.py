@@ -76,7 +76,8 @@ NO_TOOL = "none"
 #: password. A label only: aai-cli posts the request to the credential gateway and never
 #: contacts this host, and the gateway answers it from IMAP.
 GMAIL_SERVED_BASE_URL = "https://gmail.internal/v1"
-_GMAIL_MESSAGE_PATH = re.compile(r"/v1/messages/(\d{1,20})")
+_GMAIL_MESSAGE_PATH = re.compile(r"/v1/messages/([0-9]{1,20})")
+_GMAIL_LIMIT = re.compile(r"[0-9]{1,3}")
 _GMAIL_DEFAULT_LIMIT = 20
 
 _PIPEDRIVE_DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -783,9 +784,12 @@ class GmailAppPasswordPlugin(AaiCliPlugin[GmailAppPasswordContent]):
         raw_limit = query.get("limit", _GMAIL_DEFAULT_LIMIT)
         if search is not None and not isinstance(search, str):
             return _served_error(400, "invalid_request", "q must be one Gmail search.")
-        if isinstance(raw_limit, bool) or not isinstance(raw_limit, int | str) or not str(raw_limit).isdigit():
-            return _served_error(400, "invalid_request", f"limit must be a whole number from 1 to {MAX_LIST_LIMIT}.")
-        limit = int(raw_limit)
+        if isinstance(raw_limit, int) and not isinstance(raw_limit, bool):
+            limit = raw_limit
+        elif isinstance(raw_limit, str) and _GMAIL_LIMIT.fullmatch(raw_limit):
+            limit = int(raw_limit)
+        else:
+            limit = 0
         if not 1 <= limit <= MAX_LIST_LIMIT:
             return _served_error(400, "invalid_request", f"limit must be a whole number from 1 to {MAX_LIST_LIMIT}.")
         return _read_mail(

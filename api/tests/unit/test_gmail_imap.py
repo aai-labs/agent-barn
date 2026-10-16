@@ -5,6 +5,7 @@ ever opens the inbox read-only and only fetches with BODY.PEEK.
 """
 
 import imaplib
+import re
 from email.message import EmailMessage
 from unittest.mock import patch
 
@@ -20,7 +21,7 @@ from api.infrastructure.google.gmail_imap import (
     MailUnavailable,
 )
 
-_READ_ONLY_COMMANDS = {"login", "select", "uid", "logout"}
+_READ_ONLY_COMMANDS = {"login", "select", "fetch", "uid", "logout"}
 
 
 def _raw(subject: str, *, sender="Alice <alice@example.com>", html: str | None = None, attachment=False) -> bytes:
@@ -38,12 +39,18 @@ def _raw(subject: str, *, sender="Alice <alice@example.com>", html: str | None =
 
 
 class FakeIMAP:
-    """Answers like imaplib.IMAP4_SSL for a small inbox and records each command."""
+    """Answers like imaplib.IMAP4_SSL for a small inbox and records each command.
 
-    def __init__(self, messages: dict[int, bytes], *, login_error: bool = False):
+    ``exists`` overrides the message count EXAMINE reports, to stand in for a large inbox.
+    A search records the literal imaplib would send after the command line.
+    """
+
+    def __init__(self, messages: dict[int, bytes], *, login_error: bool = False, exists: int | None = None):
         self.messages = messages
         self.login_error = login_error
+        self.exists = len(messages) if exists is None else exists
         self.commands: list[tuple] = []
+        self.literal: bytes | None = None
 
     def login(self, user, password):
         self.commands.append(("login", user, password))
@@ -53,24 +60,39 @@ class FakeIMAP:
 
     def select(self, mailbox="INBOX", readonly=False):
         self.commands.append(("select", mailbox, readonly))
-        return "OK", [str(len(self.messages)).encode()]
+        return "OK", [str(self.exists).encode()]
+
+    def fetch(self, message_set, query):
+        """FETCH by message sequence number: 1 is the oldest inbox message."""
+        self.commands.append(("fetch", message_set, query))
+        first, last = (int(n) for n in message_set.split(":"))
+        uids = sorted(self.messages)
+        return "OK", self._parts(uids[first - 1 : last], query)
 
     def uid(self, command, *args):
-        self.commands.append(("uid", command, *args))
         if command == "SEARCH":
+            self.commands.append(("uid", command, *args, self.literal))
+            self.literal = None
             return "OK", [b" ".join(str(uid).encode() for uid in sorted(self.messages))]
+        self.commands.append(("uid", command, *args))
         if command == "FETCH":
             uid_set, query = args
-            parts: list = []
-            for uid in [int(u) for u in uid_set.split(",")]:
-                if uid not in self.messages:
-                    continue
-                raw = self.messages[uid]
-                body = raw.split(b"\n\n", 1)[0] if "HEADER.FIELDS" in query else raw
-                parts.append((f"{uid} (UID {uid} BODY[] {{{len(body)}}}".encode(), body))
-                parts.append(b")")
-            return "OK", parts
+            return "OK", self._parts([int(u) for u in uid_set.split(",") if int(u) in self.messages], query)
         raise AssertionError(f"unexpected UID command {command}")
+
+    def _parts(self, uids: list[int], query: str) -> list:
+        parts: list = []
+        for uid in uids:
+            raw = self.messages[uid]
+            if query == "(UID RFC822.SIZE)":
+                parts.append(f"{uid} (UID {uid} RFC822.SIZE {len(raw)})".encode())
+                continue
+            partial = re.search(r"<0\.(\d+)>", query)
+            body = raw.split(b"\n\n", 1)[0] if "HEADER.FIELDS" in query else raw
+            body = body[: int(partial[1])] if partial else body
+            parts.append((f"{uid} (UID {uid} BODY[] {{{len(body)}}}".encode(), body))
+            parts.append(b")")
+        return parts
 
     def logout(self):
         self.commands.append(("logout",))
@@ -86,12 +108,16 @@ def _inbox(fake: FakeIMAP):
     return patch.object(gmail_imap.imaplib, "IMAP4_SSL", return_value=fake)
 
 
+def _fetches(fake: FakeIMAP) -> list[str]:
+    return [c[-1] for c in fake.commands if c[0] == "fetch" or c[:2] == ("uid", "FETCH")]
+
+
 def _assert_read_only(fake: FakeIMAP):
     assert_that({c[0] for c in fake.commands} <= _READ_ONLY_COMMANDS, is_(True))
     assert_that([c for c in fake.commands if c[0] == "select"], equal_to([("select", "INBOX", True)]))
-    for command in fake.commands:
-        if command[:2] == ("uid", "FETCH"):
-            assert_that(command[3], contains_string("BODY.PEEK"))
+    for query in _fetches(fake):
+        # BODY[] and a bare RFC822 mark a message read; only PEEK and the size do not.
+        assert_that("BODY[" in query or re.search(r"RFC822(?!\.SIZE)", query) is not None, is_(False), query)
     assert_that(fake.commands[-1], equal_to(("logout",)))
 
 
@@ -105,17 +131,42 @@ def test_list_returns_newest_first_and_never_changes_the_mailbox():
     assert_that(messages[0].subject, equal_to("third"))
     assert_that(messages[0].sender, equal_to("Alice <alice@example.com>"))
     assert_that(fake.commands[0], equal_to(("login", "someone@gmail.com", "secret")))
-    assert_that(("uid", "SEARCH", "ALL") in fake.commands, is_(True))
     _assert_read_only(fake)
 
 
-def test_list_passes_a_gmail_search_as_one_quoted_argument():
+def test_listing_a_huge_inbox_fetches_only_the_newest_messages_without_searching():
+    # SEARCH ALL returns every UID on one line, which imaplib refuses past 1 MB, so
+    # a mailbox of a few hundred thousand messages could otherwise never be listed.
+    fake = FakeIMAP({uid: _raw(f"m{uid}") for uid in range(1, 4)}, exists=3)
+    with _inbox(fake):
+        GmailInbox().list_messages("someone@gmail.com", "secret", query=None, limit=2)
+
+    assert_that([c for c in fake.commands if c[:2] == ("uid", "SEARCH")], equal_to([]))
+    assert_that(
+        [c for c in fake.commands if c[0] == "fetch"],
+        equal_to([("fetch", "2:3", "(UID BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")]),
+    )
+
+
+def test_a_search_is_sent_as_a_utf8_literal_over_the_newest_messages():
+    fake = FakeIMAP({1: _raw("hello")}, exists=80_000)
+    with _inbox(fake):
+        GmailInbox().list_messages("someone@gmail.com", "secret", query='from:José "a\\b"', limit=5)
+
+    searches = [c for c in fake.commands if c[:2] == ("uid", "SEARCH")]
+    assert_that(
+        searches,
+        equal_to([("uid", "SEARCH", "CHARSET", "UTF-8", "30001:*", "X-GM-RAW", 'from:José "a\\b"'.encode())]),
+    )
+    _assert_read_only(fake)
+
+
+def test_a_search_of_a_small_inbox_covers_all_of_it():
     fake = FakeIMAP({1: _raw("hello")})
     with _inbox(fake):
-        GmailInbox().list_messages("someone@gmail.com", "secret", query='from:alice "a\\b"', limit=5)
+        GmailInbox().list_messages("someone@gmail.com", "secret", query="from:alice", limit=5)
 
-    assert_that(("uid", "SEARCH", "X-GM-RAW", '"from:alice \\"a\\\\b\\""') in fake.commands, is_(True))
-    _assert_read_only(fake)
+    assert_that([c[4] for c in fake.commands if c[:2] == ("uid", "SEARCH")], equal_to(["1:*"]))
 
 
 @pytest.mark.parametrize("query", ["x\r\nA1 STORE 1 +FLAGS (\\Deleted)", "x\nfoo", "x\x00", "q" * 501])
@@ -136,7 +187,14 @@ def test_list_of_an_empty_inbox_fetches_nothing():
     fake = FakeIMAP({})
     with _inbox(fake):
         assert_that(GmailInbox().list_messages("someone@gmail.com", "secret", query=None, limit=5), equal_to([]))
-    assert_that([c for c in fake.commands if c[:2] == ("uid", "FETCH")], equal_to([]))
+    assert_that(_fetches(fake), equal_to([]))
+
+
+def test_searching_an_empty_inbox_sends_nothing():
+    fake = FakeIMAP({})
+    with _inbox(fake):
+        assert_that(GmailInbox().list_messages("someone@gmail.com", "secret", query="x", limit=5), equal_to([]))
+    assert_that([c for c in fake.commands if c[0] in {"fetch", "uid"}], equal_to([]))
 
 
 def test_get_returns_text_and_attachment_names_without_marking_it_read():
@@ -150,8 +208,33 @@ def test_get_returns_text_and_attachment_names_without_marking_it_read():
     assert_that(message.body, contains_string("Plain body for invoice"))
     assert_that(message.attachments, equal_to(["invoice.pdf"]))
     assert_that(message.truncated, is_(False))
-    assert_that(("uid", "FETCH", "7", "(BODY.PEEK[])") in fake.commands, is_(True))
+    assert_that(_fetches(fake), equal_to(["(UID RFC822.SIZE)", "(UID BODY.PEEK[])"]))
     _assert_read_only(fake)
+
+
+def test_get_of_a_huge_message_fetches_only_its_start():
+    raw = _raw("big").replace(b"Plain body for big", b"y" * 3_000_000)
+    fake = FakeIMAP({8: raw})
+    with _inbox(fake):
+        message = GmailInbox().get_message("someone@gmail.com", "secret", "8")
+
+    assert_that(_fetches(fake), equal_to(["(UID RFC822.SIZE)", "(UID BODY.PEEK[]<0.2000000>)"]))
+    assert_that(message.subject, equal_to("big"))
+    assert_that(message.truncated, is_(True))
+    _assert_read_only(fake)
+
+
+def test_get_reads_a_part_in_an_unknown_charset_instead_of_failing():
+    # Anyone can send the inbox a message that declares a charset Python does not know.
+    raw = (
+        b"From: x@example.com\r\nSubject: odd\r\nMIME-Version: 1.0\r\n"
+        b'Content-Type: text/plain; charset="x-bogus"\r\n\r\nhello there'
+    )
+    fake = FakeIMAP({6: raw})
+    with _inbox(fake):
+        message = GmailInbox().get_message("someone@gmail.com", "secret", "6")
+
+    assert_that(message.body, contains_string("hello there"))
 
 
 def test_get_turns_an_html_only_message_into_text():
@@ -180,7 +263,7 @@ def test_get_of_a_missing_message_is_not_found():
     _assert_read_only(fake)
 
 
-@pytest.mark.parametrize("message_id", ["", "1,2", "1:*", "../1", "1 2", "-1"])
+@pytest.mark.parametrize("message_id", ["", "1,2", "1:*", "../1", "1 2", "-1", "\u0661\u0662", "1" * 21])
 def test_get_refuses_anything_but_a_single_message_id_before_connecting(message_id):
     with _inbox(FakeIMAP({})) as connect, pytest.raises(MailNotFound):
         GmailInbox().get_message("someone@gmail.com", "secret", message_id)
@@ -238,7 +321,13 @@ class FlakyIMAP(FakeIMAP):
         super().select(mailbox, readonly)
         if self.drop_on == "SELECT":
             raise ConnectionResetError()
-        return self.select_status, [b""]
+        return self.select_status, [str(self.exists).encode()]
+
+    def fetch(self, message_set, query):
+        if self.drop_on == "FETCH":
+            raise ConnectionResetError()
+        _, data = super().fetch(message_set, query)
+        return self.fetch_status, data
 
     def uid(self, command, *args):
         if command == self.drop_on:
@@ -257,15 +346,13 @@ class FlakyIMAP(FakeIMAP):
     "fake",
     [
         FlakyIMAP({1: _raw("a")}, select_status="NO"),
-        FlakyIMAP({1: _raw("a")}, search_status="NO"),
         FlakyIMAP({1: _raw("a")}, fetch_status="NO"),
-        FlakyIMAP({1: _raw("a")}, drop_on="SEARCH"),
+        FlakyIMAP({1: _raw("a")}, drop_on="FETCH"),
         FlakyIMAP({1: _raw("a")}, login_drop=True),
         FlakyIMAP({1: _raw("a")}, drop_on="SELECT"),
     ],
     ids=[
         "select-refused",
-        "search-refused",
         "fetch-refused",
         "dropped-mid-read",
         "dropped-at-login",
@@ -279,10 +366,86 @@ def test_gmail_misbehaving_while_listing_is_unavailable(fake):
 
 
 @pytest.mark.parametrize(
+    "fake",
+    [
+        FlakyIMAP({1: _raw("a")}, search_status="NO"),
+        FlakyIMAP({1: _raw("a")}, drop_on="SEARCH"),
+        FlakyIMAP({1: _raw("a")}, fetch_status="NO"),
+    ],
+    ids=["search-refused", "dropped-mid-search", "fetch-refused"],
+)
+def test_gmail_misbehaving_while_searching_is_unavailable(fake):
+    with _inbox(fake), pytest.raises(MailUnavailable):
+        GmailInbox().list_messages("someone@gmail.com", "secret", query="from:alice", limit=5)
+    assert_that(fake.commands[-1], equal_to(("logout",)))
+
+
+@pytest.mark.parametrize(
     "fake", [FlakyIMAP({1: _raw("a")}, fetch_status="NO"), FlakyIMAP({1: _raw("a")}, drop_on="FETCH")]
 )
 def test_gmail_misbehaving_while_reading_is_unavailable(fake):
     with _inbox(fake), pytest.raises(MailUnavailable):
+        GmailInbox().get_message("someone@gmail.com", "secret", "1")
+
+
+class UncountedIMAP(FakeIMAP):
+    def select(self, mailbox="INBOX", readonly=False):
+        super().select(mailbox, readonly)
+        return "OK", [None]
+
+
+class SizelessIMAP(FakeIMAP):
+    def uid(self, command, *args):
+        self.commands.append(("uid", command, *args))
+        return "OK", [b"1 (UID 1 FLAGS ())"]
+
+
+class NoMatchIMAP(FakeIMAP):
+    def uid(self, command, *args):
+        if command == "SEARCH":
+            super().uid(command, *args)
+            return "OK", [b""]
+        return super().uid(command, *args)
+
+
+class BodyFetchIMAP(FakeIMAP):
+    """Reports the size, then refuses or loses the message when its body is fetched."""
+
+    def __init__(self, messages, *, status: str):
+        super().__init__(messages)
+        self.status = status
+
+    def uid(self, command, *args):
+        status, data = super().uid(command, *args)
+        if command == "FETCH" and "BODY.PEEK" in args[-1]:
+            return self.status, []
+        return status, data
+
+
+def test_a_search_with_no_matches_fetches_nothing():
+    fake = NoMatchIMAP({1: _raw("a")})
+    with _inbox(fake):
+        assert_that(GmailInbox().list_messages("someone@gmail.com", "secret", query="x", limit=5), equal_to([]))
+    assert_that(_fetches(fake), equal_to([]))
+
+
+def test_a_refused_body_fetch_is_unavailable():
+    with _inbox(BodyFetchIMAP({1: _raw("a")}, status="NO")), pytest.raises(MailUnavailable):
+        GmailInbox().get_message("someone@gmail.com", "secret", "1")
+
+
+def test_a_message_gone_before_its_body_is_fetched_is_not_found():
+    with _inbox(BodyFetchIMAP({1: _raw("a")}, status="OK")), pytest.raises(MailNotFound):
+        GmailInbox().get_message("someone@gmail.com", "secret", "1")
+
+
+def test_an_inbox_without_a_message_count_is_unavailable():
+    with _inbox(UncountedIMAP({1: _raw("a")})), pytest.raises(MailUnavailable):
+        GmailInbox().list_messages("someone@gmail.com", "secret", query=None, limit=5)
+
+
+def test_a_message_without_a_reported_size_is_not_found():
+    with _inbox(SizelessIMAP({1: _raw("a")})), pytest.raises(MailNotFound):
         GmailInbox().get_message("someone@gmail.com", "secret", "1")
 
 
