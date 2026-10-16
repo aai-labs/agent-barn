@@ -159,74 +159,33 @@ def test_empty_bindings_retain_persistent_sharepoint_cleanup_without_credentials
     assert_that("aai-cli-config.toml" in artifacts.files, is_(False))
 
 
-# --- Gmail app password: the gateway reads mail; the pod gets a helper and a gateway token ---
+# --- Gmail app password: the gateway reads mail; the pod gets an aai-cli profile and a gateway token ---
 
 
 def _gmail_app_password_artifacts():
     return materialize_integrations([_binding(SecretProvider.GMAIL_APP_PASSWORD, True)], _CONTEXT)
 
 
-def test_gmail_app_password_gives_the_pod_only_its_gateway_token_and_helper():
+def test_gmail_app_password_gives_the_pod_only_its_gateway_token_and_an_aai_cli_profile():
     artifacts = _gmail_app_password_artifacts()
     token = gateway_token_env_var(SecretProvider.GMAIL_APP_PASSWORD)
     assert_that(
         artifacts.env, equal_to({token: "gateway-gmail_app_password", "AF_GATEWAY_URL": _CONTEXT.gateway_base_url})
     )
-    assert_that(set(artifacts.files), equal_to({"aai-cli-setup.sh", "gmail-read.sh"}))
+    assert_that(set(artifacts.files), equal_to({"aai-cli-setup.sh", "aai-cli-config.toml"}))
+    config = artifacts.files["aai-cli-config.toml"]
+    assert_that(config, contains_string('provider = "custom_api"'))
+    assert_that(config, contains_string(f'gateway_url = "{_CONTEXT.gateway_base_url.rstrip("/")}/custom-api/request"'))
+    assert_that(config, contains_string(f'gateway_token_env = "{token}"'))
     serialized = json.dumps({"env": artifacts.env, "files": artifacts.files, "policy": artifacts.policy_md})
     assert_that(serialized, is_not(contains_string("gmail-app-password-provider-secret")))
+    assert_that(artifacts.files["aai-cli-setup.sh"], is_not(contains_string("secrets set")))
 
 
-def test_gmail_app_password_instructions_name_only_the_helper():
+def test_gmail_app_password_instructions_name_only_aai_cli_commands():
     # Hermes refuses a whole AGENTS.md that shows curl sending a token variable
     # ("exfil_curl"), which would also drop every other platform instruction.
     policy = _gmail_app_password_artifacts().policy_md
-    assert_that(policy, contains_string("sh /app/config/gmail-read.sh list"))
-    assert_that(policy, contains_string("sh /app/config/gmail-read.sh get <id>"))
-    for forbidden in ("curl", "AF_GATEWAY", "Authorization", "Bearer", "$"):
+    assert_that(policy, contains_string("aai-cli --profile gmail-inbox custom-api request"))
+    for forbidden in ("curl ", "AF_GATEWAY", "Authorization", "Bearer", "$"):
         assert_that(policy, is_not(contains_string(forbidden)))
-
-
-def _run_gmail_helper(tmp_path: Path, *args: str) -> tuple[subprocess.CompletedProcess, list[str]]:
-    script = tmp_path / "gmail-read.sh"
-    script.write_text(_gmail_app_password_artifacts().files["gmail-read.sh"])
-    calls = tmp_path / "curl-calls"
-    fake_curl = tmp_path / "bin" / "curl"
-    fake_curl.parent.mkdir()
-    fake_curl.write_text(f'#!/bin/sh\nfor arg in "$@"; do printf "%s\\n" "$arg"; done >> {calls}\necho "{{}}"\n')
-    fake_curl.chmod(0o755)
-    env = {
-        "PATH": f"{fake_curl.parent}:/usr/bin:/bin",
-        "AF_GATEWAY_URL": "http://gateway/gateway/v1",
-        gateway_token_env_var(SecretProvider.GMAIL_APP_PASSWORD): "agt-mail",
-    }
-    result = subprocess.run(["sh", str(script), *args], env=env, capture_output=True, text=True, check=False)
-    return result, calls.read_text().splitlines() if calls.exists() else []
-
-
-def test_gmail_helper_lists_with_a_search_through_the_gateway(tmp_path: Path):
-    result, curl_args = _run_gmail_helper(tmp_path, "list", "from:alice", "newer_than:7d")
-    assert_that(result.returncode, equal_to(0), result.stderr)
-    assert_that(curl_args[-1], equal_to("http://gateway/gateway/v1/mail/messages"))
-    assert_that("Authorization: Bearer agt-mail" in curl_args, is_(True))
-    assert_that("q=from:alice newer_than:7d" in curl_args, is_(True))
-    assert_that("-G" in curl_args, is_(True))
-
-
-def test_gmail_helper_lists_without_a_search(tmp_path: Path):
-    result, curl_args = _run_gmail_helper(tmp_path, "list")
-    assert_that(result.returncode, equal_to(0), result.stderr)
-    assert_that(any(arg.startswith("q=") for arg in curl_args), is_(False))
-
-
-def test_gmail_helper_reads_one_message(tmp_path: Path):
-    result, curl_args = _run_gmail_helper(tmp_path, "get", "3753")
-    assert_that(result.returncode, equal_to(0), result.stderr)
-    assert_that(curl_args[-1], equal_to("http://gateway/gateway/v1/mail/messages/3753"))
-
-
-@pytest.mark.parametrize("args", [(), ("send",), ("get",), ("get", "../token"), ("get", "12 34"), ("delete", "1")])
-def test_gmail_helper_refuses_anything_else_without_calling_the_gateway(tmp_path: Path, args):
-    result, curl_args = _run_gmail_helper(tmp_path, *args)
-    assert_that(result.returncode, equal_to(2))
-    assert_that(curl_args, equal_to([]))

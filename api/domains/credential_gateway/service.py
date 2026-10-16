@@ -10,13 +10,7 @@ from uuid import UUID
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.agents.models import (
-    FirecrawlContent,
-    GmailAppPasswordContent,
-    SecretContent,
-    SecretProvider,
-    decrypt_content,
-)
+from api.domains.agents.models import FirecrawlContent, SecretContent, SecretProvider, decrypt_content
 from api.domains.agents.repository import AgentRepository
 from api.domains.credential_gateway.audit import GatewayAuditSink, ResolutionOutcome
 from api.domains.credential_gateway.forwarding import (
@@ -30,9 +24,6 @@ from api.domains.credential_gateway.models import (
     GatewayToken,
     GatewayTokenResolution,
     IssuedGatewayToken,
-    MailListRead,
-    MailMessageRead,
-    MailSummaryRead,
     hash_token,
     issue_token_value,
 )
@@ -46,13 +37,14 @@ from api.domains.integrations.plugins.base import (
     EgressMode,
     MintedToken,
     OutboundRequest,
+    ServedRequest,
+    ServedResponse,
     TokenBrokerService,
     UpstreamAuthenticationError,
 )
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.shared_credentials.repository import SharedCredentialRepository
-from api.infrastructure.google.gmail_imap import GmailInbox
 
 
 class GatewayTokenRejected(Exception):
@@ -75,7 +67,6 @@ class CredentialGatewayService:
     forwarder: UpstreamForwarder
     integrations: IntegrationRepository
     sharepoint_broker: SharePointBroker
-    inbox: GmailInbox
 
     # --- issuance, called from agent start ---
 
@@ -317,32 +308,30 @@ class CredentialGatewayService:
         )
         return minted
 
-    # --- read-only Gmail, read by the gateway itself for app-password credentials ---
+    # --- GATEWAY_SERVED: the provider's plugin answers the request itself ---
 
-    def list_mail(self, authorization: str | None, *, query: str | None, limit: int) -> MailListRead:
-        address, app_password = self._gmail_app_password(authorization)
-        messages = self.inbox.list_messages(address, app_password, query=query, limit=limit)
-        return MailListRead(messages=[MailSummaryRead(**vars(m)) for m in messages])
+    def serve(self, authorization: str | None, request: ServedRequest) -> ServedResponse:
+        """Answer an aai-cli Custom API request for a ``GATEWAY_SERVED`` provider.
 
-    def get_mail(self, authorization: str | None, message_id: str) -> MailMessageRead:
-        address, app_password = self._gmail_app_password(authorization)
-        return MailMessageRead(**vars(self.inbox.get_message(address, app_password, message_id)))
-
-    def _gmail_app_password(self, authorization: str | None) -> tuple[str, str]:
-        """Resolve a token to its Gmail app password; a token for any other provider is refused."""
+        The gateway owns only what every such provider shares: the token, the credential
+        and the audit. Which requests exist and how they reach the provider belong to the
+        plugin, so nothing provider-specific lives here.
+        """
         resolution = self.resolve(authorization)
-        if resolution.provider != SecretProvider.GMAIL_APP_PASSWORD:
-            raise GatewayForwardRefused(f"token is for {resolution.provider.value}, not gmail_app_password")
+        plugin = INTEGRATION_PLUGINS.require(resolution.provider)
+        if plugin.egress_mode is not EgressMode.GATEWAY_SERVED:
+            raise GatewayForwardRefused(f"{plugin.key} is not served by the gateway")
         content = self._decrypt_credential(resolution.agent_id, resolution.organization_id, resolution.provider)
-        if not isinstance(content, GmailAppPasswordContent):
-            raise GatewayForwardRefused("no gmail_app_password credential for this agent")
+        if content is None:
+            raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
+        response = plugin.serve(content, request)
         self.audit.record_lifecycle(
-            "mail_read",
+            "served",
             provider=resolution.provider,
             agent_id=resolution.agent_id,
             organization_id=resolution.organization_id,
         )
-        return content.email, content.app_password
+        return response
 
     def handoff_sharepoint(self, authorization: str | None, data: SharePointHandoff) -> None:
         resolution = self.resolve(authorization)

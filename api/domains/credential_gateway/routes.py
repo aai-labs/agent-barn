@@ -8,19 +8,18 @@ operator-facing token endpoint later would put it squarely under
 ``docs/features/rbac/IMPLEMENTATION-BRIEF.md``.
 """
 
-from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi_injector import Injected
 from starlette.concurrency import run_in_threadpool
 
 from api.domains.credential_gateway.forwarding import UpstreamUnreachable
 from api.domains.credential_gateway.models import (
     BrokeredTokenRead,
+    CustomApiRequest,
     GatewayTokenResolution,
-    MailListRead,
-    MailMessageRead,
+    ServedResponseRead,
 )
 from api.domains.credential_gateway.service import (
     CredentialGatewayService,
@@ -33,15 +32,7 @@ from api.domains.credential_gateway.sharepoint_broker import (
     SharePointHandoffRefused,
     SharePointReconnectRequired,
 )
-from api.domains.integrations.plugins.base import UpstreamAuthenticationError
-from api.infrastructure.google.gmail_imap import (
-    MAX_LIST_LIMIT,
-    MAX_QUERY_LENGTH,
-    InvalidMailQuery,
-    MailNotFound,
-    MailSignInFailed,
-    MailUnavailable,
-)
+from api.domains.integrations.plugins.base import ServedRequest, UpstreamAuthenticationError
 
 SUPPORTED_GATEWAY_PROTOCOL_VERSION = "1"
 
@@ -120,58 +111,25 @@ async def forward_to_provider(
     )
 
 
-@gateway_router.get("/mail/messages", response_model=MailListRead)
-async def list_mail(
+@gateway_router.post("/custom-api/request", response_model=ServedResponseRead)
+async def serve_custom_api_request(
+    data: CustomApiRequest,
     service: Annotated[CredentialGatewayService, Injected(CredentialGatewayService)],
     authorization: Annotated[str | None, Header()] = None,
-    q: Annotated[str | None, Query(max_length=MAX_QUERY_LENGTH)] = None,
-    limit: Annotated[int, Query(ge=1, le=MAX_LIST_LIMIT)] = 20,
-) -> MailListRead:
-    """Newest inbox messages for a Gmail app-password credential. Read-only.
+) -> ServedResponseRead:
+    """Answer an aai-cli Custom API request for a provider the gateway serves itself.
 
-    The gateway signs in to Gmail itself, so the agent never holds the app password.
-    ``q`` takes Gmail search syntax.
+    An isolated ``custom_api`` profile posts the complete request here with only the
+    agent's gateway token. The provider's plugin answers it with the stored credential,
+    which never leaves the gateway. A provider failure comes back as the upstream status
+    inside a successful envelope, because aai-cli hides the body of a gateway error.
     """
-    return await _read_mail(lambda: service.list_mail(authorization, query=q, limit=limit))
-
-
-@gateway_router.get("/mail/messages/{message_id}", response_model=MailMessageRead)
-async def get_mail(
-    message_id: str,
-    service: Annotated[CredentialGatewayService, Injected(CredentialGatewayService)],
-    authorization: Annotated[str | None, Header()] = None,
-) -> MailMessageRead:
-    """One inbox message for a Gmail app-password credential, left unread. Read-only."""
-    return await _read_mail(lambda: service.get_mail(authorization, message_id))
-
-
-async def _read_mail[T](call: Callable[[], T]) -> T:
+    request = ServedRequest(method=data.method, url=data.url, query=data.query, body=data.body)
     try:
-        return await run_in_threadpool(call)
+        served = await run_in_threadpool(service.serve, authorization, request)
     except (GatewayTokenRejected, GatewayForwardRefused) as exc:
         raise _refused("The presented gateway token is not valid for this request.") from exc
-    except InvalidMailQuery as exc:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail={"error": "invalid_query", "message": "That search cannot be used."},
-        ) from exc
-    except MailNotFound as exc:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "No inbox message with that id."}
-        ) from exc
-    except MailSignInFailed as exc:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "error": "mail_sign_in_failed",
-                "message": "Gmail rejected the app password. Ask the owner to reconnect Gmail.",
-            },
-        ) from exc
-    except MailUnavailable as exc:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            detail={"error": "upstream_unreachable", "message": "Gmail could not be reached."},
-        ) from exc
+    return ServedResponseRead(status=served.status, body=served.body)
 
 
 @gateway_router.api_route("/token", methods=["GET", "POST"], response_model=BrokeredTokenRead)
