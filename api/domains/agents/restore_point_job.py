@@ -13,6 +13,7 @@ MANIFEST_NAME = "manifest.json"
 
 MODE_CAPTURE = "capture"
 MODE_RESTORE = "restore"
+MODE_RESET = "reset"
 
 RUNTIME_HERMES = "hermes"
 RUNTIME_OPENCLAW = "openclaw"
@@ -27,6 +28,8 @@ ENV_ARCHIVE = "RESTORE_POINT_ARCHIVE"
 
 SIZE_SETTING_NAME = "RESTORE_POINT_SIZE"
 
+# Shared by restore and reset: the backup is on disk, so what failed is the part that
+# changed the Agent volume. A restore fails while extracting, a reset while wiping.
 EXIT_BACKUP_FAILED = 2
 EXIT_RESTORE_FAILED = 3
 
@@ -206,12 +209,32 @@ def _required_env(name: str) -> Path:
     return Path(value)
 
 
+def _run_reset(target: Path, backup: Path, runtime: str) -> None:
+    # Each phase fails on its own exit code: the API reads it to tell "the Agent
+    # volume was never touched" from "it was emptied".
+    try:
+        emit_result(capture(target, backup, runtime))
+    except Exception as exc:
+        emit_failure(f"pre-reset capture failed: {exc}")
+        raise SystemExit(EXIT_BACKUP_FAILED) from exc
+
+    try:
+        _wipe_contents(target)
+    except Exception as exc:
+        emit_failure(f"reset failed: {exc}")
+        raise SystemExit(EXIT_RESTORE_FAILED) from exc
+
+
 def main() -> None:
     mode = os.environ.get(ENV_MODE, MODE_CAPTURE)
     runtime = os.environ.get(ENV_RUNTIME, RUNTIME_HERMES)
 
     if mode == MODE_CAPTURE:
         emit_result(capture(_required_env(ENV_SOURCE), _required_env(ENV_DEST), runtime))
+        return
+
+    if mode == MODE_RESET:
+        _run_reset(_required_env(ENV_TARGET), _required_env(ENV_BACKUP), runtime)
         return
 
     if mode != MODE_RESTORE:

@@ -291,7 +291,13 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
               />
             )}
             {activeSection === "danger" && (
-              <AgentDangerZoneSettings agent={agent} canDelete={canDelete} homeHref={homeHref} />
+              <AgentDangerZoneSettings
+                agent={agent}
+                canDelete={canDelete}
+                canReset={canManageLifecycle}
+                canReadActivity={canReadActivity}
+                homeHref={homeHref}
+              />
             )}
           </div>
         </div>

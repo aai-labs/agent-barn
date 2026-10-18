@@ -328,10 +328,12 @@ export function AgentRestorePointsSettings({
                   </div>
                 )}
 
-                {restorePoint.status === "FAILED" && restorePoint.failureReason && (
+                {/* A ready row carries a reason in one case: a reset that took its backup and
+                    then did not finish. The archive is good, so it reads as a warning, not a failure. */}
+                {restorePoint.failureReason && (
                   <p
                     className="mb-0 mt-2 text-[0.78rem]"
-                    style={{ color: "var(--err)" }}
+                    style={{ color: restorePoint.status === "FAILED" ? "var(--err)" : "var(--ink-2)" }}
                     role="alert"
                   >
                     {restorePoint.failureReason}

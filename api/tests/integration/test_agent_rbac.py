@@ -885,6 +885,43 @@ def test_editor_can_delete_a_restore_point():
         assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
 
 
+def _reset_url(context) -> str:
+    return f"{_BASE}/{context.agent.id}/reset"
+
+
+def test_viewer_cannot_reset_an_agent():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_VIEWER_ROLE_ID)(context)
+
+        response = context.client.post(_reset_url(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        # Refused before anything was staged: no backup row, so no Job either.
+        assert_that(
+            context.injector.get(RestorePointRepository).find_non_terminal_for_agent(context.agent.id), equal_to([])
+        )
+
+
+def test_editor_can_reset_an_agent():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _switch_to_member()(context)
+        there_is_agent_access(agent_id=context.agent.id, access_role_id=AGENT_EDITOR_ROLE_ID)(context)
+
+        response = context.client.post(_reset_url(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+
+
+def test_member_without_access_gets_404_for_a_reset_not_403():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _switch_to_member()(context)
+
+        response = context.client.post(_reset_url(context), headers=_auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
 def _managed_update_url(context) -> str:
     return f"{_BASE}/{context.agent.id}/managed-update"
 

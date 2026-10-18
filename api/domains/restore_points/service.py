@@ -15,9 +15,11 @@ from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders.restore_point import (
     build_capture_job,
+    build_reset_job,
     build_restore_job,
     build_restore_point_pvc,
     capture_job_name,
+    reset_job_name,
     restore_job_name,
     restore_point_resource_name,
 )
@@ -38,6 +40,7 @@ from api.domains.agents.selection import SelectionValidator
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.events.catalog import (
+    AGENT_RESET,
     AGENT_RESTORE_POINT_CREATED,
     AGENT_RESTORE_POINT_DELETED,
     AGENT_RESTORE_POINT_RESTORED,
@@ -83,6 +86,15 @@ PRE_RESTORE_LABEL = "Automatic backup before restore"
 NOT_REPLAYABLE_DETAIL = "This restore point predates the recorded configuration, so there is nothing to re-apply."
 STILL_SHUTTING_DOWN_DETAIL = "The Agent is still shutting down. Try again in a moment."
 MANAGED_UPDATE_IN_FLIGHT_DETAIL = "A managed update is in progress for this Agent. Wait for it to finish."
+PRE_RESET_LABEL = "Automatic backup before reset"
+NOTHING_TO_RESET_DETAIL = "This Agent has never run, so there is nothing to reset."
+AGENT_RUNNING_RESET_DETAIL = "Stop the Agent before resetting it."
+RESET_UNFINISHED_DETAIL = (
+    "The backup was saved, but the reset did not finish, so some of the Agent's files may be gone. "
+    "Reset again to finish it, or restore this backup to undo it."
+)
+# Origins whose Job copies the Agent volume aside and then changes it.
+_VOLUME_WIPING_ORIGINS = (RestorePointOrigin.PRE_RESTORE, RestorePointOrigin.PRE_RESET)
 
 
 def _selection_type(agent: Agent) -> str:
@@ -98,6 +110,12 @@ def _selection_type(agent: Agent) -> str:
     if agent.agent_template_override_version_id is not None:
         return "override"
     return ""
+
+
+def _wipes_volume(row: AgentRestorePoint) -> bool:
+    """Whether this row's Job changes the Agent volume: a restore target, or the
+    backup a restore or a reset takes before it does."""
+    return row.status == RestorePointStatus.RESTORING or row.origin in _VOLUME_WIPING_ORIGINS
 
 
 class _RestoreOutcome(str, enum.Enum):
@@ -316,12 +334,15 @@ class RestorePointService:
         A row is committed before its Job is created, so a read landing in that
         window would otherwise fail a healthy operation. Past the grace window a
         missing Job is genuine. A restore target keeps its volume; a capture
-        releases the one it never finished writing.
+        releases the one it never finished writing. So does the backup of a
+        reset, with one exception: a reset Job that finished and was reaped before
+        anyone read it has already emptied the Agent volume, and this volume may
+        hold the only copy of what was on it.
         """
         grace = timedelta(seconds=RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS)
         if respect_grace and row.updated_at > datetime.now(UTC) - grace:
             return
-        if row.status == RestorePointStatus.RESTORING:
+        if row.status == RestorePointStatus.RESTORING or row.origin == RestorePointOrigin.PRE_RESET:
             self._fail(row, reason)
         else:
             self._fail_capture(row, reason)
@@ -335,8 +356,7 @@ class RestorePointService:
         path. When the phase cannot be established the backup volume is kept.
         """
         reason = self._failure_reason(row, job, namespace)
-        is_restore = row.status == RestorePointStatus.RESTORING or row.origin == RestorePointOrigin.PRE_RESTORE
-        if not is_restore:
+        if not _wipes_volume(row):
             self._fail_capture(row, reason)
             return
 
@@ -357,7 +377,11 @@ class RestorePointService:
             return
 
         if outcome == _RestoreOutcome.EXTRACTION_FAILED:
-            self._succeed(row)
+            # The backup finished and the volume was changed. For a restore that makes
+            # the backup the way back. For a reset it also means the reset itself did
+            # not finish, which the row says, since the Agent is not the way it was.
+            unfinished = RESET_UNFINISHED_DETAIL if row.origin == RestorePointOrigin.PRE_RESET else None
+            self._succeed(row, failure_reason=unfinished)
         elif outcome == _RestoreOutcome.BACKUP_FAILED:
             self._fail_capture(row, reason)
         else:
@@ -386,17 +410,17 @@ class RestorePointService:
 
     def _failure_reason(self, row: AgentRestorePoint, job: V1Job, namespace: str) -> str:
         if _deadline_exceeded(job):
-            is_restore = row.status == RestorePointStatus.RESTORING or row.origin == RestorePointOrigin.PRE_RESTORE
-            setting = RESTORE_TIMEOUT_SETTING if is_restore else CAPTURE_TIMEOUT_SETTING
+            setting = RESTORE_TIMEOUT_SETTING if _wipes_volume(row) else CAPTURE_TIMEOUT_SETTING
             return f"The operation did not finish within its time limit. Raise {setting} for large Agent volumes."
         return self._job_failure_reason(row.job_name or "", namespace)
 
-    def _succeed(self, row: AgentRestorePoint) -> None:
+    def _succeed(self, row: AgentRestorePoint, *, failure_reason: str | None = None) -> None:
         manifest = self._read_manifest(row)
         self.repository.mark_ready(
             row.id,
             archive_bytes=manifest.get("bytes"),
             file_count=manifest.get("file_count"),
+            failure_reason=failure_reason,
         )
 
     def _fail(self, row: AgentRestorePoint, reason: str) -> bool:
@@ -503,6 +527,69 @@ class RestorePointService:
 
         self._dispatch(result.delivery_ids)
         return AgentRestorePointRead.model_validate(restore_point)
+
+    def reset_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRestorePointRead:
+        """Back the Agent's volume up, then empty it.
+
+        The backup is a PRE_RESET restore point, so an ordinary restore undoes the
+        reset. One Job does both steps, in that order, so the backup is on disk
+        before anything is removed. The Agent is not started afterwards: its files
+        are gone, and starting it is what rebuilds them from its settings.
+        """
+        agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_LIFECYCLE_MANAGE)
+
+        self._await_agent_volume_release(agent.id)
+
+        with self.agent_repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+
+            current = self.agent_repository.get_by_id(agent.id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            self._refuse_during_managed_update(current)
+            self._assert_resettable(current)
+
+            backup_id = uuid7()
+            backup = AgentRestorePoint(
+                id=backup_id,
+                agent_id=current.id,
+                created_by_user_id=context.user.id,
+                label=PRE_RESET_LABEL,
+                status=RestorePointStatus.PENDING,
+                origin=RestorePointOrigin.PRE_RESET,
+                agent_type=current.agent_type,
+                pvc_name=restore_point_resource_name(backup_id),
+                job_name=reset_job_name(backup_id),
+                config_manifest=self._build_config_manifest(current).model_dump(mode="json"),
+            )
+            result = self.repository.save_with_event(
+                backup,
+                event_name=AGENT_RESET,
+                actor=resolve_actor_identity(context, current.organization_id),
+                payload=self._event_payload(current, backup, context),
+            )
+
+            self._provision_backup(
+                current,
+                backup,
+                build_reset_job(
+                    job_name=backup.job_name or reset_job_name(backup.id),
+                    restore_point_id=backup.id,
+                    agent_id=current.id,
+                    org_id=current.organization_id,
+                    namespace=self.config.k8s_namespace,
+                    image=self.config.api_image,
+                    runtime=current.agent_type,
+                    agent_pvc=f"agent-{current.id}",
+                    backup_pvc=backup.pvc_name,
+                    timeout_seconds=self.config.restore_point_restore_timeout_seconds,
+                    image_pull_secret=self.config.agent_image_pull_secret or None,
+                ),
+            )
+
+        self._dispatch(result.delivery_ids)
+        return AgentRestorePointRead.model_validate(backup)
 
     def restore_restore_point(
         self,
@@ -888,6 +975,19 @@ class RestorePointService:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=STILL_SHUTTING_DOWN_DETAIL)
             time.sleep(RESTORE_POINT_POD_TERMINATION_POLL_SECONDS)
 
+    def _assert_resettable(self, agent: Agent) -> None:
+        # No cap check: the backup is a PRE_RESET row, which the per-Agent cap does not count.
+        if agent.status == AgentStatus.RUNNING:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_RESET_DETAIL)
+
+        if self.repository.has_non_terminal_operation(agent.id) or self.repository.find_owing_replay_for_agent(
+            agent.id
+        ):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+
+        if self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace) is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOTHING_TO_RESET_DETAIL)
+
     def _assert_capturable(self, agent: Agent) -> None:
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_DETAIL)
@@ -909,6 +1009,30 @@ class RestorePointService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOTHING_TO_CAPTURE_DETAIL)
 
     def _provision_capture(self, agent: Agent, restore_point: AgentRestorePoint) -> None:
+        self._provision_backup(
+            agent,
+            restore_point,
+            build_capture_job(
+                job_name=restore_point.job_name or capture_job_name(restore_point.id),
+                restore_point_id=restore_point.id,
+                agent_id=agent.id,
+                org_id=agent.organization_id,
+                namespace=self.config.k8s_namespace,
+                image=self.config.api_image,
+                runtime=agent.agent_type,
+                agent_pvc=f"agent-{agent.id}",
+                dest_pvc=restore_point.pvc_name,
+                timeout_seconds=self.config.restore_point_capture_timeout_seconds,
+                image_pull_secret=self.config.agent_image_pull_secret or None,
+            ),
+        )
+
+    def _provision_backup(self, agent: Agent, restore_point: AgentRestorePoint, job: V1Job) -> None:
+        """Create the volume a backup is written to, then the Job that writes it.
+
+        Shared by a capture and a reset, which differ only in the Job. A failure here
+        happens before any Job runs, so the Agent volume has not been touched.
+        """
         namespace = self.config.k8s_namespace
         try:
             self.k8s.create_pvc(
@@ -922,27 +1046,12 @@ class RestorePointService:
                     self.config.storage_class or None,
                 ),
             )
-            self.k8s.create_job(
-                namespace,
-                build_capture_job(
-                    job_name=restore_point.job_name or capture_job_name(restore_point.id),
-                    restore_point_id=restore_point.id,
-                    agent_id=agent.id,
-                    org_id=agent.organization_id,
-                    namespace=namespace,
-                    image=self.config.api_image,
-                    runtime=agent.agent_type,
-                    agent_pvc=f"agent-{agent.id}",
-                    dest_pvc=restore_point.pvc_name,
-                    timeout_seconds=self.config.restore_point_capture_timeout_seconds,
-                    image_pull_secret=self.config.agent_image_pull_secret or None,
-                ),
-            )
+            self.k8s.create_job(namespace, job)
         except Exception as exc:
             # friendly_k8s_error drops the cluster's own text, and RESOURCE_REJECTED
             # carries no detail, so which field the apiserver refused survives only here.
             logger.exception(
-                "Could not provision the capture for restore point %s on agent %s", restore_point.id, agent.id
+                "Could not provision the backup for restore point %s on agent %s", restore_point.id, agent.id
             )
             restore_point.status = RestorePointStatus.FAILED
             restore_point.failure_reason = friendly_k8s_error(exc, operation=AgentProvisioningOperation.BACKUP)

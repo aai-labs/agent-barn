@@ -12,6 +12,7 @@ from api.domains.agents.restore_point_job import (
     ENV_SOURCE,
     ENV_TARGET,
     MODE_CAPTURE,
+    MODE_RESET,
     MODE_RESTORE,
 )
 
@@ -23,6 +24,7 @@ RESTORE_POINT_ID_LABEL_KEY = "agentbarn.io/restore-point-id"
 PVC_NAME_PREFIX = "restore-point-"
 CAPTURE_JOB_NAME_PREFIX = "rp-cap-"
 RESTORE_JOB_NAME_PREFIX = "rp-res-"
+RESET_JOB_NAME_PREFIX = "rp-reset-"
 _UUID_LENGTH = 36
 
 SOURCE_MOUNT_PATH = "/source"
@@ -55,6 +57,10 @@ def restore_job_name(restore_point_id: UUID) -> str:
     return f"{RESTORE_JOB_NAME_PREFIX}{restore_point_id}-{secrets.token_hex(3)}"
 
 
+def reset_job_name(restore_point_id: UUID) -> str:
+    return f"{RESET_JOB_NAME_PREFIX}{restore_point_id}-{secrets.token_hex(3)}"
+
+
 def restore_point_id_from_name(name: str) -> UUID | None:
     """The restore point a resource belongs to, read back out of its own name.
 
@@ -63,7 +69,7 @@ def restore_point_id_from_name(name: str) -> UUID | None:
     a second exact identifier rather than a guess; anything that does not match
     a prefix this module produces still resolves to None and is left alone.
     """
-    for prefix in (PVC_NAME_PREFIX, CAPTURE_JOB_NAME_PREFIX, RESTORE_JOB_NAME_PREFIX):
+    for prefix in (PVC_NAME_PREFIX, CAPTURE_JOB_NAME_PREFIX, RESTORE_JOB_NAME_PREFIX, RESET_JOB_NAME_PREFIX):
         if not name.startswith(prefix):
             continue
         try:
@@ -234,6 +240,48 @@ def build_restore_job(
         image=image,
         env=env,
         volumes=volumes,
+        timeout_seconds=timeout_seconds,
+        backoff_limit=_RESTORE_BACKOFF_LIMIT,
+        image_pull_secret=image_pull_secret,
+    )
+
+
+def build_reset_job(
+    *,
+    job_name: str,
+    restore_point_id: UUID,
+    agent_id: UUID,
+    org_id: UUID,
+    namespace: str,
+    image: str,
+    runtime: str,
+    agent_pvc: str,
+    backup_pvc: str,
+    timeout_seconds: int,
+    image_pull_secret: str | None = None,
+) -> client.V1Job:
+    """Back the Agent volume up into `backup_pvc`, then empty it.
+
+    Never retried: a second attempt would back up the volume the first one emptied
+    over the good backup.
+    """
+    return _build_job(
+        job_name=job_name,
+        restore_point_id=restore_point_id,
+        agent_id=agent_id,
+        org_id=org_id,
+        namespace=namespace,
+        image=image,
+        env={
+            ENV_MODE: MODE_RESET,
+            ENV_RUNTIME: runtime,
+            ENV_TARGET: TARGET_MOUNT_PATH,
+            ENV_BACKUP: BACKUP_MOUNT_PATH,
+        },
+        volumes=[
+            ("target", agent_pvc, TARGET_MOUNT_PATH, False),
+            ("backup", backup_pvc, BACKUP_MOUNT_PATH, False),
+        ],
         timeout_seconds=timeout_seconds,
         backoff_limit=_RESTORE_BACKOFF_LIMIT,
         image_pull_secret=image_pull_secret,

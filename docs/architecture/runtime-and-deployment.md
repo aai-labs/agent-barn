@@ -192,6 +192,13 @@ three — the Agent volume writable, the new Pre-Restore destination, and the ch
 read-only — and performs the safety-net capture and the extraction in one process, so the
 backup is on disk before anything is wiped.
 
+Reset is the third kind (`RESTORE_POINT_MODE=reset`, named `rp-reset-<id>-<suffix>`). It mounts
+two — the Agent volume writable and a new `PRE_RESET` destination — copies the first into the
+second, then empties the first's contents but not its root, so the volume's ownership is kept. It
+has no archive to extract. It reuses restore's exit codes for the same two phases: a failed copy
+means the Agent volume was never touched, and a failure after it means the backup is good and the
+volume was changed. Like restore it is never retried.
+
 The wipe is not total. A short per-runtime list of paths survives it — Hermes' `config.yaml`,
 OpenClaw's `openclaw.json` and `npm/` — because each runtime *merges into* its configuration
 rather than rewriting it, and OpenClaw's plugin store holds install records and a host link into

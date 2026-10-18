@@ -53,6 +53,22 @@ export class AgentConfigurationPage {
       .getByRole("button", { name: /^Apply(?: & Restart)?$/i });
   }
 
+  resetButton(): Locator {
+    return this.page.getByTestId("agent-reset-button");
+  }
+
+  resetReason(): Locator {
+    return this.page.getByTestId("agent-reset-reason");
+  }
+
+  resetOutcome(): Locator {
+    return this.page.getByTestId("agent-reset-outcome");
+  }
+
+  resetConfirmButton(): Locator {
+    return this.page.getByRole("dialog").getByRole("button", { name: /^reset agent$/i });
+  }
+
   captureRestorePointButton(): Locator {
     return this.page.getByRole("button", { name: /capture restore point/i });
   }

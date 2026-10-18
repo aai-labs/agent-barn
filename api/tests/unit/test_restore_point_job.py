@@ -1,5 +1,6 @@
 import gzip
 import io
+import json
 import re
 import tarfile
 from pathlib import Path
@@ -8,6 +9,7 @@ from uuid import uuid4
 import pytest
 from hamcrest import assert_that, calling, empty, equal_to, greater_than, has_item, is_not, raises
 
+from api.domains.agents import restore_point_job
 from api.domains.agents.builders.openclaw import build_config_map
 from api.domains.agents.restore_point_job import (
     ARCHIVE_NAME,
@@ -20,6 +22,7 @@ from api.domains.agents.restore_point_job import (
     EXIT_RESTORE_FAILED,
     HERMES_EXCLUDED,
     MANIFEST_NAME,
+    MODE_RESET,
     MODE_RESTORE,
     OPENCLAW_EXCLUDED,
     ArchiveValidationError,
@@ -557,6 +560,82 @@ def test_main_reports_a_failed_extraction_distinctly_and_keeps_the_backup(tmp_pa
     assert_that(exc_info.value.code, equal_to(EXIT_RESTORE_FAILED))
     assert_that((target / "workspace/live.md").read_text(), equal_to("live content"))
     assert_that(_members(backup), has_item("workspace/live.md"))
+
+
+def _reset_env(monkeypatch, target: Path, backup: Path) -> None:
+    monkeypatch.setenv(ENV_MODE, MODE_RESET)
+    monkeypatch.setenv(ENV_RUNTIME, _HERMES)
+    monkeypatch.setenv(ENV_TARGET, str(target))
+    monkeypatch.setenv(ENV_BACKUP, str(backup))
+
+
+def test_main_reset_backs_the_volume_up_then_empties_it(tmp_path, monkeypatch, capsys):
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, "memories/USER.md", "what the agent learned")
+    _write(target, "workspace/notes.md", "work in progress")
+    # Excluded from the archive because the start script rewrites it, but a reset
+    # still removes it: the aim is a volume that boots as a fresh one would.
+    _write(target, "config.yaml", "stale: true")
+    _reset_env(monkeypatch, target, backup)
+
+    main()
+
+    assert_that(sorted(target.iterdir()), empty())
+    assert_that(target.is_dir(), equal_to(True))
+    assert_that(_members(backup), has_item("memories/USER.md"))
+    assert_that(_members(backup), has_item("workspace/notes.md"))
+    assert_that(_members(backup), is_not(has_item("config.yaml")))
+    # The manifest the API reads the archive size from is printed before the wipe.
+    assert_that(json.loads(capsys.readouterr().out.splitlines()[-1])["file_count"], equal_to(2))
+
+
+def test_main_reset_leaves_the_volume_alone_when_the_backup_fails(tmp_path, monkeypatch):
+    target, backup = tmp_path / "tgt", tmp_path / "missing"
+    target.mkdir()
+    _write(target, "workspace/live.md", "live content")
+    _reset_env(monkeypatch, target, backup)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert_that(exc_info.value.code, equal_to(EXIT_BACKUP_FAILED))
+    assert_that((target / "workspace/live.md").read_text(), equal_to("live content"))
+
+
+def test_main_reset_reports_a_failed_wipe_distinctly_and_keeps_the_backup(tmp_path, monkeypatch):
+    target, backup = tmp_path / "tgt", tmp_path / "bak"
+    target.mkdir()
+    backup.mkdir()
+    _write(target, "workspace/live.md", "live content")
+    _reset_env(monkeypatch, target, backup)
+
+    def refuse(_target: Path) -> None:
+        raise PermissionError("read-only file system")
+
+    monkeypatch.setattr(restore_point_job, "_wipe_contents", refuse)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert_that(exc_info.value.code, equal_to(EXIT_RESTORE_FAILED))
+    assert_that(_members(backup), has_item("workspace/live.md"))
+
+
+def test_main_reset_requires_a_backup_volume(tmp_path, monkeypatch):
+    target = tmp_path / "tgt"
+    target.mkdir()
+    _write(target, "workspace/live.md", "live content")
+    _reset_env(monkeypatch, target, tmp_path)
+    monkeypatch.delenv(ENV_BACKUP)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    # A message, not an exit code the API reads as a phase: nothing ran.
+    assert_that(str(exc_info.value.code), equal_to(f"{ENV_BACKUP} is required"))
+    assert_that((target / "workspace/live.md").read_text(), equal_to("live content"))
 
 
 def test_the_openclaw_plugin_store_round_trips_through_a_restore(tmp_path):

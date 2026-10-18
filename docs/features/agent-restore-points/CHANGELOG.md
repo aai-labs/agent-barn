@@ -23,6 +23,30 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
+### 2026-10-16 — AF-181 — Agent reset (with backup)
+
+- Delivered: `POST /organizations/{org}/agents/{id}/reset`, returning `202` with a `PRE_RESET`
+  backup. One Job (`RESTORE_POINT_MODE=reset`) copies the Agent volume into that backup, then empties
+  the volume's contents. The Agent must be stopped (or in `ERROR`) and stays stopped afterwards.
+  Permission is `agent.lifecycle.manage`, as for restore. The `PRE_RESET` origin already existed in the
+  enum, the database, and the UI labels; no migration was needed.
+- Delivered: the reset is reconciled like a restore's safety copy: a failed backup fails the row and
+  releases its volume; a failure after the backup keeps it `READY` with a reason saying the reset did
+  not finish; an unknown phase keeps the volume. `mark_ready` can now carry a reason for that case.
+- Delivered: `agent.reset` Domain Event, projected into the security audit trail. The backup row
+  emits no `created` event.
+- Delivered: a "Reset this Agent" control in the configuration page's Danger zone, above Retire, with
+  its disabled reasons shown, and a reason shown on a `READY` restore point row.
+- Changed: `_provision_capture` now delegates to `_provision_backup`, which a reset shares: both
+  create a volume and then a Job, and both fail the row and release the volume if that cannot be done.
+- Decision: Hindsight memory is not cleared. Restore points never covered it, so clearing it would be
+  the one part of a reset with no undo.
+- Decision: `PRE_RESET` backups are not counted against `RESTORE_POINT_MAX_PER_AGENT` and are never
+  deleted automatically, the same as `PRE_UPGRADE`.
+- Not verified: no reset has run end to end in a cluster. The Job's two phases and its exit codes are
+  covered by unit tests against temporary directories, and reconciliation by integration tests with a
+  mocked Kubernetes client.
+
 ### 2026-10-07 — AF-201 — Managed update review fixes
 
 - Fixed: a rollback restore Job killed with no output (OOM, deadline, eviction) was read as "never

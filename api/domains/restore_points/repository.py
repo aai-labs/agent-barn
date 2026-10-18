@@ -224,7 +224,11 @@ class RestorePointRepository:
         *,
         archive_bytes: int | None,
         file_count: int | None,
+        failure_reason: str | None = None,
     ) -> bool:
+        """Mark an archive usable. `failure_reason` is for the one case where it is
+        usable but the operation around it was not: a reset that took its backup and
+        then did not finish emptying the volume."""
         return self._conditional_update(
             restore_point_id,
             NON_TERMINAL_STATUSES,
@@ -233,7 +237,7 @@ class RestorePointRepository:
                 "archive_bytes": archive_bytes,
                 "file_count": file_count,
                 "captured_at": datetime.now(UTC),
-                "failure_reason": None,
+                "failure_reason": failure_reason,
                 "job_name": None,
             },
         )
