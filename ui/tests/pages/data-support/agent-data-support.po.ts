@@ -630,6 +630,10 @@ export class AgentDataSupport {
     });
   }
 
+  async interceptGetCustomApiConnectionsRequest(agentId = MOCK_AGENT_ID) {
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/custom-api-connections`, (route) => route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.fallback());
+  }
+
   async interceptGetAgentRequest({
     agentId = MOCK_AGENT_ID,
     status = 200,
@@ -641,6 +645,7 @@ export class AgentDataSupport {
     detail?: string;
     body?: unknown;
   } = {}) {
+    await this.interceptGetCustomApiConnectionsRequest(agentId);
     await this.page.route(`**/api/v1/organizations/*/agents/${agentId}`, async (route) => {
       if (route.request().method() !== "GET") {
         await route.fallback();

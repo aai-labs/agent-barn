@@ -2,6 +2,7 @@
 token arrives as a store secret written only for a new sign-in, and the native Teams channel
 receives its separate bot credential."""
 
+import tomllib
 from unittest.mock import MagicMock
 
 import pytest
@@ -127,13 +128,15 @@ def test_start_agent_without_integrations_still_cleans_up_a_removed_sharepoint_s
         with when("I start the agent, which now has no aai-cli integrations"):
             response = context.client.post(f"{agent_base(context)}/start", headers=auth(context))
 
-        with then("there's no config, but the boot script still removes the old SharePoint token"):
+        with then("the config has no profiles and startup still cleans up removed credentials"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
             config_map = k8s.create_config_map.call_args.args[1]
-            assert_that("aai-cli-config.toml" in config_map.data, equal_to(False))
+            config = tomllib.loads(config_map.data["aai-cli-config.toml"])
+            assert_that(sorted(config), equal_to(["key_file", "secrets_file"]))
             setup = config_map.data["aai-cli-setup.sh"]
             assert_that(setup, contains_string("secrets remove microsoft.sharepoint_refresh_token"))
-            assert_that(setup, is_not(contains_string("cp /app/config/aai-cli-config.toml")))
+            assert_that(setup, contains_string("cp /app/config/aai-cli-config.toml"))
+            assert_that(setup, contains_string("custom-api-secrets.list"))
 
 
 @pytest.mark.parametrize(

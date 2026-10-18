@@ -11,6 +11,7 @@ import api.domains.organizations.models  # noqa: F401
 from api.core.metrics import CONTENT_TYPE_LATEST, render_metrics, setup_http_metrics
 from api.core.utils import create_injector
 from api.domains.credential_gateway.routes import gateway_router
+from api.domains.custom_api.gateway import custom_api_gateway_router
 
 
 def create_gateway_app(injector: Injector | None = None) -> FastAPI:
@@ -33,6 +34,7 @@ def create_gateway_app(injector: Injector | None = None) -> FastAPI:
         return JSONResponse(status_code=422, content={"detail": "Invalid gateway request."})
 
     subapi.include_router(gateway_router)
+    subapi.include_router(custom_api_gateway_router)
     app.mount("/gateway/v1", subapi)
 
     http_registry = setup_http_metrics(subapi)

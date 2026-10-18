@@ -257,12 +257,14 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
               />
             )}
             {activeSection === "keys" && (
+              <>
               <AgentKeysSettings
                 agent={agent}
-                canEdit={canManageSecrets}
+                canEdit={canEdit && canManageSecrets}
                 editing={editingSection === "keys"}
                 onEdit={() => toggleEditing("keys")}
               />
+              </>
             )}
             {activeSection === "override" && (
               <AgentOverrideSettings
