@@ -125,8 +125,9 @@ export function AgentDangerZoneSettings({
           <div className="font-medium text-[0.9rem]" style={{ color: "var(--err)" }}>Reset this Agent</div>
           <p className="mb-4 mt-1 text-[0.82rem]" style={{ color: "var(--ink-3)" }}>
             Remove everything the Agent has saved on its own volume — chat sessions, scheduled jobs, notes and workspace
-            files — and start it fresh from its settings. A “Before reset” backup is saved first, so you can undo this
-            from Restore points.
+            files — and start it fresh from its settings. A “Before reset” backup of those files is saved first, so you
+            can bring them back from Restore points. A backup does not hold what the Agent rebuilds when it starts (its
+            template files, skills, keys and settings) or its queued outgoing messages.
           </p>
           <button
             type="button"
@@ -181,7 +182,9 @@ export function AgentDangerZoneSettings({
         description={
           "This removes everything the Agent saved on its own volume: chat sessions, scheduled jobs, notes and workspace files. " +
           "Its settings, skills, connections, conversation history in Agent Barn and long-term memory are kept. " +
-          "A “Before reset” backup is saved first and can be restored. The Agent stays stopped until you start it."
+          "A “Before reset” backup of those files is saved first and can be restored. It does not hold queued outgoing messages, " +
+          "or what the Agent rebuilds when it starts (template files, skills, keys and settings). " +
+          "The Agent stays stopped until you start it."
         }
         confirmLabel="Reset Agent"
         pendingLabel="Resetting…"

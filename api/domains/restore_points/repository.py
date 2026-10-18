@@ -97,10 +97,14 @@ class RestorePointRepository:
             return session.exec(query).first()
 
     def count_manual_for_agent(self, agent_id: UUID) -> int:
-        """Manual restore points that still hold a volume.
+        """Manual restore points that still hold a volume."""
+        return self.count_holding_a_volume(agent_id, RestorePointOrigin.MANUAL)
 
-        FAILED captures release their volume when they fail, so counting them
-        would let a run of failures block an Agent from ever capturing again.
+    def count_holding_a_volume(self, agent_id: UUID, origin: RestorePointOrigin) -> int:
+        """Restore points of one origin that still hold a volume.
+
+        FAILED ones released theirs when they failed, so counting them would let a run
+        of failures block an Agent from ever taking another.
         """
         with Session(self.delegate.engine) as session:
             query = (
@@ -108,7 +112,7 @@ class RestorePointRepository:
                 .select_from(AgentRestorePoint)
                 .where(
                     col(AgentRestorePoint.agent_id) == agent_id,
-                    col(AgentRestorePoint.origin) == RestorePointOrigin.MANUAL,
+                    col(AgentRestorePoint.origin) == origin,
                     col(AgentRestorePoint.status) != RestorePointStatus.FAILED,
                 )
             )

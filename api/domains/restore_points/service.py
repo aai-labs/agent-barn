@@ -2,7 +2,8 @@ import enum
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid7
@@ -92,6 +93,10 @@ AGENT_RUNNING_RESET_DETAIL = "Stop the Agent before resetting it."
 RESET_UNFINISHED_DETAIL = (
     "The backup was saved, but the reset did not finish, so some of the Agent's files may be gone. "
     "Reset again to finish it, or restore this backup to undo it."
+)
+RESET_UNKNOWN_DETAIL = (
+    "Agent Barn lost track of this reset, so it cannot say whether the backup finished or whether the "
+    "Agent's files were removed. A restore checks a backup before it changes anything, so trying this one is safe."
 )
 # Origins whose Job copies the Agent volume aside and then changes it.
 _VOLUME_WIPING_ORIGINS = (RestorePointOrigin.PRE_RESTORE, RestorePointOrigin.PRE_RESET)
@@ -333,16 +338,17 @@ class RestorePointService:
 
         A row is committed before its Job is created, so a read landing in that
         window would otherwise fail a healthy operation. Past the grace window a
-        missing Job is genuine. A restore target keeps its volume; a capture
-        releases the one it never finished writing. So does the backup of a
-        reset, with one exception: a reset Job that finished and was reaped before
-        anyone read it has already emptied the Agent volume, and this volume may
-        hold the only copy of what was on it.
+        missing Job is genuine. A row whose Job changes the Agent volume keeps its
+        volume, since the Job may have finished before it was reaped. A capture
+        releases the one it never finished writing. A reset's backup is not failed
+        either: the Agent's files may already be gone, so it stays restorable.
         """
         grace = timedelta(seconds=RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS)
         if respect_grace and row.updated_at > datetime.now(UTC) - grace:
             return
-        if row.status == RestorePointStatus.RESTORING or row.origin == RestorePointOrigin.PRE_RESET:
+        if row.origin == RestorePointOrigin.PRE_RESET:
+            self._keep_unverified_reset_backup(row, reason)
+        elif _wipes_volume(row):
             self._fail(row, reason)
         else:
             self._fail_capture(row, reason)
@@ -384,6 +390,8 @@ class RestorePointService:
             self._succeed(row, failure_reason=unfinished)
         elif outcome == _RestoreOutcome.BACKUP_FAILED:
             self._fail_capture(row, reason)
+        elif row.origin == RestorePointOrigin.PRE_RESET:
+            self._keep_unverified_reset_backup(row, reason)
         else:
             self._fail(row, reason)
 
@@ -421,6 +429,21 @@ class RestorePointService:
             archive_bytes=manifest.get("bytes"),
             file_count=manifest.get("file_count"),
             failure_reason=failure_reason,
+        )
+
+    def _keep_unverified_reset_backup(self, row: AgentRestorePoint, reason: str) -> None:
+        """Leave a reset's backup restorable when nothing says how far the reset got.
+
+        The Job may have emptied the Agent volume, in which case this backup is the only copy of
+        what was on it, and a restore only starts from a READY row. Marking it FAILED would keep
+        the volume and make it useless. READY is safe: a restore checks the archive before it
+        changes anything, so a backup that never finished is refused without touching the volume.
+        """
+        self.repository.mark_ready(
+            row.id,
+            archive_bytes=None,
+            file_count=None,
+            failure_reason=f"{RESET_UNKNOWN_DETAIL} {reason}"[:_MAX_FAILURE_REASON],
         )
 
     def _fail(self, row: AgentRestorePoint, reason: str) -> bool:
@@ -489,43 +512,21 @@ class RestorePointService:
 
         self._await_agent_volume_release(agent.id)
 
-        with self.agent_repository.lifecycle_lock(agent.id) as acquired:
-            if not acquired:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
-
-            current = self.agent_repository.get_by_id(agent.id)
-            if current is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Agent {agent_id} not found",
-                )
+        with self._locked_agent(agent.id) as current:
             if not managed_update:
                 self._refuse_during_managed_update(current)
             self._assert_capturable(current)
-
-            restore_point_id = uuid7()
-            restore_point = AgentRestorePoint(
-                id=restore_point_id,
-                agent_id=current.id,
-                created_by_user_id=context.user.id,
-                label=payload.label,
-                status=RestorePointStatus.PENDING,
+            restore_point, delivery_ids = self._begin_backup(
+                current,
+                context,
                 origin=RestorePointOrigin.PRE_UPGRADE if managed_update else RestorePointOrigin.MANUAL,
-                agent_type=current.agent_type,
-                pvc_name=restore_point_resource_name(restore_point_id),
-                job_name=capture_job_name(restore_point_id),
-                config_manifest=self._build_config_manifest(current).model_dump(mode="json"),
-            )
-            result = self.repository.save_with_event(
-                restore_point,
+                label=payload.label,
+                job_name_for=capture_job_name,
                 event_name=AGENT_RESTORE_POINT_CREATED,
-                actor=resolve_actor_identity(context, current.organization_id),
-                payload=self._event_payload(current, restore_point, context),
+                job_for=self._capture_job,
             )
 
-            self._provision_capture(current, restore_point)
-
-        self._dispatch(result.delivery_ids)
+        self._dispatch(delivery_ids)
         return AgentRestorePointRead.model_validate(restore_point)
 
     def reset_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRestorePointRead:
@@ -540,56 +541,75 @@ class RestorePointService:
 
         self._await_agent_volume_release(agent.id)
 
-        with self.agent_repository.lifecycle_lock(agent.id) as acquired:
-            if not acquired:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
-
-            current = self.agent_repository.get_by_id(agent.id)
-            if current is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        with self._locked_agent(agent.id) as current:
             self._refuse_during_managed_update(current)
             self._assert_resettable(current)
-
-            backup_id = uuid7()
-            backup = AgentRestorePoint(
-                id=backup_id,
-                agent_id=current.id,
-                created_by_user_id=context.user.id,
-                label=PRE_RESET_LABEL,
-                status=RestorePointStatus.PENDING,
-                origin=RestorePointOrigin.PRE_RESET,
-                agent_type=current.agent_type,
-                pvc_name=restore_point_resource_name(backup_id),
-                job_name=reset_job_name(backup_id),
-                config_manifest=self._build_config_manifest(current).model_dump(mode="json"),
-            )
-            result = self.repository.save_with_event(
-                backup,
-                event_name=AGENT_RESET,
-                actor=resolve_actor_identity(context, current.organization_id),
-                payload=self._event_payload(current, backup, context),
-            )
-
-            self._provision_backup(
+            backup, delivery_ids = self._begin_backup(
                 current,
-                backup,
-                build_reset_job(
-                    job_name=backup.job_name or reset_job_name(backup.id),
-                    restore_point_id=backup.id,
-                    agent_id=current.id,
-                    org_id=current.organization_id,
-                    namespace=self.config.k8s_namespace,
-                    image=self.config.api_image,
-                    runtime=current.agent_type,
-                    agent_pvc=f"agent-{current.id}",
-                    backup_pvc=backup.pvc_name,
-                    timeout_seconds=self.config.restore_point_restore_timeout_seconds,
-                    image_pull_secret=self.config.agent_image_pull_secret or None,
-                ),
+                context,
+                origin=RestorePointOrigin.PRE_RESET,
+                label=PRE_RESET_LABEL,
+                job_name_for=reset_job_name,
+                event_name=AGENT_RESET,
+                job_for=self._reset_job,
             )
 
-        self._dispatch(result.delivery_ids)
+        self._dispatch(delivery_ids)
         return AgentRestorePointRead.model_validate(backup)
+
+    @contextmanager
+    def _locked_agent(self, agent_id: UUID) -> Iterator[Agent]:
+        """Hold the Agent's lifecycle lock and yield the Agent, read again under it.
+
+        Every operation that starts a Job on the Agent's volume checks the Agent's state and starts
+        the Job inside this lock, so a start, a stop or a delete cannot land between the two. It
+        refuses rather than waits when something else holds the lock.
+        """
+        with self.agent_repository.lifecycle_lock(agent_id) as acquired:
+            if not acquired:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+            current = self.agent_repository.get_by_id(agent_id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            yield current
+
+    def _begin_backup(
+        self,
+        agent: Agent,
+        context: CurrentUserContext,
+        *,
+        origin: RestorePointOrigin,
+        label: str | None,
+        job_name_for: Callable[[UUID], str],
+        event_name: str,
+        job_for: Callable[[Agent, AgentRestorePoint], V1Job],
+    ) -> tuple[AgentRestorePoint, list[UUID]]:
+        """Record a backup with its event, then start the Job that writes it.
+
+        What a capture and a reset share. The caller dispatches the returned deliveries once it has
+        released the lock.
+        """
+        backup_id = uuid7()
+        backup = AgentRestorePoint(
+            id=backup_id,
+            agent_id=agent.id,
+            created_by_user_id=context.user.id,
+            label=label,
+            status=RestorePointStatus.PENDING,
+            origin=origin,
+            agent_type=agent.agent_type,
+            pvc_name=restore_point_resource_name(backup_id),
+            job_name=job_name_for(backup_id),
+            config_manifest=self._build_config_manifest(agent).model_dump(mode="json"),
+        )
+        result = self.repository.save_with_event(
+            backup,
+            event_name=event_name,
+            actor=resolve_actor_identity(context, agent.organization_id),
+            payload=self._event_payload(agent, backup, context),
+        )
+        self._provision_backup(agent, backup, job_for(agent, backup))
+        return backup, result.delivery_ids
 
     def restore_restore_point(
         self,
@@ -610,13 +630,7 @@ class RestorePointService:
 
         self._await_agent_volume_release(agent.id)
 
-        with self.agent_repository.lifecycle_lock(agent.id) as acquired:
-            if not acquired:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
-
-            current = self.agent_repository.get_by_id(agent.id)
-            if current is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        with self._locked_agent(agent.id) as current:
             if current.status == AgentStatus.RUNNING:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_RESTORE_DETAIL)
             if not managed_update:
@@ -772,12 +786,7 @@ class RestorePointService:
         agent = self.agent_authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         scope = self.agent_authorization.authorization_scope(context, PermissionKey.ACTIVITY_READ)
 
-        with self.agent_repository.lifecycle_lock(agent.id) as acquired:
-            if not acquired:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
-            current = self.agent_repository.get_by_id(agent.id)
-            if current is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        with self._locked_agent(agent.id) as current:
             if current.status == AgentStatus.RUNNING:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_RESTORE_DETAIL)
             self._refuse_during_managed_update(current)
@@ -976,7 +985,6 @@ class RestorePointService:
             time.sleep(RESTORE_POINT_POD_TERMINATION_POLL_SECONDS)
 
     def _assert_resettable(self, agent: Agent) -> None:
-        # No cap check: the backup is a PRE_RESET row, which the per-Agent cap does not count.
         if agent.status == AgentStatus.RUNNING:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGENT_RUNNING_RESET_DETAIL)
 
@@ -984,6 +992,17 @@ class RestorePointService:
             agent.id
         ):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CAPTURE_IN_FLIGHT_DETAIL)
+
+        # Every reset keeps a full-size volume and nothing removes it, so repeated resets would
+        # fill the namespace's storage quota. These are not counted with manual captures, so an
+        # Agent that needs a reset is never blocked by its own captures.
+        cap = self.config.restore_point_max_per_agent
+        count = self.repository.count_holding_a_volume(agent.id, RestorePointOrigin.PRE_RESET)
+        if count >= cap:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"This Agent already keeps {count} of {cap} 'Before reset' backups. Delete one first.",
+            )
 
         if self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace) is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOTHING_TO_RESET_DETAIL)
@@ -1008,23 +1027,34 @@ class RestorePointService:
         if self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace) is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOTHING_TO_CAPTURE_DETAIL)
 
-    def _provision_capture(self, agent: Agent, restore_point: AgentRestorePoint) -> None:
-        self._provision_backup(
-            agent,
-            restore_point,
-            build_capture_job(
-                job_name=restore_point.job_name or capture_job_name(restore_point.id),
-                restore_point_id=restore_point.id,
-                agent_id=agent.id,
-                org_id=agent.organization_id,
-                namespace=self.config.k8s_namespace,
-                image=self.config.api_image,
-                runtime=agent.agent_type,
-                agent_pvc=f"agent-{agent.id}",
-                dest_pvc=restore_point.pvc_name,
-                timeout_seconds=self.config.restore_point_capture_timeout_seconds,
-                image_pull_secret=self.config.agent_image_pull_secret or None,
-            ),
+    def _capture_job(self, agent: Agent, restore_point: AgentRestorePoint) -> V1Job:
+        return build_capture_job(
+            job_name=restore_point.job_name or capture_job_name(restore_point.id),
+            restore_point_id=restore_point.id,
+            agent_id=agent.id,
+            org_id=agent.organization_id,
+            namespace=self.config.k8s_namespace,
+            image=self.config.api_image,
+            runtime=agent.agent_type,
+            agent_pvc=f"agent-{agent.id}",
+            dest_pvc=restore_point.pvc_name,
+            timeout_seconds=self.config.restore_point_capture_timeout_seconds,
+            image_pull_secret=self.config.agent_image_pull_secret or None,
+        )
+
+    def _reset_job(self, agent: Agent, backup: AgentRestorePoint) -> V1Job:
+        return build_reset_job(
+            job_name=backup.job_name or reset_job_name(backup.id),
+            restore_point_id=backup.id,
+            agent_id=agent.id,
+            org_id=agent.organization_id,
+            namespace=self.config.k8s_namespace,
+            image=self.config.api_image,
+            runtime=agent.agent_type,
+            agent_pvc=f"agent-{agent.id}",
+            backup_pvc=backup.pvc_name,
+            timeout_seconds=self.config.restore_point_restore_timeout_seconds,
+            image_pull_secret=self.config.agent_image_pull_secret or None,
         )
 
     def _provision_backup(self, agent: Agent, restore_point: AgentRestorePoint, job: V1Job) -> None:

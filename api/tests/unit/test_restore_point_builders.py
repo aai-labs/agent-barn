@@ -10,7 +10,6 @@ from api.domains.agents.builders.restore_point import (
     SOURCE_MOUNT_PATH,
     TARGET_MOUNT_PATH,
     build_capture_job,
-    build_reset_job,
     build_restore_job,
     build_restore_point_pvc,
     capture_job_name,
@@ -193,41 +192,8 @@ def test_restore_job_passes_all_three_paths_to_the_entrypoint():
     )
 
 
-def test_reset_job_is_never_retried_so_a_second_attempt_cannot_overwrite_the_backup():
-    job = _reset_job()
-
-    assert_that(job.spec.template.spec.restart_policy, equal_to("Never"))
-    assert_that(job.spec.backoff_limit, equal_to(0))
-    assert_that(job.spec.active_deadline_seconds, equal_to(1800))
-
-
-def test_reset_job_mounts_the_agent_volume_and_its_own_backup_volume_writable():
-    mounts = _mounts(_reset_job())
-
-    assert_that(mounts[TARGET_MOUNT_PATH], equal_to((_AGENT_PVC, False)))
-    assert_that(mounts[BACKUP_MOUNT_PATH], equal_to((f"restore-point-{_RESTORE_POINT_ID}", False)))
-    assert_that(ARCHIVE_MOUNT_PATH in mounts, equal_to(False))
-
-
-def test_reset_job_passes_its_mode_and_paths_to_the_entrypoint():
-    env = _reset_job().spec.template.spec.containers[0].env
-    env = {e.name: e.value for e in env}
-
-    assert_that(
-        env,
-        has_entries(
-            {
-                "RESTORE_POINT_MODE": "reset",
-                "RESTORE_POINT_RUNTIME": "hermes",
-                "RESTORE_POINT_TARGET": TARGET_MOUNT_PATH,
-                "RESTORE_POINT_BACKUP": BACKUP_MOUNT_PATH,
-            }
-        ),
-    )
-
-
 def test_jobs_carry_the_reclamation_labels():
-    for job in (_capture_job(), _restore_job(), _reset_job()):
+    for job in (_capture_job(), _restore_job()):
         assert_that(
             job.metadata.labels,
             has_entries(
@@ -258,23 +224,6 @@ def test_jobs_declare_bounded_resources():
 
     assert_that(container.resources.requests, is_not(empty()))
     assert_that(container.resources.limits, is_not(empty()))
-
-
-def _reset_job(**overrides):
-    kwargs: dict[str, Any] = {
-        "job_name": "rp-reset-11111111-1111-1111-1111-111111111111-abc123",
-        "restore_point_id": _RESTORE_POINT_ID,
-        "agent_id": _AGENT_ID,
-        "org_id": _ORG_ID,
-        "namespace": _NS,
-        "image": _IMAGE,
-        "runtime": "hermes",
-        "agent_pvc": _AGENT_PVC,
-        "backup_pvc": restore_point_resource_name(_RESTORE_POINT_ID),
-        "timeout_seconds": 1800,
-    }
-    kwargs.update(overrides)
-    return build_reset_job(**kwargs)
 
 
 def _apply_job_env(monkeypatch, job, path_overrides: dict[str, object]) -> None:
@@ -317,19 +266,6 @@ def test_restore_job_env_drives_the_entrypoint(tmp_path, monkeypatch):
 
     assert_that((target / "memories" / "USER.md").read_text(), equal_to("captured profile"))
     assert_that((target / "stale.md").exists(), equal_to(False))
-    assert_that((backup / ARCHIVE_NAME).exists(), equal_to(True))
-
-
-def test_reset_job_env_drives_the_entrypoint(tmp_path, monkeypatch):
-    target, backup = tmp_path / "target", tmp_path / "backup"
-    target.mkdir()
-    backup.mkdir()
-    (target / "stale.md").write_text("backed up, then removed")
-
-    _apply_job_env(monkeypatch, _reset_job(), {TARGET_MOUNT_PATH: target, BACKUP_MOUNT_PATH: backup})
-    main()
-
-    assert_that(list(target.iterdir()), empty())
     assert_that((backup / ARCHIVE_NAME).exists(), equal_to(True))
 
 

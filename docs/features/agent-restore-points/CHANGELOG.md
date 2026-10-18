@@ -23,29 +23,44 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 ## Changes
 
-### 2026-10-16 — AF-181 — Agent reset (with backup)
+### 2026-10-18 — AF-401 — Agent reset (with backup)
 
 - Delivered: `POST /organizations/{org}/agents/{id}/reset`, returning `202` with a `PRE_RESET`
   backup. One Job (`RESTORE_POINT_MODE=reset`) copies the Agent volume into that backup, then empties
   the volume's contents. The Agent must be stopped (or in `ERROR`) and stays stopped afterwards.
   Permission is `agent.lifecycle.manage`, as for restore. The `PRE_RESET` origin already existed in the
   enum, the database, and the UI labels; no migration was needed.
-- Delivered: the reset is reconciled like a restore's safety copy: a failed backup fails the row and
-  releases its volume; a failure after the backup keeps it `READY` with a reason saying the reset did
-  not finish; an unknown phase keeps the volume. `mark_ready` can now carry a reason for that case.
+- Delivered: the Job removes nothing if the backup could not hold every file. A link outside the volume,
+  a special file, or a socket is in no archive, and a reset would delete it for good. It fails the backup
+  step and names the files. A socket also crashed the capture (`gettarinfo` returns `None`); it is now
+  counted as skipped.
+- Fixed: a link to a directory was left out of every archive and not counted, so a wipe removed it
+  silently. It is now archived as the link. This also changes capture and the restore safety copy.
+- Delivered: the reset is reconciled like a restore's safety copy. A failed backup fails the row and
+  releases its volume. A failure after the backup keeps it `READY` with a reason saying the reset did
+  not finish. When the phase cannot be established, or the Job was deleted unread, it also stays `READY`
+  with a reason: the Agent's files may be gone, a restore needs a `READY` row, and a restore checks the
+  archive before changing anything. `mark_ready` can now carry a reason for these cases.
+- Changed: `_resolve_untracked` now uses `_wipes_volume`, so a Pre-Restore backup whose Job vanished
+  unread keeps its volume, like a restore target does, instead of having it released.
 - Delivered: `agent.reset` Domain Event, projected into the security audit trail. The backup row
   emits no `created` event.
 - Delivered: a "Reset this Agent" control in the configuration page's Danger zone, above Retire, with
-  its disabled reasons shown, and a reason shown on a `READY` restore point row.
-- Changed: `_provision_capture` now delegates to `_provision_backup`, which a reset shares: both
-  create a volume and then a Job, and both fail the row and release the volume if that cannot be done.
+  its disabled reasons shown, a toast when a reset fails, and a note that stays while a failed reset is
+  the latest thing to have happened to the volume. A reason is also shown on a `READY` restore point row.
+- Changed: capture and reset now share `_begin_backup` (row, event, volume and Job), and every
+  operation that starts a Job on the Agent volume takes its lifecycle lock through `_locked_agent`.
+  The restore and reset Job builders share `_build_volume_changing_job`, which holds the never-retry rule.
 - Decision: Hindsight memory is not cleared. Restore points never covered it, so clearing it would be
   the one part of a reset with no undo.
-- Decision: `PRE_RESET` backups are not counted against `RESTORE_POINT_MAX_PER_AGENT` and are never
-  deleted automatically, the same as `PRE_UPGRADE`.
-- Not verified: no reset has run end to end in a cluster. The Job's two phases and its exit codes are
-  covered by unit tests against temporary directories, and reconciliation by integration tests with a
-  mocked Kubernetes client.
+- Decision: Before-reset backups are capped per Agent by `RESTORE_POINT_MAX_PER_AGENT`, counted apart
+  from manual captures, and never deleted automatically. Without a cap, repeated resets would fill the
+  namespace quota. Pre-restore and `PRE_UPGRADE` backups are still uncapped.
+- Decision: the wipe stays total. A backup does not hold what the archive excludes. The start script
+  rebuilds most of it, but not the message spool, and the UI says so rather than promising a full undo.
+- Not verified: no reset has run end to end in a real cluster since the last change. The Job's phases
+  and exit codes are covered by unit tests against temporary directories, and reconciliation by integration
+  tests with a mocked Kubernetes client.
 
 ### 2026-10-07 — AF-201 — Managed update review fixes
 

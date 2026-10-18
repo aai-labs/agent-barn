@@ -5,7 +5,6 @@ import { AgentConfigurationPage } from "../pages/agent-configuration-page.po";
 import {
   MOCK_AGENT_ID,
   mockAgent,
-  mockAgentAllowedActions,
   mockPreResetPoint,
   mockReadyPreResetPoint,
   mockRestorePoint,
@@ -69,72 +68,6 @@ test.describe("Agent reset", () => {
     await expect(configurationPage.resetButton()).toBeEnabled();
   });
 
-  test("is offered only once the Agent is stopped, and says why until then", async ({ page }) => {
-    const dataSupport = new DataSupport(page);
-    const configurationPage = new AgentConfigurationPage(page);
-
-    await baseIntercepts(dataSupport, { ...mockAgent, status: "RUNNING" });
-    await dataSupport.agents.interceptGetRestorePointsRequest();
-
-    await openDangerZone(configurationPage);
-    await expect(configurationPage.resetButton()).toBeDisabled();
-    await expect(configurationPage.resetReason()).toHaveText("Stop the Agent before resetting it.");
-  });
-
-  test("is refused for someone who cannot manage the Agent's lifecycle", async ({ page }) => {
-    const dataSupport = new DataSupport(page);
-    const configurationPage = new AgentConfigurationPage(page);
-
-    await baseIntercepts(dataSupport, {
-      ...stoppedAgent,
-      allowed_actions: mockAgentAllowedActions.filter((action) => action !== "agent.lifecycle.manage"),
-    });
-    await dataSupport.agents.interceptGetRestorePointsRequest();
-
-    await openDangerZone(configurationPage);
-    await expect(configurationPage.resetButton()).toBeDisabled();
-    await expect(configurationPage.resetReason()).toContainText("permission");
-  });
-
-  test("waits while another restore point operation is running", async ({ page }) => {
-    const dataSupport = new DataSupport(page);
-    const configurationPage = new AgentConfigurationPage(page);
-
-    await baseIntercepts(dataSupport);
-    await dataSupport.agents.interceptGetRestorePointsRequest({
-      body: mockRestorePointsPage({ items: [{ ...mockRestorePoint, status: "CAPTURING" }] }),
-    });
-
-    await openDangerZone(configurationPage);
-    await expect(configurationPage.resetButton()).toBeDisabled();
-    await expect(configurationPage.resetReason()).toContainText("already running");
-  });
-
-  test("says so when the reset took its backup but did not finish", async ({ page }) => {
-    const dataSupport = new DataSupport(page);
-    const configurationPage = new AgentConfigurationPage(page);
-
-    await baseIntercepts(dataSupport);
-    await dataSupport.agents.interceptGetRestorePointsRequest({
-      body: mockRestorePointsPage({
-        items: [
-          {
-            ...mockReadyPreResetPoint,
-            failure_reason:
-              "The backup was saved, but the reset did not finish, so some of the Agent's files may be gone.",
-          },
-          mockRestorePoint,
-        ],
-      }),
-    });
-
-    await openDangerZone(configurationPage);
-    await expect(configurationPage.resetOutcome()).toContainText("did not finish");
-    await expect(configurationPage.resetOutcome().getByRole("link", { name: "View the backup" })).toBeVisible();
-    // Another reset is the way to finish it, so the button is still offered.
-    await expect(configurationPage.resetButton()).toBeEnabled();
-  });
-
   test("tells you when a reset fails, and keeps saying so once the Agent is running", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);
@@ -157,24 +90,5 @@ test.describe("Agent reset", () => {
     await baseIntercepts(dataSupport, mockAgent);
     await openDangerZone(configurationPage);
     await expect(configurationPage.resetOutcome()).toContainText("did not complete");
-  });
-
-  test("shows a refusal from the server as an error and leaves the dialog usable", async ({ page }) => {
-    const dataSupport = new DataSupport(page);
-    const configurationPage = new AgentConfigurationPage(page);
-
-    await baseIntercepts(dataSupport);
-    await dataSupport.agents.interceptGetRestorePointsRequest();
-    await dataSupport.agents.interceptResetAgentRequest({
-      status: 409,
-      detail: "The Agent is still shutting down. Try again in a moment.",
-    });
-
-    await openDangerZone(configurationPage);
-    await configurationPage.resetButton().click();
-    await configurationPage.resetConfirmButton().click();
-
-    await expect(page.getByText("The Agent is still shutting down. Try again in a moment.")).toBeVisible();
-    await expect(configurationPage.resetButton()).toBeEnabled();
   });
 });

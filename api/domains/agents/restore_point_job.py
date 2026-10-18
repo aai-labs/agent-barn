@@ -77,6 +77,10 @@ class DestinationFullError(Exception):
     pass
 
 
+class _Unarchivable(Exception):
+    """A file with no tar form at all, which `tarfile.data_filter` never gets to judge."""
+
+
 def _matches_prefix(rel_path: str, prefixes: tuple[str, ...]) -> bool:
     return any(rel_path == prefix or rel_path.startswith(prefix + "/") for prefix in prefixes)
 
@@ -91,14 +95,31 @@ def _walk_included_files(root: Path, runtime: str):
         current = Path(dir_path)
         rel_dir = current.relative_to(root).as_posix()
         prefix = "" if rel_dir == "." else rel_dir + "/"
-        dir_names[:] = sorted(d for d in dir_names if not is_excluded(prefix + d, runtime))
+        kept_dirs = []
+        for dir_name in sorted(dir_names):
+            if is_excluded(prefix + dir_name, runtime):
+                continue
+            if (current / dir_name).is_symlink():
+                # os.walk lists a link to a directory with the directories but does not enter it.
+                # Left there it reaches neither the archive nor the skipped count, and a wipe would
+                # remove it without a trace. It is archived as the link, and never followed.
+                yield current / dir_name, prefix + dir_name
+            else:
+                kept_dirs.append(dir_name)
+        dir_names[:] = kept_dirs
         for file_name in sorted(file_names):
             rel_path = prefix + file_name
             if not is_excluded(rel_path, runtime):
                 yield current / file_name, rel_path
 
 
-def capture(source: Path, dest: Path, runtime: str) -> dict:
+def capture(source: Path, dest: Path, runtime: str, skipped_paths: list[str] | None = None) -> dict:
+    """Archive the volume. What the archive cannot safely hold is counted, and named in `skipped_paths`.
+
+    A restore extracts with the same filter, so a member it refuses would fail the whole restore;
+    dropping it here is what keeps an archive restorable. A caller that goes on to remove the
+    volume has to look at the count: those files are in no archive.
+    """
     archive_path = dest / ARCHIVE_NAME
     file_count = 0
     skipped = 0
@@ -107,9 +128,14 @@ def capture(source: Path, dest: Path, runtime: str) -> dict:
             for path, rel_path in _walk_included_files(source, runtime):
                 info = tar.gettarinfo(path, arcname=rel_path)
                 try:
+                    # A socket has no tar form: gettarinfo returns None for it.
+                    if info is None:
+                        raise _Unarchivable
                     tarfile.data_filter(info, "")
-                except tarfile.FilterError:
+                except tarfile.FilterError, _Unarchivable:
                     skipped += 1
+                    if skipped_paths is not None:
+                        skipped_paths.append(rel_path)
                     continue
                 if info.isreg():
                     with path.open("rb") as stream:
@@ -212,11 +238,25 @@ def _required_env(name: str) -> Path:
 def _run_reset(target: Path, backup: Path, runtime: str) -> None:
     # Each phase fails on its own exit code: the API reads it to tell "the Agent
     # volume was never touched" from "it was emptied".
+    skipped_paths: list[str] = []
     try:
-        emit_result(capture(target, backup, runtime))
+        manifest = capture(target, backup, runtime, skipped_paths)
     except Exception as exc:
         emit_failure(f"pre-reset capture failed: {exc}")
         raise SystemExit(EXIT_BACKUP_FAILED) from exc
+
+    if skipped_paths:
+        # A reset removes everything, so anything the backup could not hold would be gone for
+        # good, and the row would still read as a clean success. Better to refuse. This is
+        # reported as a failed backup, and no manifest is printed, so nothing reads it as a
+        # backup that finished.
+        listed = ", ".join(skipped_paths[:5]) + (", ..." if len(skipped_paths) > 5 else "")
+        emit_failure(
+            f"{len(skipped_paths)} file(s) cannot be saved in a backup (for example, links that point outside "
+            f"the volume), so nothing was removed: {listed}"
+        )
+        raise SystemExit(EXIT_BACKUP_FAILED)
+    emit_result(manifest)
 
     try:
         _wipe_contents(target)

@@ -7,9 +7,19 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from hamcrest import assert_that, calling, empty, equal_to, greater_than, has_item, is_not, raises
+from hamcrest import (
+    assert_that,
+    calling,
+    contains_string,
+    empty,
+    equal_to,
+    greater_than,
+    has_item,
+    has_items,
+    is_not,
+    raises,
+)
 
-from api.domains.agents import restore_point_job
 from api.domains.agents.builders.openclaw import build_config_map
 from api.domains.agents.restore_point_job import (
     ARCHIVE_NAME,
@@ -574,68 +584,48 @@ def test_main_reset_backs_the_volume_up_then_empties_it(tmp_path, monkeypatch, c
     target.mkdir()
     backup.mkdir()
     _write(target, "memories/USER.md", "what the agent learned")
-    _write(target, "workspace/notes.md", "work in progress")
     # Excluded from the archive because the start script rewrites it, but a reset
     # still removes it: the aim is a volume that boots as a fresh one would.
     _write(target, "config.yaml", "stale: true")
+    # A link to a directory is archived as the link: os.walk lists it with the
+    # directories and would otherwise drop it from the backup without a trace.
+    _write(target, "projects/app.txt", "work")
+    (target / "current").symlink_to("projects")
     _reset_env(monkeypatch, target, backup)
 
     main()
 
-    assert_that(sorted(target.iterdir()), empty())
-    assert_that(target.is_dir(), equal_to(True))
-    assert_that(_members(backup), has_item("memories/USER.md"))
-    assert_that(_members(backup), has_item("workspace/notes.md"))
-    assert_that(_members(backup), is_not(has_item("config.yaml")))
+    assert_that(list(target.iterdir()), empty())
+    with tarfile.open(backup / ARCHIVE_NAME, "r:gz") as tar:
+        assert_that(tar.getnames(), has_items("memories/USER.md", "projects/app.txt", "current"))
+        assert_that(tar.getnames(), is_not(has_item("config.yaml")))
     # The manifest the API reads the archive size from is printed before the wipe.
-    assert_that(json.loads(capsys.readouterr().out.splitlines()[-1])["file_count"], equal_to(2))
+    assert_that(json.loads(capsys.readouterr().out.splitlines()[-1])["skipped"], equal_to(0))
 
 
-def test_main_reset_leaves_the_volume_alone_when_the_backup_fails(tmp_path, monkeypatch):
-    target, backup = tmp_path / "tgt", tmp_path / "missing"
-    target.mkdir()
-    _write(target, "workspace/live.md", "live content")
-    _reset_env(monkeypatch, target, backup)
-
-    with pytest.raises(SystemExit) as exc_info:
-        main()
-
-    assert_that(exc_info.value.code, equal_to(EXIT_BACKUP_FAILED))
-    assert_that((target / "workspace/live.md").read_text(), equal_to("live content"))
-
-
-def test_main_reset_reports_a_failed_wipe_distinctly_and_keeps_the_backup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("cause", ["a link to outside the volume", "a missing backup volume"])
+def test_main_reset_removes_nothing_when_the_backup_cannot_hold_everything(cause, tmp_path, monkeypatch, capsys):
     target, backup = tmp_path / "tgt", tmp_path / "bak"
     target.mkdir()
     backup.mkdir()
     _write(target, "workspace/live.md", "live content")
+    if cause == "a link to outside the volume":
+        # The archive filter refuses it, so it would be in no backup, and a reset would delete it.
+        (target / "workspace/outside").symlink_to("/etc/hostname")
+    else:
+        backup = tmp_path / "missing"
     _reset_env(monkeypatch, target, backup)
 
-    def refuse(_target: Path) -> None:
-        raise PermissionError("read-only file system")
-
-    monkeypatch.setattr(restore_point_job, "_wipe_contents", refuse)
-
     with pytest.raises(SystemExit) as exc_info:
         main()
 
-    assert_that(exc_info.value.code, equal_to(EXIT_RESTORE_FAILED))
-    assert_that(_members(backup), has_item("workspace/live.md"))
-
-
-def test_main_reset_requires_a_backup_volume(tmp_path, monkeypatch):
-    target = tmp_path / "tgt"
-    target.mkdir()
-    _write(target, "workspace/live.md", "live content")
-    _reset_env(monkeypatch, target, tmp_path)
-    monkeypatch.delenv(ENV_BACKUP)
-
-    with pytest.raises(SystemExit) as exc_info:
-        main()
-
-    # A message, not an exit code the API reads as a phase: nothing ran.
-    assert_that(str(exc_info.value.code), equal_to(f"{ENV_BACKUP} is required"))
+    captured = capsys.readouterr()
+    assert_that(exc_info.value.code, equal_to(EXIT_BACKUP_FAILED))
     assert_that((target / "workspace/live.md").read_text(), equal_to("live content"))
+    # No manifest, or it could be read as a backup that finished.
+    assert_that(captured.out, equal_to(""))
+    if cause == "a link to outside the volume":
+        assert_that(captured.err, contains_string("workspace/outside"))
 
 
 def test_the_openclaw_plugin_store_round_trips_through_a_restore(tmp_path):

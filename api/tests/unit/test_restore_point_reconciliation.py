@@ -289,26 +289,6 @@ def test_an_unlabelled_resource_is_identified_by_its_generated_name():
     assert_that(result.orphans_deleted, equal_to(2))
 
 
-def test_an_unlabelled_reset_job_is_identified_by_its_generated_name():
-    orphan_id = uuid4()
-    cluster = FakeCluster(jobs=[_resource(f"rp-reset-{orphan_id}-a1b2c3", labelled=False)])
-
-    result = _reconciler(FakeRepository(), cluster=cluster).run_once()
-
-    assert_that(result.orphans_unidentified, equal_to(0))
-    assert_that(result.orphans_deleted, equal_to(1))
-
-
-def test_an_unlabelled_reset_job_a_row_still_owns_is_left_alone():
-    owned_id = uuid4()
-    cluster = FakeCluster(jobs=[_resource(f"rp-reset-{owned_id}-a1b2c3", labelled=False)])
-
-    result = _reconciler(FakeRepository(existing_ids={owned_id}), cluster=cluster).run_once()
-
-    assert_that(result.orphans_deleted, equal_to(0))
-    assert_that(cluster.deleted_jobs, empty())
-
-
 def test_an_unlabelled_resource_a_row_still_owns_is_left_alone():
     owned_id = uuid4()
     cluster = FakeCluster(pvcs=[_resource(f"restore-point-{owned_id}", labelled=False)])

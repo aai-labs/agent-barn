@@ -57,10 +57,6 @@ export class AgentConfigurationPage {
     return this.page.getByTestId("agent-reset-button");
   }
 
-  resetReason(): Locator {
-    return this.page.getByTestId("agent-reset-reason");
-  }
-
   resetOutcome(): Locator {
     return this.page.getByTestId("agent-reset-outcome");
   }
