@@ -11,7 +11,7 @@ import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 import { useBillingSettings } from "../hooks/use-billing-settings";
 import { chargeUsd } from "../pricing";
 
-type Draft = { min: string; max: string; rate: string; fee: string };
+type Draft = { payments: boolean; min: string; max: string; rate: string; fee: string };
 
 // The API's bounds: Stripe's smallest card payment, and caps that only stop a typo.
 const MIN_PURCHASE_FLOOR_USD = 0.5;
@@ -110,10 +110,20 @@ export function PlatformBillingSettings() {
   // What a buyer pays for $1.00 of credit; below $1.00 the platform sells at a loss.
   const pricePerCredit = rate === null || fee === null ? null : (1 / rate) * (1 + fee / 100);
 
+  // Payments can always be turned off, but only turned on where the deployment can take them.
+  const paymentsLocked = draft !== null && !draft.payments && !billingSettings.paymentsConfigured;
+  const paymentsChange = draft === null || draft.payments === billingSettings.paymentsEnabled ? null : draft.payments;
+
   async function submit() {
-    if (min === null || max === null || rate === null || fee === null || max < min) return;
+    if (draft === null || min === null || max === null || rate === null || fee === null || max < min) return;
     try {
-      await saveSettings({ minPurchaseUsd: min, maxPurchaseUsd: max, creditRate: rate, purchaseFeePercent: fee });
+      await saveSettings({
+        paymentsEnabled: draft.payments,
+        minPurchaseUsd: min,
+        maxPurchaseUsd: max,
+        creditRate: rate,
+        purchaseFeePercent: fee,
+      });
       setDraft(null);
       setSaved(true);
     } catch {
@@ -126,13 +136,47 @@ export function PlatformBillingSettings() {
   return (
     <section className="af-card overflow-hidden" aria-label="Billing settings">
       <div className="p-5">
-        {!billingSettings.paymentsEnabled && (
+        {!billingSettings.paymentsConfigured ? (
           <p className="mb-4 mt-0 text-sm" style={{ color: "var(--ink-2)" }}>
-            This deployment doesn&apos;t take payments. These settings apply once it does.
+            {billingSettings.paymentsEnabled
+              ? "Payments are on, but this deployment can't take them right now, so organizations can't buy credit."
+              : "This deployment isn't set up to take payments yet."}
           </p>
+        ) : (
+          !billingSettings.paymentsEnabled && (
+            <p className="mb-4 mt-0 text-sm" style={{ color: "var(--ink-2)" }}>
+              Organizations can&apos;t buy credit until payments are turned on.
+            </p>
+          )
         )}
         {draft !== null ? (
           <div className="flex flex-col gap-5">
+            <div>
+              <div className="flex max-w-md items-center justify-between gap-4">
+                <label htmlFor="billing-payments" className="text-sm font-medium">
+                  Take payments
+                </label>
+                <button
+                  id="billing-payments"
+                  type="button"
+                  role="switch"
+                  aria-checked={draft.payments}
+                  aria-describedby="billing-payments-description"
+                  disabled={isSaving || paymentsLocked}
+                  onClick={() => change({ payments: !draft.payments })}
+                  className="relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50"
+                  style={{ backgroundColor: draft.payments ? "var(--ink)" : "var(--line)" }}
+                >
+                  <span
+                    aria-hidden
+                    className={`absolute left-1 top-1 h-4 w-4 rounded-full bg-white transition-transform ${draft.payments ? "translate-x-5" : ""}`}
+                  />
+                </button>
+              </div>
+              <p id="billing-payments-description" className="mb-0 mt-2 text-sm" style={{ color: "var(--ink-3)" }}>
+                Let organizations on credit buy more. Turning it off stops new purchases only.
+              </p>
+            </div>
             <Field
               id="billing-min"
               label="Smallest purchase"
@@ -172,6 +216,14 @@ export function PlatformBillingSettings() {
           </div>
         ) : (
           <dl className="m-0 grid gap-x-8 gap-y-5 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <dt className="mb-2 text-[0.7rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>
+                Payments
+              </dt>
+              <dd className="m-0 text-[0.9rem]" data-testid="saved-payments">
+                {billingSettings.paymentsEnabled ? "On" : "Off"}
+              </dd>
+            </div>
             <Saved label="Smallest purchase">{formatUsd(billingSettings.minPurchaseUsd, 2)}</Saved>
             <Saved label="Largest purchase">{formatUsd(billingSettings.maxPurchaseUsd, 2)}</Saved>
             <Saved label="Credit per dollar">{String(billingSettings.creditRate)}</Saved>
@@ -215,6 +267,7 @@ export function PlatformBillingSettings() {
             className="af-btn"
             onClick={() => {
               setDraft({
+                payments: billingSettings.paymentsEnabled,
                 min: String(billingSettings.minPurchaseUsd),
                 max: String(billingSettings.maxPurchaseUsd),
                 rate: String(billingSettings.creditRate),
@@ -238,6 +291,13 @@ export function PlatformBillingSettings() {
           isPending={isSaving}
           onConfirm={submit}
         >
+          {paymentsChange !== null && (
+            <p className="mb-3 mt-0 text-[0.88rem]" style={{ color: "var(--ink-2)" }}>
+              {paymentsChange
+                ? "Organizations on credit will be able to buy it."
+                : "Organizations will no longer be able to buy credit. Payments already made still arrive."}
+            </p>
+          )}
           {pricePerCredit < 1 ? (
             <p className="m-0 text-[0.88rem]" role="alert" style={{ color: "var(--err)" }}>
               Each $1.00 of credit will cost buyers {formatUsd(chargeUsd(1, { creditRate: rate, purchaseFeePercent: fee }), 2)},

@@ -10,7 +10,10 @@ import { BillingSettingsSchema, type BillingSettings } from "../schemas";
 const BASE = "/api/v1/platform/settings/billing";
 const KEY = createQueryKeyStructure("platform-billing-settings").detail("settings");
 
-type BillingSettingsChange = Pick<BillingSettings, "minPurchaseUsd" | "maxPurchaseUsd" | "creditRate" | "purchaseFeePercent">;
+type BillingSettingsChange = Pick<
+  BillingSettings,
+  "paymentsEnabled" | "minPurchaseUsd" | "maxPurchaseUsd" | "creditRate" | "purchaseFeePercent"
+>;
 
 export function useBillingSettings() {
   const client = useQueryClient();

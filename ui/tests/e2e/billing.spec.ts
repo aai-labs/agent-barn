@@ -376,6 +376,7 @@ test.describe("Platform · Billing settings", () => {
     const saved: unknown[] = [];
     let current = {
       payments_enabled: true,
+      payments_configured: true,
       min_purchase_usd: 5,
       max_purchase_usd: 500,
       credit_rate: 1,
@@ -425,6 +426,7 @@ test.describe("Platform · Billing settings", () => {
       return route.fulfill({
         json: {
           payments_enabled: true,
+          payments_configured: true,
           min_purchase_usd: 5,
           max_purchase_usd: 500,
           credit_rate: 1,
@@ -463,6 +465,7 @@ test.describe("Platform · Billing settings", () => {
         route.fulfill({
           json: {
             payments_enabled: true,
+            payments_configured: true,
             min_purchase_usd: 5,
             max_purchase_usd: 500,
             credit_rate: 1,
@@ -483,29 +486,88 @@ test.describe("Platform · Billing settings", () => {
     });
   }
 
-  test("says when this deployment doesn't take payments", async ({ page }) => {
+  async function openSettings(page: Page, initial: Record<string, unknown>) {
     const data = new DataSupport(page);
     await data.auth.interceptRefreshRequest();
     await data.users.interceptGetUserContextRequest();
     await data.users.interceptGetOrganizationsRequest();
     await data.platformMemory.intercept();
-    await page.route("**/api/v1/platform/settings/billing", (route) =>
-      route.fulfill({
-        json: {
-          payments_enabled: false,
-          min_purchase_usd: 5,
-          max_purchase_usd: 500,
-          credit_rate: 1,
-          purchase_fee_percent: 0,
-          updated_at: null,
-        },
-      }),
-    );
-
+    const saved: Record<string, unknown>[] = [];
+    let current = {
+      payments_enabled: false,
+      payments_configured: true,
+      min_purchase_usd: 5,
+      max_purchase_usd: 500,
+      credit_rate: 1,
+      purchase_fee_percent: 0,
+      updated_at: null,
+      ...initial,
+    };
+    await page.route("**/api/v1/platform/settings/billing", (route) => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON() as Record<string, unknown>;
+        saved.push(body);
+        current = { ...current, ...body };
+      }
+      return route.fulfill({ json: current });
+    });
     await page.goto("/dashboard/platform/settings");
     await page.getByRole("button", { name: "Billing" }).click();
+    return { section: page.getByRole("region", { name: "Billing" }), saved };
+  }
 
-    await expect(page.getByText("This deployment doesn't take payments.")).toBeVisible();
+  test("payments are off until a Platform Administrator turns them on", async ({ page }) => {
+    const { section, saved } = await openSettings(page, {});
+    await expect(section.getByText("Organizations can't buy credit until payments are turned on.")).toBeVisible();
+    await expect(section.getByTestId("saved-payments")).toHaveText("Off");
+
+    await section.getByRole("button", { name: "Edit" }).click();
+    const toggle = section.getByRole("switch", { name: "Take payments" });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await toggle.click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    const confirm = page.getByRole("dialog");
+    await expect(confirm).toContainText("Organizations on credit will be able to buy it.");
+    await confirm.getByRole("button", { name: "Save settings" }).click();
+
+    await expect(section.getByRole("status")).toContainText("Billing settings saved.");
+    await expect(section.getByTestId("saved-payments")).toHaveText("On");
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ payments_enabled: true });
+    await expect(section.getByText("Organizations can't buy credit until payments are turned on.")).toHaveCount(0);
+  });
+
+  test("turning payments off says new purchases stop", async ({ page }) => {
+    const { section } = await openSettings(page, { payments_enabled: true });
+    await section.getByRole("button", { name: "Edit" }).click();
+    await section.getByRole("switch", { name: "Take payments" }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await expect(page.getByRole("dialog")).toContainText(
+      "Organizations will no longer be able to buy credit. Payments already made still arrive.",
+    );
+  });
+
+  test("payments can't be turned on until this deployment is set up to take them", async ({ page }) => {
+    const { section } = await openSettings(page, { payments_configured: false });
+    await expect(section.getByText("This deployment isn't set up to take payments yet.")).toBeVisible();
+
+    await section.getByRole("button", { name: "Edit" }).click();
+
+    await expect(section.getByRole("switch", { name: "Take payments" })).toBeDisabled();
+  });
+
+  test("payments left on that this deployment can't take are said to be unavailable, and can be turned off", async ({
+    page,
+  }) => {
+    const { section } = await openSettings(page, { payments_enabled: true, payments_configured: false });
+    await expect(
+      section.getByText("Payments are on, but this deployment can't take them right now, so organizations can't buy credit."),
+    ).toBeVisible();
+
+    await section.getByRole("button", { name: "Edit" }).click();
+
+    await expect(section.getByRole("switch", { name: "Take payments" })).toBeEnabled();
   });
 });
 

@@ -51,7 +51,10 @@ export const PaginatedPlatformCreditRecordsSchema = z.object({
 });
 
 export const BillingSettingsSchema = z.object({
+  // Turned on by a Platform Administrator.
   paymentsEnabled: z.boolean(),
+  // Whether this deployment has what payments need; without it they can't be turned on.
+  paymentsConfigured: z.boolean(),
   minPurchaseUsd: z.number(),
   maxPurchaseUsd: z.number(),
   creditRate: z.number(),
