@@ -138,7 +138,10 @@ is read when the pod starts, so an Organization that changes kind gets the new w
 on its Agents' next restart.
 
 Card details never reach Agent Barn: payment happens on Stripe's page. Credit is
-granted only by a verified event, never by the browser returning from Checkout.
+granted only by a verified event, never by the browser returning from Checkout. Back
+from Checkout, the Billing page watches for the credit for a minute, measured against
+the credit the tab saw before leaving to pay (`sessionStorage`), since the event often
+lands first; without that, against its first read.
 Stripe can email receipts itself; the Billing page shows the credit history without
 receipt links. Credit is in US dollars only.
 

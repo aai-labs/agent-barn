@@ -190,6 +190,26 @@ test.describe("Billing", () => {
     await expect(page.getByRole("status").filter({ hasText: "Payment received" })).toHaveCount(0);
   });
 
+  test("credit that arrived before the owner got back is said to have arrived", async ({ page }) => {
+    await signedIn(page);
+    await interceptBilling(page, billing());
+    let current = billing();
+    // Registered last, so it answers billing reads ahead of the fixed one above.
+    await page.route(`**/api/v1/organizations/*/billing`, (route) => route.fulfill({ json: current }));
+    await page.goto(BILLING_URL);
+    await page.getByRole("button", { name: "Buy credit" }).click();
+    await page.getByRole("dialog").getByLabel("Credit to add").fill("20");
+    await page.getByRole("dialog").getByRole("button", { name: "Continue to payment" }).click();
+    await page.waitForURL(CHECKOUT_URL);
+
+    // Stripe's webhook usually lands before the owner is sent back.
+    current = billing({ credit_usd: 30, balance_usd: 27.5 });
+    await page.goto(`${BILLING_URL}?checkout=success`);
+
+    await expect(page.getByRole("status").filter({ hasText: "Your credit has been added." })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "Payment received" })).toHaveCount(0);
+  });
+
   test("the payment message doesn't come back on a reload", async ({ page }) => {
     await signedIn(page);
     await interceptBilling(page, billing());

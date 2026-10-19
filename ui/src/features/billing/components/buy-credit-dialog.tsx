@@ -7,6 +7,7 @@ import { formatUsd } from "@/features/organizations/spend-limit";
 import { MoneyInput } from "@/features/spend-limits/components/money-input";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
+import { rememberCreditBeforeCheckout } from "../credit-before-checkout";
 import { useStartCheckout } from "../hooks/use-organization-billing";
 import { chargeUsd } from "../pricing";
 import type { OrganizationBilling } from "../schemas";
@@ -58,6 +59,7 @@ export function BuyCreditDialog({
         if (!inBounds || parsed === null) return;
         try {
           const { url } = await checkout.mutateAsync(parsed);
+          rememberCreditBeforeCheckout(organizationId, billing.creditUsd);
           window.location.assign(url);
         } catch {
           /* The error stays in the dialog. */

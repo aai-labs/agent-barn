@@ -12,6 +12,7 @@ import { organizationLlmBudgetKey } from "@/features/organizations/utils";
 import { Fact } from "@/features/spend-limits/components/fact";
 import { ApiError } from "@/shared/api/error/errors";
 
+import { takeCreditBeforeCheckout } from "../credit-before-checkout";
 import { formatDate, KIND_LABEL, signedUsd } from "../format";
 import { PAYMENT_WAIT_MS, useOrganizationBilling } from "../hooks/use-organization-billing";
 import { BuyCreditDialog } from "./buy-credit-dialog";
@@ -57,8 +58,9 @@ export function BillingPage() {
   useEffect(() => {
     if (!billing || payment !== "waiting") return;
     if (creditBefore.current === null) {
-      creditBefore.current = billing.creditUsd;
-      return;
+      // The credit before leaving to pay, when this tab kept it; otherwise this first read.
+      const saved = organizationId ? takeCreditBeforeCheckout(organizationId) : null;
+      creditBefore.current = saved ?? billing.creditUsd;
     }
     if (billing.creditUsd > creditBefore.current) {
       setPayment("arrived");
@@ -66,7 +68,7 @@ export function BillingPage() {
       void queryClient.invalidateQueries({ queryKey: organizationLlmBudgetKey.all });
       void queryClient.invalidateQueries({ predicate: (query) => isSpendLimitQuery(query.queryKey) });
     }
-  }, [billing, payment, queryClient]);
+  }, [billing, payment, queryClient, organizationId]);
 
   const forbidden = error instanceof ApiError && error.status === 403;
 
