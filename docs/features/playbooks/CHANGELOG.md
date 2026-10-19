@@ -32,6 +32,11 @@ Story: as a partner, I want to capture how I trained my best Agent and clone tha
 
 ## Changes
 
+### 2026-10-19 — staging integration
+
+- Found: staging moved past the branch's merge revision `82d7f9074830`, so merging the PR would have left two Alembic heads (`82d7f9074830` and staging's `a78bcde4b918`).
+- Changed: merged staging and added merge revision `dc378bacdf04`, which joins both heads. Existing Playbooks revisions are unchanged.
+
 ### 2026-10-14 — conventions dialog for many Templates
 
 - Found: with prod's 57 Template lineages (about 35 auto-named per-Agent ones), the single-screen dialog had two small nested scroll areas, cut-off one-line rules, and no way to find the Templates that matter.
