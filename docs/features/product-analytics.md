@@ -44,7 +44,7 @@ Product analytics forwards selected Domain Events to PostHog, in the Agent Barn 
 
 ## Data flow
 
-1. A business mutation commits its Domain Event together with one Event Delivery per intended handler.
+1. A business mutation commits its Domain Event together with one Event Delivery per intended handler. Most deliveries are enqueued right after commit. Telegram events raised by the shared bot itself (`blocked_bot` and `access_lost` unlinks, and `telegram.first_message.received`) are left to the outbox reconciler, so they reach PostHog within about five minutes.
 2. The worker claims the `product_analytics.posthog` delivery.
 3. The handler resolves the actor to a user, reads the Organization's trial flag for Organization-scoped events, and builds one `/batch/` request. The request holds the event capture, plus a `$groupidentify` naming the Installation group when this process has not named it yet, and a `$groupidentify` setting the Organization's `is_trial` when this process has not sent that value yet.
 4. `PostHogClient` posts the batch to `{ANALYTICS_POSTHOG_HOST}/batch/` with a 5-second limit.
