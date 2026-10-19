@@ -537,14 +537,18 @@ export function mockVersionsForKey(templateKey: string) {
 export class AgentDataSupport {
   trackHiringRequests() {
     const creations: Record<string, unknown>[] = [];
+    const creationPaths: string[] = [];
     const starts: string[] = [];
     this.page.on("request", (request) => {
       if (request.method() !== "POST") return;
       const path = new URL(request.url()).pathname;
-      if (/\/organizations\/[^/]+\/agents$/.test(path)) creations.push(request.postDataJSON());
+      if (/\/organizations\/[^/]+\/agents(\/ready-made)?$/.test(path)) {
+        creations.push(request.postDataJSON());
+        creationPaths.push(path);
+      }
       if (/\/organizations\/[^/]+\/agents\/[^/]+\/start$/.test(path)) starts.push(path);
     });
-    return { creations, starts };
+    return { creations, creationPaths, starts };
   }
   constructor(private page: Page) {}
 
@@ -1042,6 +1046,28 @@ export class AgentDataSupport {
     body?: unknown;
   } = {}) {
     await this.page.route("**/api/v1/organizations/*/agents", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status,
+        contentType: "application/json",
+        body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockAgent)),
+      });
+    });
+  }
+
+  async interceptCreateReadyMadeAgentRequest({
+    status = 201,
+    detail = "Unable to hire the ready-made assistant",
+    body,
+  }: {
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route("**/api/v1/organizations/*/agents/ready-made", async (route) => {
       if (route.request().method() !== "POST") {
         await route.fallback();
         return;

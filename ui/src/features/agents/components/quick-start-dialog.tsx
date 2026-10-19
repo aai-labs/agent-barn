@@ -21,7 +21,7 @@ import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { useAgentNameSuggestion } from "../hooks/use-agent-name-suggestion";
 import { useFetchAgent } from "../hooks/use-agent";
-import { useCreateAgent } from "../hooks/use-create-agent";
+import { useCreateReadyMadeAgent } from "../hooks/use-create-ready-made-agent";
 import type { HiredAgent } from "../hooks/use-hire-agent-form";
 import { useStartAgent } from "../hooks/use-start-agent";
 import { formatAgentName } from "../naming";
@@ -33,7 +33,7 @@ export function QuickStartDialog({ onClose, onHired }: { onClose: () => void; on
   const { selectedOrganization } = useOrganizationContext();
   const orgApiBase = useOrganizationApiBase();
   const suggestion = useAgentNameSuggestion();
-  const create = useCreateAgent();
+  const create = useCreateReadyMadeAgent();
   const start = useStartAgent();
   const fetchAgent = useFetchAgent();
   const { createConnection } = useCommunicationConnectionActions();
@@ -51,7 +51,7 @@ export function QuickStartDialog({ onClose, onHired }: { onClose: () => void; on
       if (!current) {
         const firstName = suggestion.firstName ?? (await suggestion.retry()).data?.firstName;
         if (!firstName) throw new Error("We couldn't suggest an agent name. Try again.");
-        const created = await create.mutateAsync({ name: formatAgentName(firstName, "General Purpose"), agentType: "hermes", templateKey: "general-purpose", approvalMode: "auto" });
+        const created = await create.mutateAsync({ name: formatAgentName(firstName, "General Purpose") });
         current = { id: created.id, name: created.name, role: "General Purpose" };
         savedAgent.current = current;
         setAgent(current);
@@ -88,7 +88,7 @@ export function QuickStartDialog({ onClose, onHired }: { onClose: () => void; on
         onConfirm={() => { setConfirmed(true); setup.mutate(); }}
       >
         <dl className="my-5 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border p-4 text-sm" style={{ borderColor: "var(--line)", background: "var(--bg-soft)" }}>
-          <dt style={{ color: "var(--ink-3)" }}>Template</dt><dd className="m-0 font-medium">General Purpose</dd>
+          <dt style={{ color: "var(--ink-3)" }}>Template</dt><dd className="m-0 font-medium">Onboarding assistant</dd>
           <dt style={{ color: "var(--ink-3)" }}>Runtime</dt><dd className="m-0 font-medium">Hermes</dd>
           <dt style={{ color: "var(--ink-3)" }}>Model</dt><dd className="m-0 font-medium">Organization default</dd>
         </dl>

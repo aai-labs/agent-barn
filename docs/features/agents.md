@@ -17,11 +17,17 @@ Organizations, including after a trial ends, every hiring entry point opens
 Existing ready-made Agents and their Telegram linking remain available after a trial ends.
 Opening or cancelling the chooser or ready-made confirmation creates nothing.
 Build your own opens the existing runtime/template/model/Skill form. Ready-made
-first explains the assistant's purpose, General Purpose Template, Hermes runtime,
-and Organization default model. Only **Hire assistant** creates and starts a new
-Agent with automatic command approval, even when the Organization already has
-Agents. Both paths use ordinary scoped Agent create/start APIs and retain their
-validation and Agent authorization. A failed start retries the newly created Agent
+first explains the assistant's purpose, its template (the hidden Onboarding Template, shown as
+"Onboarding assistant"), Hermes runtime, and Organization default model. Only
+**Hire assistant** creates and starts a new Agent with automatic command approval, even
+when the Organization already has Agents. Ready-made creation uses its own route,
+`POST /organizations/{organization_id}/agents/ready-made` with only a `name`: it requires
+`agent.create`, answers 409 for an Organization that is not on a trial, and creates the
+Hermes Agent on the Onboarding Template through the same path as every other hire (trial
+agent limit, validation, credentials), so the Agent runs the first-conversation script
+(see [Templates and Skills](templates-and-skills.md)). Build your own and the start calls
+use the ordinary scoped Agent create/start APIs; both paths retain their validation and
+Agent authorization. A failed start retries the newly created Agent
 within the same dialog.
 The hiring modal and onboarding share the same Hermes/OpenClaw segmented runtime
 control, including keyboard selection and disabled behavior during submission.

@@ -15,4 +15,5 @@ A new trial user's first Agent needs a first-conversation script that makes no s
 
 - Hiding is a code-owned key list (`HIDDEN_TEMPLATE_KEYS`), not a schema column: the one hidden lineage is seeded by the file-based bootstrap, and no other template needs it.
 - Organization template reads filter the key in the query and answer 404 for it; Platform Administrator routes are unchanged.
+- The dashboard's ready-made hire (a trial-only shortcut to the same assistant) reaches the template through its own route rather than by naming the key, so the generic Agent create route keeps refusing it.
 - Revisit if a second hidden template appears, or if Organizations need to fork onboarding content.

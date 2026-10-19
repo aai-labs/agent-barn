@@ -172,6 +172,7 @@ Trials start on Hermes, and the first-conversation script runs only on Hermes; O
 ignores bootstrap.md, as it does for every template.
 
 The dashboard ready-made option reuses the Telegram and completion steps in a
-dialog after an explicit **Hire assistant** confirmation. It provisions a new Agent
-through ordinary scoped Agent/Connection APIs and leaves onboarding completion
-unchanged; see [Hiring choices](agents.md#hiring-choices).
+dialog after an explicit **Hire assistant** confirmation. It creates the same assistant as
+Quick start, on the Onboarding Template, through its own trial-only route, then uses the
+ordinary scoped Connection and start APIs, and leaves onboarding completion unchanged; see
+[Hiring choices](agents.md#hiring-choices).

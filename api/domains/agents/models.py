@@ -1061,6 +1061,10 @@ class AgentCreate(PydanticBaseModel):
         return self
 
 
+class ReadyMadeAgentCreate(PydanticBaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
 class AgentUpdate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 

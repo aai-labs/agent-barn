@@ -30,6 +30,7 @@ test.describe("Hiring choices", () => {
     await data.agents.interceptGetTemplatesRequest();
     await data.agents.interceptGetModelsRequest();
     await data.agents.interceptCreateAgentRequest();
+    await data.agents.interceptCreateReadyMadeAgentRequest();
     await data.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
     await data.communicationConnections.interceptQuickStartConnections(MOCK_AGENT_ID, TRIAL_CONNECTION_ID);
     const links = new OnboardingDataSupport(page, { organizationId: TEST_ORG_ID, agentId: MOCK_AGENT_ID, connectionId: TRIAL_CONNECTION_ID });
@@ -45,7 +46,7 @@ test.describe("Hiring choices", () => {
     await dashboard.openHireChoices();
     await dashboard.chooseReadyMadeHiring();
     await expect(page.getByRole("heading", { name: "Your ready-made assistant" })).toBeVisible();
-    await expect(page.getByText("General Purpose", { exact: true })).toBeVisible();
+    await expect(page.getByText("Onboarding assistant", { exact: true })).toBeVisible();
     expect(requests.creations).toHaveLength(0);
     expect(requests.starts).toHaveLength(0);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -75,9 +76,8 @@ test.describe("Hiring choices", () => {
     await page.getByRole("button", { name: "Go to dashboard", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(page).toHaveURL(`/dashboard/${TEST_ORG_ID}`);
-    expect(requests.creations).toEqual([{
-      name: "Brandon the Assistant", agent_type: "hermes", template_key: "general-purpose", approval_mode: "auto",
-    }]);
+    expect(requests.creations).toEqual([{ name: "Brandon the Assistant" }]);
+    expect(requests.creationPaths).toEqual([`/api/v1/organizations/${TEST_ORG_ID}/agents/ready-made`]);
     expect(requests.starts).toHaveLength(1);
   });
 

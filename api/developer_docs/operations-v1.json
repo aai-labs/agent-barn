@@ -966,6 +966,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/ready-made",
+    "create_ready_made_agent_organizations__organization_id__agents_ready_made_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/configuration/draft",
     "start_agent_override_draft_organizations__organization_id__agents__agent_id__configuration_draft_post"
   ],

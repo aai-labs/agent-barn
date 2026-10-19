@@ -30,6 +30,7 @@ from api.domains.agents.models import (
     AgentTemplateSelection,
     AgentUpdate,
     IntegrationIsolationUpdate,
+    ReadyMadeAgentCreate,
     SecretProvider,
     get_agent_filter,
 )
@@ -61,6 +62,15 @@ def create_agent(
     service: Annotated[AgentService, Injected(AgentService)],
 ):
     return service.create_agent(data, context)
+
+
+@agents_router.post("/ready-made", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
+def create_ready_made_agent(
+    data: ReadyMadeAgentCreate,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    return service.create_ready_made_agent(data, context)
 
 
 @agents_router.get("", response_model=PaginatedItems[AgentRead])

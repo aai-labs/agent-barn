@@ -265,7 +265,7 @@ The manual action that clones an origin's newer Platform Template snapshot—inc
 _Avoid_: template merge, in-place sync
 
 **Onboarding Template**:
-The built-in Platform Template (`trial-onboarding`) that trial onboarding gives a new user's first Agent. It is hidden from every Organization — absent from template lists and answering 404 to Organization template routes — and is managed only by Platform Administrators.
+The built-in Platform Template (`trial-onboarding`) that trial onboarding's Quick start and a Trial Organization's ready-made hire give their Agent. It is hidden from every Organization — absent from template lists and answering 404 to Organization template routes — and is managed only by Platform Administrators.
 _Avoid_: trial template, onboarding agent template, hidden template
 
 **Skill**:

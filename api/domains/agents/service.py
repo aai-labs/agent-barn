@@ -98,6 +98,7 @@ from api.domains.agents.models import (
     GoogleWorkspaceContent,
     JiraContent,
     ManagedUpdateOutcome,
+    ReadyMadeAgentCreate,
     RestorePointStatus,
     SecretProvider,
     SharePointContent,
@@ -862,6 +863,15 @@ class AgentService:
         return self._create_agent(
             AgentCreate(name=name, agent_type=AgentType.HERMES, template_key=ONBOARDING_TEMPLATE_KEY), context
         )
+
+    def create_ready_made_agent(self, data: ReadyMadeAgentCreate, context: CurrentUserContext) -> AgentRead:
+        self.authorization.require_collection_scope(context, PermissionKey.AGENT_CREATE)
+        if not self.organization_lookup.is_trial(self._org_id(context)):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Ready-made assistants are only available during a trial",
+            )
+        return self.create_onboarding_agent(data.name, context)
 
     def _create_agent(self, data: AgentCreate, context: CurrentUserContext) -> AgentRead:
         org_id = self._org_id(context)
