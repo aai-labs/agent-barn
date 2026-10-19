@@ -8,7 +8,7 @@ from alembic import command
 from alembic.config import Config
 from fastapi import status
 from hamcrest import assert_that, equal_to, is_, none
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlmodel import Session, col, select
 
 from api.core.config import Config as AppConfig
@@ -16,6 +16,7 @@ from api.domains.agents.models import (
     Agent,
     AgentSecret,
     AgentStatus,
+    AgentType,
     SecretProvider,
     SharePointContent,
     encrypt_content,
@@ -23,7 +24,7 @@ from api.domains.agents.models import (
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.service import AgentService
 from api.domains.credential_gateway.forwarding import UpstreamForwarder
-from api.domains.credential_gateway.models import GatewayToken
+from api.domains.credential_gateway.models import GatewayToken, gateway_token_env_var
 from api.domains.credential_gateway.service import CredentialGatewayService, ForwardRequest, GatewayTokenRejected
 from api.domains.integrations.capabilities import ISOLATION_CAPABILITIES
 from api.domains.integrations.models import AgentIntegrationIsolation
@@ -42,6 +43,7 @@ from api.tests.core.modules import (
     prepare_injector,
     set_env_variable,
 )
+from api.tests.helpers.integration_credentials import credential_for
 from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
@@ -523,10 +525,15 @@ def test_backfill_preserves_routes_shared_sources_and_gateway_tokens():
             command.upgrade(config, "head")
             with Session(context.postgres_delegate.engine) as session:
                 policies = session.exec(select(AgentIntegrationIsolation)).all()
+                # Downgrading below the Gmail migrations deletes their credentials, so none are backfilled.
                 assert_that(
                     {p.provider: p.isolated for p in policies},
                     equal_to(
-                        {p.value: p not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO} for p in SecretProvider}
+                        {
+                            p.value: p not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO}
+                            for p in SecretProvider
+                            if p not in {SecretProvider.GMAIL, SecretProvider.GMAIL_APP_PASSWORD}
+                        }
                     ),
                 )
                 assert_that(all(p.agent_id != deleted_agent_id for p in policies), is_(True))
@@ -886,7 +893,14 @@ def test_default_firecrawl_choice_survives_stored_credential_attachment_and_remo
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
-@pytest.mark.parametrize("provider", [p for p in SecretProvider if ISOLATION_CAPABILITIES[p].supports_isolated])
+@pytest.mark.parametrize(
+    "provider",
+    [
+        p
+        for p in SecretProvider
+        if ISOLATION_CAPABILITIES[p].supports_isolated and ISOLATION_CAPABILITIES[p].supports_direct
+    ],
+)
 def test_each_provider_applies_both_directions_in_each_runtime(runtime, provider):
     from api.domains.agents.models import AgentType, encrypt_content
     from api.domains.credential_gateway.models import gateway_token_env_var
@@ -941,6 +955,38 @@ def test_each_provider_applies_both_directions_in_each_runtime(runtime, provider
                 expected = current_grant.refresh_token
             assert expected is not None
             assert_that(expected in str(environment), is_(not isolated))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+@pytest.mark.parametrize("provider", [p for p in SecretProvider if not ISOLATION_CAPABILITIES[p].supports_direct])
+def test_an_isolated_only_provider_applies_isolation_in_each_runtime(runtime, provider):
+    with given([*_GIVEN[:-1], there_is_an_agent(agent_type=AgentType(runtime))]) as context:
+        context.postgres_delegate.save(
+            AgentSecret(
+                agent_id=context.agent.id,
+                provider=provider,
+                secret_name=provider.value,
+                content=encrypt_content(credential_for(provider), TEST_ENCRYPTION_KEY),
+            )
+        )
+        cluster = context.injector.get(KubernetesClient)
+
+        with when("isolation is applied with a restart, as the Keys settings do"):
+            response = context.client.put(
+                f"{_base(context)}/integrations/{provider.value}/isolation",
+                json={"isolated": True, "restart": True},
+                headers=_auth(context),
+            )
+
+        with then("the agent runs isolated with only its gateway token"):
+            assert_that(response.status_code, equal_to(200), response.text)
+            metadata = response.json()["secrets"][0]["isolation"]
+            assert_that(metadata["desired"], is_(True))
+            assert_that(metadata["applied"], is_(True))
+            assert_that(metadata["pending"], is_(False))
+            environment = cluster.create_secret.call_args.args[1].string_data
+            assert_that(gateway_token_env_var(provider) in environment, is_(True))
+            assert_that(f"{provider.value}-provider-secret" in str(environment), is_(False))
 
 
 @pytest.mark.parametrize(
@@ -1036,8 +1082,13 @@ def test_apollo_upgrade_preserves_direct_bindings_and_explicit_choices(existing,
                     context.agent.id, SecretProvider.APOLLO, existing, "agent_secret"
                 )
             if deleted:
-                context.agent.deleted_at = datetime.now(UTC)
-                context.injector.get(AgentRepository).save(context.agent)
+                # Plain SQL on purpose: the schema is downgraded here, and the ORM
+                # model writes every current Agent column, old or new.
+                with context.postgres_delegate.engine.begin() as connection:
+                    connection.execute(
+                        text("UPDATE agent SET deleted_at = :deleted_at WHERE id = :id"),
+                        {"deleted_at": datetime.now(UTC), "id": context.agent.id},
+                    )
             command.upgrade(config, "head")
             policy = _policy(context)
             if existing is None and deleted:

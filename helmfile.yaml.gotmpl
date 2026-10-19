@@ -226,6 +226,10 @@ releases:
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
         value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
+      - name: onedriveSyncClientId
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_ID" | default "" | quote }}
+      - name: onedriveSyncClientSecret
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_SECRET" | default "" | quote }}
       - name: agentFirecrawlApiKey
         value: {{ env "FIRECRAWL_API_KEY" | default "" | quote }}
       - name: apiExternalUrl
@@ -249,6 +253,10 @@ releases:
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist
         value: {{ env "AGENT_MODEL_ALLOWLIST" | default "" | quote }}
+      - name: agentbarnTelegramBotToken
+        value: {{ env "AGENTBARN_TELEGRAM_BOT_TOKEN" | default "" | quote }}
+      - name: agentbarnTelegramBotUsername
+        value: {{ env "AGENTBARN_TELEGRAM_BOT_USERNAME" | default "" | quote }}
       - name: registry.server
         value: {{ env "REGISTRY_SERVER" | required "REGISTRY_SERVER is required" | quote }}
       - name: registry.username

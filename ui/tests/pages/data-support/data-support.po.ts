@@ -8,13 +8,16 @@ import { CommunicationConnectionDataSupport } from "./communication-connection-d
 import { CostDataSupport } from "./cost-data-support.po";
 import { EventDeliveryDataSupport } from "./event-delivery-data-support.po";
 import { KpisDataSupport } from "./kpis-data-support.po";
+import { OnboardingDataSupport } from "./onboarding-data-support.po";
 import { OrganizationDataSupport } from "./organization-data-support.po";
 import { OrgTemplateDataSupport } from "./org-template-data-support.po";
 import { PlatformMemoryDataSupport } from "./platform-memory-data-support.po";
 import { PlatformStatsDataSupport } from "./platform-stats-data-support.po";
 import { PlatformTemplateDataSupport } from "./platform-template-data-support.po";
+import { PlaybookDataSupport } from "./playbook-data-support.po";
 import { ResourceUsageDataSupport } from "./resource-usage-data-support.po";
 import { SkillDataSupport } from "./skill-data-support.po";
+import { SyncProviderDataSupport } from "./sync-provider-data-support.po";
 import { UserDataSupport } from "./user-data-support.po";
 
 export class DataSupport {
@@ -25,14 +28,17 @@ export class DataSupport {
   public agentWebhooks: AgentWebhookDataSupport;
   public communicationConnections: CommunicationConnectionDataSupport;
   public skills: SkillDataSupport;
+  public onboarding: OnboardingDataSupport;
   public organizations: OrganizationDataSupport;
   public costs: CostDataSupport;
   public eventDeliveries: EventDeliveryDataSupport;
   public kpis: KpisDataSupport;
+  public syncProviders: SyncProviderDataSupport;
   public orgTemplates: OrgTemplateDataSupport;
   public platformTemplates: PlatformTemplateDataSupport;
   public platformMemory: PlatformMemoryDataSupport;
   public platformStats: PlatformStatsDataSupport;
+  public playbooks: PlaybookDataSupport;
   public resourceUsage: ResourceUsageDataSupport;
 
   constructor(page: Page) {
@@ -43,14 +49,17 @@ export class DataSupport {
     this.agentWebhooks = new AgentWebhookDataSupport(page);
     this.communicationConnections = new CommunicationConnectionDataSupport(page);
     this.skills = new SkillDataSupport(page);
+    this.onboarding = new OnboardingDataSupport(page);
     this.organizations = new OrganizationDataSupport(page);
     this.costs = new CostDataSupport(page);
     this.eventDeliveries = new EventDeliveryDataSupport(page);
     this.kpis = new KpisDataSupport(page);
+    this.syncProviders = new SyncProviderDataSupport(page);
     this.orgTemplates = new OrgTemplateDataSupport(page);
     this.platformTemplates = new PlatformTemplateDataSupport(page);
     this.platformMemory = new PlatformMemoryDataSupport(page);
     this.platformStats = new PlatformStatsDataSupport(page);
+    this.playbooks = new PlaybookDataSupport(page);
     this.resourceUsage = new ResourceUsageDataSupport(page);
   }
 }

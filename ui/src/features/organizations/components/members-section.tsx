@@ -29,7 +29,6 @@ import { useMemberActions } from "../hooks/use-member-actions";
 import { useOrganizationMembers } from "../hooks/use-organization-members";
 import type { OrganizationMember, OrganizationRole } from "../schemas";
 import { AddMemberDialog } from "./add-member-dialog";
-import { InviteLinkField } from "./invite-link-field";
 
 function initialsOf(member: OrganizationMember) {
   return (member.fullName ?? member.email)
@@ -177,7 +176,6 @@ export function MembersSection({
 
   const [addOpen, setAddOpen] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
-  const [resendLink, setResendLink] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
   const term = search.trim().toLowerCase();
@@ -223,10 +221,7 @@ export function MembersSection({
 
   const onResend = (member: OrganizationMember) => {
     resendInvite.mutate(member.userId, {
-      onSuccess: (result) => {
-        setResendLink(result.inviteLink);
-        toast.success("Invite resent.");
-      },
+      onSuccess: () => toast.success(`Invitation emailed to ${member.email}.`),
       onError: (e) => toast.error(e.message || "Failed to resend invite"),
     });
   };
@@ -403,23 +398,6 @@ export function MembersSection({
         </DialogContent>
       </Dialog>
 
-      {/* Resend invite link */}
-      <Dialog open={!!resendLink} onOpenChange={(v) => !v && setResendLink(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Invite resent</DialogTitle>
-            <DialogDescription>
-              A fresh invite email was sent. You can also share the link directly.
-            </DialogDescription>
-          </DialogHeader>
-          {resendLink && <InviteLinkField link={resendLink} label="Invite link" />}
-          <DialogFooter>
-            <button className="af-btn af-btn-primary" onClick={() => setResendLink(null)}>
-              Done
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </section>
   );
 }

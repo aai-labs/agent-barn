@@ -91,6 +91,19 @@ export function agentInitials(name: string): string {
 
 const MODEL_DISPLAY_PREFIX = "litellm/openrouter/";
 
+/** Bounds of an Agent's own Hermes turn limit, the same ones the API enforces. */
+export const MAX_TURNS_MIN = 1;
+export const MAX_TURNS_MAX = 500;
+
+export function turnLimitText(maxTurns: number | null): string {
+  return maxTurns === null ? "Platform default" : `${maxTurns} turns per run`;
+}
+
+/** Names the platform default only when the Agent follows it; that is the only read that knows it. */
+export function turnLimitLabel(agent: Pick<Agent, "maxTurns" | "effectiveMaxTurns">): string {
+  return agent.maxTurns === null ? `Platform default (${agent.effectiveMaxTurns})` : turnLimitText(agent.maxTurns);
+}
+
 // Strips the internal litellm/openrouter routing prefix for display, leaving the
 // provider/model slug (e.g. "openai/gpt-5-mini"). No-op if the prefix is absent.
 export function formatModelName(model: string): string {

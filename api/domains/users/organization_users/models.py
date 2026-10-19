@@ -95,13 +95,15 @@ class TransferOwnershipRequest(PydanticBaseModel):
 
 
 class MemberInviteResult(PydanticBaseModel):
-    """Result of adding/resending an invite. ``invite_link`` is present only when a link
-    was actually issued — on an add that means a brand-new user, since anyone who already
-    exists keeps the one link their account already has."""
+    """Result of adding a member. ``invite_link`` is always null: an invitation link goes
+    only to the invitee's inbox, so whoever invites cannot enroll an address they don't
+    own. The field stays for v1 compatibility."""
 
     member: OrganizationMemberRead
     invite_link: str | None = None
 
 
 class InviteLinkResult(PydanticBaseModel):
-    invite_link: str
+    """Result of resending an invitation. ``invite_link`` is always null, as above."""
+
+    invite_link: str | None = None

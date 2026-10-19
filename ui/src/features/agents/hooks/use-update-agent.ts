@@ -27,6 +27,8 @@ export type UpdateAgentData = {
   removedSecretProviders?: string[];
   approvalMode?: "manual" | "auto" | "off";
   verboseMode?: boolean;
+  // null returns the Agent to the platform default.
+  maxTurns?: number | null;
 };
 
 export function useUpdateAgent() {

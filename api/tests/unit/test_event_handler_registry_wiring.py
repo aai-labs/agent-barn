@@ -29,6 +29,9 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
     ORGANIZATION_CREATED,
     ORGANIZATION_DELETED,
+    ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,
+    ORGANIZATION_LLM_BUDGET_EXHAUSTED,
+    ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED,
     ORGANIZATION_MEMBER_ADDED,
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
@@ -40,14 +43,19 @@ from api.domains.events.catalog import (
     PLATFORM_USER_PRIVILEGE_REVOKED,
     PRODUCT_ANALYTICS_HANDLER,
     SECURITY_AUDIT_HANDLER,
+    TELEGRAM_ACCOUNT_LINKED,
+    TELEGRAM_ACCOUNT_UNLINKED,
+    TELEGRAM_FIRST_MESSAGE_RECEIVED,
     TEMPLATE_CREATED,
     TEMPLATE_DELETED,
     TEMPLATE_UPDATED,
     USER_LOGGED_IN,
+    USER_ONBOARDING_COMPLETED,
     USER_SIGNED_UP,
 )
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.security_audit import SecurityAuditProjection
+from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
 
 
 def _build_production_handler_registry() -> EventHandlerRegistry:
@@ -55,10 +63,12 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
         [
             AgentLifecycleEmailHandler(repository=Mock(), email_service=Mock()),
             SecurityAuditProjection(repository=Mock()),
+            OrganizationBudgetEmailHandler(repository=Mock(), email_service=Mock()),
             ProductAnalyticsHandler(
                 config=Mock(),
                 installation_repository=Mock(),
                 organization_user_repository=Mock(),
+                organization_repository=Mock(),
                 user_repository=Mock(),
                 posthog_client=Mock(),
             ),
@@ -75,6 +85,10 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
         (ORGANIZATION_DELETED, {PRODUCT_ANALYTICS_HANDLER}),
         (USER_LOGGED_IN, {PRODUCT_ANALYTICS_HANDLER}),
         (USER_SIGNED_UP, {PRODUCT_ANALYTICS_HANDLER}),
+        (USER_ONBOARDING_COMPLETED, {PRODUCT_ANALYTICS_HANDLER}),
+        (TELEGRAM_ACCOUNT_LINKED, {PRODUCT_ANALYTICS_HANDLER}),
+        (TELEGRAM_ACCOUNT_UNLINKED, {PRODUCT_ANALYTICS_HANDLER}),
+        (TELEGRAM_FIRST_MESSAGE_RECEIVED, {PRODUCT_ANALYTICS_HANDLER}),
         (AGENT_UPDATED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (AGENT_STARTED, {AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (AGENT_STOPPED, {AGENT_LIFECYCLE_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
@@ -83,6 +97,8 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
         (ORGANIZATION_MEMBER_REMOVED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (ORGANIZATION_ROLE_CHANGED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (ORGANIZATION_OWNERSHIP_TRANSFERRED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
+        (ORGANIZATION_LLM_BUDGET_EXHAUSTED, {ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
+        (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, {ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER}),
         (AGENT_ACCESS_GRANTED, {SECURITY_AUDIT_HANDLER}),
         (TEMPLATE_CREATED, {SECURITY_AUDIT_HANDLER}),
     ],
@@ -128,6 +144,8 @@ def test_every_catalog_handler_name_has_a_registered_handler():
         COMMUNICATION_DELIVERY_DEAD_LETTERED,
         COMMUNICATION_DELIVERY_RETRY_REQUESTED,
         COMMUNICATION_DELIVERY_RECOVERED,
+        ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED,
+        ORGANIZATION_LLM_BUDGET_EXHAUSTED,
     ):
         for handler_name in EVENT_REGISTRY.handler_names_for(event_name, 1):
             assert_that(handlers.supports(handler_name, event_name, 1), is_(True))

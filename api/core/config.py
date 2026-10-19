@@ -101,6 +101,8 @@ class Config(BaseSettings):
     memory_runtime_service_key: str = ""
 
     memory_default_model: str = "openrouter/openai/gpt-4.1-mini"
+    # Used until a Platform Administrator chooses a Playbook Extraction model.
+    playbook_default_model: str = "openrouter/openai/gpt-4.1-mini"
     memory_litellm_active_key_hash: str = ""
 
     hindsight_base_url: str = ""
@@ -127,6 +129,21 @@ class Config(BaseSettings):
     # Content-free Communication journal history is pruned by Communications
     # maintenance after this many days.
     communication_journal_retention_days: int = Field(default=31, ge=1, le=3650)
+    # Agent Barn's own Telegram bot, shared by every Agent on the agentbarn_telegram
+    # Platform. The platform is offered only when both are set. The API reads only
+    # the bot's id from the token; the Communications process alone calls Telegram
+    # with it, and Agents get a per-Connection stand-in.
+    agentbarn_telegram_bot_token: str = ""
+    agentbarn_telegram_bot_username: str = ""
+    # Where the Communications process delivers a linked user's updates to their
+    # Agent's Telegram webhook. Local Docker/k3d cannot resolve cluster DNS.
+    agentbarn_telegram_runtime_webhook_url: str = "http://agent-{agent_id}.{namespace}.svc.cluster.local:8443/telegram"
+    # Calls per second Agents may make through the shared bot: in total, kept under
+    # Telegram's limit of about 30, and per Organization, so no one Organization can
+    # use up the bot for the others.
+    agentbarn_telegram_bot_rate_per_second: float = Field(default=25, gt=0)
+    agentbarn_telegram_organization_rate_per_second: float = Field(default=5, gt=0)
+
     # Socket timeout for Slack Web API calls. Large sweeps (e.g. users.list can be
     # ~320KB) are slow over a poor link; too tight a timeout cuts the body off
     # mid-stream (IncompleteRead). Generous default; in-cluster latency is low.
@@ -161,6 +178,9 @@ class Config(BaseSettings):
     # injected into the agent's aai-cli gmail-work profile at start time.
     google_cloud_client_id: str = ""
     google_cloud_client_secret: str = ""
+
+    onedrive_sync_client_id: str = ""
+    onedrive_sync_client_secret: str = ""
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
@@ -268,6 +288,10 @@ class Config(BaseSettings):
             and self.agent_email_mailbox.strip()
             and self.email_inbound_secret.strip()
         )
+
+    @property
+    def is_onedrive_sync_enabled(self) -> bool:
+        return bool(self.onedrive_sync_client_id.strip() and self.onedrive_sync_client_secret.strip())
 
 
 @lru_cache

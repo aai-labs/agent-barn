@@ -41,6 +41,7 @@ class ValidationConfig:
     skip_discord_token_validation: bool = True
     skip_slack_token_validation: bool = True
     skip_telegram_token_validation: bool = True
+    agentbarn_telegram_bot_token: str = ""
     skip_teams_token_validation: bool = True
     teams_publisher_name: str = "Agent Barn"
     teams_publisher_website_url: str = "https://example.test"
@@ -112,6 +113,25 @@ def test_telegram_plugin_returns_safe_external_identity_when_validation_is_skipp
 
     assert validated.external_identity == "validation-skipped"
     assert validated.credentials == {"bot_token": "123:token"}
+
+
+@pytest.mark.parametrize("bot_token", ["424242:the-shared-secret", "424242:a-secret-after-a-revoke"])
+def test_telegram_plugin_refuses_agent_barns_own_shared_bot(bot_token: str) -> None:
+    # Telegram allows one consumer per bot; a second would steal the shared bot's updates.
+    plugin = TelegramPlatformPlugin(ValidationConfig(agentbarn_telegram_bot_token="424242:the-shared-secret"))
+
+    with pytest.raises(ValueError, match="Agent Barn's own Telegram bot"):
+        plugin.validate_configuration({}, {"bot_token": bot_token}, organization_id=uuid4(), agent_id=uuid4())
+
+
+def test_telegram_plugin_accepts_other_bots_while_a_shared_bot_is_configured() -> None:
+    plugin = TelegramPlatformPlugin(ValidationConfig(agentbarn_telegram_bot_token="424242:the-shared-secret"))
+
+    validated = plugin.validate_configuration(
+        {}, {"bot_token": "4242420:another-bot"}, organization_id=uuid4(), agent_id=uuid4()
+    )
+
+    assert validated.credentials == {"bot_token": "4242420:another-bot"}
 
 
 def test_discord_plugin_builds_the_recommended_install_link_from_the_application() -> None:

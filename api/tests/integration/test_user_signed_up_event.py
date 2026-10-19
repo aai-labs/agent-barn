@@ -73,7 +73,7 @@ def test_accepting_an_invite_records_one_platform_scoped_user_signed_up():
                     EventScope.PLATFORM,
                     None,
                     {"type": "USER", "id": str(user_id), "organization_id": None},
-                    {"user_id": str(user_id)},
+                    {"user_id": str(user_id), "method": "invite"},
                 )
             ),
         )

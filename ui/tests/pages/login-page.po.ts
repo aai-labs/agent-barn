@@ -22,7 +22,7 @@ export class LoginPage {
   }
 
   title(): Locator {
-    return this.page.getByText("Welcome back");
+    return this.page.getByRole("heading", { name: "Welcome to Agent Barn" });
   }
 
   emailField(): Locator {

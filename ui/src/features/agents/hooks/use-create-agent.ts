@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
+import { organizationsKey } from "@/features/organizations/utils";
 
 import { Agent, AgentSchema } from "../schemas";
 import { agentsKey } from "../utils";
@@ -39,6 +40,7 @@ export function useCreateAgent() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: agentsKey.all });
+      void queryClient.invalidateQueries({ queryKey: organizationsKey.all });
     },
   });
 }

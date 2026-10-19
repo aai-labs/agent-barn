@@ -16,6 +16,32 @@ as in the README setup; native transport dependencies belong to the runtime imag
 
 ## Database migrations
 
+Migration `b91a73e42c60` removes the unused global `aai-zoho-mail` built-in Skill
+left behind by Zoho provider retirement. It runs automatically on upgrade and
+does nothing on installations without that lineage (including new installs).
+It preserves custom Skills and any built-in lineage still referenced by Agent
+pins, Template/Override requirements, or fork provenance. The deleted retired
+content is not recreated on downgrade.
+
+The following migration, `c42e91b7a603`, removes only `zoho_mail`, `zoho_calendar`,
+and `slack` from `required_providers` on all retained Skill lineages, published
+versions, and drafts in every scope. This is a repair to historical provider
+metadata after tool-provider retirement: content, assignments, version numbers,
+fork provenance, timestamps, and other provider requirements remain unchanged.
+It does not enable retired tool integrations or affect runtime-owned Slack
+Communication Connections. Already-clean installations require no changes;
+downgrade does not reconstruct removed requirements. These migrations complement
+the credential cleanup in `a85f48650d6a`; removing a provider from code alone
+does not retire database Skill metadata.
+
+Migration `d72b85f19c40` gives existing verified non-platform, non-self-signup users
+with no Membership an ordinary Organization and Owner Membership, using deployment
+model/spend defaults and respecting the Organization creation limit. It is a one-time
+data backfill; it leaves invitations, existing Memberships and self-signup accounts
+unchanged. Downgrade retains created Organizations and Memberships to preserve user
+work. It makes no external calls; existing reconciliation and first-Agent-key
+provisioning apply. See [Identity and Organizations](../features/identity-and-organizations.md#organization-creation-and-membership-flows).
+
 ```bash
 make migrate          # upgrade the configured database to head
 make makemigrations   # autogenerate a revision after prompting for its message
@@ -45,6 +71,16 @@ Testing and verification commands live in [`testing.md`](testing.md).
 The deployable services have independent Helm charts. `../../helmfile.yaml.gotmpl` controls release ordering, and `../../.github/workflows/deploy.yml` builds images and applies Helmfile. Read `../architecture/runtime-and-deployment.md` before changing runtime images, agent Kubernetes resources, chart wiring, migrations, or deployment order.
 
 LiteLLM uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`): the namespace quota cannot accommodate its old and replacement 2Gi pods at once. Upgrades briefly interrupt the proxy while Kubernetes replaces the pod; do not restore the default surge behavior unless the quota is increased first.
+
+## Public signup configuration
+
+Configure public self-signup and Trial Credit in **Platform settings → Signup & trials**.
+New installations default to signup disabled and $0 credit. A Platform Administrator
+must set positive credit before enabling signup; both can be saved together. These
+settings take effect without redeployment and are audited. They are no longer read
+from environment variables, Helm values, or GitHub Variables. Google OAuth and the
+shared Telegram bot still require deployment credentials as described in
+[Trial onboarding](../features/trial-onboarding.md#trials).
 
 ## Local Communications reload
 
@@ -285,6 +321,12 @@ budgets, and spend. On key rotation provision the persisted model, startup
 fallback, and models needed by in-progress operations on the new key. Keep
 retired hashes for delayed cost attribution.
 
+The Playbook Extraction model is chosen at Platform Settings. Until then the API and worker use
+`PLAYBOOK_DEFAULT_MODEL` (`openrouter/openai/gpt-4.1-mini` when unset); Compose reads it from `.env`,
+and Helm deployments use the default. The worker calls LiteLLM directly for these runs, so its
+Deployment and Compose service receive `LITELLM_BASE_URL` like the API, and the Compose worker also
+receives `MEMORY_VIEW_BASE_URL` to read long-term memories (Helm supplies it through the API Secret).
+
 Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
 customize the initial model. Both deployments use that one setting for the API
 default and Hindsight startup model. When using charts directly, set API
@@ -475,6 +517,14 @@ The [integration contract](../features/integrations.md#optional-credential-isola
 
 Isolated Apollo requires both runtime images to be rebuilt with `aai-apollo-routing.patch`. Publish new immutable image versions before rollout; an older image can send `apollo health` outside the gateway. Migration `0d612dc60e9a` preserves direct routing for pre-existing Apollo credentials and leaves existing policy choices unchanged.
 
+Custom API connections require both runtime images to include the pinned aai-cli
+revision from `main` with `custom-api request` (aai-cli PR #30). Hermes 0.2.10
+and OpenClaw 0.7.7 pin merged commit `69d280f0762200fde5bea164adee83573eef5ea1`. Rebuild and verify both images before enabling
+these connections; older images do not include the command. During release
+preparation, assign new immutable runtime versions under the versioning rules below
+and deploy the connection migration, API, credential gateway and UI together.
+Existing Agents apply connection changes only on an explicit start or restart.
+
 For a failed application, open the integration setup and Apply & Restart to retry, or select Restore previous mode and then Apply & Restart. A SharePoint reconnect-required message means the broker could not prove continuity; reconnect the sign-in before retrying. Preserve the aai-cli PVC store/key/marker until the handoff succeeds. Credential setup failures now stop startup; repair a corrupted store/key pair rather than booting with stale credentials. The gateway cache needs no separate service or replica affinity. Apply & Restart returns after provisioning; a slow image pull remains unverified and is not torn down on a readiness timeout. If an old pod stays Terminating past the termination budget, inspect its node and volume state before retrying; an operator must establish that the old process cannot run before forcing deletion. Preserve its gateway authorization until termination is established.
 
 Before rolling the application/schema back, apply direct SharePoint through the current API to hand back the latest service-side grant, then stop affected Agents. Do not downgrade while isolated SharePoint generations are live. The generation migration's downgrade requires `AGENT_TOKEN_ENCRYPTION_KEY` when SharePoint rows exist; it removes broker/cache metadata from encrypted payloads while preserving the latest refresh token so older strict schemas can decrypt them. It keeps the latest service-side refresh grant. Downgrade removes the revision marker metadata, so the older setup imports that DB grant again; it cannot capture any subsequent direct-PVC rotation. Keep the rollback interval short and reconnect if Microsoft refuses that grant. Default-source policy is discarded on schema downgrade because older applications have no such binding; restart Agents under the older application's routing after rollback. Keep a database backup and the PVC together; a mode change cannot revoke credentials already received by an Agent.
@@ -509,6 +559,16 @@ Before rolling the application/schema back, apply direct SharePoint through the 
 - Review `[messaging-retirement]` startup counts and the Agent-volume `retired-messaging-audit.json` report (`/opt/data` on Hermes, `/home/node/.openclaw` on OpenClaw). `job_audit=unreadable` requires inspecting the native store before treating the audit as complete. `report_write=failed` means the report could not be saved (without masking `job_audit=unreadable`); startup continues after plugin removal, but repair volume permissions and inspect the native store before declaring the audit complete. Reports contain job IDs and flags, not prompts, message content, or destinations.
 - Repair listed jobs through the native scheduler only after verifying their stored Connection, allowed recipient, and thread policy. Hermes `api_server`/`connection:` origins and OpenClaw `last` destinations do not prove a usable native recipient. Missing explicit recipients are accepted only with a usable configured native home (`defaultTo` in the merged OpenClaw config or the Hermes home-channel environment); the no-home sentinel is never accepted. Disabled jobs, completed/paused Hermes jobs, and OpenClaw main-session jobs without delivery are excluded. Malformed jobs mark the audit unreadable while other jobs remain auditable. Required managed-plugin removal must succeed before runtime startup. Preserve schedules, job identity, and session history; never replay the retired spool or infer delivery from it. No automatic rerouting is performed. Startup jobs should explicitly select a configured native home platform. Web Chat and Email support ordinary replies, not scheduled pushes.
 
+## Agent Barn Telegram
+
+Agent Barn's own Telegram bot lets Organizations use Telegram without bringing a bot. See `../features/communications/CHANGELOG.md` for how linking, relaying, and the Bot API proxy work.
+
+- **`AGENTBARN_TELEGRAM_BOT_TOKEN`** is a GitHub secret and **`AGENTBARN_TELEGRAM_BOT_USERNAME`** (the bot's username, without `@`) a GitHub variable, with `STAGING_` variants for staging and `PUBLIC_` variants for the public cluster. Both flow through `helmfile.yaml.gotmpl` into the API chart's shared Secret. Unset hides the Agent Barn Telegram Platform in that environment; existing Connections stay readable.
+- **Create one bot per environment** with @BotFather (`/newbot`). Telegram lets only one process poll a bot, and the Communications process takes over every update the bot receives, so a bot must never be shared between environments, developers' local stacks, or anything else.
+- The token never leaves the Communications process: Agents get a per-Connection stand-in token for Agent Barn's proxy. Rotating the token (BotFather `/revoke`) needs only a redeploy, not Agent restarts.
+- Optional tunables, normally left unset: `AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL` (where linked users' messages are delivered to an Agent; defaults to its in-cluster Service on port 8443) and `AGENTBARN_TELEGRAM_BOT_RATE_PER_SECOND` / `AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND` (defaults 25 and 5).
+- Polling and proxying run on one Communications replica at a time (a database lease decides which). Rate limits are per process, which holds while `communications.replicaCount` is 1.
+
 ## Staging environment
 
 Staging is a fully separate stack in its own namespace (`agent-farm-staging`),
@@ -524,7 +584,7 @@ for why staging is a namespace.
 - **Checks:** `deploy.yml` skips lint and tests (`run_checks=false`) only when the pushed commit is the merge result of a pull request into the same branch whose head passed `ci-gate`, found through the commit's associated pull requests and that head's check runs. A direct push, a manual `workflow_dispatch`, a pull request without a passing `ci-gate` (including ones merged before the check existed), or any lookup failure runs the full checks, so an untested commit never ships. The single-Alembic-head check (`make check-migrations`) runs in either case, because two pull requests that each add a migration can pass CI separately and still leave two heads once merged in sequence. A failure in that preflight or in change detection stops the deploy before any image is pushed or released.
 - **Images:** all four images (api, ui, hermes-base, openclaw-base) get a `-staging` tag suffix on staging; staging never pushes `:latest`, since each environment builds its own base images and their installed contents can diverge.
 - **Change detection:** `deploy.yml` compares the current commit with the latest successful deploy run for the same branch. A failed deploy does not advance that baseline, so a later fix rebuilds every component changed since the last successful deploy. If no valid baseline can be found, or the workflow is dispatched manually, all four images are built.
-- **Secrets/vars:** every per-env value uses a `STAGING_`-prefixed GitHub secret or variable, selected by a `github.ref_name == 'staging' && secrets.STAGING_X || secrets.X` ternary in `deploy.yml`. Shared references (registry, `OPENROUTER_API_KEY`, Google OAuth client, DB user/db names, and the Cloudflare email account/token) are reused as-is. Email follows the standard convention: only `STAGING_SENDER_EMAIL` differs, pointing staging at its own `mail-staging.` sending subdomain.
+- **Secrets/vars:** every per-env value uses a `STAGING_`-prefixed GitHub secret or variable, selected by a `github.ref_name == 'staging' && secrets.STAGING_X || secrets.X` ternary in `deploy.yml`. Shared references (registry, `OPENROUTER_API_KEY`, Google OAuth client, OneDrive sync Microsoft app, DB user/db names, and the Cloudflare email account/token) are reused as-is. Email follows the standard convention: only `STAGING_SENDER_EMAIL` differs, pointing staging at its own `mail-staging.` sending subdomain.
 - **RBAC bootstrap:** the staging namespace and its deploy identities are
   provisioned out of band. Do not use `deploy.sh` as a staging entry point: it
   always applies `k8s/agent-farm-user.yaml` for `agent-farm`. The current
@@ -548,7 +608,7 @@ Hosted public Agent Barn runs on the dedicated Talos cluster, not on k3s. k3s (`
   Nothing in this workflow writes to `registry.k8s.aai-labs.com`.
 - **Registry:** `PUBLIC_REGISTRY_URL` (`registry.agentbarn.dev`). Do not reuse the k3s registry password or R2 bucket.
 - **Namespace:** still `agent-farm` so helmfile and `k8s/agent-farm-user.yaml` apply unchanged. This is a different cluster, so it does not collide with k3s.
-- **Secrets/vars:** every public-only value is `PUBLIC_`-prefixed. Postgres **user/db names**, `AGENT_DEFAULT_MODEL` / `AGENT_MODEL_ALLOWLIST`, the Cloudflare email account/token, and the Google OAuth client are reused. OpenRouter, Firecrawl, Slack webhook, DB passwords, and signing keys are **not** reused — copy a value into a `PUBLIC_` secret only when that sharing is intentional.
+- **Secrets/vars:** every public-only value is `PUBLIC_`-prefixed. Postgres **user/db names**, `AGENT_DEFAULT_MODEL` / `AGENT_MODEL_ALLOWLIST`, the Cloudflare email account/token, the Google OAuth client, and the OneDrive sync Microsoft app are reused. OpenRouter, Firecrawl, Slack webhook, DB passwords, and signing keys are **not** reused — copy a value into a `PUBLIC_` secret only when that sharing is intentional.
 - **Kubeconfig:** `PUBLIC_KUBECONFIG_B64` must reach the Talos API (`https://<cp-1>:6443`). There is no bastion tunnel. `PUBLIC_POD_KUBECONFIG_B64` is what the API pod uses to manage agents; if unset, the workflow falls back to the deploy kubeconfig. Prefer a namespace-scoped kubeconfig for the pod, as on k3s.
 - **Storage:** `PUBLIC_STORAGE_CLASS`. Intended value is `rook-ceph-block-main`. Use `local-path` only while Ceph has no OSDs — postgres then dies with the node that holds the volume.
 - **Hosts:** `PUBLIC_UI_HOST` is `cloud.agentbarn.dev` (not `app` — that hostname stays on k3s). Product Grafana is `grafana-app.agentbarn.dev`, not cluster `grafana.agentbarn.dev`.
@@ -574,6 +634,7 @@ git push origin "$RELEASE_TAG"
 | `PUBLIC_GRAFANA_HOST` | `grafana-app.agentbarn.dev` |
 | `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
 | `PUBLIC_AGENT_EMAIL_DOMAIN` | `agents.agentbarn.dev`. Unset leaves agent email inert and skips the Worker publish |
+| `PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME` | The public deployment's own bot, without `@`. Unset hides Agent Barn Telegram |
 | `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
 
 ### Public GitHub secrets
@@ -600,10 +661,12 @@ kubeconfig portably with
 | `PUBLIC_OPENROUTER_API_KEY` | Prefer a dedicated key so public traffic is not the testing quota |
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 | `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
+| `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
-`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`, and
-`GOOGLE_CLOUD_CLIENT_SECRET`.
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`,
+`GOOGLE_CLOUD_CLIENT_SECRET`, and `ONEDRIVE_SYNC_CLIENT_SECRET` (with the
+`ONEDRIVE_SYNC_CLIENT_ID` variable).
 
 ## Versioning and releases
 
@@ -630,6 +693,7 @@ Rules:
 - Bump chart versions late, ideally immediately before the PR, to reduce merge conflicts, when chart packaging actually changed.
 - `../../.github/workflows/deploy.yml` builds API and UI images under moving environment tags and passes those tags into Helm via `API_IMAGE_TAG` and `UI_IMAGE_TAG`: `latest` on `main`, `latest-staging` on `staging`. Branch deploys no longer depend on chart `appVersion` bumps.
 - **The API image is deployed by digest.** `api.yml` pushes it without a tag; `deploy.yml` passes `API_IMAGE_TAG=<moving tag>@sha256:<digest>` (a valid reference whose tag is ignored), runs the migration hook and rollout against that digest, and only then re-tags `latest`/`latest-staging` to it in `promote-api`. A failed migration therefore leaves the moving tag, and every pod restart, CronJob and restore-point job that resolves it, on the previous image. The re-tag copies a manifest and stores no layers; no per-deploy tag is created. When the API was not rebuilt, `resolve-env` pins the moving tag's current digest so the rendered spec matches the running one. If that lookup fails the plain tag is used, which rolls the API but never changes its image silently. The UI and the Hermes/OpenClaw base images keep their moving tags: the UI has no schema coupling, and the base images carry `VERSION` tags consumed by API-created pods. Rationale: [`../adr/2026-10-13-deploy-api-image-by-digest.md`](../adr/2026-10-13-deploy-api-image-by-digest.md).
+- `promote-api` runs after a successful deploy when the API push produced a new digest, even when optional upstream jobs were skipped. It skips when no new API image was pushed, deployment did not succeed, or the run was cancelled.
 - A run that fails after `deploy` but before `promote-api` is not a successful deploy, so it stays out of the change-detection baseline and the next run rebuilds the API. Re-run the failed run, or dispatch `deploy.yml`, to move the tag.
 - Public hosted deploys (`../../.github/workflows/deploy-public.yml`) pin API/UI to the git tag (`vX.Y.Z`) on `registry.agentbarn.dev`. They never move k3s `latest` tags.
 - Runtime `VERSION` tags MUST NOT be reused for different image contents:

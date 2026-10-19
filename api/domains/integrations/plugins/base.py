@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import enum
 from abc import ABC
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from api.domains.agents.models import SecretContent, SecretProvider
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
@@ -36,6 +38,10 @@ class EgressMode(str, enum.Enum):
     #: The gateway mints a short-lived upstream token the pod uses directly. The pod
     #: never holds a renewable grant.
     TOKEN_BROKER = "token_broker"
+    #: The gateway answers the agent's request itself through the plugin's ``serve``, for
+    #: a credential that cannot be narrowed (a Gmail app password) or a protocol that is
+    #: not HTTP. Nothing is forwarded or minted: the pod holds only its gateway token.
+    GATEWAY_SERVED = "gateway_served"
     #: The credential is materialized into the pod. Retained as the rollout fallback
     #: and as the recorded escape hatch for a CLI whose auth cannot be redirected.
     DIRECT = "direct"
@@ -86,6 +92,30 @@ class MintedToken:
     #: than tracking wall-clock expiry, so a relative lifetime avoids clock-skew bugs.
     expires_in: int
     scopes: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class ServedRequest:
+    """One agent request a ``GATEWAY_SERVED`` plugin answers itself.
+
+    The shape of aai-cli's Custom API request object, which an isolated ``custom_api``
+    profile posts to the gateway. ``url`` is an address inside the profile's base URL,
+    not a host the gateway contacts.
+    """
+
+    method: str
+    url: str
+    query: Mapping[str, object] = field(default_factory=dict)
+    body: object = None
+
+
+@dataclass(frozen=True)
+class ServedResponse:
+    """The provider's answer, returned to aai-cli as ``{status, body}``."""
+
+    status: int
+    #: Any JSON value.
+    body: Any
 
 
 class UpstreamAuthenticationError(Exception):
@@ -167,3 +197,14 @@ class IntegrationPlugin[ContentT: SecretContent](ABC):
         The gateway runs both off the event loop.
         """
         raise NotImplementedError(f"{self.key} is not a {EgressMode.TOKEN_BROKER.value} provider")
+
+    # --- GATEWAY_SERVED seam ---
+
+    def serve(self, content: ContentT, request: ServedRequest) -> ServedResponse:
+        """Answer an agent's request with the credential, without it leaving the gateway.
+
+        Owns everything provider-specific: which requests exist, the upstream I/O, and
+        mapping failures to a status the agent can read. Refuse anything not explicitly
+        supported. Synchronous, like the other seams; the gateway runs it off the event loop.
+        """
+        raise NotImplementedError(f"{self.key} is not a {EgressMode.GATEWAY_SERVED.value} provider")

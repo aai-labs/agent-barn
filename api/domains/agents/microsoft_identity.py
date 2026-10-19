@@ -97,13 +97,17 @@ def build_admin_consent_url(*, tenant_id: str, client_id: str, redirect_uri: str
     return f"{_tenant(tenant_id)}/v2.0/adminconsent?{urllib.parse.urlencode(params)}"
 
 
-def build_app_permission_consent_url(*, tenant_id: str, client_id: str, redirect_uri: str) -> str:
+def build_app_permission_consent_url(
+    *, tenant_id: str, client_id: str, redirect_uri: str, state: str | None = None
+) -> str:
     """A link an administrator opens to approve the application permissions set on the app.
 
     Selected-sites mode needs the application permission ``Sites.Selected``; ``.default``
     approves whatever application permissions the app lists, so it is added there first.
     """
     params = {"client_id": client_id, "scope": APP_ONLY_SCOPE, "redirect_uri": redirect_uri}
+    if state is not None:
+        params["state"] = state
     return f"{_tenant(tenant_id)}/v2.0/adminconsent?{urllib.parse.urlencode(params)}"
 
 
@@ -134,19 +138,21 @@ class MicrosoftIdentityClient:
         redirect_uri: str,
         code_verifier: str,
         scopes: tuple[str, ...],
+        client_secret: str | None = None,
     ) -> MicrosoftTokens:
-        """Redeem an authorization code as a public client: the PKCE verifier, no secret."""
-        return self._token(
-            tenant_id,
-            {
-                "grant_type": "authorization_code",
-                "client_id": client_id,
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "code_verifier": code_verifier,
-                "scope": " ".join(scopes),
-            },
-        )
+        """Redeem an authorization code with the PKCE verifier: as a public client by default,
+        or as a confidential (web) client when ``client_secret`` is given."""
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": code_verifier,
+            "scope": " ".join(scopes),
+        }
+        if client_secret is not None:
+            data["client_secret"] = client_secret
+        return self._token(tenant_id, data)
 
     def client_credentials(self, *, tenant_id: str, client_id: str, client_secret: str) -> MicrosoftTokens:
         """An app-only Graph token for the app itself, carrying its consented application permissions.

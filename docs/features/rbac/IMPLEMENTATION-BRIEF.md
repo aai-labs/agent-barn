@@ -32,6 +32,9 @@ See [Agent Memory](../agent-memory.md#platform-memory-processing-model) for the
 Platform Admin settings and separate backend-service credential contract.
 Organization roles confer no authority on these Platform routes.
 
+The Platform Playbook Extraction model (`/platform/settings/playbooks`) follows the
+same rule; see [Playbooks](../playbooks.md#model-and-billing).
+
 ### Organization Roles
 
 | Role                | Authority                                                                                                                          |
@@ -79,11 +82,25 @@ Explicit Agent Access and Agent General Access scope the complete Agent aggregat
 
 ## Data-access enforcement
 
+The Organization read's `trial_agent_limit_reached` boolean is creation-capacity
+metadata for members who may create Agents. It accounts for every non-deleted Agent,
+including ones hidden from that member, without exposing identities or an unfiltered
+Agent count. See [Hiring choices](../agents.md#hiring-choices) for its UI contract.
+
 Visibility belongs in repository queries rather than post-fetch filtering. Member list, search, count, and detail queries must constrain by Organization, soft-deletion state, and either explicit Agent Access or applicable Agent General Access before ordering, totals, or pagination. Organization Owner/Admin use implicit Organization-wide visibility.
 
 Subordinate repositories must join or use an accessible-Agent query so alternate endpoints cannot reveal conversations, tool calls, costs, logs, Skills, configuration, or credential metadata.
 
 Agent-authenticated gateway traffic has no user Membership. The memory gateway instead resolves the hash of a per-start Agent credential to one undeleted, running, memory-enabled Agent and its existing Organization, then reads only that Agent's same-Organization Memory Grants. Client bank names and tags cannot choose a different tenant or identity. Organization Memory grants permit either read only or read and write; both add a strict `scope:team` scope to recall, and other-Agent grants add exact private scopes only. Shared authorship grants no private read access. The Agent Memory tab requires human `activity.read` and includes Organization records only with the viewed Agent's current Organization grant; revocation hides its own shared contributions too. The explicit writer endpoint requires a live write grant. User-facing memory settings and grants retain the Organization and Agent Permission checks above. See [`Agent Memory`](../agent-memory.md#use-the-memory-gateway) for the machine-request contract.
+
+Playbook Extractions read one Agent's transcripts and write an Organization Skill, so they need Agent `activity.read` on the source Agent and Organization `skill.manage`; in practice Owners and Admins. Publishing the resulting Skill makes content derived from that Agent visible to every Member through `skill.read`; the reviewing Owner or Admin is the control. The worker runs a person's request, not background work: when a run starts it re-checks that the requesting Membership still holds both Permissions on the undeleted source Agent. See [`Playbooks`](../playbooks.md#authorization).
+
+Agent Barn Telegram traffic has no user Membership either. Two callers reach it: Telegram, through the shared bot the Communications process polls, and Agent pods, through the Bot API proxy. Neither carries a session, so there is no Active Organization to scope against. The tenant comes from persisted rows instead, and no caller-supplied value can choose it.
+
+- **Proxy calls** are authenticated by the Connection in the path and a stand-in token derived from that Connection's own secret. The Connection resolves its Agent and Organization, which set the per-Organization rate limit. A chat-scoped call reaches Telegram only when every chat it names is a Telegram user with an active link to that Connection, and the Member who issued the link still holds `agent.update` on the Agent. That Member is checked on every call, so a scheduled send stops on the next call after an Agent Access, Agent General Access, Membership, or role change, as a request would; losing the Permission ends the link. Every message and file id the call names must also belong to that Connection, so an Agent cannot act on what a user exchanged with an Agent they were linked to before.
+- **Telegram-driven reads and writes** run in the poller: linking, queuing updates for an Agent, ending links, and recording which Connection owns a message or file. A link is created only by spending a single-use token that a Member with `agent.update` issued through an authorized route, and it records that Membership. The poller's link writes stage Domain Events (`telegram.account.linked`, and `telegram.account.unlinked` for a link it replaces) in the same transaction, with that recorded Membership as the actor and the link's own Organization as the scope; no caller-supplied value chooses either. Before an update is queued, and again before it is delivered, the link's Membership is checked for `agent.update` on the Agent with `AgentAuthorization.membership_has_permission`, which resolves the Membership exactly as a signed-in request does. Losing it ends the link and drops the update. A button press or edit on a message the current Connection does not own is not delivered.
+
+These paths are not the background work described below: product users trigger them, so they keep explicit authority checks against the linking Membership rather than running unscoped.
 
 Background work is the one exception, and it is narrow. It covers scheduled work, Jobs the chart runs on every deploy, and operator-run one-shot commands. A CronJob, a deploy-run Job, or an operator's `kubectl exec` has no `CurrentUserContext` and therefore no Active Organization to scope against. So `ToolCallService.platform_daily_active_agent_ids`, the restore point reconciler's repository methods, the Communications maintenance scan's `CommunicationConnectionRepository.list_enabled_email_page`, and the Business Action backfill's `BusinessActionRepository.find_backfill_batch` and `apply_classified` run unscoped. The exception holds only while all three of these do:
 

@@ -8,6 +8,7 @@ import {
   MOCK_PLATFORM_SKILL_ID,
 } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
+import { mockSucceededRun } from "../pages/data-support/playbook-data-support.po";
 
 test.describe("Settings — Skill detail page", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -337,5 +338,75 @@ test.describe("Settings — Skill detail page", () => {
     expect(deleteCalled).toBe(true);
     await expect(page.getByRole("button", { name: "Delete version 1" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "Delete version 2" })).toBeVisible();
+  });
+
+  test("a playbook draft names its source Agent and what to check before publishing", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillFilesRequest({
+      skill: { ...mockCustomSkill, hasDraft: true },
+      files: [{ path: "SKILL.md", content: "# Refunds playbook" }],
+    });
+    await dataSupportPage.skills.interceptGetSkillVersionsRequest();
+    await dataSupportPage.skills.interceptGetSkillDraftRequest();
+    const playbooks = await dataSupportPage.playbooks.intercept({
+      runs: [mockSucceededRun({ skill_id: MOCK_CUSTOM_SKILL_ID, source_agent_name: "Sally" })],
+    });
+
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
+
+    const source = page.getByRole("region", { name: "Playbook source" });
+    await expect(source).toContainText("Playbook extracted from Sally");
+    await expect(source).toContainText("20 conversations");
+    await expect(source).toContainText("Before publishing the draft");
+    await expect(source).toContainText("visible to every member of the Organization");
+    const lookup = playbooks.requests.find((request) => request.url.pathname.endsWith("/playbook-extractions"));
+    expect(lookup?.url.searchParams.get("skill_id")).toBe(MOCK_CUSTOM_SKILL_ID);
+  });
+
+  test("a Skill no playbook run wrote shows no playbook source", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillFilesRequest({
+      skill: mockCustomSkill,
+      files: [{ path: "SKILL.md", content: "# My tool" }],
+    });
+    await dataSupportPage.skills.interceptGetSkillVersionsRequest();
+    await dataSupportPage.playbooks.intercept();
+
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
+
+    await expect(page.getByRole("heading", { name: mockCustomSkill.name })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Playbook source" })).toHaveCount(0);
+  });
+
+  test("a playbook's Skill page says it is the role playbook and leads to the run's conventions", async ({ page }) => {
+    await dataSupportPage.skills.interceptGetSkillFilesRequest({
+      skill: { ...mockCustomSkill, hasDraft: true },
+      files: [{ path: "SKILL.md", content: "# Refunds playbook" }],
+    });
+    await dataSupportPage.skills.interceptGetSkillVersionsRequest();
+    await dataSupportPage.skills.interceptGetSkillDraftRequest();
+    await dataSupportPage.orgTemplates.interceptGetLineages();
+    await dataSupportPage.playbooks.intercept({
+      runs: [
+        mockSucceededRun({
+          skill_id: MOCK_CUSTOM_SKILL_ID,
+          source_agent_name: "Sally",
+          convention_count: 1,
+          conventions: [{ rule: "Use Vilnius time for dates and deadlines.", conversations: 4 }],
+        }),
+      ],
+    });
+
+    await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
+
+    const source = page.getByRole("region", { name: "Playbook source" });
+    await expect(source).toContainText("role playbook: how Sally does its job");
+    await expect(page.getByTestId("playbook-conventions-pointer")).toContainText(
+      "The same run proposed 1 organization convention:",
+    );
+    await source.getByRole("button", { name: "Review conventions" }).click();
+
+    await expect(page.getByRole("dialog")).toContainText("Organization conventions");
+    await expect(page.getByRole("textbox", { name: "Convention 1" })).toHaveValue(
+      "Use Vilnius time for dates and deadlines.",
+    );
   });
 });

@@ -14,6 +14,7 @@ CONFIG = SimpleNamespace(
     skip_slack_token_validation=True,
     skip_discord_token_validation=True,
     skip_telegram_token_validation=True,
+    agentbarn_telegram_bot_token="",
     skip_teams_token_validation=True,
     teams_publisher_name="Test",
     teams_publisher_website_url="https://example.com",

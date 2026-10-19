@@ -22,6 +22,7 @@ class User(BaseModel, table=True):
     __table_args__ = (
         Index("ix_user_email", "email", unique=True),
         Index("ix_user_is_platform_admin", "is_platform_admin"),
+        Index("ix_user_google_sub", "google_sub", unique=True),
     )
 
     email: EmailStr = Field()
@@ -30,6 +31,19 @@ class User(BaseModel, table=True):
     is_platform_admin: bool = Field(default=False, sa_column_kwargs={"server_default": "false"})
     security_stamp: str = Field(default_factory=lambda: uuid7().hex)
     email_verified_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    # Google's stable account id ("sub"), set the first time the user signs in with Google.
+    # Matched before the email, since a Google account's address can change.
+    google_sub: str | None = Field(default=None, nullable=True, max_length=255)
+    # When the user signed themselves up. NULL for everyone a Platform Administrator or an
+    # Organization brought in. Self-signed-up users don't create further Organizations.
+    signed_up_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    # When a Platform Administrator ended this user's trial. Until then a self-signed-up
+    # user creates no Organizations, even after deleting the trial.
+    trial_ended_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    # When the user finished trial onboarding. NULL for everyone who never went through it.
+    onboarding_completed_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
 
 
 class UserCreate(PydanticBaseModel):
@@ -46,6 +60,9 @@ class UserRead(BaseModel):
     email: str
     is_platform_admin: bool
     email_verified_at: datetime | None = None
+    # Set for users who signed themselves up; they don't create further Organizations.
+    signed_up_at: datetime | None = None
+    trial_ended_at: datetime | None = None
     organization_users: list[OrganizationUserRead] | None = None
 
 

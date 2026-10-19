@@ -47,10 +47,8 @@ jobs:
           file: openclaw-base/Dockerfile
           load: true
           tags: openclaw-base:ci
-          # The rust-build stage clones aai-cli's default branch, but its RUN text never
-          # changes, so Docker happily serves a months-old clone from cache and the image
-          # silently ships a stale aai-cli. Nothing else here depends on remote state, so
-          # only this stage opts out; the rest of the build still caches normally.
+          # Rebuild the pinned aai-cli revision and compatibility patches for validation;
+          # the rest of the runtime image still uses the shared layer cache.
           no-cache-filters: rust-build
           cache-from: type=gha
           cache-to: type=gha,mode=max
