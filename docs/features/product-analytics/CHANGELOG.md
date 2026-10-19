@@ -88,7 +88,7 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
   - A new link has its own first message.
   - It is delivered by the outbox reconciler.
 - Migration `a78bcde4b918` adds the column and sets it to `created_at` for existing links, so their next message is not reported as a first.
-  - After merging staging with the onboarding redesign (`c61a94e72b30` → `d72b85f19c40`), it was re-pointed to `down_revision = "d72b85f19c40"`, so there is a single head.
+  - After merging staging with the onboarding redesign (`c61a94e72b30` → `d72b85f19c40`), it was re-pointed to `down_revision = "d72b85f19c40"`, and after the next staging merge to `down_revision = "877273bff59e"`, so there is a single head.
 - Changed:
   - `communications/models.py`, `agentbarn_telegram_repository.py` (`queue_update` takes `first_message_link_id` and returns delivery ids), `agentbarn_telegram_processor.py`
   - `events/catalog.py`, `analytics/event_handlers.py`
