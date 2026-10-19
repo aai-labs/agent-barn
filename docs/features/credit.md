@@ -93,7 +93,9 @@ webhook secret.
     one for an Organization no longer on Credit grants nothing and is recorded as
     `platform.credit_purchase.unapplied`, with the reason, for someone to refund. The
     payment is remembered (`billing_unapplied_payment`), so a redelivery doesn't log it
-    again.
+    again. A session we never created logs the credit its metadata claims, or zero when
+    that isn't a finite number, so a garbled claim is still logged rather than failing
+    the delivery.
   - Any refund event (`refund.created`, `refund.updated`, `refund.failed`) settles the
     refund on its status as Stripe has it now: credit taken back while it stands (its
     share of the purchase, keyed by the refund id), given back once it has failed or

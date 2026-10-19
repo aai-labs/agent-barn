@@ -13,7 +13,7 @@ import logging
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from uuid import UUID
 
@@ -321,7 +321,7 @@ class BillingService:
             self._unapplied(
                 organization_id,
                 reference or str(session.get("id")),
-                Decimal(str(checkout.credit_usd if checkout else metadata["credit_usd"])),
+                Decimal(str(checkout.credit_usd)) if checkout else self._claimed_credit(metadata["credit_usd"]),
                 amount_paid_usd,
                 problem or "No checkout was started for this payment.",
             )
@@ -371,6 +371,17 @@ class BillingService:
         if session.get("amount_total") != checkout.amount_cents:
             return "The amount paid doesn't match the price of the credit."
         return None
+
+    @staticmethod
+    def _claimed_credit(value: object) -> Decimal:
+        """The credit a session we didn't create claims, for the audit log only: zero when
+        it isn't a finite number, so a forged or garbled claim is still recorded rather
+        than failing the delivery and leaving Stripe to retry it for days."""
+        try:
+            credit = Decimal(str(value))
+        except InvalidOperation:
+            return Decimal(0)
+        return credit if credit.is_finite() else Decimal(0)
 
     @staticmethod
     def _uuid(value: str) -> UUID | None:

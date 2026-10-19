@@ -566,6 +566,20 @@ def test_a_session_we_never_created_grants_nothing():
         )
 
 
+@pytest.mark.parametrize("credit", ["lots", "NaN", "sNaN", "Infinity", ""])
+def test_a_session_we_never_created_whose_metadata_credit_is_not_a_number_is_flagged_not_retried(credit):
+    """Stripe retries a failed delivery for days; a payment nobody can grant must land on
+    the audit log at once instead."""
+    with given(_setup(an_owner_on_credit())) as context:
+        response = deliver(context, "checkout.session.completed", paid_session(context, credit=credit, recorded=False))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(stored(context).llm_budget_usd, equal_to(10.0))
+        events = events_named(context, "platform.credit_purchase.unapplied")
+        assert_that(events, has_length(1))
+        assert_that(events[0].payload, has_entries(credit_usd=0, reason="No checkout was started for this payment."))
+
+
 def test_a_payment_that_granted_nothing_is_flagged_once_however_often_it_is_sent():
     with given(_setup(an_owner_on_credit())) as context:
         session = paid_session(context, amount_total=50)
