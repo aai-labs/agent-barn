@@ -5296,7 +5296,7 @@ def _configure_gmail_app_password(client: TestClient, context):
 
 
 def test_gmail_app_password_is_stored_isolated_without_exposing_it():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I connect Gmail with an app password"):
@@ -5314,9 +5314,10 @@ def test_gmail_app_password_is_stored_isolated_without_exposing_it():
 
 
 def test_gmail_app_password_cannot_be_switched_to_direct():
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
-        _configure_gmail_app_password(client, context)
+        saved = _configure_gmail_app_password(client, context)
+        assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
 
         with when("I ask for the app password to be given to the agent"):
             response = client.put(
@@ -5333,8 +5334,15 @@ def test_gmail_app_password_cannot_be_switched_to_direct():
 @pytest.mark.parametrize(
     "given_runtime",
     [
-        pytest.param(lambda: [*_GIVEN, there_is_an_agent()], id="openclaw"),
-        pytest.param(lambda: [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)], id="hermes"),
+        pytest.param(lambda: [*_GIVEN, there_is_an_agent(), providers_accept_credentials()], id="openclaw"),
+        pytest.param(
+            lambda: [
+                *_GIVEN_WITH_HERMES_IMAGE,
+                there_is_an_agent(agent_type=AgentType.HERMES),
+                providers_accept_credentials(),
+            ],
+            id="hermes",
+        ),
     ],
 )
 def test_start_agent_reads_gmail_through_the_gateway_without_the_app_password(given_runtime):
@@ -5343,7 +5351,8 @@ def test_start_agent_reads_gmail_through_the_gateway_without_the_app_password(gi
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
         with when("I start an agent connected to Gmail with an app password"):
-            _configure_gmail_app_password(client, context)
+            saved = _configure_gmail_app_password(client, context)
+            assert_that(saved.status_code, equal_to(status.HTTP_200_OK), saved.text)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
         with then("the pod holds only its gateway token, never the app password"):
@@ -5592,7 +5601,7 @@ def _configure_gmail(client: TestClient, context, content: dict | None = None):
 
 def test_patch_agent_accepts_gmail_secret():
     """Covers the enum member, the content schema, and the DB check constraint."""
-    with given([*_GIVEN, there_is_an_agent()]) as context:
+    with given([*_GIVEN, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("I configure a Gmail credential"):
@@ -5606,7 +5615,7 @@ def test_patch_agent_accepts_gmail_secret():
 
 
 def test_start_agent_wires_gmail_through_the_shared_client():
-    with given([*_GIVEN_WITH_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+    with given([*_GIVEN_WITH_GOOGLE_CLIENT, there_is_an_agent(), providers_accept_credentials()]) as context:
         from api.domains.skills.skill_seeder import seed_aai_cli_skills
 
         client: TestClient = context.client
@@ -5637,7 +5646,7 @@ def test_start_agent_wires_gmail_through_the_shared_client():
 
 
 def test_start_agent_keeps_a_user_supplied_gmail_client():
-    with given([*_GIVEN_WITH_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+    with given([*_GIVEN_WITH_GOOGLE_CLIENT, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
         k8s: MagicMock = context.injector.get(KubernetesClient)
 
@@ -5658,7 +5667,7 @@ def test_start_agent_keeps_a_user_supplied_gmail_client():
 
 
 def test_start_agent_rejects_gmail_without_a_client():
-    with given([*_GIVEN_WITHOUT_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+    with given([*_GIVEN_WITHOUT_GOOGLE_CLIENT, there_is_an_agent(), providers_accept_credentials()]) as context:
         client: TestClient = context.client
 
         with when("neither the credential nor the server has a Google client"):
