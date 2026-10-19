@@ -32,7 +32,7 @@ const BUDGET_EXHAUSTED =
 const ON_CREDIT = process.env.AGENTBARN_SPEND_LIMIT_KIND === 'credit';
 const CREDIT_EXHAUSTED =
   'This organization has used all its credit, so this agent cannot reply right now. ' +
-  "Ask the organization's owner to buy more credit in Billing.";
+  "Ask the organization's owner to add more credit.";
 const SPENT_MESSAGE = ON_CREDIT ? CREDIT_EXHAUSTED : BUDGET_EXHAUSTED;
 const SPENT_CODE = ON_CREDIT ? 'CREDIT_EXHAUSTED' : 'SPEND_LIMIT_REACHED';
 

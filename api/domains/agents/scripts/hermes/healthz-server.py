@@ -37,7 +37,7 @@ _BUDGET_EXHAUSTED = (
 _ON_CREDIT = os.environ.get("AGENTBARN_SPEND_LIMIT_KIND", "") == "credit"
 _CREDIT_EXHAUSTED = (
     "This organization has used all its credit, so this agent cannot reply right now. "
-    "Ask the organization's owner to buy more credit in Billing."
+    "Ask the organization's owner to add more credit."
 )
 _SPENT_MESSAGE = _CREDIT_EXHAUSTED if _ON_CREDIT else _BUDGET_EXHAUSTED
 _SPENT_CODE = "CREDIT_EXHAUSTED" if _ON_CREDIT else "SPEND_LIMIT_REACHED"

@@ -60,7 +60,7 @@ SPEND_LIMIT_MESSAGE = (
 # On credit there is no limit beneath the balance, so the reply says what to do about it.
 CREDIT_MESSAGE = (
     "This organization has used all its credit, so this agent cannot reply right now. "
-    "Ask the organization's owner to buy more credit in Billing."
+    "Ask the organization's owner to add more credit."
 )
 UNKNOWN_MODEL_BODY = {"error": {"message": "model 'nope' not found", "type": "invalid_request_error"}}
 
@@ -257,7 +257,7 @@ def test_a_budget_rejection_is_rewritten_for_the_user(runtime, upstream_status):
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
-def test_running_out_of_credit_says_to_buy_more_and_is_recorded_as_such(runtime, tmp_path):
+def test_running_out_of_credit_says_to_add_more_and_is_recorded_as_such(runtime, tmp_path):
     marker = tmp_path / "marker.json"
     extra = {"AGENTBARN_SPEND_LIMIT_KIND": "credit", "AGENTBARN_LLM_ERROR_MARKER": str(marker)}
     with _upstream(400, BUDGET_BODY) as target, _proxy(runtime, target, extra) as proxy:

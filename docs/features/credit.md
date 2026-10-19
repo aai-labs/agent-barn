@@ -126,10 +126,11 @@ page, and read every Organization's credit history on the platform Billing page
 (`/dashboard/platform/billing`), filtered by kind or Organization. On Credit, the Spend limits settings show the credit without any limit to set
 beneath it.
 
-When an Organization on Credit runs out with payments on, its Agents' reply says so and
-names the remedy, on Hermes and OpenClaw alike: "This organization has used all its
-credit, so this agent cannot reply right now. Ask the organization's owner to buy more
-credit in Billing." The API starts each Agent's pod with `AGENTBARN_SPEND_LIMIT_KIND`
+When an Organization on Credit runs out, its Agents' reply says so and names the remedy,
+on Hermes and OpenClaw alike: "This organization has used all its credit, so this agent
+cannot reply right now. Ask the organization's owner to add more credit." It holds
+whether payments are on or off (the owner buys more, or asks a Platform Administrator),
+so it doesn't depend on a setting that can change while the pod runs. The API starts each Agent's pod with `AGENTBARN_SPEND_LIMIT_KIND`
 (`credit` or `limit`); both in-pod healthz proxies (`../../api/domains/agents/scripts/hermes/healthz-server.py`,
 `../../api/domains/agents/scripts/openclaw/healthz-server.js`) pick the reply and record
 `CREDIT_EXHAUSTED` instead of `SPEND_LIMIT_REACHED`, which

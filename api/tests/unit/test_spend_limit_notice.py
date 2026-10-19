@@ -223,7 +223,7 @@ def test_the_code_becomes_the_spend_limit_notice_and_is_not_retried():
     assert_that(normalized.details.retryable, is_(False))
 
 
-def test_running_out_of_credit_becomes_the_buy_credit_notice_and_is_not_retried():
+def test_running_out_of_credit_becomes_the_add_credit_notice_and_is_not_retried():
     normalized = normalize_communication_error(
         error_code="CREDIT_EXHAUSTED",
         error_message="HTTP 402: returned a billing error — your API key has run out of credits",
@@ -234,7 +234,7 @@ def test_running_out_of_credit_becomes_the_buy_credit_notice_and_is_not_retried(
         normalized.summary,
         equal_to(
             "This organization has used all its credit, so this agent cannot reply right now. "
-            "Ask the organization's owner to buy more credit in Billing."
+            "Ask the organization's owner to add more credit."
         ),
     )
     assert normalized.details is not None

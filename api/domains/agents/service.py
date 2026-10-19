@@ -404,7 +404,9 @@ class AgentService:
     def _spend_limit_kind(self, organization_id: UUID) -> str:
         limit = self.organization_lookup.get_llm_limit(organization_id)
         on_credit = limit is not None and limit.runs_on_credit
-        return "credit" if on_credit and self.config.payments_enabled else "limit"
+        # Not whether payments are on: that can change while the pod runs, and the pod
+        # reads this once, at start. The credit wording holds either way.
+        return "credit" if on_credit else "limit"
 
     def _auto_attached_aai_cli_skills(
         self,

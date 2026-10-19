@@ -76,7 +76,7 @@ _RUNTIME_CODES = {
     ),
     "CREDIT_EXHAUSTED": (
         "This organization has used all its credit, so this agent cannot reply right now. "
-        "Ask the organization's owner to buy more credit in Billing."
+        "Ask the organization's owner to add more credit."
     ),
 }
 _SUMMARY_BY_HTTP_STATUS = {
