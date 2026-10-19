@@ -22,7 +22,6 @@ export const OrganizationBillingSchema = z.object({
   balanceUsd: z.number().nullable().optional(),
   minPurchaseUsd: z.number(),
   maxPurchaseUsd: z.number(),
-  creditRate: z.number(),
   purchaseFeePercent: z.number(),
   // Newest first.
   history: z.array(CreditHistoryItemSchema),
@@ -57,7 +56,6 @@ export const BillingSettingsSchema = z.object({
   paymentsConfigured: z.boolean(),
   minPurchaseUsd: z.number(),
   maxPurchaseUsd: z.number(),
-  creditRate: z.number(),
   purchaseFeePercent: z.number(),
   updatedAt: z.string().nullable().optional(),
 });

@@ -17,7 +17,6 @@ function billing(overrides: Record<string, unknown> = {}) {
     balance_usd: 7.5,
     min_purchase_usd: 5,
     max_purchase_usd: 500,
-    credit_rate: 1,
     purchase_fee_percent: 0,
     history: [{ kind: "trial", credit_usd: 10, amount_paid_usd: null, created_at: "2026-10-01T09:00:00Z" }],
     ...overrides,
@@ -379,7 +378,6 @@ test.describe("Platform · Billing settings", () => {
       payments_configured: true,
       min_purchase_usd: 5,
       max_purchase_usd: 500,
-      credit_rate: 1,
       purchase_fee_percent: 0,
       updated_at: null,
     };
@@ -412,48 +410,15 @@ test.describe("Platform · Billing settings", () => {
     await expect(section).toContainText("$10.00");
     await expect(section).toContainText("5.5%");
     expect(saved).toHaveLength(1);
-  });
-
-  test("settings that sell credit below cost are warned about before saving", async ({ page }) => {
-    const data = new DataSupport(page);
-    await data.auth.interceptRefreshRequest();
-    await data.users.interceptGetUserContextRequest();
-    await data.users.interceptGetOrganizationsRequest();
-    await data.platformMemory.intercept();
-    const saved: unknown[] = [];
-    await page.route("**/api/v1/platform/settings/billing", (route) => {
-      if (route.request().method() === "PUT") saved.push(route.request().postDataJSON());
-      return route.fulfill({
-        json: {
-          payments_enabled: true,
-          payments_configured: true,
-          min_purchase_usd: 5,
-          max_purchase_usd: 500,
-          credit_rate: 1,
-          purchase_fee_percent: 0,
-          updated_at: null,
-        },
-      });
-    });
-    await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Billing" }).click();
-    await page.getByRole("region", { name: "Billing" }).getByRole("button", { name: "Edit" }).click();
-
-    await page.getByLabel("Credit per dollar").fill("10");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-
-    const confirm = page.getByRole("dialog");
-    await expect(confirm.getByRole("alert")).toContainText(
-      "Each $1.00 of credit will cost buyers $0.10, less than it costs to provide.",
-    );
-    await confirm.getByRole("button", { name: "Cancel" }).click();
-    expect(saved).toEqual([]);
+    // $1 of credit is $1 of model spend: the fee is the only markup.
+    expect(saved[0]).not.toHaveProperty("credit_rate");
+    await expect(section.getByText("Credit per dollar")).toHaveCount(0);
   });
 
   for (const [label, typed, message] of [
     ["Smallest purchase", "0.49", "Enter an amount from $0.50 to $100,000.00."],
     ["Largest purchase", "100001", "Enter an amount from the smallest purchase to $100,000.00."],
-    ["Credit per dollar", "101", "Enter a number above 0, up to 100."],
+    ["Purchase fee", "101", "Enter a percentage from 0 to 100."],
   ] as const) {
     test(`${label} refuses ${typed} before saving`, async ({ page }) => {
       const data = new DataSupport(page);
@@ -468,7 +433,6 @@ test.describe("Platform · Billing settings", () => {
             payments_configured: true,
             min_purchase_usd: 5,
             max_purchase_usd: 500,
-            credit_rate: 1,
             purchase_fee_percent: 0,
             updated_at: null,
           },
@@ -498,7 +462,6 @@ test.describe("Platform · Billing settings", () => {
       payments_configured: true,
       min_purchase_usd: 5,
       max_purchase_usd: 500,
-      credit_rate: 1,
       purchase_fee_percent: 0,
       updated_at: null,
       ...initial,

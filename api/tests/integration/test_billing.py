@@ -32,7 +32,6 @@ from injector import Module, provider, singleton
 from sqlmodel import Session
 
 from api.domains.billing.models import (
-    DEFAULT_CREDIT_RATE,
     DEFAULT_MAX_PURCHASE_USD,
     DEFAULT_MIN_PURCHASE_USD,
     DEFAULT_PURCHASE_FEE_PERCENT,
@@ -125,7 +124,6 @@ def payments_are_on():
                     payments_enabled=True,
                     min_purchase_usd=DEFAULT_MIN_PURCHASE_USD,
                     max_purchase_usd=DEFAULT_MAX_PURCHASE_USD,
-                    credit_rate=DEFAULT_CREDIT_RATE,
                     purchase_fee_percent=DEFAULT_PURCHASE_FEE_PERCENT,
                     updated_at=datetime.now(UTC),
                 )
@@ -304,10 +302,11 @@ def test_a_platform_administrator_reads_the_billing_defaults():
                 payments_configured=True,
                 min_purchase_usd=5.0,
                 max_purchase_usd=500.0,
-                credit_rate=1.0,
                 purchase_fee_percent=0.0,
             ),
         )
+        # $1 of credit is $1 of model spend: only the purchase fee is charged on top.
+        assert_that("credit_rate" in response.json(), equal_to(False))
 
 
 def test_a_platform_administrator_turns_payments_on_and_it_is_audited():
@@ -363,7 +362,7 @@ def test_a_platform_administrator_changes_the_billing_settings_and_it_is_audited
 
 @pytest.mark.parametrize(
     "payload",
-    [{"min_purchase_usd": 600}, {"credit_rate": 0}, {"purchase_fee_percent": -1}, {"max_purchase_usd": None}],
+    [{"min_purchase_usd": 600}, {"credit_rate": 0.5}, {"purchase_fee_percent": -1}, {"max_purchase_usd": None}],
 )
 def test_impossible_billing_settings_are_refused(payload):
     with given(_setup(a_platform_administrator())) as context:
@@ -414,6 +413,7 @@ def test_an_owner_on_credit_sees_their_balance_and_history():
                 max_purchase_usd=500.0,
             ),
         )
+        assert_that("credit_rate" in body, equal_to(False))
         assert_that(body["history"], has_length(1))
         assert_that(body["history"][0], has_entries(kind="trial", credit_usd=10.0))
 
@@ -524,31 +524,17 @@ def test_receipts_go_to_whoever_is_buying_now():
         stripe(context).update_customer_email.assert_awaited_once_with("cus_test", "owner@example.com")
 
 
-def test_the_charge_includes_the_credit_rate_and_purchase_fee():
-    with given(
-        _setup(an_owner_on_credit(), the_billing_settings_are(credit_rate=0.5, purchase_fee_percent=10))
-    ) as context:
+def test_the_charge_is_the_credit_plus_the_purchase_fee():
+    with given(_setup(an_owner_on_credit(), the_billing_settings_are(purchase_fee_percent=10))) as context:
         buy(context, 20)
 
-        # $20 of credit at 0.5 credit per dollar is $40, plus a 10% fee.
-        assert_that(stripe(context).create_checkout_session.await_args.kwargs["amount_cents"], equal_to(4400))
+        assert_that(stripe(context).create_checkout_session.await_args.kwargs["amount_cents"], equal_to(2200))
 
 
 @pytest.mark.parametrize("credit_usd", [4.99, 500.01])
 def test_a_purchase_outside_the_platforms_bounds_is_refused_before_stripe(credit_usd):
     with given(_setup(an_owner_on_credit())) as context:
         response = buy(context, credit_usd)
-
-        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
-        stripe(context).create_checkout_session.assert_not_awaited()
-
-
-def test_a_charge_below_stripes_minimum_is_refused_before_stripe():
-    with given(
-        _setup(an_owner_on_credit(), the_billing_settings_are(min_purchase_usd=0.5, credit_rate=100))
-    ) as context:
-        # $1 of credit at 100 credit per dollar would be a one-cent charge.
-        response = buy(context, 1)
 
         assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
         stripe(context).create_checkout_session.assert_not_awaited()

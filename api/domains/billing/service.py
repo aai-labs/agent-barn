@@ -58,19 +58,17 @@ _STRIPE = ActorIdentity(type=ActorIdentityType.SYSTEM, id="stripe")
 _STRIPE_DISPLAY = "Payment provider"
 _CREDIT_PLACES = Decimal("0.000001")
 _NOT_FOUND = "Not found"
-# The smallest card payment Stripe takes in US dollars.
-STRIPE_MINIMUM_CHARGE_CENTS = 50
 _UNAVAILABLE = "Payments aren't available right now. Try again shortly."
 # A refund in any of these didn't, or won't, send the money back.
 _REFUND_UNDONE = frozenset({"failed", "canceled"})
 
 
 def charge_cents(credit_usd: Decimal, settings: BillingSettingsRead) -> int:
-    """What `credit_usd` of credit costs, in cents: the credit at the platform's rate, plus
-    its purchase fee, rounded up so a fraction of a cent is never given away. Exact
-    fractions, so no leftover from dividing by the rate rounds up a whole cent."""
-    cents = Fraction(credit_usd) / Fraction(str(settings.credit_rate)) * 100
-    cents *= 1 + Fraction(str(settings.purchase_fee_percent)) / 100
+    """What `credit_usd` of credit costs, in cents: the credit, plus the purchase fee,
+    rounded up so a fraction of a cent is never given away. Never below the credit, so
+    the smallest purchase (at least Stripe's $0.50) keeps every charge payable. Exact
+    fractions, so a fee landing on a whole cent doesn't round up another."""
+    cents = Fraction(credit_usd) * 100 * (1 + Fraction(str(settings.purchase_fee_percent)) / 100)
     return math.ceil(cents)
 
 
@@ -175,7 +173,6 @@ class BillingService:
             balance_usd=None if spend is None else credit.credit_usd - spend,
             min_purchase_usd=settings.min_purchase_usd,
             max_purchase_usd=settings.max_purchase_usd,
-            credit_rate=settings.credit_rate,
             purchase_fee_percent=settings.purchase_fee_percent,
             history=[
                 CreditHistoryItem(
@@ -229,10 +226,6 @@ class BillingService:
             )
 
         amount_cents = charge_cents(data.credit_usd, settings)
-        if amount_cents < STRIPE_MINIMUM_CHARGE_CENTS:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="That's below the smallest payment we can take."
-            )
 
         try:
             customer_id = await run_in_threadpool(self.customers.get_customer_id, organization_id)

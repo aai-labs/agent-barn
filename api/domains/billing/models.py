@@ -14,7 +14,6 @@ from sqlmodel import SQLModel
 BILLING_SETTINGS_SUBJECT_DISPLAY = "Billing settings"
 DEFAULT_MIN_PURCHASE_USD = 5.0
 DEFAULT_MAX_PURCHASE_USD = 500.0
-DEFAULT_CREDIT_RATE = 1.0
 DEFAULT_PURCHASE_FEE_PERCENT = 0.0
 # Bounds no real setting reaches; they only stop a typo.
 MAX_PURCHASE_CAP_USD = 100_000.0
@@ -32,7 +31,6 @@ class PlatformBillingSettings(SQLModel, table=True):
         sa.CheckConstraint("id = 1", name="ck_platform_billing_settings_singleton"),
         sa.CheckConstraint("min_purchase_usd > 0", name="ck_platform_billing_settings_min_positive"),
         sa.CheckConstraint("max_purchase_usd >= min_purchase_usd", name="ck_platform_billing_settings_max_above_min"),
-        sa.CheckConstraint("credit_rate > 0", name="ck_platform_billing_settings_rate_positive"),
         sa.CheckConstraint("purchase_fee_percent >= 0", name="ck_platform_billing_settings_fee_non_negative"),
     )
     id: int = SqlField(default=1, primary_key=True)
@@ -41,10 +39,8 @@ class PlatformBillingSettings(SQLModel, table=True):
     payments_enabled: bool = SqlField(default=False, sa_column_kwargs={"server_default": "false"})
     min_purchase_usd: float
     max_purchase_usd: float
-    # Credit granted per dollar charged, before the purchase fee. 1.0 passes model spend
-    # through at cost; below 1.0 is a margin.
-    credit_rate: float
-    # Added on top of every purchase, e.g. to cover the payment provider's fee.
+    # Added on top of every purchase, to cover the payment provider's fee or keep a margin.
+    # $1 of credit is always $1 of model spend; this is the only markup.
     purchase_fee_percent: float
     updated_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
     updated_by: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
@@ -93,7 +89,6 @@ class BillingSettingsRead(BaseModel):
     payments_configured: bool = False
     min_purchase_usd: float = DEFAULT_MIN_PURCHASE_USD
     max_purchase_usd: float = DEFAULT_MAX_PURCHASE_USD
-    credit_rate: float = DEFAULT_CREDIT_RATE
     purchase_fee_percent: float = DEFAULT_PURCHASE_FEE_PERCENT
     # None until the first save.
     updated_at: datetime | None = None
@@ -110,7 +105,6 @@ class BillingSettingsUpdate(BaseModel):
     max_purchase_usd: float | None = Field(
         default=None, ge=MIN_PURCHASE_FLOOR_USD, le=MAX_PURCHASE_CAP_USD, allow_inf_nan=False
     )
-    credit_rate: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
     purchase_fee_percent: float | None = Field(default=None, ge=0, le=MAX_PURCHASE_FEE_PERCENT, allow_inf_nan=False)
 
     @model_validator(mode="after")
@@ -161,7 +155,6 @@ class OrganizationBillingRead(BaseModel):
     balance_usd: float | None = None
     min_purchase_usd: float
     max_purchase_usd: float
-    credit_rate: float
     purchase_fee_percent: float
     # Newest first.
     history: list[CreditHistoryItem] = Field(default_factory=list)

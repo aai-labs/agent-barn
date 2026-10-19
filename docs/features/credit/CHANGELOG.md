@@ -35,8 +35,11 @@ Related context: [Credit](../credit.md), [Costs](../costs.md), [Trial onboarding
     instead of failing the delivery.
   - A platform top-up makes an expired trial active again.
   - Healed spend is summed from a partial index of healed cost records.
+  - The credit rate setting is gone: $1 of credit is $1 of model spend, and the purchase
+    fee is the only markup, shown to the buyer before paying.
 - Changed: migrations `897a48ad47f0` (merge with staging), `218e1241a0c5`
-  (healed index), `7b3b00d8227d` (payments setting); `agentbarn-api` chart 0.17.0.
+  (healed index), `7b3b00d8227d` (payments setting), `6553916224ec` (drop credit rate);
+  `agentbarn-api` chart 0.17.0.
 
 ### 2026-10-14 — AF-381 — Third review fixes (PR pending)
 

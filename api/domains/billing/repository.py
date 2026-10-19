@@ -50,7 +50,6 @@ class BillingSettingsRepository:
             payments_enabled=row.payments_enabled,
             min_purchase_usd=row.min_purchase_usd,
             max_purchase_usd=row.max_purchase_usd,
-            credit_rate=row.credit_rate,
             purchase_fee_percent=row.purchase_fee_percent,
             updated_at=row.updated_at,
         )
@@ -82,7 +81,6 @@ class BillingSettingsRepository:
                     payments_enabled=stored.payments_enabled,
                     min_purchase_usd=stored.min_purchase_usd,
                     max_purchase_usd=stored.max_purchase_usd,
-                    credit_rate=stored.credit_rate,
                     purchase_fee_percent=stored.purchase_fee_percent,
                     updated_at=now,
                     updated_by=actor_id,

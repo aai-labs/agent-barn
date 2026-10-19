@@ -128,18 +128,19 @@ def test_nothing_reaches_stripe_without_a_key_or_secret():
 
 
 @pytest.mark.parametrize(
-    "credit,rate,fee,cents",
+    "credit,fee,cents",
     [
-        ("20", 1.0, 0.0, 2000),
-        ("20", 1.0, 5.5, 2110),
-        ("20", 0.5, 10.0, 4400),
+        ("20", 0.0, 2000),
+        ("20", 5.5, 2110),
+        ("0.50", 0.0, 50),
         # A fraction of a cent is rounded up, never given away.
-        ("10.01", 1.0, 3.0, 1032),
-        # Exact: no leftover from dividing by the rate adds a cent.
-        ("5.15", 0.95, 33.0, 721),
-        ("1.00", 0.6, 200.0, 500),
+        ("10.01", 3.0, 1032),
+        ("5.15", 33.0, 685),
+        # Exact: a fee that lands on a whole cent adds nothing.
+        ("1.00", 200.0, 300),
     ],
 )
-def test_the_charge_is_the_credit_at_the_rate_plus_the_fee_rounded_up(credit, rate, fee, cents):
-    settings = BillingSettingsRead(credit_rate=rate, purchase_fee_percent=fee)
+def test_the_charge_is_the_credit_plus_the_fee_rounded_up(credit, fee, cents):
+    """$1 of credit is $1 of model spend; only the purchase fee is added."""
+    settings = BillingSettingsRead(purchase_fee_percent=fee)
     assert_that(charge_cents(Decimal(credit), settings), equal_to(cents))

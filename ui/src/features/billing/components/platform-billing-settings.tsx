@@ -11,19 +11,16 @@ import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 import { useBillingSettings } from "../hooks/use-billing-settings";
 import { chargeUsd } from "../pricing";
 
-type Draft = { payments: boolean; min: string; max: string; rate: string; fee: string };
+type Draft = { payments: boolean; min: string; max: string; fee: string };
 
 // The API's bounds: Stripe's smallest card payment, and caps that only stop a typo.
 const MIN_PURCHASE_FLOOR_USD = 0.5;
 const MAX_PURCHASE_CAP_USD = 100_000;
-const MAX_CREDIT_RATE = 100;
 
-function parseWithin(raw: string, { above, from, to }: { above?: number; from?: number; to: number }): number | null {
+function parseWithin(raw: string, { from, to }: { from: number; to: number }): number | null {
   const trimmed = raw.trim();
   const parsed = Number(trimmed);
-  if (trimmed === "" || !Number.isFinite(parsed) || parsed > to) return null;
-  if (above !== undefined && parsed <= above) return null;
-  if (from !== undefined && parsed < from) return null;
+  if (trimmed === "" || !Number.isFinite(parsed) || parsed < from || parsed > to) return null;
   return parsed;
 }
 
@@ -94,11 +91,9 @@ export function PlatformBillingSettings() {
 
   const min = draft === null ? null : parseWithin(draft.min, { from: MIN_PURCHASE_FLOOR_USD, to: MAX_PURCHASE_CAP_USD });
   const max = draft === null ? null : parseWithin(draft.max, { from: MIN_PURCHASE_FLOOR_USD, to: MAX_PURCHASE_CAP_USD });
-  const rate = draft === null ? null : parseWithin(draft.rate, { above: 0, to: MAX_CREDIT_RATE });
   const fee = draft === null ? null : parseWithin(draft.fee, { from: 0, to: 100 });
   const minInvalid = draft !== null && min === null;
   const maxInvalid = draft !== null && (max === null || (min !== null && max < min));
-  const rateInvalid = draft !== null && rate === null;
   const feeInvalid = draft !== null && fee === null;
 
   function change(next: Partial<Draft>) {
@@ -107,21 +102,17 @@ export function PlatformBillingSettings() {
     resetSave();
   }
 
-  // What a buyer pays for $1.00 of credit; below $1.00 the platform sells at a loss.
-  const pricePerCredit = rate === null || fee === null ? null : (1 / rate) * (1 + fee / 100);
-
   // Payments can always be turned off, but only turned on where the deployment can take them.
   const paymentsLocked = draft !== null && !draft.payments && !billingSettings.paymentsConfigured;
   const paymentsChange = draft === null || draft.payments === billingSettings.paymentsEnabled ? null : draft.payments;
 
   async function submit() {
-    if (draft === null || min === null || max === null || rate === null || fee === null || max < min) return;
+    if (draft === null || min === null || max === null || fee === null || max < min) return;
     try {
       await saveSettings({
         paymentsEnabled: draft.payments,
         minPurchaseUsd: min,
         maxPurchaseUsd: max,
-        creditRate: rate,
         purchaseFeePercent: fee,
       });
       setDraft(null);
@@ -196,21 +187,12 @@ export function PlatformBillingSettings() {
               onChange={(value) => change({ max: value })}
             />
             <Field
-              id="billing-rate"
-              label="Credit per dollar"
-              value={draft.rate}
-              invalid={rateInvalid}
-              error="Enter a number above 0, up to 100."
-              help="1 sells credit at cost. Below 1 keeps a margin on every purchase."
-              onChange={(value) => change({ rate: value })}
-            />
-            <Field
               id="billing-fee"
               label="Purchase fee"
               value={draft.fee}
               invalid={feeInvalid}
               error="Enter a percentage from 0 to 100."
-              help="A percentage added to every purchase, for example to cover card fees."
+              help="Added on top of every purchase, to cover card fees or keep a margin. $1.00 of credit is always $1.00 of model spend."
               onChange={(value) => change({ fee: value })}
             />
           </div>
@@ -226,7 +208,6 @@ export function PlatformBillingSettings() {
             </div>
             <Saved label="Smallest purchase">{formatUsd(billingSettings.minPurchaseUsd, 2)}</Saved>
             <Saved label="Largest purchase">{formatUsd(billingSettings.maxPurchaseUsd, 2)}</Saved>
-            <Saved label="Credit per dollar">{String(billingSettings.creditRate)}</Saved>
             <Saved label="Purchase fee">{`${billingSettings.purchaseFeePercent}%`}</Saved>
           </dl>
         )}
@@ -256,7 +237,7 @@ export function PlatformBillingSettings() {
             </button>
             <button
               className="af-btn af-btn-primary"
-              disabled={minInvalid || maxInvalid || rateInvalid || feeInvalid || isSaving}
+              disabled={minInvalid || maxInvalid || feeInvalid || isSaving}
               onClick={() => setConfirming(true)}
             >
               {isSaving ? "Saving…" : "Save"}
@@ -270,7 +251,6 @@ export function PlatformBillingSettings() {
                 payments: billingSettings.paymentsEnabled,
                 min: String(billingSettings.minPurchaseUsd),
                 max: String(billingSettings.maxPurchaseUsd),
-                rate: String(billingSettings.creditRate),
                 fee: String(billingSettings.purchaseFeePercent),
               });
               setSaved(false);
@@ -280,7 +260,7 @@ export function PlatformBillingSettings() {
           </button>
         )}
       </footer>
-      {rate !== null && fee !== null && pricePerCredit !== null && (
+      {fee !== null && (
         <ConfirmationDialog
           open={confirming}
           onOpenChange={setConfirming}
@@ -298,17 +278,9 @@ export function PlatformBillingSettings() {
                 : "Organizations will no longer be able to buy credit. Payments already made still arrive."}
             </p>
           )}
-          {pricePerCredit < 1 ? (
-            <p className="m-0 text-[0.88rem]" role="alert" style={{ color: "var(--err)" }}>
-              Each $1.00 of credit will cost buyers {formatUsd(chargeUsd(1, { creditRate: rate, purchaseFeePercent: fee }), 2)},
-              less than it costs to provide. Every purchase will lose money.
-            </p>
-          ) : (
-            <p className="m-0 text-[0.88rem]" style={{ color: "var(--ink-2)" }}>
-              Each $1.00 of credit will cost buyers{" "}
-              {formatUsd(chargeUsd(1, { creditRate: rate, purchaseFeePercent: fee }), 2)}.
-            </p>
-          )}
+          <p className="m-0 text-[0.88rem]" style={{ color: "var(--ink-2)" }}>
+            Each $1.00 of credit will cost buyers {formatUsd(chargeUsd(1, { purchaseFeePercent: fee }), 2)}.
+          </p>
         </ConfirmationDialog>
       )}
     </section>

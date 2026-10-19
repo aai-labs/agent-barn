@@ -78,9 +78,10 @@ webhook secret.
   purchase bounds, and its credit history, newest first, with who bought each purchase
   (null when the buyer can't be named).
 - `POST /organizations/{id}/billing/checkout {credit_usd}` — within the platform's
-  minimum and maximum; returns a Stripe Checkout URL. The charge is the credit divided
-  by the credit rate, plus the purchase fee, rounded up to the cent, computed in exact
-  fractions; a charge below Stripe's $0.50 minimum is refused (400), and Stripe failing
+  minimum and maximum; returns a Stripe Checkout URL. The charge is the credit plus the
+  purchase fee, rounded up to the cent, computed in exact fractions: $1 of credit is
+  always $1 of model spend, and the fee is the only markup. The minimum purchase can't go
+  below Stripe's $0.50, so no charge is below it. Stripe failing
   is a 503 that says to try again. A second purchase updates the Stripe Customer's
   email to the current buyer, so receipts follow ownership changes. Each Organization
   pays as one Stripe Customer, created on its first purchase. The buyer's user id goes
@@ -112,7 +113,7 @@ webhook secret.
     events that aren't ours (no credit purchase behind them), are acknowledged and
     ignored.
 - `GET`/`PUT /platform/settings/billing` — Platform Administrators set the minimum and
-  maximum purchase, the credit rate (1.0: credit at cost) and the purchase fee percent;
+  maximum purchase, whether payments are on, and the purchase fee percent;
   each change is audited as `platform.billing_settings.changed`.
 - `GET /platform/billing/credit-history?kind=&organization_id=&page=&page_size=` —
   Platform Administrators read every Organization's Credit Grants, newest first, with
