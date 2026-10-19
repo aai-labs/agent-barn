@@ -18,6 +18,7 @@ import api.domains.business_value.models
 import api.domains.communications.models
 import api.domains.conversations.models
 import api.domains.costs.models
+import api.domains.custom_api.models
 import api.domains.events.models
 import api.domains.events.security_audit
 import api.domains.integrations.models
@@ -28,6 +29,7 @@ import api.domains.playbooks.platform_models
 import api.domains.rbac.models
 import api.domains.shared_credentials.models
 import api.domains.skills.models
+import api.domains.sync_provider.models
 import api.domains.templates.models
 import api.domains.tool_calls.models
 import api.domains.users.models

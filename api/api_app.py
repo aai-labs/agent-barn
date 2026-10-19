@@ -38,6 +38,7 @@ from api.domains.communications.runtime_webhook_routes import runtime_provider_w
 from api.domains.conversations.routes import conversations_router
 from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
+from api.domains.custom_api.routes import custom_api_router
 from api.domains.discovery.routes import router as discovery_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
@@ -56,6 +57,7 @@ from api.domains.shared_credentials.routes import shared_credentials_router
 from api.domains.skills.repository import SkillRepository
 from api.domains.skills.routes import agent_skills_router, platform_skills_router, skills_router
 from api.domains.skills.skill_seeder import seed_aai_cli_skills
+from api.domains.sync_provider.routes import sync_provider_callback_router, sync_provider_router
 from api.domains.templates.routes import platform_templates_router, templates_router
 from api.domains.templates.service import TemplateService
 from api.domains.tool_calls.routes import tool_calls_router
@@ -129,6 +131,7 @@ def create_app(injector: Injector | None = None):
     app_v1.mount("/api/v1", subapi)
 
     subapi.include_router(agents_router)
+    subapi.include_router(custom_api_router)
     subapi.include_router(agent_webhooks_router)
     subapi.include_router(agent_settings_router)
     subapi.include_router(platform_memory_router)
@@ -162,6 +165,8 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(integrations_router)
     subapi.include_router(sharepoint_sign_in_router)
     subapi.include_router(microsoft_callback_router)
+    subapi.include_router(sync_provider_router)
+    subapi.include_router(sync_provider_callback_router)
     subapi.include_router(templates_router)
     subapi.include_router(platform_templates_router)
     subapi.include_router(tool_calls_router)

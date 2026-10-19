@@ -743,6 +743,26 @@ test.describe("Agent Detail Page — Channels tab", () => {
     await agentDetailPage.channelsTab().click();
   });
 
+  for (const existing of ["none", "agentbarn_telegram", "telegram", "disabled-telegram"] as const) {
+    test(`Telegram picker respects ${existing} and reserves Agent Barn Telegram for ready-made setup`, async ({ page }) => {
+      await page.route("**/api/v1/organizations/*/communication-platforms", (route) => route.fulfill({ json: [
+        ...mockCommunicationPlatforms,
+        { ...mockCommunicationPlatforms[2], key: "agentbarn_telegram", display_name: "Agent Barn Telegram", credentials_schema: { type: "object", properties: {} } },
+      ] }));
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/connections`, (route) => route.fulfill({ json: existing === "none" ? [] : [{
+        ...mockCommunicationConnection,
+        platform_key: existing === "disabled-telegram" ? "telegram" : existing,
+        enabled: existing !== "disabled-telegram",
+      }] }));
+      await page.reload();
+      await agentDetailPage.addConnectionButton().click();
+      await expect(agentDetailPage.selectPlatformButton("Slack")).toBeVisible();
+      await expect(agentDetailPage.selectPlatformButton("Agent Barn Telegram")).toHaveCount(0);
+      if (existing === "none") await expect(agentDetailPage.selectPlatformButton("Telegram")).toBeVisible();
+      else await expect(agentDetailPage.selectPlatformButton("Telegram")).toHaveCount(0);
+    });
+  }
+
   test("lists Connection identity and health independently of the Agent runtime", async () => {
     await expect(agentDetailPage.connectionIdentity("validation-skipped")).toBeVisible();
     await expect(agentDetailPage.connectionProviderStatus("Connected")).toBeVisible();

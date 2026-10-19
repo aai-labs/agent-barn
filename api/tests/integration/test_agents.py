@@ -5374,6 +5374,122 @@ def test_start_agent_wires_apollo_into_aai_cli():
 
 
 # ---------------------------------------------------------------------------
+# Gmail (aai-cli) integration
+# ---------------------------------------------------------------------------
+
+_GMAIL_CONTENT = {
+    "email": "user@example.com",
+    "scopes": ["openid", "https://www.googleapis.com/auth/gmail.readonly"],
+    "refresh_token": "gmail-refresh-token",
+}
+
+_GIVEN_WITH_GOOGLE_CLIENT = [
+    set_env_variable(
+        {
+            "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
+            "LITELLM_BASE_URL": "http://litellm:4000",
+            "LITELLM_SECRET_NAME": "litellm",
+            "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
+            "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
+            "API_EXTERNAL_URL": "https://api.test.com",
+            "SKIP_SLACK_TOKEN_VALIDATION": "true",
+            "GOOGLE_CLOUD_CLIENT_ID": "shared-client.apps.googleusercontent.com",
+            "GOOGLE_CLOUD_CLIENT_SECRET": "shared-client-secret",
+        }
+    ),
+    *_GIVEN[1:],
+]
+
+
+def _configure_gmail(client: TestClient, context, content: dict | None = None):
+    return client.patch(
+        f"{_BASE}/{context.agent.id}",
+        json={"secrets": [{"provider": "gmail", "content": content or _GMAIL_CONTENT}]},
+        headers=_auth(context),
+    )
+
+
+def test_patch_agent_accepts_gmail_secret():
+    """Covers the enum member, the content schema, and the DB check constraint."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I configure a Gmail credential"):
+            response = _configure_gmail(client, context)
+
+        with then("it is stored and listed without exposing the refresh token"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["gmail"]))
+            assert_that(response.json()["secrets"][0]["secret_name"], equal_to("Gmail credential"))
+            assert_that(response.text, is_not(contains_string("gmail-refresh-token")))
+
+
+def test_start_agent_wires_gmail_through_the_shared_client():
+    with given([*_GIVEN_WITH_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+        from api.domains.skills.skill_seeder import seed_aai_cli_skills
+
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+        seed_aai_cli_skills(context.injector.get(SkillRepository))
+
+        with when("I start an agent whose Gmail credential names no client of its own"):
+            _configure_gmail(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the pod secret carries the shared client secret and the refresh token"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["AAI_SECRET_GOOGLE_GMAIL_CLIENT_SECRET"], equal_to("shared-client-secret"))
+            assert_that(secret.string_data["AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN"], equal_to("gmail-refresh-token"))
+
+        with then("aai-cli gets a gmail-work profile on the shared client"):
+            config_map = k8s.create_config_map.call_args.args[1]
+            toml = config_map.data["aai-cli-config.toml"]
+            assert_that(toml, contains_string("[profiles.gmail-work]"))
+            assert_that(toml, contains_string('client_id = "shared-client.apps.googleusercontent.com"'))
+            assert_that(toml, is_not(contains_string("gmail-refresh-token")))
+            assert_that(config_map.data["AGENTS.md"], contains_string("--profile gmail-work"))
+
+        with then("the bundled aai-gmail skill is mounted"):
+            paths = [entry["path"] for entry in json.loads(config_map.data["skills.json"])]
+            assert_that(paths, has_item("aai-gmail/SKILL.md"))
+
+
+def test_start_agent_keeps_a_user_supplied_gmail_client():
+    with given([*_GIVEN_WITH_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent whose Gmail credential carries its own client"):
+            _configure_gmail(
+                client,
+                context,
+                {**_GMAIL_CONTENT, "client_id": "own.apps.googleusercontent.com", "client_secret": "own-secret"},
+            )
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the refresh token stays paired with the client that issued it"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["AAI_SECRET_GOOGLE_GMAIL_CLIENT_SECRET"], equal_to("own-secret"))
+            toml = k8s.create_config_map.call_args.args[1].data["aai-cli-config.toml"]
+            assert_that(toml, contains_string('client_id = "own.apps.googleusercontent.com"'))
+
+
+def test_start_agent_rejects_gmail_without_a_client():
+    with given([*_GIVEN_WITHOUT_GOOGLE_CLIENT, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("neither the credential nor the server has a Google client"):
+            _configure_gmail(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the start is rejected with a reconnect hint"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Gmail credential"))
+
+
+# ---------------------------------------------------------------------------
 # Google Workspace (gog) integration
 # ---------------------------------------------------------------------------
 
@@ -5529,11 +5645,11 @@ def test_start_agent_with_only_google_workspace_omits_aai_cli_policy():
             _configure_gws(client, context)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("the aai-cli integrations block and config.toml are absent"):
+        with then("the aai-cli integrations block and profiles are absent"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Integrations (aai-cli)")))
-            assert_that(config_map.data, is_not(has_key("aai-cli-config.toml")))
+            assert_that(config_map.data["aai-cli-config.toml"], is_not(contains_string("[profiles.")))
 
 
 def test_start_agent_rejects_google_workspace_without_a_client():

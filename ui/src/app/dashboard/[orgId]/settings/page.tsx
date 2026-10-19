@@ -1,6 +1,6 @@
 "use client";
 
-import { Brain, FileCode2, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
+import { Brain, FileCode2, FolderSync, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
@@ -18,6 +18,7 @@ import {
 import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
 import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limits-panel";
+import { SyncProvidersPanel } from "@/features/sync-provider/components/sync-providers-panel";
 
 const ICONS = {
   agents: UserRound,
@@ -27,6 +28,7 @@ const ICONS = {
   "memory-access": Brain,
   "organization-memory": Brain,
   "shared-credentials": KeyRound,
+  sync: FolderSync,
 } as const;
 
 export default function SettingsPage() {
@@ -98,6 +100,7 @@ export default function SettingsPage() {
           {section.key === "organization-memory" && <MemoryItemsViewer key={selectedOrganization?.id} enabled={isMembershipAdmin} />}
           {section.key === "memory-access" && <MemoryAccessPanel canManage={isMembershipAdmin} />}
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
+          {section.key === "sync" && <SyncProvidersPanel canManage={canManage} />}
         </SettingsPageLayout>
       </main>
     </div>

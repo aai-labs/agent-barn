@@ -11,7 +11,8 @@ import httpx
 import pytest
 from api.domains.agents.models import SecretProvider
 from api.domains.credential_gateway.aai_store import sharepoint_refresh_token
-from api.domains.integrations.plugins.aai_cli_support import AaiCliIntegration
+from api.domains.integrations.capabilities import ISOLATION_CAPABILITIES
+from api.domains.integrations.plugins.aai_cli_support import AaiCliIntegration, env_var_for
 from api.domains.integrations.plugins.base import EgressMode
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.domains.integrations.runtime import RuntimeBinding, RuntimeContext, materialize_integrations
@@ -134,14 +135,24 @@ def run_phase(cluster, runtime: str, image: str, phase: str):
         gateway_tokens={p: f"agt_{p.value}_fixture" for p in SecretProvider},
     )
     isolated = phase in {"refused", "isolated", "reboot"}
+    plugins = INTEGRATION_PLUGINS.for_tool("aai-cli")
+    # An isolated Agent still receives the credentials of integrations that cannot be isolated.
+    isolatable = [p for p in plugins if ISOLATION_CAPABILITIES[p.provider].supports_isolated]
+    direct_only_env = {
+        env_var_for(name)
+        for plugin in plugins
+        if plugin not in isolatable and isinstance(plugin, AaiCliIntegration)
+        for name, _ in plugin.aai_cli_secret_entries
+    }
     bindings = []
-    for plugin in INTEGRATION_PLUGINS.for_tool("aai-cli"):
+    for plugin in plugins:
         content = credential_for(plugin.provider)
         if phase == "handback" and plugin.provider == SecretProvider.SHAREPOINT:
             content = content.model_copy(
                 update={"refresh_token": "latest-service-grant", "store_revision": "service-revision"}
             )
-        bindings.append(RuntimeBinding(plugin.provider, content, plugin.egress_mode if isolated else EgressMode.DIRECT))
+        mode = plugin.egress_mode if isolated and plugin in isolatable else EgressMode.DIRECT
+        bindings.append(RuntimeBinding(plugin.provider, content, mode))
     artifacts = materialize_integrations(bindings, context)
     # Direct modes still need the non-secret fixture URL for the egress check.
     artifacts.env.setdefault("AF_GATEWAY_URL", context.gateway_base_url)
@@ -154,12 +165,12 @@ def run_phase(cluster, runtime: str, image: str, phase: str):
     secret = json.loads(cluster.kubectl("get", "secret", name, "-o", "json"))
     values = {key: base64.b64decode(value).decode() for key, value in secret.get("data", {}).items()}
     if isolated:
-        assert not any(key.startswith("AAI_SECRET_") for key in values), (
+        assert not any(key.startswith("AAI_SECRET_") and key not in direct_only_env for key in values), (
             "Isolated Secret contains direct credential environment"
         )
         configmap = json.loads(cluster.kubectl("get", "configmap", name, "-o", "json"))
         payloads = [*values.values(), *configmap.get("data", {}).values()]
-        for plugin in INTEGRATION_PLUGINS.for_tool("aai-cli"):
+        for plugin in isolatable:
             assert isinstance(plugin, AaiCliIntegration)
             for _, attr in plugin.aai_cli_secret_entries:
                 credential = getattr(credential_for(plugin.provider), attr)

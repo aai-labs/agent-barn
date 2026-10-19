@@ -8,9 +8,11 @@ import { AppErrorState } from "@/components/app-error-state";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
+import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { AgentCard } from "@/features/agents/components/agent-card";
-import { HireDialog } from "@/features/agents/components/hire-dialog";
+import { EmptyTeam } from "@/features/agents/components/empty-team";
+import { HireDialog, type HireChoice } from "@/features/agents/components/hire-dialog";
 import { HireTeammateCard } from "@/features/agents/components/hire-teammate-card";
 import { isQuiet } from "@/features/agents/utils";
 
@@ -39,8 +41,10 @@ export default function DashboardPage() {
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : "";
   const [hireOpen, setHireOpen] = useState(false);
+  const [hireChoice, setHireChoice] = useState<HireChoice | undefined>();
   const [search, setSearch] = useState("");
   const { user } = useCurrentUser();
+  const { selectedOrganization } = useOrganizationContext();
   const { agents, total, isLoading, error, refetch } = useAgents();
 
   const hour = new Date().getHours();
@@ -59,7 +63,7 @@ export default function DashboardPage() {
             {greet}, {firstName}
           </h1>
           <div className="text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
-            {isLoading ? "Loading…" : `${running} working now · ${idle} idle`}
+            {isLoading ? "Loading…" : !error && total === 0 ? "Make room for the work you want to do." : `${running} working now · ${idle} idle`}
             {!isLoading && quiet > 0 && <span style={{ color: "var(--warn)" }}> · {quiet} quiet for 2+ weeks</span>}
           </div>
         </div>
@@ -87,23 +91,24 @@ export default function DashboardPage() {
               : displayedAgents.map((agent) => (
                   <AgentCard key={agent.id} agent={agent} href={`/dashboard/${orgId}/agents/${agent.id}`} />
                 ))}
-            {!isLoading && displayedAgents.length === 0 && (
+            {!isLoading && agents.length === 0 && <EmptyTeam onReady={selectedOrganization?.isTrial ? () => { setHireChoice("ready"); setHireOpen(true); } : undefined} onCustom={() => { setHireChoice("custom"); setHireOpen(true); }} />}
+            {!isLoading && agents.length > 0 && displayedAgents.length === 0 && (
               <div className="col-span-full flex min-h-56 flex-col items-center justify-center gap-1 text-center" style={{ color: "var(--ink-3)" }}>
                 <div className="font-medium text-[0.9375rem]" style={{ color: "var(--ink)" }}>
-                  {agents.length === 0 ? "No agents yet" : "No teammates match"}
+                  No teammates match
                 </div>
                 <div className="text-[0.844rem]">
-                  {agents.length === 0 ? "Hire your first teammate to get started." : "Try another name or clear your search."}
+                  Try another name or clear your search.
                 </div>
               </div>
             )}
-            {!isLoading && <HireTeammateCard onHire={() => setHireOpen(true)} />}
+            {!isLoading && agents.length > 0 && <HireTeammateCard onHire={() => { setHireChoice(undefined); setHireOpen(true); }} />}
           </div>
         )}
       </div>
 
       {hireOpen && (
-        <HireDialog onClose={() => setHireOpen(false)} onHired={({ name }) => { setHireOpen(false); toast.success(`${name} was hired successfully.`); }} />
+        <HireDialog initialChoice={hireChoice} onClose={() => setHireOpen(false)} onHired={({ name }) => { setHireOpen(false); toast.success(`${name} was hired successfully.`); }} />
       )}
     </div>
   );

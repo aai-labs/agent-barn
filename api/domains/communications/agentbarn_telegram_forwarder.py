@@ -13,7 +13,7 @@ from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.models import AgentStatus
 from api.domains.communications.agentbarn_telegram_processor import AgentBarnTelegramBot
-from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
+from api.domains.communications.agentbarn_telegram_repository import ACCESS_LOST, AgentBarnTelegramRepository
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.models import AgentBarnTelegramUpdate
 from api.domains.communications.plugins.agentbarn_telegram import runtime_webhook_secret
@@ -148,7 +148,9 @@ class AgentBarnTelegramForwarder:
             target.link.linked_by_membership_id, update.agent_id, PermissionKey.AGENT_UPDATE
         ):
             # The Member who linked this sender lost access while it waited.
-            self.repository.end_link_for_connection(update.connection_id, update.telegram_user_id, now=now)
+            self.repository.end_link_for_connection(
+                update.connection_id, update.telegram_user_id, now=now, reason=ACCESS_LOST
+            )
             self.repository.drop(update.update_id)
             return False
         if target.agent_status != AgentStatus.RUNNING:
