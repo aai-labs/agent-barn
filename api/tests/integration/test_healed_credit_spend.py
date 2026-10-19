@@ -11,6 +11,7 @@ from decimal import Decimal
 from uuid import uuid7
 
 from hamcrest import assert_that, equal_to, has_entries
+from sqlalchemy import text
 
 from api.domains.costs.models import CostRecord
 from api.domains.costs.repository import CostRepository
@@ -18,6 +19,7 @@ from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetSe
 from api.domains.organizations.models import CreditGrantKind
 from api.domains.organizations.repository import OrganizationRepository
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.integration.test_billing import BILLING, _setup, an_owner_on_credit, auth
 from api.tests.integration.test_credit_ledger import grant
@@ -147,3 +149,17 @@ def test_healed_memory_on_a_legacy_shared_key_is_not_counted_twice():
         )
 
         assert_that(healed, equal_to(Decimal(3)))
+
+
+def test_healed_spend_is_summed_from_a_partial_index_of_healed_rows():
+    """Summed on every budget check over the Organization's whole history: the index
+    holds only healed rows, so the sum stays cheap however old the Organization is."""
+    with given(_setup(an_owner_on_credit())) as context:
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with delegate.engine.connect() as connection:
+            index = connection.execute(
+                text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_cost_record_healed_org_occurred'")
+            ).scalar_one_or_none()
+        assert index is not None
+        assert_that("(organization_id, occurred_at)" in index, equal_to(True))
+        assert_that("WHERE (healed_at IS NOT NULL)" in index, equal_to(True))
