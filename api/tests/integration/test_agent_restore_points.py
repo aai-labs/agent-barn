@@ -434,6 +434,23 @@ def test_a_failed_capture_releases_its_destination_volume():
             assert_that(deleted, has_item(seeded.pvc_name))
 
 
+def test_a_failed_capture_reports_the_exception_without_its_module_path():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        seeded = _reconcilable(context)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = _job_with({"failed": 1})
+        k8s.read_job_logs.return_value = (
+            "Traceback (most recent call last):\n"
+            "api.domains.agents.restore_point_job.DestinationFullError: the volume is full\n"
+        )
+
+        with when("the capture job failed with a Python exception"):
+            body = context.client.get(f"{_url(context)}/{seeded.id}", headers=_auth(context)).json()
+
+        with then("the reason names the exception but not the module it lives in"):
+            assert_that(body["failure_reason"], equal_to("DestinationFullError: the volume is full"))
+
+
 def test_failed_captures_do_not_consume_the_per_agent_cap():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
         _seed(context, status_value=RestorePointStatus.FAILED)

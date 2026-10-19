@@ -1,6 +1,7 @@
 import enum
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -124,6 +125,10 @@ def _parse_manifest(logs: str) -> dict:
         if manifest is not None:
             return manifest
     return {}
+
+
+def _without_module_path(line: str) -> str:
+    return re.sub(r"^(?:\w+\.)+(?=\w*(?:Error|Exception):)", "", line)
 
 
 def _deadline_exceeded(job: V1Job) -> bool:
@@ -439,7 +444,7 @@ class RestorePointService:
         if logs:
             lines = [line.strip() for line in logs.splitlines() if line.strip() and _manifest_from_line(line) is None]
             if lines:
-                return lines[-1]
+                return _without_module_path(lines[-1])
         return "The operation failed. Check the cluster logs for details."
 
     def get_restore_point(
