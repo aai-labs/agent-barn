@@ -47,6 +47,7 @@ class BillingSettingsRepository:
         if row is None:
             return BillingSettingsRead()
         return BillingSettingsRead(
+            payments_enabled=row.payments_enabled,
             min_purchase_usd=row.min_purchase_usd,
             max_purchase_usd=row.max_purchase_usd,
             credit_rate=row.credit_rate,
@@ -55,7 +56,7 @@ class BillingSettingsRepository:
         )
 
     def set_settings(
-        self, changes: Mapping[str, float], actor_id: UUID, actor_display: str
+        self, changes: Mapping[str, bool | float], actor_id: UUID, actor_display: str
     ) -> tuple[BillingSettingsRead, list[UUID]]:
         """Store the settings and stage one audit Event per setting that moved, in one
         commit. A setting saved at the value already in force writes nothing. Raises
@@ -78,6 +79,7 @@ class BillingSettingsRepository:
             session.merge(
                 PlatformBillingSettings(
                     id=1,
+                    payments_enabled=stored.payments_enabled,
                     min_purchase_usd=stored.min_purchase_usd,
                     max_purchase_usd=stored.max_purchase_usd,
                     credit_rate=stored.credit_rate,
@@ -103,8 +105,9 @@ class BillingSettingsRepository:
                         "actor_display": actor_display,
                         "subject_display": BILLING_SETTINGS_SUBJECT_DISPLAY,
                         "setting": setting,
-                        "previous": float(previous),
-                        "current": float(value),
+                        # Booleans stay booleans; amounts are numbers.
+                        "previous": previous if isinstance(previous, bool) else float(previous),
+                        "current": value if isinstance(value, bool) else float(value),
                     },
                 )
                 self.outbox.stage(session=session, registry=EVENT_REGISTRY, event=event)

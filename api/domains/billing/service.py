@@ -100,6 +100,11 @@ class BillingService:
 
     def update_settings(self, data: BillingSettingsUpdate, context: CurrentUserContext) -> BillingSettingsRead:
         self.authority.require_platform_admin(context.user)
+        if data.payments_enabled and not self.config.payments_configured:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Payments can't be turned on until this deployment is set up to take them.",
+            )
         try:
             stored, delivery_ids = self.settings.set_settings(
                 data.changes(), context.user.id, context.user.full_name or context.user.email
@@ -107,7 +112,7 @@ class BillingService:
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         self.dispatcher.enqueue_immediate(delivery_ids)
-        return stored.model_copy(update={"payments_enabled": self.config.payments_enabled})
+        return stored.model_copy(update={"payments_configured": self.config.payments_configured})
 
     def list_credit_history(
         self,
@@ -143,7 +148,13 @@ class BillingService:
         )
 
     def _settings(self) -> BillingSettingsRead:
-        return self.settings.read().model_copy(update={"payments_enabled": self.config.payments_enabled})
+        return self.settings.read().model_copy(update={"payments_configured": self.config.payments_configured})
+
+    @staticmethod
+    def _takes_payments(settings: BillingSettingsRead) -> bool:
+        """Turned on, and still able to: a key gone from the deployment since stops new
+        purchases without turning the setting off."""
+        return settings.payments_enabled and settings.payments_configured
 
     # --- what an Organization sees --------------------------------------------------
 
@@ -157,7 +168,7 @@ class BillingService:
         # The same spend the limit is enforced on: the team's, plus what it doesn't count.
         spend = self.budgets.get_organization_llm_budget(organization_id, context).spend_usd
         return OrganizationBillingRead(
-            available=self.config.payments_enabled and credit.runs_on_credit,
+            available=self._takes_payments(settings) and credit.runs_on_credit,
             on_credit=credit.runs_on_credit,
             credit_usd=credit.credit_usd,
             spend_usd=spend,
@@ -197,7 +208,8 @@ class BillingService:
     ) -> CheckoutRead:
         """Send the Owner to Stripe's page to pay for `data.credit_usd` of credit. Nothing
         is granted here: credit arrives with Stripe's signed event once the payment is."""
-        if not self.config.payments_enabled:
+        settings = await run_in_threadpool(self._settings)
+        if not self._takes_payments(settings):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND)
         await run_in_threadpool(self._require_billing, context, organization_id)
         credit = await run_in_threadpool(self.organizations.get_credit, organization_id)
@@ -208,7 +220,6 @@ class BillingService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This organization's spend limit is set by the platform, so it doesn't buy credit.",
             )
-        settings = await run_in_threadpool(self._settings)
         if not settings.min_purchase_usd <= float(data.credit_usd) <= settings.max_purchase_usd:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

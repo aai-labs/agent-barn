@@ -82,10 +82,9 @@ class Config(BaseSettings):
     # divides its own allowance among its Agents.
     organization_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
     agent_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
-    # Buying credit with Stripe. Off unless set: with it off, Organizations on credit
-    # can't buy more. The webhook is served whenever its secret is set, so payments made
-    # before payments were turned off, and their refunds and disputes, still land.
-    payments_enabled: bool = False
+    # Buying credit with Stripe. A Platform Administrator turns payments on in the billing
+    # settings, which needs both. The webhook is served whenever its secret is set, so
+    # payments made before payments were turned off, and their refunds and disputes, still land.
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
     # How many Agents an Organization that is not a trial may run, unless a Platform
@@ -254,18 +253,18 @@ class Config(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def payments_have_stripe_secrets(self) -> Self:
-        """Payments without both secrets would fail every purchase and every Stripe event
-        at runtime; refuse to boot instead."""
-        if self.payments_enabled:
-            for name in ("stripe_secret_key", "stripe_webhook_secret"):
-                if not (getattr(self, name) or "").strip():
-                    raise ValueError(f"PAYMENTS_ENABLED needs {name.upper()}")
-        # The webhook is served whenever its secret is set, payments on or off, and it
-        # reads each refund's status from Stripe: without the key every refund would fail.
+    def webhook_secret_has_the_secret_key(self) -> Self:
+        """The webhook is served whenever its secret is set, payments on or off, and it
+        reads each refund's status from Stripe: without the key every refund would fail."""
         if (self.stripe_webhook_secret or "").strip() and not (self.stripe_secret_key or "").strip():
             raise ValueError("STRIPE_WEBHOOK_SECRET needs STRIPE_SECRET_KEY")
         return self
+
+    @property
+    def payments_configured(self) -> bool:
+        """Whether this deployment has what payments need, so they may be turned on:
+        without both keys, every purchase or every payment it confirms would fail."""
+        return bool((self.stripe_secret_key or "").strip() and (self.stripe_webhook_secret or "").strip())
 
     @field_validator("organization_default_agent_limit", mode="before")
     @classmethod

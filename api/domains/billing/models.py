@@ -36,6 +36,9 @@ class PlatformBillingSettings(SQLModel, table=True):
         sa.CheckConstraint("purchase_fee_percent >= 0", name="ck_platform_billing_settings_fee_non_negative"),
     )
     id: int = SqlField(default=1, primary_key=True)
+    # Whether Organizations on credit can buy more. Off until a Platform Administrator
+    # turns it on, which needs the deployment's Stripe keys.
+    payments_enabled: bool = SqlField(default=False, sa_column_kwargs={"server_default": "false"})
     min_purchase_usd: float
     max_purchase_usd: float
     # Credit granted per dollar charged, before the purchase fee. 1.0 passes model spend
@@ -83,8 +86,11 @@ class BillingUnappliedPayment(SQLModel, table=True):
 
 
 class BillingSettingsRead(BaseModel):
-    # Whether this deployment takes payments at all (PAYMENTS_ENABLED).
+    # Whether a Platform Administrator has turned payments on.
     payments_enabled: bool = False
+    # Whether this deployment has the Stripe keys payments need. Payments are taken only
+    # with both: turned on, and this.
+    payments_configured: bool = False
     min_purchase_usd: float = DEFAULT_MIN_PURCHASE_USD
     max_purchase_usd: float = DEFAULT_MAX_PURCHASE_USD
     credit_rate: float = DEFAULT_CREDIT_RATE
@@ -97,6 +103,7 @@ class BillingSettingsUpdate(BaseModel):
     """Omitting a setting leaves it as it is; none can be removed."""
 
     model_config = ConfigDict(extra="forbid")
+    payments_enabled: bool | None = None
     min_purchase_usd: float | None = Field(
         default=None, ge=MIN_PURCHASE_FLOOR_USD, le=MAX_PURCHASE_CAP_USD, allow_inf_nan=False
     )
@@ -113,7 +120,7 @@ class BillingSettingsUpdate(BaseModel):
                 raise ValueError(f"{setting} can't be removed")
         return self
 
-    def changes(self) -> dict[str, float]:
+    def changes(self) -> dict[str, bool | float]:
         return self.model_dump(include=self.model_fields_set)
 
 

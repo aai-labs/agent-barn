@@ -1,7 +1,8 @@
 """Buying credit with Stripe (AF-381).
 
-- Payments are opt in: with `PAYMENTS_ENABLED` off, checkout and the webhook are not
-  there, and the billing read says credit can't be bought.
+- Payments are opt in: off until a Platform Administrator turns them on in the billing
+  settings, which needs the deployment's Stripe keys. Off, checkout isn't there and the
+  billing read says credit can't be bought.
 - Only an Organization on credit buys it, and only its Owner (`billing.manage`).
 - Checkout charges for the credit asked for at the platform's credit rate and purchase
   fee, within its minimum and maximum, and is paid on Stripe's own page.
@@ -28,7 +29,15 @@ import pytest
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_entries, has_length, not_
 from injector import Module, provider, singleton
+from sqlmodel import Session
 
+from api.domains.billing.models import (
+    DEFAULT_CREDIT_RATE,
+    DEFAULT_MAX_PURCHASE_USD,
+    DEFAULT_MIN_PURCHASE_USD,
+    DEFAULT_PURCHASE_FEE_PERCENT,
+    PlatformBillingSettings,
+)
 from api.domains.billing.repository import BillingCheckoutRepository, BillingSettingsRepository
 from api.domains.billing.service import BillingService
 from api.domains.organizations.models import CreditGrantKind
@@ -36,6 +45,7 @@ from api.domains.organizations.repository import OrganizationRepository
 from api.domains.rbac.catalog import OrganizationRole
 from api.domains.users.models import User
 from api.domains.users.repository import UserRepository
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.stripe.client import (
     CheckoutSession,
     PaymentProviderUnavailable,
@@ -81,7 +91,7 @@ class MockStripeModule(Module):
         return gateway
 
 
-def _setup(*steps, payments: str = "true", webhook_secret: str = WEBHOOK_SECRET) -> list:
+def _setup(*steps, payments: bool = True, secret_key: str = "sk_test_x", webhook_secret: str = WEBHOOK_SECRET) -> list:
     return [
         set_env_variable(
             {
@@ -89,8 +99,7 @@ def _setup(*steps, payments: str = "true", webhook_secret: str = WEBHOOK_SECRET)
                 "LITELLM_BASE_URL": "http://litellm:4000",
                 "LITELLM_SECRET_NAME": "litellm",
                 "WEB_APP_URL": "https://app.test",
-                "PAYMENTS_ENABLED": payments,
-                "STRIPE_SECRET_KEY": "sk_test_x",
+                "STRIPE_SECRET_KEY": secret_key,
                 "STRIPE_WEBHOOK_SECRET": webhook_secret,
             }
         ),
@@ -100,8 +109,30 @@ def _setup(*steps, payments: str = "true", webhook_secret: str = WEBHOOK_SECRET)
         database_repo_is_ready(),
         database_is_clean(),
         event_delivery_tables_are_clean(),
+        *([payments_are_on()] if payments else []),
         *steps,
     ]
+
+
+def payments_are_on():
+    """As a Platform Administrator's save leaves them, without its audit Event."""
+
+    def step(context):
+        delegate = context.injector.get(PostgresRepositoryDelegate)
+        with Session(delegate.engine) as session:
+            session.add(
+                PlatformBillingSettings(
+                    payments_enabled=True,
+                    min_purchase_usd=DEFAULT_MIN_PURCHASE_USD,
+                    max_purchase_usd=DEFAULT_MAX_PURCHASE_USD,
+                    credit_rate=DEFAULT_CREDIT_RATE,
+                    purchase_fee_percent=DEFAULT_PURCHASE_FEE_PERCENT,
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            session.commit()
+
+    return step
 
 
 def an_owner_on_credit(*, trial: bool = True):
@@ -262,20 +293,59 @@ def stored(context):
 
 
 def test_a_platform_administrator_reads_the_billing_defaults():
-    with given(_setup(a_platform_administrator())) as context:
+    with given(_setup(a_platform_administrator(), payments=False)) as context:
         response = context.client.get(SETTINGS, headers=auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that(
             response.json(),
             has_entries(
-                payments_enabled=True,
+                payments_enabled=False,
+                payments_configured=True,
                 min_purchase_usd=5.0,
                 max_purchase_usd=500.0,
                 credit_rate=1.0,
                 purchase_fee_percent=0.0,
             ),
         )
+
+
+def test_a_platform_administrator_turns_payments_on_and_it_is_audited():
+    with given(_setup(a_platform_administrator(), payments=False)) as context:
+        response = context.client.put(SETTINGS, json={"payments_enabled": True}, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(context.client.get(SETTINGS, headers=auth(context)).json(), has_entries(payments_enabled=True))
+        (event,) = events_named(context, "platform.billing_settings.changed")
+        assert_that(event.payload, has_entries(setting="payments_enabled", previous=False, current=True))
+        assert_that(type(event.payload["current"]), equal_to(bool))
+
+
+@pytest.mark.parametrize(
+    "secret_key,webhook_secret", [("", ""), ("sk_test_x", "")], ids=["no-keys", "no-webhook-secret"]
+)
+def test_payments_cannot_be_turned_on_without_the_deployments_stripe_keys(secret_key, webhook_secret):
+    with given(
+        _setup(a_platform_administrator(), payments=False, secret_key=secret_key, webhook_secret=webhook_secret)
+    ) as context:
+        response = context.client.put(SETTINGS, json={"payments_enabled": True}, headers=auth(context))
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(
+            context.client.get(SETTINGS, headers=auth(context)).json(),
+            has_entries(payments_enabled=False, payments_configured=False),
+        )
+        assert_that(events_named(context, "platform.billing_settings.changed"), equal_to([]))
+
+
+def test_payments_can_be_turned_off_and_settings_saved_while_the_keys_are_missing():
+    with given(_setup(a_platform_administrator(), webhook_secret="")) as context:
+        response = context.client.put(
+            SETTINGS, json={"payments_enabled": False, "purchase_fee_percent": 3}, headers=auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json(), has_entries(payments_enabled=False, purchase_fee_percent=3.0))
 
 
 def test_a_platform_administrator_changes_the_billing_settings_and_it_is_audited():
@@ -349,7 +419,15 @@ def test_an_owner_on_credit_sees_their_balance_and_history():
 
 
 def test_credit_cannot_be_bought_while_payments_are_off():
-    with given(_setup(an_owner_on_credit(), payments="false")) as context:
+    with given(_setup(an_owner_on_credit(), payments=False)) as context:
+        response = context.client.get(BILLING.format(organization_id=context.organization.id), headers=auth(context))
+
+        assert_that(response.json(), has_entries(available=False))
+        assert_that(buy(context, 20).status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_payments_left_on_cannot_be_used_while_the_deployment_lacks_its_stripe_keys():
+    with given(_setup(an_owner_on_credit(), webhook_secret="")) as context:
         response = context.client.get(BILLING.format(organization_id=context.organization.id), headers=auth(context))
 
         assert_that(response.json(), has_entries(available=False))
@@ -738,7 +816,7 @@ def test_events_that_are_not_ours_are_acknowledged_and_ignored():
 
 
 def test_the_webhook_is_not_there_without_a_webhook_secret():
-    with given(_setup(an_owner_on_credit(), payments="false", webhook_secret="")) as context:
+    with given(_setup(an_owner_on_credit(), payments=False, webhook_secret="")) as context:
         response = deliver(context, "checkout.session.completed", paid_session(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
@@ -746,7 +824,7 @@ def test_the_webhook_is_not_there_without_a_webhook_secret():
 
 
 def test_payments_made_and_refunds_still_land_after_payments_are_turned_off():
-    with given(_setup(an_owner_on_credit(), payments="false")) as context:
+    with given(_setup(an_owner_on_credit(), payments=False)) as context:
         with when("a payment made before the switch arrives, and is then refunded"):
             paid = deliver(context, "checkout.session.completed", paid_session(context))
             refunded = deliver(context, "refund.created", refund(cents=2000))
