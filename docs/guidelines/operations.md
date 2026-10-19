@@ -517,6 +517,14 @@ The [integration contract](../features/integrations.md#optional-credential-isola
 
 Isolated Apollo requires both runtime images to be rebuilt with `aai-apollo-routing.patch`. Publish new immutable image versions before rollout; an older image can send `apollo health` outside the gateway. Migration `0d612dc60e9a` preserves direct routing for pre-existing Apollo credentials and leaves existing policy choices unchanged.
 
+Custom API connections require both runtime images to include the pinned aai-cli
+revision from `main` with `custom-api request` (aai-cli PR #30). Hermes 0.2.10
+and OpenClaw 0.7.7 pin merged commit `69d280f0762200fde5bea164adee83573eef5ea1`. Rebuild and verify both images before enabling
+these connections; older images do not include the command. During release
+preparation, assign new immutable runtime versions under the versioning rules below
+and deploy the connection migration, API, credential gateway and UI together.
+Existing Agents apply connection changes only on an explicit start or restart.
+
 For a failed application, open the integration setup and Apply & Restart to retry, or select Restore previous mode and then Apply & Restart. A SharePoint reconnect-required message means the broker could not prove continuity; reconnect the sign-in before retrying. Preserve the aai-cli PVC store/key/marker until the handoff succeeds. Credential setup failures now stop startup; repair a corrupted store/key pair rather than booting with stale credentials. The gateway cache needs no separate service or replica affinity. Apply & Restart returns after provisioning; a slow image pull remains unverified and is not torn down on a readiness timeout. If an old pod stays Terminating past the termination budget, inspect its node and volume state before retrying; an operator must establish that the old process cannot run before forcing deletion. Preserve its gateway authorization until termination is established.
 
 Before rolling the application/schema back, apply direct SharePoint through the current API to hand back the latest service-side grant, then stop affected Agents. Do not downgrade while isolated SharePoint generations are live. The generation migration's downgrade requires `AGENT_TOKEN_ENCRYPTION_KEY` when SharePoint rows exist; it removes broker/cache metadata from encrypted payloads while preserving the latest refresh token so older strict schemas can decrypt them. It keeps the latest service-side refresh grant. Downgrade removes the revision marker metadata, so the older setup imports that DB grant again; it cannot capture any subsequent direct-PVC rotation. Keep the rollback interval short and reconnect if Microsoft refuses that grant. Default-source policy is discarded on schema downgrade because older applications have no such binding; restart Agents under the older application's routing after rollback. Keep a database backup and the PVC together; a mode change cannot revoke credentials already received by an Agent.
@@ -576,7 +584,7 @@ for why staging is a namespace.
 - **Checks:** `deploy.yml` skips lint and tests (`run_checks=false`) only when the pushed commit is the merge result of a pull request into the same branch whose head passed `ci-gate`, found through the commit's associated pull requests and that head's check runs. A direct push, a manual `workflow_dispatch`, a pull request without a passing `ci-gate` (including ones merged before the check existed), or any lookup failure runs the full checks, so an untested commit never ships. The single-Alembic-head check (`make check-migrations`) runs in either case, because two pull requests that each add a migration can pass CI separately and still leave two heads once merged in sequence. A failure in that preflight or in change detection stops the deploy before any image is pushed or released.
 - **Images:** all four images (api, ui, hermes-base, openclaw-base) get a `-staging` tag suffix on staging; staging never pushes `:latest`, since each environment builds its own base images and their installed contents can diverge.
 - **Change detection:** `deploy.yml` compares the current commit with the latest successful deploy run for the same branch. A failed deploy does not advance that baseline, so a later fix rebuilds every component changed since the last successful deploy. If no valid baseline can be found, or the workflow is dispatched manually, all four images are built.
-- **Secrets/vars:** every per-env value uses a `STAGING_`-prefixed GitHub secret or variable, selected by a `github.ref_name == 'staging' && secrets.STAGING_X || secrets.X` ternary in `deploy.yml`. Shared references (registry, `OPENROUTER_API_KEY`, Google OAuth client, DB user/db names, and the Cloudflare email account/token) are reused as-is. Email follows the standard convention: only `STAGING_SENDER_EMAIL` differs, pointing staging at its own `mail-staging.` sending subdomain.
+- **Secrets/vars:** every per-env value uses a `STAGING_`-prefixed GitHub secret or variable, selected by a `github.ref_name == 'staging' && secrets.STAGING_X || secrets.X` ternary in `deploy.yml`. Shared references (registry, `OPENROUTER_API_KEY`, Google OAuth client, OneDrive sync Microsoft app, DB user/db names, and the Cloudflare email account/token) are reused as-is. Email follows the standard convention: only `STAGING_SENDER_EMAIL` differs, pointing staging at its own `mail-staging.` sending subdomain.
 - **RBAC bootstrap:** the staging namespace and its deploy identities are
   provisioned out of band. Do not use `deploy.sh` as a staging entry point: it
   always applies `k8s/agent-farm-user.yaml` for `agent-farm`. The current
@@ -600,7 +608,7 @@ Hosted public Agent Barn runs on the dedicated Talos cluster, not on k3s. k3s (`
   Nothing in this workflow writes to `registry.k8s.aai-labs.com`.
 - **Registry:** `PUBLIC_REGISTRY_URL` (`registry.agentbarn.dev`). Do not reuse the k3s registry password or R2 bucket.
 - **Namespace:** still `agent-farm` so helmfile and `k8s/agent-farm-user.yaml` apply unchanged. This is a different cluster, so it does not collide with k3s.
-- **Secrets/vars:** every public-only value is `PUBLIC_`-prefixed. Postgres **user/db names**, `AGENT_DEFAULT_MODEL` / `AGENT_MODEL_ALLOWLIST`, the Cloudflare email account/token, and the Google OAuth client are reused. OpenRouter, Firecrawl, Slack webhook, DB passwords, and signing keys are **not** reused — copy a value into a `PUBLIC_` secret only when that sharing is intentional.
+- **Secrets/vars:** every public-only value is `PUBLIC_`-prefixed. Postgres **user/db names**, `AGENT_DEFAULT_MODEL` / `AGENT_MODEL_ALLOWLIST`, the Cloudflare email account/token, the Google OAuth client, and the OneDrive sync Microsoft app are reused. OpenRouter, Firecrawl, Slack webhook, DB passwords, and signing keys are **not** reused — copy a value into a `PUBLIC_` secret only when that sharing is intentional.
 - **Kubeconfig:** `PUBLIC_KUBECONFIG_B64` must reach the Talos API (`https://<cp-1>:6443`). There is no bastion tunnel. `PUBLIC_POD_KUBECONFIG_B64` is what the API pod uses to manage agents; if unset, the workflow falls back to the deploy kubeconfig. Prefer a namespace-scoped kubeconfig for the pod, as on k3s.
 - **Storage:** `PUBLIC_STORAGE_CLASS`. Intended value is `rook-ceph-block-main`. Use `local-path` only while Ceph has no OSDs — postgres then dies with the node that holds the volume.
 - **Hosts:** `PUBLIC_UI_HOST` is `cloud.agentbarn.dev` (not `app` — that hostname stays on k3s). Product Grafana is `grafana-app.agentbarn.dev`, not cluster `grafana.agentbarn.dev`.
@@ -656,8 +664,9 @@ kubeconfig portably with
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
-`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`, and
-`GOOGLE_CLOUD_CLIENT_SECRET`.
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`,
+`GOOGLE_CLOUD_CLIENT_SECRET`, and `ONEDRIVE_SYNC_CLIENT_SECRET` (with the
+`ONEDRIVE_SYNC_CLIENT_ID` variable).
 
 ## Versioning and releases
 

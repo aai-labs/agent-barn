@@ -121,7 +121,7 @@ class OnboardingService:
             return self.agents.get_agent(agent.id, trial)
 
     def complete(self, context: CurrentUserContext) -> None:
-        self.users.complete_onboarding(context.user.id)
+        self.users.complete_onboarding(context.user.id, self.organizations.first_created_by(context.user.id))
 
     def _agent(self, trial: CurrentUserContext) -> AgentRead | None:
         """The trial's oldest live Agent: the one onboarding set up, even after the user

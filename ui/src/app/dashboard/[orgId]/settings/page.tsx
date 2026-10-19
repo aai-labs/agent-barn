@@ -16,6 +16,7 @@ import {
 import { SharedCredentialsPanel } from "@/features/shared-credentials/components/shared-credentials-panel";
 import { SkillsPanel } from "@/features/skills/components/skills-panel";
 import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limits-panel";
+import { SyncProvidersPanel } from "@/features/sync-provider/components/sync-providers-panel";
 
 
 export default function SettingsPage() {
@@ -72,6 +73,7 @@ export default function SettingsPage() {
           {section.key === "organization-memory" && <MemoryItemsViewer key={selectedOrganization?.id} enabled={isMembershipAdmin} />}
           {section.key === "memory-access" && <MemoryAccessPanel canManage={isMembershipAdmin} />}
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
+          {section.key === "sync" && <SyncProvidersPanel canManage={canManage} />}
         </SettingsPageLayout>
       </main>
     </div>

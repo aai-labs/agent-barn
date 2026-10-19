@@ -10,6 +10,7 @@ async function open(page: Page, options: { provider?: string; status?: string; a
   await data.users.interceptGetUserContextRequest();
   await data.users.interceptGetOrganizationsRequest();
   await data.agents.interceptGetAgentConfigurationRequest();
+  await data.agents.interceptGetCustomApiConnectionsRequest();
   await data.agents.interceptGetAgentHealthRequest();
   await data.organizations.interceptGetOrganizationLlmBudget({ organizationId: TEST_ORG_ID });
   const provider = options.provider ?? "github";

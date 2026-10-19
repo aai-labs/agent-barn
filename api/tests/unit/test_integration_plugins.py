@@ -16,7 +16,7 @@ from api.domains.agents.models import (
     SecretProvider,
 )
 from api.domains.integrations.plugins.aai_cli_support import AaiCliIntegration, AaiCliPlugin
-from api.domains.integrations.plugins.base import EgressMode, IntegrationPlugin, OutboundRequest
+from api.domains.integrations.plugins.base import EgressMode, IntegrationPlugin, OutboundRequest, ServedRequest
 from api.domains.integrations.plugins.providers import AAI_CLI, GOG, NO_TOOL
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS, IntegrationPluginRegistry
 from api.infrastructure.integration_validators import PROVIDER_VALIDATORS
@@ -92,7 +92,9 @@ def test_aai_cli_gateway_egress_preserves_native_sharepoint_sign_in():
                 [
                     p.key
                     for p in AAI_CLI_PLUGINS
-                    if p.egress_mode != EgressMode.DIRECT and p.provider != SecretProvider.SHAREPOINT
+                    # Gateway-served providers answer aai-cli themselves; nothing is proxied.
+                    if p.egress_mode not in (EgressMode.DIRECT, EgressMode.GATEWAY_SERVED)
+                    and p.provider != SecretProvider.SHAREPOINT
                 ]
             )
         ),
@@ -143,6 +145,38 @@ def test_a_provider_without_gateway_support_refuses_the_seams(plugin: Integratio
         plugin.apply_upstream_auth(content, OutboundRequest("GET", "/"))
 
 
+# --- gateway-served providers: the gateway performs the operation itself ---
+
+_GATEWAY_SERVED = [p for p in ALL_PLUGINS if p.egress_mode is EgressMode.GATEWAY_SERVED]
+
+
+def test_gmail_app_password_is_served_by_the_gateway():
+    plugin = INTEGRATION_PLUGINS.require(SecretProvider.GMAIL_APP_PASSWORD)
+    assert_that(plugin.egress_mode, is_(EgressMode.GATEWAY_SERVED))
+    # The agent reaches it with aai-cli, like every other aai-cli integration.
+    assert_that(plugin.runtime_tool, equal_to(AAI_CLI))
+    # One person's mailbox: never reusable across an Organization's agents.
+    assert_that(plugin.shared_credential_eligible, is_(False))
+    assert_that(plugin.bundled_skill_slugs, equal_to(()))
+
+
+@pytest.mark.parametrize("plugin", _GATEWAY_SERVED, ids=_ids(_GATEWAY_SERVED))
+def test_a_gateway_served_provider_neither_forwards_nor_mints(plugin: IntegrationPlugin):
+    content = object()
+    with pytest.raises(NotImplementedError):
+        plugin.upstream_base_url(content)
+    with pytest.raises(NotImplementedError):
+        plugin.apply_upstream_auth(content, OutboundRequest("GET", "/"))
+    with pytest.raises(NotImplementedError):
+        plugin.mint_upstream_token(content)
+
+
+@pytest.mark.parametrize("plugin", [p for p in ALL_PLUGINS if p.egress_mode is not EgressMode.GATEWAY_SERVED])
+def test_only_a_gateway_served_provider_answers_requests_itself(plugin: IntegrationPlugin):
+    with pytest.raises(NotImplementedError):
+        plugin.serve(object(), ServedRequest("GET", "https://example.com/"))
+
+
 # --- registry validation ---
 
 
@@ -187,6 +221,11 @@ def test_registry_rejects_a_gateway_proxy_plugin_with_no_upstream_behavior():
 def test_registry_rejects_a_token_broker_plugin_with_no_minting_behavior():
     message = _registry_error(egress_mode=EgressMode.TOKEN_BROKER)
     assert_that("never overrides mint_upstream_token" in message, is_(True))
+
+
+def test_registry_rejects_a_gateway_served_plugin_that_serves_nothing():
+    message = _registry_error(egress_mode=EgressMode.GATEWAY_SERVED)
+    assert_that("never overrides serve" in message, is_(True))
 
 
 def test_registry_rejects_a_catalogue_missing_a_provider():

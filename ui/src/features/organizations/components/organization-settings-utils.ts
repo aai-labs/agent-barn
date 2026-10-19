@@ -7,7 +7,8 @@ export type OrganizationSettingsSectionKey =
   | "skills"
   | "organization-memory"
   | "memory-access"
-  | "shared-credentials";
+  | "shared-credentials"
+  | "sync";
 
 export type OrganizationSettingsSection = {
   key: OrganizationSettingsSectionKey;
@@ -69,6 +70,12 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
     label: "Shared Credentials",
     description: "Organization-wide integration keys reusable across Agents.",
     adminOnly: true,
+  },
+  {
+    key: "sync",
+    label: "Sync",
+    description: "Connect storage providers to keep your organization's files in sync.",
+    adminOnly: false,
   },
 ];
 
