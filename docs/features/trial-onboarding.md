@@ -28,8 +28,9 @@ This stage does not create or start an Agent; errors retain the setup retry scre
 After completion, the ready screen retains this visit's setup summary and navigation
 targets: the refreshed API status no longer includes the trial setup details.
 
-After sign-in, `/onboarding` uses four steps: **Signed in → Choose how to start →
-Connect Telegram or Set up your agent → You're ready**. Signed in is already complete.
+After sign-in, `/onboarding` uses five steps: **Signed in → Choose how to start →
+Connect Telegram or Set up your agent → Connect Gmail → You're ready**. Signed in is
+already complete.
 The frame shows a step rail on desktop and compact progress on small screens; Trial
 Credit appears in the desktop rail.
 
@@ -56,8 +57,8 @@ Credit appears in the desktop rail.
    browser click. Pressing Start links the account; expired 10-minute tokens are
    replaced. Only links opened from this step show an expiry warning; unopened
    links refresh silently. Account polling stops once linking succeeds.
-   Already-linked users can Continue. **Skip, I'll chat on the web** records
-   completion and opens this Agent's Web Chat without requiring a Telegram link.
+   Already-linked users can Continue. **Skip, I'll chat on the web** leads,
+   through the Gmail step, to this Agent's Web Chat without requiring a Telegram link.
 3. **Build my own: Set up your agent**. The wizard shares the hire dialog's form logic
    and ordinary create/start calls, including template-required Skills, group choices,
    credential validation, model inheritance and Hermes command approval. No quick-start
@@ -71,7 +72,19 @@ Credit appears in the desktop rail.
    generated name, required Skills, and entered credentials persist while browsing.
    **I'll do this later** is also available here when no hire/start request is in flight;
    it creates no Agent and preserves any Agent already created by a failed start.
-4. **You're ready**. Successful linking or hiring records `user.onboarding_completed_at`
+4. **Connect Gmail** (optional, both paths). Once the Agent exists, the user can give it
+   read-only Gmail with a Google app password, or **Skip** to the ready screen;
+   **I'll do this later** records completion and opens the dashboard. Connecting uses the
+   agent settings calls: stop the Agent if it is running, save the
+   `gmail_app_password` credential, check the sign-in with the integration validate
+   endpoint, and start the Agent again. Updates don't check credentials with the
+   provider, so a password Gmail rejects is removed again before the restart and the
+   step explains why; a failed restart offers Try again, which only starts the Agent.
+   Telegram's **Skip, I'll chat on the web** still comes here, and every way out of this
+   step then opens Web Chat instead of the ready screen or dashboard. When setting up the
+   Agent failed, that skip goes straight to Web Chat. One-click Gmail sign-in is not offered here or anywhere else until the
+   Google app is verified; see [Google OAuth](integrations.md#google-oauth).
+5. **You're ready**. Finishing or skipping the Gmail step records `user.onboarding_completed_at`
    through `POST /onboarding/complete`. The first completion also emits `user.onboarding.completed`
    for product analytics, and so does every exit that records completion, such as
    **I'll do this later** or **Skip, I'll chat on the web**; a repeat writes and emits nothing. A completion failure retries only that save,

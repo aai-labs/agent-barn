@@ -94,6 +94,7 @@ export function TokenInput({
   onToggle,
   placeholder,
   disabled,
+  ariaLabel,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -101,10 +102,12 @@ export function TokenInput({
   onToggle: () => void;
   placeholder?: string;
   disabled?: boolean;
+  ariaLabel?: string;
 }) {
   return (
     <div className="relative">
       <input
+        aria-label={ariaLabel}
         className="af-input font-mono text-[0.8125rem] pr-10"
         type={visible ? "text" : "password"}
         value={value}

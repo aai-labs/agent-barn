@@ -180,6 +180,8 @@ test.describe("Trial onboarding", () => {
     await wizard.agentName().fill("My helper");
     await wizard.template().click();
     await wizard.hireAction().click();
+    await expect(wizard.heading("Let your agent read your Gmail")).toBeVisible();
+    await wizard.skipGmail().click();
     await expect(wizard.heading("My helper is ready")).toBeVisible();
     expect(setups).toHaveLength(0);
     expect(completions).toHaveLength(1);
@@ -198,6 +200,7 @@ test.describe("Trial onboarding", () => {
     await wizard.goto();
     await wizard.chooseQuickStart();
     await wizard.continueAction().click();
+    await wizard.skipGmail().click();
     await expect(wizard.alert()).toContainText("save your progress");
     await wizard.retryAction().click();
     await expect(wizard.heading("Your agent is live in Telegram.")).toBeVisible();
@@ -221,6 +224,7 @@ test.describe("Trial onboarding", () => {
       response.url().endsWith("/api/v1/onboarding") && (await response.json()).required === false,
     );
     await wizard.continueAction().click();
+    await wizard.skipGmail().click();
     await completedRead;
     await expect(wizard.heading("Your agent is live in Telegram.")).toBeVisible();
     await expect(wizard.summaryRow("credit")).toContainText("$10.00");
@@ -281,6 +285,7 @@ test.describe("Trial onboarding", () => {
       skill_ids: [mockPlatformSkill.id], skill_versions: [{ skill_id: mockPlatformSkill.id, version: 3 }],
       secrets: [{ provider: "github", content: { token: "test-github-token", owner: "demo-org", org: "demo-org" } }],
     });
+    await wizard.skipGmail().click();
     await expect(wizard.heading("Maya is ready")).toBeVisible();
   });
 
@@ -327,7 +332,7 @@ test.describe("Trial onboarding", () => {
     });
   }
 
-  test("quick start can skip Telegram and open web chat", async ({ page }) => {
+  test("quick start can skip Telegram, then Gmail, and open web chat", async ({ page }) => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding();
     await data.onboarding.interceptSetUpAgent();
@@ -338,6 +343,9 @@ test.describe("Trial onboarding", () => {
     await wizard.goto();
     await wizard.chooseQuickStart();
     await wizard.skipAction().click();
+    await expect(wizard.heading("Let your agent read your Gmail")).toBeVisible();
+    expect(completions).toHaveLength(0);
+    await wizard.skipGmail().click();
     await page.waitForURL(`/dashboard/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}?tab=chat`);
     expect(completions).toHaveLength(1);
   });
@@ -355,7 +363,7 @@ test.describe("Trial onboarding", () => {
     await onboardingPage.chooseQuickStart();
 
     await expect(onboardingPage.heading("Say hi to @AgentBarnTestBot")).toBeVisible();
-    await expect(onboardingPage.stepCounter()).toHaveText("Step 3 of 4");
+    await expect(onboardingPage.stepCounter()).toHaveText("Step 3 of 5");
     await expect(onboardingPage.openInTelegram()).toHaveAttribute("href", TRIAL_DEEP_LINK);
     await expect(onboardingPage.openInTelegram()).toHaveAttribute("target", "_blank");
     expect(setUps).toHaveLength(1);
@@ -366,8 +374,13 @@ test.describe("Trial onboarding", () => {
 
     await onboardingPage.continueAction().click();
 
+    await expect(onboardingPage.heading("Let your agent read your Gmail")).toBeVisible();
+    await expect(onboardingPage.stepCounter()).toHaveText("Step 4 of 5");
+    expect(completions).toHaveLength(0);
+    await onboardingPage.skipGmail().click();
+
     await expect(onboardingPage.heading("Your agent is live in Telegram.")).toBeVisible();
-    await expect(onboardingPage.stepCounter()).toHaveText("Step 4 of 4");
+    await expect(onboardingPage.stepCounter()).toHaveText("Step 5 of 5");
     expect(completions).toHaveLength(1);
     await expect(onboardingPage.summaryRow("account")).toContainText("jane@example.com");
     await expect(onboardingPage.summaryRow("telegram")).toContainText("@jane_doe");
@@ -528,6 +541,7 @@ test.describe("Trial onboarding", () => {
     await onboardingPage.goto();
     await onboardingPage.chooseQuickStart();
     await onboardingPage.continueAction().click();
+    await onboardingPage.skipGmail().click();
     await expect(onboardingPage.goToDashboard()).toHaveClass(/\baf-btn-primary\b/);
     await expect(onboardingPage.openTelegram()).not.toHaveClass(/\baf-btn-primary\b/);
     await expect(onboardingPage.openTelegram()).toHaveAttribute("target", "_blank");
@@ -696,4 +710,186 @@ test.describe("Trial onboarding", () => {
       expect(writes).toHaveLength(0);
     });
   }
+});
+
+test.describe("Gmail in onboarding", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  const ADDRESS = "jane@gmail.com";
+  const APP_PASSWORD = "abcd efgh ijkl mnop";
+
+  /** Records, in order, each call the Gmail step makes to the trial Agent. */
+  async function gmailStepCalls(page: Page, {
+    validation = { validation_status: "valid", validation_identity: ADDRESS },
+    startStatuses = [200],
+  }: { validation?: Record<string, unknown>; startStatuses?: number[] } = {}) {
+    const calls: { call: string; body?: unknown }[] = [];
+    const agentUrl = `**/api/v1/organizations/*/agents/${TRIAL_AGENT_ID}`;
+    await page.route(agentUrl, async (route) => {
+      const method = route.request().method();
+      if (method === "GET") return route.fulfill({ json: { ...mockAgent, id: TRIAL_AGENT_ID, status: "RUNNING" } });
+      if (method !== "PATCH") return route.fallback();
+      calls.push({ call: "update", body: route.request().postDataJSON() });
+      return route.fulfill({ json: { ...mockAgent, id: TRIAL_AGENT_ID, status: "STOPPED" } });
+    });
+    await page.route(`${agentUrl}/stop`, async (route) => {
+      calls.push({ call: "stop" });
+      await route.fulfill({ json: { ...mockAgent, id: TRIAL_AGENT_ID, status: "STOPPED" } });
+    });
+    await page.route(`${agentUrl}/integrations/gmail_app_password/validate`, async (route) => {
+      calls.push({ call: "validate" });
+      await route.fulfill({ json: validation });
+    });
+    let starts = 0;
+    await page.route(`${agentUrl}/start`, async (route) => {
+      calls.push({ call: "start" });
+      const status = startStatuses[Math.min(starts++, startStatuses.length - 1)];
+      await route.fulfill(status >= 400
+        ? { status, json: { detail: "Unable to start agent" } }
+        : { json: { ...mockAgent, id: TRIAL_AGENT_ID, status: "RUNNING" } });
+    });
+    return calls;
+  }
+
+  async function reachGmailStep(page: Page, { skipTelegram = false } = {}) {
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    await data.onboarding.interceptSetUpAgent();
+    await data.onboarding.interceptLinkedAccounts(skipTelegram ? [] : [linkedAccount]);
+    await data.onboarding.interceptLinkTokens();
+    const completions = await data.onboarding.interceptCompleteOnboarding();
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.chooseQuickStart();
+    await (skipTelegram ? wizard.skipAction() : wizard.continueAction()).click();
+    await expect(wizard.heading("Let your agent read your Gmail")).toBeVisible();
+    return { wizard, completions };
+  }
+
+  test("skipping Telegram still offers Gmail, then opens web chat", async ({ page }) => {
+    const calls = await gmailStepCalls(page);
+    const { wizard, completions } = await reachGmailStep(page, { skipTelegram: true });
+
+    await wizard.gmailAddress().fill(ADDRESS);
+    await wizard.gmailAppPassword().fill(APP_PASSWORD);
+    await wizard.connectGmail().click();
+
+    await page.waitForURL(`/dashboard/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}?tab=chat`);
+    expect(calls.map(({ call }) => call)).toEqual(["stop", "update", "validate", "start"]);
+    expect(completions).toHaveLength(1);
+  });
+
+  test("after skipping Telegram, I'll do this later still opens web chat", async ({ page }) => {
+    const calls = await gmailStepCalls(page);
+    const { wizard, completions } = await reachGmailStep(page, { skipTelegram: true });
+
+    await wizard.laterAction().click();
+
+    await page.waitForURL(`/dashboard/${TRIAL_ORG_ID}/agents/${TRIAL_AGENT_ID}?tab=chat`);
+    expect(calls).toEqual([]);
+    expect(completions).toHaveLength(1);
+  });
+
+  test("is optional, read-only, and skipping it saves nothing", async ({ page }) => {
+    const calls = await gmailStepCalls(page);
+    const { wizard, completions } = await reachGmailStep(page);
+
+    await expect(page.getByText(/read your inbox, but never send, delete or change mail/)).toBeVisible();
+    await expect(page.getByText("myaccount.google.com/apppasswords", { exact: false })).toBeVisible();
+    await expect(wizard.connectGmail()).toBeDisabled();
+    await wizard.skipGmail().click();
+
+    await expect(wizard.heading("Your agent is live in Telegram.")).toBeVisible();
+    expect(completions).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
+  test("I'll do this later opens the dashboard without saving Gmail", async ({ page }) => {
+    const calls = await gmailStepCalls(page);
+    const { wizard, completions } = await reachGmailStep(page);
+
+    await wizard.laterAction().click();
+
+    await expect(page).toHaveURL(`/dashboard/${TRIAL_ORG_ID}`);
+    expect(completions).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
+  test("connects Gmail, checks the sign-in, and restarts the agent", async ({ page }) => {
+    const calls = await gmailStepCalls(page);
+    const { wizard, completions } = await reachGmailStep(page);
+
+    await wizard.gmailAddress().fill(ADDRESS);
+    await wizard.gmailAppPassword().fill(APP_PASSWORD);
+    await wizard.connectGmail().click();
+
+    await expect(wizard.heading("Your agent is live in Telegram.")).toBeVisible();
+    expect(calls).toEqual([
+      { call: "stop" },
+      { call: "update", body: { secrets: [{ provider: "gmail_app_password", content: { email: ADDRESS, app_password: APP_PASSWORD } }] } },
+      { call: "validate" },
+      { call: "start" },
+    ]);
+    expect(completions).toHaveLength(1);
+  });
+
+  test("a rejected app password is removed again and explained", async ({ page }) => {
+    const rejected = "Gmail rejected this address and app password. Check both, or create a new app password.";
+    const calls = await gmailStepCalls(page, { validation: { validation_status: "invalid", validation_error: rejected } });
+    const { wizard, completions } = await reachGmailStep(page);
+
+    await wizard.gmailAddress().fill(ADDRESS);
+    await wizard.gmailAppPassword().fill("wrong password");
+    await wizard.connectGmail().click();
+
+    await expect(wizard.alert()).toHaveText(rejected);
+    await expect(wizard.heading("Let your agent read your Gmail")).toBeVisible();
+    expect(calls.map(({ call }) => call)).toEqual(["stop", "update", "validate", "update", "start"]);
+    expect(calls[3].body).toEqual({ removed_secret_providers: ["gmail_app_password"] });
+    expect(completions).toHaveLength(0);
+  });
+
+  test("a failed restart can be tried again", async ({ page }) => {
+    const calls = await gmailStepCalls(page, { startStatuses: [500, 200] });
+    const { wizard, completions } = await reachGmailStep(page);
+
+    await wizard.gmailAddress().fill(ADDRESS);
+    await wizard.gmailAppPassword().fill(APP_PASSWORD);
+    await wizard.connectGmail().click();
+
+    await expect(wizard.alert()).toContainText("couldn't restart your agent");
+    expect(completions).toHaveLength(0);
+    await wizard.retryAction().click();
+
+    await expect(wizard.heading("Your agent is live in Telegram.")).toBeVisible();
+    expect(calls.map(({ call }) => call)).toEqual(["stop", "update", "validate", "start", "start"]);
+    expect(completions).toHaveLength(1);
+  });
+
+  test("a custom agent can connect Gmail right after it is hired", async ({ page }) => {
+    const calls = await gmailStepCalls(page);
+    const data = await signedInTrialUser(page);
+    await data.onboarding.interceptGetOnboarding();
+    await data.onboarding.interceptCompleteOnboarding([204], { required: false, completed_at: "2026-10-14T12:00:00Z" });
+    await data.agents.interceptGetTemplatesRequest();
+    await data.agents.interceptGetModelsRequest();
+    await data.agents.interceptNameSuggestionRequest();
+    await data.agents.interceptCreateAgentRequest({ body: { ...mockAgent, id: TRIAL_AGENT_ID, name: "My helper", status: "STOPPED" } });
+    const wizard = new OnboardingPage(page);
+    await wizard.goto();
+    await wizard.chooseOwnAgent();
+    await wizard.agentName().fill("My helper");
+    await wizard.template().click();
+    await wizard.hireAction().click();
+
+    await expect(wizard.heading("Let your agent read your Gmail")).toBeVisible();
+    await expect(wizard.stepCounter()).toHaveText("Step 4 of 5");
+    await wizard.gmailAddress().fill(ADDRESS);
+    await wizard.gmailAppPassword().fill(APP_PASSWORD);
+    await wizard.connectGmail().click();
+
+    await expect(wizard.heading("My helper is ready")).toBeVisible();
+    // Hiring started the Agent once; the Gmail step stops it, saves, checks and starts it again.
+    expect(calls.map(({ call }) => call)).toEqual(["start", "stop", "update", "validate", "start"]);
+  });
 });
