@@ -258,6 +258,13 @@ class RestorePointRepository:
             },
         )
 
+    def mark_restore_retryable(self, restore_point_id: UUID, reason: str) -> bool:
+        return self._conditional_update(
+            restore_point_id,
+            (RestorePointStatus.RESTORING,),
+            {"status": RestorePointStatus.READY, "failure_reason": reason, "job_name": None},
+        )
+
     def mark_failed_restore_target_ready(self, restore_point_id: UUID) -> bool:
         return self._conditional_update(
             restore_point_id,

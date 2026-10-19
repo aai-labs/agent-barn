@@ -461,6 +461,33 @@ test.describe("Agent restore points", () => {
     await expect(notice).toBeHidden();
   });
 
+  test("does not offer to skip the backup for a backup that failed before this restore", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    const olderFailedBackup = {
+      ...mockPreRestorePoint,
+      status: "FAILED",
+      failure_reason: "pre-restore capture failed: disk full",
+      created_at: "2026-05-13T10:00:00Z",
+    };
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: () => mockRestorePointsPage({ items: [mockRestorePoint, olderFailedBackup], manualCount: 1 }),
+    });
+    await dataSupport.agents.interceptRestoreRestorePointRequest();
+
+    await openRestorePoints(configurationPage);
+    await configurationPage.restoreButton().first().click();
+    await configurationPage.restoreConfirmNameInput().fill(mockAgent.name);
+    const request = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/restore"));
+    await configurationPage.restoreConfirmButton().click();
+    await request;
+
+    await expect(page.getByRole("dialog")).toBeHidden();
+    await expect(page.getByTestId("restore-backup-failed")).toHaveCount(0);
+  });
+
   test("sends the replay choice with the restore and then closes", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);

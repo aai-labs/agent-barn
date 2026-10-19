@@ -27,7 +27,6 @@ import {
   nameSkillsInMessage,
   restorePointLabel,
   restorePointTime,
-  shortFailureReason,
 } from "./restore-point-utils";
 
 function StatusPill({ restorePoint }: { restorePoint: RestorePoint }) {
@@ -110,10 +109,10 @@ export function AgentRestorePointsSettings({
   const [restoreTarget, setRestoreTarget] = useState<RestorePoint | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RestorePoint | null>(null);
   const restoreWithoutBackup = useRestoreRestorePoint(agent.id);
-  // The restore this page started. Kept only here, so a reload forgets a failed backup.
   const [startedRestore, setStartedRestore] = useState<{
     restorePointId: string;
     reapplyConfiguration: boolean;
+    knownBackupIds: string[];
   } | null>(null);
 
   const isRunning = agent.status === "RUNNING";
@@ -145,23 +144,27 @@ export function AgentRestorePointsSettings({
 
   const captureBlockedReason = captureBlockedBecause();
 
-  // The Job takes its backup first and stops if it fails. The failed backup is the newest row
-  // and the target is back to READY, so the restore can be offered again without one.
-  const newest = restorePoints[0];
+  // A failed backup leaves its target READY again. Backups that already existed when this restore
+  // started are ignored, so an older failure is never taken for this one.
   const startedTarget = restorePoints.find((item) => item.id === startedRestore?.restorePointId);
-  const backupFailureReason =
-    startedRestore !== null &&
-    startedTarget?.status === "READY" &&
-    !hasWorkInFlight &&
-    newest?.origin === "PRE_RESTORE" &&
-    newest.status === "FAILED"
-      ? (shortFailureReason(newest.failureReason ?? "No reason was given."))
-      : null;
+  const failedBackup =
+    startedRestore && startedTarget?.status === "READY" && !hasWorkInFlight
+      ? restorePoints.find(
+          (item) =>
+            item.origin === "PRE_RESTORE" &&
+            item.status === "FAILED" &&
+            !startedRestore.knownBackupIds.includes(item.id),
+        )
+      : undefined;
 
   async function restoreWithoutBackupSnapshot() {
     if (!startedRestore) return;
     try {
-      await restoreWithoutBackup.mutateAsync({ ...startedRestore, skipBackup: true });
+      await restoreWithoutBackup.mutateAsync({
+        restorePointId: startedRestore.restorePointId,
+        reapplyConfiguration: startedRestore.reapplyConfiguration,
+        skipBackup: true,
+      });
       setStartedRestore(null);
     } catch (caught) {
       toastError(caught);
@@ -240,7 +243,7 @@ export function AgentRestorePointsSettings({
           </div>
         )}
 
-        {canManage && backupFailureReason !== null && startedTarget && (
+        {canManage && failedBackup && (
           <div
             className="mb-5 rounded-xl p-3 text-[0.8rem]"
             style={{
@@ -253,7 +256,7 @@ export function AgentRestorePointsSettings({
           >
             <div className="font-medium">The backup snapshot failed, so nothing was restored</div>
             <p className="mb-0 mt-1" style={{ color: "var(--ink-3)" }}>
-              {backupFailureReason}
+              {failedBackup.failureReason ?? "No reason was given."}
             </p>
             <p className="mb-0 mt-1" style={{ color: "var(--ink-3)" }}>
               You can restore without it, but the current files cannot be brought back afterwards.
@@ -403,7 +406,7 @@ export function AgentRestorePointsSettings({
                     style={{ color: restorePoint.status === "FAILED" ? "var(--err)" : "var(--ink-2)" }}
                     role="alert"
                   >
-                    {shortFailureReason(restorePoint.failureReason)}
+                    {restorePoint.failureReason}
                   </p>
                 )}
 
@@ -440,7 +443,10 @@ export function AgentRestorePointsSettings({
           if (!open) setRestoreTarget(null);
         }}
         onRestoreStarted={(started) => {
-          setStartedRestore(started);
+          setStartedRestore({
+            ...started,
+            knownBackupIds: restorePoints.filter((item) => item.origin === "PRE_RESTORE").map((item) => item.id),
+          });
           setRestoreTarget(null);
         }}
       />

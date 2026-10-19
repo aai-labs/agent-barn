@@ -603,6 +603,28 @@ def test_restore_without_backup_takes_no_backup_and_says_so_in_the_audit_event()
             assert_that(messages[0].payload["backup_skipped"], equal_to(True))
 
 
+def test_a_failed_extraction_without_a_backup_keeps_the_target_restorable():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        target = _seed(context, status_value=RestorePointStatus.READY)
+        k8s = context.injector.get(KubernetesClient)
+        context.client.post(_restore_url(context, target.id), json={"skip_backup": True}, headers=_auth(context))
+        created = k8s.create_job.call_args.args[1]
+        k8s.get_job.return_value = V1Job(metadata=created.metadata, spec=created.spec, status=V1JobStatus(failed=1))
+        k8s.get_pod_name_for_job.return_value = "rp-res-pod"
+        k8s.get_job_exit_code.return_value = EXIT_RESTORE_FAILED
+        k8s.read_job_logs.return_value = "restore failed: corrupt archive"
+        k8s.delete_pvc.reset_mock()
+
+        with when("the extraction fails and the user had skipped the backup"):
+            rows = context.client.get(_url(context), headers=_auth(context)).json()["items"]
+
+        with then("the target is ready to restore again, says why it failed, and keeps its volume"):
+            assert_that(rows, has_length(1))
+            assert_that(rows[0]["status"], equal_to(RestorePointStatus.READY.value))
+            assert_that(rows[0]["failure_reason"], contains_string("corrupt archive"))
+            assert_that(k8s.delete_pvc.called, equal_to(False))
+
+
 def test_restore_on_a_running_agent_returns_409():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         target = _seed(context, status_value=RestorePointStatus.READY)

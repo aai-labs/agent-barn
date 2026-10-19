@@ -80,6 +80,9 @@ def restore_point_id_from_name(name: str) -> UUID | None:
     return None
 
 
+BACKUP_SKIPPED_BY_USER_LABEL = "agentbarn.io/backup-skipped-by-user"
+
+
 def _labels(restore_point_id: UUID, agent_id: UUID, org_id: UUID) -> dict[str, str]:
     return {
         "org-id": str(org_id),
@@ -240,6 +243,7 @@ def build_restore_job(
     archive_pvc: str,
     timeout_seconds: int,
     image_pull_secret: str | None = None,
+    backup_skipped_by_user: bool = False,
 ) -> client.V1Job:
     extra_env = {ENV_ARCHIVE: ARCHIVE_MOUNT_PATH}
     extra_volumes = [("archive", archive_pvc, ARCHIVE_MOUNT_PATH, True)]
@@ -249,7 +253,7 @@ def build_restore_job(
     if backup_pvc is not None:
         extra_env[ENV_BACKUP] = BACKUP_MOUNT_PATH
         extra_volumes.insert(0, ("backup", backup_pvc, BACKUP_MOUNT_PATH, False))
-    return _build_volume_changing_job(
+    job = _build_volume_changing_job(
         mode=MODE_RESTORE,
         runtime=runtime,
         agent_pvc=agent_pvc,
@@ -264,6 +268,9 @@ def build_restore_job(
         timeout_seconds=timeout_seconds,
         image_pull_secret=image_pull_secret,
     )
+    if backup_skipped_by_user:
+        job.metadata.labels[BACKUP_SKIPPED_BY_USER_LABEL] = "true"
+    return job
 
 
 def build_reset_job(

@@ -51,6 +51,9 @@ class ManagedUpdateOutcome(str, enum.Enum):
     SUCCEEDED = "SUCCEEDED"
     # The automatic backup could not be taken. The Agent was stopped but not changed.
     BACKUP_FAILED = "BACKUP_FAILED"
+    # The new version never became healthy and, with no backup, nothing was rolled back.
+    # The Agent was stopped.
+    UPDATE_FAILED = "UPDATE_FAILED"
     # The new version never became healthy; the backup and the old image are back.
     ROLLED_BACK = "ROLLED_BACK"
     # The rollback did not finish. The backup holds the pre-update state.
@@ -1433,7 +1436,6 @@ AgentModelSource = Literal["default", "override"]
 class AgentManagedUpdateRequest(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # Set when the user was told the automatic backup failed and chose to update anyway.
     skip_backup: bool = False
 
 
