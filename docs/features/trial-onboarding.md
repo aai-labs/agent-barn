@@ -72,7 +72,9 @@ Credit appears in the desktop rail.
    **I'll do this later** is also available here when no hire/start request is in flight;
    it creates no Agent and preserves any Agent already created by a failed start.
 4. **You're ready**. Successful linking or hiring records `user.onboarding_completed_at`
-   through `POST /onboarding/complete`. A completion failure retries only that save,
+   through `POST /onboarding/complete`. The first completion also emits `user.onboarding.completed`
+   for product analytics, and so does every exit that records completion, such as
+   **I'll do this later** or **Skip, I'll chat on the web**; a repeat writes and emits nothing. A completion failure retries only that save,
    without creating or starting another Agent. Quick start makes Go to dashboard
    the primary action, with Open Telegram as a secondary link that opens separately;
    Build my own offers Web Chat and a link to configure channels.

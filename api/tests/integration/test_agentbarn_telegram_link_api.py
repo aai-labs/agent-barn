@@ -43,6 +43,7 @@ from api.tests.steps.agent import (
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.telegram_link_events import unlinked_events
 
 _BOT_ENV = {
     "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
@@ -206,6 +207,21 @@ def test_unlinking_removes_the_account_once() -> None:
             assert_that(first.status_code, equal_to(status.HTTP_204_NO_CONTENT))
             assert_that(again.status_code, equal_to(status.HTTP_404_NOT_FOUND))
             assert_that(listed, equal_to([]))
+
+        with then("one unlink is recorded, by me, as removed by a user"):
+            events = unlinked_events(context)
+            assert_that([event.payload["reason"] for event in events], equal_to(["user_removed"]))
+            assert_that(
+                events[0].actor,
+                equal_to(
+                    {
+                        "type": "MEMBERSHIP",
+                        "id": str(context.organization_user.id),
+                        "organization_id": str(context.organization.id),
+                    }
+                ),
+            )
+            assert_that(events[0].payload["link_id"], equal_to(str(link.id)))
 
 
 def test_a_presented_token_is_matched_by_hash_only() -> None:
