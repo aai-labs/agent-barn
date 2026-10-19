@@ -107,6 +107,7 @@ export function AgentRestorePointsSettings({
   const [label, setLabel] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<RestorePoint | null>(null);
+  const [backupIdsWhenOpened, setBackupIdsWhenOpened] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<RestorePoint | null>(null);
   const restoreWithoutBackup = useRestoreRestorePoint(agent.id);
   const [startedRestore, setStartedRestore] = useState<{
@@ -355,7 +356,12 @@ export function AgentRestorePointsSettings({
                       <>
                         <RestoreAction
                           reason={restoreBlockedReason(restorePoint)}
-                          onClick={() => setRestoreTarget(restorePoint)}
+                          onClick={() => {
+                            setBackupIdsWhenOpened(
+                              restorePoints.filter((item) => item.origin === "PRE_RESTORE").map((item) => item.id),
+                            );
+                            setRestoreTarget(restorePoint);
+                          }}
                         />
                         <button
                           type="button"
@@ -443,10 +449,7 @@ export function AgentRestorePointsSettings({
           if (!open) setRestoreTarget(null);
         }}
         onRestoreStarted={(started) => {
-          setStartedRestore({
-            ...started,
-            knownBackupIds: restorePoints.filter((item) => item.origin === "PRE_RESTORE").map((item) => item.id),
-          });
+          setStartedRestore({ ...started, knownBackupIds: backupIdsWhenOpened });
           setRestoreTarget(null);
         }}
       />
