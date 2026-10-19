@@ -13,6 +13,7 @@ and a message larger than ``MAX_FETCH_BYTES`` is read only from its start.
 import email
 import imaplib
 import re
+import ssl
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -21,6 +22,7 @@ from email.policy import default as default_policy
 from html.parser import HTMLParser
 
 GMAIL_IMAP_HOST = "imap.gmail.com"
+GMAIL_IMAP_PORT = 993
 MAX_LIST_LIMIT = 50
 MAX_QUERY_LENGTH = 500
 #: A search's UIDs come back on one line, which imaplib refuses past 1 MB, so only the
@@ -179,8 +181,11 @@ def _inbox(address: str, app_password: str) -> Iterator[tuple[imaplib.IMAP4_SSL,
 
 
 def _connect() -> imaplib.IMAP4_SSL:
+    # imaplib's own default context checks neither the certificate nor the hostname, so a
+    # server posing as Gmail would be handed the app password. Verify both before LOGIN.
+    context = ssl.create_default_context()
     try:
-        return imaplib.IMAP4_SSL(GMAIL_IMAP_HOST, timeout=_TIMEOUT_SECONDS)
+        return imaplib.IMAP4_SSL(GMAIL_IMAP_HOST, GMAIL_IMAP_PORT, ssl_context=context, timeout=_TIMEOUT_SECONDS)
     except OSError as exc:
         raise MailUnavailable("could not reach Gmail") from exc
 

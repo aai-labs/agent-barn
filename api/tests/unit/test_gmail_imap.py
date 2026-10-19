@@ -6,11 +6,20 @@ ever opens the inbox read-only and only fetches with BODY.PEEK.
 
 import imaplib
 import re
+import socket
+import ssl
+import threading
+from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from hamcrest import assert_that, contains_string, equal_to, is_
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+from hamcrest import assert_that, contains_string, empty, equal_to, is_
 
 from api.infrastructure.google import gmail_imap
 from api.infrastructure.google.gmail_imap import (
@@ -126,7 +135,11 @@ def test_list_returns_newest_first_and_never_changes_the_mailbox():
     with _inbox(fake) as connect:
         messages = GmailInbox().list_messages("someone@gmail.com", "secret", query=None, limit=2)
 
-    connect.assert_called_once_with("imap.gmail.com", timeout=20)
+    connect.assert_called_once()
+    assert_that(connect.call_args.args, equal_to(("imap.gmail.com", 993)))
+    assert_that(connect.call_args.kwargs["timeout"], equal_to(20))
+    context = connect.call_args.kwargs["ssl_context"]
+    assert_that((context.verify_mode, context.check_hostname), equal_to((ssl.CERT_REQUIRED, True)))
     assert_that([m.id for m in messages], equal_to(["3", "2"]))
     assert_that(messages[0].subject, equal_to("third"))
     assert_that(messages[0].sender, equal_to("Alice <alice@example.com>"))
@@ -464,3 +477,94 @@ def test_a_message_without_a_text_body_reads_as_empty():
         read = GmailInbox().get_message("someone@gmail.com", "secret", "5")
     assert_that(read.body, equal_to(""))
     assert_that(read.attachments, equal_to(["scan.pdf"]))
+
+
+class ImpostorIMAPServer:
+    """A TLS server on localhost posing as Gmail with a self-signed certificate.
+
+    It answers like an IMAP server would and records every line a client sends, so a
+    test can see whether credentials were sent to it.
+    """
+
+    def __init__(self, cert_dir: Path):
+        key = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "not-gmail.invalid")])
+        now = datetime.now(UTC)
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName("not-gmail.invalid")]), critical=False)
+            .sign(key, hashes.SHA256())
+        )
+        cert_file, key_file = cert_dir / "cert.pem", cert_dir / "key.pem"
+        cert_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        key_file.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+            )
+        )
+        self._context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self._context.load_cert_chain(cert_file, key_file)
+        self._listener = socket.create_server(("127.0.0.1", 0))
+        self._listener.settimeout(10)
+        self.port = self._listener.getsockname()[1]
+        self.received: list[bytes] = []
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        try:
+            raw, _ = self._listener.accept()
+        except OSError:
+            return
+        try:
+            with self._context.wrap_socket(raw, server_side=True) as conn:
+                conn.settimeout(10)
+                conn.sendall(b"* OK ready\r\n")
+                reader = conn.makefile("rb")
+                for line in reader:
+                    self.received.append(line)
+                    tag = line.split(b" ", 1)[0]
+                    if b" CAPABILITY" in line.upper():
+                        conn.sendall(b"* CAPABILITY IMAP4rev1 AUTH=PLAIN\r\n" + tag + b" OK done\r\n")
+                        continue
+                    if b" LOGOUT" in line.upper():
+                        conn.sendall(b"* BYE\r\n" + tag + b" OK done\r\n")
+                        return
+                    conn.sendall(tag + b" NO [AUTHENTICATIONFAILED] no\r\n")
+        except OSError:
+            return
+
+    def close(self) -> None:
+        self._listener.close()
+        self._thread.join(timeout=10)
+
+
+@pytest.fixture
+def impostor_gmail(tmp_path):
+    server = ImpostorIMAPServer(tmp_path)
+    with (
+        patch.object(gmail_imap, "GMAIL_IMAP_HOST", "127.0.0.1"),
+        patch.object(gmail_imap, "GMAIL_IMAP_PORT", server.port),
+    ):
+        yield server
+    server.close()
+
+
+def test_a_server_without_a_trusted_certificate_is_refused_before_signing_in(impostor_gmail):
+    with pytest.raises(MailUnavailable):
+        gmail_imap.check_sign_in("someone@gmail.com", "app-password-1234")
+    impostor_gmail.close()
+    assert_that(impostor_gmail.received, is_(empty()))
+
+
+def test_reading_mail_from_a_server_without_a_trusted_certificate_sends_no_password(impostor_gmail):
+    with pytest.raises(MailUnavailable):
+        GmailInbox().list_messages("someone@gmail.com", "app-password-1234", query=None, limit=5)
+    impostor_gmail.close()
+    assert_that(impostor_gmail.received, is_(empty()))
