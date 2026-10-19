@@ -151,7 +151,7 @@ Isolated Google Workspace and SharePoint expose expiring upstream credentials to
 
 A read-only Google Workspace credential also sets `GOG_READONLY=1`, which makes gog reject mutating API requests locally before dispatch. This is a defence-in-depth backstop layered on the read-only OAuth scopes, not a replacement for them: it is an environment variable, so an agent with a shell can unset it.
 
-In direct selected-sites mode the profile is aai-cli's generic `auth_type = "token_url"`: `token_url = {ingest_base_url}/agents/{id}/integrations/sharepoint/token` and `api_token_secret = "agentfarm.ingest_key"`. `aai-cli-setup.sh` stores `$INGEST_API_KEY` under that name on every boot (the ingest key is regenerated per start), and no SharePoint token or sign-in marker reaches the pod; a refresh token left from an earlier delegated sign-in is removed. The tool context lists the granted sites. Isolated selected-sites mode instead uses the credential gateway URL and dedicated generation token; its handoff proves the existing app-only token service before removing any old delegated PVC entry, and imports no delegated grant. Both routes reuse the same Teams-app token issuer. The direct ingest token route remains available to isolated selected-sites Agents through their ingest key. Native Teams still supplies its app secret to the runtime, so this isolation choice cannot isolate that Communication Connection credential or reduce the app's site grants. Both runtimes take the same profile and script. `token_url` arrived in aai-cli with aai-labs/aai-cli#27, so selected sites needs `openclaw-base` 0.7.5 and `hermes-base` 0.2.8 or later (0.7.4 and 0.2.7 were published before #27 merged); both images build aai-cli from its default branch, so #27 must merge before these versions are published.
+In direct selected-sites mode the profile is aai-cli's generic `auth_type = "token_url"`: `token_url = {ingest_base_url}/agents/{id}/integrations/sharepoint/token` and `api_token_secret = "agentfarm.ingest_key"`. `aai-cli-setup.sh` stores `$INGEST_API_KEY` under that name on every boot (the ingest key is regenerated per start), and no SharePoint token or sign-in marker reaches the pod; a refresh token left from an earlier delegated sign-in is removed. The tool context lists the granted sites. Isolated selected-sites mode instead uses the credential gateway URL and dedicated generation token; its handoff proves the existing app-only token service before removing any old delegated PVC entry, and imports no delegated grant. Both routes reuse the same Teams-app token issuer. The direct ingest token route remains available to isolated selected-sites Agents through their ingest key. Native Teams still supplies its app secret to the runtime, so this isolation choice cannot isolate that Communication Connection credential or reduce the app's site grants. Both runtimes take the same profile and script. `token_url` arrived in aai-cli with aai-labs/aai-cli#27, so selected sites needs `openclaw-base` 0.7.5 and `hermes-base` 0.2.8 or later (0.7.4 and 0.2.7 were published before #27 merged); current images pin a revision from aai-cli `main` that includes #27, under the [runtime versioning rules](../guidelines/operations.md#versioning-and-releases).
 
 ## Source map
 
@@ -178,3 +178,111 @@ In direct selected-sites mode the profile is aai-cli's generic `auth_type = "tok
 ## Change impact
 
 A tool Integration provider addition is one Integration Plugin plus its bundled Skill, its content model, and the UI form. A schema change still affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. A provider reached by a new CLI also needs that CLI's adapter and plugin surface; it does not touch existing providers. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key. Bumping `GOG_VERSION` also requires re-recording the gog command tree the Business Action catalogue is tested against (see [`business-value.md`](business-value.md#change-impact)).
+
+## Custom API connections
+
+Custom API connections configure arbitrary public HTTPS APIs without adding a
+provider-specific CLI or generating tools from OpenAPI. An Agent may have multiple
+connections. Each has an immutable, Agent-scoped identifier (`inventory`, for
+example), a display name, and a base URL that defines its allowed origin and path.
+Creation derives the identifier from the name by lowercasing it and replacing
+spaces and other unsupported characters with hyphens (up to 64 characters).
+Identifiers are not editable and remain unchanged when the display name changes;
+names producing an existing identifier are rejected. Custom API setup is part of
+the existing Integrations editor, with the same Add, Apply and Cancel workflow.
+API-specific instructions belong in the assigned Template or Skills.
+
+Connections live in `api/domains/custom_api/`, independently of the one-Secret-per-
+provider registry. Each row encrypts its authentication and additional headers with
+the existing Agent credential encryption key. Supported authentication is none,
+Bearer token, a named API-key header (including a complete custom Authorization
+scheme), or Basic username/password. Additional headers may be ordinary or secret;
+secret values, auth tokens, and Basic credentials are never returned by read APIs.
+Header entries are lists so the web client's case transformations do not rename
+HTTP header names.
+
+`/organizations/{organization_id}/agents/{agent_id}/custom-api-connections` lists
+and creates connections; `/{connection_id}` updates or deletes one. Visibility uses
+the accessible-Agent repository query. Writes require `agent.update` and
+`agent.secret.manage`, the Agent lifecycle lock, and no managed update or blocking
+restore. Ordinary writes require a stopped Agent. Identifiers cannot be changed.
+Updates preserve omitted auth/header fields. An auth object must explicitly name
+its type; omitted secret values retain their saved value only for the same auth
+type. A submitted headers list replaces the list; an omitted value retains a saved
+secret only for the same header name. Changing authentication type requires the new
+credential fields. Removing a header from the list removes it. CRUD stages an Agent
+Updated Domain Event atomically without credential values.
+
+Isolation is optional, defaults **off**, and is selected independently for each
+connection. Direct mode injects that connection's real credentials into the pod's
+Kubernetes Secret environment. Isolation keeps those credentials outside the pod
+and injects a per-connection, per-start gateway token instead. Direct mode does not
+prevent the Agent from reading its credentials. Startup transfers these values over
+stdin into aai-cli's encrypted store on the Agent volume. Generated profiles contain
+secret references; the ConfigMap contains no authentication tokens, passwords or
+header values. A namespaced manifest removes the previous Custom API entries before
+installing current values, including after isolation, auth/header changes and
+connection deletion. Built-in integration entries are preserved. Old managed
+Kubernetes Secrets are replaced on start.
+
+Startup installs an aai-cli configuration containing only encrypted-store paths
+even when no CLI integrations remain. This clears stale profiles while the setup
+script removes former Custom API entries and any removed SharePoint sign-in.
+
+`POST /{connection_id}/apply` accepts the update fields plus `restart`. Applying to
+a running Agent requires `restart: true` and `agent.lifecycle.manage`. The server
+prepares the complete resulting runtime configuration before stopping the old pod,
+persists the intended change, and starts a new generation. Failure leaves the saved
+intent available for retry. Start, restart, managed update and recovery use the same
+materializer. The integration runtime snapshot records connection identity, scope,
+mode and a credential revision hash; only a ready generation counts as applied, and
+the existing last verified snapshot remains available during recovery. Removing a
+connection, stopping the Agent, or replacing its generation invalidates its token.
+
+The editor submits multiple Custom API changes to `POST /custom-api-connections/apply`
+with `creates`, `updates` (`id` plus `data`), `deletes` (connection IDs), and an
+outer `restart` choice. The server checks all targets, resulting identifiers,
+credentials, and runtime artifacts under the Agent lifecycle lock before stopping
+the Agent, then persists the connection changes and their events in one transaction.
+Invalid batches leave the running Agent and saved connections unchanged. A running
+Agent requires explicit restart authorization and is restarted once for the batch;
+a stopped Agent stays stopped unless `restart` is requested.
+For edits combining Custom API and built-in provider changes, the editor first
+uses `POST /custom-api-connections/preflight` with the same batch body. This validates
+the resulting Custom API configuration without saving or stopping, before entering
+the shared provider stop/save/start workflow. The batch is revalidated when saved;
+this preflight does not reserve configuration across requests or make built-in
+provider and Custom API writes atomic together. Failed mixed saves retain the
+restart choice for retry within the editor.
+
+Both Hermes and OpenClaw use the generic Custom API command in aai-cli. Profiles
+use `custom-api-<connection_identifier>` to avoid collisions with built-in providers.
+This requires a runtime image whose aai-cli includes the `custom-api` command:
+`openclaw-base` 0.7.6 or `hermes-base` 0.2.9 or later. The shared command is:
+
+```sh
+aai-cli --profile custom-api-inventory custom-api request --request-json - <<'JSON'
+{"method":"GET","url":"https://api.example.com/v1/items","query":{"limit":10}}
+JSON
+```
+
+The command takes an absolute URL only; it never joins a relative path to the base
+URL. It supports GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS, query objects,
+JSON or text bodies, and additional request headers. Configured headers cannot be
+overridden. Responses contain the HTTP `status` and a JSON or text `body`, with
+known literal credential values redacted. Upstream responses are untrusted and
+redaction cannot guarantee removal of encoded or transformed secrets. Request and response bodies are limited to 1 MiB
+and upstream connections time out after 30 seconds. The isolated interface posts the
+same request to `/gateway/v1/custom-api/request`; that endpoint derives its Agent
+and connection solely from the hashed, generation-bound token.
+
+The destination policy allows public HTTPS on the configured port (443 by default).
+Requests must match the configured effective port. Internal/private/link-local,
+loopback, multicast and reserved addresses are unsupported in this initial version.
+All DNS answers must be public and the connection is pinned to a validated address
+while TLS verifies the configured hostname. Environment proxies are not used.
+The destination must match the configured origin and path segment boundary.
+Userinfo, fragments, backslashes, dot segments, duplicate slashes, encoded separators,
+and double encoding are refused; ordinary encoded resource names are supported.
+Redirects are refused in both modes, including same-origin redirects. The configured
+base URL is a destination scope, not an endpoint prefix to join automatically.

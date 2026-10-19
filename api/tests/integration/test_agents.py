@@ -5645,11 +5645,11 @@ def test_start_agent_with_only_google_workspace_omits_aai_cli_policy():
             _configure_gws(client, context)
             response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
 
-        with then("the aai-cli integrations block and config.toml are absent"):
+        with then("the aai-cli integrations block and profiles are absent"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             config_map = k8s.create_config_map.call_args.args[1]
             assert_that(config_map.data["AGENTS.md"], is_not(contains_string("Integrations (aai-cli)")))
-            assert_that(config_map.data, is_not(has_key("aai-cli-config.toml")))
+            assert_that(config_map.data["aai-cli-config.toml"], is_not(contains_string("[profiles.")))
 
 
 def test_start_agent_rejects_google_workspace_without_a_client():

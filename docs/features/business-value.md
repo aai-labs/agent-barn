@@ -30,7 +30,7 @@ This is not the per-Agent Activity tab ([`agent-activity.md`](agent-activity.md)
   - Neither path logs command text.
 - Ingest writes Business Actions under the same Agent identity and ingest-key authentication as Tool Calls. Every product read follows [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md); see [Value settings](#value-settings) for the Organization-authorized surface.
 - The aai-cli catalogue lives in `api/domains/business_value/catalogue.py` and the gog catalogue in `api/domains/business_value/gog_catalogue.py`, both outside `aai_cli_skills/bundled/`, so catalogue changes do not move the runtime digest. `outcome_type` is a plain `VARCHAR(64)`, so catalogue changes need no migration.
-- The gog catalogue describes the gog binary pinned in both runtime images (`GOG_VERSION` in `hermes-base/Dockerfile` and `openclaw-base/Dockerfile`, 0.37.0 today). Unlike aai-cli, gog is pinned, and its command tree is recorded from that binary in `api/tests/fixtures/gog/command-tree.json`.
+- The gog catalogue describes the gog binary pinned in both runtime images (`GOG_VERSION` in `hermes-base/Dockerfile` and `openclaw-base/Dockerfile`, 0.37.0 today). Its command tree is recorded from that binary in `api/tests/fixtures/gog/command-tree.json`.
 
 ## Classification
 
@@ -374,7 +374,7 @@ Each of these is an **undercount**, not a verdict on the Agent. The last one is 
 - **Only direct invocations are detected.** `timeout aai-cli …`, `xargs aai-cli …`, and scripts that call aai-cli are not seen. Invocations inside `$(…)`, inside `(…)`, or after `&` are recorded but never `SUCCESS`.
 - **Orphaned results and calls that never complete are not counted.** `ToolCallRepository.complete()` returns `None` for a result without a matching call, and such calls stay `PENDING`. Hermes produces one whenever its hook lacks a tool call id. How often this happens in real traffic has not been measured. The CHANGELOG records the staging query that would size it.
 - **Some commands are unclassified.** Command groups with no bundled reference are stored with `is_write` `NULL`: the aai-cli binary also ships `calendar`, `sheets`, and `slack`. So are paths the catalogue does not know.
-- **aai-cli is unpinned.** Both runtime images build it from its default branch, and it has no `--version`, so the commands actually run can drift from the bundled references the catalogue is tested against. gog is pinned, and its catalogue is tested against the recorded command tree of the pinned version.
+- **aai-cli references can drift from the binary.** Both runtime images now pin the same source revision under the [runtime versioning rules](../guidelines/operations.md#versioning-and-releases), but the CLI has no `--version` and its bundled references must still be kept in sync with that revision. The gog catalogue is tested against the recorded command tree of its pinned version.
 - **Business Actions store no arguments and no results.** They say what kind of action happened, not to what or with which content.
 - **Success is conservative.** Actions outside the segment the exit code covers, background runs, and multi-action failures that cannot be attributed are `UNKNOWN`, even when they succeeded.
   - With a single action, any failure in the command marks it `ERROR`, even when the failing segment was not aai-cli.
