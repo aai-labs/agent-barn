@@ -13,6 +13,7 @@ import {
   useApplyRecordedConfiguration,
   useCreateRestorePoint,
   useDeleteRestorePoint,
+  useRestoreRestorePoint,
 } from "../hooks/use-restore-point-actions";
 import { isRestorePointBusy, useRestorePoints } from "../hooks/use-restore-points";
 import type { Agent, AgentConfigurationVersion, RestorePoint } from "../schemas";
@@ -26,6 +27,7 @@ import {
   nameSkillsInMessage,
   restorePointLabel,
   restorePointTime,
+  shortFailureReason,
 } from "./restore-point-utils";
 
 function StatusPill({ restorePoint }: { restorePoint: RestorePoint }) {
@@ -107,6 +109,12 @@ export function AgentRestorePointsSettings({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<RestorePoint | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RestorePoint | null>(null);
+  const restoreWithoutBackup = useRestoreRestorePoint(agent.id);
+  // The restore this page started. Kept only here, so a reload forgets a failed backup.
+  const [startedRestore, setStartedRestore] = useState<{
+    restorePointId: string;
+    reapplyConfiguration: boolean;
+  } | null>(null);
 
   const isRunning = agent.status === "RUNNING";
   const hasWorkInFlight = restorePoints.some(isRestorePointBusy);
@@ -136,6 +144,29 @@ export function AgentRestorePointsSettings({
   }
 
   const captureBlockedReason = captureBlockedBecause();
+
+  // The Job takes its backup first and stops if it fails. The failed backup is the newest row
+  // and the target is back to READY, so the restore can be offered again without one.
+  const newest = restorePoints[0];
+  const startedTarget = restorePoints.find((item) => item.id === startedRestore?.restorePointId);
+  const backupFailureReason =
+    startedRestore !== null &&
+    startedTarget?.status === "READY" &&
+    !hasWorkInFlight &&
+    newest?.origin === "PRE_RESTORE" &&
+    newest.status === "FAILED"
+      ? (shortFailureReason(newest.failureReason ?? "No reason was given."))
+      : null;
+
+  async function restoreWithoutBackupSnapshot() {
+    if (!startedRestore) return;
+    try {
+      await restoreWithoutBackup.mutateAsync({ ...startedRestore, skipBackup: true });
+      setStartedRestore(null);
+    } catch (caught) {
+      toastError(caught);
+    }
+  }
 
   async function capture() {
     try {
@@ -206,6 +237,42 @@ export function AgentRestorePointsSettings({
             ) : (
               captureButton
             )}
+          </div>
+        )}
+
+        {canManage && backupFailureReason !== null && startedTarget && (
+          <div
+            className="mb-5 rounded-xl p-3 text-[0.8rem]"
+            style={{
+              background: "color-mix(in srgb, var(--err) 5%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--err) 35%, var(--line))",
+              color: "var(--ink-2)",
+            }}
+            role="alert"
+            data-testid="restore-backup-failed"
+          >
+            <div className="font-medium">The backup snapshot failed, so nothing was restored</div>
+            <p className="mb-0 mt-1" style={{ color: "var(--ink-3)" }}>
+              {backupFailureReason}
+            </p>
+            <p className="mb-0 mt-1" style={{ color: "var(--ink-3)" }}>
+              You can restore without it, but the current files cannot be brought back afterwards.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                className="af-btn af-btn-sm"
+                style={{ borderColor: "var(--err)", color: "var(--err)" }}
+                disabled={isRunning || restoreWithoutBackup.isPending}
+                data-testid="restore-without-backup-button"
+                onClick={() => void restoreWithoutBackupSnapshot()}
+              >
+                {restoreWithoutBackup.isPending ? "Starting…" : "Restore without backup snapshot"}
+              </button>
+              <button type="button" className="af-btn af-btn-sm" onClick={() => setStartedRestore(null)}>
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
@@ -334,7 +401,7 @@ export function AgentRestorePointsSettings({
                     style={{ color: "var(--err)" }}
                     role="alert"
                   >
-                    {restorePoint.failureReason}
+                    {shortFailureReason(restorePoint.failureReason)}
                   </p>
                 )}
 
@@ -370,7 +437,10 @@ export function AgentRestorePointsSettings({
         onOpenChange={(open) => {
           if (!open) setRestoreTarget(null);
         }}
-        onRestoreStarted={() => setRestoreTarget(null)}
+        onRestoreStarted={(started) => {
+          setStartedRestore(started);
+          setRestoreTarget(null);
+        }}
       />
 
       <ConfirmationDialog

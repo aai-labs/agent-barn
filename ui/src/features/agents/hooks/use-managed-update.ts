@@ -19,10 +19,11 @@ export function useManagedUpdate() {
   const orgApiBase = useOrganizationApiBase();
 
   return useMutation({
-    mutationFn: async (agentId: string) => {
+    mutationFn: async ({ agentId, skipBackup = false }: { agentId: string; skipBackup?: boolean }) => {
       const response = await api.post<Agent>(
         `${orgApiBase}/agents/${agentId}/managed-update`,
-        undefined,
+        // Sent only after the user was told the automatic backup failed.
+        skipBackup ? { skipBackup } : undefined,
         { schema: AgentSchema },
       );
       return response.data;
@@ -33,7 +34,7 @@ export function useManagedUpdate() {
       queryClient.setQueryData(agentsKey.detail(data.id), data);
       void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
     },
-    onError: (_error, agentId) => {
+    onError: (_error, { agentId }) => {
       void queryClient.invalidateQueries({ queryKey: agentsKey.detail(agentId) });
       void queryClient.invalidateQueries({ queryKey: agentsKey.lists() });
     },

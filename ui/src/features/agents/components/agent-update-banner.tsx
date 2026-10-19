@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { RotateCcw, Sparkles } from "lucide-react";
 
@@ -8,6 +9,7 @@ import { toastError } from "@/shared/toast";
 
 import { useManagedUpdate } from "../hooks/use-managed-update";
 import type { Agent } from "../schemas";
+import { shortFailureReason } from "./restore-point-utils";
 
 const RELEASES_URL = "https://github.com/aai-labs/agent-barn/releases";
 
@@ -27,12 +29,24 @@ export function AgentUpdateBanner({ agent, className }: { agent: Agent; classNam
   // The server's flag covers the whole run, including the minutes after the
   // 202, so the button cannot start a second update meanwhile.
   const updating = agent.updateInProgress || managedUpdate.isPending;
+  // Kept only here, on purpose: after a reload the banner offers a normal update again.
+  const [startedHere, setStartedHere] = useState(false);
+  // A failed backup leaves the Agent stopped, and a stopped Agent never reports an update as
+  // available, so the failure is what keeps the banner on screen.
+  const backupFailed =
+    startedHere &&
+    !updating &&
+    agent.status === "STOPPED" &&
+    agent.lastManagedUpdate?.outcome === "BACKUP_FAILED";
 
-  if (!agent.updateAvailable && !updating) {
+  if (!agent.updateAvailable && !updating && !backupFailed) {
     return null;
   }
 
-  const update = () => void managedUpdate.mutateAsync(agent.id).catch(toastError);
+  const update = () => {
+    setStartedHere(true);
+    void managedUpdate.mutateAsync({ agentId: agent.id, skipBackup: backupFailed }).catch(toastError);
+  };
 
   return (
     <div
@@ -54,7 +68,15 @@ export function AgentUpdateBanner({ agent, className }: { agent: Agent; classNam
           <Sparkles size={16} />
         </span>
         <p className="m-0 text-[0.844rem] leading-relaxed" style={{ color: "var(--accent-ink)" }}>
-          <UpdateExplanation agentName={agent.name} />{" "}
+          {backupFailed ? (
+            <>
+              The backup snapshot failed. You can update without it, but if the new version does
+              not come up healthy, {agent.name} restarts on its old version and its files are not
+              rolled back.
+            </>
+          ) : (
+            <UpdateExplanation agentName={agent.name} />
+          )}{" "}
           <a
             href={RELEASES_URL}
             target="_blank"
@@ -72,7 +94,8 @@ export function AgentUpdateBanner({ agent, className }: { agent: Agent; classNam
         disabled={updating}
         onClick={update}
       >
-        <RotateCcw size={14} /> {updating ? "Updating…" : "Update"}
+        <RotateCcw size={14} />{" "}
+        {updating ? "Updating…" : backupFailed ? "Update without backup snapshot" : "Update"}
       </button>
     </div>
   );
@@ -161,19 +184,31 @@ export function AgentUpdateOutcomeNote({
 
   let message: React.ReactNode = null;
   if (last.outcome === "ROLLED_BACK" && agent.status === "RUNNING") {
-    message = (
+    message = last.restorePointId ? (
       <>
         The last update did not come up healthy, so {agent.name} was rolled back to the version and
         files it had before. It is running as before.
+      </>
+    ) : (
+      <>
+        The last update, run without a backup, did not come up healthy, so {agent.name} was
+        restarted on the version it had before. Its files were not rolled back.
       </>
     );
   } else if (last.outcome === "BACKUP_FAILED") {
     message = (
       <>
         The last update was not applied because the automatic backup could not be taken
-        {last.failureReason ? `: ${last.failureReason}` : "."}{" "}
+        {last.failureReason ? ` (${shortFailureReason(last.failureReason).replace(/\.$/, "")}).` : "."}{" "}
         {agent.status === "STOPPED" &&
           `${agent.name} was stopped but not changed. Start it to keep using the current version.`}
+      </>
+    );
+  } else if (last.outcome === "ROLLBACK_FAILED" && agent.status !== "RUNNING" && !last.restorePointId) {
+    message = (
+      <>
+        The update, run without a backup, failed and {agent.name} could not be restarted on its
+        previous version. There is no backup to restore. Start the Agent to try again.
       </>
     );
   } else if (last.outcome === "ROLLBACK_FAILED" && agent.status !== "RUNNING") {
