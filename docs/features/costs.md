@@ -242,7 +242,10 @@ that Agent's configuration.
 Threshold alerts cover both levels. The Organization's go to its Owners and Admins, and
 to Platform Administrators when it is exhausted. An Agent's go to its creator and
 Owners — the same people told about its lifecycle — and never to Platform
-Administrators, since one Agent running out is its Organization's business.
+Administrators, since one Agent running out is its Organization's business. An
+Organization's exhausted alert (`organization.llm_budget.exhausted`) also goes to
+product analytics, attributed to the Organization's creator; see
+[`product-analytics.md`](product-analytics.md).
 
 LiteLLM enforces its own recorded spend, independently of `cost_record` and
 OpenRouter cost healing. That figure is known to sit slightly below the truth —

@@ -54,6 +54,7 @@ DEFAULT_REFRESH_TOKEN_EXPIRE_DAYS = 15
 DEFAULT_PWD_RESET_TOKEN_EXPIRE_MINUTES = 60 * 24
 JWT_ENCODING_ALGORITHM = "HS256"
 PASSWORD_LOGIN_METHOD = "password"
+GOOGLE_LOGIN_METHOD = "google"
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +95,10 @@ class AuthService:
         token_pair = self.create_token_pair(
             TokenData(user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION)
         )
-        self._record_login(user.id)
+        self.record_login(user.id, PASSWORD_LOGIN_METHOD)
         return token_pair
 
-    def _record_login(self, user_id: UUID) -> None:
+    def record_login(self, user_id: UUID, method: str) -> None:
         try:
             event = EVENT_REGISTRY.build_event(
                 event_name=USER_LOGGED_IN,
@@ -107,7 +108,7 @@ class AuthService:
                 actor=ActorIdentity(type=ActorIdentityType.USER, id=user_id),
                 subject=SubjectIdentity(type=SubjectIdentityType.USER, id=user_id),
                 correlation_id=uuid4(),
-                payload={"user_id": user_id, "method": PASSWORD_LOGIN_METHOD},
+                payload={"user_id": user_id, "method": method},
             )
             self.outbox_repository.create(event, EVENT_REGISTRY)
             deliveries = self.outbox_repository.list_deliveries_for_event(event.event_id)

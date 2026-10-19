@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from uuid import uuid7
+from uuid import UUID, uuid7
 
 import jwt
 from injector import inject, singleton
@@ -33,8 +33,10 @@ from api.domains.agent_settings.models import OrganizationAgentSettings
 from api.domains.auth.hashing import hash_text
 from api.domains.auth.models import CredentialClass, TokenData
 from api.domains.auth.repository import PasswordResetTokenRepository
-from api.domains.auth.service import JWT_ENCODING_ALGORITHM, AuthService
+from api.domains.auth.service import GOOGLE_LOGIN_METHOD, JWT_ENCODING_ALGORITHM, AuthService
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
+from api.domains.events.dispatch import EventDeliveryDispatcher
+from api.domains.events.models import ActorIdentity, ActorIdentityType
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.organizations.models import Organization
@@ -43,7 +45,7 @@ from api.domains.users.exceptions import EmailTakenHTTPException
 from api.domains.users.models import User
 from api.domains.users.organization_users.models import OrganizationRole, OrganizationUser
 from api.domains.users.organization_users.repository import OrganizationUserRepository
-from api.domains.users.repository import UserRepository
+from api.domains.users.repository import GOOGLE_SIGNUP_METHOD, INVITE_SIGNUP_METHOD, UserRepository
 from api.infrastructure.google.identity import (
     GoogleIdentity,
     GoogleIdentityClient,
@@ -86,6 +88,13 @@ class SignInOutcome:
     refresh_token: str | None = None
 
 
+@dataclass(frozen=True)
+class _SignedIn:
+    user: User
+    returning: bool
+    delivery_ids: tuple[UUID, ...] = ()
+
+
 class _SignInRefused(Exception):
     def __init__(self, error: SignInError):
         super().__init__(error.value)
@@ -106,6 +115,7 @@ class GoogleSignInService:
     trial_settings: TrialSettingsService
     llm_budgets: OrganizationLlmBudgetService
     telegram: AgentBarnTelegramService
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def redirect_uri(self) -> str:
         # Must be registered on the Google client, and identical in the authorize request
@@ -161,7 +171,7 @@ class GoogleSignInService:
             return SignInOutcome(redirect_url=self._page(origin, SignInError.FAILED))
         try:
             identity = self.google.exchange_code(code=code, redirect_uri=self.redirect_uri())
-            user = self._sign_in(identity)
+            signed_in = self._sign_in(identity)
         except GoogleIdentityUnavailable:
             logger.warning("Google sign-in could not reach Google")
             return SignInOutcome(redirect_url=self._page(origin, SignInError.UNAVAILABLE))
@@ -170,15 +180,19 @@ class GoogleSignInService:
             return SignInOutcome(redirect_url=self._page(origin, SignInError.FAILED))
         except _SignInRefused as refused:
             return SignInOutcome(redirect_url=self._page(origin, refused.error))
+        user = signed_in.user
         refresh_token = self.auth_service.create_refresh_token(
             TokenData(user_id=str(user.id), stamp=user.security_stamp, credential_class=CredentialClass.USER_SESSION)
         )
+        self.event_delivery_dispatcher.enqueue_immediate(list(signed_in.delivery_ids))
+        if signed_in.returning:
+            self.auth_service.record_login(user.id, GOOGLE_LOGIN_METHOD)
         # The web app trades the refresh cookie for an access token on its first request.
         onboarding = user.signed_up_at is not None and user.onboarding_completed_at is None
         landing = "onboarding" if onboarding else "dashboard"
         return SignInOutcome(redirect_url=f"{self.config.web_app_url}/{landing}", refresh_token=refresh_token)
 
-    def _sign_in(self, identity: GoogleIdentity) -> User:
+    def _sign_in(self, identity: GoogleIdentity) -> _SignedIn:
         # An unverified address proves nothing about who owns it, so it neither creates an
         # account nor signs in to one with that address.
         if not identity.email_verified:
@@ -188,26 +202,28 @@ class GoogleSignInService:
         except EmailTakenHTTPException, IntegrityError:
             # A concurrent first sign-in with the same Google account or address committed
             # between our lookup and our insert; that is the account, so sign in to it.
-            return self._find_or_create(identity)
+            return _SignedIn(user=self._find_or_create(identity).user, returning=False)
 
-    def _find_or_create(self, identity: GoogleIdentity) -> User:
+    def _find_or_create(self, identity: GoogleIdentity) -> _SignedIn:
         with Session(self.user_repository.delegate.engine, expire_on_commit=False) as session:
             user = self.user_repository.get_by_google_sub_for_update(identity.sub, session)
             if user is not None:
-                return user
+                return _SignedIn(user=user, returning=True)
             user = self.user_repository.get_by_email_ignoring_case_for_update(identity.email, session)
             if user is not None:
-                return self._link(user, identity, session)
+                returning = user.email_verified_at is not None
+                user, delivery_ids = self._link(user, identity, session)
+                return _SignedIn(user=user, returning=returning, delivery_ids=tuple(delivery_ids))
             # Quick start still needs the shared bot configured.
             if not self.telegram.is_offered():
                 raise _SignInRefused(SignInError.SIGNUP_CLOSED)
-            user, organization = self._sign_up(identity, session)
+            user, organization, delivery_ids = self._sign_up(identity, session)
         # With its limit already on it. Best effort: the Organization is committed, and
         # the first Agent key provisions the team again if this fails.
         self.llm_budgets.provision_team(organization.id)
-        return user
+        return _SignedIn(user=user, returning=False, delivery_ids=tuple(delivery_ids))
 
-    def _link(self, user: User, identity: GoogleIdentity, session: Session) -> User:
+    def _link(self, user: User, identity: GoogleIdentity, session: Session) -> tuple[User, list[UUID]]:
         """An account that already has this address. Google has verified it, which proves
         as much as following an invitation link would, so a pending invitee is enrolled
         and their invitation retired."""
@@ -218,12 +234,15 @@ class GoogleSignInService:
             if not user.full_name and identity.name:
                 user.full_name = identity.name
         session.add(user)
+        delivery_ids = (
+            self.user_repository.stage_user_signed_up(session, user.id, INVITE_SIGNUP_METHOD) if enrolling else []
+        )
         session.commit()
         if enrolling:
             self.invite_tokens.invalidate_unused_for_user(user.id)
-        return user
+        return user, delivery_ids
 
-    def _sign_up(self, identity: GoogleIdentity, session: Session) -> tuple[User, Organization]:
+    def _sign_up(self, identity: GoogleIdentity, session: Session) -> tuple[User, Organization, list[UUID]]:
         settings = self.trial_settings.signup_settings(session)
         if not settings.self_signup_enabled:
             raise _SignInRefused(SignInError.SIGNUP_CLOSED)
@@ -264,5 +283,11 @@ class GoogleSignInService:
             session,
         )
         self.trial_settings.record_trial(identity.email, session)
+        delivery_ids = [
+            *self.user_repository.stage_user_signed_up(session, user.id, GOOGLE_SIGNUP_METHOD),
+            *self.organization_repository.stage_organization_created(
+                session, organization, ActorIdentity(type=ActorIdentityType.USER, id=user.id)
+            ),
+        ]
         session.commit()
-        return user, organization
+        return user, organization, delivery_ids

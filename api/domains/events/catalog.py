@@ -53,6 +53,10 @@ API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
 USER_LOGGED_IN = "user.logged_in"
 USER_SIGNED_UP = "user.signed_up"
+USER_ONBOARDING_COMPLETED = "user.onboarding.completed"
+TELEGRAM_ACCOUNT_LINKED = "telegram.account.linked"
+TELEGRAM_ACCOUNT_UNLINKED = "telegram.account.unlinked"
+TELEGRAM_FIRST_MESSAGE_RECEIVED = "telegram.first_message.received"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
 COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconnect.requested"
 COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
@@ -598,6 +602,41 @@ class UserSignedUpPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_id: UUID
+    method: Literal["invite", "google"] = "invite"
+
+
+class UserOnboardingCompletedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID
+
+
+class TelegramAccountLinkedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    link_id: UUID
+
+
+class TelegramFirstMessageReceivedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    link_id: UUID
+
+
+class TelegramAccountUnlinkedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    link_id: UUID
+    reason: Literal["user_removed", "relinked", "blocked_bot", "access_lost"]
 
 
 class CommunicationConnectionHealthChangedPayload(BaseModel):
@@ -782,7 +821,10 @@ def build_default_event_registry() -> DomainEventRegistry:
     for event_name, handler_names in (
         (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,)),
         # Running out is also what expires a trial.
-        (ORGANIZATION_LLM_BUDGET_EXHAUSTED, (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, ORGANIZATION_TRIAL_EXPIRY_HANDLER)),
+        (
+            ORGANIZATION_LLM_BUDGET_EXHAUSTED,
+            (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, ORGANIZATION_TRIAL_EXPIRY_HANDLER, PRODUCT_ANALYTICS_HANDLER),
+        ),
     ):
         registry.register(
             DomainEventDefinition(
@@ -933,6 +975,28 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_scope=EventScope.PLATFORM,
         )
     )
+    registry.register(
+        DomainEventDefinition(
+            event_name=USER_ONBOARDING_COMPLETED,
+            schema_version=1,
+            payload_model=UserOnboardingCompletedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+        )
+    )
+    for event_name, payload_model in (
+        (TELEGRAM_ACCOUNT_LINKED, TelegramAccountLinkedPayload),
+        (TELEGRAM_ACCOUNT_UNLINKED, TelegramAccountUnlinkedPayload),
+        (TELEGRAM_FIRST_MESSAGE_RECEIVED, TelegramFirstMessageReceivedPayload),
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=payload_model,
+                handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
     for event_name, payload_model in (
         (COMMUNICATION_CONNECTION_HEALTH_CHANGED, CommunicationConnectionHealthChangedPayload),
         (COMMUNICATION_CONNECTION_RECONNECT_REQUESTED, CommunicationConnectionReconnectRequestedPayload),
