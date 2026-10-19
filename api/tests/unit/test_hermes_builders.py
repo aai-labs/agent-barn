@@ -279,6 +279,11 @@ def test_gateway_config_caps_turns_at_the_platform_default_unless_the_agent_sets
     assert own["agent"]["max_turns"] == 150
 
 
+def test_gateway_config_delivers_scheduled_results_without_the_cron_header_and_footer() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert config["cron"] == {"wrap_response": False}
+
+
 def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
     """Auxiliary tasks left on the openrouter lane reach the proxy without the
     agent's key; smart approval then escalates every flagged command to the user.

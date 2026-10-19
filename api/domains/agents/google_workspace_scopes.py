@@ -2,6 +2,9 @@ from collections.abc import Iterable
 
 GOOGLE_SCOPE_PREFIX = "https://www.googleapis.com/auth/"
 
+# The only scope the Gmail integration requests: it reads and searches mail, nothing else.
+GMAIL_READONLY_SCOPE = f"{GOOGLE_SCOPE_PREFIX}gmail.readonly"
+
 # Per-service (full, read-only) scope sets mirror gog v0.37.0's own derivation
 # (internal/googleauth/service.go: serviceInfoByService plus
 # scopesForServiceWithOptions). The OAuth flow and stored-content validator both use

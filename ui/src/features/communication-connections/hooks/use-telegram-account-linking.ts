@@ -28,7 +28,7 @@ function connectionPath(orgApiBase: string, agentId: string, connectionId: strin
 export function useTelegramLinkedAccounts(
   agentId: string,
   connectionId: string,
-  { whileLinking = false }: { whileLinking?: boolean } = {},
+  { whileLinking = false, stopWhenLinked = false }: { whileLinking?: boolean; stopWhenLinked?: boolean } = {},
 ) {
   const orgApiBase = useOrganizationApiBase();
   const { selectedOrganization } = useOrganizationContext();
@@ -44,7 +44,9 @@ export function useTelegramLinkedAccounts(
     },
     enabled: Boolean(organizationId && agentId && connectionId),
     // A pending link lands in this list the moment someone presses Start.
-    refetchInterval: whileLinking ? LINK_STATUS_INTERVAL_MS : false,
+    // Onboarding finishes at the first account; Connection settings can link more.
+    refetchInterval: (current) =>
+      whileLinking && !(stopWhenLinked && current.state.data?.length) ? LINK_STATUS_INTERVAL_MS : false,
   });
   return { linkedAccounts: query.data ?? [], isLoadingLinkedAccounts: query.isLoading, error: query.error };
 }

@@ -3,8 +3,9 @@ Connection, is set up and started for them; finishing onboarding sends returning
 straight to the dashboard."""
 
 import logging
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_entries, has_length, none, not_none
 
@@ -22,6 +23,7 @@ from api.tests.core.modules import create_test_client, prepare_api_server, prepa
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.google_sign_in import WEB_APP_URL, FakeGoogleIdentityModule, finish_google_sign_in
+from api.tests.steps.onboarding import trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.user import there_is_a_user
 
@@ -33,8 +35,6 @@ def _setup(*steps):
         set_env_variable(
             {
                 "WEB_APP_URL": WEB_APP_URL,
-                "SELF_SIGNUP_ENABLED": "true",
-                "TRIAL_DEFAULT_CREDIT_USD": "10",
                 "AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY,
                 "LITELLM_BASE_URL": "http://litellm:4000",
                 "LITELLM_SECRET_NAME": "litellm",
@@ -51,6 +51,7 @@ def _setup(*steps):
         create_test_client(),
         database_repo_is_ready(),
         database_is_clean(),
+        trial_settings_are_configured(),
         predefined_templates_are_seeded(),
         *steps,
     ]
@@ -288,7 +289,7 @@ def test_onboarding_follows_the_trials_first_agent():
         first = _set_up_agent(context).json()
         there_is_a_user(email="limit-admin@example.com", is_platform_admin=True, organization_id=None)(context)
         context.injector.get(TrialSettingsRepository).set_settings(
-            {"agent_limit": 2}, 10, context.user.id, "Platform Admin"
+            {"agent_limit": 2}, context.user.id, "Platform Admin"
         )
         hired = context.client.post(
             f"/api/v1/organizations/{first['organization_id']}/agents",
@@ -302,3 +303,49 @@ def test_onboarding_follows_the_trials_first_agent():
 
         with then("it is still about the Agent it set up"):
             assert_that(response.json(), has_entries(agent_id=first["agent_id"]))
+
+
+@pytest.mark.parametrize("can_recover_agent", [True, False])
+def test_a_concurrent_hire_filling_the_trial_slot_never_creates_a_duplicate(can_recover_agent):
+    with given(_setup(someone_signed_up_with_google())) as context:
+        first = _set_up_agent(context).json()
+        service = context.injector.get(OnboardingService)
+        original = service._agent
+        reads = 0
+
+        def stale_then_current(trial):
+            nonlocal reads
+            reads += 1
+            return original(trial) if can_recover_agent and reads > 1 else None
+
+        with when("setup sees an empty trial just before another request fills its slot"):
+            with patch.object(service, "_agent", side_effect=stale_then_current):
+                response = _set_up_agent(context)
+
+        with then("it reuses the winning Agent or preserves the quota conflict"):
+            if can_recover_agent:
+                assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+                assert_that(
+                    response.json(), has_entries(agent_id=first["agent_id"], connection_id=first["connection_id"])
+                )
+            else:
+                assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+                assert_that(response.json(), has_entries(detail="Trial organizations can have one agent."))
+            assert_that(
+                context.injector.get(AgentRepository).count_active_by_org(first["organization_id"]), equal_to(1)
+            )
+            assert_that(_connections(context, first), has_length(1))
+
+
+def test_a_user_whose_trial_was_deleted_is_not_sent_back_to_onboarding():
+    with given(_setup(someone_signed_up_with_google())) as context:
+        trial = context.client.get(ONBOARDING, headers=auth(context)).json()
+        deleted = context.client.delete(f"/api/v1/organizations/{trial['organization_id']}", headers=auth(context))
+        assert_that(deleted.status_code, equal_to(status.HTTP_204_NO_CONTENT), deleted.text)
+
+        with when("the user opens onboarding after their trial is gone"):
+            response = context.client.get(ONBOARDING, headers=auth(context))
+
+        with then("there is no onboarding or replacement Agent to set up"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(response.json(), has_entries(required=False, agent_id=None))

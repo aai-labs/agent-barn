@@ -18,9 +18,9 @@ Plugins are trusted release artifacts, not dynamically installed packages: addin
 
 ## Supported providers
 
-Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Firecrawl, Pipedrive, SharePoint, and Apollo. The per-service Google providers (Gmail, Google Calendar, Google Sheets) are retired; affected agents must reconnect through Google Workspace. Zoho Mail and Zoho Calendar are retired: Zoho Calendar's CalDAV verbs were never carried by any transport we shipped, so it never worked, and Zoho Mail is withdrawn with it. Slack is retired as a tool Integration: the shipped Slack Platform Plugin replaces it and owns that credential, so a Slack credential is always a Communication Connection credential and never an Agent Secret.
+Provider credential contracts are defined by `SecretProvider` and its content models in `../../api/domains/agents/models.py`. Current providers cover GitHub, Jira, Confluence, Bitbucket, Google Workspace, Gmail, Firecrawl, Pipedrive, SharePoint, and Apollo. Gmail is a read-only integration beside Google Workspace: one sign-in on the shared Google client, Gmail only, reached through aai-cli's `email` commands. The per-service Google Calendar and Google Sheets providers are retired; affected agents must reconnect through Google Workspace. Zoho Mail and Zoho Calendar are retired: Zoho Calendar's CalDAV verbs were never carried by any transport we shipped, so it never worked, and Zoho Mail is withdrawn with it. Slack is retired as a tool Integration: the shipped Slack Platform Plugin replaces it and owns that credential, so a Slack credential is always a Communication Connection credential and never an Agent Secret.
 
-Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace) or gog (Google Workspace only). The two have separate runtime artifacts, secret stores, and agent policy blocks. Commands run through either CLI are recorded as Business Actions (see [`business-value.md`](business-value.md)).
+Providers reach their service through one of two CLIs: aai-cli (all of the above except Google Workspace, including Gmail) or gog (Google Workspace only). The two have separate runtime artifacts, secret stores, and agent policy blocks. Commands run through either CLI are recorded as Business Actions (see [`business-value.md`](business-value.md)).
 
 ## Shared credentials
 
@@ -48,11 +48,11 @@ Shared Credentials are org-scoped, admin-managed credential payloads that any me
 
 ## Google OAuth
 
-The flow serves Google Workspace, the only Google-backed provider. The authorize and exchange operations require an authenticated user. The caller names the provider and selects services plus read-only access; those choices are carried inside the signed state because Google's callback returns only the code and state. The callback accepts a signed, typed, short-lived state and forwards the authorization code to the web application; authenticated exchange returns a refresh token, the account email, and the granted scopes. Persistence then occurs through the normal Agent Secret create/update flow.
+The flow serves the two Google-backed providers, Google Workspace and Gmail. The authorize and exchange operations require an authenticated user. The caller names the provider; for Google Workspace it also selects services plus read-only access; those choices are carried inside the signed state because Google's callback returns only the code and state. The callback accepts a signed, typed, short-lived state and forwards the authorization code to the web application; authenticated exchange returns a refresh token, the account email, and the granted scopes. Persistence then occurs through the normal Agent Secret create/update flow.
 
 The server-owned client (`GOOGLE_CLOUD_CLIENT_ID`/`SECRET`) also serves "Sign in with Google" for Agent Barn accounts, which asks only for identity and keeps no Google token; see [Identity and Organizations](identity-and-organizations.md#google-sign-in-and-self-signup). Both callbacks must be registered on that client.
 
-Scopes are derived per request from the selected services and access level rather than being fixed per provider. Stored services, read-only mode, and granted scopes are validated together before encryption. Google Workspace uses the gog CLI and its own credential materialization, separate from aai-cli. A user-supplied Web-application OAuth client is the expected setup; server-owned credentials remain supported where configured.
+For Google Workspace, scopes are derived per request from the selected services and access level; stored services, read-only mode, and granted scopes are validated together before encryption. Google Workspace uses the gog CLI and its own credential materialization, separate from aai-cli. Gmail always asks for read-only Gmail plus identity and ignores any service or access-level choice; the stored grant must include read-only Gmail. Gmail is materialized as an aai-cli `gmail-work` profile. A user-supplied Web-application OAuth client is the expected setup; server-owned credentials remain supported where configured.
 
 ## SharePoint sign-in
 
@@ -84,6 +84,8 @@ Flow:
 - `POST …/sign-in` checks the tenant and that `Sites.FullControl.All` was granted, then reconciles with the administrator's access token, which is used only in that request and never stored: every new site is looked up first, new sites are granted `read`/`write` (`POST /sites/{id}/permissions` for the Teams app), kept sites are left alone unless the access level changed (then their grant's roles are updated in place, `PATCH /sites/{id}/permissions/{perm}`), grants recorded for a different Teams app are all replaced, and removed sites are revoked (`DELETE /sites/{id}/permissions/{perm}`; already gone counts as done). A failed grant or level change takes back the attempt's grants and puts changed levels back; errors name the site's address, never Graph's path; a grant that couldn't be revoked stays on record (502) so the next sign-in retries. Graph refusing to manage permissions (a non-administrator) is a 403. Graph rejecting a change (400/409) is a 502 naming the site; throttling (429) is a 503 that says to wait; both still undo the attempt. Finishing a sign-in holds a per-agent advisory lock (`AgentRepository.sharepoint_sign_in_lock`, non-blocking like `lifecycle_lock`) through the save, so a second sign-in finishing meanwhile gets a 409 instead of overwriting the first's result. The credential stores each site's URL, site id and permission id, the administrator's account, and no token.
 - `GET /organizations/{org}/agents/{agent}/integrations/sharepoint` returns the mode, account, access level and site URLs (never permission ids) so the UI can show and edit the list.
 - `POST /ingest/v1/agents/{agent}/integrations/sharepoint/token`, authenticated by the agent's ingest key, returns `{access_token, expires_at}`: a client-credentials token from `CommunicationsService.get_teams_app_credentials` (server-side only; the secret is excluded from `repr`), cached per Teams app (keyed by a hash of the secret) until five minutes before it lapses. 404 not connected, 409 for a delegated agent, a disabled Teams connection, or Microsoft refusing the app; 502 Microsoft unreachable. It spares aai-cli a Microsoft credential but is not a security boundary: native Teams gives the pod the same secret (`MSTEAMS_APP_PASSWORD` / `TEAMS_CLIENT_SECRET`) for the bot, and a token minted with it reaches the same sites and carries the same application permissions.
+
+The site holding the Organization's [OneDrive sync](sync-provider/README.md#onedrive-provider) folder is never granted to an Agent: once the new sites are resolved and before any grant, a sign-in naming that site (by Graph site id, case-insensitively) is refused with 409 "This site holds the Organization's OneDrive folder, so Agents can't be given SharePoint access to it." and nothing changes. The reverse holds too: OneDrive sync refuses a site any Agent in the Organization holds a recorded grant on. Delegated mode has no per-site grant, so a delegated agent reaches whatever its signer can, including the folder site.
 
 Grants live on the sites, not in any token: every app-only token for the Teams app reaches every site granted to it. So the credential is never dropped while it holds grants, or a later setup on the same app (the same agent after a removal, or another agent the app moves to) would inherit sites nobody chose. While a selected-sites credential exists, the API refuses with 409: removing SharePoint in an agent update, starting or completing a delegated sign-in, removing the agent's Teams connection, and pointing that connection at another app (a rotated secret on the same app is fine). The way out is the removal sign-in, `authorize-url?mode=selected_sites&remove_all=true`: the same administrator sign-in, which revokes every recorded grant and deletes the credential (`POST …/sign-in` returns `null`); grants that couldn't be revoked stay on record (502) for the next try. Retiring the agent is allowed, with a warning in the UI that its sites stay granted. Grants attach to the agent's own Teams app, so site scope is per agent. Two setup cautions follow from the pod holding the app's secret and the app allowing public client flows: the app should carry no application permission beyond `Sites.Selected` (every one of them reaches the pod), and the tenant should block the device code flow for it with Conditional Access, since a device code sign-in by a tricked administrator would hand the agent a delegated `Sites.FullControl.All` token. Rotate the app's secret if an agent may have leaked it. Graph's workbook API has no app-only support, so Excel workbook commands are unavailable in this mode; files still download and upload. The pinned CLI permits brokered delegated workbook calls, so Microsoft Graph remains the authorization boundary for app-only tokens.
 
@@ -149,7 +151,7 @@ Isolated Google Workspace and SharePoint expose expiring upstream credentials to
 
 A read-only Google Workspace credential also sets `GOG_READONLY=1`, which makes gog reject mutating API requests locally before dispatch. This is a defence-in-depth backstop layered on the read-only OAuth scopes, not a replacement for them: it is an environment variable, so an agent with a shell can unset it.
 
-In direct selected-sites mode the profile is aai-cli's generic `auth_type = "token_url"`: `token_url = {ingest_base_url}/agents/{id}/integrations/sharepoint/token` and `api_token_secret = "agentfarm.ingest_key"`. `aai-cli-setup.sh` stores `$INGEST_API_KEY` under that name on every boot (the ingest key is regenerated per start), and no SharePoint token or sign-in marker reaches the pod; a refresh token left from an earlier delegated sign-in is removed. The tool context lists the granted sites. Isolated selected-sites mode instead uses the credential gateway URL and dedicated generation token; its handoff proves the existing app-only token service before removing any old delegated PVC entry, and imports no delegated grant. Both routes reuse the same Teams-app token issuer. The direct ingest token route remains available to isolated selected-sites Agents through their ingest key. Native Teams still supplies its app secret to the runtime, so this isolation choice cannot isolate that Communication Connection credential or reduce the app's site grants. Both runtimes take the same profile and script. `token_url` arrived in aai-cli with aai-labs/aai-cli#27, so selected sites needs `openclaw-base` 0.7.5 and `hermes-base` 0.2.8 or later (0.7.4 and 0.2.7 were published before #27 merged); both images build aai-cli from its default branch, so #27 must merge before these versions are published.
+In direct selected-sites mode the profile is aai-cli's generic `auth_type = "token_url"`: `token_url = {ingest_base_url}/agents/{id}/integrations/sharepoint/token` and `api_token_secret = "agentfarm.ingest_key"`. `aai-cli-setup.sh` stores `$INGEST_API_KEY` under that name on every boot (the ingest key is regenerated per start), and no SharePoint token or sign-in marker reaches the pod; a refresh token left from an earlier delegated sign-in is removed. The tool context lists the granted sites. Isolated selected-sites mode instead uses the credential gateway URL and dedicated generation token; its handoff proves the existing app-only token service before removing any old delegated PVC entry, and imports no delegated grant. Both routes reuse the same Teams-app token issuer. The direct ingest token route remains available to isolated selected-sites Agents through their ingest key. Native Teams still supplies its app secret to the runtime, so this isolation choice cannot isolate that Communication Connection credential or reduce the app's site grants. Both runtimes take the same profile and script. `token_url` arrived in aai-cli with aai-labs/aai-cli#27, so selected sites needs `openclaw-base` 0.7.5 and `hermes-base` 0.2.8 or later (0.7.4 and 0.2.7 were published before #27 merged); current images pin a revision from aai-cli `main` that includes #27, under the [runtime versioning rules](../guidelines/operations.md#versioning-and-releases).
 
 ## Source map
 
@@ -176,3 +178,111 @@ In direct selected-sites mode the profile is aai-cli's generic `auth_type = "tok
 ## Change impact
 
 A tool Integration provider addition is one Integration Plugin plus its bundled Skill, its content model, and the UI form. A schema change still affects request validation, encrypted compatibility, runtime environment/config generation, built-in Skill seeding, UI forms/Zod schemas, and Agent start tests. A provider reached by a new CLI also needs that CLI's adapter and plugin surface; it does not touch existing providers. Platform additions instead use the shipped Platform Plugin seam. Encryption-key changes require an explicit migration/rotation plan because Agent Secrets, Shared Credentials, and Communication Connection credentials depend on the existing key. Bumping `GOG_VERSION` also requires re-recording the gog command tree the Business Action catalogue is tested against (see [`business-value.md`](business-value.md#change-impact)).
+
+## Custom API connections
+
+Custom API connections configure arbitrary public HTTPS APIs without adding a
+provider-specific CLI or generating tools from OpenAPI. An Agent may have multiple
+connections. Each has an immutable, Agent-scoped identifier (`inventory`, for
+example), a display name, and a base URL that defines its allowed origin and path.
+Creation derives the identifier from the name by lowercasing it and replacing
+spaces and other unsupported characters with hyphens (up to 64 characters).
+Identifiers are not editable and remain unchanged when the display name changes;
+names producing an existing identifier are rejected. Custom API setup is part of
+the existing Integrations editor, with the same Add, Apply and Cancel workflow.
+API-specific instructions belong in the assigned Template or Skills.
+
+Connections live in `api/domains/custom_api/`, independently of the one-Secret-per-
+provider registry. Each row encrypts its authentication and additional headers with
+the existing Agent credential encryption key. Supported authentication is none,
+Bearer token, a named API-key header (including a complete custom Authorization
+scheme), or Basic username/password. Additional headers may be ordinary or secret;
+secret values, auth tokens, and Basic credentials are never returned by read APIs.
+Header entries are lists so the web client's case transformations do not rename
+HTTP header names.
+
+`/organizations/{organization_id}/agents/{agent_id}/custom-api-connections` lists
+and creates connections; `/{connection_id}` updates or deletes one. Visibility uses
+the accessible-Agent repository query. Writes require `agent.update` and
+`agent.secret.manage`, the Agent lifecycle lock, and no managed update or blocking
+restore. Ordinary writes require a stopped Agent. Identifiers cannot be changed.
+Updates preserve omitted auth/header fields. An auth object must explicitly name
+its type; omitted secret values retain their saved value only for the same auth
+type. A submitted headers list replaces the list; an omitted value retains a saved
+secret only for the same header name. Changing authentication type requires the new
+credential fields. Removing a header from the list removes it. CRUD stages an Agent
+Updated Domain Event atomically without credential values.
+
+Isolation is optional, defaults **off**, and is selected independently for each
+connection. Direct mode injects that connection's real credentials into the pod's
+Kubernetes Secret environment. Isolation keeps those credentials outside the pod
+and injects a per-connection, per-start gateway token instead. Direct mode does not
+prevent the Agent from reading its credentials. Startup transfers these values over
+stdin into aai-cli's encrypted store on the Agent volume. Generated profiles contain
+secret references; the ConfigMap contains no authentication tokens, passwords or
+header values. A namespaced manifest removes the previous Custom API entries before
+installing current values, including after isolation, auth/header changes and
+connection deletion. Built-in integration entries are preserved. Old managed
+Kubernetes Secrets are replaced on start.
+
+Startup installs an aai-cli configuration containing only encrypted-store paths
+even when no CLI integrations remain. This clears stale profiles while the setup
+script removes former Custom API entries and any removed SharePoint sign-in.
+
+`POST /{connection_id}/apply` accepts the update fields plus `restart`. Applying to
+a running Agent requires `restart: true` and `agent.lifecycle.manage`. The server
+prepares the complete resulting runtime configuration before stopping the old pod,
+persists the intended change, and starts a new generation. Failure leaves the saved
+intent available for retry. Start, restart, managed update and recovery use the same
+materializer. The integration runtime snapshot records connection identity, scope,
+mode and a credential revision hash; only a ready generation counts as applied, and
+the existing last verified snapshot remains available during recovery. Removing a
+connection, stopping the Agent, or replacing its generation invalidates its token.
+
+The editor submits multiple Custom API changes to `POST /custom-api-connections/apply`
+with `creates`, `updates` (`id` plus `data`), `deletes` (connection IDs), and an
+outer `restart` choice. The server checks all targets, resulting identifiers,
+credentials, and runtime artifacts under the Agent lifecycle lock before stopping
+the Agent, then persists the connection changes and their events in one transaction.
+Invalid batches leave the running Agent and saved connections unchanged. A running
+Agent requires explicit restart authorization and is restarted once for the batch;
+a stopped Agent stays stopped unless `restart` is requested.
+For edits combining Custom API and built-in provider changes, the editor first
+uses `POST /custom-api-connections/preflight` with the same batch body. This validates
+the resulting Custom API configuration without saving or stopping, before entering
+the shared provider stop/save/start workflow. The batch is revalidated when saved;
+this preflight does not reserve configuration across requests or make built-in
+provider and Custom API writes atomic together. Failed mixed saves retain the
+restart choice for retry within the editor.
+
+Both Hermes and OpenClaw use the generic Custom API command in aai-cli. Profiles
+use `custom-api-<connection_identifier>` to avoid collisions with built-in providers.
+This requires a runtime image whose aai-cli includes the `custom-api` command:
+`openclaw-base` 0.7.6 or `hermes-base` 0.2.9 or later. The shared command is:
+
+```sh
+aai-cli --profile custom-api-inventory custom-api request --request-json - <<'JSON'
+{"method":"GET","url":"https://api.example.com/v1/items","query":{"limit":10}}
+JSON
+```
+
+The command takes an absolute URL only; it never joins a relative path to the base
+URL. It supports GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS, query objects,
+JSON or text bodies, and additional request headers. Configured headers cannot be
+overridden. Responses contain the HTTP `status` and a JSON or text `body`, with
+known literal credential values redacted. Upstream responses are untrusted and
+redaction cannot guarantee removal of encoded or transformed secrets. Request and response bodies are limited to 1 MiB
+and upstream connections time out after 30 seconds. The isolated interface posts the
+same request to `/gateway/v1/custom-api/request`; that endpoint derives its Agent
+and connection solely from the hashed, generation-bound token.
+
+The destination policy allows public HTTPS on the configured port (443 by default).
+Requests must match the configured effective port. Internal/private/link-local,
+loopback, multicast and reserved addresses are unsupported in this initial version.
+All DNS answers must be public and the connection is pinned to a validated address
+while TLS verifies the configured hostname. Environment proxies are not used.
+The destination must match the configured origin and path segment boundary.
+Userinfo, fragments, backslashes, dot segments, duplicate slashes, encoded separators,
+and double encoding are refused; ordinary encoded resource names are supported.
+Redirects are refused in both modes, including same-origin redirects. The configured
+base URL is a destination scope, not an endpoint prefix to join automatically.

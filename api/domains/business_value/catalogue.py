@@ -228,6 +228,8 @@ _COMMAND_PATHS = {
     "drive permissions list": _READ,
     "drive permissions get": _READ,
     "drive about get": _READ,
+    "email messages list": _READ,
+    "email messages get": _READ,
     "hubspot health": _IGNORED,
     "hubspot crm contacts list": _READ,
     "hubspot crm companies get": _READ,

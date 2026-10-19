@@ -14,6 +14,7 @@ export const OrganizationSchema = z.object({
   isTrial: z.boolean().default(false),
   // How many agents a trial may run; only the organization read carries it.
   trialAgentLimit: z.number().int().nullable().optional(),
+  trialAgentLimitReached: z.boolean().optional(),
 });
 
 export const OrganizationCreateSchema = z.object({
