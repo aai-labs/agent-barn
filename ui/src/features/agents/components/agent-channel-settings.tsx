@@ -619,13 +619,19 @@ export function AgentChannelSettings({
   const platforms = useCommunicationPlatforms();
   const setupManifest = (platformKey: string) =>
     platformKey === "slack" ? createSlackAppManifest(agent.name, agentDescription) : null;
-  // Web Chat is lazily provisioned on first send and can't be added by hand.
+  // Web Chat is provisioned lazily; the shared Telegram bot belongs to ready-made setup.
   const addablePlatforms = useMemo(
     () => {
-      const connected = new Set(connections.data?.map((connection) => connection.platformKey));
+      if (!connections.data) return undefined;
+      const connected = new Set(connections.data.map((connection) => connection.platformKey));
+      // Both Telegram types occupy the runtime's single adapter, even when disabled.
+      const hasTelegram = connected.has("telegram") || connected.has("agentbarn_telegram");
       return platforms.data?.filter(
         (platform) =>
-          platform.key !== WEB_PLATFORM_KEY && !connected.has(platform.key),
+          platform.key !== WEB_PLATFORM_KEY &&
+          platform.key !== "agentbarn_telegram" &&
+          !connected.has(platform.key) &&
+          !(platform.key === "telegram" && hasTelegram),
       );
     },
     [connections.data, platforms.data],

@@ -3,6 +3,8 @@ from injector import Module, provider, singleton
 from api.core.config import Config, get_config
 from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agents.event_handlers import AgentBudgetEmailHandler, AgentLifecycleEmailHandler
+from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
+from api.domains.agents.microsoft_identity import MicrosoftIdentityClient
 from api.domains.agents.repository import AgentRepository
 from api.domains.analytics.event_handlers import ProductAnalyticsHandler
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
@@ -27,6 +29,8 @@ from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetSe
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
+from api.domains.sync_provider.plugins.providers import shipped_plugins
+from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.email.client import EmailClient
@@ -75,6 +79,16 @@ class AppModule(Module):
                 WebPlatformPlugin(),
             ]
         )
+
+    @provider
+    @singleton
+    def provide_sync_provider_plugin_registry(
+        self,
+        config: Config,
+        identity: MicrosoftIdentityClient,
+        graph_sites: MicrosoftGraphSites,
+    ) -> SyncProviderPluginRegistry:
+        return SyncProviderPluginRegistry(shipped_plugins(config, identity, graph_sites))
 
     @provider
     @singleton

@@ -20,6 +20,7 @@ from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.models import CreditGrantKind
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.repository import UserRepository
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW, LiteLLMClient, LiteLLMError
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -28,6 +29,7 @@ from api.tests.core.modules import create_test_client, prepare_api_server, prepa
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, use_org_for_auth
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.events import event_delivery_tables_are_clean
+from api.tests.steps.onboarding import trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -36,7 +38,7 @@ AGENTS = "/api/v1/organizations/{organization_id}/agents"
 CREATE = {"name": "Trial Agent", "template_key": "test-template"}
 
 
-def _setup(*steps, self_signup: str = "true"):
+def _setup(*steps, self_signup: bool = True):
     return [
         set_env_variable(
             {
@@ -45,7 +47,6 @@ def _setup(*steps, self_signup: str = "true"):
                 "LITELLM_SECRET_NAME": "litellm",
                 "AGENT_DEFAULT_MODEL": "litellm/gpt-5-mini",
                 "AGENT_LITELLM_BASE_URL": "http://litellm:4000",
-                "SELF_SIGNUP_ENABLED": self_signup,
             }
         ),
         prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
@@ -54,6 +55,7 @@ def _setup(*steps, self_signup: str = "true"):
         database_repo_is_ready(),
         database_is_clean(),
         event_delivery_tables_are_clean(),
+        trial_settings_are_configured(enabled=self_signup, credit=10 if self_signup else 0),
         there_is_an_organization_with_user_and_access_token(),
         use_org_for_auth(),
         there_is_a_template(),
@@ -117,7 +119,7 @@ def _end_trial(context, organization_id=None, body=None):
 def the_trial_agent_limit_is(limit: int):
     def step(context):
         context.injector.get(TrialSettingsRepository).set_settings(
-            {"agent_limit": limit}, 10, context.user.id, "Platform Admin"
+            {"agent_limit": limit}, context.user.id, "Platform Admin"
         )
 
     return step
@@ -218,7 +220,34 @@ def test_the_organization_read_says_whether_it_is_a_trial():
     with given(_setup(the_organization_is_a_trial())) as context:
         response = context.client.get(f"/api/v1/organizations/{context.organization.id}", headers=auth(context))
 
-        assert_that(response.json(), has_entries(is_trial=True, agent_limit=1))
+        assert_that(
+            response.json(),
+            has_entries(is_trial=True, agent_limit=1, trial_agent_limit=1, trial_agent_limit_reached=False),
+        )
+
+
+def test_trial_capacity_counts_hidden_and_stopped_agents_but_not_deleted_agents():
+    with given(_setup(the_organization_is_a_trial())) as context:
+        created = context.client.post(AGENTS, json=CREATE, headers=auth(context))
+        assert_that(created.status_code, equal_to(201), created.text)
+        repository = context.injector.get(AgentRepository)
+        agent = repository.get_by_id(UUID(created.json()["id"]))
+        agent.general_access_role_id = None
+        repository.save(agent)
+        there_is_a_user(email="trial-member@example.com", role=OrganizationRole.MEMBER)(context)
+        there_is_an_access_token_for_user()(context)
+
+        visible = context.client.get(AGENTS, headers=auth(context))
+        assert_that(visible.json()["items"], has_length(0))
+        organization_url = f"/api/v1/organizations/{context.organization.id}"
+        capacity = context.client.get(organization_url, headers=auth(context))
+        assert_that(capacity.json(), has_entries(trial_agent_limit_reached=True))
+        assert_that(capacity.json().get("trial_agent_count"), equal_to(None))
+
+        agent.deleted_at = datetime.now(UTC)
+        repository.save(agent)
+        capacity = context.client.get(organization_url, headers=auth(context))
+        assert_that(capacity.json(), has_entries(trial_agent_limit_reached=False))
 
 
 # --- no further Organizations for self-signed-up users -----------------------------------
@@ -355,7 +384,7 @@ def test_someone_whose_address_has_had_a_trial_gets_an_organization_on_credit_in
 def test_an_invited_member_is_told_when_no_trials_are_available():
     with given(_setup(a_member_invited_by_email("colleague@example.com"))) as context:
         context.injector.get(TrialSettingsRepository).set_settings(
-            {"max_active_trials": 1}, 10, context.user.id, "Platform Admin"
+            {"max_active_trials": 1}, context.user.id, "Platform Admin"
         )
         the_organization_is_a_trial()(context)
 
@@ -401,7 +430,7 @@ def test_a_trial_taken_by_the_same_inbox_meanwhile_is_a_clean_refusal_and_a_retr
 def test_without_self_signup_someone_an_organization_invites_creates_organizations_on_the_platform_budget():
     """With nobody able to sign themselves up, every account traces back to a Platform
     Administrator or an Organization they set up: no credit to buy, nothing to close."""
-    with given(_setup(self_signup="false")) as context:
+    with given(_setup(self_signup=False)) as context:
         invited = context.client.post(
             f"/api/v1/organizations/{context.organization.id}/members",
             json={"email": "colleague@example.com", "role": "MEMBER"},

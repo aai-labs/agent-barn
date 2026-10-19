@@ -212,6 +212,12 @@ class OrganizationRead(PydanticBaseModel):
     trial_expired_at: datetime | None = None
     # How many Agents the Organization may run; None when there is no limit.
     agent_limit: int | None = None
+    # Whether it already runs that many, counting Agents this member can't read.
+    agent_limit_reached: bool = False
+    # How many Agents the trial may run; None for an Organization that is not a trial.
+    trial_agent_limit: int | None = None
+    # Creation capacity, independent of which Agents this member may read.
+    trial_agent_limit_reached: bool = False
 
 
 class PlatformOrganizationRead(PydanticBaseModel):

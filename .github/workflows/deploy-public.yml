@@ -335,6 +335,8 @@ jobs:
           PAYMENTS_ENABLED: ${{ vars.PUBLIC_PAYMENTS_ENABLED || 'false' }}
           STRIPE_SECRET_KEY: ${{ secrets.PUBLIC_STRIPE_SECRET_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.PUBLIC_STRIPE_WEBHOOK_SECRET }}
+          ONEDRIVE_SYNC_CLIENT_ID: ${{ vars.ONEDRIVE_SYNC_CLIENT_ID }}
+          ONEDRIVE_SYNC_CLIENT_SECRET: ${{ secrets.ONEDRIVE_SYNC_CLIENT_SECRET }}
           AGENT_DEFAULT_MODEL: ${{ vars.AGENT_DEFAULT_MODEL }}
           AGENT_MODEL_ALLOWLIST: ${{ vars.AGENT_MODEL_ALLOWLIST }}
           ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS: ${{ vars.ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS }}
@@ -342,7 +344,6 @@ jobs:
           ORGANIZATION_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_ORGANIZATION_DEFAULT_LLM_BUDGET_USD }}
           AGENT_DEFAULT_LLM_BUDGET_USD: ${{ vars.PUBLIC_AGENT_DEFAULT_LLM_BUDGET_USD }}
           # Public trial signup, opted into on purpose; unset means off.
-          SELF_SIGNUP_ENABLED: ${{ vars.PUBLIC_SELF_SIGNUP_ENABLED || 'false' }}
           # Empty means the default of 10.
           ORGANIZATION_DEFAULT_AGENT_LIMIT: ${{ vars.PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT || '' }}
           # The public deployment's own bot; Telegram allows one consumer per bot.

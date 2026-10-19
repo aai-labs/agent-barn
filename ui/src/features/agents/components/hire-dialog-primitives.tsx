@@ -2,6 +2,7 @@
 
 import React, { useRef, useState } from "react";
 import { EyeIcon, EyeOffIcon, PlusIcon, XIcon } from "@/components/icons";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { useGoogleOAuth, type GoogleOAuthResult } from "../hooks/use-google-oauth";
 
@@ -13,19 +14,19 @@ export function DialogShell({
   shadeClick: (() => void) | undefined;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div
-        className="absolute inset-0"
-        style={{ background: "rgba(20,16,10,.4)" }}
-        onClick={shadeClick}
-      />
-      <div
-        className="relative flex flex-col w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl"
+    <Dialog open onOpenChange={(open) => { if (!open) shadeClick?.(); }}>
+      <DialogContent
+        showCloseButton={false}
+        aria-describedby={undefined}
+        className="flex w-[calc(100%-2rem)] max-w-4xl max-h-[90svh] flex-col gap-0 overflow-hidden rounded-2xl border-0 p-0 shadow-2xl"
         style={{ background: "var(--bg-elev)" }}
+        onEscapeKeyDown={(event) => { if (!shadeClick) event.preventDefault(); }}
+        onPointerDownOutside={(event) => { if (!shadeClick) event.preventDefault(); }}
       >
+        <DialogTitle className="sr-only">Hire an agent</DialogTitle>
         {children}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -109,7 +110,9 @@ export function TokenInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        autoComplete="off"
+        // Browsers ignore autocomplete="off" on a password field, but never fill a
+        // saved login password into a "new-password" one.
+        autoComplete="new-password"
         data-lpignore="true"
         data-1p-ignore
         data-form-type="other"
@@ -138,6 +141,8 @@ function GoogleGlyph({ size = 16 }: { size?: number }) {
     </svg>
   );
 }
+
+const GOOGLE_CLIENT_ID_PATTERN = /^[^\s@]+\.apps\.googleusercontent\.com$/;
 
 /**
  * "Authenticate with Google" button that runs the OAuth popup flow and hands the
@@ -229,6 +234,11 @@ export function GoogleAuthButton({
       setError(
         "Enter both a client ID and secret, or leave both blank to use the shared app client.",
       );
+      return;
+    }
+    // Catches a saved login autofilled into the fields before Google rejects it.
+    if (id && !GOOGLE_CLIENT_ID_PATTERN.test(id)) {
+      setError("That isn't a Google client ID. A client ID ends in .apps.googleusercontent.com.");
       return;
     }
     if (ownClientRequired && (!id || !secret)) {
@@ -339,6 +349,9 @@ export function GoogleAuthButton({
               onChange={(e) => setClientId(e.target.value)}
               placeholder="1234567890-abc….apps.googleusercontent.com"
               autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore
+              data-form-type="other"
               disabled={disabled || isConnecting}
             />
           </FormField>

@@ -74,6 +74,11 @@ paymentsEnabled: false
 stripe:
   secretKey: ""
   webhookSecret: ""
+# Multi-tenant Microsoft Entra app for Organization OneDrive sync. Leave blank to
+# disable. Registered Web redirect URI must be
+# "<webAppUrl>/api/v1/integrations/sync-provider/onedrive/callback".
+onedriveSyncClientId: ""
+onedriveSyncClientSecret: ""
 
 # OpenRouter inference key (k8s Secret env var OPENROUTER_API_KEY), polled
 # via GET /key for the key's remaining credit limit metric. Same key litellm
@@ -105,11 +110,6 @@ prometheus:
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""
-
-# Whether a first sign-in with Google creates an account and a trial Organization.
-# Off by default so a rollout never opens public signup by accident; existing users
-# can always sign in with Google.
-selfSignupEnabled: false
 
 # How many Agents an Organization that is not a trial may run, unless a Platform
 # Administrator sets its own. Empty means the default of 10.

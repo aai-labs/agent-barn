@@ -165,6 +165,7 @@ def _service(openrouter, allowlist=None, default_model=""):
         agent_settings_lookup=agent_settings_lookup,
         credential_gateway=MagicMock(),
         integrations=MagicMock(),
+        custom_api=MagicMock(),
         agent_budgets=MagicMock(),
         restore_points=MagicMock(),
         selection=MagicMock(),

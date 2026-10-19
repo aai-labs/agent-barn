@@ -16,6 +16,21 @@ import {
 export class CommunicationConnectionDataSupport {
   constructor(private page: Page) {}
 
+  async interceptQuickStartConnections(agentId: string, connectionId: string, { loseFirstResponse = false } = {}) {
+    const connection = { ...mockCommunicationConnection, id: connectionId, agent_id: agentId, platform_key: "agentbarn_telegram", display_name: "Telegram", external_identity: "@AgentBarnTestBot", settings: {} };
+    let saved = false;
+    const creates: unknown[] = [];
+    await this.page.route(`**/api/v1/organizations/*/agents/${agentId}/connections`, async (route) => {
+      if (route.request().method() === "GET") return route.fulfill({ json: saved ? [connection] : [] });
+      if (route.request().method() !== "POST") return route.fallback();
+      creates.push(route.request().postDataJSON());
+      saved = true;
+      if (loseFirstResponse && creates.length === 1) return route.abort("failed");
+      return route.fulfill({ status: 201, json: connection });
+    });
+    return creates;
+  }
+
   async interceptChannelsRequests({ agentId, connection, deliveryJournal = mockCommunicationDeliveryJournalPage }: {
     agentId: string;
     connection?: Partial<typeof mockCommunicationConnection>;

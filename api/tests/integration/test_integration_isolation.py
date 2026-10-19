@@ -521,10 +521,15 @@ def test_backfill_preserves_routes_shared_sources_and_gateway_tokens():
             command.upgrade(config, "head")
             with Session(context.postgres_delegate.engine) as session:
                 policies = session.exec(select(AgentIntegrationIsolation)).all()
+                # Downgrading below Gmail's migration deletes Gmail credentials, so none are backfilled.
                 assert_that(
                     {p.provider: p.isolated for p in policies},
                     equal_to(
-                        {p.value: p not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO} for p in SecretProvider}
+                        {
+                            p.value: p not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO}
+                            for p in SecretProvider
+                            if p != SecretProvider.GMAIL
+                        }
                     ),
                 )
                 assert_that(all(p.agent_id != deleted_agent_id for p in policies), is_(True))

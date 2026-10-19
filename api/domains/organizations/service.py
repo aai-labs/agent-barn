@@ -90,6 +90,13 @@ class OrganizationService:
             )
         # The read carries the Organization's own limit; members see the one in force.
         organization.agent_limit = self._agent_limit_in_force(organization.agent_limit, organization.is_trial)
+        if organization.agent_limit is not None:
+            organization.agent_limit_reached = (
+                self.agent_repository.count_active_by_org(organization_id) >= organization.agent_limit
+            )
+            if organization.is_trial:
+                organization.trial_agent_limit = organization.agent_limit
+                organization.trial_agent_limit_reached = organization.agent_limit_reached
         return organization
 
     def get_platform_organization(self, organization_id: UUID) -> PlatformOrganizationRead:
@@ -228,7 +235,8 @@ class OrganizationService:
         # for what their Organizations spend: each runs on credit, starting with none.
         # Without self-signup every account traces back to a Platform Administrator or an
         # Organization they set up, so there is nothing to close.
-        on_credit = config.self_signup_enabled and not (
+        policy = self.trial_settings.signup_policy()
+        on_credit = policy.self_signup_enabled and not (
             actor.user.is_platform_admin or actor.user.platform_provisioned_at is not None
         )
         # Their first Organization of their own is a trial when their address has never
@@ -239,7 +247,7 @@ class OrganizationService:
         opening_credit = Decimal(0)
         if on_credit:
             if trial:
-                opening_credit = Decimal(str(self.trial_settings.credit_usd()))
+                opening_credit = Decimal(str(policy.credit_usd))
                 organization.is_trial = True
             organization.llm_budget_usd = float(opening_credit)
             organization.llm_budget_duration = ONE_OFF_BUDGET_WINDOW
@@ -264,7 +272,7 @@ class OrganizationService:
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
-            _, delivery_ids = self.organization_repository.create_for_user(
+            organization, delivery_ids = self.organization_repository.create_for_user(
                 organization,
                 actor.user.id,
                 config.organization_creation_limit,

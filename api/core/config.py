@@ -82,9 +82,6 @@ class Config(BaseSettings):
     # divides its own allowance among its Agents.
     organization_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
     agent_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
-    # Self-signup: a first Google sign-in creates the account and a trial Organization.
-    # Off (the default) turns new Google accounts away; existing users can still sign in.
-    self_signup_enabled: bool = False
     # Buying credit with Stripe. Off unless set: with it off, Organizations on credit
     # can't buy more. The webhook is served whenever its secret is set, so payments made
     # before payments were turned off, and their refunds and disputes, still land.
@@ -95,8 +92,6 @@ class Config(BaseSettings):
     # Administrator sets its own limit, until a Platform Administrator saves a default
     # on the platform settings page. Unset (or empty) is 10.
     organization_default_agent_limit: int = Field(default=DEFAULT_ORGANIZATION_AGENT_LIMIT, ge=1)
-    # Trial credit (USD) until a Platform Administrator sets one on the platform settings page.
-    trial_default_credit_usd: float = Field(default=10.0, ge=0, allow_inf_nan=False)
     # The API's own public base URL, used to show callers where to reach an Agent
     # Webhook or a Teams Connection. Deployments set it from API_HOST; locally it is
     # derived below, because the host port is the only thing that makes it up.
@@ -193,6 +188,9 @@ class Config(BaseSettings):
     # injected into the agent's aai-cli gmail-work profile at start time.
     google_cloud_client_id: str = ""
     google_cloud_client_secret: str = ""
+
+    onedrive_sync_client_id: str = ""
+    onedrive_sync_client_secret: str = ""
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
@@ -322,6 +320,10 @@ class Config(BaseSettings):
             and self.agent_email_mailbox.strip()
             and self.email_inbound_secret.strip()
         )
+
+    @property
+    def is_onedrive_sync_enabled(self) -> bool:
+        return bool(self.onedrive_sync_client_id.strip() and self.onedrive_sync_client_secret.strip())
 
 
 @lru_cache

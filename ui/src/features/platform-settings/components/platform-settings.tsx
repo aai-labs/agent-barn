@@ -22,9 +22,9 @@ const SECTIONS = {
     description: "What every organization gets unless you set something else for it.",
   },
   trials: {
-    label: "Trials",
+    label: "Signup & trials",
     icon: <Sparkles size={15} aria-hidden />,
-    description: "What a new organization gets when someone signs themselves up.",
+    description: "Manage public signup and what each new trial organization receives.",
   },
   billing: {
     label: "Billing",

@@ -99,8 +99,6 @@ spec:
               value: {{ .Values.organizationLlmBudgets.alertThresholds | quote }}
             - name: AGENT_MODEL_ALLOWLIST
               value: "{{ .Values.agentModelAllowlist }}"
-            - name: SELF_SIGNUP_ENABLED
-              value: {{ .Values.selfSignupEnabled | quote }}
             - name: ORGANIZATION_DEFAULT_AGENT_LIMIT
               value: {{ .Values.organizationDefaultAgentLimit | quote }}
             - name: PAYMENTS_ENABLED

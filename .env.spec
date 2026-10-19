@@ -75,6 +75,14 @@ AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND=
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
 
+# Optional: multi-tenant Microsoft Entra app for Organization OneDrive sync. If
+# unset, OneDrive sync is unavailable. Register
+# "<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback" as a Web redirect URI
+# (Microsoft requires HTTPS unless the host is localhost). Permissions: application
+# Sites.Selected; delegated Sites.FullControl.All, Sites.Read.All, openid, profile.
+ONEDRIVE_SYNC_CLIENT_ID=
+ONEDRIVE_SYNC_CLIENT_SECRET=
+
 # Kubernetes client
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
 K8S_KUBECONFIG_PATH=
@@ -136,15 +144,6 @@ ORGANIZATION_DEFAULT_LLM_BUDGET_USD=
 # Required. Model spend limit (USD) an Agent is held to until its Organization sets a
 # default or the Agent its own. Must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD.
 AGENT_DEFAULT_LLM_BUDGET_USD=
-# Whether a first sign-in with Google creates an account and a trial Organization.
-# false turns new accounts away; existing users can still sign in with Google. Sign-in
-# uses GOOGLE_CLOUD_CLIENT_ID/SECRET; register <WEB_APP_URL>/api/v1/auth/google/callback
-# as a redirect URI on that client.
-SELF_SIGNUP_ENABLED=true
-# Credit (USD) a new trial Organization starts with, until a Platform Administrator
-# sets one on the platform settings page. Granted once; it never renews.
-TRIAL_DEFAULT_CREDIT_USD=10
-# How many Agents an Organization that is not a trial may run, unless a Platform
 # Administrator sets its own on the Organization's page, until a Platform
 # Administrator saves a default on the platform settings page. Empty is 10.
 ORGANIZATION_DEFAULT_AGENT_LIMIT=

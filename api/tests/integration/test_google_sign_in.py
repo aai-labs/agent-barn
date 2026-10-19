@@ -41,8 +41,9 @@ from api.tests.steps.google_sign_in import (
     start_google_sign_in,
     state_from,
 )
+from api.tests.steps.onboarding import trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization
-from api.tests.steps.user import there_is_a_user
+from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
 CALLBACK = f"{WEB_APP_URL}/api/v1/auth/google/callback"
 ONBOARDING = f"{WEB_APP_URL}/onboarding"
@@ -54,8 +55,6 @@ def _setup(*steps, signup: str = "true", telegram: bool = True):
         set_env_variable(
             {
                 "WEB_APP_URL": WEB_APP_URL,
-                "SELF_SIGNUP_ENABLED": signup,
-                "TRIAL_DEFAULT_CREDIT_USD": "7.5",
                 # A trial is reached through Agent Barn's shared bot.
                 "AGENTBARN_TELEGRAM_BOT_TOKEN": "424242:the-shared-bot-token" if telegram else "",
                 "AGENTBARN_TELEGRAM_BOT_USERNAME": "AgentBarnTestBot" if telegram else "",
@@ -66,6 +65,7 @@ def _setup(*steps, signup: str = "true", telegram: bool = True):
         create_test_client(),
         database_repo_is_ready(),
         database_is_clean(),
+        trial_settings_are_configured(enabled=signup == "true", credit=7.5),
         *steps,
     ]
 
@@ -515,6 +515,29 @@ def test_with_signup_closed_existing_users_still_sign_in_with_google():
         assert_that(redirect_target(response), equal_to((DASHBOARD, {})))
 
 
+def test_platform_settings_open_and_close_signup_without_a_restart():
+    with given(_setup(signup="false")) as context:
+        there_is_a_user(email="signup-admin@example.com", is_platform_admin=True)(context)
+        there_is_an_access_token_for_user(context.user.id)(context)
+        headers = {"Authorization": f"Bearer {context.access_token}"}
+        opened = context.client.put(
+            "/api/v1/platform/settings/trial", headers=headers, json={"self_signup_enabled": True, "credit_usd": 20}
+        )
+        assert_that(opened.status_code, equal_to(200), opened.text)
+        assert_that(redirect_target(finish_google_sign_in(context)), equal_to((ONBOARDING, {})))
+        organization_id = _memberships(context, _user(context).id)[0].organization_id
+        closed = context.client.put(
+            "/api/v1/platform/settings/trial", headers=headers, json={"self_signup_enabled": False, "credit_usd": 0}
+        )
+        assert_that(closed.status_code, equal_to(200), closed.text)
+        google_returns(google_identity(email="next-user@example.com", sub="next-user"))(context)
+        assert_that(redirect_target(finish_google_sign_in(context))[1], equal_to({"error": "signup_closed"}))
+        assert_that(_user(context, "next-user@example.com"), none())
+        assert_that(context.injector.get(OrganizationRepository).get(organization_id).llm_budget_usd, equal_to(20))
+        google_returns(google_identity())(context)
+        assert_that(redirect_target(finish_google_sign_in(context)), equal_to((ONBOARDING, {})))
+
+
 def test_without_the_shared_telegram_bot_new_accounts_are_turned_away():
     """A trial is used through Agent Barn's Telegram bot; without one configured, a new
     user could never finish onboarding."""
@@ -634,7 +657,7 @@ def test_a_callback_cannot_be_replayed():
 def _set_trial_credit(context, credit: float) -> None:
     there_is_a_user(email="platform-admin@example.com", is_platform_admin=True)(context)
     context.injector.get(TrialSettingsRepository).set_settings(
-        {"credit_usd": credit}, 7.5, context.user.id, "Platform Admin"
+        {"credit_usd": credit}, context.user.id, "Platform Admin"
     )
 
 
@@ -642,7 +665,7 @@ def _set_trial_cap(context, cap: int) -> None:
     admin = there_is_a_user(email="trial-cap-admin@example.com", is_platform_admin=True)
     admin(context)
     context.injector.get(TrialSettingsRepository).set_settings(
-        {"max_active_trials": cap}, 7.5, context.user.id, "Platform Admin"
+        {"max_active_trials": cap}, context.user.id, "Platform Admin"
     )
 
 

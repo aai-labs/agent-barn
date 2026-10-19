@@ -176,9 +176,6 @@ releases:
         value: {{ env "ORGANIZATION_DEFAULT_LLM_BUDGET_USD" | quote }}
       - name: organizationLlmBudgets.defaultAgentUsd
         value: {{ env "AGENT_DEFAULT_LLM_BUDGET_USD" | quote }}
-      # Public trial signup stays off unless an environment opts in.
-      - name: selfSignupEnabled
-        value: {{ env "SELF_SIGNUP_ENABLED" | default "false" | quote }}
       # Empty means the default of 10 Agents for Organizations that are not trials.
       - name: organizationDefaultAgentLimit
         value: {{ env "ORGANIZATION_DEFAULT_AGENT_LIMIT" | default "" | quote }}
@@ -239,6 +236,10 @@ releases:
         value: {{ env "STRIPE_SECRET_KEY" | default "" | quote }}
       - name: stripe.webhookSecret
         value: {{ env "STRIPE_WEBHOOK_SECRET" | default "" | quote }}
+      - name: onedriveSyncClientId
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_ID" | default "" | quote }}
+      - name: onedriveSyncClientSecret
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_SECRET" | default "" | quote }}
       - name: agentFirecrawlApiKey
         value: {{ env "FIRECRAWL_API_KEY" | default "" | quote }}
       - name: apiExternalUrl

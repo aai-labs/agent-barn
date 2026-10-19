@@ -1,5 +1,73 @@
 # Agents
 
+The Home page shows a single first-Agent panel when the user's visible team is empty,
+with example use cases and direct ready-made/custom hiring choices. Once
+Agents exist, Home shows the Agent grid and its hire tile. Home owns its hire entry
+point; the top navigation keeps its hire action on other Organization pages.
+
+## Hiring choices
+
+For active Trial Organizations, general **Hire agent** entry points offer
+**Ready-made assistant** and **Build your own**, including after onboarding is
+complete and when the Organization already has Agents. Neither option is preselected; **Continue** requires an explicit choice. The empty dashboard's two explicit buttons open their respective setup
+directly after the capacity check, without asking the user to choose again.
+Ready-made hiring is offered only while the Organization is on a trial. For ordinary
+Organizations, including after a trial ends, every hiring entry point opens
+**Build your own agent** directly, and the empty dashboard shows only that action.
+Existing ready-made Agents and their Telegram linking remain available after a trial ends.
+Opening or cancelling the chooser or ready-made confirmation creates nothing.
+Build your own opens the existing runtime/template/model/Skill form. Ready-made
+first explains the assistant's purpose, General Purpose Template, Hermes runtime,
+and Organization default model. Only **Hire assistant** creates and starts a new
+Agent with automatic command approval, even when the Organization already has
+Agents. Both paths use ordinary scoped Agent create/start APIs and retain their
+validation and Agent authorization. A failed start retries the newly created Agent
+within the same dialog.
+The hiring modal and onboarding share the same Hermes/OpenClaw segmented runtime
+control, including keyboard selection and disabled behavior during submission.
+
+The ready-made path creates its Agent Barn Telegram Connection before startup,
+then reuses onboarding's Telegram preparation, QR code, link-status polling,
+expiry recovery, and completion screens inside a dashboard dialog. Retrying setup
+retains the created Agent and reads existing Connections before creating one, so a
+lost Connection response does not duplicate it. Setup reads the Agent's current
+status before starting and skips start when it is already running, including after
+a lost start response. Telegram is optional: users can
+skip linking and go directly to Web Chat. This path does not reopen or modify
+onboarding completion.
+
+The Agent detail page shows **Finish connecting Telegram** for an enabled Agent
+Barn Telegram Connection with no linked accounts, including after a refresh or a
+closed setup dialog. Members with `agent.update` can reopen the same QR/linking
+screen using **Connect Telegram**. This links the existing Connection and never
+creates or starts an Agent. A stopped Agent must first be started through its
+lifecycle controls; linked Connections do not show the reminder. Skipping returns
+to the detail page's Web Chat tab.
+
+Before setup begins, a Trial Organization's current read must succeed. Its
+`trial_agent_limit_reached` flag reports creation capacity across non-deleted Agents,
+including stopped Agents and ones hidden from this member; it exposes neither their
+identities nor an unfiltered Agent count. When full, both choices stay visible and
+disabled, with the limit explained and **View your agents** as the action. The notice
+states that deleting an Agent frees a slot and stopping one does not. A failed capacity
+check offers retry and keeps both choices disabled. Creation still enforces the quota
+under the existing database lock, including when capacity changes after the check.
+Creating or deleting an Agent invalidates the Organization read as well as Agent lists.
+
+Any other Organization goes straight to the hiring form, unless its read's
+`agent_limit_reached` flag (counted the same way, against the Agent limit in force)
+says it already has all its Agents; then the dialog says so instead of showing the form.
+
+## Messaging connection choices
+
+The general Messaging picker offers users' own Telegram bots and other supported
+platforms. Agent Barn Telegram is reserved for ready-made setup and is excluded
+from this picker; existing shared-bot Connections can still be managed and linked.
+An Agent has one Telegram adapter, so either Telegram Connection type hides
+Telegram from the add picker, including when disabled. Deleting the existing
+Connection frees that choice. The API/database independently reject conflicting
+Telegram types; picker filtering does not replace that enforcement.
+
 ## Read when
 
 Read before changing agent creation, Agent Access Roles, explicit Agent Access assignments, Agent General Access, lifecycle, runtime or platform selection, template pinning, Agent Template Overrides, model selection, skill assignment, credentials, logs, health, Agent Restore Points, or Kubernetes resources.

@@ -540,8 +540,8 @@ class PlatformTrialSettingsChangedPayload(BaseModel):
     actor_display: str
     subject_display: str
     setting: str
-    previous: float | None
-    current: float | None
+    previous: bool | float | None
+    current: bool | float | None
 
 
 class PlatformCreditPurchaseUnappliedPayload(BaseModel):

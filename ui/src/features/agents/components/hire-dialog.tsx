@@ -1,354 +1,127 @@
 "use client";
 
 import { useState } from "react";
-import { XIcon } from "@/components/icons";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { useRouter } from "next/navigation";
+import { ArrowRight, Check, WandSparkles, Wrench, X } from "lucide-react";
+
 import { useOrganization } from "@/features/organizations/hooks/use-organization";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
-import {
-  coerceBooleanFields,
-  expandGithubContent,
-  hasIncompleteIntegration,
-  isSignInOnlyProvider,
-  isAutoConfiguredProvider,
-  type IntegrationDraft,
-} from "../integrations";
-import { useAgentNameSuggestion } from "../hooks/use-agent-name-suggestion";
-import { useAgents } from "../hooks/use-agents";
-import { formatAgentName } from "../naming";
-import { useCreateAgent } from "../hooks/use-create-agent";
-import { useStartAgent } from "../hooks/use-start-agent";
-import { useModels } from "../hooks/use-models";
-import { useTemplates } from "../hooks/use-templates";
-import { splitRequiredSkills } from "../utils";
-import { CredentialErrorAlert } from "./credential-error-alert";
-import { AgentErrorBanner } from "./agent-error-banner";
-import { provisioningFailureOf } from "../provisioning-failure";
-import type { AgentProvisioningError } from "../schemas";
-import { DialogShell, FormField } from "./hire-dialog-primitives";
-import { SkillsStep } from "./hire-dialog-steps";
-import { ModelChoice } from "./model-choice";
+import type { HiredAgent } from "../hooks/use-hire-agent-form";
+import { DialogShell } from "./hire-dialog-primitives";
+import { HireFormDialog } from "./hire-form-dialog";
+import { QuickStartDialog } from "./quick-start-dialog";
 
-interface HireDialogProps {
+export type HireChoice = "ready" | "custom";
+
+export function HireDialog({ onClose, onHired, initialChoice }: {
   onClose: () => void;
-  onHired: (info: { name: string; role: string }) => void;
-}
-
-function credentialsForProviders(
-  providers: string[],
-  existing: IntegrationDraft[],
-): IntegrationDraft[] {
-  const existingByProvider = new Map(existing.map((draft) => [draft.provider, draft]));
-  return providers.map(
-    (provider) =>
-      existingByProvider.get(provider) ?? {
-        provider,
-        content: {},
-      },
-  );
-}
-
-export function HireDialog({ onClose, onHired }: HireDialogProps) {
+  onHired: (agent: HiredAgent) => void;
+  /** A choice already made on the dashboard; omit to show the chooser. */
+  initialChoice?: HireChoice;
+}) {
+  const router = useRouter();
   const { selectedOrganization } = useOrganizationContext();
+  const isTrial = Boolean(selectedOrganization?.isTrial);
   // The membership list doesn't carry the agent limit; the organization read does.
-  const { organization } = useOrganization(selectedOrganization?.id ?? "");
-  const agentLimit = organization?.agentLimit ?? null;
-  const { total: agentCount } = useAgents();
-  const { templates, isLoading } = useTemplates();
-  const createAgent = useCreateAgent();
-  const startAgent = useStartAgent();
-  const suggestion = useAgentNameSuggestion();
-  const [manualName, setManualName] = useState<string | null>(null);
-  const [templateKey, setTemplateKey] = useState("");
-  const [agentType, setAgentType] = useState<"openclaw" | "hermes">("hermes");
-  const [model, setModel] = useState<string | null>(null);
-  const { defaultModel } = useModels();
-  const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
-  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
-  const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
-  const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
-  const [error, setError] = useState<string | null>(null);
-  const [provisioningFailure, setProvisioningFailure] =
-    useState<AgentProvisioningError | null>(null);
-  // Creation can succeed and the start still fail. Holding the Agent lets the retry
-  // start that Agent instead of creating a second one.
-  const [createdAgent, setCreatedAgent] = useState<{ id: string; name: string } | null>(null);
+  const { organization, isLoading, isFetching, error, refetch } = useOrganization(selectedOrganization?.id ?? "");
+  const [selected, setSelected] = useState<HireChoice | null>(null);
+  const [started, setStarted] = useState<HireChoice | null>(null);
+  const limit = organization?.trialAgentLimit;
+  const full = isTrial && organization?.trialAgentLimitReached === true;
+  const checking = isTrial && (isLoading || isFetching);
+  const unavailable = isTrial && !checking && (Boolean(error) || organization?.trialAgentLimitReached === undefined || limit == null);
+  const disabled = checking || unavailable || full;
 
-  const template = templates.find((candidate) => candidate.templateKey === templateKey);
-  const name = manualName ?? (suggestion.firstName
-    ? formatAgentName(suggestion.firstName, template?.templateName)
-    : "");
-  const { standalone, groups } = splitRequiredSkills(template?.requiredSkills ?? []);
-  const missingGroupChoice = groups.some((group) => !(groupChoices[group.key]?.length));
-  const pending = createAgent.isPending || startAgent.isPending;
-  const canHire =
-    Boolean(template) &&
-    !missingGroupChoice &&
-    !hasIncompleteIntegration(skillCredentials);
-
-  const hireButtonLabel = createdAgent
-    ? pending
-      ? "Starting…"
-      : "Start again"
-    : pending
-      ? "Hiring…"
-      : "Hire Agent";
-
-  function handleTemplateChange(nextKey: string) {
-    const nextTemplate = templates.find((candidate) => candidate.templateKey === nextKey);
-    setTemplateKey(nextKey);
-    setError(null);
-
-    if (!nextTemplate) {
-      setSelectedSkillIds([]);
-      setSkillCredentials([]);
-      setGroupChoices({});
-      return;
+  if (!isTrial) {
+    // An organization at its agent limit is refused by the API, so say so before the form.
+    const agentLimit = organization?.agentLimit;
+    if (organization?.agentLimitReached && agentLimit != null) {
+      return (
+        <DialogShell shadeClick={onClose}>
+          <header className="flex items-start justify-between border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
+            <div>
+              <h2 className="m-0 text-xl font-semibold tracking-tight">Your organization has all its agents</h2>
+              <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>
+                This organization can have {agentLimit} {agentLimit === 1 ? "agent" : "agents"}.
+              </p>
+            </div>
+            <button type="button" aria-label="Close hiring dialog" className="af-btn af-btn-ghost af-btn-icon" onClick={onClose}><X size={18} aria-hidden /></button>
+          </header>
+          <footer className="flex justify-end px-6 py-4">
+            <button type="button" className="af-btn" onClick={onClose}>Close</button>
+          </footer>
+        </DialogShell>
+      );
     }
-
-    const { standalone: nextStandalone } = splitRequiredSkills(nextTemplate.requiredSkills);
-    const requiredProviders = [
-      ...new Set(nextStandalone.flatMap((skill) => skill.requiredProviders)),
-    ].filter((provider) => !isAutoConfiguredProvider(provider));
-    setSelectedSkillIds(nextStandalone.map((skill) => skill.id));
-    setGroupChoices({});
-    setSkillCredentials((current) => credentialsForProviders(requiredProviders, current));
+    return <HireFormDialog onClose={onClose} onHired={onHired} />;
   }
 
-  function handleGroupChoiceChange(groupKey: string, skillId: string) {
-    setGroupChoices((current) => {
-      const selected = current[groupKey] ?? [];
-      const next = selected.includes(skillId)
-        ? selected.filter((id) => id !== skillId)
-        : [...selected, skillId];
-      return { ...current, [groupKey]: next };
-    });
+  // An explicit dashboard choice advances as soon as its capacity check succeeds.
+  // Latch that transition: this Agent may itself fill the trial during creation.
+  if (initialChoice && started === null && !disabled) {
+    setStarted(initialChoice);
+    return null;
   }
 
-  async function hire() {
-    if (!template || !name.trim() || !canHire) return;
-    setError(null);
-    setProvisioningFailure(null);
-
-    if (createdAgent) {
-      await startCreatedAgent(createdAgent);
-      return;
-    }
-
-    const skillIds = [
-      ...new Set([
-        ...selectedSkillIds,
-        ...Object.values(groupChoices).flat(),
-      ]),
-    ];
-    const requiredSkillVersions = [
-      ...standalone,
-      ...groups.flatMap((group) =>
-        (groupChoices[group.key] ?? [])
-          .map((id) => group.members.find((member) => member.id === id))
-          .filter((skill): skill is (typeof standalone)[number] => skill !== undefined),
-      ),
-    ].map((skill) => ({ skillId: skill.id, version: skill.version }));
-    const manualSecrets = skillCredentials
-      .filter(
-        (draft) =>
-          !draft.sharedCredentialId &&
-          !isAutoConfiguredProvider(draft.provider) &&
-          !isSignInOnlyProvider(draft.provider),
-      )
-      .map((draft) => ({
-        provider: draft.provider,
-        content: coerceBooleanFields(
-          draft.provider === "github"
-            ? expandGithubContent(draft.content)
-            : draft.content,
-        ),
-      }));
-    const sharedCredentials = skillCredentials
-      .filter((draft) => draft.sharedCredentialId)
-      .map((draft) => ({ sharedCredentialId: draft.sharedCredentialId! }));
-
-    try {
-      const approval = agentType === "hermes" ? { approvalMode } : {};
-      const agent = await createAgent.mutateAsync({
-        name: name.trim(),
-        agentType,
-        templateKey: template.templateKey,
-        templateVersion: template.version,
-        ...(model ? { model } : {}),
-        ...(skillIds.length > 0 ? { skillIds } : {}),
-        ...(requiredSkillVersions.length > 0 ? { skillVersions: requiredSkillVersions } : {}),
-        ...(manualSecrets.length > 0 ? { secrets: manualSecrets } : {}),
-        ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
-        ...approval,
-      });
-      setCreatedAgent({ id: agent.id, name: agent.name });
-      await startCreatedAgent({ id: agent.id, name: agent.name });
-    } catch (cause) {
-      reportHireFailure(cause);
-    }
-  }
-
-  async function startCreatedAgent(agent: { id: string; name: string }) {
-    if (!template) return;
-    try {
-      await startAgent.mutateAsync(agent.id);
-      onHired({ name: agent.name, role: template.templateName });
-    } catch (cause) {
-      reportHireFailure(cause);
-    }
-  }
-
-  function reportHireFailure(cause: unknown) {
-    const failure = provisioningFailureOf(cause);
-    if (failure) {
-      setProvisioningFailure(failure);
-      return;
-    }
-    setError(cause instanceof Error ? cause.message : "Could not hire the Agent.");
-  }
-
-  // An organization at its agent limit is refused by the API, so say so before the form.
-  if (agentLimit != null && agentCount >= agentLimit) {
+  if (started === "custom") return <HireFormDialog onClose={onClose} onHired={onHired} />;
+  if (started === "ready") return <QuickStartDialog onClose={onClose} onHired={onHired} />;
+  if (initialChoice && !full && !unavailable) {
     return (
       <DialogShell shadeClick={onClose}>
-        <header className="flex items-start justify-between border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
-          <div>
-            <h2 className="m-0 text-xl font-semibold tracking-tight">
-              {selectedOrganization?.isTrial ? "Your trial has all its agents" : "Your organization has all its agents"}
-            </h2>
-            <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>
-              This organization can have {agentLimit} {agentLimit === 1 ? "agent" : "agents"}.
-            </p>
-          </div>
-          <button type="button" aria-label="Close hiring dialog" className="af-btn af-btn-ghost af-btn-icon" onClick={onClose}><XIcon /></button>
-        </header>
-        <footer className="flex justify-end px-6 py-4">
-          <button type="button" className="af-btn" onClick={onClose}>Close</button>
-        </footer>
+        <div className="p-6">
+          <p role="status" className="m-0">Checking your trial&apos;s agent limit…</p>
+          <button type="button" aria-label="Close hiring dialog" className="af-btn mt-4" onClick={onClose}>Cancel</button>
+        </div>
       </DialogShell>
     );
   }
 
   return (
-    <DialogShell shadeClick={pending ? undefined : onClose}>
-      <header className="flex items-start justify-between border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
+    <DialogShell shadeClick={onClose}>
+      <header className="flex items-start justify-between gap-4 border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
         <div>
-          <div className="mb-1 text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-3)" }}>New Agent</div>
-          <h2 className="m-0 text-xl font-semibold tracking-tight">Hire a headless Agent</h2>
-          <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>Start with the runtime. Add a messaging platform or several connections afterward.</p>
+          <h2 className="m-0 text-xl font-semibold tracking-tight">How would you like to start?</h2>
+          <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>A ready-made assistant, or an agent built your way.</p>
         </div>
-        <button type="button" aria-label="Close hiring dialog" className="af-btn af-btn-ghost af-btn-icon" disabled={pending} onClick={onClose}><XIcon /></button>
+        <button type="button" aria-label="Close hiring dialog" className="af-btn af-btn-ghost af-btn-icon" onClick={onClose}><X size={18} aria-hidden /></button>
       </header>
-
-      <div className="grid flex-1 gap-5 overflow-y-auto p-6 sm:grid-cols-2">
-        {!createdAgent && (
-          <>
-        <FormField label="Agent name">
-          <input aria-label="Agent name" className="af-input" value={name} maxLength={255} onChange={(event) => setManualName(event.target.value)} autoFocus />
-          {suggestion.isLoading && <span role="status">Suggesting a name…</span>}
-          {suggestion.error && (
-            <span role="alert">
-              Could not suggest a name. Enter one or{" "}
-              <button type="button" onClick={() => void suggestion.retry()}>Retry name suggestion</button>.
-            </span>
-          )}
-        </FormField>
-        <FormField label="Runtime">
-          <Select value={agentType} onValueChange={(value) => setAgentType(value as "openclaw" | "hermes")}>
-            <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent><SelectGroup><SelectItem value="hermes">Hermes</SelectItem><SelectItem value="openclaw">OpenClaw</SelectItem></SelectGroup></SelectContent>
-          </Select>
-        </FormField>
-        <FormField label="Template" hint="Communication connections do not belong to templates or runtimes.">
-          <Select value={templateKey} onValueChange={handleTemplateChange} disabled={isLoading || pending}>
-            <SelectTrigger className="w-full"><SelectValue placeholder={isLoading ? "Loading templates…" : "Choose a template"} /></SelectTrigger>
-            <SelectContent><SelectGroup>{templates.map((item) => <SelectItem key={`${item.templateKey}:${item.version}`} value={item.templateKey}>{item.templateName} · v{item.version}</SelectItem>)}</SelectGroup></SelectContent>
-          </Select>
-        </FormField>
-        <FormField label="Model">
-          <ModelChoice
-            value={model}
-            effectiveDefaultModel={defaultModel}
-            onChange={setModel}
-            disabled={pending}
-          />
-        </FormField>
-        {agentType === "hermes" && (
-          <FormField label="Command approval">
-            <Select value={approvalMode} onValueChange={(value) => setApprovalMode(value as "manual" | "auto" | "off")} disabled={pending}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent><SelectGroup><SelectItem value="auto">Automatic</SelectItem><SelectItem value="manual">Manual</SelectItem><SelectItem value="off">Off</SelectItem></SelectGroup></SelectContent>
-            </Select>
-          </FormField>
+      <div className="overflow-y-auto p-6">
+        {checking && <p role="status">Checking your trial&apos;s agent limit…</p>}
+        {unavailable && <div role="alert" className="mb-5"><p>We couldn&apos;t check your trial&apos;s agent limit.</p><button type="button" className="af-btn" onClick={() => void refetch()}>Try again</button></div>}
+        {full && (
+          <div role="status" className="mb-5 rounded-xl border p-4" style={{ background: "var(--warn-soft)", borderColor: "var(--line)", color: "var(--ink-2)" }}>
+            <p className="m-0 font-semibold">Your trial includes {limit} {limit === 1 ? "agent" : "agents"}, and you&apos;re using {limit === 1 ? "it" : "all of them"}.</p>
+            <p className="mb-0 mt-2 text-sm">To try a different agent, delete an existing agent to free a slot. Stopping an agent doesn&apos;t free a slot.</p>
+            <p className="mb-0 mt-2 text-sm">If you can&apos;t see or delete it, ask an organization owner.</p>
+          </div>
         )}
-        <div className="rounded-xl border border-dashed p-4 text-sm" style={{ color: "var(--ink-3)" }}>
-          {template?.requiredSkills.length
-            ? "Communication connections are configured after hiring. Credentials required by this template are configured before hiring."
-            : "Communication connections and integration credentials are configured independently after hiring."}
+        <div role="radiogroup" aria-label="How to hire" className="grid gap-3 sm:grid-cols-2">
+          {([
+            { value: "ready", icon: WandSparkles, title: "Ready-made assistant", description: "A general-purpose assistant on Hermes, using your organization's default model. Chat on the web or connect Telegram afterward." },
+            { value: "custom", icon: Wrench, title: "Build your own", description: "Choose your template, runtime, model and skills. Add channels whenever you're ready." },
+          ] as const).map(({ value, icon: Icon, title, description }) => (
+            <button key={value} type="button" role="radio" aria-checked={selected === value} data-choice={value} tabIndex={selected === value || (selected === null && value === "ready") ? 0 : -1} disabled={disabled} onClick={() => setSelected(value)} onKeyDown={(event) => {
+              if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+              event.preventDefault();
+              const next = value === "ready" ? "custom" : "ready";
+              setSelected(next);
+              event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-choice="${next}"]`)?.focus();
+            }} className="flex flex-col items-start gap-3 rounded-xl border p-5 text-left disabled:cursor-not-allowed disabled:opacity-60" style={{ borderColor: selected === value ? "var(--ink)" : "var(--line)", background: selected === value ? "var(--bg-soft)" : "var(--bg-elev)" }}>
+              <span className="flex w-full items-center justify-between"><Icon size={22} aria-hidden />{selected === value && <Check size={16} aria-hidden />}</span>
+              <span className="font-semibold">{title}</span>
+              <span className="text-sm leading-relaxed" style={{ color: "var(--ink-3)" }}>{description}</span>
+            </button>
+          ))}
         </div>
-
-        {template && template.requiredSkills.length > 0 && (
-          <section className="flex flex-col gap-3 border-t pt-5 sm:col-span-2" style={{ borderColor: "var(--line)" }}>
-            <div>
-              <h3 className="m-0 text-base font-semibold" style={{ color: "var(--ink)" }}>Template skills and credentials</h3>
-              <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>
-                Required skills are assigned as part of creation. Their credentials are validated by the server before anything is saved.
-              </p>
-            </div>
-            <SkillsStep
-              key={`${template.templateKey}:${template.version}`}
-              selectedSkillIds={selectedSkillIds}
-              skillCredentials={skillCredentials}
-              onSkillIdsChange={setSelectedSkillIds}
-              onSkillCredentialsChange={setSkillCredentials}
-              templateRequiredSkills={standalone}
-              requiredGroups={groups}
-              groupChoices={groupChoices}
-              onGroupChoiceChange={handleGroupChoiceChange}
-              credentialError={error}
-            />
-          </section>
-        )}
-          </>
-        )}
-
-        {provisioningFailure && (
-          <AgentErrorBanner
-            failure={provisioningFailure}
-            className="sm:col-span-2"
-            testId="hire-provisioning-error"
-          >
-          </AgentErrorBanner>
-        )}
-
-        {error && (createdAgent || !template?.requiredSkills.length || skillCredentials.length === 0) && (
-          <CredentialErrorAlert
-            title={createdAgent ? "Could not start Agent" : "Could not hire Agent"}
-            message={error}
-          />
-        )}
-        {createdAgent && (provisioningFailure || error) && (
-          <p className="m-0 text-sm sm:col-span-2">
-            {createdAgent.name} was created and is waiting on your team page.
-          </p>
-        )}
-
       </div>
-
-      <footer className="flex justify-end gap-2 border-t px-6 py-4" style={{ borderColor: "var(--line)" }}>
-        <button type="button" className="af-btn" disabled={pending} onClick={onClose}>Cancel</button>
-        <button type="button" className="af-btn af-btn-primary" disabled={pending || !template || !name.trim() || !canHire} onClick={() => void hire()}>
-          {hireButtonLabel}
-        </button>
+      <footer className="flex flex-wrap justify-end gap-2 border-t px-6 py-4" style={{ borderColor: "var(--line)" }}>
+        <button type="button" className="af-btn" onClick={onClose}>Cancel</button>
+        {full ? (
+          <button type="button" className="af-btn af-btn-primary" onClick={() => { onClose(); router.push(`/dashboard/${selectedOrganization!.id}`); }}>View your agents</button>
+        ) : (
+          <button type="button" className="af-btn af-btn-primary" disabled={disabled || selected === null} onClick={() => setStarted(selected)}>Continue <ArrowRight size={16} aria-hidden /></button>
+        )}
       </footer>
     </DialogShell>
   );

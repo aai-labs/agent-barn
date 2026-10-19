@@ -406,7 +406,6 @@ jobs:
           AGENT_DEFAULT_LLM_BUDGET_USD: ${{ github.ref_name == 'staging' && vars.STAGING_AGENT_DEFAULT_LLM_BUDGET_USD || vars.AGENT_DEFAULT_LLM_BUDGET_USD }}
           # Public trial signup, opted into per environment; an unset variable means off,
           # never the other environment's setting.
-          SELF_SIGNUP_ENABLED: ${{ github.ref_name == 'staging' && (vars.STAGING_SELF_SIGNUP_ENABLED || 'false') || (vars.SELF_SIGNUP_ENABLED || 'false') }}
           # Per environment; empty means the default of 10, and an unset staging
           # variable gets that default rather than production's limit.
           ORGANIZATION_DEFAULT_AGENT_LIMIT: ${{ github.ref_name == 'staging' && vars.STAGING_ORGANIZATION_DEFAULT_AGENT_LIMIT || github.ref_name != 'staging' && vars.ORGANIZATION_DEFAULT_AGENT_LIMIT || '' }}
@@ -427,6 +426,8 @@ jobs:
           PAYMENTS_ENABLED: ${{ github.ref_name == 'staging' && (vars.STAGING_PAYMENTS_ENABLED || 'false') || (vars.PAYMENTS_ENABLED || 'false') }}
           STRIPE_SECRET_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_STRIPE_SECRET_KEY || github.ref_name != 'staging' && secrets.STRIPE_SECRET_KEY || '' }}
           STRIPE_WEBHOOK_SECRET: ${{ github.ref_name == 'staging' && secrets.STAGING_STRIPE_WEBHOOK_SECRET || github.ref_name != 'staging' && secrets.STRIPE_WEBHOOK_SECRET || '' }}
+          ONEDRIVE_SYNC_CLIENT_ID: ${{ vars.ONEDRIVE_SYNC_CLIENT_ID }}
+          ONEDRIVE_SYNC_CLIENT_SECRET: ${{ secrets.ONEDRIVE_SYNC_CLIENT_SECRET }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           SENDER_EMAIL: ${{ github.ref_name == 'staging' && vars.STAGING_SENDER_EMAIL || vars.SENDER_EMAIL }}

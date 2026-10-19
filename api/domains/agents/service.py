@@ -94,6 +94,7 @@ from api.domains.agents.models import (
     CommandApprovalMode,
     ConfluenceContent,
     FirecrawlContent,
+    GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
     ManagedUpdateOutcome,
@@ -148,6 +149,9 @@ from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.credential_gateway.models import gateway_token_env_var
 from api.domains.credential_gateway.service import CredentialGatewayService
+from api.domains.custom_api.models import CustomApiConnection
+from api.domains.custom_api.repository import CustomApiRepository
+from api.domains.custom_api.runtime import connection_snapshot, materialize_custom_api
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -212,6 +216,10 @@ _CREDENTIAL_FIELDS = frozenset(
 
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
+
+# Google-backed providers whose credential may omit its OAuth client, in which case the
+# server-owned client is filled in at agent start and before live validation.
+_GOOGLE_OAUTH_PROVIDERS = (SecretProvider.GOOGLE_WORKSPACE, SecretProvider.GMAIL)
 
 RESTORE_POINT_IN_FLIGHT_DETAIL = (
     "A restore point capture or restore is still running for this Agent. Wait for it to finish."
@@ -335,6 +343,7 @@ class AgentService:
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
     credential_gateway: CredentialGatewayService
+    custom_api: CustomApiRepository
     integrations: IntegrationRepository
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
@@ -2156,6 +2165,7 @@ class AgentService:
         *,
         preflight: bool = False,
         isolation_overrides: Mapping[SecretProvider, bool] | None = None,
+        custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
     ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
@@ -2359,21 +2369,21 @@ class AgentService:
                     ),
                 ) from exc
         self._backfill_google_client_credentials(decrypted)
-        # Only google_workspace is materialized. The retired per-service Google providers
-        # and their rows were deleted by migration; affected agents must reconnect through
-        # Google Workspace.
-        gws_content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
-        if isinstance(gws_content, GoogleWorkspaceContent) and (
-            not gws_content.client_id or not gws_content.client_secret
-        ):
-            raise AgentProvisioningPrecondition(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
-                    "and Google OAuth is not configured on this server. Reconnect via "
-                    "Authenticate with Google, or configure google_cloud_client_id/secret."
-                ),
-            )
+        # A Google refresh token is useless without the client it was issued under: either
+        # the credential's own, or the server-owned one backfilled just above.
+        for google_provider in _GOOGLE_OAUTH_PROVIDERS:
+            google_content = decrypted.get(google_provider)
+            if isinstance(google_content, (GoogleWorkspaceContent, GmailContent)) and (
+                not google_content.client_id or not google_content.client_secret
+            ):
+                raise AgentProvisioningPrecondition(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"{PROVIDER_DISPLAY_NAMES[google_provider]} is missing a client id/secret "
+                        "and Google OAuth is not configured on this server. Reconnect via "
+                        "Authenticate with Google, or configure google_cloud_client_id/secret."
+                    ),
+                )
         policies = self.integrations.policies(agent.id)
         default_firecrawl = SecretProvider.FIRECRAWL not in decrypted and bool(
             self.config.agent_firecrawl_api_key and self.config.agent_firecrawl_base_url
@@ -2420,6 +2430,20 @@ class AgentService:
                 "isolated": policies[SecretProvider.FIRECRAWL],
                 "source": "platform_default",
             }
+        custom_connections = self.custom_api.runtime_connections(agent.id)
+        if custom_api_overrides:
+            by_id: dict[UUID, CustomApiConnection | None] = {row.id: row for row in custom_connections}
+            by_id.update(custom_api_overrides)
+            custom_connections = sorted((row for row in by_id.values() if row is not None), key=lambda row: row.slug)
+        snapshot.update(connection_snapshot(custom_connections))
+        custom_artifacts = materialize_custom_api(
+            custom_connections,
+            self.config.agent_token_encryption_key,
+            self.config.credential_gateway_base_url,
+            self.custom_api,
+            home_dir=aai_home,
+            store_dir=aai_store_dir,
+        )
         gateway_tokens = []
         if not preflight:
             runtime = self.integrations.begin(agent.id, snapshot)
@@ -2430,9 +2454,24 @@ class AgentService:
                 bindings,
                 replace(runtime_context, gateway_tokens={issued.provider: issued.value for issued in gateway_tokens}),
             )
+        if not preflight:
+            custom_artifacts = materialize_custom_api(
+                custom_connections,
+                self.config.agent_token_encryption_key,
+                self.config.credential_gateway_base_url,
+                self.custom_api,
+                runtime.generation,
+                home_dir=aai_home,
+                store_dir=aai_store_dir,
+            )
+        secret.string_data.update(custom_artifacts.env)
         secret.string_data.update(artifacts.env)
-        aai_config_toml = artifacts.files.get("aai-cli-config.toml")
-        aai_setup_sh = artifacts.files["aai-cli-setup.sh"]
+        aai_config_toml = artifacts.files.get("aai-cli-config.toml") or (
+            f'secrets_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/aai-secrets.enc.json"\n'
+            f'key_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/key"\n'
+        )
+        aai_config_toml += "\n" + custom_artifacts.files["custom-api-profiles.toml"]
+        aai_setup_sh = artifacts.files["aai-cli-setup.sh"] + custom_artifacts.files["custom-api-setup.sh"]
         gog_setup_sh = artifacts.files.get("gog-setup.sh")
         gog_shim_sh = artifacts.files.get("gog-shim.sh")
         fc_api_key = artifacts.env.get("FIRECRAWL_API_KEY", self.config.agent_firecrawl_api_key)
@@ -2598,6 +2637,8 @@ class AgentService:
                 gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
             )
+
+        config_map.data["AGENTS.md"] += custom_artifacts.policy_md
 
         if preflight:
             return previous_status
@@ -3256,17 +3297,18 @@ class AgentService:
         return options
 
     def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
-        """Inject the server-owned OAuth client when a Google Workspace secret omits it.
+        """Inject the server-owned OAuth client when a Google-backed secret omits it.
 
         Backfill only when empty so a user-supplied client (the one the refresh token
         was issued under) keeps working.
         """
-        content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
-        if isinstance(content, GoogleWorkspaceContent):
-            if not content.client_id:
-                content.client_id = self.config.google_cloud_client_id
-            if not content.client_secret:
-                content.client_secret = self.config.google_cloud_client_secret
+        for provider in _GOOGLE_OAUTH_PROVIDERS:
+            content = decrypted.get(provider)
+            if isinstance(content, (GoogleWorkspaceContent, GmailContent)):
+                if not content.client_id:
+                    content.client_id = self.config.google_cloud_client_id
+                if not content.client_secret:
+                    content.client_secret = self.config.google_cloud_client_secret
 
     def _refuse_forgetting_granted_sites(self, agent_id: UUID) -> None:
         """Removing SharePoint would forget sites still granted to the Teams app, which its next
@@ -3292,7 +3334,7 @@ class AgentService:
             return
 
         validation_content = content
-        if provider == SecretProvider.GOOGLE_WORKSPACE and isinstance(content, GoogleWorkspaceContent):
+        if provider in _GOOGLE_OAUTH_PROVIDERS and isinstance(content, (GoogleWorkspaceContent, GmailContent)):
             # The stored payload may intentionally omit the deployment-owned OAuth client;
             # validate with the same server-side backfill used during runtime materialization
             # without changing the caller's encrypted payload.
