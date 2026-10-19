@@ -74,3 +74,13 @@ _REAL_BOOTSTRAPS = {
 @pytest.mark.parametrize("bootstrap_md", _REAL_BOOTSTRAPS.values(), ids=_REAL_BOOTSTRAPS.keys())
 def test_real_bootstraps_are_not_placeholders(bootstrap_md: str) -> None:
     assert not is_placeholder_bootstrap(bootstrap_md)
+
+
+def test_onboarding_seed_starts_with_no_user_memory_entries() -> None:
+    assert (SEEDS_DIR / ONBOARDING_TEMPLATE_KEY / "user.md").read_text(encoding="utf-8") == ""
+
+
+def test_onboarding_script_asks_for_one_new_user_memory_entry() -> None:
+    script = (SEEDS_DIR / ONBOARDING_TEMPLATE_KEY / "bootstrap.md").read_text(encoding="utf-8")
+
+    assert "3. Add one user-memory entry with their name and what they want help with." in script

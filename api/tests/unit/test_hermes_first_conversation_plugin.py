@@ -1,5 +1,4 @@
 import importlib.util
-import json
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -60,7 +59,7 @@ def test_an_interactive_turn_carries_the_wrapper_and_the_script(plugin, state_di
 
     assert result is not None
     assert result["context"].startswith("[Agent Barn — first conversation]")
-    assert "finish_first_conversation" in result["context"]
+    assert "finish_first_conversation" not in result["context"]
     assert result["context"].endswith(_SCRIPT_TEXT)
 
 
@@ -101,10 +100,10 @@ def test_a_session_carries_the_script_once_and_hermes_replays_it(plugin, state_d
     _with_script(state_dir)
 
     first = _interactive_turn(plugin)
-    later = [_interactive_turn(plugin) for _ in range(3)]
+    later = [_interactive_turn(plugin) for _ in range(2)]
 
     assert _carries_script(first)
-    assert later == [None, None, None]
+    assert later == [None, None]
 
 
 def test_every_new_session_gets_one_copy_of_its_own(plugin, state_dir: Path) -> None:
@@ -119,36 +118,30 @@ def test_every_new_session_gets_one_copy_of_its_own(plugin, state_dir: Path) -> 
     assert telegram_again is None
 
 
-def test_the_cap_counts_every_turn_and_closes_on_the_seventh(plugin, state_dir: Path) -> None:
+def test_the_script_retires_after_the_third_turn_with_a_person(plugin, state_dir: Path) -> None:
     script = _with_script(state_dir)
 
-    six = [_interactive_turn(plugin) for _ in range(6)]
-    seventh = _interactive_turn(plugin)
+    three = [_interactive_turn(plugin) for _ in range(3)]
+    fourth = _interactive_turn(plugin)
 
-    assert _carries_script(six[0])
-    assert six[1:] == [None] * 5
-    assert _is_close_note(seventh)
+    assert _carries_script(three[0])
+    assert three[1:] == [None, None]
+    assert _is_close_note(fourth)
     assert not script.exists()
     assert not (state_dir / "bootstrap-turns").exists()
     assert _interactive_turn(plugin) is None
 
 
-def test_finishing_closes_each_session_that_got_the_script_exactly_once(plugin, state_dir: Path) -> None:
+def test_retiring_closes_each_session_that_got_the_script_exactly_once(plugin, state_dir: Path) -> None:
     script = _with_script(state_dir)
     _interactive_turn(plugin)
     _interactive_turn(plugin, session_id="connection:abc:main", platform="api_server")
+    _interactive_turn(plugin)
 
-    first = json.loads(plugin.finish_first_conversation({}))
-    second = json.loads(plugin.finish_first_conversation({}, task_id="t1"))
     telegram = [_interactive_turn(plugin) for _ in range(2)]
     web_chat = [_interactive_turn(plugin, session_id="connection:abc:main", platform="api_server") for _ in range(2)]
     stranger = _interactive_turn(plugin, session_id="agent:main:telegram:dm:99")
 
-    assert first == second
-    assert first["status"] == "done"
-    assert first["next"] == (
-        "Nothing from this turn has reached the person yet. Now write your complete reply to them."
-    )
     assert not script.exists()
     assert not (state_dir / "bootstrap-turns").exists()
     assert _is_close_note(telegram[0]) and telegram[1] is None
@@ -170,8 +163,9 @@ def test_finishing_closes_each_session_that_got_the_script_exactly_once(plugin, 
 )
 def test_runs_without_a_person_do_not_consume_the_close_note(plugin, state_dir: Path, overrides: dict) -> None:
     _with_script(state_dir)
-    _interactive_turn(plugin)
-    plugin.finish_first_conversation({})
+    for _ in range(3):
+        _interactive_turn(plugin)
+    _interactive_turn(plugin, session_id="connection:abc:main", platform="api_server")
 
     assert _interactive_turn(plugin, **overrides) is None
     assert _is_close_note(_interactive_turn(plugin))
@@ -179,36 +173,31 @@ def test_runs_without_a_person_do_not_consume_the_close_note(plugin, state_dir: 
 
 def test_concurrent_turns_in_one_session_carry_one_copy_and_count_each_turn(plugin, state_dir: Path) -> None:
     _with_script(state_dir)
-    barrier = threading.Barrier(6)
+    barrier = threading.Barrier(3)
     results: list[object] = []
 
     def turn() -> None:
         barrier.wait()
         results.append(_interactive_turn(plugin))
 
-    threads = [threading.Thread(target=turn) for _ in range(6)]
+    threads = [threading.Thread(target=turn) for _ in range(3)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
 
     assert sum(_carries_script(result) for result in results) == 1
-    assert (state_dir / "bootstrap-turns").read_text(encoding="utf-8") == "6"
+    assert (state_dir / "bootstrap-turns").read_text(encoding="utf-8") == "3"
     assert _is_close_note(_interactive_turn(plugin))
 
 
-def test_register_wires_the_hook_and_the_tool_under_its_own_toolset(plugin) -> None:
+def test_register_wires_only_the_hook(plugin) -> None:
     ctx = MagicMock()
 
     plugin.register(ctx)
 
     ctx.register_hook.assert_called_once_with("pre_llm_call", plugin.on_pre_llm_call)
-    tool = ctx.register_tool.call_args.kwargs
-    assert tool["name"] == "finish_first_conversation"
-    assert tool["toolset"] == "agentbarn-first-conversation"
-    assert tool["handler"] is plugin.finish_first_conversation
-    assert tool["schema"]["name"] == "finish_first_conversation"
-    assert tool["schema"]["parameters"] == {"type": "object", "properties": {}}
+    ctx.register_tool.assert_not_called()
 
 
 def test_manifest_names_the_plugin() -> None:

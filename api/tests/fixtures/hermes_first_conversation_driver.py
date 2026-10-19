@@ -71,10 +71,10 @@ def contexts(**kwargs) -> list:
 
 
 def check_plugin(config: dict) -> None:
-    if registry.get_entry("finish_first_conversation") is None:
-        fail("the finish tool was not registered")
-    if PLUGIN_ID not in _get_platform_tools(config, "telegram"):
-        fail("the finish tool's toolset is not offered on telegram")
+    if registry.get_entry("finish_first_conversation") is not None:
+        fail("the retired finish tool is still registered")
+    if PLUGIN_ID in _get_platform_tools(config, "telegram"):
+        fail("the plugin still offers a toolset on telegram")
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     (STATE_DIR / "BOOTSTRAP.md").write_text(SCRIPT)
@@ -85,15 +85,14 @@ def check_plugin(config: dict) -> None:
     carried = contexts()
     if len(carried) != 1 or not carried[0]["context"].endswith(SCRIPT):
         fail(f"an interactive telegram turn did not carry the script: {carried}")
-    if contexts():
-        fail("a second turn in the same session carried another copy of the script")
+    if contexts() or contexts():
+        fail("a later turn in the same session carried another copy of the script")
+    if not (STATE_DIR / "BOOTSTRAP.md").exists():
+        fail("the script was retired before the person's fourth message")
 
-    result = registry.dispatch("finish_first_conversation", {})
-    if '"done"' not in str(result):
-        fail(f"the finish tool returned {result!r}")
-    if (STATE_DIR / "BOOTSTRAP.md").exists():
-        fail("the finish tool left the script in place")
     closing = contexts()
+    if (STATE_DIR / "BOOTSTRAP.md").exists():
+        fail("the script was not retired on the person's fourth message")
     if len(closing) != 1 or SCRIPT in closing[0]["context"] or "script is complete" not in closing[0]["context"]:
         fail(f"the session that had the script was not closed once: {closing}")
     if contexts():

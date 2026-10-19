@@ -41,7 +41,7 @@ docker run --rm --network none \
     /driver.py
 
 # First-conversation plugin and its seed helper against Hermes' real plugin loader,
-# hook dispatch, tool registry and per-platform toolsets. Root, for the real /workspace.
+# hook dispatch and tool registry. Root, for the real /workspace.
 docker run --rm --network none --user root \
     -v "$repo_root/api/domains/agents/scripts/hermes/plugins/agentbarn-first-conversation:/plugin:ro" \
     -v "$repo_root/api/domains/agents/scripts/hermes/first-conversation-seed.py:/seed.py:ro" \
