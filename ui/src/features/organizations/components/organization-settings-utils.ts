@@ -1,4 +1,4 @@
-import { Brain, FileCode2, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
+import { Brain, FileCode2, FolderSync, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
 
 export type OrganizationSettingsSectionKey =
   | "agents"
@@ -91,6 +91,7 @@ export const ORGANIZATION_SETTINGS_ICONS = {
   "memory-access": Brain,
   "organization-memory": Brain,
   "shared-credentials": KeyRound,
+  sync: FolderSync,
 } as const;
 
 export function visibleOrganizationSettingsSections(canManage: boolean, isMembershipAdmin = canManage) {

@@ -947,7 +947,7 @@ test.describe("Agent configuration page", () => {
 
     test("offers Gmail with an app password but not Gmail sign-in", async ({ page }) => {
       const configurationPage = await openConfiguration(page, {});
-      await configurationPage.sectionButton("Integrations").click();
+      await configurationPage.sectionLink("Integrations").click();
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
 
@@ -958,7 +958,7 @@ test.describe("Agent configuration page", () => {
 
     test("does not offer the skill that needs Gmail sign-in", async ({ page }) => {
       const configurationPage = await openConfiguration(page, { skills: [] });
-      await configurationPage.sectionButton("Skills").click();
+      await configurationPage.sectionLink("Skills").click();
       const section = page.locator('section[aria-label="Skills"]');
 
       await expect(section.getByText(mockCustomSkill.name, { exact: true })).toBeVisible();
@@ -969,7 +969,7 @@ test.describe("Agent configuration page", () => {
       const configurationPage = await openConfiguration(page, {
         secrets: [{ provider: "gmail", secret_name: "Gmail credential", source: "agent_secret" }],
       });
-      await configurationPage.sectionButton("Integrations").click();
+      await configurationPage.sectionLink("Integrations").click();
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
 
@@ -1195,7 +1195,7 @@ test.describe("Agent configuration page", () => {
         await route.fulfill({ json: { ...mockAgent, status: "STOPPED" } });
       });
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Integrations").click();
+      await configurationPage.sectionLink("Integrations").click();
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
       return { section, sent };
