@@ -70,7 +70,7 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 AF-381 (prepaid credit) adds, all projected by `security_audit.projection`:
 
 - `organization.trial.ended` is also emitted when a credit purchase converts a trial (actor: the payment system, `actor_display` "Credit purchase").
-- `organization.trial.expired` — emitted once when a trial runs out of credit; it then no longer counts toward the cap on active trials. Emitted by the `organization.trial_expiry.projection` Event Handler, which handles `organization.llm_budget.exhausted` (alongside the budget email handler).
+- `organization.trial.expired` — emitted once when a trial runs out of credit; it then no longer counts toward the cap on active trials. Emitted by the `organization.trial_expiry.projection` Event Handler, which handles `organization.llm_budget.exhausted` (alongside the budget email and product analytics handlers).
 - `organization.agent_limit.changed` — emitted atomically when a Platform Administrator sets or clears an Organization's own Agent limit, with the previous and current limit (`null` follows the default).
 - `platform.billing_settings.changed` — emitted atomically when a Platform Administrator changes a billing setting (`payments_enabled`, `min_purchase_usd`, `max_purchase_usd`, `purchase_fee_percent`), one event per setting that moved, same payload shape as `platform.trial_settings.changed`.
 - `platform.organization_settings.changed` — the same, for the platform's Organization settings (`default_agent_limit`).
