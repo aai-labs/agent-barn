@@ -7,6 +7,8 @@ ordinary Organization that stays on credit, whether or not it had expired.
 
 from decimal import Decimal
 
+import pytest
+from fastapi import status
 from hamcrest import assert_that, empty, equal_to, has_entries, is_not, none, not_none
 
 from api.domains.events import ActorIdentity, ActorIdentityType
@@ -17,8 +19,13 @@ from api.domains.organizations.service import OrganizationService
 from api.domains.users.repository import UserRepository
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 from api.tests.core.givenpy import given, then, when
-from api.tests.integration.test_spend_limits import events_named
-from api.tests.integration.test_trial_organizations import _setup, auth, the_organization_is_a_trial
+from api.tests.integration.test_spend_limits import PLATFORM_BUDGET, events_named
+from api.tests.integration.test_trial_organizations import (
+    _setup,
+    a_platform_admin_token,
+    auth,
+    the_organization_is_a_trial,
+)
 
 SYSTEM = ActorIdentity(type=ActorIdentityType.SYSTEM, id="test")
 
@@ -77,6 +84,40 @@ def test_the_organization_read_says_the_trial_has_expired():
         response = context.client.get(f"/api/v1/organizations/{context.organization.id}", headers=auth(context))
 
         assert_that(response.json(), has_entries(is_trial=True, trial_expired_at=not_none()))
+
+
+def test_a_platform_top_up_revives_an_expired_trial_under_the_cap():
+    """It can spend again, so it counts as active again. If the top-up still leaves it
+    spent, the next budget check alerts again (a new limit re-arms it) and expires it."""
+    with given(_setup(the_organization_is_a_trial(), the_trial_has_its_credit(), a_platform_admin_token())) as context:
+        expire(context)
+
+        with when("a platform administrator raises its credit"):
+            response = context.client.put(
+                PLATFORM_BUDGET.format(organization_id=context.organization.id),
+                json={"budget_usd": 25},
+                headers=auth(context),
+            )
+
+        with then("it is an active trial again, counted under the cap"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that((stored(context).is_trial, stored(context).trial_expired_at), equal_to((True, None)))
+            assert_that(context.injector.get(OrganizationLookupService).count_trials(), equal_to(1))
+
+
+@pytest.mark.parametrize("budget_usd", [10, 5], ids=["unchanged", "lowered"])
+def test_a_platform_change_that_adds_no_credit_leaves_a_trial_expired(budget_usd):
+    with given(_setup(the_organization_is_a_trial(), the_trial_has_its_credit(), a_platform_admin_token())) as context:
+        expire(context)
+
+        response = context.client.put(
+            PLATFORM_BUDGET.format(organization_id=context.organization.id),
+            json={"budget_usd": budget_usd},
+            headers=auth(context),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(stored(context).trial_expired_at, not_none())
 
 
 def test_buying_credit_converts_an_expired_trial_and_keeps_it_on_credit():

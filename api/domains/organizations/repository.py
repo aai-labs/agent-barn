@@ -280,6 +280,10 @@ class OrganizationRepository:
                     self._add_credit_grant(
                         session, organization_id, CreditGrantKind.ADJUSTMENT, difference, actor_display=actor_display
                     )
+                if difference > 0:
+                    # Credit to spend again makes an expired trial active again. Still spent
+                    # after it, the next budget check alerts anew and expires it again.
+                    organization.trial_expired_at = None
             own = None if on_credit else organization.llm_own_budget_usd
             lowered = own is not None and own > ceiling_usd
             return self._write_llm_budgets(
