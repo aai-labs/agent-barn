@@ -22,12 +22,12 @@ _LEGACY_ISOLATED = frozenset(
 
 def legacy_isolation(provider: SecretProvider) -> bool:
     """Preserve routes for pre-policy credentials; never downgrade missing legacy rows."""
-    return provider in _LEGACY_ISOLATED
+    return provider in _LEGACY_ISOLATED or not ISOLATION_CAPABILITIES[provider].supports_direct
 
 
 def default_isolation(provider: SecretProvider) -> bool:
-    """New bindings opt in to isolation explicitly."""
-    return False
+    """New bindings opt in to isolation explicitly, unless the provider has no direct route."""
+    return not ISOLATION_CAPABILITIES[provider].supports_direct
 
 
 def isolation_read(provider: SecretProvider, isolated: bool | None) -> IntegrationIsolationRead:
