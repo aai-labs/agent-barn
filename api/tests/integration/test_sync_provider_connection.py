@@ -35,6 +35,7 @@ from api.domains.agents.microsoft_identity import MicrosoftIdentityError, Micros
 from api.domains.agents.models import AgentSecret, GrantedSite, SecretProvider, SharePointContent, encrypt_content
 from api.domains.agents.sharepoint_service import SignInState, encode_sign_in_state
 from api.domains.sync_provider.models import SyncProviderStatus
+from api.domains.sync_provider.plugins.base import SyncProviderError
 from api.domains.sync_provider.repository import SyncProviderRepository
 from api.domains.sync_provider.service import SyncProviderState, encode_state
 from api.domains.users.organization_users.models import OrganizationRole
@@ -743,6 +744,17 @@ def test_a_provider_without_a_location_picker_connects_at_sign_in():
             assert connection is not None
             assert_that(connection.provider_data, equal_to({"grant": "g1"}))
             assert_that(connection.credentials_encrypted, none())
+
+
+def test_an_unclassified_provider_failure_is_a_bad_gateway():
+    with given(_given(other_drive=True)) as context:
+        other_drive(context).sign_in_failure = SyncProviderError("Other Drive said no for an unknown reason.")
+
+        response = _sign_in(context, _consent_state(context, OTHER_DRIVE), provider_key=OTHER_DRIVE)
+
+        assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY))
+        assert_that(response.json()["detail"], equal_to("Other Drive said no for an unknown reason."))
+        assert_that(_repository(context).get_open(context.organization.id, OTHER_DRIVE), none())
 
 
 def test_a_provider_without_a_location_picker_has_no_locations():

@@ -81,7 +81,6 @@ from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import AGENT_SECRET_ADDED, AGENT_SECRET_UPDATED
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.sync_provider.lookup import SyncProviderLookupService
-from api.domains.sync_provider.plugins.onedrive import ONEDRIVE_PROVIDER_KEY
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
@@ -763,7 +762,7 @@ class SharePointService:
 
     def _refuse_onedrive_folder_site(self, organization_id: UUID, site_ids: Iterable[str]) -> None:
         """No Agent may be granted the site holding the Organization's OneDrive sync folder."""
-        folder_site_id = self.sync_provider.folder_location_id(organization_id, ONEDRIVE_PROVIDER_KEY)
+        folder_site_id = self.sync_provider.sharepoint_folder_site_id(organization_id)
         if folder_site_id is not None and folder_site_id.lower() in {site_id.lower() for site_id in site_ids}:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ONEDRIVE_FOLDER_SITE)
 

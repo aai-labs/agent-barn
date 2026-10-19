@@ -9,7 +9,7 @@ Connecting an Organization to storage is a generic sync provider with one plugin
 ## Decision
 
 - **Provider seam.** `SyncProviderPlugin` and the code-owned `SyncProviderPluginRegistry` live under `api/domains/sync_provider/plugins/` and are registered in `AppModule`, like Platform Plugins.
-  - A plugin talks only to its provider and never touches the database or another domain.
+  - A plugin talks only to its provider. It depends only on that provider's HTTP clients, never on another domain's services or repositories, and never touches the database. OneDrive reuses the Microsoft identity and Graph clients in `api/domains/agents/`, which it shares with the SharePoint integration.
   - A check another domain owns is named by a typed `SyncLocationGuard` and bound in the service, as `TokenBrokerService` is for Integration Plugins.
   - The table (`sync_provider_connection`), the routes (`…/sync-providers/{provider_key}/…`) and the Sync settings UI are generic, and provider wording comes from the plugin's descriptor.
 - **One connection at a time.** This rule lives only in `SyncProviderService._blocking_connection` and the partial unique index on `organization_id`. Everything else is keyed by provider.

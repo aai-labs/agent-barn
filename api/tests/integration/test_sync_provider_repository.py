@@ -14,6 +14,7 @@ from api.tests.core.givenpy import given
 from api.tests.core.modules import prepare_injector
 from api.tests.steps.database import database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization
+from api.tests.steps.sync_provider import OTHER_DRIVE, OtherDriveModule
 
 _ONEDRIVE = "onedrive"
 _DROPBOX = "dropbox"
@@ -295,14 +296,33 @@ def test_deleting_the_organization_deletes_its_connection():
             assert_that(session.get(SyncProviderConnection, created.id), none())
 
 
-def test_the_lookup_names_the_active_folder_location_for_that_provider():
+def test_the_lookup_names_the_sharepoint_folder_site_of_an_active_connection():
     with given(_GIVEN) as context:
         lookup = context.injector.get(SyncProviderLookupService)
         pending = _create_pending(context)
-        assert_that(lookup.folder_location_id(context.organization.id, _ONEDRIVE), none())
+        assert_that(lookup.sharepoint_folder_site_id(context.organization.id), none())
 
         _activate(context, pending)
 
-        assert_that(lookup.folder_location_id(context.organization.id, _ONEDRIVE), equal_to(_SITE_ID))
-        assert_that(lookup.folder_location_id(context.organization.id, _DROPBOX), none())
-        assert_that(lookup.folder_location_id(uuid7(), _ONEDRIVE), none())
+        assert_that(lookup.sharepoint_folder_site_id(context.organization.id), equal_to(_SITE_ID))
+        assert_that(lookup.sharepoint_folder_site_id(uuid7()), none())
+
+
+def test_the_lookup_ignores_a_provider_without_the_sharepoint_guard():
+    with given(
+        [prepare_injector(modules=[OtherDriveModule()]), database_repo_is_ready(), there_is_an_organization()]
+    ) as context:
+        lookup = context.injector.get(SyncProviderLookupService)
+
+        _activate(context, _create_pending(context, OTHER_DRIVE))
+
+        assert_that(lookup.sharepoint_folder_site_id(context.organization.id), none())
+
+
+def test_the_lookup_ignores_a_provider_that_is_no_longer_shipped():
+    with given(_GIVEN) as context:
+        _activate(context, _create_pending(context, _DROPBOX))
+
+        assert_that(
+            context.injector.get(SyncProviderLookupService).sharepoint_folder_site_id(context.organization.id), none()
+        )

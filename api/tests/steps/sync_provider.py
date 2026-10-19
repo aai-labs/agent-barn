@@ -32,6 +32,7 @@ class OtherDrivePlugin(SyncProviderPlugin):
     folder_hint = "Open the folder in Other Drive."
 
     signed_in_account: str = OTHER_ACCOUNT_ID
+    sign_in_failure: Exception | None = None
     sign_ins: list[dict] = field(default_factory=list)
     provisions: list[dict] = field(default_factory=list)
     revokes: list[dict] = field(default_factory=list)
@@ -41,6 +42,8 @@ class OtherDrivePlugin(SyncProviderPlugin):
 
     def complete_sign_in(self, *, code: str, code_verifier: str, redirect_uri: str) -> SignedIn:
         self.sign_ins.append({"code": code, "redirect_uri": redirect_uri})
+        if self.sign_in_failure is not None:
+            raise self.sign_in_failure
         return SignedIn(account_id=self.signed_in_account, access_token=OTHER_TOKEN, expires_in=3600)
 
     def require_same_account(self, stored_account_id: str, signed_in: SignedIn) -> None:

@@ -482,7 +482,10 @@ class SyncProviderService:
         try:
             return action()
         except SyncProviderError as exc:
-            code = next(code for failure, code in _FAILURE_STATUS.items() if isinstance(exc, failure))
+            code = next(
+                (code for failure, code in _FAILURE_STATUS.items() if isinstance(exc, failure)),
+                status.HTTP_502_BAD_GATEWAY,
+            )
             raise HTTPException(code, exc.message) from exc
 
 

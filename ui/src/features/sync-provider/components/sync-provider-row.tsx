@@ -94,9 +94,8 @@ export function SyncProviderRow({ provider, canManage }: { provider: SyncProvide
               href={folderUrl}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label={`Open in ${provider.displayName}`}
             >
-              Open <ExternalLink size={13} aria-hidden />
+              Open in {provider.displayName} <ExternalLink size={13} aria-hidden />
             </a>
           )}
           {status === "active" && canManage && (

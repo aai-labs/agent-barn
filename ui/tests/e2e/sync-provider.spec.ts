@@ -93,6 +93,7 @@ test.describe("Settings · Sync · the provider list", () => {
     await expect(sync.row(ONEDRIVE)).toContainText("Connected to Agent Barn Test");
     await expect(sync.openFolder(ONEDRIVE)).toHaveAttribute("href", ONEDRIVE_FOLDER_URL);
     await expect(sync.openFolder(ONEDRIVE)).toHaveAttribute("target", "_blank");
+    await expect(sync.openFolder(ONEDRIVE)).toHaveText("Open in OneDrive");
     await expect(sync.row(ONEDRIVE)).toContainText("Add shortcut to My files");
     await expect(sync.connect(ONEDRIVE)).toHaveCount(0);
   });

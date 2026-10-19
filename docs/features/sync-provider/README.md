@@ -11,7 +11,7 @@ An Organization Owner or Admin connects a storage provider once from Organizatio
 Providers are plugins of one seam, the way messaging platforms are Platform Plugins of Communications ([ADR](../../adr/2026-10-16-sync-provider-plugin-seam.md)):
 
 - The generic `SyncProviderService` (`api/domains/sync_provider/`) owns permissions, the signed state, the callback page, the connection lifecycle, and one connection at a time.
-- Each `SyncProviderPlugin` (`api/domains/sync_provider/plugins/`) talks only to its provider: sign-in, location search, provisioning and its rollback, and revoking. It never touches the database or another domain.
+- Each `SyncProviderPlugin` (`api/domains/sync_provider/plugins/`) talks only to its provider: sign-in, location search, provisioning and its rollback, and revoking. It depends only on its provider's HTTP clients, never on another domain's services or repositories, and never touches the database. OneDrive reuses the Microsoft identity and Graph clients in `api/domains/agents/` (`microsoft_identity.py`, `microsoft_graph_sites.py`), which it shares with the SharePoint integration.
 
 Delivery state is tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -94,7 +94,7 @@ Settings → **Sync** (`?tab=sync`) is visible to every Organization Member. It 
 - Pending:
   - Owners and Admins of a provider with `location_picker` get the picker inline: a search that needs a term (labelled from `location_noun`), a result list, and **Use**. The API's `detail` is shown inline when choosing fails. Reloading the page resumes at the picker while the sign-in is fresh. **Start over** abandons the unfinished connection.
   - Members are told no {location_noun} has been chosen yet.
-- Active: **Open** (labelled "Open in {provider}") links to the folder in a new tab, with the provider's `folder_hint` underneath. Owners and Admins also get **Disconnect**, confirmed in a dialog that says the folder and its files stay where they are. It then opens the sign-in popup and posts the code to the disconnect route. A refusal is shown inline and the connection stays.
+- Active: **Open in {provider}** links to the folder in a new tab, with the provider's `folder_hint` underneath. Owners and Admins also get **Disconnect**, confirmed in a dialog that says the folder and its files stay where they are. It then opens the sign-in popup and posts the code to the disconnect route. A refusal is shown inline and the connection stays.
 - Connecting or disconnecting one provider refetches the list, because it changes whether the others may connect.
 
 The query is keyed by Organization id, so switching Organization never shows the previous one's providers.
@@ -156,7 +156,7 @@ When either setting is blank, OneDrive is left out of the list and its routes re
 - **Connecting refuses a site an Agent holds.** If any Agent in the Organization, including a deleted one, holds a recorded SharePoint selected-sites grant on the site id (compared case-insensitively), choosing it is refused with 409: "An Agent in this Organization already has SharePoint access to this site. Remove it there, or pick another site."
   - Deleting an Agent neither revokes nor forgets its grants, so they still count.
   - This is the `SHAREPOINT_AGENT_SITES` guard, bound to `SharePointService.organization_site_ids`.
-- **The SharePoint integration refuses the folder site.** It won't grant an Agent the site holding the Organization's folder (409, before any grant), through `SyncProviderLookupService.folder_location_id(organization_id, "onedrive")`. See [SharePoint selected sites](../integrations.md#sharepoint-selected-sites).
+- **The SharePoint integration refuses the folder site.** It won't grant an Agent the site holding the Organization's folder (409, before any grant), through `SyncProviderLookupService.sharepoint_folder_site_id(organization_id)`: the active connection's location when its provider declares the `SHAREPOINT_AGENT_SITES` guard. SharePoint never names a provider. See [SharePoint selected sites](../integrations.md#sharepoint-selected-sites).
 - **Delegated-mode SharePoint Agents are not guarded.** They have no per-site grant, so they reach whatever the person who signed them in can open, which may include the folder site. This gap is accepted and documented, not enforced.
 
 ### Known limits
@@ -165,7 +165,7 @@ When either setting is blank, OneDrive is left out of the list and its routes re
 - **Deleting an Organization** deletes its connection row (cascade) but leaves the platform app's grant on the site in Microsoft. Nobody is signed in to revoke it. An administrator can remove it from the site's permissions.
 - **There is no lock between an Agent's selected-sites grant and an Organization connecting at the same moment.** Each check reads the other's state independently, so two requests finishing together can both pass.
 - **Approving the app needs a Microsoft Global Administrator or Privileged Role Administrator**, once per Microsoft organization, and again only if the app's permissions change. Connecting and disconnecting need a SharePoint Administrator who is a member of the site.
-- **The app shows as "unverified" on Microsoft's consent page** until the AAI Labs app has publisher verification.
+- **The app shows as "unverified" on Microsoft's consent page** until AAI Labs completes [publisher verification](https://learn.microsoft.com/en-us/entra/identity-platform/publisher-verification-overview). A Global Administrator can still approve it, because the app needs admin consent anyway. Organizations whose user-consent policies only allow verified publishers will still see the unverified label. Verification needs a verified AAI Labs AI Cloud Partner Program partner global account, a publisher domain that isn't `*.onmicrosoft.com`, and someone who is both an Entra Application Administrator and a Partner Center admin, signing in with MFA. It has no cost.
 
 ## Source map
 
