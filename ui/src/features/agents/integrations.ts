@@ -38,6 +38,9 @@ export interface IntegrationProvider {
   // Mirrors the server, which refuses to turn it off. Its two descriptions replace the
   // generic ones before the credential is first saved.
   alwaysIsolated?: { isolatedDescription: string; directDescription: string };
+  // false keeps the provider out of every "add" list (integrations, and skills that need
+  // it) while credentials an Agent already has still show and can be removed.
+  offered?: boolean;
 }
 
 export interface IntegrationDraft {
@@ -158,6 +161,11 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     id: "gmail",
     label: "Gmail",
     authMethod: "google_oauth",
+    // Not offered yet, but not dead code: one-click Gmail signs in on the deployment's
+    // shared Google app, which Google has not verified, so users would get Google's
+    // "unverified app" warning and the app's cap on how many people can sign in. Gmail
+    // with an app password is offered instead. Drop this line once the app is verified.
+    offered: false,
     scopeNote: "Read-only access to one Gmail inbox. Sign in with Google; there's nothing else to set up.",
     oauthConnectedNote: "Gmail connected",
     fields: [],
@@ -230,6 +238,15 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     ],
   },
 ];
+
+export function isOfferedProvider(providerId: string): boolean {
+  return getIntegrationProvider(providerId)?.offered !== false;
+}
+
+/** A skill can be added only when every credential it needs can be connected. */
+export function isOfferedSkill(skill: { requiredProviders: string[] }): boolean {
+  return skill.requiredProviders.every(isOfferedProvider);
+}
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
   return INTEGRATION_PROVIDERS.find((p) => p.id === id);
