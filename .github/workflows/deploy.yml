@@ -417,6 +417,8 @@ jobs:
           WEB_APP_URL: ${{ needs.resolve-env.outputs.web_app_url }}
           GOOGLE_CLOUD_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_CLIENT_ID }}
           GOOGLE_CLOUD_CLIENT_SECRET: ${{ secrets.GOOGLE_CLOUD_CLIENT_SECRET }}
+          ONEDRIVE_SYNC_CLIENT_ID: ${{ vars.ONEDRIVE_SYNC_CLIENT_ID }}
+          ONEDRIVE_SYNC_CLIENT_SECRET: ${{ secrets.ONEDRIVE_SYNC_CLIENT_SECRET }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           SENDER_EMAIL: ${{ github.ref_name == 'staging' && vars.STAGING_SENDER_EMAIL || vars.SENDER_EMAIL }}

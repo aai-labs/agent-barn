@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
-from api.domains.agents.google_workspace_scopes import required_service_scopes
+from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
@@ -97,6 +97,7 @@ class SecretProvider(str, enum.Enum):
     GOOGLE_WORKSPACE = "google_workspace"
     SHAREPOINT = "sharepoint"
     APOLLO = "apollo"
+    GMAIL = "gmail"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -115,6 +116,7 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
     SecretProvider.SHAREPOINT: "SharePoint credential",
     SecretProvider.APOLLO: "Apollo credential",
+    SecretProvider.GMAIL: "Gmail credential",
 }
 
 
@@ -215,6 +217,28 @@ class GoogleWorkspaceContent(SecretContent):
             raise ValueError(
                 "scopes do not cover the selected Google services at the configured access level: " + ", ".join(missing)
             )
+        return self
+
+
+class GmailContent(SecretContent):
+    """Credential for aai-cli's Gmail profile: one read-only Gmail grant.
+
+    Separate from Google Workspace: it covers Gmail alone, is always read-only, and is
+    reached through aai-cli rather than gog. ``scopes`` records what Google granted.
+    ``client_id``/``client_secret`` are optional: empty means the server-owned client
+    is backfilled from config at agent-start time, which is the one-click path.
+    """
+
+    email: str = Field(min_length=1)
+    scopes: list[str] = Field(default_factory=list)
+    refresh_token: str
+    client_id: str = ""
+    client_secret: str = ""
+
+    @model_validator(mode="after")
+    def _validate_granted_scopes(self) -> Self:
+        if self.scopes and GMAIL_READONLY_SCOPE not in self.scopes:
+            raise ValueError(f"scopes do not include read-only Gmail access ({GMAIL_READONLY_SCOPE})")
         return self
 
 
@@ -331,6 +355,7 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
     SecretProvider.SHAREPOINT: SharePointContent,
     SecretProvider.APOLLO: ApolloContent,
+    SecretProvider.GMAIL: GmailContent,
 }
 
 
