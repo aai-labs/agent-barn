@@ -296,6 +296,18 @@ _Avoid_: version pruning, archive, soft-delete
 An explicit action that copies a newer direct source Skill Version into a fork. With no Draft it publishes immediately; with a Draft it replaces the Draft and leaves it unpublished. It never repins existing consumers automatically.
 _Avoid_: automatic merge, live sync
 
+**Playbook**:
+An Organization Skill whose content was produced by a Playbook Extraction from one source Agent's work and then reviewed by a person. It is published, assigned, and required like any other Organization Skill; nothing about it is installed automatically.
+_Avoid_: training, compiled config, template
+
+**Playbook Extraction**:
+One recorded run that reads a source Agent's Conversation Messages, Tool Calls, and long-term memories over a time window, asks a model for the recurring practices they show, and writes the result into an Organization Skill Draft for review. It is billed to the source Agent's model key and never publishes.
+_Avoid_: training job, sync, import
+
+**Organization Conventions**:
+Rules every Agent in an Organization should follow whatever its role, such as time zones, approval before changes, and message format. A Playbook Extraction proposes them; people review them and add them to a marked section of Organization Templates' AGENTS.md. They are not a Skill.
+_Avoid_: playbook, org prompt, global instructions
+
 **Agent Secret**:
 An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
 _Avoid_: skill, application secret
@@ -311,6 +323,14 @@ _Avoid_: credential
 **Credential Isolation Policy**:
 The Agent-specific choice of whether a tool Integration keeps long-lived provider credentials outside its runtime. It is independent of credential ownership; Agents sharing a Shared Credential can choose independently. New bindings default OFF, and running changes require explicit application and restart. See [Integrations](docs/features/integrations.md#optional-credential-isolation) for routing, applied generations and recovery.
 _Avoid_: encryption toggle, Shared Credential setting
+
+**Sync Provider**:
+A storage service an Organization can connect so Agent Barn keeps an "Agent Barn" folder there, implemented as a Sync Provider Plugin. OneDrive is the first. See [Sync providers](docs/features/sync-provider/README.md).
+_Avoid_: storage integration, Platform
+
+**Sync Provider Connection**:
+An Organization's connection to one Sync Provider: for OneDrive, one SharePoint site through the platform Microsoft app. An Organization has at most one open (pending or active) connection across all providers. It is not an Integration: no Agent is given access to it.
+_Avoid_: OneDrive integration, SharePoint integration, OneDrive Sync Connection
 
 **Conversation Message**:
 An inbound or outbound chat message ingested from an agent runtime and associated with a channel, direct message, session, and optional thread.
@@ -400,6 +420,7 @@ _Avoid_: webhook
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
 - An **Agent** has zero or more **Agent Restore Points**, each capturing its persistent volume at one instant. They exist only after the Agent has run at least once, and they are destroyed when the Agent is deleted.
 - A **Template Version** may require multiple immutable **Skill Versions**.
+- A **Playbook Extraction** reads one source **Agent** and writes into one **Organization Skill**'s **Skill Draft**; a **Playbook** may be refreshed by later extractions from the same or other Agents.
 - A **Platform Skill** has no owner; an **Organization Skill** belongs to one Organization; an **Agent Skill** belongs to one Agent and retains its Organization for tenant isolation.
 - An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
 - A custom **Skill Lineage** can be hard-deleted from its owning Platform, Organization, or Agent scope only when no Agent pins any of its versions and no Template, Override, or fork-source reference remains; the delete cascades the lineage's own Drafts, Versions, and files.

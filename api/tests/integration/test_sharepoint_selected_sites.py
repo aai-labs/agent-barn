@@ -2,6 +2,7 @@
 each chosen site under Sites.Selected, and each later sign-in reconciles the grants."""
 
 import urllib.parse
+from datetime import UTC, datetime, timedelta
 
 from fastapi import status
 from hamcrest import assert_that, contains_string, empty, equal_to, has_entries, has_length, is_not, none, not_
@@ -17,6 +18,7 @@ from api.domains.agents.microsoft_graph_sites import (
 from api.domains.agents.models import SecretProvider, SharePointContent, decrypt_content
 from api.domains.agents.repository import AgentRepository
 from api.domains.agents.sharepoint_service import decode_sign_in_state
+from api.domains.sync_provider.repository import SyncProviderRepository
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import (
@@ -27,7 +29,10 @@ from api.tests.steps.agent import (
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
-from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.organization import (
+    there_is_an_organization,
+    there_is_an_organization_with_user_and_access_token,
+)
 from api.tests.steps.sharepoint import (
     ADMIN_EMAIL,
     TEAMS_APP_ID,
@@ -656,3 +661,79 @@ def test_a_sign_in_finishing_while_another_is_in_progress_is_refused() -> None:
             assert_that([g["site_id"] for g in graph.grants], equal_to([site_id_for(_FINANCE)]))
             assert_that(graph.revokes, empty())
             assert_that(fake_identity(context).exchanges, has_length(1))
+
+
+# --- the Organization's OneDrive folder site -----------------------------------------
+
+
+def _onedrive_folder_is_on(site_id: str, organization_id=None):
+    """The Organization (or another one) keeps its OneDrive sync folder on ``site_id``."""
+
+    def step(context):
+        repository = context.injector.get(SyncProviderRepository)
+        pending = repository.create_pending(
+            organization_id or context.organization.id,
+            "onedrive",
+            schema_version=1,
+            account_id=TEAMS_TENANT_ID,
+            connected_by_user_id=context.user.id,
+            credentials_encrypted="encrypted",
+            pending_expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        repository.activate(
+            pending.id,
+            location_id=site_id,
+            location_name="Finance",
+            location_url=_FINANCE,
+            folder_id="folder-item-1",
+            folder_web_url=f"{_FINANCE}/Shared%20Documents/Agent%20Barn",
+            provider_data={"permission_id": "onedrive-perm-1"},
+        )
+
+    return step
+
+
+def test_the_organizations_onedrive_folder_site_cannot_be_granted_to_an_agent() -> None:
+    with given([*_GIVEN, _onedrive_folder_is_on(site_id_for(_FINANCE))]) as context:
+        with when("an administrator grants the agent the folder site alongside another site"):
+            response = _admin_signs_in(context, _LEGAL, _FINANCE)
+
+        with then("the sign-in is refused before any site is granted, and nothing is saved"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(
+                response.json()["detail"],
+                equal_to(
+                    "This site holds the Organization's OneDrive folder, so Agents can't be given SharePoint "
+                    "access to it."
+                ),
+            )
+            assert_that(fake_graph_sites(context).grants, empty())
+            assert_that(sharepoint_secret(context), none())
+
+
+def test_the_folder_site_is_recognised_regardless_of_case() -> None:
+    with given([*_GIVEN, _onedrive_folder_is_on(site_id_for(_FINANCE).upper())]) as context:
+        response = _admin_signs_in(context, _FINANCE)
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(fake_graph_sites(context).grants, empty())
+
+
+def test_other_sites_are_granted_while_the_organization_syncs_to_onedrive() -> None:
+    with given([*_GIVEN, _onedrive_folder_is_on(site_id_for(_FINANCE))]) as context:
+        response = _admin_signs_in(context, _LEGAL)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that([g["site_id"] for g in fake_graph_sites(context).grants], equal_to([site_id_for(_LEGAL)]))
+
+
+def test_another_organizations_folder_site_does_not_block_a_grant() -> None:
+    with given(_GIVEN) as context:
+        organization = context.organization
+        there_is_an_organization()(context)
+        _onedrive_folder_is_on(site_id_for(_FINANCE))(context)
+        context.organization = organization
+
+        response = _admin_signs_in(context, _FINANCE)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)

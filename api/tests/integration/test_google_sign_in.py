@@ -194,7 +194,7 @@ def test_two_simultaneous_first_sign_ins_make_one_account():
 
         def sign_in() -> None:
             barrier.wait()
-            signed_in.append(service._sign_in(google_identity()).id)
+            signed_in.append(service._sign_in(google_identity()).user.id)
 
         with when("both callbacks are handled at the same moment"):
             threads = [threading.Thread(target=sign_in) for _ in range(2)]

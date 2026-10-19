@@ -28,6 +28,8 @@ from api.domains.communications.models import (
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
+from api.domains.events.dispatch import EventDeliveryDispatcher, resolve_actor_identity
+from api.domains.events.models import ActorIdentity, ActorIdentityType
 from api.domains.rbac.catalog import PermissionKey
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 
@@ -53,6 +55,7 @@ class AgentBarnTelegramService:
     connections: CommunicationConnectionRepository
     repository: AgentBarnTelegramRepository
     plugins: PlatformPluginRegistry
+    event_delivery_dispatcher: EventDeliveryDispatcher
 
     def is_offered(self) -> bool:
         """Whether this environment has Agent Barn's own bot configured."""
@@ -142,8 +145,18 @@ class AgentBarnTelegramService:
     ) -> None:
         self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
         scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_UPDATE)
-        if not self.repository.unlink_in_scope(link_id, connection_id, agent_id, scope, now=datetime.now(UTC)):
+        membership = context.current_user_organization
+        actor = (
+            resolve_actor_identity(context, membership.organization_id)
+            if membership is not None
+            else ActorIdentity(type=ActorIdentityType.USER, id=context.user.id)
+        )
+        delivery_ids = self.repository.unlink_in_scope(
+            link_id, connection_id, agent_id, scope, now=datetime.now(UTC), actor=actor
+        )
+        if delivery_ids is None:
             self._raise_not_found("Linked Telegram account")
+        self.event_delivery_dispatcher.enqueue_immediate(list(delivery_ids))
 
     def consume_link_token(
         self,
@@ -157,12 +170,14 @@ class AgentBarnTelegramService:
         There is no user context: the bot's ingress calls this with the sender
         Telegram reported, and the token itself carries the Member's authority.
         """
-        return self.repository.consume_link_token(
+        result = self.repository.consume_link_token(
             hash_link_token(raw_token),
             telegram_user_id=telegram_user_id,
             telegram_username=telegram_username,
             now=datetime.now(UTC),
         )
+        self.event_delivery_dispatcher.enqueue_immediate(list(result.delivery_ids))
+        return result
 
     def _plugin(self) -> AgentBarnTelegramPlatformPlugin:
         plugin = self.plugins.require(CommunicationPlatform.AGENTBARN_TELEGRAM.value)
