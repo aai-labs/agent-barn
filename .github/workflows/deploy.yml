@@ -420,10 +420,9 @@ jobs:
           WEB_APP_URL: ${{ needs.resolve-env.outputs.web_app_url }}
           GOOGLE_CLOUD_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_CLIENT_ID }}
           GOOGLE_CLOUD_CLIENT_SECRET: ${{ secrets.GOOGLE_CLOUD_CLIENT_SECRET }}
-          # Payments, opted into per environment; an unset variable means off. Each
-          # environment has its own Stripe account mode (staging: a sandbox) and webhook,
-          # so never reads the other's secrets.
-          PAYMENTS_ENABLED: ${{ github.ref_name == 'staging' && (vars.STAGING_PAYMENTS_ENABLED || 'false') || (vars.PAYMENTS_ENABLED || 'false') }}
+          # Payments are turned on in the platform Billing settings; these make it possible.
+          # Each environment has its own Stripe account mode (staging: a sandbox) and
+          # webhook, so never reads the other's secrets.
           STRIPE_SECRET_KEY: ${{ github.ref_name == 'staging' && secrets.STAGING_STRIPE_SECRET_KEY || github.ref_name != 'staging' && secrets.STRIPE_SECRET_KEY || '' }}
           STRIPE_WEBHOOK_SECRET: ${{ github.ref_name == 'staging' && secrets.STAGING_STRIPE_WEBHOOK_SECRET || github.ref_name != 'staging' && secrets.STRIPE_WEBHOOK_SECRET || '' }}
           ONEDRIVE_SYNC_CLIENT_ID: ${{ vars.ONEDRIVE_SYNC_CLIENT_ID }}

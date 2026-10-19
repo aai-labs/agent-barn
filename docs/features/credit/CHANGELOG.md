@@ -12,13 +12,31 @@ Related context: [Credit](../credit.md), [Costs](../costs.md), [Trial onboarding
   system-triggered trial conversion for the payment provider to call; buying credit
   through Stripe, with a Billing page, platform billing settings and an out-of-credit
   banner that links to buying more; the out-of-credit reply on Hermes and OpenClaw;
-  healed spend counted against credit; a platform default Agent limit; and the review
-  fixes of 2026-10-14.
-- In transition: none; rebased onto staging, which now includes AF-368.
-- Next: the PR into staging.
+  healed spend counted against credit; a platform default Agent limit; the review fixes
+  of 2026-10-14 and 2026-10-19; and payments as a platform setting.
+- In transition: none; staging merged in, with self-signup read from its platform setting.
+- Next: review of PR #302 into staging.
 - Blockers: none. A Stripe sandbox exists for manual testing.
 
 ## Changes
+
+### 2026-10-19 — AF-381 — Payments as a platform setting, fourth review fixes (PR #302)
+
+- Delivered:
+  - Payments are a platform billing setting (**Take payments**), off until a Platform
+    Administrator turns it on, refused without both Stripe keys; `PAYMENTS_ENABLED` is
+    gone from config, the deploy workflows, helmfile and the chart.
+  - Agents on credit say they're out of credit whether or not payments are on, asking the
+    owner to add more, on both runtimes.
+  - Self-signup comes from staging's platform trial setting; every Organization's read
+    says whether it has reached its Agent limit (`agent_limit_reached`).
+  - Back from Checkout, credit that landed first is said to have arrived.
+  - A session we didn't create claiming credit that isn't a number is logged as zero
+    instead of failing the delivery.
+  - A platform top-up makes an expired trial active again.
+  - Healed spend is summed from a partial index of healed cost records.
+- Changed: migrations `897a48ad47f0` (merge with staging), `218e1241a0c5`
+  (healed index), `7b3b00d8227d` (payments setting); `agentbarn-api` chart 0.17.0.
 
 ### 2026-10-14 — AF-381 — Third review fixes (PR pending)
 

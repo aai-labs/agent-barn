@@ -63,9 +63,13 @@ up, so every Organization a user creates gets the platform's renewing limit, as 
 
 ## Buying credit
 
-New purchases need `PAYMENTS_ENABLED` on (see [operations](../guidelines/operations.md#payments-stripe)),
-an Organization on Credit, and someone holding `billing.manage` (its Owner). With
-payments off, the billing read still answers (`available: false`) and the webhook keeps
+New purchases need payments turned on, an Organization on Credit, and someone holding
+`billing.manage` (its Owner). Payments are a platform billing setting
+(`payments_enabled`, off until a Platform Administrator turns it on, audited like the
+others). Turning it on is refused (400) unless the deployment has both Stripe keys (see
+[operations](../guidelines/operations.md#payments-stripe)); the settings read says
+whether it has (`payments_configured`), and payments left on take no purchase while a
+key is missing. With payments off, the billing read still answers (`available: false`) and the webhook keeps
 landing payments already made, refunds and disputes, as long as the deployment has a
 webhook secret.
 

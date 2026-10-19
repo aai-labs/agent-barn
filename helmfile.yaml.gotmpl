@@ -229,9 +229,7 @@ releases:
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
         value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
-      # Payments stay off unless an environment opts in.
-      - name: paymentsEnabled
-        value: {{ env "PAYMENTS_ENABLED" | default "false" | quote }}
+      # Payments are turned on in the platform Billing settings; these only make it possible.
       - name: stripe.secretKey
         value: {{ env "STRIPE_SECRET_KEY" | default "" | quote }}
       - name: stripe.webhookSecret

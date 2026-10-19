@@ -101,8 +101,6 @@ spec:
               value: "{{ .Values.agentModelAllowlist }}"
             - name: ORGANIZATION_DEFAULT_AGENT_LIMIT
               value: {{ .Values.organizationDefaultAgentLimit | quote }}
-            - name: PAYMENTS_ENABLED
-              value: {{ .Values.paymentsEnabled | quote }}
             - name: AGENT_FIRECRAWL_BASE_URL
               value: "{{ .Values.agentFirecrawlBaseUrl }}"
             - name: PROMETHEUS_URL

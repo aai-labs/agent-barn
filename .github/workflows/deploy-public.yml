@@ -331,8 +331,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           GOOGLE_CLOUD_CLIENT_ID: ${{ vars.GOOGLE_CLOUD_CLIENT_ID }}
           GOOGLE_CLOUD_CLIENT_SECRET: ${{ secrets.GOOGLE_CLOUD_CLIENT_SECRET }}
-          # Payments, opted into on purpose; unset means off.
-          PAYMENTS_ENABLED: ${{ vars.PUBLIC_PAYMENTS_ENABLED || 'false' }}
+          # Payments are turned on in the platform Billing settings; these make it possible.
           STRIPE_SECRET_KEY: ${{ secrets.PUBLIC_STRIPE_SECRET_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.PUBLIC_STRIPE_WEBHOOK_SECRET }}
           ONEDRIVE_SYNC_CLIENT_ID: ${{ vars.ONEDRIVE_SYNC_CLIENT_ID }}

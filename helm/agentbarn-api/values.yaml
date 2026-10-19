@@ -67,10 +67,9 @@ emailInboundSecret: ""
 googleCloudClientId: ""
 googleCloudClientSecret: ""
 
-# Buying credit with Stripe. Off by default; with it on, the API needs the account's
-# secret key and the signing secret of the webhook endpoint pointed at
-# "<API host>/api/v1/billing/stripe/webhook".
-paymentsEnabled: false
+# Buying credit with Stripe: the account's secret key and the signing secret of the
+# webhook endpoint pointed at "<API host>/api/v1/billing/stripe/webhook". With both, a
+# Platform Administrator can turn payments on in the platform Billing settings.
 stripe:
   secretKey: ""
   webhookSecret: ""
