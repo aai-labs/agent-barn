@@ -14,6 +14,7 @@ from api.domains.events.catalog import TEMPLATE_CREATED, TEMPLATE_UPDATED
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.domains.skills.repository import SkillRepository
+from api.domains.templates.conventions import ConventionsSectionMalformed, merge_conventions
 from api.domains.templates.defaults import (
     DEFAULT_AGENTS_MD,
     DEFAULT_BOOT_MD,
@@ -28,6 +29,8 @@ from api.domains.templates.models import (
     AgentTemplate,
     AgentTemplateDraft,
     AgentTemplateDraftRead,
+    OrganizationConventionsAdd,
+    OrganizationConventionsApplied,
     OrganizationTemplateLineageSummary,
     PlatformTemplate,
     PlatformTemplateAdminSummary,
@@ -483,6 +486,32 @@ class TemplateService:
         self._reject_standalone_group_overlap(resolved_map)
         self.repository.update_org_draft_with_skills(draft, resolved_map)
         return self._org_draft_read(draft)
+
+    def add_organization_conventions(
+        self, template_key: str, data: OrganizationConventionsAdd, context: CurrentUserContext
+    ) -> OrganizationConventionsApplied:
+        """Merge reviewed rules into the Organization Conventions section of the draft's AGENTS.md.
+
+        Starts the draft from the latest version when there is none, like editing does;
+        publishing stays with the person. Required Skills are left exactly as they are.
+        """
+        org_id = self._org_id(context)
+        self.start_org_draft(template_key, None, context)
+        draft = self._get_org_draft_or_404(org_id, template_key)
+        try:
+            draft.agents_md, added = merge_conventions(draft.agents_md, data.rules)
+        except ConventionsSectionMalformed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The draft's AGENTS.md has an incomplete Organization conventions section. Fix its markers first.",
+            ) from None
+        if added:
+            self.repository.update_org_draft_with_skills(
+                draft, self.repository.get_org_draft_required_skill_map(draft.id)
+            )
+        return OrganizationConventionsApplied(
+            template_key=template_key, added=added, already_present=len(data.rules) - added
+        )
 
     def discard_org_draft(self, template_key: str, context: CurrentUserContext) -> None:
         org_id = self._org_id(context)

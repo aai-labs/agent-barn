@@ -71,6 +71,10 @@ Reading the proxy at request time — the earlier arrangement — meant a failed
 - Cost-facing status is mapped to `active`, `stopped`, `error` or `deleted`; it is not the persisted AgentStatus enum.
 - Every platform route requires `require_platform_admin`. Nothing re-scopes by membership, because a platform admin deliberately has none.
 
+## Playbook Extraction attribution
+
+A [Playbook Extraction](playbooks.md#model-and-billing) calls models with its source Agent's own LiteLLM key, so its spend is attributed to that Agent like the Agent's own calls, shows on its Costs tab, and counts against its Agent and Organization budgets. No separate key, marker, or bucket exists; the run also records its own token usage and LiteLLM-reported cost.
+
 ## Agent Memory attribution
 
 Hindsight's trace API has token counts but no billed amount or provider generation
