@@ -1079,7 +1079,6 @@ class AgentRepository:
     def record_managed_update_backup_skipped(
         self, agent: Agent, *, actor: ActorIdentity, actor_display: str
     ) -> list[UUID]:
-        """Stage the audit event for an update the user chose to run without a backup."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             event = EVENT_REGISTRY.build_event(
                 event_name=AGENT_MANAGED_UPDATE_BACKUP_SKIPPED,

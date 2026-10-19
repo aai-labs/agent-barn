@@ -22,7 +22,6 @@ export function useManagedUpdate() {
     mutationFn: async ({ agentId, skipBackup = false }: { agentId: string; skipBackup?: boolean }) => {
       const response = await api.post<Agent>(
         `${orgApiBase}/agents/${agentId}/managed-update`,
-        // Sent only after the user was told the automatic backup failed.
         skipBackup ? { skipBackup } : undefined,
         { schema: AgentSchema },
       );

@@ -229,6 +229,7 @@ RESTORE_POINT_IN_FLIGHT_DETAIL = (
 )
 
 MANAGED_UPDATE_BACKUP_LABEL = "Automatic backup before managed update"
+SKIP_BACKUP_NOT_OFFERED_DETAIL = "Updating without a backup is only possible right after an update's backup failed."
 # How long a managed update waits for the stopped pod to let go of the volume.
 # Capture and restore wait only the pod's default 30s grace period themselves.
 MANAGED_UPDATE_VOLUME_RELEASE_TIMEOUT_SECONDS = 120
@@ -3027,9 +3028,9 @@ class AgentService:
     ) -> AgentRead:
         """One-click runtime update: capture, start on the new image, roll back on failure.
 
-        `skip_backup` is the user's answer to a failed backup: the update runs without one,
-        from the stopped state that failure left the Agent in, and can only undo itself by
-        starting the old image again.
+        `skip_backup` is the user's answer to a failed backup. The update then runs
+        without one, on the stopped Agent that failure left behind, and a failed start
+        is not rolled back: with no archive there is nothing to roll back to.
 
         The orchestration runs as a scheduled background task; this call only
         checks authority and preconditions, and marks the update as running so
@@ -3042,8 +3043,13 @@ class AgentService:
         # as an Agent update. Settle that here: refused in the background task, it
         # would only show up as an Agent left in ERROR.
         self.authorization.require_action_for_visible(context, agent, PermissionKey.AGENT_UPDATE)
-        allowed_statuses = (AgentStatus.RUNNING, AgentStatus.STOPPED) if skip_backup else (AgentStatus.RUNNING,)
-        if agent.status not in allowed_statuses:
+        if skip_backup:
+            if (
+                agent.status != AgentStatus.STOPPED
+                or agent.managed_update_outcome != ManagedUpdateOutcome.BACKUP_FAILED
+            ):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SKIP_BACKUP_NOT_OFFERED_DETAIL)
+        elif agent.status != AgentStatus.RUNNING:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A managed update applies to a running Agent.",
@@ -3052,9 +3058,13 @@ class AgentService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
         if not self.repository.claim_managed_update(agent.id):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
-        if skip_backup:
-            self._record_backup_skipped(agent, context)
-        schedule(self._run_managed_update, agent.id, context, skip_backup)
+        try:
+            if skip_backup:
+                self._record_backup_skipped(agent, context)
+            schedule(self._run_managed_update, agent.id, context, skip_backup)
+        except Exception:
+            self.repository.release_managed_update(agent.id)
+            raise
         # Re-read so the response already says the update is in progress.
         return self._get_agent_read(self.repository.get_by_id(agent.id) or agent, context)
 
@@ -3078,15 +3088,14 @@ class AgentService:
 
     def _update_or_roll_back(self, agent_id: UUID, context: CurrentUserContext, skip_backup: bool = False) -> None:
         agent = self.repository.get_by_id(agent_id)
-        if agent is None:
-            return
-        if agent.status != AgentStatus.RUNNING and not (skip_backup and agent.status == AgentStatus.STOPPED):
+        expected_status = AgentStatus.STOPPED if skip_backup else AgentStatus.RUNNING
+        if agent is None or agent.status != expected_status:
             return
         actor = resolve_actor_identity(context, agent.organization_id)
-        logger.info("Managed update started for agent %s (skip_backup=%s)", agent_id, skip_backup)
+        logger.info("Managed update started for agent %s", agent_id)
 
         if skip_backup:
-            self._update_without_backup(agent, actor)
+            self._update_without_backup(agent_id, actor)
             return
 
         # 1-2. Stop, then capture the pre-update state. Nothing about the Agent
@@ -3116,17 +3125,7 @@ class AgentService:
 
         # 3. Start on the platform image and watch it come up. A start that fails
         #    to provision rolls back exactly like one that never becomes ready.
-        try:
-            self._start_for_update(agent_id, actor, pinned_image="")
-            healthy = self._wait_for_ready(
-                agent_id,
-                self.config.agent_update_ready_timeout_seconds,
-                poll_seconds=self.config.agent_update_ready_poll_seconds,
-            )
-        except Exception:
-            logger.exception("Managed update start failed for agent %s", agent_id)
-            healthy = False
-        if healthy:
+        if self._start_and_wait(agent_id, actor, pinned_image=""):
             logger.info("Managed update succeeded for agent %s", agent_id)
             self.repository.record_managed_update_outcome(
                 agent_id, ManagedUpdateOutcome.SUCCEEDED, restore_point_id=backup.id
@@ -3137,56 +3136,52 @@ class AgentService:
         #    configuration, then start the image the pod ran before.
         self._rollback_managed_update(agent_id, backup.id, context, actor, previous_image)
 
-    def _update_without_backup(self, agent: Agent, actor: ActorIdentity) -> None:
-        """Update after the user accepted going without a backup.
-
-        With no archive to restore, a failed update can only start the image the Agent
-        ran before. Its files stay as the new version left them.
-        """
-        agent_id = agent.id
-        previous_image = self._effective_runtime_image(agent)
+    def _update_without_backup(self, agent_id: UUID, actor: ActorIdentity) -> None:
         try:
-            if agent.status == AgentStatus.RUNNING:
-                stopped_image = self._stop_for_update(agent_id, actor)
-                if stopped_image is None:
-                    return
-                previous_image = stopped_image
-            else:
-                self._wait_for_volume_release(agent_id)
-            self._start_for_update(agent_id, actor, pinned_image="")
-            healthy = self._wait_for_ready(
+            self._wait_for_volume_release(agent_id)
+        except Exception as exc:
+            logger.exception("Managed update without a backup could not start agent %s", agent_id)
+            # Nothing changed, so the Agent is exactly as the failed backup left it and
+            # the offer to update without one still stands.
+            self.repository.record_managed_update_outcome(
                 agent_id,
-                self.config.agent_update_ready_timeout_seconds,
-                poll_seconds=self.config.agent_update_ready_poll_seconds,
+                ManagedUpdateOutcome.BACKUP_FAILED,
+                restore_point_id=None,
+                failure_reason=_managed_update_failure_text(exc),
             )
-        except Exception:
-            logger.exception("Managed update without a backup failed to start agent %s", agent_id)
-            healthy = False
-        if healthy:
-            logger.info("Managed update succeeded for agent %s", agent_id)
+            return
+        if self._start_and_wait(agent_id, actor, pinned_image=""):
+            logger.info("Managed update without a backup succeeded for agent %s", agent_id)
             self.repository.record_managed_update_outcome(
                 agent_id, ManagedUpdateOutcome.SUCCEEDED, restore_point_id=None
             )
             return
-        self._restart_previous_image(agent_id, actor, previous_image)
+        self._stop_after_failed_update(agent_id)
 
-    def _restart_previous_image(self, agent_id: UUID, actor: ActorIdentity, previous_image: str) -> None:
+    def _stop_after_failed_update(self, agent_id: UUID) -> None:
         try:
-            self._free_volume_for_rollback(agent_id, actor)
-            self._start_for_update(agent_id, actor, pinned_image=previous_image)
-            healthy = self._wait_for_ready(
+            self._teardown_workload(agent_id)
+        except Exception:
+            logger.exception("Could not remove the workload of agent %s after a failed update", agent_id)
+        agent = self.repository.get_by_id(agent_id)
+        if agent is not None:
+            agent.status = AgentStatus.STOPPED
+            self.repository.save(agent)
+        self.repository.record_managed_update_outcome(
+            agent_id, ManagedUpdateOutcome.UPDATE_FAILED, restore_point_id=None
+        )
+
+    def _start_and_wait(self, agent_id: UUID, actor: ActorIdentity, *, pinned_image: str) -> bool:
+        try:
+            self._start_for_update(agent_id, actor, pinned_image=pinned_image)
+            return self._wait_for_ready(
                 agent_id,
                 self.config.agent_update_ready_timeout_seconds,
                 poll_seconds=self.config.agent_update_ready_poll_seconds,
             )
         except Exception:
-            logger.exception("Managed update could not restart the previous image for agent %s", agent_id)
-            healthy = False
-        if not healthy:
-            self._mark_update_failed(agent_id, None, previous_image)
-            return
-        logger.info("Managed update without a backup rolled back for agent %s", agent_id)
-        self.repository.record_managed_update_outcome(agent_id, ManagedUpdateOutcome.ROLLED_BACK, restore_point_id=None)
+            logger.exception("Managed update could not start agent %s", agent_id)
+            return False
 
     def _stop_for_update(self, agent_id: UUID, actor: ActorIdentity) -> str | None:
         """Stop the Agent and return the image its pod was running.
@@ -3283,17 +3278,7 @@ class AgentService:
             self._mark_update_failed(agent_id, backup_id, previous_image)
             return
 
-        try:
-            self._start_for_update(agent_id, actor, pinned_image=previous_image)
-            healthy = self._wait_for_ready(
-                agent_id,
-                self.config.agent_update_ready_timeout_seconds,
-                poll_seconds=self.config.agent_update_ready_poll_seconds,
-            )
-        except Exception:
-            logger.exception("Managed update rollback could not restart agent %s", agent_id)
-            healthy = False
-        if not healthy:
+        if not self._start_and_wait(agent_id, actor, pinned_image=previous_image):
             self._mark_update_failed(agent_id, backup_id, previous_image)
             return
         logger.info("Managed update rolled back for agent %s", agent_id)
@@ -3316,7 +3301,7 @@ class AgentService:
         self._teardown_workload(agent_id)
         self._wait_for_volume_release(agent_id)
 
-    def _mark_update_failed(self, agent_id: UUID, backup_id: UUID | None, previous_image: str) -> None:
+    def _mark_update_failed(self, agent_id: UUID, backup_id: UUID, previous_image: str) -> None:
         """Leave the Agent in ERROR, ready for the user to restore the backup by hand.
 
         Pinned to its previous image so the start after that restore lands on

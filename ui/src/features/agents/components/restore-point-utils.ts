@@ -25,14 +25,6 @@ export const RESTORE_POINT_ORIGIN_BADGE: Record<RestorePoint["origin"], string |
 };
 
 /**
- * A Job's last log line can be a Python exception with its whole module path
- * ("api.domains.x.DestinationFullError: ..."). The class name is the part worth reading.
- */
-export function shortFailureReason(reason: string): string {
-  return reason.replace(/^(?:\w+\.)+(?=\w*(?:Error|Exception):)/, "");
-}
-
-/**
  * Swaps Skill ids in a server message for the names the manifest recorded.
  * Validation failures name the Skill by id ("Skill <uuid> not found"), which tells
  * the reader nothing about which of their Skills is the problem.

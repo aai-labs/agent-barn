@@ -28,12 +28,15 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Delivered: `skip_backup` on the restore request and on `POST .../managed-update`. The UI offers
   it after the automatic backup fails ("Restore without backup snapshot" / "Update without backup
   snapshot"). The failed-backup state lives only in the browser.
-- Delivered: an update without a backup may start from a `STOPPED` Agent, and if the new image
-  fails it only restarts the previous image (`ROLLED_BACK`/`ROLLBACK_FAILED` with no restore point).
+- Delivered: the update accepts `skip_backup` only for a `STOPPED` Agent whose last outcome is
+  `BACKUP_FAILED`. If the new image fails there is no rollback: the Agent is stopped and the
+  outcome is the new `UPDATE_FAILED`.
+- Delivered: a restore that skipped its backup and then fails during extraction returns its target
+  to `READY` with the reason on the row, so it can be tried again.
 - Delivered: audit — `agent.managed_update.backup_skipped` and `backup_skipped` on
   `agent.restore_point.restored`.
-- Known gap: a restore without a backup that fails during extraction marks its target `FAILED`,
-  with no safety copy to fall back on.
+- Not changed: a restore with `skip_backup` is not checked against a failed backup, because a
+  restore already replaces the volume.
 
 ### 2026-10-07 — AF-201 — Managed update review fixes
 

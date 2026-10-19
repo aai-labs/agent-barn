@@ -9,7 +9,6 @@ import { toastError } from "@/shared/toast";
 
 import { useManagedUpdate } from "../hooks/use-managed-update";
 import type { Agent } from "../schemas";
-import { shortFailureReason } from "./restore-point-utils";
 
 const RELEASES_URL = "https://github.com/aai-labs/agent-barn/releases";
 
@@ -29,8 +28,10 @@ export function AgentUpdateBanner({ agent, className }: { agent: Agent; classNam
   // The server's flag covers the whole run, including the minutes after the
   // 202, so the button cannot start a second update meanwhile.
   const updating = agent.updateInProgress || managedUpdate.isPending;
-  // Kept only here, on purpose: after a reload the banner offers a normal update again.
   const [startedHere, setStartedHere] = useState(false);
+  if (startedHere && !updating && agent.status !== "STOPPED") {
+    setStartedHere(false);
+  }
   // A failed backup leaves the Agent stopped, and a stopped Agent never reports an update as
   // available, so the failure is what keeps the banner on screen.
   const backupFailed =
@@ -71,8 +72,7 @@ export function AgentUpdateBanner({ agent, className }: { agent: Agent; classNam
           {backupFailed ? (
             <>
               The backup snapshot failed. You can update without it, but if the new version does
-              not come up healthy, {agent.name} restarts on its old version and its files are not
-              rolled back.
+              not come up healthy there is nothing to roll back to, and {agent.name} stays stopped.
             </>
           ) : (
             <UpdateExplanation agentName={agent.name} />
@@ -184,31 +184,26 @@ export function AgentUpdateOutcomeNote({
 
   let message: React.ReactNode = null;
   if (last.outcome === "ROLLED_BACK" && agent.status === "RUNNING") {
-    message = last.restorePointId ? (
+    message = (
       <>
         The last update did not come up healthy, so {agent.name} was rolled back to the version and
         files it had before. It is running as before.
-      </>
-    ) : (
-      <>
-        The last update, run without a backup, did not come up healthy, so {agent.name} was
-        restarted on the version it had before. Its files were not rolled back.
       </>
     );
   } else if (last.outcome === "BACKUP_FAILED") {
     message = (
       <>
         The last update was not applied because the automatic backup could not be taken
-        {last.failureReason ? ` (${shortFailureReason(last.failureReason).replace(/\.$/, "")}).` : "."}{" "}
+        {last.failureReason ? `: ${last.failureReason}` : "."}{" "}
         {agent.status === "STOPPED" &&
           `${agent.name} was stopped but not changed. Start it to keep using the current version.`}
       </>
     );
-  } else if (last.outcome === "ROLLBACK_FAILED" && agent.status !== "RUNNING" && !last.restorePointId) {
+  } else if (last.outcome === "UPDATE_FAILED" && agent.status === "STOPPED") {
     message = (
       <>
-        The update, run without a backup, failed and {agent.name} could not be restarted on its
-        previous version. There is no backup to restore. Start the Agent to try again.
+        The update, run without a backup, did not come up healthy. There was nothing to roll back
+        to, so {agent.name} was stopped. Start it to try again.
       </>
     );
   } else if (last.outcome === "ROLLBACK_FAILED" && agent.status !== "RUNNING") {

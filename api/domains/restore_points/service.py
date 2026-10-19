@@ -14,6 +14,7 @@ from kubernetes.client import V1Job
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders.restore_point import (
+    BACKUP_SKIPPED_BY_USER_LABEL,
     build_capture_job,
     build_restore_job,
     build_restore_point_pvc,
@@ -140,6 +141,11 @@ def _ran_safety_copy(job: V1Job) -> bool:
     template = job.spec.template if job.spec is not None else None
     containers = template.spec.containers if template is not None and template.spec is not None else None
     return any(env.name == ENV_BACKUP for container in containers or [] for env in container.env or [])
+
+
+def _backup_skipped_by_user(job: V1Job) -> bool:
+    labels = job.metadata.labels if job.metadata is not None else None
+    return (labels or {}).get(BACKUP_SKIPPED_BY_USER_LABEL) == "true"
 
 
 @inject
@@ -355,6 +361,8 @@ class RestorePointService:
                 )
             if outcome == _RestoreOutcome.BACKUP_FAILED:
                 self.repository.mark_restored(row.id)
+            elif _backup_skipped_by_user(job):
+                self.repository.mark_restore_retryable(row.id, reason[:_MAX_FAILURE_REASON])
             else:
                 self._fail(row, reason)
             return
@@ -586,7 +594,9 @@ class RestorePointService:
             if result is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOT_READY_DETAIL)
 
-            self._provision_restore(current, target, backup, job_name)
+            self._provision_restore(
+                current, target, backup, job_name, backup_skipped_by_user=payload.skip_backup and not managed_update
+            )
 
         self._dispatch(result.delivery_ids)
 
@@ -748,6 +758,8 @@ class RestorePointService:
         target: AgentRestorePoint,
         backup: AgentRestorePoint | None,
         job_name: str,
+        *,
+        backup_skipped_by_user: bool = False,
     ) -> None:
         namespace = self.config.k8s_namespace
         try:
@@ -778,6 +790,7 @@ class RestorePointService:
                     archive_pvc=target.pvc_name,
                     timeout_seconds=self.config.restore_point_restore_timeout_seconds,
                     image_pull_secret=self.config.agent_image_pull_secret or None,
+                    backup_skipped_by_user=backup_skipped_by_user,
                 ),
             )
         except Exception as exc:

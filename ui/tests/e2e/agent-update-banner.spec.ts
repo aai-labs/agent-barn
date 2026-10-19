@@ -12,7 +12,6 @@ import { expect, test } from "@playwright/test";
 
 import {
   MOCK_AGENT_ID,
-  MOCK_RESTORE_POINT_ID,
   mockAgent,
   mockAgentAllowedActions,
 } from "../pages/data-support/agent-data-support.po";
@@ -288,11 +287,7 @@ test.describe("Agent update banner", () => {
         ...mockAgent,
         status: "ERROR",
         running_model: "",
-        last_managed_update: {
-          outcome: "ROLLBACK_FAILED",
-          restore_point_id: MOCK_RESTORE_POINT_ID,
-          failure_reason: null,
-        },
+        last_managed_update: { outcome: "ROLLBACK_FAILED", restore_point_id: null, failure_reason: null },
       },
     });
 
