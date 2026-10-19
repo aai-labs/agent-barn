@@ -3,7 +3,8 @@
 import base64
 import binascii
 import datetime
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from api.domains.agents.models import FirecrawlContent, SecretContent, SecretPro
 from api.domains.agents.repository import AgentRepository
 from api.domains.credential_gateway.audit import GatewayAuditSink, ResolutionOutcome
 from api.domains.credential_gateway.forwarding import (
+    UpstreamBusy,
     UpstreamForwarder,
     UpstreamResponse,
     UpstreamUnreachable,
@@ -35,6 +37,7 @@ from api.domains.credential_gateway.sharepoint_broker import (
 )
 from api.domains.integrations.plugins.base import (
     EgressMode,
+    IntegrationPlugin,
     MintedToken,
     OutboundRequest,
     TokenBrokerService,
@@ -65,6 +68,8 @@ class CredentialGatewayService:
     forwarder: UpstreamForwarder
     integrations: IntegrationRepository
     sharepoint_broker: SharePointBroker
+    _upstream_slots: dict[str, threading.BoundedSemaphore] = field(default_factory=dict, init=False, repr=False)
+    _upstream_slots_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     # --- issuance, called from agent start ---
 
@@ -262,15 +267,30 @@ class CredentialGatewayService:
         except ValueError as exc:
             raise GatewayForwardRefused(f"invalid upstream configuration for {plugin.key}") from exc
         url = f"{base}/{request.path.lstrip('/')}"
-        return self.forwarder.send(
-            outbound.method,
-            url,
-            headers=outbound.headers,
-            params=outbound.query,
-            content=request.body,
-            sensitive_headers=outbound.sensitive_headers,
-            timeout=plugin.upstream_timeout_seconds,
-        )
+        slot = self._upstream_slot(plugin)
+        if slot is not None and not slot.acquire(blocking=False):
+            raise UpstreamBusy(plugin.key)
+        try:
+            return self.forwarder.send(
+                outbound.method,
+                url,
+                headers=outbound.headers,
+                params=outbound.query,
+                content=request.body,
+                sensitive_headers=outbound.sensitive_headers,
+                timeout=plugin.upstream_timeout_seconds,
+            )
+        finally:
+            if slot is not None:
+                slot.release()
+
+    def _upstream_slot(self, plugin: IntegrationPlugin) -> threading.BoundedSemaphore | None:
+        if plugin.max_concurrent_upstream is None:
+            return None
+        with self._upstream_slots_lock:
+            return self._upstream_slots.setdefault(
+                plugin.key, threading.BoundedSemaphore(plugin.max_concurrent_upstream)
+            )
 
     # --- token brokering, called once per agent process start ---
 

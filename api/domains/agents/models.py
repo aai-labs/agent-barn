@@ -352,6 +352,8 @@ class MerkysContent(SecretContent):
         ):
             raise ValueError("base_url must be an https origin such as https://merkys.example.com")
         host = parsed.hostname.lower()
+        # A typo guard, not SSRF protection: a hostname or a short or decimal IP form can still
+        # resolve to these addresses. The validator limits what a probe can learn instead.
         if host == "localhost" or host.endswith(".localhost"):
             raise ValueError("base_url must not point at localhost")
         try:
@@ -359,9 +361,7 @@ class MerkysContent(SecretContent):
         except ValueError:
             address = None  # a DNS name
         if address is not None:
-            # Never a valid Merkys host for a remote cluster, and a way to reach the API
-            # server's own loopback or the cloud metadata service. Private ranges stay
-            # allowed: an on-prem Merkys is often reached over a VPN.
+            # Private ranges stay allowed: an on-prem Merkys is often reached over a VPN.
             if address.is_loopback or address.is_link_local or address.is_unspecified:
                 raise ValueError("base_url must not be a loopback or link-local address")
             host = f"[{host}]" if address.version == 6 else host

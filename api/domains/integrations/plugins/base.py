@@ -137,6 +137,9 @@ class IntegrationPlugin[ContentT: SecretContent](ABC):
     #: Seconds the gateway waits on this provider's upstream before giving up. Providers
     #: whose calls run long (an LLM answering a question) raise it.
     upstream_timeout_seconds: int = 30
+    #: Most requests the gateway keeps in flight to this provider per process. Each one holds
+    #: a thread from a shared pool, so a slow provider is capped to leave room for the rest.
+    max_concurrent_upstream: int | None = None
 
     def validate_external(self, content: ContentT) -> IntegrationValidationResult | None:
         """Check the credential against the live provider.

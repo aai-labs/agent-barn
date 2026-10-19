@@ -1,7 +1,11 @@
+import logging
+
 import httpx
 
 from api.domains.agents.models import MerkysContent
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
+
+logger = logging.getLogger(__name__)
 
 _TIMEOUT = 10
 # Cheapest authenticated call a user API key can make. `/api/limits` needs no auth, and
@@ -19,7 +23,8 @@ def validate_merkys(content: MerkysContent) -> IntegrationValidationResult:
             follow_redirects=False,
         )
     except Exception as exc:
-        return IntegrationValidationResult(valid=False, error=f"Could not reach Merkys: {exc}")
+        logger.warning("Merkys validation could not reach %s: %s", content.base_url, exc)
+        return IntegrationValidationResult(valid=False, error="Could not reach Merkys. Check the URL.")
 
     if resp.status_code == 401:
         return IntegrationValidationResult(valid=False, error="Invalid API key")

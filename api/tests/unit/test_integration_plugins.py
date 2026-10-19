@@ -292,13 +292,15 @@ def test_merkys_gateway_profile_refuses_an_off_list_host_before_the_pod_starts()
         )
 
 
-def test_only_merkys_extends_the_gateway_timeout():
-    # An LLM answer takes 5–30 s; every other provider keeps the short default.
+def test_only_merkys_extends_the_gateway_timeout_and_is_capped():
     timeouts = {p.key: p.upstream_timeout_seconds for p in ALL_PLUGINS}
-    assert_that(timeouts["merkys"], is_(equal_to(180)))
+    caps = {p.key: p.max_concurrent_upstream for p in ALL_PLUGINS}
+    assert_that(timeouts["merkys"], is_(equal_to(90)))
     assert_that(
         {k: v for k, v in timeouts.items() if k != "merkys"}, equal_to({k: 30 for k in timeouts if k != "merkys"})
     )
+    assert_that(caps["merkys"], is_(equal_to(8)))
+    assert_that({k: v for k, v in caps.items() if k != "merkys"}, equal_to({k: None for k in caps if k != "merkys"}))
 
 
 def test_merkys_is_shared_credential_eligible():

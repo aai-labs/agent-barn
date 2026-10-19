@@ -276,8 +276,42 @@ def test_merkys_gets_a_long_upstream_timeout_and_others_the_default():
             github_call = _sent(context)
 
         with then("Merkys may take longer than the default before the gateway gives up"):
-            assert_that(merkys_call.kwargs["timeout"], equal_to(180))
+            assert_that(merkys_call.kwargs["timeout"], equal_to(90))
             assert_that(github_call.kwargs["timeout"], equal_to(30))
+
+
+def test_merkys_over_its_concurrency_cap_is_refused_at_once_and_recovers():
+    from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
+
+    with given(_ALL_AAI_GIVEN) as context:
+        _provider_secret(
+            context,
+            SecretProvider.MERKYS,
+            MerkysContent(base_url="https://merkys.aai-labs.com", api_key="cb_merkys-real"),
+        )
+        token = _token_for(context, SecretProvider.MERKYS)
+        service = context.injector.get(CredentialGatewayService)
+        slot = service._upstream_slot(INTEGRATION_PLUGINS.require(SecretProvider.MERKYS))
+        taken = 0
+        while slot.acquire(blocking=False):
+            taken += 1
+
+        with when("all Merkys slots are in use and the agent calls Merkys"):
+            busy = context.gateway_client.get("/gateway/v1/p/merkys/api/conversation/", headers=_auth(token))
+
+        with then("the gateway answers 503 with Retry-After and never calls the provider"):
+            assert_that(taken, equal_to(8))
+            assert_that(busy.status_code, equal_to(status.HTTP_503_SERVICE_UNAVAILABLE))
+            assert_that(busy.headers["Retry-After"], equal_to("5"))
+            assert_that(context.injector.get(UpstreamForwarder).send.called, is_(False))
+
+        with when("a slot frees up"):
+            slot.release()
+            ok = context.gateway_client.get("/gateway/v1/p/merkys/api/conversation/", headers=_auth(token))
+
+        with then("the call goes through and gives its slot back"):
+            assert_that(ok.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(slot.acquire(blocking=False), is_(True))
 
 
 def test_merkys_off_the_allowlist_is_never_forwarded_to():

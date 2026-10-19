@@ -45,6 +45,10 @@ class UpstreamUnreachable(Exception):
     """The upstream could not be reached. Distinct from an upstream error status."""
 
 
+class UpstreamBusy(Exception):
+    """The provider already has its maximum number of requests in flight."""
+
+
 def sanitize_request_headers(headers: dict[str, str]) -> dict[str, str]:
     """Drop what the agent must not dictate before the plugin adds real auth."""
     return {

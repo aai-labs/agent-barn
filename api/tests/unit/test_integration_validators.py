@@ -1030,9 +1030,15 @@ def test_merkys_a_200_that_is_not_a_merkys_list_is_invalid():
         assert validate_merkys(_MERKYS).valid is False
 
 
-def test_merkys_network_error_returns_error():
-    with patch(_MERKYS_MOD, side_effect=_connect_error()):
-        result = validate_merkys(_MERKYS)
+def test_merkys_network_error_does_not_tell_which_ports_answer():
+    refused = httpx.ConnectError("[Errno 111] Connection refused", request=_REQUEST)
+    handshake = httpx.ConnectError("[SSL: WRONG_VERSION_NUMBER] wrong version number", request=_REQUEST)
 
-    assert result.valid is False
-    assert "merkys" in (result.error or "").lower()
+    with patch(_MERKYS_MOD, side_effect=refused):
+        closed = validate_merkys(_MERKYS)
+    with patch(_MERKYS_MOD, side_effect=handshake):
+        open_port = validate_merkys(_MERKYS)
+
+    assert closed.valid is False
+    assert closed.error == open_port.error
+    assert "Errno" not in (closed.error or "") and "SSL" not in (open_port.error or "")

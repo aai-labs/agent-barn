@@ -508,9 +508,8 @@ class MerkysPlugin(AaiCliPlugin[MerkysContent]):
     credentials_model = MerkysContent
     shared_credential_eligible = True
     bundled_skill_slugs = ("aai-merkys",)
-    # A Merkys answer takes 5–30 s and the gateway streams nothing back, so the default
-    # 30 s would cut off an ordinary `merkys ask` that the direct route completes.
-    upstream_timeout_seconds = 180
+    upstream_timeout_seconds = 90
+    max_concurrent_upstream = 8
 
     aai_cli_slug = "merkys-work"
     aai_cli_label = "Merkys"
