@@ -185,6 +185,8 @@ class RestorePointService:
         agent: Agent,
         restore_point: AgentRestorePoint,
         context: CurrentUserContext,
+        *,
+        backup_skipped: bool = False,
     ) -> dict:
         return {
             "organization_id": agent.organization_id,
@@ -195,6 +197,7 @@ class RestorePointService:
             "label": restore_point.label,
             "actor_display": context.user.full_name or context.user.email,
             "subject_display": agent.name,
+            "backup_skipped": backup_skipped,
         }
 
     def list_restore_points(
@@ -667,7 +670,8 @@ class RestorePointService:
             # Without the copy a failed extraction has nothing to fall back to;
             # the caller keeps the target restorable instead (see
             # `reopen_failed_restore`).
-            backup = None if managed_update else self._create_pre_restore_row(current, job_name)
+            skip_backup = managed_update or payload.skip_backup
+            backup = None if skip_backup else self._create_pre_restore_row(current, job_name)
             result = self.repository.update_status_with_event(
                 target.id,
                 RestorePointStatus.RESTORING,
@@ -675,7 +679,7 @@ class RestorePointService:
                 job_name=job_name,
                 event_name=AGENT_RESTORE_POINT_RESTORED,
                 actor=resolve_actor_identity(context, current.organization_id),
-                payload=self._event_payload(current, target, context),
+                payload=self._event_payload(current, target, context, backup_skipped=payload.skip_backup),
                 reapply_configuration=payload.reapply_configuration,
                 restored_by_user_id=context.user.id,
                 restored_by_display=context.user.full_name or context.user.email,

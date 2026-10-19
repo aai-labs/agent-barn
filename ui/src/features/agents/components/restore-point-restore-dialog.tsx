@@ -22,7 +22,7 @@ export function RestorePointRestoreDialog({
   restorePoint: RestorePoint | null;
   canEditConfiguration: boolean;
   onOpenChange: (open: boolean) => void;
-  onRestoreStarted: () => void;
+  onRestoreStarted: (started: { restorePointId: string; reapplyConfiguration: boolean }) => void;
 }) {
   const restore = useRestoreRestorePoint(agent.id);
   const [typedName, setTypedName] = useState("");
@@ -37,11 +37,9 @@ export function RestorePointRestoreDialog({
   async function confirm() {
     if (!restorePoint) return;
     setFailure(null);
+    const reapplyConfiguration = reapply && replayable;
     try {
-      await restore.mutateAsync({
-        restorePointId: restorePoint.id,
-        reapplyConfiguration: reapply && replayable,
-      });
+      await restore.mutateAsync({ restorePointId: restorePoint.id, reapplyConfiguration });
     } catch (error) {
       // The server checks the recorded configuration before it starts the Job, so a
       // refusal here means nothing has been overwritten and this dialog can simply
@@ -53,7 +51,7 @@ export function RestorePointRestoreDialog({
       );
       return;
     }
-    onRestoreStarted();
+    onRestoreStarted({ restorePointId: restorePoint.id, reapplyConfiguration });
     onOpenChange(false);
   }
 

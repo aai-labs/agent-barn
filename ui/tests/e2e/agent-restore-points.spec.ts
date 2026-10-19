@@ -420,6 +420,47 @@ test.describe("Agent restore points", () => {
     await expect(dialog).toContainText("Nothing on the Agent's volume has been changed");
   });
 
+  test("when the backup fails, offers to restore without it and sends skip_backup", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    let listBody: unknown = mockRestorePointsPage({ items: [mockRestorePoint], manualCount: 1 });
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({ body: () => listBody });
+    await dataSupport.agents.interceptRestoreRestorePointRequest();
+
+    await openRestorePoints(configurationPage);
+    await configurationPage.restoreButton().click();
+    await configurationPage.restoreConfirmNameInput().fill(mockAgent.name);
+
+    const first = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/restore"));
+    await configurationPage.restoreConfirmButton().click();
+    expect((await first).postDataJSON().skip_backup).toBe(false);
+
+    // The Job's backup failed, so the target is READY again and the newest row is the failed backup.
+    listBody = mockRestorePointsPage({
+      items: [
+        {
+          ...mockPreRestorePoint,
+          status: "FAILED",
+          failure_reason: "pre-restore capture failed: disk full",
+          created_at: "2026-05-14T10:00:00Z",
+        },
+        mockRestorePoint,
+      ],
+      manualCount: 1,
+    });
+
+    const notice = page.getByTestId("restore-backup-failed");
+    await expect(notice).toContainText(/backup snapshot failed/i);
+    await expect(notice).toContainText(/disk full/i);
+
+    const second = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/restore"));
+    await page.getByTestId("restore-without-backup-button").click();
+    expect((await second).postDataJSON().skip_backup).toBe(true);
+    await expect(notice).toBeHidden();
+  });
+
   test("sends the replay choice with the restore and then closes", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);

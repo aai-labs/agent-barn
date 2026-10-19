@@ -43,15 +43,17 @@ export function useRestoreRestorePoint(agentId: string) {
     mutationFn: async ({
       restorePointId,
       reapplyConfiguration = false,
+      skipBackup = false,
     }: {
       restorePointId: string;
       reapplyConfiguration?: boolean;
+      skipBackup?: boolean;
     }) => {
       const response = await api.post<RestorePoint>(
         `${orgApiBase}/agents/${agentId}/restore-points/${restorePointId}/restore`,
         // The server checks the recorded configuration before it starts the Job, so
         // a configuration that cannot be applied never costs the Agent its files.
-        { reapplyConfiguration },
+        { reapplyConfiguration, skipBackup },
         { schema: RestorePointSchema },
       );
       return response.data;

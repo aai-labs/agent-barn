@@ -62,6 +62,18 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   and exit codes are covered by unit tests against temporary directories, and reconciliation by integration
   tests with a mocked Kubernetes client.
 
+### 2026-10-19 — AF-406 — Continue without a backup when the snapshot fails
+
+- Delivered: `skip_backup` on the restore request and on `POST .../managed-update`. The UI offers
+  it after the automatic backup fails ("Restore without backup snapshot" / "Update without backup
+  snapshot"). The failed-backup state lives only in the browser.
+- Delivered: an update without a backup may start from a `STOPPED` Agent, and if the new image
+  fails it only restarts the previous image (`ROLLED_BACK`/`ROLLBACK_FAILED` with no restore point).
+- Delivered: audit — `agent.managed_update.backup_skipped` and `backup_skipped` on
+  `agent.restore_point.restored`.
+- Known gap: a restore without a backup that fails during extraction marks its target `FAILED`,
+  with no safety copy to fall back on. Reset still refuses when its backup fails.
+
 ### 2026-10-07 — AF-201 — Managed update review fixes
 
 - Fixed: a rollback restore Job killed with no output (OOM, deadline, eviction) was read as "never

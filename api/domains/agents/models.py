@@ -1430,6 +1430,13 @@ class AgentAssignedSkillRead(PydanticBaseModel):
 AgentModelSource = Literal["default", "override"]
 
 
+class AgentManagedUpdateRequest(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Set when the user was told the automatic backup failed and chose to update anyway.
+    skip_backup: bool = False
+
+
 class AgentManagedUpdateRead(PydanticBaseModel):
     """How the Agent's last managed update ended."""
 

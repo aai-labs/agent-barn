@@ -23,6 +23,7 @@ AGENT_RESTORE_POINT_CREATED = "agent.restore_point.created"
 AGENT_RESTORE_POINT_RESTORED = "agent.restore_point.restored"
 AGENT_RESTORE_POINT_DELETED = "agent.restore_point.deleted"
 AGENT_RESET = "agent.reset"
+AGENT_MANAGED_UPDATE_BACKUP_SKIPPED = "agent.managed_update.backup_skipped"
 AGENT_SECRET_ADDED = "agent.secret.added"
 AGENT_SECRET_UPDATED = "agent.secret.updated"
 AGENT_SECRET_REMOVED = "agent.secret.removed"
@@ -225,6 +226,17 @@ class AgentRestorePointChangedPayload(BaseModel):
     label: str | None = None
     actor_display: str | None = None
     subject_display: str | None = None
+    backup_skipped: bool = False
+
+
+class AgentManagedUpdateBackupSkippedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    agent_name: str
+    actor_display: str
+    subject_display: str
 
 
 class AgentSecretChangedPayload(BaseModel):
@@ -778,6 +790,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=AGENT_RESET,
             schema_version=1,
             payload_model=AgentRestorePointChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=AGENT_MANAGED_UPDATE_BACKUP_SKIPPED,
+            schema_version=1,
+            payload_model=AgentManagedUpdateBackupSkippedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.ORGANIZATION,
         )
