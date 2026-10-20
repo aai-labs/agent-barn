@@ -14,6 +14,10 @@ export class WorkflowDataSupport {
   saveRequests: Record<string, unknown>[] = [];
   savePaths: string[] = [];
   conflictSave = false;
+  /** Description another user saved before the conflicting save. */
+  conflictDescription: string | null = null;
+  failCapabilities = false;
+  forbidSave = false;
   saveAllowed = true;
   validationSaveErrors: { loc: (string | number)[]; msg: string }[] | null =
     null;
@@ -56,6 +60,7 @@ export class WorkflowDataSupport {
       organizationId = "*",
       stepId,
       paginated = false,
+      description,
     }: {
       saved?: boolean;
       viewer?: boolean;
@@ -63,6 +68,7 @@ export class WorkflowDataSupport {
       organizationId?: string;
       stepId?: string;
       paginated?: boolean;
+      description?: string;
     } = {},
   ) {
     const data = new DataSupport(this.page);
@@ -71,6 +77,7 @@ export class WorkflowDataSupport {
     await data.communicationConnections.interceptChannelsRequests({ agentId });
     let workflow = workflowFixture(agentId, viewer);
     if (stepId) workflow.version.draft.steps[0].id = stepId;
+    if (description) workflow.version.draft.description = description;
     let present = saved;
     if (paginated) {
       workflow.revision = 3;
@@ -81,7 +88,9 @@ export class WorkflowDataSupport {
     const pageSize = paginated ? 2 : 20;
     const base = `**/api/v1/organizations/${organizationId}/agents/${agentId}`;
     await this.page.route(`${base}/workflow-capabilities`, (route) =>
-      route.fulfill({
+      this.failCapabilities
+        ? route.abort()
+        : route.fulfill({
         json: {
           authoring,
           execution: false,
@@ -117,9 +126,18 @@ export class WorkflowDataSupport {
           await route.fulfill({ status: 422, json: { detail } });
           return;
         }
+        if (this.forbidSave) {
+          await route.fulfill({
+            status: 403,
+            json: { detail: "Permission denied" },
+          });
+          return;
+        }
         if (this.conflictSave) {
           this.conflictSave = false;
           workflow.revision++;
+          if (this.conflictDescription)
+            workflow.version.draft.description = this.conflictDescription;
           await route.fulfill({
             status: 409,
             json: {

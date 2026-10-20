@@ -66,7 +66,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadWorkflows = canAgent(agent, "agent.read");
   const workflowCapabilities = useWorkflowCapabilities(agentId, canReadWorkflows);
-  const showWorkflows = canReadWorkflows && !workflowCapabilities.error && workflowCapabilities.data?.authoring === true;
+  const showWorkflows = canReadWorkflows && workflowCapabilities.data?.authoring === true;
   const canReadActivity = canAgent(agent, "activity.read");
   const canReadCosts = canAgent(agent, "cost.read");
   const { health } = useAgentHealth(

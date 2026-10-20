@@ -28,6 +28,7 @@ import {
   type WorkflowDraft,
   type WorkflowVersion,
 } from "../schemas";
+import { changedByOthers } from "../utils";
 import {
   workflowApiProblems,
   workflowProblems,
@@ -86,6 +87,8 @@ export function WorkflowsPage({
   const [editTarget, setEditTarget] = useState<{
     workflowId: string;
     revision: number;
+    /** The saved draft this edit started from, to show what others changed. */
+    base: WorkflowDraft;
   } | null>(null);
   const detail = useWorkflow(agentId, editTarget?.workflowId ?? selected);
   const [versionPage, setVersionPage] = useQueryState(
@@ -100,6 +103,7 @@ export function WorkflowsPage({
   const [attempted, setAttempted] = useState(false);
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
+  const [notice, setNotice] = useState<string[]>([]);
   const [discard, setDiscard] = useState(false);
   const [archive, setArchive] = useState(false);
   const [historic, setHistoric] = useState<WorkflowVersion | null>(null);
@@ -122,6 +126,7 @@ export function WorkflowsPage({
     setEditTarget(null);
     setError("");
     setConflict(false);
+    setNotice([]);
     setDiscard(false);
   };
   const changeDraft = (next: WorkflowDraft) => {
@@ -152,6 +157,7 @@ export function WorkflowsPage({
       setEditTarget(null);
       setError("");
       setConflict(false);
+      setNotice([]);
       setHistoric(null);
       setVersionPage(1);
       void setSelected(saved.id);
@@ -272,6 +278,7 @@ export function WorkflowsPage({
                     setEditTarget({
                       workflowId: detail.data!.id,
                       revision: detail.data!.revision,
+                      base: detail.data!.version.draft,
                     });
                     setShowHistory(false);
                   }}
@@ -349,20 +356,38 @@ export function WorkflowsPage({
             conflict
               ? async () => {
                   const latest = await detail.refetch();
-                  if (latest.data) {
+                  if (latest.data && editTarget) {
+                    setNotice(
+                      changedByOthers(
+                        editTarget.base,
+                        latest.data.version.draft,
+                      ),
+                    );
                     setEditTarget({
                       workflowId: latest.data.id,
                       revision: latest.data.revision,
+                      base: latest.data.version.draft,
                     });
                     setConflict(false);
-                    setError(
-                      "Current revision loaded. Your edits are retained. Review them before saving a new version.",
-                    );
+                    setError("");
                   }
                 }
               : undefined
           }
         />
+      )}
+      {draft && editTarget && !error && notice.length > 0 && (
+        <div role="status" className="af-card p-5 mb-5">
+          <p>
+            Current revision loaded. Your edits are retained; saving replaces
+            these changes made since you started:
+          </p>
+          <ul className="mt-2 list-disc pl-5">
+            {notice.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
       )}
       {draft ? (
         <WorkflowEditor

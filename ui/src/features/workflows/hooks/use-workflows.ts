@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { api } from "@/shared/api";
+import { agentsKey } from "@/features/agents/utils";
 import { ApiError } from "@/shared/api/error/errors";
 import { createQueryKeyStructure } from "@/shared/query-keys";
 
@@ -128,6 +129,9 @@ export function useWorkflowActions(agentId: string) {
     if (!(error instanceof ApiError) || ![403, 404, 409].includes(error.status))
       return;
     void invalidateLists();
+    // Save authority comes from the Agent's own permissions; refetch them.
+    if (error.status === 403)
+      void client.invalidateQueries({ queryKey: agentsKey.detail(agentId) });
     void client.invalidateQueries({
       queryKey: workflowKeys.capabilities(scope.key),
     });

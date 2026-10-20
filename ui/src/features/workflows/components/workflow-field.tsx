@@ -35,9 +35,9 @@ export function WorkflowField({
       <label className="block text-sm font-medium">
         {label}
         {area ? (
-          <textarea maxLength={4000} {...control} />
+          <textarea {...control} />
         ) : (
-          <input maxLength={200} {...control} />
+          <input {...control} />
         )}
       </label>
       {error && (

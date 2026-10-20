@@ -1,3 +1,5 @@
+import { type WorkflowDraft } from "./schemas";
+
 const KEY_MAX = 64;
 
 /** FNV-1a over UTF-8 bytes: a short, deterministic suffix that reduces normalization collisions. */
@@ -32,4 +34,40 @@ export function inputKeyFromLabel(label: string): string {
   if (lossy || key.length > KEY_MAX)
     key = `${key.slice(0, KEY_MAX - 9).replace(/-+$/, "")}-${labelHash(folded)}`;
   return key;
+}
+
+const SHOWN_MAX = 200;
+const shown = (value: string | null) => {
+  const text = value ?? "none";
+  return text.length > SHOWN_MAX ? `${text.slice(0, SHOWN_MAX)}…` : text;
+};
+
+/**
+ * Lines naming what another save changed between the draft an edit started
+ * from and the current revision, so loading it never overwrites unseen work.
+ */
+export function changedByOthers(
+  base: WorkflowDraft,
+  latest: WorkflowDraft,
+): string[] {
+  const differs = (a: unknown, b: unknown) =>
+    JSON.stringify(a) !== JSON.stringify(b);
+  const lines: string[] = [];
+  if (differs(base.name, latest.name))
+    lines.push(`Name is now “${shown(latest.name)}”`);
+  if (differs(base.description, latest.description))
+    lines.push(`Outcome is now “${shown(latest.description)}”`);
+  if (differs(base.steps, latest.steps))
+    lines.push(
+      `Steps are now: ${latest.steps.map((step) => step.name || "Untitled step").join(", ") || "none"}`,
+    );
+  if (differs(base.inputs, latest.inputs))
+    lines.push(
+      `Inputs are now: ${latest.inputs.map((input) => input.label).join(", ") || "none"}`,
+    );
+  if (differs(base.finalArtifactDescription, latest.finalArtifactDescription))
+    lines.push(
+      `Final output is now “${shown(latest.finalArtifactDescription)}”`,
+    );
+  return lines;
 }

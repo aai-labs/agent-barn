@@ -13,6 +13,12 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-20 — AF-388 — review follow-ups on PR #308
+
+- Reproduced: after a 409, a failed capabilities refresh hid the Workflows tab and discarded the draft; "Load current revision" silently replaced another user's change and reported success in the error style; after a 403 the cached Agent permissions kept Save enabled; a 4,000-emoji description the API accepted failed UI response validation.
+- Changed: a failed capability refresh keeps the last known state; loading the current revision lists what changed since the edit began in a neutral notice; a 403 refetches Agent permissions; length limits count code points and saved snapshots are read without input limits.
+- Verification: four new browser tests fail without the fix and pass with it; 152 workflow, platform-setting and Agent detail browser tests pass; UI types and lint pass.
+
 ### 2026-10-15 — AF-388 — CI audit projection test setup
 
 - Reproduced: `ci-api / Test` failed because Redis was unavailable, leaving the workflow-setting event delivery pending. The audit test attempted processing without establishing its required enqueued state, so no projection was produced. The same assertion failed locally with `REDIS_URL=redis://127.0.0.1:1/0` before the fix.

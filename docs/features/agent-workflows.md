@@ -61,10 +61,13 @@ null creator provenance without rewriting content. Archive increments the
 revision, retains all versions and prevents further authoring. There is no
 unarchive or version-delete API in WF01.
 
-Validation returns actionable 422 errors. Stale revisions and archive conflicts
+Text limits (4,000 characters for descriptions, 200 for names) count Unicode
+code points on the API and in the editor; saved snapshots are read back without
+input limits. Validation returns actionable 422 errors. Stale revisions and archive conflicts
 return 409. The editor retains its draft after validation, transport or conflict
 failure; loading the current revision is an explicit action that keeps edits
-for review before another save.
+and lists what the other save changed (name, outcome, steps, inputs, final
+output) before another save replaces it.
 
 ## Manual workflow building
 
@@ -132,11 +135,12 @@ current deployment default still persists that explicit choice.
 
 The Agent’s Workflows tab opens `/dashboard/{orgId}/agents/{id}?tab=workflows`.
 The tab and its content appear only when the installation capability enables
-authoring. While disabled (or capability loading fails), Agent navigation omits
+authoring. While disabled (or before capability loading first succeeds), Agent navigation omits
 Workflows, and direct/legacy workflow links render the Agent’s default visible
 tab without loading workflow definitions or history. This is UI visibility only:
 saved data and the existing API read/authoring contracts are unchanged. A disabled
-capability observed while the tab is open unmounts its view and local draft.
+capability observed while the tab is open unmounts its view and local draft; a failed
+capability refresh keeps the last known state, so the tab and draft stay.
 It requires `agent.read`, independently of conversation/activity access. Existing
 `/workflows` links redirect to the tab and preserve the selected `workflow` query.
 The editor supports adding, removing, undoing and reordering steps.
@@ -181,7 +185,8 @@ Successful saves seed the exact detail cache from the server response, avoiding
 an immediate redundant detail GET, and invalidate the scoped lists/history.
 Archive invalidates the definition and history as well as its scoped lists.
 Mutation 403/404/409 responses also invalidate the affected definition,
-capabilities and lists. Organization switching evicts workflow caches, while
+capabilities and lists; a 403 also refetches the Agent's own permissions, which
+decide whether authoring controls stay enabled. Organization switching evicts workflow caches, while
 page state is keyed by Organization/Agent so drafts cannot cross scope. List and
 history pages use `workflowPage` and `workflowVersionPage` URL parameters, so
 reloads and returning from a definition retain their position. Invalid,

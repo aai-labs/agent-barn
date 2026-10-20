@@ -332,6 +332,83 @@ test.describe("WF01 workflow authoring", () => {
       page.getByRole("heading", { name: "Weekly pipeline report" }),
     ).toBeVisible();
   });
+  test("loading the current revision names what another save changed", async ({
+    page,
+  }) => {
+    await support.intercept(MOCK_AGENT_ID, { saved: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(MOCK_AGENT_ID, TEST_ORG_ID, WORKFLOW_ID);
+    await page.getByRole("button", { name: "Edit workflow" }).click();
+    await page.getByLabel("Workflow name").fill("My edited report");
+    support.conflictSave = true;
+    support.conflictDescription = "Owner rewrote the outcome";
+    await workflows.save();
+    await page
+      .getByRole("button", { name: "Load current revision and keep my edits" })
+      .click();
+    const notice = page.getByRole("status").filter({
+      hasText: "Current revision loaded",
+    });
+    await expect(notice).toContainText("Owner rewrote the outcome");
+    await expect(
+      page.getByRole("alert", { name: "Workflow error" }),
+    ).toHaveCount(0);
+  });
+  test("a failed capabilities refresh keeps the tab and the draft", async ({
+    page,
+  }) => {
+    await support.intercept(MOCK_AGENT_ID, { saved: true });
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(MOCK_AGENT_ID, TEST_ORG_ID, WORKFLOW_ID);
+    await page.getByRole("button", { name: "Edit workflow" }).click();
+    await page.getByLabel("Workflow name").fill("My edited report");
+    support.failCapabilities = true;
+    support.conflictSave = true;
+    await workflows.save();
+    // The refresh is retried before it reports failure.
+    await expect(
+      page.getByText("We couldn’t load authoring availability"),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Workflows", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Workflow name")).toHaveValue(
+      "My edited report",
+    );
+  });
+  test("losing save authority disables Save after the first refusal", async ({
+    page,
+  }) => {
+    await support.intercept(MOCK_AGENT_ID);
+    const workflows = new WorkflowsPage(page);
+    await workflows.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    await workflows.create("Summarize weekly pipeline changes");
+    await workflows.buildExample();
+    support.forbidSave = true;
+    await new DataSupport(page).agents.interceptGetAgentRequest({
+      body: { ...mockAgent, allowed_actions: ["agent.read"] },
+    });
+    await workflows.save();
+    await expect(
+      page.getByRole("button", { name: "Save workflow", exact: true }),
+    ).toBeDisabled();
+    await expect(page.getByLabel("Workflow name")).toBeDisabled();
+    expect(support.saveRequests).toHaveLength(1);
+  });
+  test("opens a definition whose text uses the API's code-point limit", async ({
+    page,
+  }) => {
+    await support.intercept(MOCK_AGENT_ID, {
+      saved: true,
+      viewer: true,
+      description: "😀".repeat(4000),
+    });
+    await new WorkflowsPage(page).goto(MOCK_AGENT_ID, TEST_ORG_ID, WORKFLOW_ID);
+    await expect(
+      page.getByRole("heading", { name: "Weekly pipeline report" }),
+    ).toBeVisible();
+    await expect(page.getByText("Response validation failed")).toHaveCount(0);
+  });
   test("reads only visible views and reuses the save response instead of rereading", async ({
     page,
   }) => {
