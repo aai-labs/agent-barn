@@ -25,6 +25,7 @@ export const SKILL_PROVIDER_LABELS: Record<string, string> = {
   bitbucket: "Bitbucket",
   google_workspace: "Google Workspace",
   gmail: "Gmail",
+  gmail_app_password: "Gmail (app password)",
   sharepoint: "SharePoint",
   pipedrive: "Pipedrive",
   apollo: "Apollo",

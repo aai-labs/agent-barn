@@ -7,6 +7,7 @@ import {
 } from "../pages/data-support/agent-data-support.po";
 import {
   mockCustomSkill,
+  mockGmailSkill,
   mockJiraSkill,
   mockSharePointSkill,
 } from "../pages/data-support/skill-data-support.po";
@@ -219,6 +220,32 @@ test.describe("Hire Dialog", () => {
     await expect(requiredSection.getByText("my-tool", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Additional skills" })).toBeVisible();
     await expect(page.getByText("my-tool", { exact: true })).toBeVisible();
+  });
+
+  test("does not offer a skill that needs Gmail sign-in", async ({ page }) => {
+    const jiraRequiredSkill = {
+      id: mockJiraSkill.id,
+      name: mockJiraSkill.name,
+      source: mockJiraSkill.source,
+      required_providers: mockJiraSkill.requiredProviders,
+      tools_pointer: mockJiraSkill.toolsPointer,
+      required: true,
+      created_at: mockJiraSkill.createdAt,
+      updated_at: mockJiraSkill.updatedAt,
+      group_key: null,
+    };
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [{ ...mockTemplates[0], required_skills: [jiraRequiredSkill] }] },
+    });
+    await dataSupport.skills.interceptGetSkillsRequest({ body: [mockJiraSkill, mockCustomSkill, mockGmailSkill] });
+
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+    await chooseTemplate(page);
+
+    await expect(page.getByRole("heading", { name: "Additional skills" })).toBeVisible();
+    await expect(page.getByText("my-tool", { exact: true })).toBeVisible();
+    await expect(page.getByText(mockGmailSkill.name, { exact: true })).toHaveCount(0);
   });
 
   test("explains that a template requiring SharePoint can't be hired yet", async ({ page }) => {

@@ -112,6 +112,8 @@ class Config(BaseSettings):
     memory_runtime_service_key: str = ""
 
     memory_default_model: str = "openrouter/openai/gpt-4.1-mini"
+    # Used until a Platform Administrator chooses a Playbook Extraction model.
+    playbook_default_model: str = "openrouter/openai/gpt-4.1-mini"
     memory_litellm_active_key_hash: str = ""
 
     hindsight_base_url: str = ""

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Brain, Building2, CreditCard, Sparkles } from "lucide-react";
+import { BookOpenCheck, Brain, Building2, CreditCard, Sparkles } from "lucide-react";
+import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
@@ -9,6 +9,7 @@ import { PlatformMemorySettings } from "@/features/agent-memory/components/platf
 import { PlatformBillingSettings } from "@/features/billing/components/platform-billing-settings";
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
 import { PlatformOrganizationSettings } from "@/features/organizations/components/platform-organization-settings";
+import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
 
 const SECTIONS = {
   "agent-memory": {
@@ -20,6 +21,11 @@ const SECTIONS = {
     label: "Organizations",
     icon: <Building2 size={15} aria-hidden />,
     description: "What every organization gets unless you set something else for it.",
+  },
+  playbooks: {
+    label: "Playbooks",
+    icon: <BookOpenCheck size={15} aria-hidden />,
+    description: "How playbooks are extracted from an Agent's conversations, for every Organization.",
   },
   trials: {
     label: "Signup & trials",
@@ -36,7 +42,13 @@ const SECTIONS = {
 type SectionKey = keyof typeof SECTIONS;
 
 export function PlatformSettings() {
-  const [active, setActive] = useState<SectionKey>("agent-memory");
+  // In the URL so a section can be linked to, e.g. ?section=playbooks.
+  const [active, setActive] = useQueryState(
+    "section",
+    parseAsStringEnum<SectionKey>(Object.keys(SECTIONS) as SectionKey[])
+      .withDefault("agent-memory")
+      .withOptions({ scroll: false, history: "replace" }),
+  );
   const section = SECTIONS[active];
 
   return (
@@ -63,7 +75,7 @@ export function PlatformSettings() {
             eyebrow="Platform"
             items={Object.entries(SECTIONS).map(([key, item]) => ({ key, label: item.label, icon: item.icon }))}
             activeKey={active}
-            onSelect={(key) => setActive(key as SectionKey)}
+            onSelect={(key) => void setActive(key as SectionKey)}
           />
         }
         heading={section.label}
@@ -71,6 +83,7 @@ export function PlatformSettings() {
       >
         {active === "agent-memory" && <PlatformMemorySettings />}
         {active === "organizations" && <PlatformOrganizationSettings />}
+        {active === "playbooks" && <PlatformPlaybookSettings />}
         {active === "trials" && <PlatformTrialSettings />}
         {active === "billing" && <PlatformBillingSettings />}
       </SettingsPageLayout>

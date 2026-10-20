@@ -37,6 +37,7 @@ import {
   getIntegrationProvider,
   hasIncompleteIntegration,
   isOAuthConnected,
+  isOfferedSkill,
   isSignInOnlyProvider,
   type IntegrationDraft,
 } from "../integrations";
@@ -102,7 +103,7 @@ export const AgentSkillsTab = forwardRef<
 
   const assignedIds = new Set(agent.skills.map((s) => s.id));
   const availableSkills = skills.filter(
-    (s) => !assignedIds.has(s.id) && !pendingAddIds.includes(s.id),
+    (s) => !assignedIds.has(s.id) && !pendingAddIds.includes(s.id) && isOfferedSkill(s),
   );
 
   const newlyRequiredProviderIds = [

@@ -12,17 +12,22 @@ from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
+    GmailAppPasswordContent,
     GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
     PipedriveContent,
+    SecretProvider,
 )
 from api.domains.integrations.plugins.providers import GmailPlugin
+from api.infrastructure.google.gmail_imap import MailSignInFailed, MailUnavailable
+from api.infrastructure.integration_validators import PROVIDER_VALIDATORS
 from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
 from api.infrastructure.integration_validators.gmail import validate_gmail
+from api.infrastructure.integration_validators.gmail_app_password import validate_gmail_app_password
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
@@ -855,6 +860,41 @@ def test_apollo_network_error_returns_error():
 
     assert result.valid is False
     assert "apollo" in (result.error or "").lower()
+
+
+# ── Gmail app password ────────────────────────────────────────────────────────
+
+_GMAIL_APP_PASSWORD = GmailAppPasswordContent(email="someone@gmail.com", app_password="abcdefghijklmnop")
+_GMAIL_SIGN_IN = "api.infrastructure.integration_validators.gmail_app_password.gmail_imap.check_sign_in"
+
+
+def test_gmail_app_password_that_signs_in_is_valid():
+    with patch(_GMAIL_SIGN_IN) as sign_in:
+        result = validate_gmail_app_password(_GMAIL_APP_PASSWORD)
+
+    assert result.valid is True
+    assert result.identity == "someone@gmail.com"
+    sign_in.assert_called_once_with("someone@gmail.com", "abcdefghijklmnop")
+
+
+def test_gmail_app_password_gmail_rejects_is_invalid():
+    with patch(_GMAIL_SIGN_IN, side_effect=MailSignInFailed()):
+        result = validate_gmail_app_password(_GMAIL_APP_PASSWORD)
+
+    assert result.valid is False
+    assert "app password" in (result.error or "").lower()
+
+
+def test_gmail_app_password_unreachable_gmail_returns_error():
+    with patch(_GMAIL_SIGN_IN, side_effect=MailUnavailable("could not reach Gmail")):
+        result = validate_gmail_app_password(_GMAIL_APP_PASSWORD)
+
+    assert result.valid is False
+    assert "gmail" in (result.error or "").lower()
+
+
+def test_gmail_app_password_is_validated_on_save():
+    assert PROVIDER_VALIDATORS[SecretProvider.GMAIL_APP_PASSWORD] is validate_gmail_app_password
 
 
 # ── Google Workspace (gog) ────────────────────────────────────────────────────

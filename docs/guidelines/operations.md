@@ -321,6 +321,12 @@ budgets, and spend. On key rotation provision the persisted model, startup
 fallback, and models needed by in-progress operations on the new key. Keep
 retired hashes for delayed cost attribution.
 
+The Playbook Extraction model is chosen at Platform Settings. Until then the API and worker use
+`PLAYBOOK_DEFAULT_MODEL` (`openrouter/openai/gpt-4.1-mini` when unset); Compose reads it from `.env`,
+and Helm deployments use the default. The worker calls LiteLLM directly for these runs, so its
+Deployment and Compose service receive `LITELLM_BASE_URL` like the API, and the Compose worker also
+receives `MEMORY_VIEW_BASE_URL` to read long-term memories (Helm supplies it through the API Secret).
+
 Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
 customize the initial model. Both deployments use that one setting for the API
 default and Hindsight startup model. When using charts directly, set API

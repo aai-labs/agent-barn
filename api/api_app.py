@@ -52,6 +52,8 @@ from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_r
 from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
 from api.domains.organizations.routes import org_router, platform_org_router, platform_organization_settings_router
 from api.domains.platform_admin.routes import platform_stats_router
+from api.domains.playbooks.platform_routes import platform_playbooks_router
+from api.domains.playbooks.routes import agent_playbook_extractions_router, playbook_extractions_router
 from api.domains.rbac.seeder import RbacSeeder
 from api.domains.resource_limits.routes import platform_resource_limits_router
 from api.domains.resource_usage.platform_routes import platform_resource_usage_router
@@ -168,6 +170,9 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(skills_router)
     subapi.include_router(agent_skills_router)
     subapi.include_router(platform_skills_router)
+    subapi.include_router(agent_playbook_extractions_router)
+    subapi.include_router(playbook_extractions_router)
+    subapi.include_router(platform_playbooks_router)
     subapi.include_router(integrations_router)
     subapi.include_router(sharepoint_sign_in_router)
     subapi.include_router(microsoft_callback_router)

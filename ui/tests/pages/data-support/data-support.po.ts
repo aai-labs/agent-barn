@@ -14,6 +14,7 @@ import { OrgTemplateDataSupport } from "./org-template-data-support.po";
 import { PlatformMemoryDataSupport } from "./platform-memory-data-support.po";
 import { PlatformStatsDataSupport } from "./platform-stats-data-support.po";
 import { PlatformTemplateDataSupport } from "./platform-template-data-support.po";
+import { PlaybookDataSupport } from "./playbook-data-support.po";
 import { ResourceUsageDataSupport } from "./resource-usage-data-support.po";
 import { SkillDataSupport } from "./skill-data-support.po";
 import { SyncProviderDataSupport } from "./sync-provider-data-support.po";
@@ -37,6 +38,7 @@ export class DataSupport {
   public platformTemplates: PlatformTemplateDataSupport;
   public platformMemory: PlatformMemoryDataSupport;
   public platformStats: PlatformStatsDataSupport;
+  public playbooks: PlaybookDataSupport;
   public resourceUsage: ResourceUsageDataSupport;
 
   constructor(page: Page) {
@@ -57,6 +59,7 @@ export class DataSupport {
     this.platformTemplates = new PlatformTemplateDataSupport(page);
     this.platformMemory = new PlatformMemoryDataSupport(page);
     this.platformStats = new PlatformStatsDataSupport(page);
+    this.playbooks = new PlaybookDataSupport(page);
     this.resourceUsage = new ResourceUsageDataSupport(page);
   }
 }

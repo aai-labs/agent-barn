@@ -27,6 +27,8 @@ import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
 import { ActivityTab } from "./activity-tab";
 import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
+import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
+import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
 import { AgentTelegramSetup } from "./agent-telegram-setup";
@@ -42,6 +44,7 @@ type Tab =
   | "tool-calls"
   | "logs"
   | "memory"
+  | "playbooks"
   | "activity"
   | "costs"
   | "resource-usage"
@@ -52,6 +55,7 @@ const VALID_TABS: Tab[] = [
   "tool-calls",
   "logs",
   "memory",
+  "playbooks",
   "activity",
   "costs",
   "resource-usage",
@@ -62,6 +66,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
   const canReadCosts = canAgent(agent, "cost.read");
+  // A run reads this Agent's activity and writes an Organization Skill, so it needs both
+  // activity.read and the Owner/Admin Organization Role that holds skill.manage.
+  const { role } = useActiveOrgRole();
+  const canExtractPlaybooks = canReadActivity && (role === "OWNER" || role === "ADMIN");
   const { health } = useAgentHealth(
     agentId,
     canReadActivity &&
@@ -104,6 +112,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     // Every part of Activity needs activity.read: the runtime diagnostics on
     // their own, the usage sections together with cost.read. The tab itself
     // decides what to show a reader who has only the first.
+    ...(canExtractPlaybooks ? ([["playbooks", "Playbooks"]] as [Tab, string][]) : []),
     ...(canReadActivity ? ([["activity", "Activity"]] as [Tab, string][]) : []),
     // Costs is gated on cost.read alone, independent of activity.read: a custom
     // Agent Access Role can grant one Permission without the other, and this is
@@ -331,6 +340,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
+            {resolvedTab === "playbooks" && canExtractPlaybooks && <AgentPlaybooksTab agent={agent} />}
             {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}
             {resolvedTab === "resource-usage" && (
