@@ -36,6 +36,8 @@ export type NavItem = {
   /** Shown nested under the item while it is active, or always when `expanded`. */
   children?: NavItem[];
   expanded?: boolean;
+  /** Called when someone points at, focuses or presses the item: a moment to fetch ahead. */
+  onIntent?: () => void;
 };
 
 export type NavGroup = { key: string; label?: string; items: NavItem[] };

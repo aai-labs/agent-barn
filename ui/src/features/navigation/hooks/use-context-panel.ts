@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname, useSearchParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 
 import {
@@ -14,6 +15,7 @@ import {
   configurationSectionLabel,
   visibleAgentConfigurationSections,
 } from "@/features/agents/components/agent-configuration-utils";
+import { conversationChannelsQuery } from "@/features/agents/hooks/use-conversations";
 import type { Agent } from "@/features/agents/schemas";
 import {
   ORGANIZATION_SETTINGS_ICONS,
@@ -61,6 +63,7 @@ export function useContextPanel(): ContextPanelModel | null {
   const agentRoute = parseAgentRoute(pathname);
   const agent = useCachedAgent(agentRoute?.agentId);
   const workflowAuthoring = useCachedWorkflowAuthoring(agentRoute?.agentId);
+  const queryClient = useQueryClient();
 
   if (pathname.startsWith(PLATFORM_BASE)) {
     return platformPanel(pathname, searchParams.get("section"));
@@ -127,6 +130,16 @@ export function useContextPanel(): ContextPanelModel | null {
             href: tab === DEFAULT_AGENT_TAB ? agentBase : `${agentBase}?tab=${tab}`,
             icon: AGENT_TAB_ICONS[tab],
             active: tab === activeTab,
+            // Conversations swaps the panel for its channel list; fetching the list as the
+            // pointer arrives means the first visit shows it at once, as later ones do.
+            onIntent:
+              tab === "conversations"
+                ? () =>
+                    void queryClient.prefetchQuery({
+                      ...conversationChannelsQuery(`/api/v1/organizations/${orgId}`, agentId),
+                      staleTime: 30_000,
+                    })
+                : undefined,
           })),
       })).filter((group) => group.items.length > 0),
       footer: agent

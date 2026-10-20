@@ -252,6 +252,9 @@ export function PanelLink({
         href={item.href}
         aria-current={item.active ? "page" : undefined}
         onClick={navigate}
+        onPointerEnter={item.onIntent}
+        onFocus={item.onIntent}
+        onPointerDown={item.onIntent}
         className={`flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13.5px] transition-colors ${item.active ? "" : "af-hover-bg"}`}
         style={{
           color,

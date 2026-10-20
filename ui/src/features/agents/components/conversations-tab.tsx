@@ -4,6 +4,8 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQueryState, parseAsString } from "nuqs";
 
+import { Skeleton } from "@/components/ui/skeleton";
+
 import type { Agent, ConversationChannel, ConversationMessage, ConversationThread } from "../schemas";
 import {
   useChannelMessages,
@@ -117,7 +119,20 @@ export function ConversationChannelList({ agentId }: { agentId: string }) {
   const { channels, isLoading } = useConversationChannels(agentId);
   const [selectedChannel, setSelectedChannel] = useSelectedChannel();
 
-  if (isLoading) return null;
+  // Rows the shape of the list, so the panel keeps its form while the channels arrive
+  // instead of emptying and then filling.
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-1.5 px-2.5 pt-4" aria-busy="true" aria-label="Loading conversations">
+        {[0, 1, 2].map((row) => (
+          <div key={row} className="py-1.5">
+            <Skeleton className="h-3.5 w-3/4" />
+            <Skeleton className="mt-1.5 h-3 w-1/2" />
+          </div>
+        ))}
+      </div>
+    );
+  }
   if (channels.length === 0) {
     return (
       <p className="m-0 px-2.5 py-3 text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>

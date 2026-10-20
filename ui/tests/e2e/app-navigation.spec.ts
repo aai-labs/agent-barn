@@ -199,6 +199,34 @@ test.describe("App navigation", () => {
       expect(await page.evaluate(() => (window as unknown as { __seen: { newChat: boolean } }).__seen.newChat)).toBe(false);
     });
 
+    test("loads Conversations' channels as the pointer arrives, so the panel never empties", async ({ page }) => {
+      let channelRequests = 0;
+      // Slow enough that, without fetching ahead, the panel would show its loading rows.
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/conversations/channels`, async (route) => {
+        channelRequests += 1;
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        await route.fulfill({ json: [] });
+      });
+      await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=chat`);
+      await navigation.backToSections().click();
+      await page.evaluate(() => {
+        const seen = { loading: false };
+        (window as unknown as { __seen: typeof seen }).__seen = seen;
+        new MutationObserver(() => {
+          if (document.querySelector('aside [aria-label="Loading conversations"]')) seen.loading = true;
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+
+      await navigation.panelLink("Conversations").hover();
+      await expect.poll(() => channelRequests).toBe(1);
+      await page.waitForTimeout(800);
+      await navigation.panelLink("Conversations").click();
+
+      await expect(page.getByRole("complementary")).toContainText("No conversations yet.");
+      // The list may refresh in the background on arrival; it shows the fetched one meanwhile.
+      expect(await page.evaluate(() => (window as unknown as { __seen: { loading: boolean } }).__seen.loading)).toBe(false);
+    });
+
     test("keeps Members inside the Organization, with no way back to Platform View", async ({ page }) => {
       await page.goto(`/dashboard/${TEST_ORG_ID}/members`);
 
