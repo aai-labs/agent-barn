@@ -90,6 +90,10 @@ class OneDriveSyncProviderPlugin(SyncProviderPlugin):
         "connecting must be a SharePoint Administrator and a member of the site they pick."
     )
     location_noun = "SharePoint site"
+    server_setup_hint = (
+        "Set ONEDRIVE_SYNC_CLIENT_ID and ONEDRIVE_SYNC_CLIENT_SECRET for a multi-tenant Microsoft Entra app in "
+        "the server configuration, then redeploy. See “Connecting OneDrive (manual step)” in the README."
+    )
     capabilities = frozenset({SyncProviderCapability.LOCATION_PICKER, SyncProviderCapability.ADMIN_APPROVAL})
     location_guard = SyncLocationGuard.SHAREPOINT_AGENT_SITES
 

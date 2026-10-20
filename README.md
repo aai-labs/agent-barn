@@ -39,7 +39,7 @@ Credentials are encrypted at rest in your own PostgreSQL.
 - [What ships in the box](#what-ships-in-the-box) — [agents](#agents), [skills](#skills), [runtimes](#runtimes)
 - [Capabilities](#capabilities)
 - [Development](#development) — [native](#native-non-docker-development), [k3d](#local-kubernetes-k3d), [migrations](#database-migrations), [tests](#tests-and-checks), [troubleshooting](#troubleshooting)
-- [Deploying to Kubernetes](#deploying-to-kubernetes) — [usage analytics](#usage-analytics), [connecting agent email](#connecting-agent-email-manual-step)
+- [Deploying to Kubernetes](#deploying-to-kubernetes) — [usage analytics](#usage-analytics), [connecting agent email](#connecting-agent-email-manual-step), [connecting OneDrive](#connecting-onedrive-manual-step)
 - [Repository layout](#repository-layout)
 - [Getting help and contributing](#getting-help-and-contributing)
 
@@ -701,6 +701,36 @@ Do this once per environment, in this order:
 Full setup — the two separate Cloudflare onboardings, the environment variables
 and secrets, quota limits, and secret rotation — is in
 [`docs/guidelines/operations.md`](docs/guidelines/operations.md#per-agent-email-addresses).
+
+### Connecting OneDrive (manual step)
+
+Organizations can connect OneDrive from **Settings → Sync**, so Agent Barn keeps
+an "Agent Barn" folder in one of their SharePoint sites. It is optional and needs
+your own Microsoft app: until `ONEDRIVE_SYNC_CLIENT_ID` and
+`ONEDRIVE_SYNC_CLIENT_SECRET` are both set, Settings → Sync shows OneDrive as
+"Not set up on this server". Do this once per install, in the Microsoft Entra
+admin center (needs the Application Administrator or Application Developer role):
+
+1. **App registrations → New registration.** Choose **Accounts in any
+   organizational directory (Multitenant)**. Single-tenant apps are refused,
+   because Agent Barn signs in through Microsoft's shared `organizations`
+   endpoint.
+2. **Redirect URI:** platform **Web**,
+   `<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback`.
+   Microsoft requires HTTPS unless the host is `localhost`.
+3. **API permissions → Microsoft Graph:** application `Sites.Selected`;
+   delegated `Sites.FullControl.All`, `Sites.Read.All`, `openid`, `profile`.
+4. **Certificates & secrets → New client secret.** Copy the value at once and
+   note its expiry; OneDrive connections stop working when it expires.
+5. Put the app's **Application (client) ID** and the secret in `.env.deploy` as
+   `ONEDRIVE_SYNC_CLIENT_ID` and `ONEDRIVE_SYNC_CLIENT_SECRET`, then redeploy.
+6. A Microsoft Global Administrator of each organization that connects approves
+   the app once (for your own organization: **API permissions → Grant admin
+   consent**). An Owner or Admin who is a SharePoint Administrator then clicks
+   **Connect** in Settings → Sync and picks a site.
+
+How connecting works, and its limits:
+[`docs/features/sync-provider/README.md`](docs/features/sync-provider/README.md).
 
 ## Repository layout
 

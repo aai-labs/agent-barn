@@ -12,6 +12,7 @@ import {
   oneDriveEntry,
   otherDriveEntry,
   pendingConnection,
+  unavailableOneDriveEntry,
 } from "../pages/data-support/sync-provider-data-support.po";
 import { SettingsSyncPage } from "../pages/settings-sync.po";
 
@@ -145,6 +146,30 @@ test.describe("Settings · Sync · the provider list", () => {
 
     await expect(sync.row(ONEDRIVE)).toContainText("no SharePoint site has been chosen yet");
     await expect(sync.locationSearch(ONEDRIVE, SITE_NOUN)).toHaveCount(0);
+  });
+
+  test("an Owner is told which server settings enable a provider that isn't set up", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.syncProviders.interceptProviders({ providers: [unavailableOneDriveEntry()] });
+
+    await sync.open();
+
+    await expect(sync.row(ONEDRIVE)).toContainText("Not set up on this server");
+    await expect(sync.row(ONEDRIVE)).toContainText("ONEDRIVE_SYNC_CLIENT_ID");
+    await expect(sync.row(ONEDRIVE)).toContainText("ONEDRIVE_SYNC_CLIENT_SECRET");
+    await expect(sync.connect(ONEDRIVE)).toHaveCount(0);
+    await expect(sync.approvalLink(ONEDRIVE)).toHaveCount(0);
+  });
+
+  test("a Member is only told a provider isn't set up", async () => {
+    await data.users.interceptGetUserContextRequest({ userContext: memberContext() });
+    await data.syncProviders.interceptProviders({ providers: [unavailableOneDriveEntry()] });
+
+    await sync.open();
+
+    await expect(sync.row(ONEDRIVE)).toContainText("OneDrive isn't set up on this server.");
+    await expect(sync.row(ONEDRIVE)).not.toContainText("ONEDRIVE_SYNC_CLIENT_ID");
+    await expect(sync.row(ONEDRIVE)).not.toContainText("An Organization Owner or Admin can connect.");
   });
 
   test("a list that fails to load can be retried", async () => {
