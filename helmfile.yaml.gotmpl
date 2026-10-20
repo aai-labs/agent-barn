@@ -176,9 +176,6 @@ releases:
         value: {{ env "ORGANIZATION_DEFAULT_LLM_BUDGET_USD" | quote }}
       - name: organizationLlmBudgets.defaultAgentUsd
         value: {{ env "AGENT_DEFAULT_LLM_BUDGET_USD" | quote }}
-      # Public trial signup stays off unless an environment opts in.
-      - name: selfSignupEnabled
-        value: {{ env "SELF_SIGNUP_ENABLED" | default "false" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
@@ -229,6 +226,10 @@ releases:
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
         value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
+      - name: onedriveSyncClientId
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_ID" | default "" | quote }}
+      - name: onedriveSyncClientSecret
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_SECRET" | default "" | quote }}
       - name: agentFirecrawlApiKey
         value: {{ env "FIRECRAWL_API_KEY" | default "" | quote }}
       - name: apiExternalUrl
@@ -248,6 +249,8 @@ releases:
         value: {{ env "RESTORE_POINT_SIZE" | default "1Gi" | quote }}
       - name: restorePoints.maxPerAgent
         value: {{ env "RESTORE_POINT_MAX_PER_AGENT" | default "5" | quote }}
+      - name: workflows.authoringEnabled
+        value: {{ env "WORKFLOW_AUTHORING_ENABLED" | default "false" }}
       - name: agentDefaultModel
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist

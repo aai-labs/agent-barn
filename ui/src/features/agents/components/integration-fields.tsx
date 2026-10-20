@@ -218,7 +218,8 @@ export function IntegrationFields({
           connectedNote={provider.oauthConnectedNote}
           connectedEmail={connectedEmail || undefined}
           authorizeParams={authorizeParams}
-          requireEmail={needsServices}
+          // Every Google credential is stored with the account it signed in as.
+          requireEmail
         />
       )}
     </>

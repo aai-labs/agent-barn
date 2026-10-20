@@ -320,6 +320,38 @@ def test_exchange_redeems_the_code_with_the_verifier_and_no_secret(monkeypatch):
     assert_that(tokens.refresh_token, equal_to("rt"))
 
 
+def test_a_confidential_client_redeems_the_code_with_its_secret_and_the_verifier(monkeypatch):
+    recorder = _Recorder(_ok(refresh_token=None))
+    monkeypatch.setattr(httpx, "post", recorder)
+
+    MicrosoftIdentityClient().exchange_code(
+        tenant_id="organizations",
+        client_id=_APP_ID,
+        code="the-code",
+        redirect_uri="https://x/cb",
+        code_verifier="the-verifier",
+        scopes=("openid", "profile"),
+        client_secret="s3cret",
+    )
+
+    url, data = recorder.calls[0]
+    assert_that(url, equal_to("https://login.microsoftonline.com/organizations/oauth2/v2.0/token"))
+    assert_that(
+        data,
+        equal_to(
+            {
+                "grant_type": "authorization_code",
+                "client_id": _APP_ID,
+                "code": "the-code",
+                "redirect_uri": "https://x/cb",
+                "code_verifier": "the-verifier",
+                "scope": "openid profile",
+                "client_secret": "s3cret",
+            }
+        ),
+    )
+
+
 def test_a_rejection_carries_microsofts_error_code_and_description(monkeypatch):
     rejected = httpx.Response(401, json={"error": "invalid_client", "error_description": "AADSTS7000218: needs secret"})
     monkeypatch.setattr(httpx, "post", _Recorder(rejected))
@@ -386,3 +418,21 @@ def test_app_permission_consent_link_approves_the_apps_configured_permissions():
     assert_that(url, starts_with(f"https://login.microsoftonline.com/{_TENANT}/v2.0/adminconsent?"))
     assert_that(query["scope"], equal_to(["https://graph.microsoft.com/.default"]))
     assert_that(query["client_id"], equal_to([_APP_ID]))
+    assert_that("state" in query, equal_to(False))
+
+
+def test_app_permission_consent_link_carries_the_state_for_any_organization():
+    url = build_app_permission_consent_url(
+        tenant_id="organizations", client_id=_APP_ID, redirect_uri="https://x/cb", state="signed"
+    )
+
+    assert_that(url, starts_with("https://login.microsoftonline.com/organizations/v2.0/adminconsent?"))
+    assert_that(
+        _query(url),
+        has_entries(
+            client_id=_APP_ID,
+            scope="https://graph.microsoft.com/.default",
+            redirect_uri="https://x/cb",
+            state="signed",
+        ),
+    )

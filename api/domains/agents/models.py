@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
-from api.domains.agents.google_workspace_scopes import required_service_scopes
+from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
@@ -100,6 +100,8 @@ class SecretProvider(str, enum.Enum):
     SHAREPOINT = "sharepoint"
     APOLLO = "apollo"
     MERKYS = "merkys"
+    GMAIL = "gmail"
+    GMAIL_APP_PASSWORD = "gmail_app_password"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -119,6 +121,8 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.SHAREPOINT: "SharePoint credential",
     SecretProvider.APOLLO: "Apollo credential",
     SecretProvider.MERKYS: "Merkys credential",
+    SecretProvider.GMAIL: "Gmail credential",
+    SecretProvider.GMAIL_APP_PASSWORD: "Gmail app password",
 }
 
 
@@ -219,6 +223,28 @@ class GoogleWorkspaceContent(SecretContent):
             raise ValueError(
                 "scopes do not cover the selected Google services at the configured access level: " + ", ".join(missing)
             )
+        return self
+
+
+class GmailContent(SecretContent):
+    """Credential for aai-cli's Gmail profile: one read-only Gmail grant.
+
+    Separate from Google Workspace: it covers Gmail alone, is always read-only, and is
+    reached through aai-cli rather than gog. ``scopes`` records what Google granted.
+    ``client_id``/``client_secret`` are optional: empty means the server-owned client
+    is backfilled from config at agent-start time, which is the one-click path.
+    """
+
+    email: str = Field(min_length=1)
+    scopes: list[str] = Field(default_factory=list)
+    refresh_token: str
+    client_id: str = ""
+    client_secret: str = ""
+
+    @model_validator(mode="after")
+    def _validate_granted_scopes(self) -> Self:
+        if self.scopes and GMAIL_READONLY_SCOPE not in self.scopes:
+            raise ValueError(f"scopes do not include read-only Gmail access ({GMAIL_READONLY_SCOPE})")
         return self
 
 
@@ -376,6 +402,37 @@ class MerkysContent(SecretContent):
         return key
 
 
+class GmailAppPasswordContent(SecretContent):
+    """A Gmail address and Google app password, read over IMAP by the credential gateway.
+
+    An app password cannot be limited to reading, so it never enters the agent pod: the
+    gateway signs in on the agent's behalf and only opens the mailbox read-only. There is
+    no host field, so the password can only ever be sent to Gmail.
+    """
+
+    email: str = Field(min_length=3)
+    app_password: str = Field(min_length=1)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _trim_email(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("email")
+    @classmethod
+    def _require_address(cls, value: str) -> str:
+        local, _, domain = value.partition("@")
+        if not local or "." not in domain:
+            raise ValueError("email must be an email address")
+        return value
+
+    @field_validator("app_password", mode="before")
+    @classmethod
+    def _drop_display_spaces(cls, value: object) -> object:
+        # Google displays the password in groups of four; the spaces are not part of it.
+        return "".join(value.split()) if isinstance(value, str) else value
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
@@ -387,6 +444,8 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.SHAREPOINT: SharePointContent,
     SecretProvider.APOLLO: ApolloContent,
     SecretProvider.MERKYS: MerkysContent,
+    SecretProvider.GMAIL: GmailContent,
+    SecretProvider.GMAIL_APP_PASSWORD: GmailAppPasswordContent,
 }
 
 

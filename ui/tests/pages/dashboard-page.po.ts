@@ -25,7 +25,7 @@ export class DashboardPage {
   }
 
   async chooseHireTemplate(name: string) {
-    await this.page.getByRole("combobox").nth(1).click();
+    await this.page.getByRole("combobox", { name: "Template", exact: true }).click();
     await this.page.getByRole("option", { name, exact: true }).click();
   }
 
@@ -46,12 +46,26 @@ export class DashboardPage {
   }
 
   async openHireCard(keyboard = false) {
+    await this.openHireChoices(keyboard);
+  }
+
+  async openHireChoices(keyboard = false) {
     if (keyboard) {
       await this.hireCard().focus();
       await this.hireCard().press("Enter");
     } else {
       await this.hireCard().click();
     }
+  }
+
+  async chooseCustomHiring() {
+    await this.page.getByRole("radio", { name: /Build your own/ }).click();
+    await this.page.getByRole("button", { name: "Continue", exact: true }).click();
+  }
+
+  async chooseReadyMadeHiring() {
+    await this.page.getByRole("radio", { name: /Ready-made assistant/ }).click();
+    await this.page.getByRole("button", { name: "Continue", exact: true }).click();
   }
 
   lastActivityTime(name: string): Locator {

@@ -75,6 +75,14 @@ AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND=
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
 
+# Optional: multi-tenant Microsoft Entra app for Organization OneDrive sync. If
+# unset, OneDrive sync is unavailable. Register
+# "<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback" as a Web redirect URI
+# (Microsoft requires HTTPS unless the host is localhost). Permissions: application
+# Sites.Selected; delegated Sites.FullControl.All, Sites.Read.All, openid, profile.
+ONEDRIVE_SYNC_CLIENT_ID=
+ONEDRIVE_SYNC_CLIENT_SECRET=
+
 # Kubernetes client
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
 K8S_KUBECONFIG_PATH=
@@ -136,16 +144,11 @@ ORGANIZATION_DEFAULT_LLM_BUDGET_USD=
 # Required. Model spend limit (USD) an Agent is held to until its Organization sets a
 # default or the Agent its own. Must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD.
 AGENT_DEFAULT_LLM_BUDGET_USD=
-# Whether a first sign-in with Google creates an account and a trial Organization.
-# false turns new accounts away; existing users can still sign in with Google. Sign-in
-# uses GOOGLE_CLOUD_CLIENT_ID/SECRET; register <WEB_APP_URL>/api/v1/auth/google/callback
-# as a redirect URI on that client.
-SELF_SIGNUP_ENABLED=true
-# Credit (USD) a new trial Organization starts with, until a Platform Administrator
-# sets one on the platform settings page. Granted once; it never renews.
-TRIAL_DEFAULT_CREDIT_USD=10
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
+# WF01 authoring gate. Saving never enables workflow execution.
+# Initial default; a saved Platform Settings → Workflows choice overrides this.
+WORKFLOW_AUTHORING_ENABLED=false
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —
 # the public catalogue endpoint works unauthenticated.
 OPENROUTER_API_KEY=

@@ -9,6 +9,7 @@ provider credential on the agent's behalf. See
 import datetime
 import hashlib
 import secrets
+from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -150,3 +151,29 @@ class BrokeredTokenRead(PydanticBaseModel):
     access_token: str
     expires_in: int
     scopes: list[str] = []
+
+
+class ServedRequestHeader(PydanticBaseModel):
+    name: str = Field(max_length=256)
+    value: str = Field(max_length=8192)
+
+
+class ServedRequestBody(PydanticBaseModel):
+    """The complete request object an isolated aai-cli ``custom_api`` profile posts.
+
+    ``url`` names the provider resource inside the profile's base URL; the gateway never
+    fetches it. Headers are accepted because aai-cli always sends the list, and ignored.
+    """
+
+    method: str = Field(min_length=1, max_length=10)
+    url: str = Field(min_length=1, max_length=4096)
+    query: dict[str, Any] = Field(default_factory=dict)
+    body: Any = None
+    headers: list[ServedRequestHeader] = Field(default_factory=list, max_length=32)
+
+
+class ServedResponseRead(PydanticBaseModel):
+    """aai-cli's result envelope: the provider's status and body."""
+
+    status: int
+    body: Any

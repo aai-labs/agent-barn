@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { Brain, Sparkles } from "lucide-react";
+import { BookOpenCheck, Brain, Sparkles, Workflow } from "lucide-react";
+import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { PlatformMemorySettings } from "@/features/agent-memory/components/platform-memory-settings";
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
+import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
+import { PlatformWorkflowSettings } from "@/features/workflows/components/platform-workflow-settings";
 
 const SECTIONS = {
   "agent-memory": {
@@ -14,17 +16,33 @@ const SECTIONS = {
     icon: <Brain size={15} aria-hidden />,
     description: "Long-term memory settings shared by every Agent and Organization.",
   },
+  workflows: {
+    label: "Workflows",
+    icon: <Workflow size={15} aria-hidden />,
+    description: "Workflow authoring shared by every Agent and Organization.",
+  },
+  playbooks: {
+    label: "Playbooks",
+    icon: <BookOpenCheck size={15} aria-hidden />,
+    description: "How playbooks are extracted from an Agent's conversations, for every Organization.",
+  },
   trials: {
-    label: "Trials",
+    label: "Signup & trials",
     icon: <Sparkles size={15} aria-hidden />,
-    description: "What a new organization gets when someone signs themselves up.",
+    description: "Manage public signup and what each new trial organization receives.",
   },
 } as const;
 
 type SectionKey = keyof typeof SECTIONS;
 
 export function PlatformSettings() {
-  const [active, setActive] = useState<SectionKey>("agent-memory");
+  // In the URL so a section can be linked to, e.g. ?section=playbooks.
+  const [active, setActive] = useQueryState(
+    "section",
+    parseAsStringEnum<SectionKey>(Object.keys(SECTIONS) as SectionKey[])
+      .withDefault("agent-memory")
+      .withOptions({ scroll: false, history: "replace" }),
+  );
   const section = SECTIONS[active];
 
   return (
@@ -51,13 +69,16 @@ export function PlatformSettings() {
             eyebrow="Platform"
             items={Object.entries(SECTIONS).map(([key, item]) => ({ key, label: item.label, icon: item.icon }))}
             activeKey={active}
-            onSelect={(key) => setActive(key as SectionKey)}
+            onSelect={(key) => void setActive(key as SectionKey)}
           />
         }
         heading={section.label}
         description={section.description}
       >
-        {active === "agent-memory" ? <PlatformMemorySettings /> : <PlatformTrialSettings />}
+        {active === "agent-memory" && <PlatformMemorySettings />}
+        {active === "workflows" && <PlatformWorkflowSettings />}
+        {active === "playbooks" && <PlatformPlaybookSettings />}
+        {active === "trials" && <PlatformTrialSettings />}
       </SettingsPageLayout>
     </div>
   );

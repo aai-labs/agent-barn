@@ -32,6 +32,8 @@ export function useOnboardingActions() {
     mutationFn: async () =>
       (await api.post<Onboarding>(`${BASE}/agent`, undefined, { schema: OnboardingSchema })).data,
     onSuccess: (data) => client.setQueryData(KEY, data),
+    // Setup can fail after creating the Agent. Recover its ID for Web Chat and deferral.
+    onError: () => client.invalidateQueries({ queryKey: KEY }),
   });
   const complete = useMutation({
     mutationFn: async () => {

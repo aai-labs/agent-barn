@@ -279,6 +279,11 @@ def test_gateway_config_caps_turns_at_the_platform_default_unless_the_agent_sets
     assert own["agent"]["max_turns"] == 150
 
 
+def test_gateway_config_delivers_scheduled_results_without_the_cron_header_and_footer() -> None:
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert config["cron"] == {"wrap_response": False}
+
+
 def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -> None:
     """Auxiliary tasks left on the openrouter lane reach the proxy without the
     agent's key; smart approval then escalates every flagged command to the user.
@@ -288,6 +293,16 @@ def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -
     expected = {"provider": "custom", "base_url": "http://localhost:8090", "model": "gpt-5"}
     assert {"approval", "title_generation", "vision"} <= auxiliary.keys()
     assert all(task == expected for task in auxiliary.values())
+
+
+def test_gateway_config_leaves_the_forking_tasks_on_the_main_model() -> None:
+    """Pinned to "custom", these resolve a placeholder key and every call gets a 401.
+    ``runtime_tests/test_hermes_auxiliary_credentials.py`` proves which key each task
+    resolves; this only keeps them out of the pin list.
+    """
+    auxiliary = build_hermes_gateway_config("litellm/gpt-5", "http://localhost:8090")["auxiliary"]
+
+    assert auxiliary.keys().isdisjoint({"curator", "background_review"})
 
 
 def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_defaults() -> None:

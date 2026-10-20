@@ -18,7 +18,11 @@ from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.communications.agentbarn_telegram_messages import file_ids
 from api.domains.communications.agentbarn_telegram_rate_limit import AgentBarnTelegramRateLimits
-from api.domains.communications.agentbarn_telegram_repository import AgentBarnTelegramRepository
+from api.domains.communications.agentbarn_telegram_repository import (
+    ACCESS_LOST,
+    BLOCKED_BOT,
+    AgentBarnTelegramRepository,
+)
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.plugins.agentbarn_telegram import runtime_api_token
 from api.domains.rbac.catalog import PermissionKey
@@ -315,7 +319,7 @@ class AgentBarnTelegramProxy:
             and _BLOCKED_BY_USER in str(response.body.get("description", ""))
         ):
             for chat in self._named_chats(params) or set():
-                self.repository.end_link_for_connection(connection_id, chat, now=datetime.now(UTC))
+                self.repository.end_link_for_connection(connection_id, chat, now=datetime.now(UTC), reason=BLOCKED_BOT)
         return response
 
     def download(self, connection_id: UUID, token: str, file_path: str) -> ProxyFile:
@@ -363,7 +367,9 @@ class AgentBarnTelegramProxy:
             if not self.authorization.membership_has_permission(
                 link.linked_by_membership_id, link.agent_id, PermissionKey.AGENT_UPDATE
             ):
-                self.repository.end_link_for_connection(connection_id, link.telegram_user_id, now=datetime.now(UTC))
+                self.repository.end_link_for_connection(
+                    connection_id, link.telegram_user_id, now=datetime.now(UTC), reason=ACCESS_LOST
+                )
                 return False
         return True
 

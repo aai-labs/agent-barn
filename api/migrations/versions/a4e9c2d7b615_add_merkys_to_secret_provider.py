@@ -1,10 +1,10 @@
 """Add merkys to the agent_secret provider constraint.
 
 Revision ID: a4e9c2d7b615
-Revises: b3d8e1f4a6c2
+Revises: 49e4d8bea6de
 
-_OLD is copied verbatim from f6c2a8d41b73 (add_apollo_to_secret_provider), the most
-recent revision to recreate the provider constraint — not reconstructed from an older one.
+_OLD is copied verbatim from 8e5c1f3a9b27 (add_gmail_app_password_to_secret_provider), the
+most recent revision to recreate the provider constraint — not reconstructed from an older one.
 5e0adff0f5e2 exists because two branches each rebuilt this constraint from a stale base and
 silently dropped a provider that was already in use.
 """
@@ -12,19 +12,21 @@ silently dropped a provider that was already in use.
 from alembic import op
 
 revision: str = "a4e9c2d7b615"
-down_revision: str | None = "b3d8e1f4a6c2"
+down_revision: str | None = "49e4d8bea6de"
 branch_labels: str | None = None
 depends_on: str | None = None
 
 _OLD = (
     "provider IN ('github', 'jira', 'confluence', 'bitbucket', "
     "'zoho_mail', 'zoho_calendar', "
-    "'firecrawl', 'slack', 'pipedrive', 'google_workspace', 'sharepoint', 'apollo')"
+    "'firecrawl', 'slack', 'pipedrive', 'google_workspace', 'sharepoint', 'apollo', 'gmail', "
+    "'gmail_app_password')"
 )
 _NEW = (
     "provider IN ('github', 'jira', 'confluence', 'bitbucket', "
     "'zoho_mail', 'zoho_calendar', "
-    "'firecrawl', 'slack', 'pipedrive', 'google_workspace', 'sharepoint', 'apollo', 'merkys')"
+    "'firecrawl', 'slack', 'pipedrive', 'google_workspace', 'sharepoint', 'apollo', 'gmail', "
+    "'gmail_app_password', 'merkys')"
 )
 
 

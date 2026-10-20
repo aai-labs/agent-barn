@@ -50,6 +50,16 @@ ISOLATION_CAPABILITIES = {
         "This Agent receives the Google refresh token and OAuth client credentials and connects to Google directly.",
         "This Agent receives expiring Google access tokens only; the refresh token and OAuth client secret stay outside it.",
     ),
+    SecretProvider.GMAIL: IsolationCapabilities(
+        "This Agent receives the Gmail refresh token and OAuth client credentials and connects to Gmail directly.",
+        "Gmail cannot be isolated yet; this Agent always receives its Gmail credential.",
+        supports_isolated=False,
+    ),
+    SecretProvider.GMAIL_APP_PASSWORD: IsolationCapabilities(
+        "An app password cannot be limited to reading, so it is never given to this Agent.",
+        "The app password stays outside this Agent; Agent Barn reads the inbox for it, read-only.",
+        supports_direct=False,
+    ),
     SecretProvider.FIRECRAWL: IsolationCapabilities(
         "This Agent receives the Firecrawl API key and connects to Firecrawl directly.",
         "The stored Firecrawl API key stays outside this Agent; Agent Barn authenticates requests.",

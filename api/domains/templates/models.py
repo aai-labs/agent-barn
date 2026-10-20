@@ -1,5 +1,6 @@
 import enum
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -341,6 +342,20 @@ class TemplateUpdate(PydanticBaseModel):
         if self.required_skill_ids is not None and self.required_skill_groups is not None:
             _validate_no_skill_overlap(self.required_skill_ids, self.required_skill_groups)
         return self
+
+
+class OrganizationConventionsAdd(PydanticBaseModel):
+    """Reviewed rules to add to a Template draft's Organization Conventions section."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rules: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(min_length=1, max_length=30)
+
+
+class OrganizationConventionsApplied(PydanticBaseModel):
+    template_key: str
+    added: int
+    already_present: int
 
 
 class PlatformTemplateDraftCreate(PydanticBaseModel):

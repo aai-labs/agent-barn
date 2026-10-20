@@ -94,12 +94,25 @@ export function EmailIcon(p: BrandIconProps) {
   return <ColorGlyph src="/brand/email.svg" label="Email" {...p} />;
 }
 
+export function OneDriveIcon(p: BrandIconProps) {
+  return <ColorGlyph src="/brand/onedrive.svg" label="OneDrive" {...p} />;
+}
+
+/** Brand icon element for a sync provider key (e.g. "onedrive"), or null if unknown. */
+export function syncProviderIcon(providerKey: string, props: BrandIconProps = {}): React.ReactNode | null {
+  switch (providerKey) {
+    case "onedrive": return <OneDriveIcon {...props} />;
+    default: return null;
+  }
+}
+
 /** Brand icon element for a communication platform key (e.g. "slack"), or null if unknown. */
 export function platformIcon(platformKey: string, props: BrandIconProps = {}): React.ReactNode | null {
   switch (platformKey) {
     case "slack": return <SlackIcon {...props} />;
     case "discord": return <DiscordIcon {...props} />;
-    case "telegram": return <TelegramIcon {...props} />;
+    case "telegram":
+    case "agentbarn_telegram": return <TelegramIcon {...props} />;
     case "teams": return <TeamsIcon {...props} />;
     case "email": return <EmailIcon {...props} />;
     default: return null;

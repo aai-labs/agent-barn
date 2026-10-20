@@ -7,6 +7,8 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user, require_platform_admin
 from api.domains.templates.models import (
     AgentTemplateDraftRead,
+    OrganizationConventionsAdd,
+    OrganizationConventionsApplied,
     OrganizationTemplateLineageSummary,
     PlatformTemplateAdminSummary,
     PlatformTemplateDraftCreate,
@@ -106,6 +108,16 @@ def update_org_draft(
     service: Annotated[TemplateService, Injected(TemplateService)],
 ):
     return service.update_org_draft(template_key, data, context)
+
+
+@templates_router.post("/{template_key}/draft/conventions", response_model=OrganizationConventionsApplied)
+def add_organization_conventions(
+    template_key: str,
+    data: OrganizationConventionsAdd,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[TemplateService, Injected(TemplateService)],
+):
+    return service.add_organization_conventions(template_key, data, context)
 
 
 @templates_router.delete("/{template_key}/draft", status_code=status.HTTP_204_NO_CONTENT)

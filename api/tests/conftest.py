@@ -1,8 +1,10 @@
 import logging
 import os
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
+import bcrypt
 import httpx
 import pytest
 from alembic import command
@@ -67,6 +69,13 @@ def setup_test_database():
         get_config.cache_clear()
         logger.info("Upgrading test database to head")
         command.upgrade(config, "head")
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def fast_password_hashing():
+    """Production bcrypt cost (12 rounds) is ~0.2s per hash; minimum cost keeps the suite fast."""
+    with patch("api.domains.auth.hashing.bcrypt.gensalt", new=partial(bcrypt.gensalt, rounds=4)):
         yield
 
 

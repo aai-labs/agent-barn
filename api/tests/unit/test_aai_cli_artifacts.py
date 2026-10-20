@@ -18,6 +18,7 @@ from api.domains.agents.models import (
     ApolloContent,
     ConfluenceContent,
     FirecrawlContent,
+    GmailContent,
     JiraContent,
     MerkysContent,
     PipedriveContent,
@@ -28,6 +29,7 @@ from api.domains.agents.models import (
 from api.domains.integrations.plugins.providers import (
     ApolloPlugin,
     ConfluencePlugin,
+    GmailPlugin,
     JiraPlugin,
     MerkysPlugin,
     PipedrivePlugin,
@@ -266,6 +268,64 @@ def test_merkys_direct_profile_is_valid_aai_cli_config():
         "base_url": "https://merkys.aai-labs.com",
         "api_token_secret": "merkys.api_key",
     }
+
+
+_GMAIL = cast(
+    GmailContent,
+    validate_content(
+        SecretProvider.GMAIL,
+        {
+            "email": "alice@example.com",
+            "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            "refresh_token": "gmail_rt",
+            "client_id": "client.apps.googleusercontent.com",
+            "client_secret": "gmail_cs",
+        },
+    ),
+)
+
+
+def test_gmail_profile_refreshes_through_the_secret_store():
+    toml = GmailPlugin().aai_cli_profile_block(_GMAIL)
+    assert "[profiles.gmail-work]" in toml
+    assert 'provider = "google"' in toml
+    assert 'auth_type = "bearer_token"' in toml
+    assert 'client_id = "client.apps.googleusercontent.com"' in toml
+    assert 'client_secret_secret = "google.gmail_client_secret"' in toml
+    assert 'refresh_token_secret = "google.gmail_refresh_token"' in toml
+    assert 'user_id = "me"' in toml
+    # Only references go in the mounted config; the values ride in the pod Secret.
+    assert "gmail_rt" not in toml
+    assert "gmail_cs" not in toml
+
+
+def test_setup_sh_gmail_stores_client_secret_and_refresh_token():
+    setup = build_setup_sh([SecretProvider.GMAIL])
+    assert (
+        f"printf '%s' \"$AAI_SECRET_GOOGLE_GMAIL_CLIENT_SECRET\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_client_secret" in setup
+    )
+    assert (
+        f"printf '%s' \"$AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_refresh_token" in setup
+    )
+
+
+def test_build_env_gmail_emits_client_secret_and_refresh_token():
+    assert build_env({SecretProvider.GMAIL: _GMAIL}) == {
+        "AAI_SECRET_GOOGLE_GMAIL_CLIENT_SECRET": "gmail_cs",
+        "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN": "gmail_rt",
+    }
+
+
+def test_gmail_context_and_policy_name_the_account_and_read_only_access():
+    context = build_tool_context_md({SecretProvider.GMAIL: _GMAIL})
+    assert "- **Gmail** (`gmail-work`): signed in as alice@example.com (read-only)" in context
+    policy = build_integrations_policy_md({SecretProvider.GMAIL: _GMAIL})
+    assert "- **Gmail**: `--profile gmail-work`" in policy
+    assert "read-only" in policy
+    assert "aai-gmail" in policy
+    assert "gmail_rt" not in context + policy
 
 
 def test_setup_sh_cp_always_and_secrets_set_per_store_provider():

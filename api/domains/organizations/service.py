@@ -84,6 +84,9 @@ class OrganizationService:
             )
         if organization.is_trial:
             organization.trial_agent_limit = self.trial_settings.agent_limit()
+            organization.trial_agent_limit_reached = (
+                self.agent_repository.count_active_by_org(organization_id) >= organization.trial_agent_limit
+            )
         return organization
 
     def get_platform_organization(self, organization_id: UUID) -> PlatformOrganizationRead:
@@ -213,7 +216,7 @@ class OrganizationService:
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
-            _, delivery_ids = self.organization_repository.create_for_user(
+            organization, delivery_ids = self.organization_repository.create_for_user(
                 organization,
                 actor.user.id,
                 config.organization_creation_limit,

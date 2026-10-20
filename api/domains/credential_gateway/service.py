@@ -40,6 +40,8 @@ from api.domains.integrations.plugins.base import (
     IntegrationPlugin,
     MintedToken,
     OutboundRequest,
+    ServedRequest,
+    ServedResponse,
     TokenBrokerService,
     UpstreamAuthenticationError,
 )
@@ -326,6 +328,31 @@ class CredentialGatewayService:
             organization_id=resolution.organization_id,
         )
         return minted
+
+    # --- GATEWAY_SERVED: the provider's plugin answers the request itself ---
+
+    def serve(self, authorization: str | None, request: ServedRequest) -> ServedResponse:
+        """Answer an aai-cli Custom API request for a ``GATEWAY_SERVED`` provider.
+
+        The gateway owns only what every such provider shares: the token, the credential
+        and the audit. Which requests exist and how they reach the provider belong to the
+        plugin, so nothing provider-specific lives here.
+        """
+        resolution = self.resolve(authorization)
+        plugin = INTEGRATION_PLUGINS.require(resolution.provider)
+        if plugin.egress_mode is not EgressMode.GATEWAY_SERVED:
+            raise GatewayForwardRefused(f"{plugin.key} is not served by the gateway")
+        content = self._decrypt_credential(resolution.agent_id, resolution.organization_id, resolution.provider)
+        if content is None:
+            raise GatewayForwardRefused(f"no {plugin.key} credential for this agent")
+        response = plugin.serve(content, request)
+        self.audit.record_lifecycle(
+            "served",
+            provider=resolution.provider,
+            agent_id=resolution.agent_id,
+            organization_id=resolution.organization_id,
+        )
+        return response
 
     def handoff_sharepoint(self, authorization: str | None, data: SharePointHandoff) -> None:
         resolution = self.resolve(authorization)
