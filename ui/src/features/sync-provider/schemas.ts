@@ -20,7 +20,6 @@ export const SyncProviderSchema = z.object({
   schemaVersion: z.number(),
   capabilities: z.array(z.string()),
   available: z.boolean(),
-  serverSetupHint: z.string().nullable(),
   approvalUrl: z.string().nullable(),
   connection: SyncProviderConnectionSchema.nullable(),
   canConnect: z.boolean(),

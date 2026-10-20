@@ -707,8 +707,8 @@ and secrets, quota limits, and secret rotation — is in
 Organizations can connect OneDrive from **Settings → Sync**, so Agent Barn keeps
 an "Agent Barn" folder in one of their SharePoint sites. It is optional and needs
 your own Microsoft app: until `ONEDRIVE_SYNC_CLIENT_ID` and
-`ONEDRIVE_SYNC_CLIENT_SECRET` are both set, Settings → Sync shows OneDrive as
-"Not set up on this server". Do this once per install, in the Microsoft Entra
+`ONEDRIVE_SYNC_CLIENT_SECRET` are both set, Settings → Sync says "OneDrive is
+not configured for the platform." Do this once per install, in the Microsoft Entra
 admin center (needs the Application Administrator or Application Developer role):
 
 1. **App registrations → New registration.** Choose **Accounts in any

@@ -92,7 +92,6 @@ _ENTRY_KEYS = {
     "schema_version",
     "capabilities",
     "available",
-    "server_setup_hint",
     "approval_url",
     "connection",
     "can_connect",
@@ -212,12 +211,12 @@ def _consent_state(context, provider_key: str = _ONEDRIVE) -> str:
 # --- the provider list -------------------------------------------------------------
 
 
-def test_an_unconfigured_provider_is_listed_as_not_set_up_with_how_to_enable_it():
+def test_an_unconfigured_provider_is_listed_as_unavailable():
     with given(_given(configured=False)) as context:
         with when("an Organization reads its sync providers on a server without the Microsoft app"):
             response = context.client.get(_catalogue(context), headers=_auth(context))
 
-        with then("OneDrive is listed as unavailable, with the server settings that enable it"):
+        with then("OneDrive is listed as unavailable and cannot be connected"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             assert_that([entry["key"] for entry in response.json()], equal_to([_ONEDRIVE]))
             entry = response.json()[0]
@@ -228,8 +227,6 @@ def test_an_unconfigured_provider_is_listed_as_not_set_up_with_how_to_enable_it(
                     available=False, approval_url=None, connection=None, can_connect=False, blocked_reason=None
                 ),
             )
-            assert_that(entry["server_setup_hint"], contains_string("ONEDRIVE_SYNC_CLIENT_ID"))
-            assert_that(entry["server_setup_hint"], contains_string("ONEDRIVE_SYNC_CLIENT_SECRET"))
 
 
 def test_onedrive_is_listed_not_connected_when_configured():

@@ -6,9 +6,6 @@ export const ONEDRIVE_FOLDER_URL =
 export const ONEDRIVE_APPROVAL_URL =
   "https://login.microsoftonline.com/organizations/v2.0/adminconsent?client_id=app&scope=https%3A%2F%2Fgraph.microsoft.com%2F.default";
 
-export const ONEDRIVE_SETUP_HINT =
-  "Set ONEDRIVE_SYNC_CLIENT_ID and ONEDRIVE_SYNC_CLIENT_SECRET for a multi-tenant Microsoft Entra app in the server configuration, then redeploy. See “Connecting OneDrive (manual step)” in the README.";
-
 /** OneDrive as listed on a server without its Microsoft app settings. */
 export function unavailableOneDriveEntry(): Entry {
   return oneDriveEntry({ available: false, approval_url: null, can_connect: false });
@@ -37,7 +34,6 @@ export function oneDriveEntry(overrides: Entry = {}): Entry {
     schema_version: 1,
     capabilities: ["admin_approval", "location_picker"],
     available: true,
-    server_setup_hint: ONEDRIVE_SETUP_HINT,
     approval_url: ONEDRIVE_APPROVAL_URL,
     connection: null,
     can_connect: true,
@@ -58,7 +54,6 @@ export function otherDriveEntry(overrides: Entry = {}): Entry {
     schema_version: 1,
     capabilities: [],
     available: true,
-    server_setup_hint: null,
     approval_url: null,
     connection: null,
     can_connect: true,

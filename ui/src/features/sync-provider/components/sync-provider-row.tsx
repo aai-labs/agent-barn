@@ -40,25 +40,18 @@ export function SyncProviderRow({ provider, canManage }: { provider: SyncProvide
     return (
       <li
         aria-label={provider.displayName}
-        className="flex flex-col gap-3 px-4 py-3.5"
+        className="flex flex-wrap items-center gap-3 px-4 py-3.5"
         style={{ borderColor: "var(--line)" }}
       >
-        <div className="flex flex-wrap items-center gap-3">
-          <SyncProviderIcon providerKey={provider.key} displayName={provider.displayName} />
-          <div className="min-w-0 flex-1">
-            <div className="text-[0.92rem] font-medium" style={{ color: "var(--ink)" }}>
-              {provider.displayName}
-            </div>
-            <div className="text-[0.82rem]" style={{ color: "var(--ink-3)" }}>
-              Not set up on this server
-            </div>
+        <SyncProviderIcon providerKey={provider.key} displayName={provider.displayName} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[0.92rem] font-medium" style={{ color: "var(--ink)" }}>
+            {provider.displayName}
+          </div>
+          <div className="text-[0.82rem]" style={{ color: "var(--ink-3)" }}>
+            {provider.displayName} is not configured for the platform.
           </div>
         </div>
-        <Note>
-          {canManage && provider.serverSetupHint
-            ? provider.serverSetupHint
-            : `${provider.displayName} isn't set up on this server.`}
-        </Note>
       </li>
     );
   }

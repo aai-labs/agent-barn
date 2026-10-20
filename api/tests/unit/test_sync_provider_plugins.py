@@ -222,14 +222,6 @@ def test_onedrive_declares_the_picker_the_approval_link_and_the_sharepoint_guard
     assert_that(connect_hint, contains_string("SharePoint Administrator"))
 
 
-def test_onedrive_tells_the_server_operator_which_settings_enable_it():
-    hint = _onedrive(configured=False)[0].descriptor.server_setup_hint
-
-    assert hint is not None
-    assert_that(hint, contains_string("ONEDRIVE_SYNC_CLIENT_ID"))
-    assert_that(hint, contains_string("ONEDRIVE_SYNC_CLIENT_SECRET"))
-
-
 def test_onedrive_signs_in_at_any_work_organization_with_the_site_scopes():
     url = _onedrive()[0].authorize_url(redirect_uri=REDIRECT_URI, state="the-state", code_challenge="the-challenge")
 

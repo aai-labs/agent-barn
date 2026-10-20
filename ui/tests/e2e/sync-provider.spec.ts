@@ -148,29 +148,22 @@ test.describe("Settings · Sync · the provider list", () => {
     await expect(sync.locationSearch(ONEDRIVE, SITE_NOUN)).toHaveCount(0);
   });
 
-  test("an Owner is told which server settings enable a provider that isn't set up", async () => {
-    await data.users.interceptGetUserContextRequest();
-    await data.syncProviders.interceptProviders({ providers: [unavailableOneDriveEntry()] });
+  for (const [role, userContext] of [
+    ["an Owner", UserContext],
+    ["a Member", memberContext()],
+  ] as const) {
+    test(`${role} is told a provider isn't configured for the platform`, async () => {
+      await data.users.interceptGetUserContextRequest({ userContext });
+      await data.syncProviders.interceptProviders({ providers: [unavailableOneDriveEntry()] });
 
-    await sync.open();
+      await sync.open();
 
-    await expect(sync.row(ONEDRIVE)).toContainText("Not set up on this server");
-    await expect(sync.row(ONEDRIVE)).toContainText("ONEDRIVE_SYNC_CLIENT_ID");
-    await expect(sync.row(ONEDRIVE)).toContainText("ONEDRIVE_SYNC_CLIENT_SECRET");
-    await expect(sync.connect(ONEDRIVE)).toHaveCount(0);
-    await expect(sync.approvalLink(ONEDRIVE)).toHaveCount(0);
-  });
-
-  test("a Member is only told a provider isn't set up", async () => {
-    await data.users.interceptGetUserContextRequest({ userContext: memberContext() });
-    await data.syncProviders.interceptProviders({ providers: [unavailableOneDriveEntry()] });
-
-    await sync.open();
-
-    await expect(sync.row(ONEDRIVE)).toContainText("OneDrive isn't set up on this server.");
-    await expect(sync.row(ONEDRIVE)).not.toContainText("ONEDRIVE_SYNC_CLIENT_ID");
-    await expect(sync.row(ONEDRIVE)).not.toContainText("An Organization Owner or Admin can connect.");
-  });
+      await expect(sync.row(ONEDRIVE)).toContainText("OneDrive is not configured for the platform.");
+      await expect(sync.row(ONEDRIVE)).not.toContainText("ONEDRIVE_SYNC_CLIENT_ID");
+      await expect(sync.connect(ONEDRIVE)).toHaveCount(0);
+      await expect(sync.approvalLink(ONEDRIVE)).toHaveCount(0);
+    });
+  }
 
   test("a list that fails to load can be retried", async () => {
     await data.users.interceptGetUserContextRequest();
