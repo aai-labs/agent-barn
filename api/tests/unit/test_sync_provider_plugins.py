@@ -194,6 +194,7 @@ def test_registry_offers_only_configured_providers_in_key_order():
     assert_that(_ids(registry.offered()), is_(equal_to(["alpha", "zeta"])))
     assert_that([descriptor.key for descriptor in registry.descriptors()], is_(equal_to(["alpha", "zeta"])))
     assert_that(registry.require("hidden").key, is_(equal_to("hidden")))
+    assert_that(_ids(registry.all()), is_(equal_to(["alpha", "hidden", "zeta"])))
 
 
 # --- OneDrive: offering and links ---

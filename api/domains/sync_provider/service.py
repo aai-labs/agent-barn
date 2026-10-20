@@ -186,9 +186,10 @@ class SyncProviderService:
     config: Config
 
     def providers(self, organization_id: UUID, context: CurrentUserContext) -> list[SyncProviderRead]:
-        """Every provider the Organization may connect on this server, with its connection."""
+        """Every provider shipped with Agent Barn, with its connection. One not set up on this server is
+        listed as unavailable, with how to enable it."""
         self.permission_policy.require(context, organization_id, PermissionKey.ORGANIZATION_READ, detail=_READ_DENIED)
-        return [self._read(organization_id, plugin) for plugin in self.plugins.offered()]
+        return [self._read(organization_id, plugin) for plugin in self.plugins.all()]
 
     def authorize_url(
         self, organization_id: UUID, provider_key: str, purpose: SyncProviderPurpose, context: CurrentUserContext
@@ -343,12 +344,13 @@ class SyncProviderService:
 
     def _read(self, organization_id: UUID, plugin: SyncProviderPlugin) -> SyncProviderRead:
         connection = self._fresh_open(organization_id, plugin.key)
+        available = plugin.is_offered()
         approval_url = (
             plugin.approval_url(redirect_uri=redirect_uri(self.config, plugin.key))
-            if SyncProviderCapability.ADMIN_APPROVAL in plugin.capabilities
+            if available and SyncProviderCapability.ADMIN_APPROVAL in plugin.capabilities
             else None
         )
-        blocked_reason = self._blocked_reason(organization_id, plugin.key)
+        blocked_reason = self._blocked_reason(organization_id, plugin.key) if available else None
         return SyncProviderRead(
             **plugin.descriptor.model_dump(),
             approval_url=approval_url,
@@ -361,7 +363,7 @@ class SyncProviderService:
                 folder_web_url=connection.folder_web_url,
                 connected_at=connection.connected_at,
             ),
-            can_connect=connection is None and blocked_reason is None,
+            can_connect=available and connection is None and blocked_reason is None,
             blocked_reason=blocked_reason,
         )
 

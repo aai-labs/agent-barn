@@ -80,6 +80,7 @@ class SyncProviderDescriptorRead(PydanticBaseModel):
     location_noun: str | None = None
     schema_version: int
     capabilities: list[SyncProviderCapability]
+    available: bool = True
 
 
 class SyncProviderConnectionRead(PydanticBaseModel):
