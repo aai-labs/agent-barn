@@ -12,6 +12,7 @@ import {
   oneDriveEntry,
   otherDriveEntry,
   pendingConnection,
+  unavailableOneDriveEntry,
 } from "../pages/data-support/sync-provider-data-support.po";
 import { SettingsSyncPage } from "../pages/settings-sync.po";
 
@@ -146,6 +147,23 @@ test.describe("Settings · Sync · the provider list", () => {
     await expect(sync.row(ONEDRIVE)).toContainText("no SharePoint site has been chosen yet");
     await expect(sync.locationSearch(ONEDRIVE, SITE_NOUN)).toHaveCount(0);
   });
+
+  for (const [role, userContext] of [
+    ["an Owner", UserContext],
+    ["a Member", memberContext()],
+  ] as const) {
+    test(`${role} is told a provider isn't configured for the platform`, async () => {
+      await data.users.interceptGetUserContextRequest({ userContext });
+      await data.syncProviders.interceptProviders({ providers: [unavailableOneDriveEntry()] });
+
+      await sync.open();
+
+      await expect(sync.row(ONEDRIVE)).toContainText("OneDrive is not configured for the platform.");
+      await expect(sync.row(ONEDRIVE)).not.toContainText("ONEDRIVE_SYNC_CLIENT_ID");
+      await expect(sync.connect(ONEDRIVE)).toHaveCount(0);
+      await expect(sync.approvalLink(ONEDRIVE)).toHaveCount(0);
+    });
+  }
 
   test("a list that fails to load can be retried", async () => {
     await data.users.interceptGetUserContextRequest();
