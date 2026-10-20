@@ -75,7 +75,7 @@ def setup_test_database():
 @pytest.fixture(scope="session", autouse=True)
 def fast_password_hashing():
     """Production bcrypt cost (12 rounds) is ~0.2s per hash; minimum cost keeps the suite fast."""
-    with patch("api.domains.auth.hashing.bcrypt.gensalt", new=partial(bcrypt.gensalt, 4)):
+    with patch("api.domains.auth.hashing.bcrypt.gensalt", new=partial(bcrypt.gensalt, rounds=4)):
         yield
 
 
