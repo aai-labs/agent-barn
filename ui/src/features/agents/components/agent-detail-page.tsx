@@ -26,6 +26,8 @@ import { ConversationsTab } from "./conversations-tab";
 import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
 import { ActivityTab } from "./activity-tab";
+import { WorkflowsPage } from "@/features/workflows/components/workflows-page";
+import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
@@ -44,6 +46,7 @@ type Tab =
   | "tool-calls"
   | "logs"
   | "memory"
+  | "workflows"
   | "playbooks"
   | "activity"
   | "costs"
@@ -55,6 +58,7 @@ const VALID_TABS: Tab[] = [
   "tool-calls",
   "logs",
   "memory",
+  "workflows",
   "playbooks",
   "activity",
   "costs",
@@ -64,6 +68,9 @@ const VALID_TABS: Tab[] = [
 
 export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
+  const canReadWorkflows = canAgent(agent, "agent.read");
+  const workflowCapabilities = useWorkflowCapabilities(agentId, canReadWorkflows);
+  const showWorkflows = canReadWorkflows && workflowCapabilities.data?.authoring === true;
   const canReadActivity = canAgent(agent, "activity.read");
   const canReadCosts = canAgent(agent, "cost.read");
   // A run reads this Agent's activity and writes an Organization Skill, so it needs both
@@ -90,12 +97,15 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     parseAsString.withOptions({ history: "replace" }),
   );
 
+  const [, setWorkflow] = useQueryState("workflow", parseAsString.withOptions({ history: "replace" }));
+
   function selectTab(next: Tab) {
     void setTab(next);
     // channel is only meaningful on the conversations tab; drop it elsewhere
     if (next !== "conversations") void setChannel(null);
     // likewise the time range, which only the resource usage tab reads
     if (next !== "resource-usage") void setUsageRange(null);
+    if (next !== "workflows") void setWorkflow(null);
   }
 
   const tabs: [Tab, string][] = [
@@ -109,6 +119,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           ["memory", "Memory"],
         ] as [Tab, string][])
       : []),
+    ...(showWorkflows ? ([["workflows", "Workflows"]] as [Tab, string][]) : []),
     // Every part of Activity needs activity.read: the runtime diagnostics on
     // their own, the usage sections together with cost.read. The tab itself
     // decides what to show a reader who has only the first.
@@ -126,7 +137,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       : []),
     ["about", "About"],
   ];
-  const resolvedTab = tabs.some(([key]) => key === tab) ? tab : tabs[0][0];
+  const defaultTab = tabs.find(([key]) => key !== "workflows")?.[0] ?? "about";
+  const resolvedTab = tabs.some(([key]) => key === tab) ? tab : defaultTab;
 
   const isRunning = agent?.status === "RUNNING";
   const isAgentWorking = isRunning && health?.status === "ok";
@@ -176,7 +188,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
         {agent && (
           <>
-            <div className="flex items-start gap-5.5 pb-8">
+            <div className="flex flex-wrap items-start gap-5.5 pb-8">
               <AgentAvatar agent={agent} size="xl" />
               <div className="flex-1 min-w-0">
                 <h1
@@ -186,7 +198,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                   {agent.name}
                 </h1>
                 {currentModelOf(agent) && (
-                  <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
+                  <div className="flex flex-wrap items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
                     <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
                     <ModelSourceBadge source={agent.modelSource} />
                   </div>
@@ -194,13 +206,13 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 <AgentMetaBadges
                   agent={agent}
                   variant="full"
-                  className="mt-2"
+                  className="mt-2 flex-wrap"
                 />
                 <div className="mt-2">
                   <StatusLine status={agent.status} health={health} />
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
                 <Link
                   href={`${homeHref}/agents/${agent.id}/configuration`}
@@ -314,13 +326,13 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             )}
 
             <div
-              className="flex items-center gap-1 mb-7"
+              className="flex items-center gap-1 mb-7 overflow-x-auto"
               style={{ borderBottom: "1px solid var(--line)" }}
             >
               {tabs.map(([k, l]) => (
                 <button
                   key={k}
-                  className="ap-tab"
+                  className="ap-tab shrink-0 whitespace-nowrap"
                   data-active={resolvedTab === k}
                   onClick={() => {
                     selectTab(k);
@@ -340,6 +352,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
+            {resolvedTab === "workflows" && orgId && showWorkflows && (
+              <WorkflowsPage key={`${orgId}:${agent.id}`} agentId={agent.id} organizationId={orgId} embedded />
+            )}
             {resolvedTab === "playbooks" && canExtractPlaybooks && <AgentPlaybooksTab agent={agent} />}
             {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}

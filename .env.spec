@@ -155,6 +155,9 @@ STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
+# WF01 authoring gate. Saving never enables workflow execution.
+# Initial default; a saved Platform Settings → Workflows choice overrides this.
+WORKFLOW_AUTHORING_ENABLED=false
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —
 # the public catalogue endpoint works unauthenticated.
 OPENROUTER_API_KEY=

@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpenCheck, Brain, Building2, CreditCard, Sparkles } from "lucide-react";
+import { BookOpenCheck, Brain, Building2, CreditCard, Sparkles, Workflow } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
@@ -10,6 +10,7 @@ import { PlatformBillingSettings } from "@/features/billing/components/platform-
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
 import { PlatformOrganizationSettings } from "@/features/organizations/components/platform-organization-settings";
 import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
+import { PlatformWorkflowSettings } from "@/features/workflows/components/platform-workflow-settings";
 
 const SECTIONS = {
   "agent-memory": {
@@ -21,6 +22,11 @@ const SECTIONS = {
     label: "Organizations",
     icon: <Building2 size={15} aria-hidden />,
     description: "What every organization gets unless you set something else for it.",
+  },
+  workflows: {
+    label: "Workflows",
+    icon: <Workflow size={15} aria-hidden />,
+    description: "Workflow authoring shared by every Agent and Organization.",
   },
   playbooks: {
     label: "Playbooks",
@@ -83,6 +89,7 @@ export function PlatformSettings() {
       >
         {active === "agent-memory" && <PlatformMemorySettings />}
         {active === "organizations" && <PlatformOrganizationSettings />}
+        {active === "workflows" && <PlatformWorkflowSettings />}
         {active === "playbooks" && <PlatformPlaybookSettings />}
         {active === "trials" && <PlatformTrialSettings />}
         {active === "billing" && <PlatformBillingSettings />}

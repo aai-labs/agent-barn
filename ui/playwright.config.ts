@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const PORT = 3003;
+const STUB_BACKEND_PORT = 3013;
 const baseURL = `http://127.0.0.1:${PORT}`;
 const isCI = !!process.env.CI;
 
@@ -36,23 +37,31 @@ export default defineConfig({
       },
     },
   ],
-  webServer: {
-    // In CI, serve a production build: `next dev` compiles routes on-demand on first
-    // hit, and under a constrained runner that first-hit latency flakes late-in-suite
-    // routes (e.g. /set-password, /forgot-password). A prebuilt server has no compile
-    // step, so route timing is deterministic. Locally we keep `next dev` for fast DX.
-    command: isCI
-      ? `pnpm exec next build && pnpm exec next start -p ${PORT}`
-      : `pnpm exec next dev -p ${PORT}`,
-    url: baseURL,
-    reuseExistingServer: false,
-    timeout: (isCI ? 240 : 120) * 1000,
-    env: {
-      NEXT_PUBLIC_E2E: "true",
-      NEXT_PUBLIC_BACKEND_URL: "http://127.0.0.1:8000",
-      // Distinct distDir so this dev server's lock file doesn't collide with a
-      // manually-run `pnpm dev` in the same project directory (see next.config.ts).
-      ...(isCI ? {} : { NEXT_DIST_DIR: ".next-e2e" }),
+  webServer: [
+    {
+      command: "node tests/support/stub-backend.mjs",
+      port: STUB_BACKEND_PORT,
+      reuseExistingServer: false,
+      env: { STUB_BACKEND_PORT: String(STUB_BACKEND_PORT) },
     },
-  },
+    {
+      // In CI, serve a production build: `next dev` compiles routes on-demand on first
+      // hit, and under a constrained runner that first-hit latency flakes late-in-suite
+      // routes (e.g. /set-password, /forgot-password). A prebuilt server has no compile
+      // step, so route timing is deterministic. Locally we keep `next dev` for fast DX.
+      command: isCI
+        ? `pnpm exec next build && pnpm exec next start -p ${PORT}`
+        : `pnpm exec next dev -p ${PORT}`,
+      url: baseURL,
+      reuseExistingServer: false,
+      timeout: (isCI ? 240 : 120) * 1000,
+      env: {
+        NEXT_PUBLIC_E2E: "true",
+        NEXT_PUBLIC_BACKEND_URL: `http://127.0.0.1:${STUB_BACKEND_PORT}`,
+        // Distinct distDir so this dev server's lock file doesn't collide with a
+        // manually-run `pnpm dev` in the same project directory (see next.config.ts).
+        ...(isCI ? {} : { NEXT_DIST_DIR: ".next-e2e" }),
+      },
+    },
+  ],
 });

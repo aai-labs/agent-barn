@@ -6,7 +6,7 @@ import { PlatformStatsPanel } from "@/features/platform-stats/components/platfor
 import { Activity, CreditCard, FileText, Receipt, Settings, Sparkles } from "lucide-react";
 
 const platformLinks = [
-  { href: "/dashboard/platform/settings", title: "Platform Settings", description: "Choose the memory-processing model shared across Organizations.", Icon: Settings },
+  { href: "/dashboard/platform/settings", title: "Platform Settings", description: "Manage memory processing and workflow authoring across Organizations.", Icon: Settings },
   {
     href: "/dashboard/platform/users",
     title: "Users",

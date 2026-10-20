@@ -22,6 +22,7 @@ from api.tests.core.givenpy import given, then, when
 from api.tests.helpers.hindsight_view_backend import (
     consolidate_bank,
     hindsight_listing,
+    pinned_hindsight_container,
     pinned_hindsight_is_running,
     retain_in_bank,
     wait_for_consolidation,
@@ -31,6 +32,12 @@ from api.tests.steps.agent import there_is_an_agent
 from api.tests.steps.agent_memory import agent_memory_api_setup, memory_is_enabled, purge_tasks_are_clean, two_agents
 
 pytestmark = pytest.mark.xdist_group("heavy_containers")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def pinned_hindsight():
+    with pinned_hindsight_container() as url:
+        yield url
 
 
 def test_purge_removes_private_and_shared_documents_without_touching_another_agent_or_bank():
