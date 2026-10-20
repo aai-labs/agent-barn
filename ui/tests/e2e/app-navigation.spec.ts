@@ -179,9 +179,9 @@ test.describe("App navigation", () => {
       expect(serverRequests).toEqual([]);
     });
 
-    test("goes from Chat's sections to Conversations without showing Chat's threads again", async ({ page }) => {
+    test("goes from Chat's Overview to Conversations without showing Chat's threads again", async ({ page }) => {
       await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=chat`);
-      await navigation.backToSections().click();
+      await navigation.backToOverview().click();
       await expect(navigation.panelLink("Conversations")).toBeVisible();
       // Records any New chat button the panel draws from here on, however briefly.
       await page.evaluate(() => {
@@ -197,7 +197,7 @@ test.describe("App navigation", () => {
 
       await navigation.panelLink("Conversations").click();
       await expect(navigation.breadcrumbCurrent()).toHaveText("Conversations");
-      await expect(navigation.backToSections()).toBeVisible();
+      await expect(navigation.backToOverview()).toBeVisible();
 
       expect(await page.evaluate(() => (window as unknown as { __seen: { newChat: boolean } }).__seen.newChat)).toBe(false);
     });
@@ -211,7 +211,7 @@ test.describe("App navigation", () => {
         await route.fulfill({ json: [] });
       });
       await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=chat`);
-      await navigation.backToSections().click();
+      await navigation.backToOverview().click();
       await page.evaluate(() => {
         const seen = { loading: false };
         (window as unknown as { __seen: typeof seen }).__seen = seen;
@@ -274,16 +274,20 @@ test.describe("App navigation", () => {
       await expect(navigation.panelLink("Overview")).toHaveAttribute("aria-current", "page");
     });
 
-    test("gives Chat the panel for its threads, with a way back to the sections", async () => {
+    test("gives Chat the panel for its threads, with a way up to the Overview and back", async () => {
       await navigation.gotoAgent(MOCK_AGENT_ID);
 
       await navigation.panelLink("Chat").click();
       await expect(navigation.breadcrumbCurrent()).toHaveText("Chat");
       await expect(navigation.newChat()).toBeVisible();
 
-      await navigation.backToSections().click();
-      await expect(navigation.panelLink("Chat")).toHaveAttribute("aria-current", "page");
+      await navigation.backToOverview().click();
+      await expect(navigation.breadcrumbCurrent()).toHaveText("Overview");
+      await expect(navigation.panelLink("Overview")).toHaveAttribute("aria-current", "page");
       await expect(navigation.newChat()).toHaveCount(0);
+
+      await navigation.panelLink("Chat").click();
+      await expect(navigation.newChat()).toBeVisible();
     });
 
     test("lists the team's Agents in the Agent switcher", async () => {

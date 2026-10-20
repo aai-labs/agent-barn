@@ -77,8 +77,9 @@ export class AppNavigation {
     return this.panel().getByRole("link", { name, exact: true });
   }
 
-  backToSections(): Locator {
-    return this.page.getByRole("button", { name: "Sections", exact: true });
+  /** The way up from Chat's threads or Conversations' channels to the Agent's Overview. */
+  backToOverview(): Locator {
+    return this.page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true });
   }
 
   newChat(): Locator {
