@@ -213,15 +213,26 @@ class PlaybookPipeline:
                 return None
             return parse_notes(result.content)
 
+        failure: PlaybookExtractionFailed | None = None
+        notes: list[dict[str, Any] | str | None] = []
         with ThreadPoolExecutor(max_workers=NOTES_CONCURRENCY, thread_name_prefix="playbook-notes") as pool:
             futures = [pool.submit(take_notes, transcript) for transcript in transcripts]
             try:
                 notes = [future.result() for future in futures]
+            except PlaybookExtractionFailed as exc:
+                cancelled.set()
+                for future in futures:
+                    future.cancel()
+                failure = exc
             except BaseException:
                 cancelled.set()
                 for future in futures:
                     future.cancel()
                 raise
+        if failure is not None:
+            # Leaving the pool waited for calls already in flight, which were billed too;
+            # report the totals as they stand now, not when the first call failed.
+            raise PlaybookExtractionFailed(failure.error, **usage.values())
         if cancelled.is_set():
             raise RunCancelled()
         # Small talk and one-off requests teach nothing; drop them unless nothing else is left.
