@@ -7,7 +7,7 @@ import { PlatformStatsPanel } from "@/features/platform-stats/components/platfor
 export default function PlatformPage() {
   return (
     <PlatformAdminOnly>
-      <div className="af-page">
+      <div>
         <Suspense fallback={null}>
           <PlatformStatsPanel />
         </Suspense>

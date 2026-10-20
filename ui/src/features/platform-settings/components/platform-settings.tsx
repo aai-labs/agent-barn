@@ -46,7 +46,7 @@ export function PlatformSettings() {
   const section = PLATFORM_SETTINGS_SECTIONS[active];
 
   return (
-    <div className="af-page">
+    <div>
       <SettingsPageLayout
         heading={section.label}
         description={section.description}

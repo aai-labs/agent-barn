@@ -17,7 +17,7 @@ export function DashboardRouteLoading({
   description?: string;
 }) {
   return (
-    <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
+    <div>
       <div className="animate-pulse mb-8">
         <div className="h-7 w-52 rounded-md mb-2" style={{ background: "var(--bg-soft)" }} />
         <div className="h-4 w-80 max-w-full rounded-md" style={{ background: "var(--bg-soft)" }} />

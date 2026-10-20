@@ -183,7 +183,7 @@ export function WorkflowsPage({
     );
   if (isLoading || !agent)
     return (
-      <p className="af-page" role="status">
+      <p role="status">
         Loading Agent…
       </p>
     );
@@ -200,7 +200,6 @@ export function WorkflowsPage({
   const current = historic ?? detail.data?.version;
   return (
     <div
-      className={embedded ? undefined : "af-page"}
       style={{ color: "var(--ink)" }}
     >
       <div className="flex items-center gap-2 text-sm text-[var(--ink-3)]">

@@ -225,6 +225,9 @@ export function PanelLink({
 }) {
   const Icon = item.icon;
   const danger = item.tone === "danger";
+  const pathname = usePathname() ?? "";
+  // Opened in place (below), so there is nothing for Next.js to prefetch from the server.
+  const samePage = item.href.split("?")[0] === pathname;
 
   // A section of the page you are on differs only in its query (?tab=, ?section=), and
   // every such page reads it on the client. Changing it in place, as the tab rows did,
@@ -251,6 +254,7 @@ export function PanelLink({
       <Link
         href={item.href}
         aria-current={item.active ? "page" : undefined}
+        prefetch={samePage ? false : undefined}
         onClick={navigate}
         onPointerEnter={item.onIntent}
         onFocus={item.onIntent}

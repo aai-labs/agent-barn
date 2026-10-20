@@ -68,7 +68,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
   if (agentLoading || configurationLoading) {
     return (
-      <div className="af-page animate-pulse">
+      <div className="animate-pulse">
         <div className="h-8 w-72 rounded-lg" style={{ background: "var(--bg-soft)" }} />
         <div className="mt-6 h-96 rounded-2xl" style={{ background: "var(--bg-soft)" }} />
       </div>
@@ -77,7 +77,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
   if (agentError) {
     return (
-      <div className="af-page">
+      <div>
         <AppErrorState
           error={agentError}
           title="We couldn't load this agent"
@@ -89,7 +89,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
   if (configurationError) {
     return (
-      <div className="af-page">
+      <div>
         <AppErrorState
           error={configurationError}
           title="We couldn't load this configuration"
@@ -119,7 +119,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
   return (
     <div style={{ background: "var(--bg)" }}>
-      <main className="af-page">
+      <div>
 
         <div className="mb-8 flex flex-wrap items-start gap-4">
           <AgentAvatar agent={agent} size="lg" />
@@ -275,7 +275,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
             )}
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }

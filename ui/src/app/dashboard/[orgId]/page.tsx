@@ -57,7 +57,7 @@ export default function DashboardPage() {
   const displayedAgents = agents.filter((agent) => agent.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   return (
-    <div className="af-page">
+    <div>
       <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-4xl font-medium tracking-[-0.028em] leading-[1.18] m-0 mb-3" style={{ color: "var(--ink)" }}>

@@ -164,8 +164,11 @@ test.describe("App navigation", () => {
       await navigation.gotoAgent(MOCK_AGENT_ID);
       await expect(navigation.panelLink("Chat")).toBeVisible();
       const serverRequests: string[] = [];
+      // A navigation's server request, not the prefetches a production build makes for
+      // the links on the page.
       page.on("request", (request) => {
-        if (request.headers()["rsc"]) serverRequests.push(request.url());
+        const headers = request.headers();
+        if (headers["rsc"] && !headers["next-router-prefetch"]) serverRequests.push(request.url());
       });
 
       await navigation.panelLink("Tool calls").click();
@@ -225,6 +228,24 @@ test.describe("App navigation", () => {
       await expect(page.getByRole("complementary")).toContainText("No conversations yet.");
       // The list may refresh in the background on arrival; it shows the fetched one meanwhile.
       expect(await page.evaluate(() => (window as unknown as { __seen: { loading: boolean } }).__seen.loading)).toBe(false);
+    });
+
+    test("gives the Agent's logs the page's whole height, as Chat has", async ({ page }) => {
+      await new DataSupport(page).agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED" } });
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/logs`, (route) =>
+        route.fulfill({ json: { lines: ["agent started"], source: "snapshot" } }),
+      );
+      await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=logs`);
+
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      const log = page.getByText("agent started", { exact: true });
+      await expect(log).toBeVisible();
+      // The scrolling log box keeps the page's width and margins, and grows down to the
+      // page's bottom margin instead of stopping at 32rem.
+      const box = await log.evaluate((line) => line.parentElement!.getBoundingClientRect());
+      expect(box.height).toBeGreaterThan(32 * 16 + 100);
+      expect(box.bottom).toBeGreaterThan(1000 - 100);
+      expect(box.left).toBeGreaterThan(340);
     });
 
     test("keeps Members inside the Organization, with no way back to Platform View", async ({ page }) => {

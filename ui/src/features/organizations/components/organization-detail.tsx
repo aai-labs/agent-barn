@@ -76,7 +76,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
   if (isLoading) {
     return (
-      <div className="af-page">
+      <div>
         <div
           className="flex items-center gap-2 py-10 text-[13.5px]"
           style={{ color: "var(--ink-3)" }}
@@ -90,7 +90,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
   if (!organization) {
     return (
-      <div className="af-page">
+      <div>
         <div className="text-[14px]" style={{ color: "var(--ink-3)" }}>
           Organization not found.
         </div>
@@ -101,7 +101,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
   const memberCount = membersLoading ? null : members.length;
 
   return (
-    <div className="af-page">
+    <div>
       {/* Header: monogram + name/description, quiet delete on the right */}
       <div className="flex items-start gap-4 mb-7">
         <div

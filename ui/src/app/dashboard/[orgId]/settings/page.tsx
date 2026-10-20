@@ -39,7 +39,7 @@ export default function SettingsPage() {
 
   return (
     <div style={{ background: "var(--bg)" }}>
-      <main className="af-page">
+      <div>
         <SettingsPageLayout
           heading={section.label}
           description={section.description}
@@ -63,7 +63,7 @@ export default function SettingsPage() {
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
           {section.key === "sync" && <SyncProvidersPanel canManage={canManage} />}
         </SettingsPageLayout>
-      </main>
+      </div>
     </div>
   );
 }

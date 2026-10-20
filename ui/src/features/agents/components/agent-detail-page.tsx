@@ -99,18 +99,18 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   const homeHref = orgId ? `/dashboard/${orgId}` : "/dashboard";
 
-  // On desktop, Chat and Conversations take the whole page below the path bar. The
-  // switch is CSS (`lg:` and `af-page-fill`), not a second layout, so the conversation
-  // stays mounted when the window crosses the breakpoint and the first desktop paint is
-  // already the desktop layout.
+  // The shell frames the page (`usePageFrame`): on desktop, Chat and Conversations edge to
+  // edge below the path bar, the live Logs at the usual width grown to the window's height.
+  // The page only passes that height down to the section, and on Chat and Conversations
+  // insets its notices, since the frame there has no margins of its own. All of it is CSS,
+  // so what is open stays mounted when the window crosses the breakpoint.
   const fillsPage = resolvedTab === "chat" || resolvedTab === "conversations";
+  const fillsHeight = fillsPage || resolvedTab === "logs";
+  const passesHeight = cn(fillsHeight && "lg:flex lg:min-h-0 lg:flex-1 lg:flex-col");
 
   return (
-    <div
-      className={cn(fillsPage && "lg:flex lg:h-[calc(100vh-3.5rem)] lg:flex-col")}
-      style={{ background: "var(--bg)" }}
-    >
-      <div className={cn("af-page", fillsPage && "af-page-fill")}>
+    <div className={passesHeight}>
+      <div className={passesHeight}>
         {isLoading && <AgentDetailHeaderSkeleton />}
 
         {error && (
@@ -185,7 +185,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               {AGENT_PAGE_TAB_LABELS[resolvedTab]}
             </h2>
 
-            <div className={cn(fillsPage && "lg:min-h-0 lg:flex-1")}>
+            <div className={cn(fillsHeight && "lg:min-h-0 lg:flex-1")}>
             {resolvedTab === "chat" && (
               <ChatTab agent={agent} isAgentWorking={isAgentWorking} />
             )}

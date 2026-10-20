@@ -155,14 +155,26 @@
 
 /* ─── Agent Barn utility classes ─────────────────────────────────── */
 
-/* Canonical dashboard page content width. Every /dashboard/** page body should
-   use this (instead of ad-hoc max-w-[...] mx-auto px-10 pt-9 pb-24 variants) so
-   content width doesn't visibly shift when navigating between pages. */
+/* Canonical dashboard page content width and margins. The dashboard shell puts it on
+   <main> for every /dashboard/** page (usePageFrame in features/navigation), so a page
+   never sets its own width; content width doesn't shift between pages. */
 .af-page {
   max-width: 1200px;
   margin-left: auto;
   margin-right: auto;
   padding: 36px 40px 96px;
+}
+
+/* A page whose one panel grows to the window's height on desktop, inside the page's usual
+   width and margins: an Agent's live Logs. Below the breakpoint it is an ordinary .af-page. */
+@media (min-width: 1024px) {
+  .af-page-tall {
+    display: flex;
+    flex: 1 1 0%;
+    flex-direction: column;
+    min-height: 0;
+    width: 100%;
+  }
 }
 
 /* A page given entirely to one panel on desktop, edge to edge below the path bar: an
