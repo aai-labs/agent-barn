@@ -10,6 +10,7 @@ import pytest
 
 from api.domains.agents.models import SecretProvider
 from api.domains.credential_gateway.aai_store import sharepoint_refresh_token
+from api.domains.integrations.capabilities import ISOLATION_CAPABILITIES
 from api.domains.integrations.plugins.base import EgressMode
 from api.domains.integrations.plugins.registry import INTEGRATION_PLUGINS
 from api.domains.integrations.runtime import RuntimeBinding, RuntimeContext, materialize_integrations
@@ -47,9 +48,11 @@ def _prepare(runtime: str, root: Path):
             bindings = [RuntimeBinding(SecretProvider.SHAREPOINT, grant, mode)]
             for plugin in INTEGRATION_PLUGINS.for_tool("aai-cli"):
                 if plugin.provider != SecretProvider.SHAREPOINT:
+                    # A provider with no direct route (a Gmail app password) stays isolated.
                     route = (
                         EgressMode.DIRECT
-                        if name == "direct" or plugin.provider == SecretProvider.GITHUB
+                        if ISOLATION_CAPABILITIES[plugin.provider].supports_direct
+                        and (name == "direct" or plugin.provider == SecretProvider.GITHUB)
                         else plugin.egress_mode
                     )
                     bindings.append(RuntimeBinding(plugin.provider, credential_for(plugin.provider), route))

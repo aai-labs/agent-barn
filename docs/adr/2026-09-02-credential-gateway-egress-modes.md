@@ -43,6 +43,10 @@ Residual `TOKEN_BROKER` exposure is narrowed two ways: minting per-subcommand sc
 
 SharePoint's typed file and workbook commands use Graph directly, so a token broker preserves their command surface without introducing a file-buffering proxy. Unlike Google's existing broker, Microsoft's delegated refresh rotates a grant that may already be newer on the direct pod's persistent volume. The optional-isolation work therefore uses a domain broker with durable locking/cache and a proven boot handoff before cleanup. Current lifecycle details belong in [Integrations](../features/integrations.md#sharepoint-broker-and-handoff).
 
+## Gateway-served amendment (2026-10-16)
+
+A Gmail app password cannot be proxied or brokered: it is spoken over IMAP, not HTTP, and it is the only credential, so there is nothing narrower to mint. It also cannot be scoped by Google, so anything holding it can delete and send mail. A fourth mode, **`GATEWAY_SERVED`**, keeps it in the gateway: the plugin's `serve` hook answers the agent's request itself with the decrypted credential, and the gateway owns only what every such provider shares (token resolution, the mode check, decryption, audit, and the `{status, body}` envelope). The agent reaches it through aai-cli's Custom API gateway mode on one generic route, `POST /gateway/v1/served/request`, so it uses the same CLI as the other aai-cli providers. Read-only is enforced by what `serve` accepts and by the IMAP client it calls, not by a filter on forwarded traffic. Gateway-served providers have no `DIRECT` route. Details belong in [Integrations](../features/integrations.md#gmail-app-password).
+
 ## Consequences
 
 - `gog-setup.sh`, the file keyring, and the wipe-and-rebuild `GOG_HOME` machinery are deleted. The encrypted Agent Secret remains the source of truth without a per-boot pod-side reconstruction.

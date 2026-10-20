@@ -22,7 +22,7 @@ def _consume(repository: AgentBarnTelegramRepository) -> LinkTokenConsumption:
 
 
 def test_a_lost_first_link_race_is_retried_once() -> None:
-    repository = AgentBarnTelegramRepository(MagicMock())
+    repository = AgentBarnTelegramRepository(MagicMock(), MagicMock())
     linked = LinkTokenConsumption(LinkTokenOutcome.LINKED)
 
     with patch.object(repository, "_consume", side_effect=[_race(), linked]) as consume:
@@ -33,7 +33,7 @@ def test_a_lost_first_link_race_is_retried_once() -> None:
 
 
 def test_a_link_that_keeps_conflicting_is_not_retried_forever() -> None:
-    repository = AgentBarnTelegramRepository(MagicMock())
+    repository = AgentBarnTelegramRepository(MagicMock(), MagicMock())
 
     with patch.object(repository, "_consume", side_effect=[_race(), _race()]) as consume:
         with pytest.raises(IntegrityError):

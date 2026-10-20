@@ -14,6 +14,7 @@ import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
   isAutoConfiguredProvider,
+  isOfferedSkill,
   type IntegrationDraft,
 } from "../integrations";
 import type { TemplateRequiredSkill } from "../schemas";
@@ -120,7 +121,7 @@ export function SkillsStep({
   // between required and optional skills is consistent across requirement types.
   // Optional skills remain paginated through the catalog response.
   const orderedSkills = skills.filter(
-    (s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id),
+    (s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id) && isOfferedSkill(s),
   );
   const hasTemplateRequirements =
     templateRequiredSkills.length > 0 || requiredGroups.length > 0;
@@ -522,7 +523,11 @@ export function IntegrationsStep({
   agentId,
   renderIsolation,
   canRemoveProvider,
+  extraIntegrations,
+  onAddCustomApi,
 }: {
+  extraIntegrations?: ReactNode;
+  onAddCustomApi?: () => void;
   integrations: IntegrationDraft[];
   onChange: (next: IntegrationDraft[]) => void;
   credentialError?: string | null;
@@ -537,7 +542,7 @@ export function IntegrationsStep({
 
   const usedProviders = new Set(integrations.filter((i) => !i.platformDefault).map((i) => i.provider));
   const available = INTEGRATION_PROVIDERS.filter(
-    (p) => !usedProviders.has(p.id),
+    (p) => !usedProviders.has(p.id) && p.offered !== false,
   );
   const firstCredentialProviderId = integrations[0]?.provider;
 
@@ -708,6 +713,8 @@ export function IntegrationsStep({
         );
       })}
 
+      {extraIntegrations}
+
       {credentialError && integrations.length === 0 && (
         <CredentialErrorAlert
           title="Could not save credentials"
@@ -715,7 +722,7 @@ export function IntegrationsStep({
         />
       )}
 
-      {available.length > 0 && (
+      {(available.length > 0 || onAddCustomApi) && (
         <div className="flex flex-col gap-2">
           <div
             className="font-medium text-[0.844rem]"
@@ -724,6 +731,7 @@ export function IntegrationsStep({
             Add an integration
           </div>
           <div className="flex flex-wrap gap-2">
+            {onAddCustomApi && <button type="button" className="af-btn af-btn-sm flex items-center gap-1.5" onClick={onAddCustomApi}><PlusIcon size={14} /> Custom API</button>}
             {available.map((p) => (
               <button
                 key={p.id}

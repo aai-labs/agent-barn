@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 from fastapi import HTTPException, status
@@ -247,12 +246,11 @@ class UserService:
         user = self.user_repository.save(user)
         return self.to_user_read(user)
 
-    def complete_onboarding(self, user_id: UUID) -> None:
+    def complete_onboarding(self, user_id: UUID, organization_id: UUID | None) -> None:
         """Remember that the user finished onboarding. The first finish is the one kept."""
-        user = self.get_user(user_id)
-        if user.onboarding_completed_at is None:
-            user.onboarding_completed_at = datetime.now(UTC)
-            self.user_repository.save(user)
+        self.get_user(user_id)
+        delivery_ids = self.user_repository.complete_onboarding(user_id, organization_id)
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
 
     def verify_user_password(self, user_id: UUID, password: str) -> None:
         user = self.get_user(user_id)

@@ -1,9 +1,13 @@
-"""Microsoft Graph calls that grant and revoke an app's access to one SharePoint site.
+"""Microsoft Graph calls that find SharePoint sites, grant and revoke an app's access to one, and
+ensure a folder in its default document library.
 
 Under ``Sites.Selected`` an app reaches nothing until each site is granted to it, and the grant
 is made with a token that can manage the site's permissions — here the administrator's, from the
-selected-sites sign-in. Request shapes follow Graph's site permission API.
+selected-sites sign-in. Request shapes follow Graph's site permission and driveItem APIs.
 """
+
+import urllib.parse
+from dataclasses import dataclass
 
 import httpx
 from injector import singleton
@@ -12,6 +16,20 @@ from api.domains.agents.sharepoint_sites import site_graph_path
 
 _GRAPH = "https://graph.microsoft.com/v1.0"
 _TIMEOUT_SECONDS = 30
+_FOLDER_CONFLICT_BEHAVIOR = "fail"
+
+
+@dataclass(frozen=True)
+class SiteSummary:
+    id: str
+    name: str
+    web_url: str
+
+
+@dataclass(frozen=True)
+class FolderRef:
+    item_id: str
+    web_url: str
 
 
 class SiteNotFound(Exception):
@@ -48,6 +66,38 @@ class MicrosoftGraphSites:
         if not site_id:
             raise SitesUnavailable("site response without an id")
         return str(site_id)
+
+    def search_sites(self, token: str, query: str) -> list[SiteSummary]:
+        """Sites the signed-in account can see whose details match ``query``."""
+        payload = self._call("GET", f"/sites?search={urllib.parse.quote(query, safe='')}", token)
+        entries = payload.get("value") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            raise SitesUnavailable("search response without a value list")
+        return [_site_summary(entry) for entry in entries if isinstance(entry, dict) and entry.get("id")]
+
+    def get_site(self, token: str, site_id: str) -> SiteSummary:
+        """The site with Graph id ``site_id``. Not found names that id, not Graph's path."""
+        try:
+            payload = self._call("GET", f"/sites/{site_id}", token)
+        except SiteNotFound, SiteChangeRejected:
+            raise SiteNotFound(site_id) from None
+        if not isinstance(payload, dict) or not payload.get("id"):
+            raise SitesUnavailable("site response without an id")
+        return _site_summary(payload)
+
+    def ensure_folder(self, token: str, *, site_id: str, name: str) -> FolderRef:
+        """The folder ``name`` at the root of the site's default library, created when missing.
+        One created by someone else in between is reused rather than reported as a conflict."""
+        path = f"/sites/{site_id}/drive/root:/{urllib.parse.quote(name, safe='')}"
+        try:
+            return _folder_ref(self._call("GET", path, token))
+        except SiteNotFound:
+            pass
+        body = {"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": _FOLDER_CONFLICT_BEHAVIOR}
+        try:
+            return _folder_ref(self._call("POST", f"/sites/{site_id}/drive/root/children", token, body))
+        except SiteChangeRejected:
+            return _folder_ref(self._call("GET", path, token))
 
     def grant_site(self, token: str, *, site_id: str, app_id: str, display_name: str, role: str) -> str:
         """Grant the app ``role`` (``read`` or ``write``) on the site; returns the grant's id."""
@@ -100,3 +150,19 @@ class MicrosoftGraphSites:
             return response.json()
         except ValueError as exc:
             raise SitesUnavailable(f"HTTP {response.status_code} without a JSON body") from exc
+
+
+def _site_summary(payload: dict) -> SiteSummary:
+    return SiteSummary(
+        id=str(payload["id"]),
+        name=str(payload.get("displayName") or payload.get("name") or ""),
+        web_url=str(payload.get("webUrl") or ""),
+    )
+
+
+def _folder_ref(payload: object) -> FolderRef:
+    item_id = payload.get("id") if isinstance(payload, dict) else None
+    web_url = payload.get("webUrl") if isinstance(payload, dict) else None
+    if not item_id or not web_url:
+        raise SitesUnavailable("folder response without an id or link")
+    return FolderRef(item_id=str(item_id), web_url=str(web_url))

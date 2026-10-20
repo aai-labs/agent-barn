@@ -34,6 +34,13 @@ export interface IntegrationProvider {
   authMethod?: "google_oauth" | "microsoft_sign_in";
   // Fallback shown next to the ✓ when an OAuth provider connects without an identity.
   oauthConnectedNote?: string;
+  // The credential can never be given to the agent, so credential isolation is always on.
+  // Mirrors the server, which refuses to turn it off. Its two descriptions replace the
+  // generic ones before the credential is first saved.
+  alwaysIsolated?: { isolatedDescription: string; directDescription: string };
+  // false keeps the provider out of every "add" list (integrations, and skills that need
+  // it) while credentials an Agent already has still show and can be removed.
+  offered?: boolean;
 }
 
 export interface IntegrationDraft {
@@ -113,10 +120,9 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API token", type: "secret", required: true },
     ],
   },
-  // gmail, google_sheets and google_calendar are retired: one google_workspace
-  // credential (below) now covers Gmail, Calendar, Drive and Sheets through gog under a
-  // single consent. The retired providers and their rows were deleted by migration;
-  // affected agents must reconnect, so they must not be offered here.
+  // google_sheets and google_calendar are retired: one google_workspace credential
+  // (below) covers Gmail, Calendar, Drive and Sheets through gog under a single consent.
+  // gmail is separate: read-only Gmail alone, connected with one Google sign-in.
   {
     id: "google_workspace",
     label: "Google Workspace",
@@ -150,6 +156,40 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
         hint: "Read-only requests view-only scopes; Google enforces this, so writes are refused even if the agent tries.",
       },
     ],
+  },
+  {
+    id: "gmail",
+    label: "Gmail",
+    authMethod: "google_oauth",
+    // Not offered yet, but not dead code: one-click Gmail signs in on the deployment's
+    // shared Google app, which Google has not verified, so users would get Google's
+    // "unverified app" warning and the app's cap on how many people can sign in. Gmail
+    // with an app password is offered instead. Drop this line once the app is verified.
+    offered: false,
+    scopeNote: "Read-only access to one Gmail inbox. Sign in with Google; there's nothing else to set up.",
+    oauthConnectedNote: "Gmail connected",
+    fields: [],
+  },
+  {
+    id: "gmail_app_password",
+    label: "Gmail (app password)",
+    scopeNote:
+      "Read-only access to one Gmail inbox. The agent can read mail but never send, delete or change it, and the app password is never given to the agent.",
+    fields: [
+      { key: "email", label: "Gmail address", type: "text", required: true, placeholder: "you@gmail.com" },
+      {
+        key: "appPassword",
+        label: "App password",
+        type: "secret",
+        required: true,
+        placeholder: "abcd efgh ijkl mnop",
+        hint: "Create one at myaccount.google.com/apppasswords. Your Google account needs 2-Step Verification turned on.",
+      },
+    ],
+    alwaysIsolated: {
+      isolatedDescription: "The app password stays outside this Agent; Agent Barn reads the inbox for it, read-only.",
+      directDescription: "An app password cannot be limited to reading, so it is never given to this Agent.",
+    },
   },
   {
     id: "sharepoint",
@@ -198,6 +238,15 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     ],
   },
 ];
+
+export function isOfferedProvider(providerId: string): boolean {
+  return getIntegrationProvider(providerId)?.offered !== false;
+}
+
+/** A skill can be added only when every credential it needs can be connected. */
+export function isOfferedSkill(skill: { requiredProviders: string[] }): boolean {
+  return skill.requiredProviders.every(isOfferedProvider);
+}
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
   return INTEGRATION_PROVIDERS.find((p) => p.id === id);

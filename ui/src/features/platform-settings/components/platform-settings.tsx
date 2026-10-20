@@ -1,12 +1,13 @@
 "use client";
 
-import { Brain, Sparkles, Workflow } from "lucide-react";
-import { parseAsStringLiteral, useQueryState } from "nuqs";
+import { BookOpenCheck, Brain, Sparkles, Workflow } from "lucide-react";
+import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { PlatformMemorySettings } from "@/features/agent-memory/components/platform-memory-settings";
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
+import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
 import { PlatformWorkflowSettings } from "@/features/workflows/components/platform-workflow-settings";
 
 const SECTIONS = {
@@ -20,6 +21,11 @@ const SECTIONS = {
     icon: <Workflow size={15} aria-hidden />,
     description: "Workflow authoring shared by every Agent and Organization.",
   },
+  playbooks: {
+    label: "Playbooks",
+    icon: <BookOpenCheck size={15} aria-hidden />,
+    description: "How playbooks are extracted from an Agent's conversations, for every Organization.",
+  },
   trials: {
     label: "Signup & trials",
     icon: <Sparkles size={15} aria-hidden />,
@@ -27,10 +33,15 @@ const SECTIONS = {
   },
 } as const;
 
+type SectionKey = keyof typeof SECTIONS;
+
 export function PlatformSettings() {
+  // In the URL so a section can be linked to, e.g. ?section=playbooks.
   const [active, setActive] = useQueryState(
     "section",
-    parseAsStringLiteral(["agent-memory", "workflows", "trials"]).withDefault("agent-memory"),
+    parseAsStringEnum<SectionKey>(Object.keys(SECTIONS) as SectionKey[])
+      .withDefault("agent-memory")
+      .withOptions({ scroll: false, history: "replace" }),
   );
   const section = SECTIONS[active];
 
@@ -58,19 +69,16 @@ export function PlatformSettings() {
             eyebrow="Platform"
             items={Object.entries(SECTIONS).map(([key, item]) => ({ key, label: item.label, icon: item.icon }))}
             activeKey={active}
-            onSelect={(key) => void setActive(key === "workflows" || key === "trials" ? key : "agent-memory")}
+            onSelect={(key) => void setActive(key as SectionKey)}
           />
         }
         heading={section.label}
         description={section.description}
       >
-        {active === "agent-memory" ? (
-          <PlatformMemorySettings />
-        ) : active === "workflows" ? (
-          <PlatformWorkflowSettings />
-        ) : (
-          <PlatformTrialSettings />
-        )}
+        {active === "agent-memory" && <PlatformMemorySettings />}
+        {active === "workflows" && <PlatformWorkflowSettings />}
+        {active === "playbooks" && <PlatformPlaybookSettings />}
+        {active === "trials" && <PlatformTrialSettings />}
       </SettingsPageLayout>
     </div>
   );

@@ -226,6 +226,10 @@ releases:
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
         value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
+      - name: onedriveSyncClientId
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_ID" | default "" | quote }}
+      - name: onedriveSyncClientSecret
+        value: {{ env "ONEDRIVE_SYNC_CLIENT_SECRET" | default "" | quote }}
       - name: agentFirecrawlApiKey
         value: {{ env "FIRECRAWL_API_KEY" | default "" | quote }}
       - name: apiExternalUrl
