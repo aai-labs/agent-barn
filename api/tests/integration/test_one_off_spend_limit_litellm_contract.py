@@ -5,6 +5,7 @@ import time
 from uuid import uuid4
 
 import httpx
+import pytest
 from hamcrest import assert_that, equal_to, none
 
 from api.core.config import Config
@@ -13,6 +14,8 @@ from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW, LiteLLMClie
 from api.tests.core.givenpy import given, then, when
 from api.tests.helpers.litellm_memory_budget import MASTER_KEY, pinned_litellm_budget_is_running
 from api.tests.steps.agent_memory import agent_memory_api_setup
+
+pytestmark = pytest.mark.xdist_group("heavy_containers")
 
 COMPLETION = {"model": "openrouter/contract/model", "messages": [{"role": "user", "content": "hello"}]}
 

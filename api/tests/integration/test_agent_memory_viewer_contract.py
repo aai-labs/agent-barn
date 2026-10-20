@@ -8,6 +8,7 @@ import json
 from uuid import uuid4
 
 import httpx
+import pytest
 from hamcrest import assert_that, contains_inanyorder, empty, equal_to, greater_than, has_entries, has_item, is_not
 from sqlmodel import Session, select
 
@@ -28,6 +29,8 @@ from api.tests.helpers.hindsight_view_backend import (
 from api.tests.helpers.memory_backend import memory_viewer_is_served
 from api.tests.steps.agent import there_is_an_agent
 from api.tests.steps.agent_memory import agent_memory_api_setup, memory_is_enabled, purge_tasks_are_clean, two_agents
+
+pytestmark = pytest.mark.xdist_group("heavy_containers")
 
 
 def test_purge_removes_private_and_shared_documents_without_touching_another_agent_or_bank():
