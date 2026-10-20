@@ -9,6 +9,7 @@ from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.gmail_app_password import validate_gmail_app_password
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
+from api.infrastructure.integration_validators.merkys import validate_merkys
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 
@@ -22,6 +23,7 @@ PROVIDER_VALIDATORS: dict[SecretProvider, Any] = {
     SecretProvider.GMAIL_APP_PASSWORD: validate_gmail_app_password,
     SecretProvider.PIPEDRIVE: validate_pipedrive,
     SecretProvider.APOLLO: validate_apollo,
+    SecretProvider.MERKYS: validate_merkys,
 }
 
 
@@ -51,5 +53,6 @@ __all__ = [
     "validate_gmail",
     "validate_google_workspace",
     "validate_jira",
+    "validate_merkys",
     "validate_pipedrive",
 ]

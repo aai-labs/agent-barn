@@ -42,7 +42,7 @@ The classifier (`api/domains/business_value/classifier.py`) is a pure function o
 4. Drop the global flags `--profile`, `--config`, `--secrets-file`, and `--key-file` with their values, in both `--flag VALUE` and `--flag=VALUE` form and in any position.
 5. Ignore any invocation that has `--help` or `-h`, a `help` subcommand, or no command path, and any invocation in the aai-cli tooling groups `config`, `skills`, `secrets`, or `help`. `--version` is not a help flag, because `confluence pages update` takes `--version N`.
 6. Match the longest known command path. `verb` is its last token and `resource` is the tokens in between.
-   - Passthrough `request` commands (microsoft, pipedrive, hubspot, openpanel, apollo) read their HTTP method: `get` and `head` are reads, and any other method is a write with no Outcome Type.
+   - Passthrough `request` commands (microsoft, pipedrive, hubspot, openpanel, apollo, merkys) read their HTTP method: `get` and `head` are reads, and any other method is a write with no Outcome Type.
    - An unknown path keeps the deepest known resource. It keeps the next token as `verb` only if that token looks like a command word, so no argument text is stored.
 
 ### gog commands
