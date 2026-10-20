@@ -90,7 +90,7 @@ deployment limits cannot change their expected budget contracts.
 | `make fix-api` | Ruff autofix and formatting; modifies files | None |
 | `make check-migrations` | Exactly one Alembic head | None |
 | `make check-memory` | Rendered gateway/backend isolation and authentication contracts | Helm 3.19.0 |
-| `make test-api` | API unit and integration tests, excluding the Kubernetes client test; runs one pytest-xdist worker per CPU, each with its own PostgreSQL container | Docker for Testcontainers PostgreSQL and the pinned Prometheus image, plus Node.js for the OpenClaw plugin and healthz metrics tests |
+| `make test-api` | API unit and integration tests, excluding the Kubernetes client test; runs one pytest-xdist worker per CPU, each with its own PostgreSQL container; tests marked `xdist_group("heavy_containers")` (pinned LiteLLM/Hindsight contracts) share one worker so those containers never start concurrently | Docker for Testcontainers PostgreSQL and the pinned Prometheus image, plus Node.js for the OpenClaw plugin and healthz metrics tests |
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
 | `make test-integration-isolation RUNTIME=both` | Opt-in Secrets/PVC transition contracts in a new disposable k3d cluster | Docker, k3d, kubectl, locally built `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE`; no provider accounts |
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
