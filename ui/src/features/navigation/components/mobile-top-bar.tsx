@@ -2,15 +2,14 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { ChevronDown, ChevronLeft } from "lucide-react";
 
 import { LogoMark } from "@/components/logo-mark";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { usePlatformView } from "@/features/organizations/hooks/use-platform-view";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 import { useContextPanel } from "../hooks/use-context-panel";
-import { PLATFORM_BASE } from "../nav-model";
 import { PanelGroups, PanelHeader, PanelLink } from "./context-panel";
 
 /**
@@ -19,8 +18,8 @@ import { PanelGroups, PanelHeader, PanelLink } from "./context-panel";
  */
 export function MobileTopBar() {
   const panel = useContextPanel();
-  const pathname = usePathname() ?? "";
   const { selectedOrganization } = useOrganizationContext();
+  const isPlatformView = usePlatformView();
   const [open, setOpen] = useState(false);
 
   const barClass =
@@ -32,7 +31,7 @@ export function MobileTopBar() {
       <header className={`${barClass} px-4`} style={barStyle}>
         <LogoMark size={26} />
         <span className="ml-2 truncate text-[15px] font-semibold" style={{ color: "var(--ink)" }}>
-          {pathname.startsWith(PLATFORM_BASE)
+          {isPlatformView
             ? "Platform admin"
             : (selectedOrganization?.name ?? "Agent Barn")}
         </span>

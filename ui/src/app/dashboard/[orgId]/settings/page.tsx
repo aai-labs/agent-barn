@@ -40,29 +40,17 @@ export default function SettingsPage() {
   return (
     <div style={{ background: "var(--bg)" }}>
       <main className="af-page">
-        <div className="mb-8 flex flex-wrap items-start gap-4">
-          <div className="min-w-0 flex-1">
-            <h1
-              className="m-0 text-[2rem] font-semibold tracking-[-0.025em]"
-              style={{ color: "var(--ink)" }}
-            >
-              Settings
-            </h1>
-            <p className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-3)" }}>
-              {selectedOrganization?.name ?? "Organization"}
-            </p>
-          </div>
-          <div
-            className="rounded-full border px-3 py-1.5 text-[0.78rem]"
-            style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}
-          >
-            {canManage ? "Admin access" : "Read-only access"}
-          </div>
-        </div>
-
         <SettingsPageLayout
           heading={section.label}
           description={section.description}
+          aside={
+            <div
+              className="rounded-full border px-3 py-1.5 text-[0.78rem]"
+              style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}
+            >
+              {canManage ? "Admin access" : "Read-only access"}
+            </div>
+          }
         >
           {section.key === "agents" && <AgentDefaultsPanel canEdit={canManage} />}
           {section.key === "spend-limits" && <SpendLimitsPanel />}

@@ -15,13 +15,11 @@ import {
   visibleAgentConfigurationSections,
 } from "@/features/agents/components/agent-configuration-utils";
 import type { Agent } from "@/features/agents/schemas";
-import { canAgent } from "@/features/agents/utils";
 import {
   ORGANIZATION_SETTINGS_ICONS,
   visibleOrganizationSettingsSections,
 } from "@/features/organizations/components/organization-settings-utils";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
-import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 import {
   PLATFORM_SETTINGS_SECTIONS,
   type PlatformSettingsSectionKey,
@@ -38,7 +36,7 @@ import {
   type NavGroup,
   type NavItem,
 } from "../nav-model";
-import { useCachedAgent } from "./use-cached-agent";
+import { useCachedAgent, useCachedWorkflowAuthoring } from "./use-cached-agent";
 
 export type ContextPanelModel = {
   title: string;
@@ -62,11 +60,7 @@ export function useContextPanel(): ContextPanelModel | null {
   const { role, canManage, selectedOrganization } = useActiveOrgRole();
   const agentRoute = parseAgentRoute(pathname);
   const agent = useCachedAgent(agentRoute?.agentId);
-  // The same capability read the Agent page makes, shared through the query cache.
-  const workflowCapabilities = useWorkflowCapabilities(
-    agentRoute?.agentId ?? "",
-    Boolean(agentRoute) && canAgent(agent, "agent.read"),
-  );
+  const workflowAuthoring = useCachedWorkflowAuthoring(agentRoute?.agentId);
 
   if (pathname.startsWith(PLATFORM_BASE)) {
     return platformPanel(pathname, searchParams.get("section"));
@@ -108,7 +102,7 @@ export function useContextPanel(): ContextPanelModel | null {
     }
 
     const tabs = agent
-      ? visibleAgentPageTabs(agent, role, { workflowAuthoring: workflowCapabilities.data?.authoring === true })
+      ? visibleAgentPageTabs(agent, role, { workflowAuthoring })
       : [];
     const requested = searchParams.get("tab") as AgentPageTab | null;
     // Only the Agent page itself has a selected section; its sub-pages (a connection,
@@ -193,8 +187,11 @@ function platformPanel(pathname: string, requestedSection: string | null): Conte
       href: page.href,
       icon: page.icon,
       active,
+      // Platform settings' sections are listed whether or not you are on them, so each is
+      // one click from anywhere in the area; one is selected only on the settings page.
+      expanded: page.key === "settings",
       children:
-        page.key === "settings" && pathname === page.href
+        page.key === "settings"
           ? (Object.entries(PLATFORM_SETTINGS_SECTIONS) as [
               PlatformSettingsSectionKey,
               (typeof PLATFORM_SETTINGS_SECTIONS)[PlatformSettingsSectionKey],
@@ -203,7 +200,7 @@ function platformPanel(pathname: string, requestedSection: string | null): Conte
               label: section.label,
               href: `${page.href}?section=${key}`,
               icon: section.Icon,
-              active: key === settingsSection,
+              active: pathname === page.href && key === settingsSection,
             }))
           : undefined,
     };

@@ -6,6 +6,7 @@ import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 
 import type { Organization } from "../schemas";
+import { usePlatformView } from "./use-platform-view";
 
 // Segments directly under /dashboard/ that are NOT an org id (global admin / personal).
 const GLOBAL_DASHBOARD_SEGMENTS = new Set(["account", "platform"]);
@@ -42,7 +43,7 @@ export function useOrganizationSwitch() {
   const { user } = useCurrentUser();
   const router = useRouter();
   const pathname = usePathname() ?? "";
-  const isPlatformView = pathname.startsWith("/dashboard/platform");
+  const isPlatformView = usePlatformView();
   // Mirrors the API: a self-signed-up user stays on their trial (even after deleting
   // it) until a platform admin ends it, and nobody owning a running trial creates more.
   const onTrial =
@@ -58,7 +59,7 @@ export function useOrganizationSwitch() {
   };
 
   const selectPlatform = () => {
-    if (!isPlatformView) {
+    if (!pathname.startsWith("/dashboard/platform")) {
       router.push("/dashboard/platform");
     }
   };

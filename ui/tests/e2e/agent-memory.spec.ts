@@ -374,7 +374,7 @@ test.describe("Memory access settings", () => {
     await switcher.click();
     await page.getByRole("menuitem", { name: /globex/i }).click();
     await expect(page).toHaveURL(new RegExp(`/dashboard/${ORG_B_ID}`));
-    await page.getByRole("link", { name: "Settings", exact: true }).click();
+    await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Settings", exact: true }).click();
     await page.getByRole("complementary").getByRole("link", { name: "Memory access", exact: true }).click();
 
     await expect(page.getByText("No memory access granted")).toBeVisible();

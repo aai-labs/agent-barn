@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -22,16 +22,23 @@ import type { NavItem } from "../nav-model";
 export function ContextPanel() {
   const panel = useContextPanel();
   const pathname = usePathname() ?? "";
-  // "Sections" from a chat list holds until you move to another section.
+  const activeKey = panel?.groups.flatMap((group) => group.items).find((item) => item.active)?.key;
+  const routeKey = `${pathname}:${activeKey}`;
+  // "Sections" from a chat list holds until you move to another section. It is dropped
+  // when the route has changed, not when a link is clicked: dropping it on the click
+  // showed the old section's list for a render before the new section arrived.
   const [sectionsShownOn, setSectionsShownOn] = useState<string | null>(null);
+  const [seenRouteKey, setSeenRouteKey] = useState(routeKey);
+  if (routeKey !== seenRouteKey) {
+    setSeenRouteKey(routeKey);
+    setSectionsShownOn(null);
+  }
   if (!panel) return null;
 
-  const activeKey = panel.groups.flatMap((group) => group.items).find((item) => item.active)?.key;
   // Chat and Conversations take the whole page, so their thread and channel lists take
   // the panel's place.
   const listTab =
     panel.agent && (activeKey === "chat" || activeKey === "conversations") ? activeKey : null;
-  const routeKey = `${pathname}:${activeKey}`;
   const showList = listTab !== null && sectionsShownOn !== routeKey;
 
   return (
@@ -61,7 +68,7 @@ export function ContextPanel() {
           {/* The path bar names the Agent and shows its avatar, status, runtime and model. */}
           <PanelHeader panel={panel} agentIdentity={false} />
           <nav aria-label={panel.title} className="flex flex-1 flex-col pt-1">
-            <PanelGroups panel={panel} onNavigate={() => setSectionsShownOn(null)} />
+            <PanelGroups panel={panel} />
           </nav>
           {panel.footer && (
             <div className="mt-3 pt-2" style={{ borderTop: "1px solid var(--line)" }}>
@@ -218,6 +225,24 @@ export function PanelLink({
 }) {
   const Icon = item.icon;
   const danger = item.tone === "danger";
+
+  // A section of the page you are on differs only in its query (?tab=, ?section=), and
+  // every such page reads it on the client. Changing it in place, as the tab rows did,
+  // skips the server round trip a link makes, which flashed the route's loading screen.
+  // Next.js syncs pushState with useSearchParams. A modified click still opens normally.
+  function navigate(event: MouseEvent<HTMLAnchorElement>) {
+    onNavigate?.();
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    const target = new URL(item.href, window.location.href);
+    if (target.origin !== window.location.origin || target.pathname !== window.location.pathname) return;
+    event.preventDefault();
+    if (target.href !== window.location.href) {
+      window.history.pushState(null, "", target.pathname + target.search);
+      window.scrollTo({ top: 0 });
+    }
+  }
   const color = danger ? "var(--err)" : item.active ? "var(--ink)" : "var(--ink-2)";
   const iconColor = danger ? "var(--err)" : item.active ? "var(--ink)" : "var(--ink-3)";
 
@@ -226,7 +251,7 @@ export function PanelLink({
       <Link
         href={item.href}
         aria-current={item.active ? "page" : undefined}
-        onClick={onNavigate}
+        onClick={navigate}
         className={`flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13.5px] transition-colors ${item.active ? "" : "af-hover-bg"}`}
         style={{
           color,
@@ -238,7 +263,7 @@ export function PanelLink({
         <span className="min-w-0 flex-1 truncate">{item.label}</span>
         {trailing && <ChevronRight size={14} aria-hidden style={{ color: "var(--ink-4)" }} />}
       </Link>
-      {item.active && item.children && (
+      {(item.active || item.expanded) && item.children && (
         <div className="my-1 ml-[19px] flex flex-col gap-px pl-2" style={{ borderLeft: "1px solid var(--line)" }}>
           {item.children.map((child) => (
             <PanelLink key={child.key} item={child} onNavigate={onNavigate} />

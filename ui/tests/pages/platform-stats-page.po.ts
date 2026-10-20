@@ -11,12 +11,9 @@ export class PlatformStatsPage {
     await this.page.goto("/dashboard/platform");
   }
 
-  heading(): Locator {
-    return this.page.getByRole("heading", { name: "Platform" });
-  }
-
+  /** The page's one heading: the overview carries no separate "Platform" title. */
   overviewHeading(): Locator {
-    return this.page.getByRole("heading", { name: "Overview" });
+    return this.page.getByRole("heading", { name: "Overview", level: 1 });
   }
 
   activityHeading(): Locator {

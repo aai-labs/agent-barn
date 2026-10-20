@@ -11,9 +11,10 @@ import {
   Users,
 } from "lucide-react";
 
+import { usePlatformView } from "@/features/organizations/hooks/use-platform-view";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 
-import { PLATFORM_AREAS, PLATFORM_BASE, isPlatformPageActive, type NavItem } from "../nav-model";
+import { PLATFORM_AREAS, isPlatformPageActive, type NavItem } from "../nav-model";
 
 export type RailModel = {
   /** `platform` tints the rail: Platform View has a rail of its own. */
@@ -34,7 +35,8 @@ export function useRailModel(): RailModel {
   const pathname = usePathname() ?? "";
   // Owners/admins (and platform admins) manage members and see org spend; plain members can't.
   const { canManage, selectedOrganization } = useActiveOrgRole();
-  const isPlatformView = pathname.startsWith(PLATFORM_BASE);
+  // From the view you are in, which a page outside both (your Account) keeps.
+  const isPlatformView = usePlatformView();
   const orgBase = selectedOrganization ? `/dashboard/${selectedOrganization.id}` : "/dashboard";
 
   if (isPlatformView) {

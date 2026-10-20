@@ -33,8 +33,9 @@ export type NavItem = {
   icon: LucideIcon;
   active: boolean;
   tone?: "danger";
-  /** Shown nested under the item while it is active. */
+  /** Shown nested under the item while it is active, or always when `expanded`. */
   children?: NavItem[];
+  expanded?: boolean;
 };
 
 export type NavGroup = { key: string; label?: string; items: NavItem[] };

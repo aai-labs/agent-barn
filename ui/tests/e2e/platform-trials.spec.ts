@@ -50,7 +50,7 @@ test.describe("Platform trials", () => {
     await page.goto("/dashboard/platform/settings");
     await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
     // The panel link changes the URL; act on the section only once it is showing.
-    await expect(page.getByRole("heading", { name: "Signup & trials", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
 
     await expect(page.getByTestId("saved-trial-credit")).toHaveText("$10.00");
     await expect(page.getByTestId("saved-trial-agent-limit")).toHaveText("1 agent");
@@ -76,7 +76,7 @@ test.describe("Platform trials", () => {
     await page.goto("/dashboard/platform/settings");
     await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
     // The panel link changes the URL; act on the section only once it is showing.
-    await expect(page.getByRole("heading", { name: "Signup & trials", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await expect(page.getByTestId("saved-self-signup")).toHaveText("Disabled");
     await expect(page.getByTestId("saved-trial-credit")).toHaveText("$0.00");
     await page.getByRole("button", { name: "Edit", exact: true }).click();
@@ -93,7 +93,7 @@ test.describe("Platform trials", () => {
     await page.reload();
     await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
     // The panel link changes the URL; act on the section only once it is showing.
-    await expect(page.getByRole("heading", { name: "Signup & trials", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await expect(page.getByTestId("saved-self-signup")).toHaveText("Enabled");
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Trial credit (USD)").fill("0");
@@ -123,7 +123,7 @@ test.describe("Platform trials", () => {
     await page.goto("/dashboard/platform/settings");
     await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
     // The panel link changes the URL; act on the section only once it is showing.
-    await expect(page.getByRole("heading", { name: "Signup & trials", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
 
     await expect(page.getByTestId("saved-trial-cap")).toHaveText("3 active, no cap");
     await page.getByRole("button", { name: "Edit", exact: true }).click();
@@ -153,7 +153,7 @@ test.describe("Platform trials", () => {
     await page.goto("/dashboard/platform/settings");
     await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
     // The panel link changes the URL; act on the section only once it is showing.
-    await expect(page.getByRole("heading", { name: "Signup & trials", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Active trials at once").fill("");
     await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -172,7 +172,7 @@ test.describe("Platform trials", () => {
     await page.goto("/dashboard/platform/settings");
     await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
     // The panel link changes the URL; act on the section only once it is showing.
-    await expect(page.getByRole("heading", { name: "Signup & trials", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Active trials at once").fill("0");
 
@@ -190,7 +190,7 @@ test.describe("Platform trials", () => {
     await page.goto("/dashboard/platform/settings");
     await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
     // The panel link changes the URL; act on the section only once it is showing.
-    await expect(page.getByRole("heading", { name: "Signup & trials", level: 2 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Trial credit (USD)").fill("-5");
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();

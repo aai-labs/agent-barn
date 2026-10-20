@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, ChevronRight, ChevronsUpDown } from "lucide-react";
 
@@ -54,13 +54,22 @@ export function PathBar() {
   // copies of the lifecycle and Share dialogs must not coexist.
   const isDesktop = useIsDesktop();
 
-  // The deepest selected entry names the page: a section inside a context, otherwise
-  // the rail destination.
-  const current =
-    panel?.groups
-      .flatMap((group) => group.items.flatMap((item) => [item, ...(item.children ?? [])]))
-      .filter((item) => item.active)
-      .at(-1)?.label ?? (agentRoute ? undefined : rail.items.find((item) => item.active)?.label);
+  // Where you are, below the Organization (and the Agent): the rail destination, then the
+  // selected entries of the panel, deepest last. "Settings / Agents", "Spend / Costs",
+  // "System / Settings / Agent Memory"; inside an Agent "Chat", or "Agent settings / Profile".
+  // Every step but the last links to its own page.
+  const selected = (panel?.groups ?? [])
+    .flatMap((group) => group.items.flatMap((item) => [item, ...(item.children ?? [])]))
+    .filter((item) => item.active)
+    .map((item) => ({ label: item.label, href: item.href }));
+  const railStep = agentRoute ? undefined : rail.items.find((item) => item.active);
+  const trail = [
+    ...(railStep ? [{ label: railStep.label, href: railStep.href }] : []),
+    ...(agentRoute?.rest === "configuration" && panel?.subtitle
+      ? [{ label: panel.subtitle, href: `/dashboard/${agentRoute.orgId}/agents/${agentRoute.agentId}/configuration` }]
+      : []),
+    ...selected,
+  ].filter((step, index, steps) => index === 0 || step.label !== steps[index - 1].label);
 
   return (
     <header
@@ -75,14 +84,24 @@ export function PathBar() {
             <AgentSwitcher orgId={agentRoute.orgId} agentId={agentRoute.agentId} rest={agentRoute.rest} />
           </>
         )}
-        {current && (
-          <>
+        {trail.map((step, index) => (
+          <Fragment key={`${index}-${step.label}`}>
             <Separator />
-            <span className="truncate px-2 text-[14px]" style={{ color: "var(--ink-3)" }} aria-current="page">
-              {current}
-            </span>
-          </>
-        )}
+            {index === trail.length - 1 ? (
+              <span className="truncate px-2 text-[14px]" style={{ color: "var(--ink-3)" }} aria-current="page">
+                {step.label}
+              </span>
+            ) : (
+              <Link
+                href={step.href}
+                className="af-hover-bg flex-shrink-0 rounded-md px-2 py-1 text-[14px]"
+                style={{ color: "var(--ink-3)" }}
+              >
+                {step.label}
+              </Link>
+            )}
+          </Fragment>
+        ))}
       </nav>
       {agentRoute && isDesktop && <AgentActions agentId={agentRoute.agentId} />}
       <div className="ml-2">

@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   CalendarDays,
-  ChevronLeft,
   Loader2,
   Trash2,
   UserRound,
@@ -104,16 +102,6 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
   return (
     <div className="af-page">
-      {user.isPlatformAdmin && (
-        <Link
-          href="/dashboard/platform/organizations"
-          className="inline-flex items-center gap-1 text-[13px] mb-4"
-          style={{ color: "var(--ink-3)" }}
-        >
-          <ChevronLeft width={14} height={14} /> Organizations
-        </Link>
-      )}
-
       {/* Header: monogram + name/description, quiet delete on the right */}
       <div className="flex items-start gap-4 mb-7">
         <div

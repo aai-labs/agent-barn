@@ -117,6 +117,95 @@ test.describe("App navigation", () => {
       await expect(navigation.contextSwitcher()).toHaveAccessibleName(/Platform admin/);
     });
 
+    test("names the whole way to a section in the path bar, each earlier step a link", async ({ page }) => {
+      await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
+
+      await expect(navigation.breadcrumbCurrent()).toHaveText("Agents");
+      await expect(navigation.breadcrumb().getByRole("link", { name: "Settings", exact: true })).toHaveAttribute(
+        "href",
+        `/dashboard/${TEST_ORG_ID}/settings`,
+      );
+      // The section is the page's heading; the path bar and panel say it is Settings.
+      await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Settings", exact: true })).toHaveCount(0);
+    });
+
+    test("lists Platform settings' sections from anywhere in System", async ({ page }) => {
+      await new DataSupport(page).platformMemory.intercept();
+      await navigation.gotoPlatform("/event-deliveries");
+
+      await expect(navigation.panelLink("Event deliveries")).toHaveAttribute("aria-current", "page");
+      await expect(navigation.panelLink("Agent Memory")).toBeVisible();
+      await expect(navigation.panelLink("Agent Memory")).not.toHaveAttribute("aria-current", "page");
+
+      await expect(navigation.panelLink("Agent Memory")).toHaveAttribute(
+        "href",
+        "/dashboard/platform/settings?section=agent-memory",
+      );
+
+      await navigation.gotoPlatform("/settings?section=agent-memory");
+      await expect(navigation.breadcrumb()).toContainText("System/Settings/Agent Memory");
+      await expect(navigation.panelLink("Agent Memory")).toHaveAttribute("aria-current", "page");
+    });
+
+    test("keeps Platform View around your Account when you open it from there", async ({ page }) => {
+      await navigation.gotoPlatform("/users");
+
+      await navigation.accountMenu().click();
+      await navigation.menuItem("Account").click();
+
+      await expect(page).toHaveURL(/\/dashboard\/account$/);
+      await expect(navigation.contextSwitcher()).toHaveAccessibleName(/Platform admin/);
+      await expect(navigation.mainLink("Users")).toBeVisible();
+      await expect(navigation.mainLink("Team")).toHaveCount(0);
+    });
+
+    test("moves between an Agent's sections in place, without a server round trip", async ({ page }) => {
+      await navigation.gotoAgent(MOCK_AGENT_ID);
+      await expect(navigation.panelLink("Chat")).toBeVisible();
+      const serverRequests: string[] = [];
+      page.on("request", (request) => {
+        if (request.headers()["rsc"]) serverRequests.push(request.url());
+      });
+
+      await navigation.panelLink("Tool calls").click();
+      await expect(navigation.breadcrumbCurrent()).toHaveText("Tool calls");
+      await navigation.panelLink("Logs").click();
+      await expect(navigation.breadcrumbCurrent()).toHaveText("Logs");
+
+      expect(serverRequests).toEqual([]);
+    });
+
+    test("goes from Chat's sections to Conversations without showing Chat's threads again", async ({ page }) => {
+      await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=chat`);
+      await navigation.backToSections().click();
+      await expect(navigation.panelLink("Conversations")).toBeVisible();
+      // Records any New chat button the panel draws from here on, however briefly.
+      await page.evaluate(() => {
+        const seen = { newChat: false };
+        (window as unknown as { __seen: typeof seen }).__seen = seen;
+        new MutationObserver(() => {
+          const panel = document.querySelector("aside");
+          if (panel && [...panel.querySelectorAll("button")].some((b) => b.textContent?.includes("New chat"))) {
+            seen.newChat = true;
+          }
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+
+      await navigation.panelLink("Conversations").click();
+      await expect(navigation.breadcrumbCurrent()).toHaveText("Conversations");
+      await expect(navigation.backToSections()).toBeVisible();
+
+      expect(await page.evaluate(() => (window as unknown as { __seen: { newChat: boolean } }).__seen.newChat)).toBe(false);
+    });
+
+    test("keeps Members inside the Organization, with no way back to Platform View", async ({ page }) => {
+      await page.goto(`/dashboard/${TEST_ORG_ID}/members`);
+
+      await expect(navigation.mainLink("Members")).toHaveAttribute("aria-current", "page");
+      await expect(page.locator('main a[href^="/dashboard/platform"]')).toHaveCount(0);
+    });
+
     test("shows a panel only for a Platform area with more than one page", async () => {
       await navigation.gotoPlatform("/users");
       await expect(navigation.breadcrumbCurrent()).toHaveText("Users");

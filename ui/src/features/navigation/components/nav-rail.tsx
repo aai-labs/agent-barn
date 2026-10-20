@@ -23,7 +23,7 @@ export function NavRail() {
       style={{ background: rail.tone === "platform" ? PLATFORM_RAIL_BACKGROUND : RAIL_BACKGROUND }}
     >
       <Link href="/dashboard" aria-label="Agent Barn home" className="mb-4 rounded-lg">
-        <LogoMark size={32} background="#fbfaf8" foreground={RAIL_BACKGROUND} />
+        <LogoMark size={32} />
       </Link>
       {rail.items.map((item) => (
         <RailLink key={item.key} item={item} tone={rail.tone} />
