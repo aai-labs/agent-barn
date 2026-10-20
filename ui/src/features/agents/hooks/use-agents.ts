@@ -8,10 +8,15 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { PaginatedAgents, PaginatedAgentsSchema } from "../schemas";
 import { AGENTS_PAGE_SIZE, agentsKey } from "../utils";
 
-export function useAgents() {
+/**
+ * The first page of the team's Agents. `enabled: false` reads what the cache already
+ * holds without asking, for a list that is only needed once someone opens it.
+ */
+export function useAgents({ enabled = true }: { enabled?: boolean } = {}) {
   const orgApiBase = useOrganizationApiBase();
   const query = useQuery({
     queryKey: agentsKey.list(),
+    enabled,
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", "1");

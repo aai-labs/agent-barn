@@ -299,7 +299,8 @@ test.describe("Agent update notice in the path bar", () => {
     });
 
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await expect(agentDetailPage.updateBanner()).toHaveCount(0);
+    // The phone's banner stays in the page, hidden by CSS on desktop.
+    await expect(agentDetailPage.updateBanner()).toBeHidden();
 
     await agentDetailPage.updateNotice().click();
     const details = agentDetailPage.updateNoticeDetails();

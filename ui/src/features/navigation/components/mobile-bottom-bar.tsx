@@ -4,11 +4,12 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Building2, Check, Ellipsis, LogOut, Shield, User } from "lucide-react";
+import { Building2, Check, Ellipsis, LogOut, Plus, Shield, User } from "lucide-react";
 
 import { useLogout } from "@/auth/hooks/use-logout";
 import { useCurrentUser } from "@/auth/providers/user-context-provider";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { CreateOrganizationDialog } from "@/features/organizations/components/create-organization-dialog";
 import { useOrganizationSwitch } from "@/features/organizations/hooks/use-organization-switch";
 
 import { useRailModel } from "../hooks/use-rail-model";
@@ -19,11 +20,13 @@ const PRIMARY_COUNT = 3;
 
 /**
  * The rail on a phone: its first destinations as a bottom bar, and the rest, with the
- * Organization switch and the account, behind More.
+ * Organization switch, creating an Organization and the account, behind More.
  */
 export function MobileBottomBar() {
   const rail = useRailModel();
   const [moreOpen, setMoreOpen] = useState(false);
+  // Outside the sheet, which closes as the dialog opens.
+  const [createOpen, setCreateOpen] = useState(false);
   const primary = rail.items.slice(0, PRIMARY_COUNT);
   const overflow = [...rail.items.slice(PRIMARY_COUNT), ...(rail.exit ? [rail.exit] : [])];
   const moreActive = overflow.some((item) => item.active);
@@ -55,9 +58,17 @@ export function MobileBottomBar() {
           <SheetHeader className="sr-only">
             <SheetTitle>More</SheetTitle>
           </SheetHeader>
-          <MoreSheetBody overflow={overflow} onNavigate={() => setMoreOpen(false)} />
+          <MoreSheetBody
+            overflow={overflow}
+            onNavigate={() => setMoreOpen(false)}
+            onCreateOrganization={() => {
+              setMoreOpen(false);
+              setCreateOpen(true);
+            }}
+          />
         </SheetContent>
       </Sheet>
+      <CreateOrganizationDialog open={createOpen} onOpenChange={setCreateOpen} />
     </nav>
   );
 }
@@ -76,11 +87,19 @@ function BarLink({ item, idle }: { item: NavItem; idle: string }) {
   );
 }
 
-function MoreSheetBody({ overflow, onNavigate }: { overflow: NavItem[]; onNavigate: () => void }) {
+function MoreSheetBody({
+  overflow,
+  onNavigate,
+  onCreateOrganization,
+}: {
+  overflow: NavItem[];
+  onNavigate: () => void;
+  onCreateOrganization: () => void;
+}) {
   const router = useRouter();
   const { user } = useCurrentUser();
   const { logout, isLoggingOut } = useLogout();
-  const { organizations, selectedOrganization, isPlatformView, selectOrganization } =
+  const { organizations, selectedOrganization, isPlatformView, selectOrganization, canCreateOrganization } =
     useOrganizationSwitch();
 
   return (
@@ -93,9 +112,11 @@ function MoreSheetBody({ overflow, onNavigate }: { overflow: NavItem[]; onNaviga
         </SheetSection>
       )}
 
-      {organizations.length > 1 && (
+      {/* The switch only when there is somewhere to switch to; creating one at every count,
+          as the desktop switcher offers it. */}
+      {(organizations.length > 1 || canCreateOrganization) && (
         <SheetSection label="Organizations">
-          {organizations.map((org) => {
+          {organizations.length > 1 && organizations.map((org) => {
             const isSelected = !isPlatformView && org.id === selectedOrganization?.id;
             return (
               <button
@@ -114,6 +135,17 @@ function MoreSheetBody({ overflow, onNavigate }: { overflow: NavItem[]; onNaviga
               </button>
             );
           })}
+          {canCreateOrganization && (
+            <button
+              type="button"
+              className="af-hover-bg flex min-h-11 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13.5px] font-medium"
+              style={{ color: "var(--ink-2)" }}
+              onClick={onCreateOrganization}
+            >
+              <Plus size={16} aria-hidden style={{ color: "var(--ink-3)" }} />
+              Create organization
+            </button>
+          )}
         </SheetSection>
       )}
 

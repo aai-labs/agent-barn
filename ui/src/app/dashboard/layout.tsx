@@ -1,5 +1,3 @@
-"use client";
-
 import type { ReactNode } from "react";
 import { AppShell } from "@/features/navigation/components/app-shell";
 

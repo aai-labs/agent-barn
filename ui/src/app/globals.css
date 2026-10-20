@@ -165,6 +165,21 @@
   padding: 36px 40px 96px;
 }
 
+/* A page given entirely to one panel on desktop, edge to edge below the path bar: an
+   Agent's Chat or Conversations. Below the breakpoint it is an ordinary .af-page. */
+@media (min-width: 1024px) {
+  .af-page-fill {
+    display: flex;
+    flex: 1 1 0%;
+    flex-direction: column;
+    min-height: 0;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+}
+
 .af-card {
   background: var(--bg-elev);
   border: 1px solid var(--line);

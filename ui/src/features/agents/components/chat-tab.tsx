@@ -39,11 +39,6 @@ import { APPROVAL_DATA_PART, WebChatApprovalRenderer } from "./web-chat-approval
 interface ChatTabProps {
   agent: Agent;
   isAgentWorking: boolean;
-  /**
-   * Fill the page and leave the thread list to the navigation panel, which shows it in
-   * place of the Agent's sections (on desktop).
-   */
-  fullScreen?: boolean;
 }
 
 const WEB_CHAT_FAILURE_PREFIX = "⚠️ I couldn't process that message.";
@@ -337,7 +332,7 @@ export function ChatThreadList({ agentId }: { agentId: string }) {
   );
 }
 
-export function ChatTab({ agent, isAgentWorking, fullScreen = false }: ChatTabProps) {
+export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
   const [threadId] = useChatThreadId();
 
   const { messages, sendMessage, stopGeneration, isAwaitingReply, streamStatus } = useWebChat(
@@ -369,26 +364,21 @@ export function ChatTab({ agent, isAgentWorking, fullScreen = false }: ChatTabPr
       <div
         className={cn(
           "flex overflow-hidden",
-          fullScreen
-            ? "h-full"
-            : isMaximized
-              ? "fixed inset-4 z-50 rounded-2xl shadow-2xl"
-              : "rounded-2xl",
+          // Below the breakpoint a framed panel with its own thread list; on desktop the
+          // page's whole height, with the threads in the navigation panel beside it.
+          isMaximized
+            ? "fixed inset-4 z-50 rounded-2xl shadow-2xl"
+            : "h-[min(760px,80vh)] rounded-2xl border",
+          "lg:static lg:inset-auto lg:z-auto lg:h-full lg:rounded-none lg:border-0 lg:shadow-none",
         )}
-        style={{
-          border: fullScreen ? undefined : "1px solid var(--line)",
-          height: fullScreen || isMaximized ? undefined : "min(760px, 80vh)",
-          background: "var(--bg)",
-        }}
+        style={{ borderColor: "var(--line)", background: "var(--bg)" }}
       >
-        {!fullScreen && (
-          <div
-            className="flex w-56 flex-shrink-0 flex-col"
-            style={{ borderRight: "1px solid var(--line)" }}
-          >
-            <ChatThreadList agentId={agent.id} />
-          </div>
-        )}
+        <div
+          className="flex w-56 flex-shrink-0 flex-col lg:hidden"
+          style={{ borderRight: "1px solid var(--line)" }}
+        >
+          <ChatThreadList agentId={agent.id} />
+        </div>
 
         <div className="flex flex-1 flex-col overflow-hidden">
           <div
@@ -427,7 +417,8 @@ export function ChatTab({ agent, isAgentWorking, fullScreen = false }: ChatTabPr
                     ? "Connecting…"
                     : "Updates paused"}
               </span>
-              {!fullScreen && (
+              {/* Wrapped: .af-btn sets its own display, which would win over lg:hidden. */}
+              <span className="lg:hidden">
                 <button
                   type="button"
                   className="af-btn af-btn-ghost af-btn-icon"
@@ -436,7 +427,7 @@ export function ChatTab({ agent, isAgentWorking, fullScreen = false }: ChatTabPr
                 >
                   {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
                 </button>
-              )}
+              </span>
             </div>
           </div>
 

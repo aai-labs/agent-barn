@@ -32,6 +32,7 @@ import {
   PLATFORM_AREAS,
   PLATFORM_BASE,
   isPlatformPageActive,
+  parseAgentRoute,
   type NavGroup,
   type NavItem,
 } from "../nav-model";
@@ -48,8 +49,6 @@ export type ContextPanelModel = {
   footer?: NavItem;
 };
 
-const AGENT_ROUTE = /^\/dashboard\/([^/]+)\/agents\/([^/]+)(?:\/(.*))?$/;
-
 /**
  * The navigation panel beside the rail: the sections of whatever the current page
  * belongs to (an Agent, its settings, the Organization's settings, Platform View).
@@ -59,15 +58,15 @@ export function useContextPanel(): ContextPanelModel | null {
   const pathname = usePathname() ?? "";
   const searchParams = useSearchParams();
   const { role, canManage, selectedOrganization } = useActiveOrgRole();
-  const agentMatch = AGENT_ROUTE.exec(pathname);
-  const agent = useCachedAgent(agentMatch?.[2]);
+  const agentRoute = parseAgentRoute(pathname);
+  const agent = useCachedAgent(agentRoute?.agentId);
 
   if (pathname.startsWith(PLATFORM_BASE)) {
     return platformPanel(pathname, searchParams.get("section"));
   }
 
-  if (agentMatch) {
-    const [, orgId, agentId, rest] = agentMatch;
+  if (agentRoute) {
+    const { orgId, agentId, rest } = agentRoute;
     const orgBase = `/dashboard/${orgId}`;
     const agentBase = `${orgBase}/agents/${agentId}`;
 
@@ -174,7 +173,7 @@ export function useContextPanel(): ContextPanelModel | null {
 
 function platformPanel(pathname: string, requestedSection: string | null): ContextPanelModel | null {
   const settingsSection: PlatformSettingsSectionKey =
-    requestedSection && requestedSection in PLATFORM_SETTINGS_SECTIONS
+    requestedSection && Object.hasOwn(PLATFORM_SETTINGS_SECTIONS, requestedSection)
       ? (requestedSection as PlatformSettingsSectionKey)
       : "agent-memory";
   const toItem = (page: (typeof PLATFORM_AREAS)[number]["pages"][number]): NavItem => {

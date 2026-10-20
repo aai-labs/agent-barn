@@ -44,6 +44,16 @@ export const RAIL_BACKGROUND = "#1a1815";
 
 export const PLATFORM_BASE = "/dashboard/platform";
 
+/** An Agent's page or one of its sub-pages: `/dashboard/{orgId}/agents/{agentId}[/{rest}]`. */
+export type AgentRoute = { orgId: string; agentId: string; rest?: string };
+
+const AGENT_ROUTE = /^\/dashboard\/([^/]+)\/agents\/([^/]+)(?:\/(.*))?$/;
+
+export function parseAgentRoute(pathname: string): AgentRoute | null {
+  const match = AGENT_ROUTE.exec(pathname);
+  return match ? { orgId: match[1], agentId: match[2], rest: match[3] || undefined } : null;
+}
+
 type PlatformPage = {
   key: string;
   label: string;

@@ -1,8 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { TEST_ORG_ID } from "../constants";
+import UserContext from "../fixtures/user-context.json";
 import { AppNavigation } from "../pages/app-navigation.po";
-import { MOCK_AGENT_ID } from "../pages/data-support/agent-data-support.po";
+import { MOCK_AGENT_ID, mockAgent } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
+
+const OTHER_AGENT_ID = "44444444-4444-4444-8444-444444444444";
+const OTHER_ORG_ID = "55555555-5555-4555-8555-555555555555";
 
 /**
  * The dashboard navigation: a rail of destinations, a path bar that switches
@@ -35,6 +40,58 @@ test.describe("App navigation", () => {
     page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
   test.describe("on a desktop viewport", () => {
+    test("moves to another Agent on the same section, without the first Agent's thread", async ({ page }) => {
+      await new DataSupport(page).agents.interceptGetAgentsRequest({
+        body: {
+          page: 1,
+          page_size: 50,
+          total: 2,
+          items: [mockAgent, { ...mockAgent, id: OTHER_AGENT_ID, name: "Sam" }],
+        },
+      });
+      await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=chat&thread=thread-of-maya`);
+
+      await navigation.agentSwitcher().click();
+      await navigation.menuItemMatching(/Sam/).click();
+
+      await expect(page).toHaveURL(new RegExp(`/agents/${OTHER_AGENT_ID}\\?tab=chat$`));
+    });
+
+    test("switching Organization from an Agent lands on the other Organization's team", async ({ page }) => {
+      const data = new DataSupport(page);
+      const [membership] = UserContext.organization_users;
+      await data.users.interceptGetUserContextRequest({
+        userContext: {
+          ...UserContext,
+          organization_users: [
+            membership,
+            {
+              ...membership,
+              id: "66666666-6666-4666-8666-666666666666",
+              organization: { ...membership.organization, id: OTHER_ORG_ID, name: "Globex" },
+            },
+          ],
+        },
+      });
+      await navigation.gotoAgent(MOCK_AGENT_ID);
+      await expect(navigation.agentSwitcher()).toHaveAccessibleName(/Maya/);
+
+      await navigation.contextSwitcher().click();
+      await navigation.menuItemMatching(/Globex/).click();
+
+      await expect(page).toHaveURL(new RegExp(`/dashboard/${OTHER_ORG_ID}$`));
+    });
+
+    test("keeps the Agent's notices above a full-page Chat", async ({ page }) => {
+      await new DataSupport(page).agents.interceptGetAgentRequest({
+        body: { ...mockAgent, status: "RUNNING", pending_model: "openrouter/anthropic/claude-opus-5.5" },
+      });
+      await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}?tab=chat`);
+
+      await expect(page.getByTestId("agent-pending-model-banner")).toBeVisible();
+      await expect(navigation.newChat()).toBeVisible();
+    });
+
     test("lists the organization's pages on the rail, with no way into Platform there", async () => {
       await navigation.gotoHome();
 
@@ -131,6 +188,15 @@ test.describe("App navigation", () => {
       await navigation.moreButton().click();
       await expect(navigation.sheet().getByRole("link", { name: "KPIs", exact: true })).toBeVisible();
       await expect(navigation.sheet().getByRole("link", { name: "Account", exact: true })).toBeVisible();
+    });
+
+    test("offers creating an Organization under More, with only one Organization", async ({ page }) => {
+      await navigation.gotoHome();
+
+      await navigation.moreButton().click();
+      await navigation.sheet().getByRole("button", { name: "Create organization" }).click();
+
+      await expect(page.getByRole("dialog", { name: "Create organization" })).toBeVisible();
     });
 
     test("opens the Agent's sections as a sheet from the top bar", async () => {

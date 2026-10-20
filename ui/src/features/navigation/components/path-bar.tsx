@@ -20,17 +20,21 @@ import { AgentUpdateNotice } from "@/features/agents/components/agent-update-ban
 import { ShareDialog } from "@/features/agents/components/share-dialog";
 import { useAgents } from "@/features/agents/hooks/use-agents";
 import { useModels } from "@/features/agents/hooks/use-models";
-import type { Agent, AgentHealth } from "@/features/agents/schemas";
+import { agentStatus } from "@/features/agents/components/status-line";
+import type { Agent } from "@/features/agents/schemas";
 import { canAgent, currentModelOf } from "@/features/agents/utils";
 
 import { useCachedAgent, useCachedAgentHealth } from "../hooks/use-cached-agent";
 import { useContextPanel } from "../hooks/use-context-panel";
 import { useIsDesktop } from "../hooks/use-is-desktop";
 import { useRailModel } from "../hooks/use-rail-model";
+import { parseAgentRoute } from "../nav-model";
 import { ContextSwitcher } from "./context-switcher";
 import { UserMenu } from "./user-menu";
 
-const AGENT_ROUTE = /^\/dashboard\/([^/]+)\/agents\/([^/]+)(?:\/(.*))?$/;
+// Query parameters that name a place inside the page rather than one Agent's thing, so
+// they carry over to another Agent. A thread or channel id is one Agent's and does not.
+const PORTABLE_PARAMS = ["tab", "section", "range"];
 
 /**
  * The desktop path bar: where you are, as a path you can switch at each step. The
@@ -44,9 +48,10 @@ export function PathBar() {
   const pathname = usePathname() ?? "";
   const panel = useContextPanel();
   const rail = useRailModel();
-  const agentMatch = AGENT_ROUTE.exec(pathname);
-  // Mounted on desktop only: phones show the Agent's header and actions on the page, and
-  // two copies of the lifecycle and Share controls must not coexist.
+  const agentRoute = parseAgentRoute(pathname);
+  // The bar itself is shown by CSS alone, so it is there on the first desktop paint. Only
+  // the Agent's actions wait for the width check: phones show them on the page, and two
+  // copies of the lifecycle and Share dialogs must not coexist.
   const isDesktop = useIsDesktop();
 
   // The deepest selected entry names the page: a section inside a context, otherwise
@@ -55,9 +60,7 @@ export function PathBar() {
     panel?.groups
       .flatMap((group) => group.items.flatMap((item) => [item, ...(item.children ?? [])]))
       .filter((item) => item.active)
-      .at(-1)?.label ?? (agentMatch ? undefined : rail.items.find((item) => item.active)?.label);
-
-  if (!isDesktop) return null;
+      .at(-1)?.label ?? (agentRoute ? undefined : rail.items.find((item) => item.active)?.label);
 
   return (
     <header
@@ -66,10 +69,10 @@ export function PathBar() {
     >
       <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-0.5">
         <ContextSwitcher />
-        {agentMatch && (
+        {agentRoute && (
           <>
             <Separator />
-            <AgentSwitcher orgId={agentMatch[1]} agentId={agentMatch[2]} rest={agentMatch[3]} />
+            <AgentSwitcher orgId={agentRoute.orgId} agentId={agentRoute.agentId} rest={agentRoute.rest} />
           </>
         )}
         {current && (
@@ -81,7 +84,7 @@ export function PathBar() {
           </>
         )}
       </nav>
-      {agentMatch && <AgentActions agentId={agentMatch[2]} />}
+      {agentRoute && isDesktop && <AgentActions agentId={agentRoute.agentId} />}
       <div className="ml-2">
         <UserMenu />
       </div>
@@ -106,7 +109,10 @@ function AgentSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: strin
   const router = useRouter();
   const searchParams = useSearchParams();
   const agent = useCachedAgent(agentId);
-  const { agents } = useAgents();
+  // Asked for when the menu first opens, not on every Agent page; the team page's list
+  // shares the cache, so coming from it there is nothing to wait for.
+  const [opened, setOpened] = useState(false);
+  const { agents, isLoading } = useAgents({ enabled: opened });
   const orgBase = `/dashboard/${orgId}`;
 
   // A connection or skill page belongs to the Agent it was opened from, so moving from
@@ -114,12 +120,17 @@ function AgentSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: strin
   const keepsPlace = !rest || rest === "configuration";
   const targetFor = (nextId: string) => {
     if (!keepsPlace) return `${orgBase}/agents/${nextId}`;
-    const query = searchParams.toString();
-    return `${orgBase}/agents/${nextId}${rest ? `/${rest}` : ""}${query ? `?${query}` : ""}`;
+    const query = new URLSearchParams();
+    for (const key of PORTABLE_PARAMS) {
+      const value = searchParams.get(key);
+      if (value !== null) query.set(key, value);
+    }
+    const search = query.toString();
+    return `${orgBase}/agents/${nextId}${rest ? `/${rest}` : ""}${search ? `?${search}` : ""}`;
   };
 
   return (
-    <DropdownMenu modal={false}>
+    <DropdownMenu modal={false} onOpenChange={(open) => open && setOpened(true)}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -134,6 +145,13 @@ function AgentSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: strin
       </DropdownMenuTrigger>
       <DropdownMenuContent side="bottom" align="start" sideOffset={6} className="w-64">
         <DropdownMenuLabel>Agents</DropdownMenuLabel>
+        {isLoading && agents.length === 0 && (
+          <DropdownMenuItem disabled>
+            <span className="flex-1" style={{ color: "var(--ink-4)" }}>
+              Loading agents…
+            </span>
+          </DropdownMenuItem>
+        )}
         {agents.map((candidate) => (
           <DropdownMenuItem
             key={candidate.id}
@@ -201,7 +219,7 @@ const RUNTIME_LABELS: Record<Agent["agentType"], string> = {
 function AgentRuntimeChip({ agent }: { agent: Agent }) {
   const { models } = useModels();
   const health = useCachedAgentHealth(agent.id);
-  const status = statusDot(agent, health);
+  const status = agentStatus(agent.status, health);
   const model = currentModelOf(agent);
   // The Organization's model list names its models; a model outside it shows its id.
   const modelLabel =
@@ -214,7 +232,7 @@ function AgentRuntimeChip({ agent }: { agent: Agent }) {
       className="inline-flex max-w-[340px] items-center gap-1.5 rounded-full px-3 py-1 text-[12.5px]"
       style={{ border: "1px solid var(--line-strong)", color: "var(--ink-3)" }}
     >
-      <span className="inline-flex flex-shrink-0 items-center gap-1.5 font-medium" style={{ color: status.color }}>
+      <span className="inline-flex flex-shrink-0 items-center gap-1.5 font-medium" style={{ color: status.textColor }}>
         <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: status.color }} />
         {status.label}
       </span>
@@ -232,21 +250,10 @@ function AgentRuntimeChip({ agent }: { agent: Agent }) {
   );
 }
 
-function statusDot(agent: Agent, health: AgentHealth | undefined) {
-  if (agent.status === "ERROR" || health?.status === "crashed") {
-    return { color: "var(--err)", label: "Needs attention" };
-  }
-  if (agent.status === "STOPPED") return { color: "var(--ink-4)", label: "Idle" };
-  if (!health || health.status === "ok" || health.status === "starting" || health.status === "initializing") {
-    return { color: "var(--ok)", label: health?.status === "ok" ? "Working" : "Initializing" };
-  }
-  return { color: "var(--warn)", label: "Disconnected" };
-}
-
-/** The Agent's avatar with its status as a dot, as StatusLine words it. */
+/** The Agent's avatar with its status as a dot. */
 function AvatarWithStatus({ agent }: { agent: Agent }) {
   const health = useCachedAgentHealth(agent.id);
-  const dot = statusDot(agent, health);
+  const dot = agentStatus(agent.status, health);
   return (
     <span className="relative flex-shrink-0" title={dot.label}>
       <AgentAvatar agent={agent} size="xs" />

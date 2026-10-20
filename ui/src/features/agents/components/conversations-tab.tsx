@@ -12,11 +12,6 @@ import {
 
 interface ConversationsTabProps {
   agent: Agent;
-  /**
-   * Fill the page and leave the channel list to the navigation panel, which shows it in
-   * place of the Agent's sections (on desktop).
-   */
-  fullScreen?: boolean;
 }
 
 function useSelectedChannel() {
@@ -34,12 +29,17 @@ function channelSelectionKey(channel: ConversationChannel): string {
   return `${channel.connectionId}:${channel.channelId}`;
 }
 
-export function ConversationsTab({ agent, fullScreen = false }: ConversationsTabProps) {
+/**
+ * Below the breakpoint a framed panel with its own channel list; on desktop the page's whole
+ * height, with the channels in the navigation panel beside it. The switch is CSS, so the
+ * open conversation stays mounted when the window crosses the breakpoint.
+ */
+export function ConversationsTab({ agent }: ConversationsTabProps) {
   const { channels, isLoading, error, refetch } = useConversationChannels(agent.id);
   const [selectedChannel, setSelectedChannel] = useSelectedChannel();
-  // Full screen, the loading and empty states keep the page's margin; only the message
-  // panel runs edge to edge.
-  const inset = (node: ReactNode) => (fullScreen ? <div className="p-6">{node}</div> : node);
+  // On desktop the loading and empty states keep a margin; only the message panel runs
+  // edge to edge.
+  const inset = (node: ReactNode) => <div className="lg:p-6">{node}</div>;
 
   if (isLoading) return inset(<ConversationsSkeleton />);
 
@@ -88,17 +88,17 @@ export function ConversationsTab({ agent, fullScreen = false }: ConversationsTab
 
   return (
     <div
-      className={fullScreen ? "flex h-full overflow-hidden" : "flex rounded-2xl overflow-hidden"}
-      style={fullScreen ? undefined : { border: "1px solid var(--line-strong)", height: "min(760px, 80vh)" }}
+      className="flex h-[min(760px,80vh)] overflow-hidden rounded-2xl border lg:h-full lg:rounded-none lg:border-0"
+      style={{ borderColor: "var(--line-strong)" }}
     >
-      {!fullScreen && (
+      <div className="contents lg:hidden">
         <ConversationSidebar
           channelConvos={channelConvos}
           dmConvos={dmConvos}
           activeChannelKey={channelSelectionKey(activeChannel)}
           onSelect={setSelectedChannel}
         />
-      )}
+      </div>
       <MessagePanel
         key={channelSelectionKey(activeChannel)}
         agentId={agent.id}

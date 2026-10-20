@@ -11,7 +11,18 @@ import type { Agent } from "../schemas";
 
 const RELEASES_URL = "https://github.com/aai-labs/agent-barn/releases";
 
-export function AgentUpdateBanner({ agent }: { agent: Agent }) {
+/** What updating does, in the banner and in the top bar's notice alike. */
+function UpdateExplanation({ agentName }: { agentName: string }) {
+  return (
+    <>
+      A new version of {agentName} is available. Updating stops the Agent, saves a restore point of
+      its current state, then starts the new version. If the new version does not come up healthy,
+      it is rolled back automatically.
+    </>
+  );
+}
+
+export function AgentUpdateBanner({ agent, className }: { agent: Agent; className?: string }) {
   const managedUpdate = useManagedUpdate();
   // The server's flag covers the whole run, including the minutes after the
   // 202, so the button cannot start a second update meanwhile.
@@ -26,7 +37,7 @@ export function AgentUpdateBanner({ agent }: { agent: Agent }) {
   return (
     <div
       data-testid="agent-update-banner"
-      className="mb-6 flex items-center justify-between gap-3 rounded-2xl px-4 py-3.5"
+      className={`mb-6 flex items-center justify-between gap-3 rounded-2xl px-4 py-3.5 ${className ?? ""}`}
       style={{
         background: "var(--accent-soft)",
         border: "1px solid color-mix(in srgb, var(--accent-color) 25%, transparent)",
@@ -43,9 +54,7 @@ export function AgentUpdateBanner({ agent }: { agent: Agent }) {
           <Sparkles size={16} />
         </span>
         <p className="m-0 text-[0.844rem] leading-relaxed" style={{ color: "var(--accent-ink)" }}>
-          A new version of {agent.name} is available. Updating stops the Agent, saves a restore
-          point of its current state, then starts the new version. If the new version does not
-          come up healthy, it is rolled back automatically.{" "}
+          <UpdateExplanation agentName={agent.name} />{" "}
           <a
             href={RELEASES_URL}
             target="_blank"
@@ -113,9 +122,7 @@ export function AgentUpdateNotice({ agent }: { agent: Agent }) {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80">
         <p className="m-0 text-[0.844rem] leading-relaxed" style={{ color: "var(--ink-2)" }}>
-          A new version of {agent.name} is available. Updating stops the Agent, saves a restore
-          point of its current state, then starts the new version. If the new version does not
-          come up healthy, it is rolled back automatically.
+          <UpdateExplanation agentName={agent.name} />
         </p>
         <div className="mt-3 flex items-center justify-between gap-3">
           <a

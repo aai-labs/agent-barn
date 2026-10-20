@@ -1,25 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQueryState, parseAsStringEnum, parseAsString } from "nuqs";
-import { MessageCircleWarning, Plus } from "lucide-react";
 import { canAgent, currentModelOf, formatModelName } from "../utils";
 import { ModelSourceBadge } from "./model-source-badge";
-import { PendingModelBanner } from "./pending-model-note";
 import { useAgent } from "../hooks/use-agent";
 import { useAgentHealth } from "../hooks/use-agent-health";
-import { useCommunicationConnections } from "@/features/communication-connections/hooks/use-communication-connections";
 import { ShareIcon } from "@/components/icons";
 import { AppErrorState } from "@/components/app-error-state";
 import { AgentCostsPanel } from "@/features/costs/components/agent-costs-panel";
 import { AgentResourceUsageTab } from "@/features/resource-usage/components/agent-resource-usage-tab";
 import { AgentAvatar } from "./agent-avatar";
-import { AgentErrorBanner, AgentHealthErrorBanner } from "./agent-error-banner";
 import { AgentLifecycleMenu } from "./agent-lifecycle-menu";
 import { AgentMetaBadges } from "./agent-meta-badges";
-import { AgentUpdateBanner, AgentUpdateOutcomeNote } from "./agent-update-banner";
+import { AgentNotices } from "./agent-notices";
 import { StatusLine } from "./status-line";
 import { ChatTab } from "./chat-tab";
 import { ConversationsTab } from "./conversations-tab";
@@ -31,9 +26,9 @@ import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-
 import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
 import { AboutTab } from "./about-tab";
 import { ShareDialog } from "./share-dialog";
-import { AgentTelegramSetup } from "./agent-telegram-setup";
 import { AgentDetailHeaderSkeleton } from "./agent-detail-header-skeleton";
 import { useIsDesktop } from "@/features/navigation/hooks/use-is-desktop";
+import { cn } from "@/lib/utils";
 import {
   AGENT_PAGE_TABS,
   AGENT_PAGE_TAB_LABELS,
@@ -52,8 +47,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { role } = useActiveOrgRole();
   const tabs = visibleAgentPageTabs(agent, role);
   const canExtractPlaybooks = tabs.includes("playbooks");
-  // The desktop path bar carries the Agent's name, status, update notice, lifecycle and
-  // Share actions, and Chat and Conversations take the whole page there.
+  // The desktop path bar carries the Agent's lifecycle and Share actions; the page's own
+  // copies wait for this check so the two never coexist.
   const isDesktop = useIsDesktop();
   const { health } = useAgentHealth(
     agentId,
@@ -89,51 +84,24 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const isAgentWorking = isRunning && health?.status === "ok";
   const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
   const canManageAccess = canAgent(agent, "agent.access.manage");
-  const canManageConnections = canAgent(agent, "agent.update");
-  const connections = useCommunicationConnections(agent?.id ?? "");
-  // The built-in Chat tab lazily provisions a "web" Connection on first send so people
-  // can try the Agent without setting anything up; it is not a real messaging platform
-  // for this nudge.
-  const telegramConnection = connections.data?.find((connection) => connection.platformKey === "agentbarn_telegram" && connection.enabled);
-  const externalConnections = connections.data?.filter((connection) => connection.platformKey !== "web");
-  const needsMessagingSetup =
-    !connections.isPending && externalConnections?.length === 0;
   const [shareOpen, setShareOpen] = useState(false);
 
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   const homeHref = orgId ? `/dashboard/${orgId}` : "/dashboard";
 
-  const fullScreenTab =
-    isDesktop && (resolvedTab === "chat" || resolvedTab === "conversations")
-      ? resolvedTab
-      : null;
-  if (agent && fullScreenTab) {
-    const failure =
-      agent.status === "ERROR" && agent.lastError ? (
-        <AgentErrorBanner failure={agent.lastError} />
-      ) : (
-        (agent.status === "ERROR" || health?.status === "crashed" || health?.status === "error") &&
-        health?.reason && <AgentHealthErrorBanner reason={health.reason} />
-      );
-    return (
-      // The page below the 3.5rem path bar, given entirely to the conversation.
-      <div className="flex h-[calc(100vh-3.5rem)] flex-col" style={{ background: "var(--bg)" }}>
-        {failure && <div className="px-6 pt-4">{failure}</div>}
-        <div className="min-h-0 flex-1">
-          {fullScreenTab === "chat" ? (
-            <ChatTab agent={agent} isAgentWorking={isAgentWorking} fullScreen />
-          ) : (
-            <ConversationsTab agent={agent} fullScreen />
-          )}
-        </div>
-      </div>
-    );
-  }
+  // On desktop, Chat and Conversations take the whole page below the path bar. The
+  // switch is CSS (`lg:` and `af-page-fill`), not a second layout, so the conversation
+  // stays mounted when the window crosses the breakpoint and the first desktop paint is
+  // already the desktop layout.
+  const fillsPage = resolvedTab === "chat" || resolvedTab === "conversations";
 
   return (
-    <div style={{ background: "var(--bg)" }}>
-      <div className="af-page">
+    <div
+      className={cn(fillsPage && "lg:flex lg:h-[calc(100vh-3.5rem)] lg:flex-col")}
+      style={{ background: "var(--bg)" }}
+    >
+      <div className={cn("af-page", fillsPage && "af-page-fill")}>
         {isLoading && <AgentDetailHeaderSkeleton />}
 
         {error && (
@@ -151,156 +119,64 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
         {agent && (
           <>
-            {/* Identity and actions wrap onto separate rows when they do not fit side
-                by side, so on a phone the buttons sit under the name, not over it. */}
-            {/* The desktop path bar names the Agent and shows its status, runtime and
-                model and its actions, so the header is left to phones. */}
-            {!isDesktop && (
-            <div className="flex flex-wrap items-start gap-x-5.5 gap-y-4 pb-8">
+            {/* The desktop path bar names the Agent and shows its status, runtime, model
+                and actions, so the header is for phones. Identity and actions wrap onto
+                separate rows when they do not fit side by side, so the buttons sit under
+                the name, not over it. */}
+            <div className="flex flex-wrap items-start gap-x-5.5 gap-y-4 pb-8 lg:hidden">
               <div className="flex min-w-0 flex-1 basis-[20rem] items-start gap-4 sm:gap-5.5">
-              <AgentAvatar agent={agent} size="xl" />
-              <div className="flex-1 min-w-0">
-                <h1
-                  className="text-[1.75rem] sm:text-[2.5rem] font-semibold tracking-[-0.028em] m-0 mb-1 leading-[1.1] break-words"
-                  style={{ color: "var(--ink)" }}
-                >
-                  {agent.name}
-                </h1>
-                {currentModelOf(agent) && (
-                  <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
-                    <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
-                    <ModelSourceBadge source={agent.modelSource} />
+                <AgentAvatar agent={agent} size="xl" />
+                <div className="flex-1 min-w-0">
+                  <h1
+                    className="text-[1.75rem] sm:text-[2.5rem] font-semibold tracking-[-0.028em] m-0 mb-1 leading-[1.1] break-words"
+                    style={{ color: "var(--ink)" }}
+                  >
+                    {agent.name}
+                  </h1>
+                  {currentModelOf(agent) && (
+                    <div className="flex items-center gap-2 text-[0.906rem]" style={{ color: "var(--ink-3)" }}>
+                      <span className="font-mono">{formatModelName(currentModelOf(agent))}</span>
+                      <ModelSourceBadge source={agent.modelSource} />
+                    </div>
+                  )}
+                  <AgentMetaBadges agent={agent} variant="full" className="mt-2" />
+                  <div className="mt-2">
+                    <StatusLine status={agent.status} health={health} />
                   </div>
-                )}
-                <AgentMetaBadges
-                  agent={agent}
-                  variant="full"
-                  className="mt-2"
-                />
-                <div className="mt-2">
-                  <StatusLine status={agent.status} health={health} />
                 </div>
               </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
-                {canManageAccess && (
-                  <button className="af-btn" onClick={() => setShareOpen(true)}>
-                    <ShareIcon /> Share
-                  </button>
-                )}
-              </div>
-            </div>
-            )}
-
-            <PendingModelBanner agent={agent} canRestart={canManageLifecycle} />
-
-            {canManageLifecycle && (
-              <>
-                {/* The path bar offers the update on desktop. */}
-                {!isDesktop && <AgentUpdateBanner agent={agent} />}
-                <AgentUpdateOutcomeNote
-                  agent={agent}
-                  restorePointsHref={`${homeHref}/agents/${agent.id}/configuration?section=restore`}
-                />
-              </>
-            )}
-
-            {/* The classified provisioning failure comes off the Agent itself, so
-                it renders on first paint and does not depend on health polling —
-                which is also gated on activity.read. Health only explains a
-                runtime fault on an Agent that did start. */}
-            {agent.status === "ERROR" && agent.lastError ? (
-              <AgentErrorBanner failure={agent.lastError} />
-            ) : (
-              (agent.status === "ERROR" ||
-                health?.status === "crashed" ||
-                health?.status === "error") &&
-              health?.reason && <AgentHealthErrorBanner reason={health.reason} />
-            )}
-
-            {canManageConnections && telegramConnection && (
-              <AgentTelegramSetup key={telegramConnection.id} agent={agent} connection={telegramConnection} onOpenChat={() => selectTab("chat")} />
-            )}
-
-            {needsMessagingSetup && (
-              <div
-                className="mb-6 overflow-hidden rounded-2xl"
-                style={{
-                  border:
-                    "1px solid color-mix(in srgb, var(--warn) 30%, var(--line))",
-                  background: "var(--warn-soft)",
-                }}
-              >
-                <div className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex min-w-0 items-start gap-3.5">
-                    <span
-                      className="grid h-10 w-10 flex-shrink-0 place-items-center rounded-xl"
-                      style={{
-                        background:
-                          "color-mix(in srgb, var(--warn) 16%, transparent)",
-                        color: "var(--warn)",
-                      }}
-                    >
-                      <MessageCircleWarning size={19} />
-                    </span>
-                    <div className="min-w-0">
-                      <div className="mb-1 flex flex-wrap items-center gap-2">
-                        <span
-                          className="text-[0.6875rem] font-semibold uppercase tracking-[0.1em]"
-                          style={{ color: "var(--warn)" }}
-                        >
-                          Messaging setup
-                        </span>
-                        <span
-                          className="rounded-full px-2 py-0.5 text-[0.6875rem] font-medium"
-                          style={{
-                            border:
-                              "1px solid color-mix(in srgb, var(--warn) 28%, transparent)",
-                            color: "var(--warn)",
-                          }}
-                        >
-                          Web chat only
-                        </span>
-                      </div>
-                      <div
-                        className="text-[0.95rem] font-semibold"
-                        style={{ color: "var(--ink)" }}
-                      >
-                        Bring {agent.name} to your messaging tools
-                      </div>
-                      <p
-                        className="mb-0 mt-1 text-[0.844rem] leading-relaxed"
-                        style={{ color: "var(--ink-3)" }}
-                      >
-                        {agent.name} is available in Web Chat. Add a connection
-                        so your team can also message {agent.name} from Slack,
-                        Teams, Telegram, or Discord.
-                      </p>
-                    </div>
-                  </div>
-                  {canManageConnections && (
-                    <Link
-                      href={`${homeHref}/agents/${agent.id}/configuration?section=channels&connect=true`}
-                      className="af-btn af-btn-primary af-btn-sm flex-shrink-0 self-start sm:self-auto"
-                    >
-                      <Plus size={14} /> Add messaging connection
-                    </Link>
+              {/* Only the actions wait for the width check: the path bar has its own,
+                  and two copies of the lifecycle and Share dialogs must not coexist. */}
+              {!isDesktop && (
+                <div className="flex flex-wrap gap-2">
+                  {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
+                  {canManageAccess && (
+                    <button className="af-btn" onClick={() => setShareOpen(true)}>
+                      <ShareIcon /> Share
+                    </button>
                   )}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
+
+            <div className={cn(fillsPage && "lg:px-6 lg:pt-4 lg:empty:hidden")}>
+              <AgentNotices
+                agent={agent}
+                health={health}
+                homeHref={homeHref}
+                onOpenChat={() => selectTab("chat")}
+              />
+            </div>
 
             {/* The path bar names the section on desktop. */}
-            {!isDesktop && (
-              <h2
-                className="m-0 mb-7 pb-3 text-[1.125rem] font-semibold"
-                style={{ color: "var(--ink)", borderBottom: "1px solid var(--line)" }}
-              >
-                {AGENT_PAGE_TAB_LABELS[resolvedTab]}
-              </h2>
-            )}
+            <h2
+              className="m-0 mb-7 pb-3 text-[1.125rem] font-semibold lg:hidden"
+              style={{ color: "var(--ink)", borderBottom: "1px solid var(--line)" }}
+            >
+              {AGENT_PAGE_TAB_LABELS[resolvedTab]}
+            </h2>
 
+            <div className={cn(fillsPage && "lg:min-h-0 lg:flex-1")}>
             {resolvedTab === "chat" && (
               <ChatTab agent={agent} isAgentWorking={isAgentWorking} />
             )}
@@ -322,11 +198,12 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               />
             )}
             {resolvedTab === "about" && <AboutTab agent={agent} />}
+            </div>
           </>
         )}
       </div>
 
-      {agent && canManageAccess && (
+      {agent && canManageAccess && !isDesktop && (
         <ShareDialog
           agentId={agent.id}
           agentName={agent.name}
