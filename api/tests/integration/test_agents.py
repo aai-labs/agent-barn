@@ -18,6 +18,7 @@ from hamcrest import (
     has_item,
     has_key,
     has_length,
+    is_,
     is_in,
     is_not,
     none,
@@ -68,6 +69,7 @@ from api.domains.skills.repository import SkillRepository
 from api.domains.templates.models import AgentTemplate, PlatformTemplate
 from api.domains.templates.repository import TemplateRepository
 from api.infrastructure.crypto import decrypt_token, encrypt_token
+from api.infrastructure.google.gmail_imap import MailSignInFailed
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
@@ -5262,6 +5264,128 @@ def test_agent_configuration_override_history_retained_after_soft_delete():
 
 
 # ---------------------------------------------------------------------------
+# Gmail app password integration
+# ---------------------------------------------------------------------------
+
+_GMAIL_APP_PASSWORD_CONTENT = {"email": "someone@gmail.com", "app_password": "abcd efgh ijkl mnop"}
+_GMAIL_SIGN_IN = "api.infrastructure.integration_validators.gmail_app_password.gmail_imap.check_sign_in"
+
+
+def _configure_gmail_app_password(client: TestClient, context):
+    return client.patch(
+        f"{_BASE}/{context.agent.id}",
+        json={"secrets": [{"provider": "gmail_app_password", "content": _GMAIL_APP_PASSWORD_CONTENT}]},
+        headers=_auth(context),
+    )
+
+
+def test_gmail_app_password_is_stored_isolated_without_exposing_it():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I connect Gmail with an app password"):
+            response = _configure_gmail_app_password(client, context)
+
+        with then("it is stored, always isolated, and the password is never echoed back"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            secret = response.json()["secrets"][0]
+            assert_that(secret["provider"], equal_to("gmail_app_password"))
+            assert_that(secret["secret_name"], equal_to("Gmail app password"))
+            assert_that(secret["isolation"]["desired"], is_(True))
+            assert_that(secret["isolation"]["supported_modes"], equal_to(["isolated"]))
+            assert_that(secret["isolation"]["switch_available"], is_(False))
+            assert_that(response.text, is_not(contains_string("abcd")))
+
+
+def test_gmail_app_password_cannot_be_switched_to_direct():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        _configure_gmail_app_password(client, context)
+
+        with when("I ask for the app password to be given to the agent"):
+            response = client.put(
+                f"{_BASE}/{context.agent.id}/integrations/gmail_app_password/isolation",
+                json={"isolated": False, "restart": False},
+                headers=_auth(context),
+            )
+
+        with then("it is refused"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST), response.text)
+            assert_that(response.json()["detail"], contains_string("does not support direct"))
+
+
+@pytest.mark.parametrize(
+    "given_runtime",
+    [
+        pytest.param(lambda: [*_GIVEN, there_is_an_agent()], id="openclaw"),
+        pytest.param(lambda: [*_GIVEN_WITH_HERMES_IMAGE, there_is_an_agent(agent_type=AgentType.HERMES)], id="hermes"),
+    ],
+)
+def test_start_agent_reads_gmail_through_the_gateway_without_the_app_password(given_runtime):
+    with given(given_runtime()) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start an agent connected to Gmail with an app password"):
+            _configure_gmail_app_password(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the pod holds only its gateway token, never the app password"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(len(secret.string_data["AF_GATEWAY_TOKEN_GMAIL_APP_PASSWORD"]), greater_than(0))
+            assert_that(secret.string_data, has_key("AF_GATEWAY_URL"))
+            config_map = k8s.create_config_map.call_args.args[1]
+            pod = str(secret.string_data) + str(config_map.data)
+            assert_that(pod, is_not(contains_string("abcdefghijklmnop")))
+            assert_that(pod, is_not(contains_string("abcd efgh")))
+
+        with then("aai-cli is pointed at the gateway and the agent is told how to read mail"):
+            assert_that(config_map.data["aai-cli-config.toml"], contains_string('provider = "custom_api"'))
+            assert_that(config_map.data["aai-cli-config.toml"], contains_string("/served/request"))
+            assert_that(
+                config_map.data["AGENTS.md"], contains_string("aai-cli --profile gmail-inbox custom-api request")
+            )
+
+
+def test_create_agent_signs_in_to_gmail_before_saving_the_app_password():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {
+            **_VALID_CREATE,
+            "secrets": [{"provider": "gmail_app_password", "content": _GMAIL_APP_PASSWORD_CONTENT}],
+        }
+
+        with when("I create an agent with an app password Gmail accepts"):
+            with patch(_GMAIL_SIGN_IN) as sign_in:
+                response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the password is checked without its display spaces and the agent is created"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+            sign_in.assert_called_once_with("someone@gmail.com", "abcdefghijklmnop")
+            assert_that(_providers(response), equal_to(["gmail_app_password"]))
+
+
+def test_create_agent_rejects_an_app_password_gmail_refuses():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        payload = {
+            **_VALID_CREATE,
+            "secrets": [{"provider": "gmail_app_password", "content": _GMAIL_APP_PASSWORD_CONTENT}],
+        }
+
+        with when("I create an agent with an app password Gmail rejects"):
+            with patch(_GMAIL_SIGN_IN, side_effect=MailSignInFailed()):
+                response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it is rejected before anything is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], contains_string("Gmail rejected"))
+            litellm.generate_key.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Apollo integration
 # ---------------------------------------------------------------------------
 
@@ -5487,6 +5611,119 @@ def test_start_agent_rejects_gmail_without_a_client():
         with then("the start is rejected with a reconnect hint"):
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
             assert_that(response.json()["detail"], contains_string("Gmail credential"))
+
+
+# ---------------------------------------------------------------------------
+# Merkys integration
+# ---------------------------------------------------------------------------
+
+_MERKYS_CONTENT = {"base_url": "https://merkys.customer.example", "api_key": "cb_merkys-test-key"}
+_MERKYS_HTTPX_GET = "api.infrastructure.integration_validators.merkys.httpx.get"
+
+
+def _merkys_response(status_code: int, payload: dict) -> httpx.Response:
+    return httpx.Response(status_code, json=payload, request=httpx.Request("GET", "https://merkys.customer.example"))
+
+
+def _configure_merkys(client: TestClient, context, content: dict | None = None):
+    return client.patch(
+        f"{_BASE}/{context.agent.id}",
+        json={"secrets": [{"provider": "merkys", "content": content or _MERKYS_CONTENT}]},
+        headers=_auth(context),
+    )
+
+
+def test_patch_agent_accepts_merkys_secret():
+    """Covers the enum member, the content schema, and the DB check constraint."""
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I configure a Merkys credential"):
+            response = _configure_merkys(client, context)
+
+        with then("it is stored and listed without exposing the key"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(_providers(response), equal_to(["merkys"]))
+            assert_that(response.json()["secrets"][0]["secret_name"], equal_to("Merkys credential"))
+            assert_that(response.text, is_not(contains_string("cb_merkys-test-key")))
+
+
+def test_patch_agent_rejects_merkys_secret_with_an_unsafe_url():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+
+        with when("I configure a Merkys credential whose URL is not a plain https origin"):
+            response = _configure_merkys(client, context, {**_MERKYS_CONTENT, "base_url": "http://127.0.0.1/x"})
+
+        with then("it is rejected"):
+            assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
+
+
+def test_create_agent_with_valid_merkys_key_succeeds():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        payload = {**_VALID_CREATE, "secrets": [{"provider": "merkys", "content": _MERKYS_CONTENT}]}
+        healthy = _merkys_response(200, {"status": "success", "items": []})
+
+        with when("I create an agent with a Merkys key that Merkys recognises"):
+            with patch(_MERKYS_HTTPX_GET, return_value=healthy) as merkys_get:
+                response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("the key is live-validated against the saved URL and the agent is created"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            merkys_get.assert_called_once()
+            assert_that(merkys_get.call_args.args[0], contains_string("https://merkys.customer.example/api/"))
+            assert_that(_providers(response), equal_to(["merkys"]))
+
+
+def test_create_agent_rejects_invalid_merkys_key():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+        litellm: MagicMock = context.injector.get(LiteLLMClient)
+        payload = {**_VALID_CREATE, "secrets": [{"provider": "merkys", "content": _MERKYS_CONTENT}]}
+
+        with when("I create an agent with a Merkys key that Merkys rejects"):
+            with patch(_MERKYS_HTTPX_GET, return_value=_merkys_response(401, {"detail": "Invalid API key"})):
+                response = client.post(_BASE, json=payload, headers=_auth(context))
+
+        with then("it is rejected before anything is persisted"):
+            assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+            assert_that(response.json()["detail"], equal_to("Invalid API key"))
+            litellm.generate_key.assert_not_called()
+            assert_that(client.get(_BASE, headers=_auth(context)).json()["items"], equal_to([]))
+
+
+def test_start_agent_wires_merkys_into_aai_cli():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        from api.domains.skills.skill_seeder import seed_aai_cli_skills
+
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+        seed_aai_cli_skills(context.injector.get(SkillRepository))
+
+        with when("I start an agent with an on-prem Merkys credential"):
+            _configure_merkys(client, context)
+            response = client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the pod secret carries the key for aai-cli's secret store"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            secret = k8s.create_secret.call_args.args[1]
+            assert_that(secret.string_data["AAI_SECRET_MERKYS_API_KEY"], equal_to("cb_merkys-test-key"))
+
+        with then("aai-cli gets a merkys-work profile pointing at the saved URL"):
+            config_map = k8s.create_config_map.call_args.args[1]
+            toml = config_map.data["aai-cli-config.toml"]
+            assert_that(toml, contains_string("[profiles.merkys-work]"))
+            assert_that(toml, contains_string('auth_type = "api_key_header"'))
+            assert_that(toml, contains_string('base_url = "https://merkys.customer.example"'))
+            assert_that(toml, is_not(contains_string("cb_merkys-test-key")))
+            assert_that(config_map.data["AGENTS.md"], contains_string("--profile merkys-work"))
+
+        with then("the bundled aai-merkys skill is mounted"):
+            paths = [entry["path"] for entry in json.loads(config_map.data["skills.json"])]
+            assert_that(paths, has_item("aai-merkys/SKILL.md"))
+            assert_that(paths, has_item("aai-merkys/references/command-reference.md"))
+            assert_that(paths, has_item("aai-merkys/references/api-endpoints.md"))
 
 
 # ---------------------------------------------------------------------------

@@ -60,7 +60,7 @@ export function SkillNewPage({ scope }: { scope: SkillScopeRef }) {
   }
 
   return (
-    <div className="af-page">
+    <div>
       <Link
         href={skillsHref}
         className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"

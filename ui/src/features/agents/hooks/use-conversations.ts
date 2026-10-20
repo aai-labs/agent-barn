@@ -1,6 +1,6 @@
 "use client";
 
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { queryOptions, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { api } from "@/shared/api";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
@@ -21,9 +21,12 @@ import { z } from "zod";
 
 const ChannelsListSchema = z.array(ConversationChannelSchema);
 
-export function useConversationChannels(agentId: string) {
-  const orgApiBase = useOrganizationApiBase();
-  const query = useQuery({
+/**
+ * The Agent's conversation channels, as one definition for the page and for anything that
+ * fetches them ahead of a visit (the navigation panel, on intent to open Conversations).
+ */
+export function conversationChannelsQuery(orgApiBase: string, agentId: string) {
+  return queryOptions({
     queryKey: agentsKey.conversationChannels(agentId),
     queryFn: async () => {
       const response = await api.get<ConversationChannel[]>(
@@ -32,8 +35,12 @@ export function useConversationChannels(agentId: string) {
       );
       return response.data;
     },
-    enabled: !!agentId,
   });
+}
+
+export function useConversationChannels(agentId: string) {
+  const orgApiBase = useOrganizationApiBase();
+  const query = useQuery({ ...conversationChannelsQuery(orgApiBase, agentId), enabled: !!agentId });
 
   return {
     channels: query.data ?? [],

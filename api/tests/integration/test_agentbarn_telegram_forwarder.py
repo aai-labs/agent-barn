@@ -27,6 +27,7 @@ from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, there_is_an_agent
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.telegram_link_events import unlink_reasons
 
 _JANE = 5550001
 _SAM = 7770007
@@ -363,7 +364,7 @@ def test_messages_held_for_someone_since_unlinked_are_not_delivered() -> None:
     with given(_given(AgentStatus.STOPPED)) as context:
         update_id = _queue(context, "private note")
         repository = context.injector.get(AgentBarnTelegramRepository)
-        repository.end_active_link(_JANE, now=datetime.now(UTC))
+        repository.end_active_link(_JANE, now=datetime.now(UTC), reason="blocked_bot")
         with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
             session.exec(select(Agent).where(col(Agent.id) == context.agent.id)).one().status = AgentStatus.RUNNING
             session.commit()
@@ -392,6 +393,7 @@ def test_messages_are_not_delivered_once_the_linking_member_lost_access() -> Non
             assert_that(_row(context, update_id).status, equal_to(AgentBarnTelegramUpdateStatus.DROPPED))
             repository = context.injector.get(AgentBarnTelegramRepository)
             assert_that(repository.active_links(context.connection.id, [_JANE]), equal_to([]))
+            assert_that(unlink_reasons(context), equal_to(["access_lost"]))
 
 
 def test_users_waiting_on_a_retry_do_not_crowd_out_users_who_are_due() -> None:

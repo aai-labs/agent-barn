@@ -11,9 +11,11 @@ from api.domains.agents.models import (
     BitbucketContent,
     FirecrawlContent,
     GithubContent,
+    GmailAppPasswordContent,
     GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
+    MerkysContent,
     PipedriveContent,
     SecretProvider,
     SharePointContent,
@@ -414,6 +416,69 @@ def test_apollo_encrypt_decrypt_round_trip():
     assert decrypt_content(SecretProvider.APOLLO, blob, _KEY) == original
 
 
+# --- Gmail app password ---
+
+_GMAIL_APP_PASSWORD_BASE = {"email": "someone@gmail.com", "app_password": "abcdefghijklmnop"}
+
+
+def test_gmail_app_password_content_validates():
+    content = validate_content(SecretProvider.GMAIL_APP_PASSWORD, _GMAIL_APP_PASSWORD_BASE)
+    assert isinstance(content, GmailAppPasswordContent)
+    assert content.email == "someone@gmail.com"
+    assert content.app_password == "abcdefghijklmnop"
+
+
+def test_gmail_app_password_drops_the_spaces_google_displays():
+    # Google shows the 16 characters in groups of four; the spaces are not part of it.
+    content = validate_content(
+        SecretProvider.GMAIL_APP_PASSWORD, {**_GMAIL_APP_PASSWORD_BASE, "app_password": " abcd efgh ijkl mnop "}
+    )
+    assert isinstance(content, GmailAppPasswordContent)
+    assert content.app_password == "abcdefghijklmnop"
+
+
+def test_gmail_app_password_trims_the_address():
+    content = validate_content(
+        SecretProvider.GMAIL_APP_PASSWORD, {**_GMAIL_APP_PASSWORD_BASE, "email": " someone@gmail.com "}
+    )
+    assert isinstance(content, GmailAppPasswordContent)
+    assert content.email == "someone@gmail.com"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {},
+        {"email": "someone@gmail.com"},
+        {"app_password": "abcdefghijklmnop"},
+        {"email": "someone@gmail.com", "app_password": "    "},
+        {"email": "not-an-address", "app_password": "abcdefghijklmnop"},
+        {"email": "", "app_password": "abcdefghijklmnop"},
+    ],
+)
+def test_gmail_app_password_content_rejects_incomplete_credentials(raw):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GMAIL_APP_PASSWORD, raw)
+
+
+@pytest.mark.parametrize("field", ["host", "extra"])
+def test_gmail_app_password_content_rejects_extra_fields(field):
+    # A host would let a caller send the password to a server other than Gmail's.
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.GMAIL_APP_PASSWORD, {**_GMAIL_APP_PASSWORD_BASE, field: "imap.evil.example"})
+
+
+def test_gmail_app_password_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.GMAIL_APP_PASSWORD, _GMAIL_APP_PASSWORD_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "abcdefghijklmnop" not in blob
+    assert decrypt_content(SecretProvider.GMAIL_APP_PASSWORD, blob, _KEY) == original
+
+
+def test_gmail_app_password_has_its_own_display_name():
+    assert PROVIDER_DISPLAY_NAMES[SecretProvider.GMAIL_APP_PASSWORD] == "Gmail app password"
+
+
 def test_retired_google_providers_are_gone():
     """The per-service Calendar and Sheets providers were removed outright, rows and all
     (their secrets are deleted by migration); google_workspace covers them. Gmail is a
@@ -533,6 +598,83 @@ def test_google_workspace_encrypt_decrypt_round_trip():
     blob = encrypt_content(original, _KEY)
     assert "rt-123" not in blob
     assert decrypt_content(SecretProvider.GOOGLE_WORKSPACE, blob, _KEY) == original
+
+
+# --- Merkys ---
+
+_MERKYS_BASE = {"base_url": "https://slack-chatbot.k8s.aai-labs.com", "api_key": "cb_test-key"}
+
+
+def test_merkys_content_validates_and_normalizes():
+    content = validate_content(
+        SecretProvider.MERKYS, {"base_url": " https://Merkys.Example.COM/ ", "api_key": " cb_test-key "}
+    )
+    assert isinstance(content, MerkysContent)
+    assert content.base_url == "https://merkys.example.com"
+    assert content.api_key == "cb_test-key"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://merkys.example.com:8443", "https://merkys.example.com:8443"),
+        ("https://10.1.2.3", "https://10.1.2.3"),
+        ("https://[2001:db8::1]", "https://[2001:db8::1]"),
+    ],
+)
+def test_merkys_content_keeps_a_port_and_private_hosts(url, expected):
+    # An on-prem Merkys is often reached over a VPN, so private ranges stay allowed.
+    content = validate_content(SecretProvider.MERKYS, {**_MERKYS_BASE, "base_url": url})
+    assert isinstance(content, MerkysContent)
+    assert content.base_url == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://merkys.example.com",
+        "merkys.example.com",
+        "https://user:pw@merkys.example.com",
+        "https://merkys.example.com/api",
+        "https://merkys.example.com?x=1",
+        "https://merkys.example.com#frag",
+        "https://merkys.example.com:99999",
+        "https://localhost",
+        "https://app.localhost",
+        "https://127.0.0.1",
+        "https://[::1]",
+        "https://169.254.169.254",
+        "https://0.0.0.0",
+        "",
+    ],
+)
+def test_merkys_content_rejects_urls_that_could_move_the_key(url):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.MERKYS, {**_MERKYS_BASE, "base_url": url})
+
+
+@pytest.mark.parametrize("raw", [{}, {"base_url": "https://a.example.com"}, {"api_key": "k"}])
+def test_merkys_content_requires_both_fields(raw):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.MERKYS, raw)
+
+
+@pytest.mark.parametrize("key", ["", "   ", "a b", "a\nb"])
+def test_merkys_content_rejects_blank_or_spaced_keys(key):
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.MERKYS, {**_MERKYS_BASE, "api_key": key})
+
+
+def test_merkys_content_rejects_extra_fields():
+    with pytest.raises(ValidationError):
+        validate_content(SecretProvider.MERKYS, {**_MERKYS_BASE, "token": "x"})
+
+
+def test_merkys_encrypt_decrypt_round_trip():
+    original = validate_content(SecretProvider.MERKYS, _MERKYS_BASE)
+    blob = encrypt_content(original, _KEY)
+    assert "cb_test-key" not in blob
+    assert decrypt_content(SecretProvider.MERKYS, blob, _KEY) == original
 
 
 _GMAIL_BASE = {

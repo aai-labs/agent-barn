@@ -69,6 +69,7 @@ class Config(BaseSettings):
     litellm_secret_name: str = "litellm"
     agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
+    workflow_authoring_enabled: bool = False
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
     # Percentages of an Organization's limit at which it is notified. Empty falls back
@@ -101,6 +102,8 @@ class Config(BaseSettings):
     memory_runtime_service_key: str = ""
 
     memory_default_model: str = "openrouter/openai/gpt-4.1-mini"
+    # Used until a Platform Administrator chooses a Playbook Extraction model.
+    playbook_default_model: str = "openrouter/openai/gpt-4.1-mini"
     memory_litellm_active_key_hash: str = ""
 
     hindsight_base_url: str = ""
@@ -176,6 +179,9 @@ class Config(BaseSettings):
     # injected into the agent's aai-cli gmail-work profile at start time.
     google_cloud_client_id: str = ""
     google_cloud_client_secret: str = ""
+
+    onedrive_sync_client_id: str = ""
+    onedrive_sync_client_secret: str = ""
 
     agent_firecrawl_base_url: str = ""
     agent_firecrawl_api_key: str = ""
@@ -283,6 +289,10 @@ class Config(BaseSettings):
             and self.agent_email_mailbox.strip()
             and self.email_inbound_secret.strip()
         )
+
+    @property
+    def is_onedrive_sync_enabled(self) -> bool:
+        return bool(self.onedrive_sync_client_id.strip() and self.onedrive_sync_client_secret.strip())
 
 
 @lru_cache

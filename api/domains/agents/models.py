@@ -1,8 +1,10 @@
 import enum
+import ipaddress
 import json
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Self
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -100,7 +102,9 @@ class SecretProvider(str, enum.Enum):
     GOOGLE_WORKSPACE = "google_workspace"
     SHAREPOINT = "sharepoint"
     APOLLO = "apollo"
+    MERKYS = "merkys"
     GMAIL = "gmail"
+    GMAIL_APP_PASSWORD = "gmail_app_password"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -119,7 +123,9 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
     SecretProvider.SHAREPOINT: "SharePoint credential",
     SecretProvider.APOLLO: "Apollo credential",
+    SecretProvider.MERKYS: "Merkys credential",
     SecretProvider.GMAIL: "Gmail credential",
+    SecretProvider.GMAIL_APP_PASSWORD: "Gmail app password",
 }
 
 
@@ -348,6 +354,88 @@ class ApolloContent(SecretContent):
     api_token: str = Field(min_length=1)
 
 
+class MerkysContent(SecretContent):
+    # Unlike Apollo, Merkys has no single public host: each deployment (cloud or on-prem)
+    # has its own, so the origin is part of the credential. It is reduced to a bare https
+    # origin because the API server, the agent's aai-cli and the credential gateway all
+    # send the key there; a path, userinfo or query would let a pasted URL move it.
+    base_url: str
+    api_key: str = Field(min_length=1)
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value.strip())
+        try:
+            port = parsed.port
+        except ValueError:
+            raise ValueError("base_url has an invalid port") from None
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("base_url must be an https origin such as https://merkys.example.com")
+        host = parsed.hostname.lower()
+        # A typo guard, not SSRF protection: a hostname or a short or decimal IP form can still
+        # resolve to these addresses. The validator limits what a probe can learn instead.
+        if host == "localhost" or host.endswith(".localhost"):
+            raise ValueError("base_url must not point at localhost")
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            address = None  # a DNS name
+        if address is not None:
+            # Private ranges stay allowed: an on-prem Merkys is often reached over a VPN.
+            if address.is_loopback or address.is_link_local or address.is_unspecified:
+                raise ValueError("base_url must not be a loopback or link-local address")
+            host = f"[{host}]" if address.version == 6 else host
+        return f"https://{host}" + (f":{port}" if port else "")
+
+    @field_validator("api_key")
+    @classmethod
+    def _validate_api_key(cls, value: str) -> str:
+        key = value.strip()
+        if not key or any(ch.isspace() for ch in key):
+            raise ValueError("api_key must not be empty or contain whitespace")
+        return key
+
+
+class GmailAppPasswordContent(SecretContent):
+    """A Gmail address and Google app password, read over IMAP by the credential gateway.
+
+    An app password cannot be limited to reading, so it never enters the agent pod: the
+    gateway signs in on the agent's behalf and only opens the mailbox read-only. There is
+    no host field, so the password can only ever be sent to Gmail.
+    """
+
+    email: str = Field(min_length=3)
+    app_password: str = Field(min_length=1)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _trim_email(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("email")
+    @classmethod
+    def _require_address(cls, value: str) -> str:
+        local, _, domain = value.partition("@")
+        if not local or "." not in domain:
+            raise ValueError("email must be an email address")
+        return value
+
+    @field_validator("app_password", mode="before")
+    @classmethod
+    def _drop_display_spaces(cls, value: object) -> object:
+        # Google displays the password in groups of four; the spaces are not part of it.
+        return "".join(value.split()) if isinstance(value, str) else value
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
@@ -358,7 +446,9 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
     SecretProvider.SHAREPOINT: SharePointContent,
     SecretProvider.APOLLO: ApolloContent,
+    SecretProvider.MERKYS: MerkysContent,
     SecretProvider.GMAIL: GmailContent,
+    SecretProvider.GMAIL_APP_PASSWORD: GmailAppPasswordContent,
 }
 
 

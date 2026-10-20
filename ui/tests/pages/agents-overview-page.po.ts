@@ -44,7 +44,8 @@ export class AgentsOverviewPage {
     await this.page.getByRole("option", { name: label }).click();
   }
 
+  /** A destination on the navigation rail. */
   navLink(name: string): Locator {
-    return this.page.locator("header nav").getByRole("link", { name, exact: true });
+    return this.page.getByRole("navigation", { name: "Main" }).getByRole("link", { name, exact: true });
   }
 }

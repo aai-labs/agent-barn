@@ -80,14 +80,21 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
   - Not emitted when a save changes nothing.
   - Emitted by `PUT /organizations/{organization_id}/value-settings` (see [`business-value.md`](business-value.md#value-settings)).
 - `organization.member.added` / `organization.member.removed` — emitted on Organization membership add/remove.
-- `organization.created` — emitted in the creating transaction, both for self-service creation (`POST /organizations`, User Actor = creator) and for Platform Administrator onboarding (`POST /platform/users`, User Actor = administrator). Its only intended handler is `product_analytics.posthog`.
+- `organization.created` — emitted in the creating transaction, for self-service creation (`POST /organizations`, User Actor = creator), for Platform Administrator onboarding (`POST /platform/users`, User Actor = administrator), and for a Google self-signup's trial Organization (`GoogleSignInService._sign_up`, User Actor = the new user). Its only intended handler is `product_analytics.posthog`.
 - `organization.updated` — emitted by `PATCH /organizations/{organization_id}` only when the Organization's name or description actually changes. Its actor is the acting User, not their Membership, so it is still attributable if the Organization is deleted before delivery. It carries the changed field names, never their values, and its only intended handler is `product_analytics.posthog`. An allowlist change in the same request still emits `organization.model_allowlist.changed` alongside it.
 - `organization.deleted` — staged in the same transaction as the Organization's hard delete, with a User Actor (the deleting Owner). The outbox and delivery rows have no foreign key to the Organization, so they outlive it. Its only intended handler is `product_analytics.posthog`.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
 
+Workflow authoring adds the Platform-scoped `platform.workflow_authoring.changed`
+event, carrying previous/current booleans and safe actor/subject display snapshots,
+projected by `security_audit.projection`. Its atomic settings boundary and no-op
+behavior are owned by [Agent workflows](agent-workflows.md#platform-authoring-setting).
+
 Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, carrying previous/current model IDs and safe actor/subject display snapshots, projected by `security_audit.projection`.
 
 Agent Memory adds Organization-scoped events handled by `security_audit.projection`: `agent.memory.enabled`, `agent.memory.disabled`, `agent.memory_grant.created`, and `agent.memory_grant.revoked`. The Subject is the reading Agent, and payloads contain scoped IDs and display snapshots, never memory content. The state change and event commit atomically; repeating the current opt-in setting emits nothing. See [`Agent Memory`](agent-memory.md).
+
+Playbooks add the Platform-scoped `platform.playbook_model.changed` event, carrying previous/current model IDs and display snapshots, and the Organization-scoped `playbook.extraction.requested` event, both projected by `security_audit.projection`. It commits with the queued run; its Subject is the source Agent whose transcripts the run reads, and its payload carries IDs, the target Skill name, the window length, the session bound, and display snapshots, never transcript or playbook content. See [`Playbooks`](playbooks.md).
 
 AF-273 adds Communications operational events as Organization-scoped audit inputs:
 
@@ -101,7 +108,7 @@ These events carry scoped resource IDs, lifecycle status, attempt/error metadata
 
 RBAC, Platform Privilege, and the AF-167 events above are intended for the `security_audit.projection` Event Handler, which persists deletion-independent Security Audit Records. Agent start/stop events are intended for the `agent.lifecycle_email.notification` Event Handler, which emails the Agent Creator and users with Agent Owner access, de-duplicated by email.
 
-`agent.created`, `agent.updated`, `agent.started`, `agent.stopped`, `agent.deleted`, `organization.member.added`, `organization.member.removed`, `organization.role.changed`, and `organization.ownership_transferred` are also intended for the `product_analytics.posthog` Event Handler. That handler forwards them to PostHog when analytics is enabled. See [`product-analytics.md`](product-analytics.md).
+`agent.created`, `agent.updated`, `agent.started`, `agent.stopped`, `agent.deleted`, `organization.member.added`, `organization.member.removed`, `organization.role.changed`, `organization.ownership_transferred`, and `organization.llm_budget.exhausted` are also intended for the `product_analytics.posthog` Event Handler. That handler forwards them to PostHog when analytics is enabled. See [`product-analytics.md`](product-analytics.md).
 
 ## Delivery worker contract
 
@@ -330,6 +337,24 @@ Platform-scoped `api_key.created` and `api_key.revoked` events record account cr
 
 ## User login events
 
-Platform-scoped `user.logged_in` records each successful password login (`POST /auth/login`), with a User actor and User subject and the payload `user_id` and `method`. `AuthService.login` writes it through `OutboxMessageRepository.create` after the credential check and enqueues it. A failure to record it is logged and never fails the login. Its only intended handler is `product_analytics.posthog`. Failed logins, token refresh and API-key authentication emit nothing.
+Platform-scoped `user.logged_in` records each successful login, with a User actor and User subject and the payload `user_id` and `method`. It is written through `AuthService.record_login`, which uses `OutboxMessageRepository.create` and enqueues the event. A failure to record it is logged and never fails the login. Its only intended handler is `product_analytics.posthog`. Failed logins, token refresh and API-key authentication emit nothing.
 
-Platform-scoped `user.signed_up` records an invitee's first enrollment. `PasswordResetTokenRepository.redeem` handles both invite acceptance and password reset in one transaction. It locks the token and the user, applies the password, marks the token used, and stages the event only for invite acceptance when the email was not yet verified. A reused token is rejected, and a password reset never emits it. Its only intended handler is `product_analytics.posthog`.
+- **Password login** (`POST /auth/login`) records `method: "password"` after the credential check.
+- **Google sign-in** (`GET /auth/google/callback`) records `method: "google"` after the session is issued, but only when the account already existed and was verified. That covers an account found by its Google id and an existing verified account linked to Google by its address. A first sign-in that creates the account, and an invitee enrolled through Google, are not logins. Nor is the losing side of two simultaneous first sign-ins.
+
+Platform-scoped `user.signed_up` records an invitee's first enrollment. `PasswordResetTokenRepository.redeem` handles both invite acceptance and password reset in one transaction. It locks the token and the user, applies the password, marks the token used, and stages the event only for invite acceptance when the email was not yet verified. A reused token is rejected, and a password reset never emits it. Its payload carries `method`: `invite` for these enrollments. Google sign-in also emits it through `UserRepository.stage_user_signed_up`, in the transaction that creates or enrolls the account:
+
+- `method: "google"` when `_sign_up` creates a self-signed-up User and trial Organization. The same transaction also stages `organization.created`.
+- `method: "invite"` when `_link` enrolls a pending invitee.
+
+Refused sign-ups and returning sign-ins emit nothing. `GoogleSignInService.complete` enqueues the deliveries after the sign-in. Its only intended handler is `product_analytics.posthog`.
+
+`user.onboarding.completed` records the first `POST /onboarding/complete` for a user, with a User actor and User subject and the payload `user_id`. `UserRepository.complete_onboarding` sets `onboarding_completed_at` with a conditional update (only while it is null) and stages the event in the same transaction only when that update changed the row, so a repeat or a simultaneous second call emits nothing. It is scoped to the first Organization the user created (a self-signed-up user's trial), or to the platform when they created none. Its definition has no fixed scope for that reason. Its only intended handler is `product_analytics.posthog`.
+
+`telegram.account.linked` and `telegram.account.unlinked` record Agent Barn Telegram links. They are Organization-scoped to the link's own Organization, with the link's issuing Membership as a Membership actor and the link's Agent as subject. The payload is `organization_id`, `agent_id`, `connection_id` and `link_id`, plus `reason` on an unlink. They never carry the Telegram user id or username. `AgentBarnTelegramRepository._consume` stages `linked` in the transaction that spends the token, and `unlinked` with `reason: "relinked"` for the Telegram user's previous link that it ends. That previous link can belong to another Organization, so its event uses that link's Organization and Membership. A failed attempt that is retried rolls its staged rows back with the rest of the transaction. Every other path that ends a link stages `unlinked` in the same transaction as the ending, and only when a link actually ended:
+- `unlink_in_scope` (the web app's unlink) uses `reason: "user_removed"`, with the clicking user's resolved actor.
+- `end_active_link` and `end_link_for_connection` (the shared bot's poller, forwarder and Bot API proxy) use `reason: "blocked_bot"` or `"access_lost"`, with the link's issuing Membership as actor.
+
+A Membership deletion cascades its links away without an event.
+
+`telegram.first_message.received` uses the same scope, actor, subject and payload as `linked`. `AgentBarnTelegramRepository.queue_update` stages it in the transaction that queues a linked user's new message, through a conditional update that sets `agentbarn_telegram_link.first_message_at` only while the link is active and the column is null. So it fires once per link, even for simultaneous messages. The processor asks for it only for a new `message`, never for an edit or a button press. Migration `a78bcde4b918` set `first_message_at` to `created_at` for links that already existed. It is delivered by the outbox reconciler. These writes run in the Communications process. The link-token and web-app paths enqueue after commit; the poller, forwarder and proxy paths rely on the outbox reconciler. Their only intended handler is `product_analytics.posthog`.

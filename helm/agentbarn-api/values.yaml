@@ -67,6 +67,12 @@ emailInboundSecret: ""
 googleCloudClientId: ""
 googleCloudClientSecret: ""
 
+# Multi-tenant Microsoft Entra app for Organization OneDrive sync. Leave blank to
+# disable. Registered Web redirect URI must be
+# "<webAppUrl>/api/v1/integrations/sync-provider/onedrive/callback".
+onedriveSyncClientId: ""
+onedriveSyncClientSecret: ""
+
 # OpenRouter inference key (k8s Secret env var OPENROUTER_API_KEY), polled
 # via GET /key for the key's remaining credit limit metric. Same key litellm
 # uses; leave blank to skip the poll. The gauge reads +Inf until a credit
@@ -107,6 +113,10 @@ agentbarnTelegramBotUsername: ""
 # Default model preselected in the picker and used at runtime when an agent has
 # no model set. Format: litellm/openrouter/<slug>. Empty uses the code default.
 agentDefaultModel: ""
+
+# Initial authoring default until saved in Platform Settings; execution is unavailable.
+workflows:
+  authoringEnabled: false
 
 kubeconfigB64: ""
 # Name of the registry pull Secret this chart creates (registry-secret.yaml) and

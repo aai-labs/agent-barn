@@ -1,0 +1,287 @@
+"use client";
+
+import Link from "next/link";
+import { Fragment, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Check, ChevronRight, ChevronsUpDown } from "lucide-react";
+
+import { ShareIcon } from "@/components/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { AgentAvatar } from "@/features/agents/components/agent-avatar";
+import { AgentLifecycleMenu } from "@/features/agents/components/agent-lifecycle-menu";
+import { AgentUpdateNotice } from "@/features/agents/components/agent-update-banner";
+import { ShareDialog } from "@/features/agents/components/share-dialog";
+import { useAgents } from "@/features/agents/hooks/use-agents";
+import { useModels } from "@/features/agents/hooks/use-models";
+import { agentStatus } from "@/features/agents/components/status-line";
+import type { Agent } from "@/features/agents/schemas";
+import { canAgent, currentModelOf } from "@/features/agents/utils";
+
+import { useCachedAgent, useCachedAgentHealth } from "../hooks/use-cached-agent";
+import { useContextPanel } from "../hooks/use-context-panel";
+import { useIsDesktop } from "../hooks/use-is-desktop";
+import { useRailModel } from "../hooks/use-rail-model";
+import { parseAgentRoute } from "../nav-model";
+import { ContextSwitcher } from "./context-switcher";
+import { UserMenu } from "./user-menu";
+
+// Query parameters that name a place inside the page rather than one Agent's thing, so
+// they carry over to another Agent. A thread or channel id is one Agent's and does not.
+const PORTABLE_PARAMS = ["tab", "section", "range"];
+
+/**
+ * The desktop path bar: where you are, as a path you can switch at each step. The
+ * first step is the Organization (or Platform View), the second the Agent when you are
+ * inside one (its avatar carries the status dot), and the last the page or section you
+ * are on. Inside an Agent a chip with its status, runtime and model follows, beside
+ * the update notice, lifecycle and Share actions it bears on; the account menu ends
+ * the bar.
+ */
+export function PathBar() {
+  const pathname = usePathname() ?? "";
+  const panel = useContextPanel();
+  const rail = useRailModel();
+  const agentRoute = parseAgentRoute(pathname);
+  // The bar itself is shown by CSS alone, so it is there on the first desktop paint. Only
+  // the Agent's actions wait for the width check: phones show them on the page, and two
+  // copies of the lifecycle and Share dialogs must not coexist.
+  const isDesktop = useIsDesktop();
+
+  // Where you are, below the Organization (and the Agent): the rail destination, then the
+  // selected entries of the panel, deepest last. "Settings / Agents", "Spend / Costs",
+  // "System / Settings / Agent Memory"; inside an Agent "Chat", or "Agent settings / Profile".
+  // Every step but the last links to its own page.
+  const selected = (panel?.groups ?? [])
+    .flatMap((group) => group.items.flatMap((item) => [item, ...(item.children ?? [])]))
+    .filter((item) => item.active)
+    .map((item) => ({ label: item.label, href: item.href }));
+  const railStep = agentRoute ? undefined : rail.items.find((item) => item.active);
+  const trail = [
+    ...(railStep ? [{ label: railStep.label, href: railStep.href }] : []),
+    ...(agentRoute?.rest === "configuration" && panel?.subtitle
+      ? [{ label: panel.subtitle, href: `/dashboard/${agentRoute.orgId}/agents/${agentRoute.agentId}/configuration` }]
+      : []),
+    ...selected,
+  ].filter((step, index, steps) => index === 0 || step.label !== steps[index - 1].label);
+
+  return (
+    <header
+      className="sticky top-0 z-20 hidden h-14 flex-shrink-0 items-center gap-0.5 px-4 lg:flex"
+      style={{ background: "var(--bg)", borderBottom: "1px solid var(--line)" }}
+    >
+      <nav aria-label="Breadcrumb" className="flex min-w-0 flex-1 items-center gap-0.5">
+        <ContextSwitcher />
+        {agentRoute && (
+          <>
+            <Separator />
+            <AgentSwitcher orgId={agentRoute.orgId} agentId={agentRoute.agentId} rest={agentRoute.rest} />
+          </>
+        )}
+        {trail.map((step, index) => (
+          <Fragment key={`${index}-${step.label}`}>
+            <Separator />
+            {index === trail.length - 1 ? (
+              <span className="truncate px-2 text-[14px]" style={{ color: "var(--ink-3)" }} aria-current="page">
+                {step.label}
+              </span>
+            ) : (
+              <Link
+                href={step.href}
+                className="af-hover-bg flex-shrink-0 rounded-md px-2 py-1 text-[14px]"
+                style={{ color: "var(--ink-3)" }}
+              >
+                {step.label}
+              </Link>
+            )}
+          </Fragment>
+        ))}
+      </nav>
+      {agentRoute && isDesktop && <AgentActions agentId={agentRoute.agentId} />}
+      <div className="ml-2">
+        <UserMenu />
+      </div>
+    </header>
+  );
+}
+
+function Separator() {
+  return (
+    <span aria-hidden className="px-0.5 text-[16px] font-light" style={{ color: "var(--ink-5)" }}>
+      /
+    </span>
+  );
+}
+
+/**
+ * The Agent step of the path: the current Agent, and a list of the team's Agents to
+ * move to. Moving keeps the section or settings page you are on, so comparing two
+ * Agents' logs is one switch, not a switch and a click.
+ */
+function AgentSwitcher({ orgId, agentId, rest }: { orgId: string; agentId: string; rest?: string }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const agent = useCachedAgent(agentId);
+  // Asked for when the menu first opens, not on every Agent page; the team page's list
+  // shares the cache, so coming from it there is nothing to wait for.
+  const [opened, setOpened] = useState(false);
+  const { agents, isLoading } = useAgents({ enabled: opened });
+  const orgBase = `/dashboard/${orgId}`;
+
+  // A connection or skill page belongs to the Agent it was opened from, so moving from
+  // one lands on the other Agent's own page instead.
+  const keepsPlace = !rest || rest === "configuration";
+  const targetFor = (nextId: string) => {
+    if (!keepsPlace) return `${orgBase}/agents/${nextId}`;
+    const query = new URLSearchParams();
+    for (const key of PORTABLE_PARAMS) {
+      const value = searchParams.get(key);
+      if (value !== null) query.set(key, value);
+    }
+    const search = query.toString();
+    return `${orgBase}/agents/${nextId}${rest ? `/${rest}` : ""}${search ? `?${search}` : ""}`;
+  };
+
+  return (
+    <DropdownMenu modal={false} onOpenChange={(open) => open && setOpened(true)}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Switch agent. Current: ${agent?.name ?? "Agent"}`}
+          className="af-hover-bg flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-[14px] font-semibold"
+          style={{ color: "var(--ink)" }}
+        >
+          {agent && <AvatarWithStatus agent={agent} />}
+          <span className="max-w-[220px] truncate">{agent?.name ?? "Agent"}</span>
+          <ChevronsUpDown size={14} aria-hidden style={{ color: "var(--ink-4)" }} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="bottom" align="start" sideOffset={6} className="w-64">
+        <DropdownMenuLabel>Agents</DropdownMenuLabel>
+        {isLoading && agents.length === 0 && (
+          <DropdownMenuItem disabled>
+            <span className="flex-1" style={{ color: "var(--ink-4)" }}>
+              Loading agents…
+            </span>
+          </DropdownMenuItem>
+        )}
+        {agents.map((candidate) => (
+          <DropdownMenuItem
+            key={candidate.id}
+            onSelect={() => {
+              if (candidate.id !== agentId) router.push(targetFor(candidate.id));
+            }}
+          >
+            <AgentAvatar agent={candidate} size="xs" />
+            <span className="flex-1 truncate">{candidate.name}</span>
+            {candidate.id === agentId && <Check aria-label="Current" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href={orgBase}>
+            <span className="flex-1">All agents</span>
+            <ChevronRight aria-hidden />
+          </Link>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function AgentActions({ agentId }: { agentId: string }) {
+  const agent = useCachedAgent(agentId);
+  if (!agent) return null;
+  return <AgentActionButtons agent={agent} />;
+}
+
+function AgentActionButtons({ agent }: { agent: Agent }) {
+  const [shareOpen, setShareOpen] = useState(false);
+  const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
+  const canManageAccess = canAgent(agent, "agent.access.manage");
+
+  return (
+    <div className="flex flex-shrink-0 items-center gap-2">
+      <AgentRuntimeChip agent={agent} />
+      {canManageLifecycle && <AgentUpdateNotice agent={agent} />}
+      {canManageLifecycle && <AgentLifecycleMenu agent={agent} />}
+      {canManageAccess && (
+        <>
+          <button type="button" className="af-btn" onClick={() => setShareOpen(true)}>
+            <ShareIcon /> Share
+          </button>
+          <ShareDialog
+            agentId={agent.id}
+            agentName={agent.name}
+            organizationId={agent.organizationId}
+            open={shareOpen}
+            onOpenChange={setShareOpen}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+const RUNTIME_LABELS: Record<Agent["agentType"], string> = {
+  hermes: "Hermes",
+  openclaw: "OpenClaw",
+};
+
+/** How the Agent is doing and what it runs on, read-only and the same on every section. */
+function AgentRuntimeChip({ agent }: { agent: Agent }) {
+  const { models } = useModels();
+  const health = useCachedAgentHealth(agent.id);
+  const status = agentStatus(agent.status, health);
+  const model = currentModelOf(agent);
+  // The Organization's model list names its models; a model outside it shows its id.
+  const modelLabel =
+    models.find((option) => option.value === model)?.label ?? model.split("/").at(-1) ?? model;
+
+  return (
+    <span
+      title={`${status.label} · ${RUNTIME_LABELS[agent.agentType]} runtime, running ${model}`}
+      data-testid="agent-runtime-chip"
+      className="inline-flex max-w-[340px] items-center gap-1.5 rounded-full px-3 py-1 text-[12.5px]"
+      style={{ border: "1px solid var(--line-strong)", color: "var(--ink-3)" }}
+    >
+      <span className="inline-flex flex-shrink-0 items-center gap-1.5 font-medium" style={{ color: status.textColor }}>
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: status.color }} />
+        {status.label}
+      </span>
+      <span aria-hidden style={{ color: "var(--ink-5)" }}>
+        ·
+      </span>
+      <span className="flex-shrink-0">{RUNTIME_LABELS[agent.agentType]}</span>
+      <span aria-hidden style={{ color: "var(--ink-5)" }}>
+        ·
+      </span>
+      <span className="truncate font-semibold" style={{ color: "var(--ink)" }}>
+        {modelLabel}
+      </span>
+    </span>
+  );
+}
+
+/** The Agent's avatar with its status as a dot. */
+function AvatarWithStatus({ agent }: { agent: Agent }) {
+  const health = useCachedAgentHealth(agent.id);
+  const dot = agentStatus(agent.status, health);
+  return (
+    <span className="relative flex-shrink-0" title={dot.label}>
+      <AgentAvatar agent={agent} size="xs" />
+      <span
+        aria-label={dot.label}
+        role="img"
+        className="absolute -bottom-px -right-px h-2 w-2 rounded-full"
+        style={{ background: dot.color, boxShadow: "0 0 0 2px var(--bg)" }}
+      />
+    </span>
+  );
+}

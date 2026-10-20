@@ -321,6 +321,12 @@ budgets, and spend. On key rotation provision the persisted model, startup
 fallback, and models needed by in-progress operations on the new key. Keep
 retired hashes for delayed cost attribution.
 
+The Playbook Extraction model is chosen at Platform Settings. Until then the API and worker use
+`PLAYBOOK_DEFAULT_MODEL` (`openrouter/openai/gpt-4.1-mini` when unset); Compose reads it from `.env`,
+and Helm deployments use the default. The worker calls LiteLLM directly for these runs, so its
+Deployment and Compose service receive `LITELLM_BASE_URL` like the API, and the Compose worker also
+receives `MEMORY_VIEW_BASE_URL` to read long-term memories (Helm supplies it through the API Secret).
+
 Set `MEMORY_DEFAULT_MODEL` in `.env` (Compose) or `.env.deploy` (Helmfile) to
 customize the initial model. Both deployments use that one setting for the API
 default and Hindsight startup model. When using charts directly, set API
@@ -578,7 +584,7 @@ for why staging is a namespace.
 - **Checks:** `deploy.yml` skips lint and tests (`run_checks=false`) only when the pushed commit is the merge result of a pull request into the same branch whose head passed `ci-gate`, found through the commit's associated pull requests and that head's check runs. A direct push, a manual `workflow_dispatch`, a pull request without a passing `ci-gate` (including ones merged before the check existed), or any lookup failure runs the full checks, so an untested commit never ships. The single-Alembic-head check (`make check-migrations`) runs in either case, because two pull requests that each add a migration can pass CI separately and still leave two heads once merged in sequence. A failure in that preflight or in change detection stops the deploy before any image is pushed or released.
 - **Images:** all four images (api, ui, hermes-base, openclaw-base) get a `-staging` tag suffix on staging; staging never pushes `:latest`, since each environment builds its own base images and their installed contents can diverge.
 - **Change detection:** `deploy.yml` compares the current commit with the latest successful deploy run for the same branch. A failed deploy does not advance that baseline, so a later fix rebuilds every component changed since the last successful deploy. If no valid baseline can be found, or the workflow is dispatched manually, all four images are built.
-- **Secrets/vars:** every per-env value uses a `STAGING_`-prefixed GitHub secret or variable, selected by a `github.ref_name == 'staging' && secrets.STAGING_X || secrets.X` ternary in `deploy.yml`. Shared references (registry, `OPENROUTER_API_KEY`, Google OAuth client, DB user/db names, and the Cloudflare email account/token) are reused as-is. Email follows the standard convention: only `STAGING_SENDER_EMAIL` differs, pointing staging at its own `mail-staging.` sending subdomain.
+- **Secrets/vars:** every per-env value uses a `STAGING_`-prefixed GitHub secret or variable, selected by a `github.ref_name == 'staging' && secrets.STAGING_X || secrets.X` ternary in `deploy.yml`. Shared references (registry, `OPENROUTER_API_KEY`, Google OAuth client, OneDrive sync Microsoft app, DB user/db names, and the Cloudflare email account/token) are reused as-is. Email follows the standard convention: only `STAGING_SENDER_EMAIL` differs, pointing staging at its own `mail-staging.` sending subdomain.
 - **RBAC bootstrap:** the staging namespace and its deploy identities are
   provisioned out of band. Do not use `deploy.sh` as a staging entry point: it
   always applies `k8s/agent-farm-user.yaml` for `agent-farm`. The current
@@ -602,7 +608,7 @@ Hosted public Agent Barn runs on the dedicated Talos cluster, not on k3s. k3s (`
   Nothing in this workflow writes to `registry.k8s.aai-labs.com`.
 - **Registry:** `PUBLIC_REGISTRY_URL` (`registry.agentbarn.dev`). Do not reuse the k3s registry password or R2 bucket.
 - **Namespace:** still `agent-farm` so helmfile and `k8s/agent-farm-user.yaml` apply unchanged. This is a different cluster, so it does not collide with k3s.
-- **Secrets/vars:** every public-only value is `PUBLIC_`-prefixed. Postgres **user/db names**, `AGENT_DEFAULT_MODEL` / `AGENT_MODEL_ALLOWLIST`, the Cloudflare email account/token, and the Google OAuth client are reused. OpenRouter, Firecrawl, Slack webhook, DB passwords, and signing keys are **not** reused — copy a value into a `PUBLIC_` secret only when that sharing is intentional.
+- **Secrets/vars:** every public-only value is `PUBLIC_`-prefixed. Postgres **user/db names**, `AGENT_DEFAULT_MODEL` / `AGENT_MODEL_ALLOWLIST`, the Cloudflare email account/token, the Google OAuth client, and the OneDrive sync Microsoft app are reused. OpenRouter, Firecrawl, Slack webhook, DB passwords, and signing keys are **not** reused — copy a value into a `PUBLIC_` secret only when that sharing is intentional.
 - **Kubeconfig:** `PUBLIC_KUBECONFIG_B64` must reach the Talos API (`https://<cp-1>:6443`). There is no bastion tunnel. `PUBLIC_POD_KUBECONFIG_B64` is what the API pod uses to manage agents; if unset, the workflow falls back to the deploy kubeconfig. Prefer a namespace-scoped kubeconfig for the pod, as on k3s.
 - **Storage:** `PUBLIC_STORAGE_CLASS`. Intended value is `rook-ceph-block-main`. Use `local-path` only while Ceph has no OSDs — postgres then dies with the node that holds the volume.
 - **Hosts:** `PUBLIC_UI_HOST` is `cloud.agentbarn.dev` (not `app` — that hostname stays on k3s). Product Grafana is `grafana-app.agentbarn.dev`, not cluster `grafana.agentbarn.dev`.
@@ -658,8 +664,9 @@ kubeconfig portably with
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
-`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`, and
-`GOOGLE_CLOUD_CLIENT_SECRET`.
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`,
+`GOOGLE_CLOUD_CLIENT_SECRET`, and `ONEDRIVE_SYNC_CLIENT_SECRET` (with the
+`ONEDRIVE_SYNC_CLIENT_ID` variable).
 
 ## Versioning and releases
 
@@ -819,3 +826,38 @@ runs it.
 - Classifier code changes that alter how a command is split into invocations can shift
   ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
   instead of updating them.
+
+## Workflow authoring (WF01)
+
+After migrating and verifying WF01, Platform Administrators can enable authoring
+at **Platform Settings → Workflows** and save the choice. It takes effect on
+subsequent API requests without a redeploy and allows manual definition creation,
+version saving and archive across all Organizations. Definition/version reads
+remain available when disabled. `WORKFLOW_AUTHORING_ENABLED` defaults to `false`
+and supplies the initial deployment default only until a Platform Admin saves a
+choice; the persisted choice then overrides the environment value in either
+direction, including after restarts. Changing the environment alone cannot
+override a saved choice. Disable authoring through Platform Settings for rollback
+of admission; requests already admitted may finish.
+This gate never enables execution; WF01 has no run endpoint. Natural-language
+draft generation is deferred to a separate PR, with no model setting or provider
+credential required for manual building. The [feature specification](../features/agent-workflows.md)
+owns the product contract.
+
+Local Compose passes `.env` through; `.env.spec` documents the authoring gate.
+Helm exposes `workflows.authoringEnabled`; Helmfile passes the corresponding
+environment variable. No runtime image, worker, storage service or cluster
+permission is added for workflow authoring.
+
+Migration `a38801c6e001` adds the authoring tables and immutable-version trigger
+after `c42e91b7a603`, preserving existing Agent data. Use `make check-migrations`
+and the migrated WF01 API contracts before rollout. Migration `a38802d7f002`
+follows it and creates the singleton Platform workflow setting. Merge revision
+`c32e42bb0396` joins that workflow branch with staging head `d72b85f19c40`;
+merge revision `49e4d8bea6de` joins it with the later staging head `517d402a59fd`,
+so fresh installs and upgrades retain a single migration head. Downgrading only
+that migration removes the saved choice and restores the environment default;
+workflow definitions and versions remain. Schema downgrade of WF01 drops
+WF01 records and is appropriate only for a disposable/empty installation or an
+explicitly approved data-removal operation; take a backup before intentional
+removal. Release versions are unchanged until release preparation is requested.

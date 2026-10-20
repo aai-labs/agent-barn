@@ -91,6 +91,27 @@ def test_create_shared_credential_returns_201():
             assert "content" not in body
 
 
+def test_create_shared_credential_accepts_merkys():
+    with given(_GIVEN) as context:
+        client: TestClient = context.client
+
+        with when("I create a shared Merkys credential"):
+            response = client.post(
+                _BASE,
+                json={
+                    "provider": "merkys",
+                    "name": "Company knowledge",
+                    "content": {"base_url": "https://merkys.aai-labs.com", "api_key": "cb_shared-key"},
+                },
+                headers=_auth(context),
+            )
+
+        with then("it is stored without echoing the key"):
+            assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+            assert_that(response.json()["provider"], equal_to("merkys"))
+            assert "cb_shared-key" not in response.text
+
+
 def test_create_shared_credential_rejects_oauth_provider():
     with given(_GIVEN) as context:
         client: TestClient = context.client

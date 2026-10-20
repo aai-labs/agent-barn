@@ -18,6 +18,9 @@ export interface IntegrationField {
   required: boolean;
   placeholder?: string;
   hint?: string;
+  // A value the user cannot change. The field renders read-only, the value is put into
+  // the draft for the request, and "required" counts it as filled. Only for "text" fields.
+  fixedValue?: string;
 }
 
 export interface IntegrationProvider {
@@ -34,6 +37,13 @@ export interface IntegrationProvider {
   authMethod?: "google_oauth" | "microsoft_sign_in";
   // Fallback shown next to the ✓ when an OAuth provider connects without an identity.
   oauthConnectedNote?: string;
+  // The credential can never be given to the agent, so credential isolation is always on.
+  // Mirrors the server, which refuses to turn it off. Its two descriptions replace the
+  // generic ones before the credential is first saved.
+  alwaysIsolated?: { isolatedDescription: string; directDescription: string };
+  // false keeps the provider out of every "add" list (integrations, and skills that need
+  // it) while credentials an Agent already has still show and can be removed.
+  offered?: boolean;
 }
 
 export interface IntegrationDraft {
@@ -154,9 +164,35 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     id: "gmail",
     label: "Gmail",
     authMethod: "google_oauth",
+    // Not offered yet, but not dead code: one-click Gmail signs in on the deployment's
+    // shared Google app, which Google has not verified, so users would get Google's
+    // "unverified app" warning and the app's cap on how many people can sign in. Gmail
+    // with an app password is offered instead. Drop this line once the app is verified.
+    offered: false,
     scopeNote: "Read-only access to one Gmail inbox. Sign in with Google; there's nothing else to set up.",
     oauthConnectedNote: "Gmail connected",
     fields: [],
+  },
+  {
+    id: "gmail_app_password",
+    label: "Gmail (app password)",
+    scopeNote:
+      "Read-only access to one Gmail inbox. The agent can read mail but never send, delete or change it, and the app password is never given to the agent.",
+    fields: [
+      { key: "email", label: "Gmail address", type: "text", required: true, placeholder: "you@gmail.com" },
+      {
+        key: "appPassword",
+        label: "App password",
+        type: "secret",
+        required: true,
+        placeholder: "abcd efgh ijkl mnop",
+        hint: "Create one at myaccount.google.com/apppasswords. Your Google account needs 2-Step Verification turned on.",
+      },
+    ],
+    alwaysIsolated: {
+      isolatedDescription: "The app password stays outside this Agent; Agent Barn reads the inbox for it, read-only.",
+      directDescription: "An app password cannot be limited to reading, so it is never given to this Agent.",
+    },
   },
   {
     id: "sharepoint",
@@ -204,7 +240,25 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "apiToken", label: "API key", type: "secret", required: true, hint: "Create one in Apollo under Settings → Integrations → API Keys." },
     ],
   },
+  {
+    id: "merkys",
+    label: "Merkys",
+    scopeNote: "The agent acts as the Merkys user who owns the API key and can read only what that user can. Use a dedicated user limited to the knowledge the agent needs, rather than a personal key.",
+    fields: [
+      { key: "baseUrl", label: "Merkys URL", type: "text", required: true, fixedValue: "https://slack-chatbot.k8s.aai-labs.com", hint: "Agent Barn's Merkys. This address is fixed." },
+      { key: "apiKey", label: "API key", type: "secret", required: true, hint: "Create one in Merkys under API keys. It starts with cb_." },
+    ],
+  },
 ];
+
+export function isOfferedProvider(providerId: string): boolean {
+  return getIntegrationProvider(providerId)?.offered !== false;
+}
+
+/** A skill can be added only when every credential it needs can be connected. */
+export function isOfferedSkill(skill: { requiredProviders: string[] }): boolean {
+  return skill.requiredProviders.every(isOfferedProvider);
+}
 
 export function getIntegrationProvider(id: string): IntegrationProvider | undefined {
   return INTEGRATION_PROVIDERS.find((p) => p.id === id);
@@ -260,7 +314,7 @@ export function hasIncompleteIntegration(integrations: IntegrationDraft[]): bool
     // (google_workspace picks services before consent) — still have them filled in.
     if (provider.authMethod && !isOAuthConnected(draft)) return true;
     return provider.fields.some((f) => {
-      if (!f.required) return false;
+      if (!f.required || f.fixedValue !== undefined) return false;
 
       // If the field depends on another field, check if the condition is met
       if (f.dependsOn) {

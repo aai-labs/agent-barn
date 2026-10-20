@@ -75,6 +75,14 @@ AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND=
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
 
+# Optional: multi-tenant Microsoft Entra app for Organization OneDrive sync. If
+# unset, OneDrive sync is unavailable. Register
+# "<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback" as a Web redirect URI
+# (Microsoft requires HTTPS unless the host is localhost). Permissions: application
+# Sites.Selected; delegated Sites.FullControl.All, Sites.Read.All, openid, profile.
+ONEDRIVE_SYNC_CLIENT_ID=
+ONEDRIVE_SYNC_CLIENT_SECRET=
+
 # Kubernetes client
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
 K8S_KUBECONFIG_PATH=
@@ -138,6 +146,9 @@ ORGANIZATION_DEFAULT_LLM_BUDGET_USD=
 AGENT_DEFAULT_LLM_BUDGET_USD=
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
+# WF01 authoring gate. Saving never enables workflow execution.
+# Initial default; a saved Platform Settings → Workflows choice overrides this.
+WORKFLOW_AUTHORING_ENABLED=false
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —
 # the public catalogue endpoint works unauthenticated.
 OPENROUTER_API_KEY=

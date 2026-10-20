@@ -37,6 +37,11 @@ ISOLATION_CAPABILITIES = {
         "This Agent receives the Apollo API key and connects to Apollo directly.",
         "The Apollo API key stays outside this Agent; Agent Barn authenticates requests.",
     ),
+    SecretProvider.MERKYS: IsolationCapabilities(
+        "This Agent receives the Merkys API key and connects to Merkys directly.",
+        "The Merkys API key stays outside this Agent; Agent Barn authenticates requests. "
+        "Only available when the Merkys URL is on an Agent Barn–approved host.",
+    ),
     SecretProvider.PIPEDRIVE: IsolationCapabilities(
         "This Agent receives the Pipedrive API token and connects to Pipedrive directly.",
         "The Pipedrive API token stays outside this Agent; Agent Barn authenticates requests.",
@@ -49,6 +54,11 @@ ISOLATION_CAPABILITIES = {
         "This Agent receives the Gmail refresh token and OAuth client credentials and connects to Gmail directly.",
         "Gmail cannot be isolated yet; this Agent always receives its Gmail credential.",
         supports_isolated=False,
+    ),
+    SecretProvider.GMAIL_APP_PASSWORD: IsolationCapabilities(
+        "An app password cannot be limited to reading, so it is never given to this Agent.",
+        "The app password stays outside this Agent; Agent Barn reads the inbox for it, read-only.",
+        supports_direct=False,
     ),
     SecretProvider.FIRECRAWL: IsolationCapabilities(
         "This Agent receives the Firecrawl API key and connects to Firecrawl directly.",

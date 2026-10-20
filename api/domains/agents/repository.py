@@ -1645,6 +1645,18 @@ class AgentRepository:
             )
             return session.exec(query).first()
 
+    def list_secrets_for_organization(self, organization_id: UUID, provider: SecretProvider) -> list[AgentSecret]:
+        """Every Agent Secret of ``provider`` in the Organization, soft-deleted Agents included:
+        deleting an Agent keeps its secrets, and a SharePoint grant recorded there is still live."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentSecret)
+                .join(Agent, col(Agent.id) == col(AgentSecret.agent_id))
+                .where(col(Agent.organization_id) == organization_id)
+                .where(col(AgentSecret.provider) == provider)
+            )
+            return list(session.exec(query).all())
+
     def get_secrets_for_agent(self, agent_id: UUID) -> list[AgentSecret]:
         with Session(self.delegate.engine) as session:
             query = select(AgentSecret).where(col(AgentSecret.agent_id) == agent_id)

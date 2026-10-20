@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { parseAsBoolean, parseAsStringEnum, useQueryState } from "nuqs";
-import { ArrowLeft, CircleAlert } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -16,10 +16,10 @@ import { useAgentHealth } from "../hooks/use-agent-health";
 import { canAgent } from "../utils";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentChannelSettings } from "./agent-channel-settings";
-import { AgentConfigurationSidebar } from "./agent-configuration-sidebar";
 import {
   AGENT_CONFIGURATION_SECTIONS,
   configurationSectionLabel,
+  visibleAgentConfigurationSections,
   type AgentConfigurationSectionKey,
 } from "./agent-configuration-utils";
 import { AgentDangerZoneSettings } from "./agent-danger-zone-settings";
@@ -51,17 +51,12 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
     agentId,
     canReadActivity && agent?.status === "ERROR",
   );
-  // Restore points read from the activity surface and the spend limit from the cost
-  // surface, so an Agent the viewer can see without that access does not offer them.
   const canReadCosts = canAgent(agent, "cost.read");
-  const sections = AGENT_CONFIGURATION_SECTIONS.filter(
-    (item) =>
-      (item.key !== "restore" || canReadActivity) && (item.key !== "spend" || canReadCosts),
-  );
+  const sections = visibleAgentConfigurationSections(agent);
   // Parsed against every section, and narrowed to the visible ones below: the visible
   // list depends on the Agent, which has not loaded on first render, and parsing
   // against it then would discard a deep link like ?section=spend.
-  const [requestedSection, setActiveSection] = useQueryState(
+  const [requestedSection] = useQueryState(
     "section",
     parseAsStringEnum<AgentConfigurationSectionKey>(AGENT_CONFIGURATION_SECTIONS.map((item) => item.key))
       .withDefault("profile")
@@ -73,7 +68,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
   if (agentLoading || configurationLoading) {
     return (
-      <div className="af-page animate-pulse">
+      <div className="animate-pulse">
         <div className="h-8 w-72 rounded-lg" style={{ background: "var(--bg-soft)" }} />
         <div className="mt-6 h-96 rounded-2xl" style={{ background: "var(--bg-soft)" }} />
       </div>
@@ -82,7 +77,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
   if (agentError) {
     return (
-      <div className="af-page">
+      <div>
         <AppErrorState
           error={agentError}
           title="We couldn't load this agent"
@@ -94,7 +89,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
   if (configurationError) {
     return (
-      <div className="af-page">
+      <div>
         <AppErrorState
           error={configurationError}
           title="We couldn't load this configuration"
@@ -114,11 +109,6 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
   const canManageLifecycle = canAgent(agent, "agent.lifecycle.manage");
   const section = sections.find((item) => item.key === activeSection) ?? sections[0];
 
-  function selectSection(nextSection: AgentConfigurationSectionKey) {
-    void setActiveSection(nextSection);
-    setEditingSection(null);
-  }
-
   function toggleEditing(sectionKey: AgentConfigurationSectionKey) {
     setEditingSection((current) => (current === sectionKey ? null : sectionKey));
   }
@@ -129,14 +119,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
 
   return (
     <div style={{ background: "var(--bg)" }}>
-      <main className="af-page">
-        <Link
-          href={`${homeHref}/agents/${agent.id}`}
-          className="mb-6 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[0.8125rem] transition-colors hover:bg-[var(--bg-soft)]"
-          style={{ color: "var(--ink-3)" }}
-        >
-          <ArrowLeft size={14} /> Back to {agent.name}
-        </Link>
+      <div>
 
         <div className="mb-8 flex flex-wrap items-start gap-4">
           <AgentAvatar agent={agent} size="lg" />
@@ -195,13 +178,8 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
             </Alert>
           ))}
 
-        <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
-          <AgentConfigurationSidebar
-            activeSection={activeSection}
-            onSectionChange={selectSection}
-            sections={sections}
-          />
-
+        {/* The navigation panel lists the sections and leads back to the Agent. */}
+        <div className="grid gap-8">
           <div className="min-w-0">
             <div className="mb-4">
               <h2 className="m-0 text-[1.25rem] font-semibold" style={{ color: "var(--ink)" }}>
@@ -303,7 +281,7 @@ export function AgentConfigurationPage({ agentId }: { agentId: string }) {
             )}
           </div>
         </div>
-      </main>
+      </div>
     </div>
   );
 }

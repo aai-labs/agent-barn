@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { RotateCcw, Sparkles } from "lucide-react";
 
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toastError } from "@/shared/toast";
 
 import { useManagedUpdate } from "../hooks/use-managed-update";
@@ -11,7 +12,18 @@ import type { Agent } from "../schemas";
 
 const RELEASES_URL = "https://github.com/aai-labs/agent-barn/releases";
 
-export function AgentUpdateBanner({ agent }: { agent: Agent }) {
+/** What updating does, in the banner and in the top bar's notice alike. */
+function UpdateExplanation({ agentName }: { agentName: string }) {
+  return (
+    <>
+      A new version of {agentName} is available. Updating stops the Agent, saves a restore point of
+      its current state, then starts the new version. If the new version does not come up healthy,
+      it is rolled back automatically.
+    </>
+  );
+}
+
+export function AgentUpdateBanner({ agent, className }: { agent: Agent; className?: string }) {
   const managedUpdate = useManagedUpdate();
   // The server's flag covers the whole run, including the minutes after the
   // 202, so the button cannot start a second update meanwhile.
@@ -40,7 +52,7 @@ export function AgentUpdateBanner({ agent }: { agent: Agent }) {
   return (
     <div
       data-testid="agent-update-banner"
-      className="mb-6 flex items-center justify-between gap-3 rounded-2xl px-4 py-3.5"
+      className={`mb-6 flex items-center justify-between gap-3 rounded-2xl px-4 py-3.5 ${className ?? ""}`}
       style={{
         background: "var(--accent-soft)",
         border: "1px solid color-mix(in srgb, var(--accent-color) 25%, transparent)",
@@ -64,9 +76,7 @@ export function AgentUpdateBanner({ agent }: { agent: Agent }) {
             </>
           ) : (
             <>
-              A new version of {agent.name} is available. Updating stops the Agent, saves a restore
-              point of its current state, then starts the new version. If the new version does not
-              come up healthy, it is rolled back automatically.{" "}
+              <UpdateExplanation agentName={agent.name} />{" "}
             </>
           )}
           <a
@@ -90,6 +100,71 @@ export function AgentUpdateBanner({ agent }: { agent: Agent }) {
         {updating ? "Updating…" : backupFailed ? "Update without backup snapshot" : "Update"}
       </button>
     </div>
+  );
+}
+
+/**
+ * The same offer as AgentUpdateBanner, compact enough for a top bar: a button that
+ * says an update is available and opens the explanation with the Update action.
+ */
+export function AgentUpdateNotice({ agent }: { agent: Agent }) {
+  const managedUpdate = useManagedUpdate();
+  const updating = agent.updateInProgress || managedUpdate.isPending;
+
+  if (!agent.updateAvailable && !updating) {
+    return null;
+  }
+
+  const update = () => void managedUpdate.mutateAsync({ agentId: agent.id }).catch(toastError);
+
+  if (updating) {
+    return (
+      <span
+        data-testid="agent-update-notice"
+        className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-medium"
+        style={{ background: "var(--accent-soft)", color: "var(--accent-ink)" }}
+      >
+        <RotateCcw size={13} className="animate-spin" aria-hidden /> Updating…
+      </span>
+    );
+  }
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-testid="agent-update-notice"
+          className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-medium"
+          style={{
+            background: "var(--accent-soft)",
+            color: "var(--accent-ink)",
+            border: "1px solid color-mix(in srgb, var(--accent-color) 25%, transparent)",
+          }}
+        >
+          <Sparkles size={13} aria-hidden /> Update available
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80">
+        <p className="m-0 text-[0.844rem] leading-relaxed" style={{ color: "var(--ink-2)" }}>
+          <UpdateExplanation agentName={agent.name} />
+        </p>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <a
+            href={RELEASES_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[0.8125rem] font-medium underline underline-offset-3"
+            style={{ color: "var(--accent-ink)" }}
+          >
+            Release notes
+          </a>
+          <button className="af-btn af-btn-primary af-btn-sm" onClick={update}>
+            <RotateCcw size={14} /> Update
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 

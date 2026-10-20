@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -36,6 +37,14 @@ def _provider_values(providers) -> list[str]:
     Skill's stored ``required_providers`` (a JSON column) reads back as plain strings, so
     ``.value`` alone fails on any lineage that requires a provider."""
     return [SecretProvider(provider).value for provider in providers]
+
+
+class PlaybookDraftConflict(Exception):
+    """The target Skill gained a draft after the Playbook Extraction was requested."""
+
+
+class PlaybookTargetUnavailable(Exception):
+    """The target Skill can no longer receive a playbook draft."""
 
 
 @inject
@@ -763,6 +772,91 @@ class SkillService:
             required_providers=[p.value for p in data.required_providers],
         )
         return self._to_read(skill, version=None, has_draft=True)
+
+    def require_playbook_target(self, org_id: UUID, skill_id: UUID) -> Skill:
+        """An Organization-owned custom Skill whose next draft a Playbook Extraction may write.
+
+        Callers have already enforced ``skill.manage``. A pending draft is refused so a
+        run never overwrites a person's unpublished edits.
+        """
+        skill = self._get_or_404(skill_id, org_id)
+        if skill.organization_id != org_id or skill.agent_id is not None or skill.source == SkillSource.AAI_CLI:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Playbooks can only refresh organization-owned custom Skills",
+            )
+        if self.repository.get_draft(skill.id) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This Skill has an unpublished draft. Publish or discard it before extracting a new playbook.",
+            )
+        return skill
+
+    def write_playbook_draft(
+        self, org_id: UUID, skill_id: UUID | None, name: str, description: str, render: Callable[[str], str]
+    ) -> UUID:
+        """Write a Playbook Extraction's result as an unpublished draft and return its Skill.
+
+        ``render`` receives the target's mount slug and returns ``SKILL.md``. An
+        existing target gets its next draft; if it was deleted, or none was named, a new
+        custom lineage is created, renamed with a suffix when the name was taken since.
+        The caller's run was authorized for ``skill.manage`` when it started.
+        """
+        if skill_id is not None:
+            skill = self.repository.get_by_id_for_org(skill_id, org_id)
+            if skill is not None:
+                if skill.organization_id != org_id or skill.agent_id is not None or skill.source == SkillSource.AAI_CLI:
+                    raise PlaybookTargetUnavailable()
+                if self.repository.get_draft(skill.id) is not None:
+                    raise PlaybookDraftConflict()
+                latest = self.repository.get_latest_version(skill.id)
+                providers = latest.required_providers if latest and latest.required_providers else []
+                try:
+                    self.repository.save_new_draft(
+                        skill.id,
+                        self._playbook_files(render(skill.slug)),
+                        description=description,
+                        required_providers=[p.value if hasattr(p, "value") else p for p in providers],
+                    )
+                except IntegrityError:
+                    raise PlaybookDraftConflict() from None
+                return skill.id
+        skill = Skill(
+            organization_id=org_id,
+            name=self._allocate_playbook_name(name, org_id),
+            slug=(slug := self._allocate_slug(name, org_id)),
+            description=description,
+            root_dir=slug,
+            entry_path=DEFAULT_ENTRY_PATH,
+            source=SkillSource.CUSTOM,
+            required_providers=[],
+        )
+        self._save_new_skill(skill)
+        self.repository.save_new_draft(
+            skill.id, self._playbook_files(render(slug)), description=description, required_providers=[]
+        )
+        return skill.id
+
+    def _playbook_files(self, content: str) -> list[tuple[str, str]]:
+        try:
+            return validate_files([(DEFAULT_ENTRY_PATH, content)])
+        except ValueError:
+            raise PlaybookTargetUnavailable() from None
+
+    def _allocate_playbook_name(self, base: str, org_id: UUID) -> str:
+        taken = {s.name for s in self.repository.find_org_scoped(org_id)}
+        candidate, suffix = base, 2
+        while candidate in taken:
+            candidate = f"{base} ({suffix})"
+            suffix += 1
+        return candidate
+
+    def require_available_organization_skill_name(self, org_id: UUID, name: str) -> None:
+        if name in {s.name for s in self.repository.find_org_scoped(org_id)}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A skill with this name already exists in this organization",
+            )
 
     def fork_skill(self, skill_id: UUID, context: CurrentUserContext) -> SkillDetailRead:
         """Create an independent Organization Skill draft from a visible source version."""

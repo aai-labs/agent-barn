@@ -18,6 +18,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+import { PlaybookProvenance } from "@/features/playbooks/components/playbook-provenance";
+
 import { useSkillDraft } from "../hooks/use-skill-draft";
 import { useSkillFiles } from "../hooks/use-skill-files";
 import { useSkillVersions } from "../hooks/use-skill-versions";
@@ -148,7 +150,7 @@ export function SkillDetailPage({
 
   if (isLoading) {
     return (
-      <div className="af-page">
+      <div>
         <div className="af-card px-6 py-8 animate-pulse">
           <div className="h-6 w-56 rounded-md mb-3" style={{ background: "var(--bg-soft)" }} />
           <div className="h-3 w-72 rounded-md" style={{ background: "var(--bg-soft)" }} />
@@ -159,7 +161,7 @@ export function SkillDetailPage({
 
   if (error || !detail) {
     return (
-      <div className="af-page">
+      <div>
         <Link
           href={skillsHref}
           className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
@@ -424,7 +426,7 @@ export function SkillDetailPage({
               : null;
 
   return (
-    <div className="af-page">
+    <div>
       <Link
         href={skillsHref}
         className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
@@ -477,6 +479,14 @@ export function SkillDetailPage({
           ) : null}
         </div>
       </div>
+
+      <PlaybookProvenance
+        skillId={skillId}
+        skillName={detail.name}
+        publishedVersion={detail.version ?? null}
+        enabled={scope.kind === "organization" && canEdit}
+        hasDraft={detail.hasDraft}
+      />
 
       <div className="flex gap-8 items-start flex-col lg:flex-row">
         <SkillDetailSidebar activeSection={section} onSectionChange={setSection} />

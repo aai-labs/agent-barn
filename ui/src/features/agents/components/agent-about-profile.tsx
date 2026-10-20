@@ -22,6 +22,7 @@ import { SKILL_PROVIDER_LABELS } from "@/features/skills/utils";
 import { useAgentTemplate } from "../hooks/use-agent-template";
 import type { Agent, AgentAssignedSkill, AgentSecretRead, CommandApprovalMode } from "../schemas";
 import { canAgent, currentModelOf, formatModelName, turnLimitLabel } from "../utils";
+import { AgentAvatar } from "./agent-avatar";
 import { ModelSourceBadge } from "./model-source-badge";
 
 const RUNTIME_LABELS = { hermes: "Hermes", openclaw: "OpenClaw" } as const;
@@ -47,7 +48,18 @@ function formatAgo(value: string): string | null {
 }
 
 /** Everything on this tab that describes the Agent itself, above its spend. */
-export function AgentAboutProfile({ agent }: { agent: Agent }) {
+export function AgentAboutProfile({
+  agent,
+  profileHeader = false,
+}: {
+  agent: Agent;
+  /**
+   * Open the Overview with the Agent's avatar, blueprint and description, and leave out
+   * what the page already shows elsewhere (the path bar names the Agent and shows its
+   * runtime, model and status).
+   */
+  profileHeader?: boolean;
+}) {
   const params = useParams();
   const orgId = typeof params?.orgId === "string" ? params.orgId : null;
   const configurationHref = (section: string) =>
@@ -55,7 +67,11 @@ export function AgentAboutProfile({ agent }: { agent: Agent }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <OverviewSection agent={agent} configurationHref={configurationHref} />
+      <OverviewSection
+        agent={agent}
+        configurationHref={configurationHref}
+        profileHeader={profileHeader}
+      />
       <SkillsSection agent={agent} orgId={orgId} configurationHref={configurationHref} />
       <div className="grid gap-4 lg:grid-cols-2">
         <MessagingSection agent={agent} configurationHref={configurationHref} />
@@ -70,9 +86,11 @@ type SectionHrefs = (section: string) => string;
 function OverviewSection({
   agent,
   configurationHref,
+  profileHeader,
 }: {
   agent: Agent;
   configurationHref: SectionHrefs;
+  profileHeader: boolean;
 }) {
   // One pinned version, not the configuration history: the Agent already
   // carries the pinned version number, so only the display name and
@@ -82,15 +100,90 @@ function OverviewSection({
   const isHermes = agent.agentType === "hermes";
   const hiredAgo = formatAgo(agent.createdAt);
 
+  const configurationLink = (
+    <Link href={configurationHref("profile")} className="af-btn af-btn-sm">
+      Configuration
+    </Link>
+  );
+  const blueprint = (
+    <>
+      <span className="truncate">{template?.templateName || agent.templateKey}</span>
+      <span className="text-[0.78rem] tabular-nums" style={{ color: "var(--ink-4)" }}>
+        v{agent.templateVersion}
+      </span>
+      {agent.templatePinType === "override" && <Badge variant="accent">Customised</Badge>}
+    </>
+  );
+  const facts = (
+    <dl className="m-0 grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+      {!profileHeader && (
+        <>
+          <Fact label="Runtime">{RUNTIME_LABELS[agent.agentType]}</Fact>
+          <Fact label="Model">
+            <span className="font-mono text-[0.84rem]">
+              {formatModelName(currentModelOf(agent)) || "—"}
+            </span>
+            <ModelSourceBadge source={agent.modelSource} />
+          </Fact>
+          <Fact label="Blueprint">{blueprint}</Fact>
+        </>
+      )}
+      <Fact label="Command approval">
+        {isHermes ? APPROVAL_LABELS[agent.approvalMode] : "Full access — no approval prompts"}
+      </Fact>
+      {isHermes && (
+        <Fact label="Verbose mode">
+          {agent.verboseMode ? "Shows progress while working" : "Only the final reply is sent"}
+        </Fact>
+      )}
+      {isHermes && <Fact label="Turn limit">{turnLimitLabel(agent)}</Fact>}
+      <Fact label="Hired">
+        {formatDay(agent.createdAt)}
+        {hiredAgo && (
+          <span className="text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
+            {hiredAgo}
+          </span>
+        )}
+      </Fact>
+    </dl>
+  );
+
+  if (profileHeader) {
+    // The Agent's own card: who it is (its blueprint and what that blueprint does),
+    // then how it is set up beyond what the top bar already says.
+    return (
+      <section className="af-card p-5" data-testid="agent-about-overview" aria-label="Overview">
+        <div className="flex items-start gap-5">
+          <AgentAvatar agent={agent} size="xl" />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <h2
+                className="m-0 flex min-w-0 flex-wrap items-center gap-2 text-[1.125rem] font-semibold"
+                style={{ color: "var(--ink)" }}
+              >
+                {blueprint}
+              </h2>
+              {configurationLink}
+            </div>
+            {template?.description && (
+              <p className="m-0 mt-1.5 max-w-[70ch] text-[13.5px] leading-relaxed" style={{ color: "var(--ink-2)" }}>
+                {template.description}
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="mt-5 pt-4" style={{ borderTop: "1px solid var(--line)" }}>
+          {facts}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <Section
       title="Overview"
       description={`How ${agent.name} is set up right now.`}
-      action={
-        <Link href={configurationHref("profile")} className="af-btn af-btn-sm">
-          Configuration
-        </Link>
-      }
+      action={configurationLink}
       testId="agent-about-overview"
     >
       {template?.description && (
@@ -99,39 +192,7 @@ function OverviewSection({
         </p>
       )}
 
-      <dl className="m-0 grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Fact label="Runtime">{RUNTIME_LABELS[agent.agentType]}</Fact>
-        <Fact label="Model">
-          <span className="font-mono text-[0.84rem]">
-            {formatModelName(currentModelOf(agent)) || "—"}
-          </span>
-          <ModelSourceBadge source={agent.modelSource} />
-        </Fact>
-        <Fact label="Blueprint">
-          <span className="truncate">{template?.templateName || agent.templateKey}</span>
-          <span className="text-[0.78rem] tabular-nums" style={{ color: "var(--ink-4)" }}>
-            v{agent.templateVersion}
-          </span>
-          {agent.templatePinType === "override" && <Badge variant="accent">Customised</Badge>}
-        </Fact>
-        <Fact label="Command approval">
-          {isHermes ? APPROVAL_LABELS[agent.approvalMode] : "Full access — no approval prompts"}
-        </Fact>
-        {isHermes && (
-          <Fact label="Verbose mode">
-            {agent.verboseMode ? "Shows progress while working" : "Only the final reply is sent"}
-          </Fact>
-        )}
-        {isHermes && <Fact label="Turn limit">{turnLimitLabel(agent)}</Fact>}
-        <Fact label="Hired">
-          {formatDay(agent.createdAt)}
-          {hiredAgo && (
-            <span className="text-[0.78rem]" style={{ color: "var(--ink-4)" }}>
-              {hiredAgo}
-            </span>
-          )}
-        </Fact>
-      </dl>
+      {facts}
     </Section>
   );
 }

@@ -64,7 +64,7 @@ test.describe("Agent configuration page", () => {
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
     await expect(configurationPage.profileHeading()).toBeVisible();
 
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(page).toHaveURL(/section=override/);
 
     await page.reload();
@@ -157,7 +157,7 @@ test.describe("Agent configuration page", () => {
     await expect(configurationPage.profileHeading()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Runtime & deployment" })).toBeVisible();
 
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(page.getByRole("heading", { name: "No active override" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
     await configurationPage.startDraftButton().click();
@@ -176,14 +176,14 @@ test.describe("Agent configuration page", () => {
     await expect(page.getByText("A private Agent-owned configuration based on the source template below.")).toBeVisible();
     await expect(page.getByText("Published by")).toBeVisible();
     await expect(page.getByText("Template key").last()).toBeVisible();
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /Maya.*v1.*Agent override/i }).click();
     await configurationPage.applyButton().click();
     await expect(configurationPage.applyConfirmationButton()).toBeVisible();
     await configurationPage.applyConfirmationButton().click();
     await expect(configurationPage.applyButton()).toBeDisabled();
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(page.getByRole("heading", { name: "No override draft" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create new draft" })).toBeVisible();
   });
@@ -222,7 +222,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
 
     await expect(page.getByRole("heading", { name: "Override draft" })).toBeVisible();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
@@ -310,7 +310,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await expect(page.getByText(/newer Platform source version \(v2\)/)).toBeVisible();
     await configurationPage.versionSelect().click();
     await expect(page.getByText("Platform update").first()).toBeVisible();
@@ -319,7 +319,7 @@ test.describe("Agent configuration page", () => {
     await configurationPage.applyConfirmationButton().click();
     await expect(configurationPage.applyButton()).toBeDisabled();
 
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(configurationPage.draftHeading()).toBeVisible();
     await expect(configurationPage.artifact("SOUL.md").last()).toHaveValue("# Local draft change");
   });
@@ -371,7 +371,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2.*Organization update/i }).click();
     await configurationPage.applyButton().click();
@@ -402,10 +402,10 @@ test.describe("Agent configuration page", () => {
     await dataSupport.agents.interceptStartAgentRequest();
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Agent-owned override").click();
+    await configurationPage.sectionLink("Agent-owned override").click();
     await expect(page.getByRole("button", { name: "Create override", exact: true })).toBeVisible();
 
-    await configurationPage.sectionButton("Profile").click();
+    await configurationPage.sectionLink("Profile").click();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Agent name").fill("Maya running");
 
@@ -441,7 +441,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.skills.interceptGetAgentSkillsRequest();
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
 
     const section = page.locator('section[aria-label="Skills"]');
     await expect(section.getByPlaceholder("Search skills…")).toBeVisible();
@@ -481,7 +481,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.skills.interceptGetAgentSkillsRequest();
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
 
     const section = page.locator('section[aria-label="Skills"]');
     const applyButton = section.getByRole("button", { name: "Apply", exact: true });
@@ -521,7 +521,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
     await expect(page.getByText("paged-skill-0", { exact: true })).toBeVisible();
 
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
@@ -552,7 +552,7 @@ test.describe("Agent configuration page", () => {
     await dataSupport.skills.interceptGetAgentSkillsRequest();
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
     const search = page.getByPlaceholder("Search skills…");
     await expect(search).toBeVisible();
     await expect.poll(() => skillRequests.length).toBe(1);
@@ -612,7 +612,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
     await expect(page.getByRole("combobox", { name: "Version for my-tool" })).toHaveText("Version v1");
     await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
 
@@ -725,7 +725,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
     await configurationPage.applyButton().click();
@@ -764,7 +764,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
     await configurationPage.applyButton().click();
@@ -795,7 +795,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
 
@@ -830,7 +830,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
 
@@ -869,7 +869,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
 
@@ -899,7 +899,7 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Template selection").click();
+    await configurationPage.sectionLink("Template selection").click();
     await configurationPage.versionSelect().click();
     await page.getByRole("option", { name: /v2/ }).click();
 
@@ -924,14 +924,63 @@ test.describe("Agent configuration page", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Skills").click();
+    await configurationPage.sectionLink("Skills").click();
 
     const versionSelect = page.getByRole("combobox", { name: "Version for my-tool" });
     await expect(versionSelect).toBeDisabled();
     await expect(versionSelect).toHaveAttribute("title", /Change it in the Template section/);
   });
 
-  test.describe("Gmail", () => {
+  test.describe("Gmail sign-in is not offered while the Google app is unverified", () => {
+    async function openConfiguration(page: Page, agent: Record<string, unknown>) {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED", ...agent } });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      await dataSupport.skills.interceptGetAgentSkillsRequest({ body: [mockGmailSkill, mockCustomSkill] });
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      return configurationPage;
+    }
+
+    test("offers Gmail with an app password but not Gmail sign-in", async ({ page }) => {
+      const configurationPage = await openConfiguration(page, {});
+      await configurationPage.sectionLink("Integrations").click();
+      const section = page.locator('section[aria-label="Integrations"]');
+      await section.getByRole("button", { name: "Edit", exact: true }).click();
+
+      await expect(section.getByRole("button", { name: "Gmail (app password)", exact: true })).toBeVisible();
+      await expect(section.getByRole("button", { name: "Gmail", exact: true })).toHaveCount(0);
+      await expect(section.getByRole("button", { name: "Google Workspace", exact: true })).toBeVisible();
+    });
+
+    test("does not offer the skill that needs Gmail sign-in", async ({ page }) => {
+      const configurationPage = await openConfiguration(page, { skills: [] });
+      await configurationPage.sectionLink("Skills").click();
+      const section = page.locator('section[aria-label="Skills"]');
+
+      await expect(section.getByText(mockCustomSkill.name, { exact: true })).toBeVisible();
+      await expect(section.getByText(mockGmailSkill.name, { exact: true })).toHaveCount(0);
+    });
+
+    test("still shows a Gmail sign-in an Agent already has", async ({ page }) => {
+      const configurationPage = await openConfiguration(page, {
+        secrets: [{ provider: "gmail", secret_name: "Gmail credential", source: "agent_secret" }],
+      });
+      await configurationPage.sectionLink("Integrations").click();
+      const section = page.locator('section[aria-label="Integrations"]');
+      await section.getByRole("button", { name: "Edit", exact: true }).click();
+
+      await expect(section.locator("summary").filter({ hasText: "Gmail" })).toBeVisible();
+    });
+  });
+
+  // The one-click Gmail flow below is kept for when the Google app is verified; it is not
+  // offered until then (see `offered` on the gmail provider in src/features/agents/integrations.ts).
+  // Re-enable these tests when that flag is removed.
+  test.describe.skip("Gmail", () => {
     // Stands in for Google: the authorize URL points the popup straight at our callback,
     // which hands the code back to the page. Records what the page sent at each step.
     async function mockGoogleSignIn(page: Page) {
@@ -1000,7 +1049,7 @@ test.describe("Agent configuration page", () => {
       const sent = await mockGoogleSignIn(page);
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Integrations").click();
+      await configurationPage.sectionLink("Integrations").click();
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
       await section.getByRole("button", { name: "Gmail", exact: true }).click();
@@ -1054,7 +1103,7 @@ test.describe("Agent configuration page", () => {
       const sent = await mockGoogleSignIn(page);
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Skills").click();
+      await configurationPage.sectionLink("Skills").click();
       const section = page.locator('section[aria-label="Skills"]');
       await section.getByRole("button", { name: "Add", exact: true }).click();
       await section.getByRole("button", { name: "Authenticate with Google" }).click();
@@ -1114,6 +1163,77 @@ test.describe("Agent configuration page", () => {
         await expect(field).toHaveAttribute("data-lpignore", "true");
         await expect(field).toHaveAttribute("data-form-type", "other");
       }
+    });
+  });
+
+  test.describe("Gmail (app password)", () => {
+    const savedIsolation = {
+      desired: true, applied: null, last_verified: null, reconnect_required: false, generation: null, pending: true,
+      switch_available: false, supported_modes: ["isolated"],
+      direct_description: "An app password cannot be limited to reading, so it is never given to this Agent.",
+      isolated_description: "The app password stays outside this Agent; Agent Barn reads the inbox for it, read-only.",
+    };
+
+    async function openIntegrations(page: Page, secrets: unknown[]) {
+      const dataSupport = new DataSupport(page);
+      const configurationPage = new AgentConfigurationPage(page);
+      await dataSupport.auth.interceptRefreshRequest();
+      await dataSupport.users.interceptGetUserContextRequest();
+      await dataSupport.users.interceptGetOrganizationsRequest();
+      await dataSupport.agents.interceptGetAgentRequest({ body: { ...mockAgent, status: "STOPPED", secrets } });
+      await dataSupport.agents.interceptGetAgentConfigurationRequest();
+      const sent: { patchBody?: Record<string, unknown>; isolation: unknown[] } = { isolation: [] };
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+        if (route.request().method() !== "PATCH") return route.fallback();
+        sent.patchBody = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({ json: { ...mockAgent, status: "STOPPED", secrets: [
+          { provider: "gmail_app_password", secret_name: "Gmail app password", source: "agent_secret", isolation: savedIsolation },
+        ] } });
+      });
+      await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}/integrations/gmail_app_password/isolation`, async (route) => {
+        sent.isolation.push(route.request().postDataJSON());
+        await route.fulfill({ json: { ...mockAgent, status: "STOPPED" } });
+      });
+      await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
+      await configurationPage.sectionLink("Integrations").click();
+      const section = page.locator('section[aria-label="Integrations"]');
+      await section.getByRole("button", { name: "Edit", exact: true }).click();
+      return { section, sent };
+    }
+
+    test("connects with an address and app password, always isolated", async ({ page }) => {
+      const { section, sent } = await openIntegrations(page, []);
+      await section.getByRole("button", { name: "Gmail (app password)", exact: true }).click();
+
+      await expect(section.getByText("myaccount.google.com/apppasswords", { exact: false })).toBeVisible();
+      const isolation = section.getByRole("switch", { name: "Gmail (app password) isolation" });
+      await expect(isolation).toBeChecked();
+      await expect(isolation).toBeDisabled();
+      await expect(section.getByText("The app password stays outside this Agent", { exact: false })).toBeVisible();
+
+      await section.getByPlaceholder("you@gmail.com").fill("someone@gmail.com");
+      await section.getByPlaceholder("abcd efgh ijkl mnop").fill("abcd efgh ijkl mnop");
+      await section.getByRole("button", { name: "Apply", exact: true }).click();
+      await page.getByRole("dialog").getByRole("button", { name: "Apply", exact: true }).click();
+
+      await expect.poll(() => sent.patchBody).toBeDefined();
+      expect(sent.patchBody?.secrets).toEqual([
+        { provider: "gmail_app_password", content: { email: "someone@gmail.com", app_password: "abcd efgh ijkl mnop" } },
+      ]);
+      await expect.poll(() => sent.isolation).toEqual([{ isolated: true, restart: false }]);
+    });
+
+    test("a saved app password stays isolated with nothing to apply", async ({ page }) => {
+      const { section, sent } = await openIntegrations(page, [
+        { provider: "gmail_app_password", secret_name: "Gmail app password", source: "agent_secret", isolation: savedIsolation },
+      ]);
+      await page.locator("summary").filter({ hasText: "Gmail (app password)" }).click();
+
+      const isolation = section.getByRole("switch", { name: "Gmail app password isolation" });
+      await expect(isolation).toBeChecked();
+      await expect(isolation).toBeDisabled();
+      await expect(section.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+      expect(sent.isolation).toEqual([]);
     });
   });
 
@@ -1186,7 +1306,7 @@ test.describe("Agent configuration page", () => {
       await mockTeamsAndSetup(page, connections, access);
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Skills").click();
+      await configurationPage.sectionLink("Skills").click();
       const section = page.locator('section[aria-label="Skills"]');
       await section.getByRole("button", { name: "Add", exact: true }).click();
       return section;
@@ -1352,7 +1472,7 @@ test.describe("Agent configuration page", () => {
       await mockTeamsAndSetup(page, [teamsConnection]);
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Integrations").click();
+      await configurationPage.sectionLink("Integrations").click();
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
       await section.getByRole("button", { name: "SharePoint" }).click();
@@ -1551,7 +1671,7 @@ test.describe("Agent configuration page", () => {
       });
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Integrations").click();
+      await configurationPage.sectionLink("Integrations").click();
       const section = page.locator('section[aria-label="Integrations"]');
       await section.getByRole("button", { name: "Edit", exact: true }).click();
 
@@ -1582,7 +1702,7 @@ test.describe("Agent configuration page", () => {
       });
 
       await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-      await configurationPage.sectionButton("Danger zone").click();
+      await configurationPage.sectionLink("Danger zone").click();
       await page.getByRole("button", { name: "Retire Agent" }).click();
 
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
