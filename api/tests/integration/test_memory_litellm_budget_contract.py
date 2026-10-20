@@ -17,6 +17,8 @@ from api.tests.helpers.litellm_memory_budget import MASTER_KEY, pinned_litellm_b
 from api.tests.integration.test_memory_team_budget import request, setup
 from api.tests.steps.agent_memory import agent_memory_api_setup
 
+pytestmark = pytest.mark.xdist_group("heavy_containers")
+
 
 def test_memory_and_runtime_keys_share_the_real_litellm_team_cutoff(monkeypatch):
     with given(agent_memory_api_setup(pinned_litellm_budget_is_running())) as context:

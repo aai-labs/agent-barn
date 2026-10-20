@@ -20,6 +20,7 @@ import {
   Wallet,
   Wrench,
   type LucideIcon,
+  Workflow,
 } from "lucide-react";
 
 import type { AgentPageTab } from "@/features/agents/agent-page-tabs";
@@ -182,6 +183,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
   "tool-calls": Wrench,
   logs: SquareTerminal,
   memory: Brain,
+  workflows: Workflow,
   playbooks: BookOpen,
   activity: Activity,
   costs: Wallet,
@@ -192,7 +194,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
 export const AGENT_TAB_GROUPS: { key: string; label?: string; tabs: AgentPageTab[] }[] = [
   // The Overview (the About section) opens the Agent, so it leads the list.
   { key: "talk", tabs: ["about", "chat", "conversations", "memory"] },
-  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "playbooks"] },
+  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "playbooks"] },
   { key: "health", label: "Health", tabs: ["activity", "costs", "resource-usage"] },
 ];
 

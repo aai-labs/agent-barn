@@ -15,11 +15,13 @@ import {
   visibleAgentConfigurationSections,
 } from "@/features/agents/components/agent-configuration-utils";
 import type { Agent } from "@/features/agents/schemas";
+import { canAgent } from "@/features/agents/utils";
 import {
   ORGANIZATION_SETTINGS_ICONS,
   visibleOrganizationSettingsSections,
 } from "@/features/organizations/components/organization-settings-utils";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
+import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 import {
   PLATFORM_SETTINGS_SECTIONS,
   type PlatformSettingsSectionKey,
@@ -60,6 +62,11 @@ export function useContextPanel(): ContextPanelModel | null {
   const { role, canManage, selectedOrganization } = useActiveOrgRole();
   const agentRoute = parseAgentRoute(pathname);
   const agent = useCachedAgent(agentRoute?.agentId);
+  // The same capability read the Agent page makes, shared through the query cache.
+  const workflowCapabilities = useWorkflowCapabilities(
+    agentRoute?.agentId ?? "",
+    Boolean(agentRoute) && canAgent(agent, "agent.read"),
+  );
 
   if (pathname.startsWith(PLATFORM_BASE)) {
     return platformPanel(pathname, searchParams.get("section"));
@@ -100,7 +107,9 @@ export function useContextPanel(): ContextPanelModel | null {
       };
     }
 
-    const tabs = agent ? visibleAgentPageTabs(agent, role) : [];
+    const tabs = agent
+      ? visibleAgentPageTabs(agent, role, { workflowAuthoring: workflowCapabilities.data?.authoring === true })
+      : [];
     const requested = searchParams.get("tab") as AgentPageTab | null;
     // Only the Agent page itself has a selected section; its sub-pages (a connection,
     // a skill) are reached from settings and leave every section unselected.

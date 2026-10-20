@@ -3,6 +3,8 @@
 import subprocess
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import httpx
 
@@ -10,67 +12,79 @@ from api.core.config import get_config
 from api.tests.core.givenpy import LambdaWith
 from api.tests.helpers.hindsight_cost_bridge import IMAGE
 
+API_KEY = "viewer-contract-key"
 
-def pinned_hindsight_is_running():
+_running: dict[str, str] = {}
+
+
+@contextmanager
+def pinned_hindsight_container() -> Iterator[str]:
     """Runs Hindsight 0.10.2 with its embedded database and mock extraction model.
 
     The mock model turns each retained item into a few deterministic world facts, which
     is enough to exercise the real tag filter, total, search, and pagination SQL.
     """
+    if subprocess.run(["docker", "image", "inspect", IMAGE], check=False, capture_output=True).returncode:
+        subprocess.run(["docker", "pull", IMAGE], check=True, capture_output=True)
+    name = f"agentbarn-viewer-contract-{uuid.uuid4().hex[:8]}"
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name,
+                "-p",
+                "127.0.0.1::8888",
+                "-e",
+                "HINDSIGHT_ENABLE_CP=false",
+                "-e",
+                "HINDSIGHT_API_LLM_PROVIDER=mock",
+                "-e",
+                "HINDSIGHT_API_LLM_API_KEY=viewer-contract",
+                IMAGE,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        port = (
+            subprocess.run(["docker", "port", name, "8888/tcp"], check=True, capture_output=True, text=True)
+            .stdout.split(":")[-1]
+            .strip()
+        )
+        url = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 150
+        while time.monotonic() < deadline:
+            try:
+                if httpx.get(f"{url}/health", timeout=2).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(1)
+        else:
+            logs = subprocess.run(["docker", "logs", name], check=False, capture_output=True, text=True).stdout[-2000:]
+            raise AssertionError(f"Hindsight did not become healthy:\n{logs}")
+        _running["url"] = url
+        yield url
+    finally:
+        _running.pop("url", None)
+        subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
+
+
+def pinned_hindsight_is_running():
+    """Points the test at the file's shared Hindsight container from `pinned_hindsight_container`."""
 
     def step(context):
-        if subprocess.run(["docker", "image", "inspect", IMAGE], check=False, capture_output=True).returncode:
-            subprocess.run(["docker", "pull", IMAGE], check=True, capture_output=True)
-        name = f"agentbarn-viewer-contract-{uuid.uuid4().hex[:8]}"
         config = get_config()
         previous_url, previous_key = config.hindsight_base_url, config.hindsight_api_key
 
         def start():
-            subprocess.run(
-                [
-                    "docker",
-                    "run",
-                    "-d",
-                    "--name",
-                    name,
-                    "-p",
-                    "127.0.0.1::8888",
-                    "-e",
-                    "HINDSIGHT_ENABLE_CP=false",
-                    "-e",
-                    "HINDSIGHT_API_LLM_PROVIDER=mock",
-                    "-e",
-                    "HINDSIGHT_API_LLM_API_KEY=viewer-contract",
-                    IMAGE,
-                ],
-                check=True,
-                capture_output=True,
-            )
-            port = (
-                subprocess.run(["docker", "port", name, "8888/tcp"], check=True, capture_output=True, text=True)
-                .stdout.split(":")[-1]
-                .strip()
-            )
-            context.hindsight_url = f"http://127.0.0.1:{port}"
-            deadline = time.monotonic() + 150
-            while time.monotonic() < deadline:
-                try:
-                    if httpx.get(f"{context.hindsight_url}/health", timeout=2).status_code == 200:
-                        break
-                except httpx.HTTPError:
-                    pass
-                time.sleep(1)
-            else:
-                logs = subprocess.run(["docker", "logs", name], check=False, capture_output=True, text=True).stdout[
-                    -2000:
-                ]
-                subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
-                raise AssertionError(f"Hindsight did not become healthy:\n{logs}")
+            context.hindsight_url = _running["url"]
             config.hindsight_base_url = context.hindsight_url
-            config.hindsight_api_key = "viewer-contract-key"
+            config.hindsight_api_key = API_KEY
 
         def stop():
-            subprocess.run(["docker", "rm", "-f", name], check=False, capture_output=True)
             config.hindsight_base_url, config.hindsight_api_key = previous_url, previous_key
 
         return LambdaWith(start, stop)

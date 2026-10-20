@@ -104,6 +104,7 @@ class SyncProviderPlugin(ABC):
             folder_hint=self.folder_hint,
             connect_hint=self.connect_hint,
             location_noun=self.location_noun,
+            available=self.is_offered(),
             schema_version=self.schema_version,
             capabilities=sorted(self.capabilities, key=lambda item: item.value),
         )

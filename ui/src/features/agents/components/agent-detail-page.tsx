@@ -22,6 +22,8 @@ import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
 import { ActivityTab } from "./activity-tab";
 import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
+import { WorkflowsPage } from "@/features/workflows/components/workflows-page";
+import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 import { AgentPlaybooksTab } from "@/features/playbooks/components/agent-playbooks-tab";
 import { AboutTab } from "./about-tab";
@@ -45,7 +47,10 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { agent, isLoading, error, refetch } = useAgent(agentId);
   const canReadActivity = canAgent(agent, "activity.read");
   const { role } = useActiveOrgRole();
-  const tabs = visibleAgentPageTabs(agent, role);
+  const workflowCapabilities = useWorkflowCapabilities(agentId, canAgent(agent, "agent.read"));
+  const tabs = visibleAgentPageTabs(agent, role, {
+    workflowAuthoring: workflowCapabilities.data?.authoring === true,
+  });
   const canExtractPlaybooks = tabs.includes("playbooks");
   // The desktop path bar carries the Agent's lifecycle and Share actions; the page's own
   // copies wait for this check so the two never coexist.
@@ -69,6 +74,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     "range",
     parseAsString.withOptions({ history: "replace" }),
   );
+  const [, setWorkflow] = useQueryState("workflow", parseAsString.withOptions({ history: "replace" }));
 
   function selectTab(next: AgentPageTab) {
     void setTab(next);
@@ -76,9 +82,12 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     if (next !== "conversations") void setChannel(null);
     // likewise the time range, which only the resource usage tab reads
     if (next !== "resource-usage") void setUsageRange(null);
+    // and the open workflow, which only the workflows tab reads
+    if (next !== "workflows") void setWorkflow(null);
   }
 
-  const resolvedTab = tabs.includes(tab) ? tab : tabs[0];
+  // Overview is always visible, and a section the viewer cannot open falls back to it.
+  const resolvedTab = tabs.includes(tab) ? tab : DEFAULT_AGENT_TAB;
 
   const isRunning = agent?.status === "RUNNING";
   const isAgentWorking = isRunning && health?.status === "ok";
@@ -186,6 +195,9 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
+            {resolvedTab === "workflows" && orgId && (
+              <WorkflowsPage key={`${orgId}:${agent.id}`} agentId={agent.id} organizationId={orgId} embedded />
+            )}
             {resolvedTab === "playbooks" && canExtractPlaybooks && <AgentPlaybooksTab agent={agent} />}
             {resolvedTab === "activity" && <ActivityTab agent={agent} />}
             {resolvedTab === "costs" && <AgentCostsPanel agentId={agent.id} />}

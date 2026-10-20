@@ -9,6 +9,7 @@ export type AgentPageTab =
   | "tool-calls"
   | "logs"
   | "memory"
+  | "workflows"
   | "playbooks"
   | "activity"
   | "costs"
@@ -21,6 +22,7 @@ export const AGENT_PAGE_TABS: AgentPageTab[] = [
   "tool-calls",
   "logs",
   "memory",
+  "workflows",
   "playbooks",
   "activity",
   "costs",
@@ -34,6 +36,7 @@ export const AGENT_PAGE_TAB_LABELS: Record<AgentPageTab, string> = {
   "tool-calls": "Tool calls",
   logs: "Logs",
   memory: "Memory",
+  workflows: "Workflows",
   playbooks: "Playbooks",
   activity: "Activity",
   costs: "Costs",
@@ -51,6 +54,8 @@ export const DEFAULT_AGENT_TAB: AgentPageTab = "about";
 export function visibleAgentPageTabs(
   agent: Pick<Agent, "allowedActions"> | null | undefined,
   role: OrganizationRole | undefined,
+  /** Whether the platform offers workflow authoring to this Agent (its workflow capabilities). */
+  { workflowAuthoring = false }: { workflowAuthoring?: boolean } = {},
 ): AgentPageTab[] {
   const canReadActivity = canAgent(agent, "activity.read");
   const canReadCosts = canAgent(agent, "cost.read");
@@ -62,6 +67,9 @@ export function visibleAgentPageTabs(
     ...(canReadActivity
       ? (["chat", "conversations", "tool-calls", "logs", "memory"] as AgentPageTab[])
       : []),
+    // Workflows are part of the Agent itself, readable with agent.read, and only where the
+    // platform offers authoring.
+    ...(workflowAuthoring && canAgent(agent, "agent.read") ? (["workflows"] as AgentPageTab[]) : []),
     ...(canExtractPlaybooks ? (["playbooks"] as AgentPageTab[]) : []),
     // Every part of Activity needs activity.read: the runtime diagnostics on
     // their own, the usage sections together with cost.read. The tab itself
