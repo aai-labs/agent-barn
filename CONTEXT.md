@@ -443,3 +443,14 @@ _Avoid_: webhook
 - “Integration” is sometimes used for both the external service and its credential. Use **Integration** for the service and **Agent Secret** for the stored credential payload.
 - “Owner” names both an Organization Role and a default Agent Access Role. Use **Organization Owner** for tenant governance and **Agent Owner** for full authority over one Agent.
 - “Restore” names two unrelated actions. **Template Restore** seeds a Draft Template Version from an earlier published version and is additive — it never destroys anything. Restoring an **Agent Restore Point** replaces an Agent's volume contents in place and is destructive. Always qualify which one is meant; never write “restore” unqualified.
+
+**Workflow**:
+An Agent-owned repeatable plan, explicitly saved before execution. Its ordered
+steps describe goals, required inputs, completion criteria and preserved outputs.
+See [Agent workflows](docs/features/agent-workflows.md).
+_Avoid_: Agent Skill, native scheduled job
+
+**Workflow Version**:
+An immutable saved snapshot of a Workflow. Editing and saving appends a new
+version; a future run pins the version it starts with.
+_Avoid_: mutable draft, runtime session

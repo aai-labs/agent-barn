@@ -42,6 +42,7 @@ ORGANIZATION_DELETED = "organization.deleted"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
+PLATFORM_WORKFLOW_AUTHORING_CHANGED = "platform.workflow_authoring.changed"
 PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
 PLATFORM_PLAYBOOK_MODEL_CHANGED = "platform.playbook_model.changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
@@ -74,6 +75,14 @@ AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
+
+
+class PlatformWorkflowAuthoringChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    previous: bool
+    current: bool
+    actor_display: str
+    subject_display: str
 
 
 class PlatformMemoryModelChangedPayload(BaseModel):
@@ -889,6 +898,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_PLAYBOOK_MODEL_CHANGED,
             schema_version=1,
             payload_model=PlatformPlaybookModelChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_WORKFLOW_AUTHORING_CHANGED,
+            schema_version=1,
+            payload_model=PlatformWorkflowAuthoringChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )

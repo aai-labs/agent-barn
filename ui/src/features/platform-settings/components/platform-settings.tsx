@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpenCheck, Brain, Sparkles } from "lucide-react";
+import { BookOpenCheck, Brain, Sparkles, Workflow } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
@@ -8,12 +8,18 @@ import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { PlatformMemorySettings } from "@/features/agent-memory/components/platform-memory-settings";
 import { PlatformTrialSettings } from "@/features/onboarding/components/platform-trial-settings";
 import { PlatformPlaybookSettings } from "@/features/playbooks/components/platform-playbook-settings";
+import { PlatformWorkflowSettings } from "@/features/workflows/components/platform-workflow-settings";
 
 const SECTIONS = {
   "agent-memory": {
     label: "Agent Memory",
     icon: <Brain size={15} aria-hidden />,
     description: "Long-term memory settings shared by every Agent and Organization.",
+  },
+  workflows: {
+    label: "Workflows",
+    icon: <Workflow size={15} aria-hidden />,
+    description: "Workflow authoring shared by every Agent and Organization.",
   },
   playbooks: {
     label: "Playbooks",
@@ -70,6 +76,7 @@ export function PlatformSettings() {
         description={section.description}
       >
         {active === "agent-memory" && <PlatformMemorySettings />}
+        {active === "workflows" && <PlatformWorkflowSettings />}
         {active === "playbooks" && <PlatformPlaybookSettings />}
         {active === "trials" && <PlatformTrialSettings />}
       </SettingsPageLayout>
