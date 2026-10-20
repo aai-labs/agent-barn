@@ -37,8 +37,14 @@ export class PlatformResourceUsagePage {
     await this.page.getByRole("option", { name: label }).click();
   }
 
+  /** A destination on the navigation rail. */
   navLink(name: string): Locator {
-    return this.page.locator("header nav").getByRole("link", { name, exact: true });
+    return this.page.getByRole("navigation", { name: "Main" }).getByRole("link", { name, exact: true });
+  }
+
+  /** A page in the navigation panel of the selected Platform area. */
+  panelLink(name: string): Locator {
+    return this.page.getByRole("complementary").getByRole("link", { name, exact: true });
   }
 
   capacityCard(kind: "limits-memory" | "limits-cpu" | "requests-memory" | "requests-cpu"): Locator {

@@ -142,10 +142,13 @@ export function LogsTab({ agent }: LogsTabProps) {
     );
   }
 
+  // A framed box: 32rem tall below the breakpoint, and on desktop as tall as the page leaves
+  // room for. The switch is CSS, so the stream and its scroll position survive the window
+  // crossing the breakpoint.
   return (
-    <div className="relative">
+    <div className="relative lg:flex lg:h-full lg:flex-col">
       <div
-        className="flex items-center justify-between px-4 py-2.5 rounded-t-xl"
+        className="flex flex-shrink-0 items-center justify-between px-4 py-2.5 rounded-t-xl"
         style={{ background: "var(--bg-soft)", borderBottom: "1px solid var(--line)" }}
       >
         <span className="text-[0.8125rem] font-medium" style={{ color: "var(--ink-2)" }}>
@@ -165,7 +168,7 @@ export function LogsTab({ agent }: LogsTabProps) {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="overflow-y-auto font-mono text-[12px] leading-relaxed px-4 py-3 rounded-b-xl"
+        className="h-[32rem] overflow-y-auto rounded-b-xl border border-t-0 px-4 py-3 font-mono text-[12px] leading-relaxed lg:h-auto lg:min-h-[32rem] lg:flex-1"
         style={{
           // The same surface the runtime diagnostics log blocks sit on. The
           // previous values named `--bg-deep`/`--ink-on-deep`, which are not
@@ -173,9 +176,7 @@ export function LogsTab({ agent }: LogsTabProps) {
           // terminal black that ignored the theme entirely.
           background: "var(--bg-elev)",
           color: "var(--ink-2)",
-          height: "32rem",
-          border: "1px solid var(--line)",
-          borderTop: "none",
+          borderColor: "var(--line)",
         }}
       >
         <div ref={sentinelRef} className="h-px" />

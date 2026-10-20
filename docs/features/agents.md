@@ -2,8 +2,9 @@
 
 The Home page shows a single first-Agent panel when the user's visible team is empty,
 with example use cases and direct ready-made/custom hiring choices. Once
-Agents exist, Home shows the Agent grid and its hire tile. Home owns its hire entry
-point; the top navigation keeps its hire action on other Organization pages.
+Agents exist, Home shows the Agent grid, its hire tile and a **Hire agent** button
+beside the "Your team" heading. Home is the only place hiring starts; the navigation
+has no hire action of its own.
 
 ## Hiring choices
 

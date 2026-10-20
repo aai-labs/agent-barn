@@ -3,40 +3,38 @@
 import type { ReactNode } from "react";
 
 /**
- * The two-column body of a settings surface: the sidebar rail beside one mounted
- * section, headed by the section's own name and description.
- *
- * The `14rem` track must stay equal to the sidebar's `lg:w-56`, and `minmax(0,1fr)`
- * is what stops a wide table or code block in the content column from pushing the
- * page sideways.
+ * The body of a settings surface: one mounted section, headed by its own name and
+ * description. The navigation panel lists the sections and the path bar names where you
+ * are, so the section's name is the page's heading. `min-w-0` is what stops a wide table
+ * or code block from pushing the page sideways.
  */
 export function SettingsPageLayout({
-  sidebar,
   heading,
   description,
+  aside,
   children,
 }: {
-  sidebar: ReactNode;
   heading: string;
   description: string;
+  /** Beside the heading, e.g. the viewer's access level. */
+  aside?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div className="grid gap-8 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start">
-      {sidebar}
-
-      <div className="min-w-0">
-        <div className="mb-4">
-          <h2 className="m-0 text-[1.25rem] font-semibold" style={{ color: "var(--ink)" }}>
+    <div className="min-w-0">
+      <div className="mb-6 flex flex-wrap items-start gap-x-4 gap-y-2">
+        <div className="min-w-0 flex-1">
+          <h1 className="m-0 text-[1.75rem] font-semibold tracking-[-0.02em]" style={{ color: "var(--ink)" }}>
             {heading}
-          </h2>
-          <p className="mb-0 mt-1 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
+          </h1>
+          <p className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-3)" }}>
             {description}
           </p>
         </div>
-
-        {children}
+        {aside}
       </div>
+
+      {children}
     </div>
   );
 }

@@ -78,7 +78,7 @@ test.describe("Settings · Agents", () => {
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
 
-    await expect(page.getByRole("button", { name: "Agents", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Agents", exact: true })).toHaveCount(0);
     // It falls back to the first section a Member can actually see.
     await expect(page.getByRole("heading", { name: "Templates" })).toBeVisible();
   });

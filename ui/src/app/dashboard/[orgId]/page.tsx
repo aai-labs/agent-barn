@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { AppErrorState } from "@/components/app-error-state";
@@ -56,7 +57,7 @@ export default function DashboardPage() {
   const displayedAgents = agents.filter((agent) => agent.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   return (
-    <div className="af-page">
+    <div>
       <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-4xl font-medium tracking-[-0.028em] leading-[1.18] m-0 mb-3" style={{ color: "var(--ink)" }}>
@@ -72,9 +73,25 @@ export default function DashboardPage() {
       <div className="mb-12">
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3 pb-4" style={{ borderBottom: "1px solid var(--line)" }}>
           <h2 className="text-lg font-semibold tracking-tight m-0" style={{ color: "var(--ink)" }}>Your team</h2>
-          {!isLoading && !error && agents.length > 0 && (
-            <Input className="w-48" type="search" aria-label="Search displayed teammates" placeholder="Search teammates…" value={search} onChange={(event) => setSearch(event.target.value)} />
-          )}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {!isLoading && !error && agents.length > 0 && (
+              <Input className="w-48" type="search" aria-label="Search displayed teammates" placeholder="Search teammates…" value={search} onChange={(event) => setSearch(event.target.value)} />
+            )}
+            {/* Hiring starts here, with the team; no other page offers it. An empty team
+                gets the first-agent welcome instead, so this would only compete with it. */}
+            {!isLoading && !error && agents.length > 0 && (
+              <button
+                type="button"
+                className="af-btn af-btn-primary"
+                onClick={() => {
+                  setHireChoice(undefined);
+                  setHireOpen(true);
+                }}
+              >
+                <Plus size={14} aria-hidden /> Hire agent
+              </button>
+            )}
+          </div>
         </div>
         {total > agents.length && !isLoading && !error && (
           <p className="mb-4 text-xs" style={{ color: "var(--ink-3)" }}>

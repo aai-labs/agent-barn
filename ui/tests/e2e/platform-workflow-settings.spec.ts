@@ -20,7 +20,7 @@ test("Platform Admin enables and disables workflow authoring with a persisted ch
   await new DataSupport(page).platformMemory.intercept();
   const settings = new PlatformWorkflowSettingsPage(page);
   await page.goto("/dashboard/platform/settings");
-  await page.getByRole("button", { name: "Workflows", exact: true }).click();
+  await page.getByRole("complementary").getByRole("link", { name: "Workflows", exact: true }).click();
   await expect(settings.toggle()).not.toBeChecked();
   await expect(settings.save()).toBeDisabled();
   await expect(page.getByText("Workflow execution is unavailable.")).toBeVisible();
@@ -37,7 +37,7 @@ test("Platform Admin enables and disables workflow authoring with a persisted ch
   await expect(settings.toggle()).not.toBeChecked();
   expect(mock.writes).toEqual([{ authoring_enabled: true }, { authoring_enabled: false }]);
   await page.screenshot({ path: test.info().outputPath("platform-workflow-settings.png"), fullPage: true });
-  await page.getByRole("button", { name: "Agent Memory", exact: true }).click();
+  await page.getByRole("complementary").getByRole("link", { name: "Agent Memory", exact: true }).click();
   await expect(page.getByTestId("saved-memory-model")).toBeVisible();
 });
 

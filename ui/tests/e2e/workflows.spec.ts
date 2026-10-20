@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
 import { WORKFLOW_ID } from "../fixtures/workflows";
@@ -9,6 +9,10 @@ import {
 } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { WorkflowDataSupport } from "../pages/data-support/workflow-data-support.po";
+
+/** A section of the Agent in the navigation panel beside the page. */
+const section = (page: Page, name: string) =>
+  page.getByRole("complementary").getByRole("link", { name, exact: true });
 
 test.describe("WF01 workflow authoring", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -35,10 +39,10 @@ test.describe("WF01 workflow authoring", () => {
       } else {
         await new WorkflowsPage(page).goto(MOCK_AGENT_ID, TEST_ORG_ID, WORKFLOW_ID);
       }
-      await expect(page.getByRole("button", { name: "About", exact: true })).toBeVisible();
+      await expect(section(page, "Overview")).toBeVisible();
       expect((await (await capability).json()).authoring).toBe(false);
-      await expect(page.getByRole("button", { name: "Workflows", exact: true })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "About", exact: true })).toHaveAttribute("data-active", "true");
+      await expect(section(page, "Workflows")).toHaveCount(0);
+      await expect(section(page, "Overview")).toHaveAttribute("aria-current", "page");
       await expect(page.getByRole("heading", { name: "Weekly pipeline report", exact: true })).toHaveCount(0);
       expect(support.reads).toEqual({ list: 0, detail: 0, versions: 0 });
     });
@@ -369,9 +373,7 @@ test.describe("WF01 workflow authoring", () => {
     await expect(
       page.getByText("We couldn’t load authoring availability"),
     ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Workflows", exact: true }),
-    ).toBeVisible();
+    await expect(section(page, "Workflows")).toBeVisible();
     await expect(page.getByLabel("Workflow name")).toHaveValue(
       "My edited report",
     );
@@ -569,6 +571,7 @@ test.describe("WF01 workflow authoring", () => {
   }) => {
     const otherId = "99999999-9999-4999-8999-999999999999";
     await support.enableOrganizationSwitch(otherId);
+    await new DataSupport(page).agents.interceptGetAgentsRequest();
     await support.intercept(MOCK_AGENT_ID, {
       saved: true,
       organizationId: TEST_ORG_ID,
@@ -585,9 +588,12 @@ test.describe("WF01 workflow authoring", () => {
     ).toBeVisible();
     await workflows.create("Private unsaved outcome");
     await workflows.switchOrganization("Globex");
-    await expect(page).toHaveURL(new RegExp(otherId));
+    // An Agent's page names the old Organization's Agent, so the switch lands on the team.
+    await expect(page).toHaveURL(new RegExp(`/dashboard/${otherId}$`));
     await expect(page.getByLabel("Your outcome")).toHaveCount(0);
-    await page.getByRole("button", { name: "Workflows", exact: true }).click();
+    // Back to the same Agent in the other Organization, in-app so the query cache stays.
+    await page.getByRole("link", { name: "View Maya", exact: true }).click();
+    await section(page, "Workflows").click();
     await expect(
       page.getByRole("heading", { name: "No workflows yet" }),
     ).toBeVisible();
@@ -892,25 +898,17 @@ test.describe("WF01 workflow authoring", () => {
     await expect(page).toHaveURL(
       new RegExp(`tab=workflows&workflow=${WORKFLOW_ID}`),
     );
-    await expect(
-      page.getByRole("button", { name: "Workflows", exact: true }),
-    ).toHaveAttribute("data-active", "true");
-    await expect(
-      page.getByRole("button", { name: "Memory", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "Workflows", exact: true }),
-    ).toHaveCount(0);
+    await expect(section(page, "Workflows")).toHaveAttribute("aria-current", "page");
+    await expect(section(page, "Memory")).toBeVisible();
     await expect(
       page.getByRole("heading", {
         name: "Weekly pipeline report",
         exact: true,
       }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "About", exact: true }).click();
-    await expect(page).toHaveURL(/tab=about/);
-    expect(new URL(page.url()).searchParams.has("workflow")).toBe(false);
-    await page.getByRole("button", { name: "Workflows", exact: true }).click();
+    await section(page, "Overview").click();
+    await expect(page).not.toHaveURL(/workflow=/);
+    await section(page, "Workflows").click();
     await expect(
       page.getByRole("button", { name: "Open Weekly pipeline report" }),
     ).toBeVisible();
@@ -925,12 +923,8 @@ test.describe("WF01 workflow authoring", () => {
     await support.intercept(MOCK_AGENT_ID, { saved: true, viewer: true });
     const workflows = new WorkflowsPage(page);
     await workflows.goto(MOCK_AGENT_ID, TEST_ORG_ID, WORKFLOW_ID);
-    await expect(
-      page.getByRole("button", { name: "Workflows", exact: true }),
-    ).toHaveAttribute("data-active", "true");
-    await expect(
-      page.getByRole("button", { name: "Memory", exact: true }),
-    ).toHaveCount(0);
+    await expect(section(page, "Workflows")).toHaveAttribute("aria-current", "page");
+    await expect(section(page, "Memory")).toHaveCount(0);
     await expect(
       page.getByRole("heading", {
         name: "Weekly pipeline report",

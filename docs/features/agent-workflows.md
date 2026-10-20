@@ -133,7 +133,7 @@ current deployment default still persists that explicit choice.
 
 ## UI and configuration
 
-The Agent’s Workflows tab opens `/dashboard/{orgId}/agents/{id}?tab=workflows`.
+The Agent’s Workflows tab, listed under Work in the Agent's navigation panel, opens `/dashboard/{orgId}/agents/{id}?tab=workflows`.
 The tab and its content appear only when the installation capability enables
 authoring. While disabled (or before capability loading first succeeds), Agent navigation omits
 Workflows, and direct/legacy workflow links render the Agent’s default visible

@@ -29,7 +29,7 @@ export function AgentCommunicationConnectionDetailPage({
 
   if (isLoadingAgent || connections.isPending) {
     return (
-      <div className="af-page animate-pulse">
+      <div className="animate-pulse">
         <div className="h-6 w-56 rounded-lg" style={{ background: "var(--bg-soft)" }} />
         <div className="mt-6 h-96 rounded-2xl" style={{ background: "var(--bg-soft)" }} />
       </div>
@@ -38,7 +38,7 @@ export function AgentCommunicationConnectionDetailPage({
 
   if (agentError || !agent) {
     return (
-      <div className="af-page">
+      <div>
         <AppErrorState error={agentError} title="We couldn't load this agent" onRetry={() => void refetchAgent()} />
       </div>
     );
@@ -46,7 +46,7 @@ export function AgentCommunicationConnectionDetailPage({
 
   if (connections.error) {
     return (
-      <div className="af-page">
+      <div>
         <AppErrorState error={connections.error} title="We couldn't load this connection" onRetry={() => void connections.refetch()} />
       </div>
     );
@@ -55,7 +55,7 @@ export function AgentCommunicationConnectionDetailPage({
   const connection = connections.data?.find((candidate) => candidate.id === connectionId);
   if (!connection) {
     return (
-      <div className="af-page">
+      <div>
         <h1 className="m-0 text-2xl font-semibold" style={{ color: "var(--ink)" }}>Connection not found</h1>
         <p style={{ color: "var(--ink-3)" }}>This messaging connection is unavailable or you no longer have access to it.</p>
       </div>
@@ -64,7 +64,7 @@ export function AgentCommunicationConnectionDetailPage({
 
   return (
     <div style={{ background: "var(--bg)" }}>
-      <main className="af-page">
+      <div>
         <Link
           href={`/dashboard/${agent.organizationId}/agents/${agent.id}/configuration?section=channels`}
           className="mb-6 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[0.8125rem] transition-colors hover:bg-[var(--bg-soft)]"
@@ -97,7 +97,7 @@ export function AgentCommunicationConnectionDetailPage({
           canEdit={canAgent(agent, "agent.update")}
           alwaysExpanded
         />
-      </main>
+      </div>
     </div>
   );
 }

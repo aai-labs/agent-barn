@@ -53,16 +53,16 @@ test.describe("Organization KPIs — navigation and access", () => {
 
     test("an owner finds KPIs right after Costs and opens the page", async ({ page }) => {
       await kpis.gotoHome();
-      await expect(kpis.inlineNavLink("Costs")).toBeVisible();
+      await expect(kpis.navLink("Costs")).toBeVisible();
 
-      const labels = await kpis.inlineNavLinks().allInnerTexts();
+      const labels = await kpis.navLinks().allInnerTexts();
       expect(labels.indexOf("KPIs")).toBe(labels.indexOf("Costs") + 1);
 
-      await kpis.inlineNavLink("KPIs").click();
+      await kpis.navLink("KPIs").click();
 
       await expect(page).toHaveURL(KPIS_URL);
       await expect(kpis.heading()).toBeVisible();
-      await expect(kpis.inlineNavLink("KPIs")).toHaveAttribute("aria-current", "page");
+      await expect(kpis.navLink("KPIs")).toHaveAttribute("aria-current", "page");
     });
 
     test("a member does not see the KPIs entry", async ({ page }) => {
@@ -70,8 +70,8 @@ test.describe("Organization KPIs — navigation and access", () => {
 
       await kpis.gotoHome();
 
-      await expect(kpis.inlineNavLink("Home")).toBeVisible();
-      await expect(kpis.inlineNavLink("KPIs")).toHaveCount(0);
+      await expect(kpis.navLink("Team")).toBeVisible();
+      await expect(kpis.navLink("KPIs")).toHaveCount(0);
       expect(page.url()).toContain(HOME_URL);
     });
 
@@ -95,7 +95,7 @@ test.describe("Organization KPIs — navigation and access", () => {
 
       await kpis.goto();
       await expect(page).toHaveURL(HOME_URL);
-      await expect(kpis.inlineNavLink("Home")).toBeVisible();
+      await expect(kpis.navLink("Team")).toBeVisible();
 
       expect(kpiReads).toEqual([]);
     });
@@ -104,28 +104,29 @@ test.describe("Organization KPIs — navigation and access", () => {
   test.describe("on a mobile viewport", () => {
     test.use({ viewport: { width: 375, height: 812 } });
 
-    test("an owner finds KPIs right after Costs in the navigation drawer", async ({ page }) => {
+    test("an owner finds KPIs first under More, after the bottom bar's Costs", async ({ page }) => {
       await kpis.gotoHome();
-      await kpis.openNavigationDrawer();
-      await expect(kpis.drawerLink("Costs")).toBeVisible();
+      await expect(kpis.navLink("Costs")).toBeVisible();
 
-      const labels = await kpis.drawerLinks().allInnerTexts();
-      expect(labels.indexOf("KPIs")).toBe(labels.indexOf("Costs") + 1);
+      await kpis.openMore();
+      const labels = await kpis.moreLinks().allInnerTexts();
+      expect(labels[0]).toBe("KPIs");
 
-      await kpis.drawerLink("KPIs").click();
+      await kpis.moreLink("KPIs").click();
 
       await expect(page).toHaveURL(KPIS_URL);
       await expect(kpis.heading()).toBeVisible();
     });
 
-    test("a member does not see the KPIs entry in the navigation drawer", async () => {
+    test("a member does not see the KPIs entry anywhere", async () => {
       await data.users.interceptGetUserContextRequest({ userContext: memberContext() });
 
       await kpis.gotoHome();
-      await kpis.openNavigationDrawer();
+      await expect(kpis.navLink("Team")).toBeVisible();
+      await expect(kpis.navLink("KPIs")).toHaveCount(0);
 
-      await expect(kpis.drawerLink("Home")).toBeVisible();
-      await expect(kpis.drawerLink("KPIs")).toHaveCount(0);
+      await kpis.openMore();
+      await expect(kpis.moreLink("KPIs")).toHaveCount(0);
     });
   });
 });

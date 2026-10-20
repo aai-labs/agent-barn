@@ -42,7 +42,7 @@ export function OrganizationsGrid() {
   });
 
   return (
-    <div className="af-page">
+    <div>
       <ListPageHeader
         title="Organizations"
         description="Platform view of all organizations."
