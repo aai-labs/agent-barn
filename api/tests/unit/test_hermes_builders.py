@@ -24,7 +24,7 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
     assert config["display"]["platforms"] == {}
-    assert config["plugins"]["enabled"] == ["telemetry-push"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-tasks"]
     assert "slack" not in config
     assert "telegram" not in config
     assert "discord" not in config
@@ -33,7 +33,7 @@ def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
 def test_native_slack_config_enables_the_observer_and_ignores_unknown_dms() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", native_slack=True)
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-tasks", "agentbarn-observer"]
     assert config["slack"]["unauthorized_dm_behavior"] == "ignore"
     assert config["platforms"]["slack"]["extra"]["markdown_blocks"] is True
     assert config["display"]["platforms"]["slack"]["tool_progress"] == "off"
@@ -93,7 +93,7 @@ def test_native_discord_config_enables_observer_and_maps_verbose_mode() -> None:
         discord_require_mention=False,
     )
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-tasks", "agentbarn-observer"]
     assert config["discord"] == {"require_mention": False, "thread_require_mention": False}
     assert config["display"]["platforms"]["discord"]["tool_progress"] == "off"
 
@@ -139,7 +139,7 @@ def test_native_telegram_config_ignores_unknown_dms() -> None:
         "litellm/gpt-5", "http://litellm:4000", telegram_settings={"group_policy": "open"}
     )
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-tasks", "agentbarn-observer"]
     assert config["telegram"] == {"unauthorized_dm_behavior": "ignore"}
     assert config["display"]["platforms"]["telegram"]["tool_progress"] == "off"
 
@@ -446,7 +446,7 @@ _AGENTBARN_TELEGRAM = AgentBarnTelegramRuntime(
 def test_agentbarn_telegram_points_hermes_at_the_proxy_and_closes_groups() -> None:
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", agentbarn_telegram=_AGENTBARN_TELEGRAM)
 
-    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-observer"]
+    assert config["plugins"]["enabled"] == ["telemetry-push", "agentbarn-tasks", "agentbarn-observer"]
     assert config["platforms"]["telegram"]["extra"] == {
         "base_url": "http://communications:8002/communications/v1/telegram/c0ffee/bot",
         "base_file_url": "http://communications:8002/communications/v1/telegram/c0ffee/file/bot",

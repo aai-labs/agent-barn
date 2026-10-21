@@ -37,6 +37,7 @@ _SCRIPTS = Path(__file__).parent.parent / "scripts" / "openclaw"
 _COMMON_SCRIPTS = _SCRIPTS.parent
 _TELEMETRY_PUSH = _SCRIPTS / "plugins" / "telemetry-push"
 _OBSERVER = _SCRIPTS / "plugins" / "agentbarn-observer"
+_TASKS_PLUGIN = _SCRIPTS / "plugins" / "agentbarn-tasks"
 
 # OpenClaw's gateway binds this port and its own `openclaw health` CLI resolves
 # the same value with no way to override it, so the runtime must not be moved
@@ -61,6 +62,9 @@ TELEMETRY_PUSH_PLUGIN_JSON: str = (_TELEMETRY_PUSH / "openclaw.plugin.json").rea
 OBSERVER_INDEX_JS: str = (_OBSERVER / "index.js").read_text()
 OBSERVER_PACKAGE_JSON: str = (_OBSERVER / "package.json").read_text()
 OBSERVER_PLUGIN_JSON: str = (_OBSERVER / "openclaw.plugin.json").read_text()
+TASKS_PLUGIN_INDEX_JS: str = (_TASKS_PLUGIN / "index.js").read_text()
+TASKS_PLUGIN_PACKAGE_JSON: str = (_TASKS_PLUGIN / "package.json").read_text()
+TASKS_PLUGIN_JSON: str = (_TASKS_PLUGIN / "openclaw.plugin.json").read_text()
 COMMUNICATIONS_RUNTIME_ADAPTER_PY: str = (_COMMON_SCRIPTS / "communications-runtime-adapter.py").read_text()
 RETIRE_MESSAGING_PY: str = (_COMMON_SCRIPTS / "retire-messaging.py").read_text()
 AGENT_TRIGGER_SERVER_PY: str = (_COMMON_SCRIPTS / "agent-trigger-server.py").read_text()
@@ -104,10 +108,11 @@ def _openclaw_config_core(
         # multi-user Agent would carry one person's private conversation into the next.
         "session": {"dmScope": "per-channel-peer"},
         "plugins": {
-            "allow": ["memory-core", "active-memory", "telemetry-push"],
+            "allow": ["memory-core", "active-memory", "telemetry-push", "agentbarn-tasks"],
             "load": {
                 "paths": [
                     "/home/node/.openclaw/local-plugins/telemetry-push",
+                    "/home/node/.openclaw/local-plugins/agentbarn-tasks",
                 ]
             },
             "slots": {"memory": "memory-core"},
@@ -128,6 +133,11 @@ def _openclaw_config_core(
                     },
                 },
                 "telemetry-push": {
+                    "enabled": True,
+                    "hooks": {"allowConversationAccess": True},
+                },
+                # Its turn hooks read the run and add context, so they need conversation access.
+                "agentbarn-tasks": {
                     "enabled": True,
                     "hooks": {"allowConversationAccess": True},
                 },
@@ -401,6 +411,9 @@ def build_config_map(
         data["agentbarn-observer-index.js"] = OBSERVER_INDEX_JS
         data["agentbarn-observer-package.json"] = OBSERVER_PACKAGE_JSON
         data["agentbarn-observer-plugin.json"] = OBSERVER_PLUGIN_JSON
+        data["agentbarn-tasks-index.js"] = TASKS_PLUGIN_INDEX_JS
+        data["agentbarn-tasks-package.json"] = TASKS_PLUGIN_PACKAGE_JSON
+        data["agentbarn-tasks-plugin.json"] = TASKS_PLUGIN_JSON
         data["communications-runtime-adapter.py"] = COMMUNICATIONS_RUNTIME_ADAPTER_PY
         data["agent-trigger-server.py"] = AGENT_TRIGGER_SERVER_PY
         data["retire-messaging.py"] = RETIRE_MESSAGING_PY

@@ -28,29 +28,27 @@ TASK_TOOL_INSTRUCTIONS = """
 
 ## Tasks
 
-Record your work as Tasks so the people you work for can follow it. Use
-`/usr/local/bin/agentbarn-task` through your terminal tool.
+Record your work as Tasks so the people you work for can follow it. Use the
+`agentbarn_task` tool. If the tool is not available, run
+`/usr/local/bin/agentbarn-task` through your terminal tool instead; it takes the
+same actions (`agentbarn-task --help`).
 
 When a request takes more than a quick answer (several steps, tools, files, or
 work that continues later), keep a Task for it:
 
-1. Run `agentbarn-task list --status open` and `agentbarn-task list --status in_progress`
-   first. If one of your Tasks already covers the request, keep using it rather
-   than opening another.
-2. Otherwise open one: `agentbarn-task create --title "<short title>" --description "<what was asked>"`.
-   It prints the Task as JSON; keep its `id`.
-3. Keep its status current: `agentbarn-task status <id> in_progress` when you
-   start, `done` when you finish, `failed` if you cannot finish. Statuses are
-   `open`, `in_progress`, `done` and `failed`.
-4. Add a note for each meaningful step, decision or problem, with the note on
-   standard input in a quoted heredoc:
-   `agentbarn-task note <id> <<'NOTE'` ... `NOTE`.
-5. Attach every file you produce for the request:
-   `agentbarn-task attach <id> <path>`. Use `--name` for a clearer file name.
-   `agentbarn-task show <id>` shows a Task with its notes and files.
+1. Check your open Tasks first (they are listed at the start of each turn, or
+   use the `list` action). If one already covers the request, keep using it
+   rather than opening another.
+2. Otherwise `create` one with a short title and a description of what was
+   asked. Keep the `id` it returns.
+3. Keep its status current: `in_progress` when you start, `done` when you
+   finish, `failed` if you cannot finish.
+4. Add a `note` for each meaningful step, decision or problem.
+5. `attach` every file you produce for the request. `show` gives a Task with its
+   notes and files.
 
 You can only see and change your own Tasks. Never put credentials or secrets in
-a Task, note or file. If a command fails, report its actual message: a file
-over the size limit is refused, and a failed command means nothing was recorded.
+a Task, note or file. If an action fails, report its actual message: a file
+over the size limit is refused, and a failed action means nothing was recorded.
 Simple questions and quick replies do not need a Task.
 """

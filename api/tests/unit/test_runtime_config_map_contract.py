@@ -129,3 +129,42 @@ def test_the_task_command_is_installed_on_the_agents_path(build):
     [item] = volume.config_map.items
     assert (mount.sub_path, mount.read_only) == (item.path, True)
     assert (item.key, item.mode) == ("agentbarn-task", 0o555)
+
+
+@pytest.mark.parametrize(
+    "builder,files",
+    [
+        (_hermes_config_map, {"agentbarn-tasks-plugin.yaml", "agentbarn-tasks-init.py"}),
+        (
+            _openclaw_config_map,
+            {"agentbarn-tasks-index.js", "agentbarn-tasks-package.json", "agentbarn-tasks-plugin.json"},
+        ),
+    ],
+)
+def test_every_agent_ships_the_tasks_plugin(builder, files):
+    assert files <= set(builder().data)
+
+
+@pytest.mark.parametrize("memory_enabled", [False, True])
+def test_hermes_enables_the_tasks_plugin(memory_enabled):
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000", memory_enabled=memory_enabled)
+    assert "agentbarn-tasks" in config["plugins"]["enabled"]
+
+
+@pytest.mark.parametrize("native_channels", [None, {"slack": {"enabled": True}}])
+def test_openclaw_loads_and_enables_the_tasks_plugin(native_channels):
+    plugins = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000", native_channels)["plugins"]
+    assert "agentbarn-tasks" in plugins["allow"]
+    assert "/home/node/.openclaw/local-plugins/agentbarn-tasks" in plugins["load"]["paths"]
+    assert plugins["entries"]["agentbarn-tasks"] == {"enabled": True, "hooks": {"allowConversationAccess": True}}
+
+
+@pytest.mark.parametrize(
+    "runtime,installed",
+    [
+        ("hermes", "/opt/data/plugins/agentbarn-tasks/__init__.py"),
+        ("openclaw", '/home/node/.openclaw/local-plugins/agentbarn-tasks"\n'),
+    ],
+)
+def test_start_script_installs_the_tasks_plugin(runtime, installed):
+    assert installed in (_SCRIPTS / runtime / "start.sh").read_text()
