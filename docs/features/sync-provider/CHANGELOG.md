@@ -1,8 +1,8 @@
 # Sync providers — change log
 
 Status: Active
-Epic: AF-383 — Connect an Organization to OneDrive
-Related context: [Sync providers](README.md), [ADR](../../adr/2026-10-16-sync-provider-plugin-seam.md), [Integrations](../integrations.md), [RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md), [epic guideline](../../guidelines/epics.md)
+Epic: AF-383 — Connect an Organization to OneDrive; AF-384 — Two-way file sync
+Related context: [Sync providers](README.md), [ADR: plugin seam](../../adr/2026-10-16-sync-provider-plugin-seam.md), [ADR: Agent file sync](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Integrations](../integrations.md), [RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md), [epic guideline](../../guidelines/epics.md)
 
 ## Current state
 
@@ -28,7 +28,68 @@ Acceptance criteria amendment: another Organization's caller gets **403**, not 4
 
 Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a generic sync provider seam, so Dropbox and Google Drive can be added as plugins; an Organization connects one provider at a time. See the [ADR](../../adr/2026-10-16-sync-provider-plugin-seam.md).
 
+### AF-384 — Two-way file sync
+
+- Delivered: Microsoft and runtime image verification (no code), and the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md). `CONTEXT.md` defines Agent Folder, File Sync and Sync Category. No file syncs yet.
+- Next, in this order, each as its own slice:
+  1. sync rules;
+  2. tables and repositories;
+  3. Graph file operations;
+  4. the `file_sync` capability, then OneDrive's implementation of it;
+  5. folder reconciliation;
+  6. the Sync Engine and its deployment;
+  7. Ingest file-sync routes;
+  8. remote change processing;
+  9. the in-pod helper;
+  10. builder and `start.sh` wiring;
+  11. pinned-image contracts;
+  12. disconnect;
+  13. docs consolidation;
+  14. an end-to-end run on local k3d against the test tenant.
+- Docs owed by the slice that makes them true:
+  - **this README:**
+    - the "Agent file sync" section, with folder reconciliation;
+    - "Adding a provider" step 3 for `file_sync`, with the capability;
+    - the Organization Member visibility limit, with the helper wiring;
+    - the disconnect section, with disconnect;
+  - **RBAC brief:**
+    - the Sync Engine as background work;
+    - Ingest file-sync traffic, alongside the memory gateway paragraph;
+    - the visibility limit;
+  - **[Agents](../agents.md):** delete stops sync, and a restore is followed on the next start;
+  - **[activity and ingest](../activity-and-ingest.md):** the new routes;
+  - **[runtime and deployment](../../architecture/runtime-and-deployment.md):** the engine and the new start step;
+  - **[operations](../../guidelines/operations.md):** the Make target and Helm values;
+  - **[INDEX](../../INDEX.md):** the new domain, engine and helper.
+- Blockers: none.
+
+Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
+- **Tables:** generic (`sync_agent_folder`, `sync_file`, `sync_upload`, `sync_operation`, `sync_activity`) instead of `onedrive_*`. The in-pod helper is `file-sync.py`, not `onedrive-sync.py`.
+- **Never in the provider:** "No path from `HERMES_EXCLUDED` / `OPENCLAW_EXCLUDED` ever appears" applies to credentials and runtime machinery. Template-rebuilt files (`SOUL.md`, `AGENTS.md`, `IDENTITY.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`) and `skills/` are mirrored read-only, with edits undone.
+- **Conflicts:** the user's version stays in the provider's version history. No `name (your edit YYYY-MM-DD).ext` copy is made. This also applies after an Agent Restore Point restore.
+- **Folders:** created, renamed and stopped by the Sync Engine's pass, not by an event handler for `agent.created`/`agent.updated`/`agent.deleted`. No new RBAC background-work exception is needed.
+- **Disallowed changes while stopped:** undos, restores of deleted files and re-uploads wait for the Agent's next start. "Within 2 minutes" applies to running Agents.
+- **Agent deletes:** an Agent deleting a file deletes it at the provider (recycle bin).
+- **Disconnect:** deletes the Agent folders and keeps the "Agent Barn" root.
+- **Accepted limit:** every Organization Member can read the Agent Folders, and edit work and memory files, at the provider.
+- **End-to-end run:** on local k3d against the test tenant instead of staging.
+- **Activity:** stored only. Its route and UI belong to the next ticket.
+
 ## Changes
+
+### 2026-10-21 — AF-384 — ADR and glossary
+
+- Delivered: [ADR 2026-10-21 — Agent files sync two ways through the Sync Provider](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md). It records:
+  - the ticket's four constraints;
+  - the maintainer's choices: version history instead of conflict copies, folders from the engine pass, and the generic capability;
+  - the accepted Organization Member visibility limit.
+- Changed:
+  - `CONTEXT.md` adds Agent Folder, File Sync and Sync Category.
+  - The Sync Provider Connection entry now says no Agent is given the provider's credentials, replacing "no Agent is given access to it".
+  - This log gains the AF-384 current state and acceptance criteria amendments.
+  - `docs/INDEX.md` routes the new ADR from the sync providers row and names AF-384 on this log's row.
+- Not changed yet: the README, RBAC brief, Agents, activity-and-ingest, runtime-and-deployment, operations and INDEX docs still describe current behaviour. The AF-384 current state above lists the slice that updates each one.
+- Verified: every relative link added in this slice resolves.
 
 ### 2026-10-21 — AF-384 — Microsoft and runtime image verification (no code)
 
