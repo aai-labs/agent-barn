@@ -20,11 +20,11 @@ test.describe("Platform Stats Page", () => {
     await dataSupport.platformStats.interceptGetAgentStatsRequest();
   });
 
-  test("renders the Overview and Activity sections for a platform admin", async () => {
+  test("renders the Overview and Activity sections for a platform admin", async ({ page }) => {
     await platformPage.goto();
 
-    await expect(platformPage.heading()).toBeVisible();
     await expect(platformPage.overviewHeading()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Platform", exact: true })).toHaveCount(0);
     await expect(platformPage.activityHeading()).toBeVisible();
   });
 

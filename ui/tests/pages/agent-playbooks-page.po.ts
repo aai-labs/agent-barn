@@ -15,8 +15,9 @@ export class AgentPlaybooksPage {
     await this.page.goto("/dashboard/platform/settings?section=playbooks");
   }
 
+  /** The Playbooks section in the navigation panel. */
   tab(): Locator {
-    return this.page.getByRole("button", { name: "Playbooks", exact: true });
+    return this.page.getByRole("complementary").getByRole("link", { name: "Playbooks", exact: true });
   }
 
   form(): Locator {

@@ -159,6 +159,42 @@ def test_empty_bindings_retain_persistent_sharepoint_cleanup_without_credentials
     assert_that("aai-cli-config.toml" in artifacts.files, is_(False))
 
 
+def _merkys_binding(base_url: str, isolated: bool) -> RuntimeBinding:
+    from api.domains.agents.models import MerkysContent
+
+    return RuntimeBinding(
+        SecretProvider.MERKYS,
+        MerkysContent(base_url=base_url, api_key="cb_onprem_key"),
+        select_egress_mode(SecretProvider.MERKYS, isolated=isolated),
+    )
+
+
+def test_on_prem_merkys_materializes_directly_with_the_key_header_and_store_secret():
+    artifacts = materialize_integrations([_merkys_binding("https://merkys.customer.example", False)], _CONTEXT)
+
+    profile = tomllib.loads(artifacts.files["aai-cli-config.toml"])["profiles"]["merkys-work"]
+    assert_that(profile["auth_type"], equal_to("api_key_header"))
+    assert_that(profile["base_url"], equal_to("https://merkys.customer.example"))
+    assert_that(artifacts.env["AAI_SECRET_MERKYS_API_KEY"], equal_to("cb_onprem_key"))
+    assert_that(artifacts.files["aai-cli-setup.sh"], contains_string("secrets set merkys.api_key"))
+    assert_that(json.dumps(artifacts.files), is_not(contains_string("cb_onprem_key")))
+
+
+def test_on_prem_merkys_cannot_be_switched_to_isolated():
+    with pytest.raises(ValueError):
+        materialize_integrations([_merkys_binding("https://merkys.customer.example", True)], _CONTEXT)
+
+
+def test_hosted_merkys_isolated_profile_points_at_the_gateway_and_holds_no_key():
+    artifacts = materialize_integrations([_merkys_binding("https://merkys.aai-labs.com", True)], _CONTEXT)
+
+    profile = tomllib.loads(artifacts.files["aai-cli-config.toml"])["profiles"]["merkys-work"]
+    assert_that(profile["base_url"], equal_to("http://credential-gateway:8003/gateway/v1/p/merkys"))
+    assert_that(profile["token_env"], equal_to(gateway_token_env_var(SecretProvider.MERKYS)))
+    assert_that("AAI_SECRET_MERKYS_API_KEY" in artifacts.env, is_(False))
+    assert_that(json.dumps({"env": artifacts.env, "files": artifacts.files}), is_not(contains_string("cb_onprem_key")))
+
+
 # --- Gmail app password: the gateway reads mail; the pod gets an aai-cli profile and a gateway token ---
 
 

@@ -94,8 +94,9 @@ export class AgentMemoryPage {
 
   // --- Memory viewer ---
 
+  /** The Memory section in the navigation panel. */
   tab(): Locator {
-    return this.page.getByRole("button", { name: "Memory", exact: true });
+    return this.page.getByRole("complementary").getByRole("link", { name: "Memory", exact: true });
   }
 
   viewer(): Locator {

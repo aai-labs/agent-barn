@@ -429,9 +429,9 @@ test.describe("Agent sharing", () => {
     await dashboard.goto();
     await expect(page.getByText("Maya")).toBeVisible();
 
-    const switcher = page.locator('button[aria-haspopup="listbox"]');
+    const switcher = page.getByRole("button", { name: /^Switch organization/ });
     await switcher.click();
-    await page.getByRole("listbox").getByRole("option", { name: /globex/i }).click();
+    await page.getByRole("menuitem", { name: /globex/i }).click();
 
     await expect(page).toHaveURL(new RegExp(ORG_B_ID));
     await expect(page.getByText("Aria")).toBeVisible();

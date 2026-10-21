@@ -526,10 +526,13 @@ def test_backfill_preserves_routes_shared_sources_and_gateway_tokens():
                 # Downgrading below the Gmail migrations deletes their credentials, so none are backfilled.
                 assert_that(
                     {p.provider: p.isolated for p in policies},
+                    # The round trip passes below the migration that adds Merkys, whose downgrade deletes
+                    # Merkys secrets, so a Merkys provider has no policy row to backfill.
                     equal_to(
                         {
                             p.value: p not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO}
                             for p in SecretProvider
+                            if p is not SecretProvider.MERKYS
                             if p not in {SecretProvider.GMAIL, SecretProvider.GMAIL_APP_PASSWORD}
                         }
                     ),

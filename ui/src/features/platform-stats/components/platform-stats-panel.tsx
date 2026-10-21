@@ -137,15 +137,15 @@ export function PlatformStatsPanel() {
           one-hour window can show zero active against three hundred running. */}
       <div className="mb-8">
         <div className="mb-5">
-          <h2
-            className="text-[19px] font-semibold tracking-tight m-0"
+          <h1
+            className="text-[28px] font-semibold tracking-tight m-0"
             style={{ color: "var(--ink)" }}
           >
             Overview
-          </h2>
-          <p className="mt-1.5 text-[13.5px]" style={{ color: "var(--ink-3)" }}>
-            Current counts. Agent totals follow the filters below; the
-            Organization count is platform-wide.
+          </h1>
+          <p className="mt-2 text-[14.5px]" style={{ color: "var(--ink-3)" }}>
+            The whole platform, outside any one organization. Agent totals follow
+            the filters below; the Organization count is platform-wide.
           </p>
         </div>
         <div

@@ -17,6 +17,8 @@ MANIFESTS = ["k8s/agent-farm-user.yaml", "k8s/agent-farm-user.staging.yaml"]
 # files/litellm_metrics_key.py reads the Secret before deciding to keep or
 # rewrite the key.
 NEEDED = [("get", "litellm-metrics-key"), ("create", None), ("update", "litellm-metrics-key")]
+# helm/hindsight/files/generate_key.py reads the retained hashes before rotating.
+NEEDED += [("get", "hindsight-litellm-hashes"), ("update", "hindsight-litellm-hashes")]
 # Public cluster only: k8s/agent-farm-user.yaml is the sole grant. The shared
 # cluster's tenant Role already allows get on every Secret.
 PUBLIC_ONLY = [("get", "hindsight-litellm-hashes")]

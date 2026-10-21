@@ -118,7 +118,7 @@ test.describe("Settings · Sync · the provider list", () => {
 
     await sync.open();
 
-    await expect(sync.sidebarItem).toBeVisible();
+    await expect(sync.sectionLink).toBeVisible();
     await expect(sync.row(ONEDRIVE)).toContainText("An Organization Owner or Admin can connect.");
     await expect(sync.connect(ONEDRIVE)).toHaveCount(0);
     await expect(sync.approvalLink(ONEDRIVE)).toHaveCount(0);

@@ -29,6 +29,12 @@ rules:
     resources: ["secrets"]
     resourceNames: ["litellm-metrics-key"]
     verbs: ["get"]
+  # The hindsight chart's litellm-key hook Job reads the retained key hashes
+  # so rotating the platform key keeps attributing late calls to old keys.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["hindsight-litellm-hashes"]
+    verbs: ["get"]
   # Agent Restore Points run capture/restore as batch Jobs and read the Job
   # pod's logs to recover the archive manifest and any failure reason.
   - apiGroups: ["batch"]

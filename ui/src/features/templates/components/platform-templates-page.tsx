@@ -4,7 +4,7 @@ import { TemplatesPanel } from "./templates-panel";
 
 export function PlatformTemplatesPage() {
   return (
-    <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
+    <div>
       <div className="mb-8">
         <h1
           className="text-[28px] font-semibold tracking-tight m-0 mb-1"

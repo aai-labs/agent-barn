@@ -391,7 +391,7 @@ test.describe("Platform · Billing settings", () => {
     });
 
     await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Billing" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Billing", exact: true }).click();
     const section = page.getByRole("region", { name: "Billing" });
     await expect(section).toContainText("$5.00");
 
@@ -439,7 +439,7 @@ test.describe("Platform · Billing settings", () => {
         }),
       );
       await page.goto("/dashboard/platform/settings");
-      await page.getByRole("button", { name: "Billing" }).click();
+      await page.getByRole("complementary").getByRole("link", { name: "Billing", exact: true }).click();
       const section = page.getByRole("region", { name: "Billing" });
       await section.getByRole("button", { name: "Edit" }).click();
 
@@ -475,7 +475,7 @@ test.describe("Platform · Billing settings", () => {
       return route.fulfill({ json: current });
     });
     await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Billing" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Billing", exact: true }).click();
     return { section: page.getByRole("region", { name: "Billing" }), saved };
   }
 
@@ -625,10 +625,12 @@ test.describe("Platform · Billing", () => {
     await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
   });
 
-  test("the platform overview links to it", async ({ page }) => {
+  test("is listed with Platform's spend", async ({ page }) => {
     await platformAdmin(page, [[record()]]);
-    await page.goto("/dashboard/platform");
+    await page.goto("/dashboard/platform/costs");
 
-    await expect(page.getByRole("link", { name: /Billing/ }).first()).toHaveAttribute("href", "/dashboard/platform/billing");
+    await expect(
+      page.getByRole("complementary").getByRole("link", { name: "Billing", exact: true }),
+    ).toHaveAttribute("href", "/dashboard/platform/billing");
   });
 });

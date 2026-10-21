@@ -77,12 +77,13 @@ export class WorkflowsPage {
     await this.page.getByRole("button", { name: "Workflow actions" }).click();
     await this.page.getByRole("menuitem", { name: "Archive workflow" }).click();
   }
+  /** A section of the Agent in the navigation panel beside the page. */
+  sectionLink(name: string) {
+    return this.page.getByRole("complementary").getByRole("link", { name, exact: true });
+  }
   async switchOrganization(name: string) {
-    await this.page.locator('button[aria-haspopup="listbox"]').click();
-    await this.page
-      .getByRole("listbox")
-      .getByRole("option", { name: new RegExp(name, "i") })
-      .click();
+    await this.page.getByRole("button", { name: /^Switch organization/ }).click();
+    await this.page.getByRole("menuitem", { name: new RegExp(name, "i") }).click();
   }
   async save() {
     await this.page

@@ -12,7 +12,7 @@ export function AgentSkillNewPage({ agentId }: { agentId: string }) {
 
   if (isLoading) {
     return (
-      <div className="af-page animate-pulse">
+      <div className="animate-pulse">
         <div className="h-6 w-56 rounded-lg" style={{ background: "var(--bg-soft)" }} />
         <div className="mt-6 h-64 rounded-2xl" style={{ background: "var(--bg-soft)" }} />
       </div>
@@ -21,7 +21,7 @@ export function AgentSkillNewPage({ agentId }: { agentId: string }) {
 
   if (error || !agent) {
     return (
-      <div className="af-page">
+      <div>
         <AppErrorState error={error} title="We couldn't load this agent" onRetry={() => void refetch()} />
       </div>
     );

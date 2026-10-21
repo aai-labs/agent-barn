@@ -31,7 +31,7 @@ export function TemplateEditorPage({
 
   if (!isNew && isLoading) {
     return (
-      <div className="max-w-[1100px] mx-auto px-10 pt-9 pb-24">
+      <div>
         <div className="af-card px-6 py-8 animate-pulse">
           <div
             className="h-6 w-56 rounded-md mb-3"
@@ -60,7 +60,7 @@ export function TemplateEditorPage({
 
   if (!isNew && !lineage) {
     return (
-      <div className="max-w-[1100px] mx-auto px-10 pt-9 pb-24">
+      <div>
         <div className="af-card px-6 py-8">
           <div
             className="font-semibold text-[16px] mb-1"

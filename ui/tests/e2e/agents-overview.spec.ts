@@ -394,25 +394,25 @@ test.describe("Agents overview", () => {
   test.describe("navigation", () => {
     test.use({ viewport: { width: 1440, height: 900 } });
 
-    test("marks Usage, not Home, on the overview", async () => {
+    test("marks Usage, not Team, on the overview", async () => {
       await overview.goto();
 
       await expect(overview.heading()).toBeVisible();
       await expect(overview.navLink("Usage")).toHaveAttribute("aria-current", "page");
-      await expect(overview.navLink("Home")).not.toHaveAttribute("aria-current", "page");
+      await expect(overview.navLink("Team")).not.toHaveAttribute("aria-current", "page");
     });
 
-    test("marks Home, not Usage, on the organization's home and on an agent's page", async ({ page }) => {
+    test("marks Team, not Usage, on the organization's home and on an agent's page", async ({ page }) => {
       await page.goto(`/dashboard/${TEST_ORG_ID}`);
 
-      await expect(overview.navLink("Home")).toHaveAttribute("aria-current", "page");
+      await expect(overview.navLink("Team")).toHaveAttribute("aria-current", "page");
       await expect(overview.navLink("Usage")).not.toHaveAttribute("aria-current", "page");
 
-      // An agent's back link says "Your team" and leads Home, so Home is the tab it sits under.
+      // An agent's panel leads back to "Your team", so Team is where it sits on the rail.
       await dataSupportPage.agents.interceptGetAgentRequest();
       await new AgentDetailPage(page).goto(MOCK_AGENT_ID);
 
-      await expect(overview.navLink("Home")).toHaveAttribute("aria-current", "page");
+      await expect(overview.navLink("Team")).toHaveAttribute("aria-current", "page");
       await expect(overview.navLink("Usage")).not.toHaveAttribute("aria-current", "page");
     });
 

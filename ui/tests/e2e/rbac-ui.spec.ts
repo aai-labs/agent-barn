@@ -68,11 +68,11 @@ test.describe("RBAC-aware Agent controls", () => {
 
     await rbac.gotoAgent(MOCK_AGENT_ID);
 
-    await expect(page.getByRole("heading", { name: "Maya" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Switch agent. Current: Maya" })).toBeVisible();
     await expect(rbac.agentAction(/pause/i)).toHaveCount(0);
     await expect(rbac.agentConfigurationLink()).toBeVisible();
     await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
-    await expect(rbac.agentAction("Conversations")).toBeVisible();
+    await expect(rbac.sectionLink("Conversations")).toBeVisible();
   });
 
   test("Editor controls are shown without Owner-only deletion", async ({ page }) => {
@@ -107,7 +107,7 @@ test.describe("RBAC-aware Agent controls", () => {
     await page.goto(
       `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration`,
     );
-    await page.getByRole("button", { name: "Danger zone", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Danger zone", exact: true }).click();
     await expect(page.getByRole("button", { name: "Retire agent" })).toHaveCount(0);
     await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
   });
@@ -143,7 +143,7 @@ test.describe("RBAC-aware Agent controls", () => {
     await page.goto(
       `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration`,
     );
-    await page.getByRole("button", { name: "Danger zone", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Danger zone", exact: true }).click();
 
     await expect(page.getByRole("button", { name: "Retire agent" })).toBeVisible();
     await expect(rbac.agentAction(/^share$/i)).toHaveCount(0);
@@ -172,13 +172,13 @@ test.describe("RBAC-aware Agent controls", () => {
       `/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}/configuration`,
     );
 
-    await page.getByRole("button", { name: "Template selection", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Template selection", exact: true }).click();
     await expect(page.getByRole("button", { name: /^Apply/ })).toBeDisabled();
 
-    await page.getByRole("button", { name: "Agent-owned override", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Agent-owned override", exact: true }).click();
     await expect(rbac.agentAction(/create override/i)).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Danger zone", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Danger zone", exact: true }).click();
     await expect(page.getByRole("button", { name: "Retire agent" })).toHaveCount(0);
   });
 

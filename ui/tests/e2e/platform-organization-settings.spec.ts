@@ -29,7 +29,7 @@ test.describe("Platform · Organization settings", () => {
   test("a Platform Administrator sets how many agents an organization may run by default", async ({ page }) => {
     const saved = await platformAdmin(page, { default_agent_limit: 10, updated_at: null });
     await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Organizations" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Organizations", exact: true }).click();
     const section = page.getByRole("region", { name: "Organization settings" });
     await expect(section).toContainText("10 agents");
 
@@ -46,7 +46,7 @@ test.describe("Platform · Organization settings", () => {
     test(`"${typed}" isn't a default agent limit`, async ({ page }) => {
       await platformAdmin(page, { default_agent_limit: 10, updated_at: null });
       await page.goto("/dashboard/platform/settings");
-      await page.getByRole("button", { name: "Organizations" }).click();
+      await page.getByRole("complementary").getByRole("link", { name: "Organizations", exact: true }).click();
       const section = page.getByRole("region", { name: "Organization settings" });
       await section.getByRole("button", { name: "Edit" }).click();
 

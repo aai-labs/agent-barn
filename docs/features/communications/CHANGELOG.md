@@ -15,6 +15,13 @@ Related context: [Agents](../agents.md), [Activity and Ingest](../activity-and-i
 
 ## Changes
 
+### 2026-10-16 — Keep a Teams app across re-created Connections — PR pending
+
+- Fixed: a Teams app package's manifest `id` now derives from the organization's first Connection for the same Microsoft App ID, including retired ones, instead of from the current Connection. Re-creating a Connection for a bot previously produced a second Teams app for that bot. Once both reached the org catalogue, Teams reported "Invalid Bot" on the new one, even though the bot was healthy.
+- Fixed: the package `version` increases with every download (`1.0.<unix seconds>`). It was fixed at `1.0.1`, so Teams Admin Center could not accept a re-downloaded package as an update.
+- Changed: Teams stores the App ID as the Connection's external identity even when `SKIP_TEAMS_TOKEN_VALIDATION` skips the credential check, so packages key on the bot in every environment. The post-setup guidance explains that reconnecting an existing bot only needs its messaging endpoint updated, and that a new package should replace the installed app, not be added beside it.
+- Follow-up: the webhook URL still contains the Connection ID, so re-creating a Connection still requires updating the Azure Bot's messaging endpoint.
+
 ### 2026-10-15 — Telegram link events for product analytics (AF-374)
 
 - Added: spending a link token stages `telegram.account.linked` in the same transaction as the link, and `telegram.account.unlinked` with `reason: "relinked"` for a link it replaces. Each event is in its link's own Organization, with the Membership that issued the link as actor. Payloads carry Organization, Agent, Connection and link ids only, never the Telegram user id or username. `AgentBarnTelegramService.consume_link_token` enqueues the deliveries after commit; the outbox reconciler picks up any it could not. See [Product analytics](../product-analytics.md).

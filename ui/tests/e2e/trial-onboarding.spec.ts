@@ -591,7 +591,7 @@ test.describe("Trial onboarding", () => {
     await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
     await page.getByRole("button", { name: /Jane's Organization/ }).first().click();
 
-    await expect(page.getByRole("button", { name: "Create organization" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Create organization" })).toBeVisible();
   });
 
   test("deleting the trial doesn't let its owner create organizations", async ({ page }) => {
@@ -610,7 +610,7 @@ test.describe("Trial onboarding", () => {
     await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
     await page.getByRole("button", { name: /Someone's Team/ }).first().click();
 
-    await expect(page.getByRole("button", { name: "Create organization" })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: "Create organization" })).toHaveCount(0);
   });
 
   test("a trial user can't create another organization", async ({ page }) => {
@@ -622,7 +622,7 @@ test.describe("Trial onboarding", () => {
     await page.goto(`/dashboard/${TRIAL_ORG_ID}`);
     await page.getByRole("button", { name: /Jane's Organization/ }).first().click();
 
-    await expect(page.getByRole("button", { name: "Create organization" })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: "Create organization" })).toHaveCount(0);
   });
 
   test("a trial that has its agent is told it can't hire another", async ({ page }) => {
