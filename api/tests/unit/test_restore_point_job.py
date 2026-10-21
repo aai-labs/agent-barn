@@ -1,6 +1,7 @@
 import gzip
 import io
 import json
+import os
 import re
 import tarfile
 from pathlib import Path
@@ -35,6 +36,7 @@ from api.domains.agents.restore_point_job import (
     MODE_RESET,
     MODE_RESTORE,
     OPENCLAW_EXCLUDED,
+    SKIPPED_LINKS_NAME,
     ArchiveValidationError,
     capture,
     is_excluded,
@@ -603,15 +605,47 @@ def test_main_reset_backs_the_volume_up_then_empties_it(tmp_path, monkeypatch, c
     assert_that(json.loads(capsys.readouterr().out.splitlines()[-1])["skipped"], equal_to(0))
 
 
-@pytest.mark.parametrize("cause", ["a link to outside the volume", "a missing backup volume"])
+def test_main_reset_writes_down_links_to_outside_the_volume_and_still_resets(tmp_path, monkeypatch, capsys):
+    target, backup, outside = tmp_path / "tgt", tmp_path / "bak", tmp_path / "usr"
+    target.mkdir()
+    backup.mkdir()
+    _write(outside, "local/lib/node_modules/openclaw/openclaw.mjs")
+    _write(outside, "bin/python3")
+    _write(target, "workspace/live.md", "live content")
+    # Both targets exist, as they do in a running pod. A link to a directory is listed with the
+    # directories by os.walk, a link to a file with the files: both have to be let through.
+    peer_link = "npm/projects/openclaw-1/node_modules/@openclaw/firecrawl-plugin/node_modules/openclaw"
+    (target / peer_link).parent.mkdir(parents=True)
+    (target / peer_link).symlink_to(outside / "local/lib/node_modules/openclaw")
+    (target / "workspace/.venv/bin").mkdir(parents=True)
+    (target / "workspace/.venv/bin/python").symlink_to(outside / "bin/python3")
+    _reset_env(monkeypatch, target, backup)
+
+    main()
+
+    assert_that(list(target.iterdir()), empty())
+    assert_that(_members(backup), has_item("workspace/live.md"))
+    assert_that(
+        json.loads((backup / SKIPPED_LINKS_NAME).read_text()),
+        equal_to(
+            {
+                peer_link: str(outside / "local/lib/node_modules/openclaw"),
+                "workspace/.venv/bin/python": str(outside / "bin/python3"),
+            }
+        ),
+    )
+    assert_that(capsys.readouterr().err, contains_string(peer_link))
+
+
+@pytest.mark.parametrize("cause", ["a pipe", "a missing backup volume"])
 def test_main_reset_removes_nothing_when_the_backup_cannot_hold_everything(cause, tmp_path, monkeypatch, capsys):
     target, backup = tmp_path / "tgt", tmp_path / "bak"
     target.mkdir()
     backup.mkdir()
     _write(target, "workspace/live.md", "live content")
-    if cause == "a link to outside the volume":
+    if cause == "a pipe":
         # The archive filter refuses it, so it would be in no backup, and a reset would delete it.
-        (target / "workspace/outside").symlink_to("/etc/hostname")
+        os.mkfifo(target / "workspace/pipe")
     else:
         backup = tmp_path / "missing"
     _reset_env(monkeypatch, target, backup)
@@ -624,8 +658,8 @@ def test_main_reset_removes_nothing_when_the_backup_cannot_hold_everything(cause
     assert_that((target / "workspace/live.md").read_text(), equal_to("live content"))
     # No manifest, or it could be read as a backup that finished.
     assert_that(captured.out, equal_to(""))
-    if cause == "a link to outside the volume":
-        assert_that(captured.err, contains_string("workspace/outside"))
+    if cause == "a pipe":
+        assert_that(captured.err, contains_string("workspace/pipe"))
 
 
 def test_the_openclaw_plugin_store_round_trips_through_a_restore(tmp_path):

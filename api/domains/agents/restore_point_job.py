@@ -4,12 +4,14 @@ import ntpath
 import os
 import posixpath
 import shutil
+import stat
 import sys
 import tarfile
 from pathlib import Path
 
 ARCHIVE_NAME = "archive.tar.gz"
 MANIFEST_NAME = "manifest.json"
+SKIPPED_LINKS_NAME = "skipped-links.json"
 
 MODE_CAPTURE = "capture"
 MODE_RESTORE = "restore"
@@ -113,16 +115,19 @@ def _walk_included_files(root: Path, runtime: str):
                 yield current / file_name, rel_path
 
 
-def capture(source: Path, dest: Path, runtime: str, skipped_paths: list[str] | None = None) -> dict:
-    """Archive the volume. What the archive cannot safely hold is counted, and named in `skipped_paths`.
+def capture(source: Path, dest: Path, runtime: str, lost_paths: list[str] | None = None) -> dict:
+    """Archive the volume. What the archive cannot safely hold is counted and left out.
 
     A restore extracts with the same filter, so a member it refuses would fail the whole restore;
-    dropping it here is what keeps an archive restorable. A caller that goes on to remove the
-    volume has to look at the count: those files are in no archive.
+    dropping it here is what keeps an archive restorable. A link or a socket holds no data, so a
+    skipped link is only written down, in `SKIPPED_LINKS_NAME` next to the archive. Anything else
+    skipped is named in `lost_paths`: a caller that goes on to remove the volume has to look at it,
+    because those files are in no archive.
     """
     archive_path = dest / ARCHIVE_NAME
     file_count = 0
     skipped = 0
+    skipped_links: dict[str, str] = {}
     try:
         with tarfile.open(archive_path, "w:gz") as tar:
             for path, rel_path in _walk_included_files(source, runtime):
@@ -134,8 +139,10 @@ def capture(source: Path, dest: Path, runtime: str, skipped_paths: list[str] | N
                     tarfile.data_filter(info, "")
                 except tarfile.FilterError, _Unarchivable:
                     skipped += 1
-                    if skipped_paths is not None:
-                        skipped_paths.append(rel_path)
+                    if path.is_symlink():
+                        skipped_links[rel_path] = os.readlink(path)
+                    elif lost_paths is not None and not stat.S_ISSOCK(path.lstat().st_mode):
+                        lost_paths.append(rel_path)
                     continue
                 if info.isreg():
                     with path.open("rb") as stream:
@@ -150,6 +157,12 @@ def capture(source: Path, dest: Path, runtime: str, skipped_paths: list[str] | N
                 f"The restore point volume ran out of space while archiving. Raise {SIZE_SETTING_NAME}."
             ) from exc
         raise
+
+    if skipped_links:
+        (dest / SKIPPED_LINKS_NAME).write_text(json.dumps(skipped_links, indent=2))
+        emit_note(
+            f"{len(skipped_links)} link(s) point outside the volume and are not in the archive: {_sample(skipped_links)}"
+        )
 
     manifest = {"bytes": archive_path.stat().st_size, "file_count": file_count, "skipped": skipped}
     (dest / MANIFEST_NAME).write_text(json.dumps(manifest))
@@ -222,6 +235,17 @@ def emit_result(manifest: dict) -> None:
     sys.stdout.flush()
 
 
+def _sample(paths) -> str:
+    paths = list(paths)
+    return ", ".join(paths[:5]) + (", ..." if len(paths) > 5 else "")
+
+
+def emit_note(message: str) -> None:
+    """Log a line for people reading the Job. A failure reported after it still wins."""
+    sys.stderr.write(message + "\n")
+    sys.stderr.flush()
+
+
 def emit_failure(message: str) -> None:
     """Report a reason the API surfaces verbatim on the restore point row."""
     sys.stderr.write(message + "\n")
@@ -238,22 +262,21 @@ def _required_env(name: str) -> Path:
 def _run_reset(target: Path, backup: Path, runtime: str) -> None:
     # Each phase fails on its own exit code: the API reads it to tell "the Agent
     # volume was never touched" from "it was emptied".
-    skipped_paths: list[str] = []
+    lost_paths: list[str] = []
     try:
-        manifest = capture(target, backup, runtime, skipped_paths)
+        manifest = capture(target, backup, runtime, lost_paths)
     except Exception as exc:
         emit_failure(f"pre-reset capture failed: {exc}")
         raise SystemExit(EXIT_BACKUP_FAILED) from exc
 
-    if skipped_paths:
+    if lost_paths:
         # A reset removes everything, so anything the backup could not hold would be gone for
         # good, and the row would still read as a clean success. Better to refuse. This is
         # reported as a failed backup, and no manifest is printed, so nothing reads it as a
         # backup that finished.
-        listed = ", ".join(skipped_paths[:5]) + (", ..." if len(skipped_paths) > 5 else "")
         emit_failure(
-            f"{len(skipped_paths)} file(s) cannot be saved in a backup (for example, links that point outside "
-            f"the volume), so nothing was removed: {listed}"
+            f"{len(lost_paths)} file(s) cannot be saved in a backup (for example, device files or pipes), "
+            f"so nothing was removed: {_sample(lost_paths)}"
         )
         raise SystemExit(EXIT_BACKUP_FAILED)
     emit_result(manifest)
