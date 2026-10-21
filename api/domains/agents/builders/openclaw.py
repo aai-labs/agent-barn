@@ -21,6 +21,7 @@ from .memory import (
     memory_command_volume,
     openclaw_memory_settings,
 )
+from .tasks import TASK_COMMAND, TASK_TOOL, TASK_TOOL_INSTRUCTIONS, task_command_mount, task_command_volume
 
 # Explicit so agents stop inheriting the namespace LimitRange default of
 # 512Mi request / 2Gi limit. requests.memory is the binding quota axis
@@ -378,8 +379,10 @@ def build_config_map(
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
         "agentbarn-memory": MEMORY_COMMAND,
+        "agentbarn_task.py": TASK_TOOL,
+        "agentbarn-task": TASK_COMMAND,
         "TOOLS.md": tools_md,
-        "AGENTS.md": agents_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
+        "AGENTS.md": agents_md + TASK_TOOL_INSTRUCTIONS + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "BOOTSTRAP.md": bootstrap_md,
         "HEARTBEAT.md": heartbeat_md,
@@ -517,6 +520,7 @@ def build_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                task_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -530,6 +534,7 @@ def build_deployment(
                     ],
                     volumes=[
                         memory_command_volume(name),
+                        task_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

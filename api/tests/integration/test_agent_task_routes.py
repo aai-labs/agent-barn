@@ -1,8 +1,18 @@
 """AF-412: Agents record their own Tasks through the ingest app, authenticated by their ingest key."""
 
+import json
+import os
+import socket
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
 import pytest
+import uvicorn
 from fastapi import status
-from hamcrest import assert_that, contains_exactly, equal_to, has_entries
+from hamcrest import assert_that, contains_exactly, contains_string, equal_to, has_entries
 from starlette.testclient import TestClient
 
 from api.domains.agents.repository import AgentRepository
@@ -330,3 +340,89 @@ def test_a_file_cannot_be_attached_to_another_agents_task():
         response = _attach(context, task_id, b"data")
 
         assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+# --- the in-pod command against the real app ---
+
+_TASK_COMMAND = Path(__file__).parents[2] / "domains/agents/scripts/agentbarn_task.py"
+
+
+def _the_ingest_app_is_served_over_a_socket():
+    def step(context):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        server = uvicorn.Server(
+            uvicorn.Config(create_ingest_app(injector=context.injector), host="127.0.0.1", port=port, log_level="error")
+        )
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 10
+        while not server.started:
+            assert time.monotonic() < deadline, "the ingest app did not start"
+            time.sleep(0.05)
+        context.ingest_url = f"http://127.0.0.1:{port}/ingest/v1"
+        context.stop_server = lambda: (setattr(server, "should_exit", True), thread.join(10))
+
+    return step
+
+
+def _task_command(context, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(_TASK_COMMAND), *args],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+        env={
+            **os.environ,
+            "AGENT_ID": str(context.agent.id),
+            "INGEST_URL": context.ingest_url,
+            "INGEST_API_KEY": context.ingest_key,
+        },
+    )
+
+
+def test_an_upload_refused_part_way_reaches_the_agent_as_a_clear_error(tmp_path: Path):
+    with given(
+        [
+            *_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES=str(1024 * 1024)),
+            _an_agent_with_an_ingest_key(),
+            _the_ingest_app_is_served_over_a_socket(),
+        ]
+    ) as context:
+        try:
+            task_id = _create(context).json()["id"]
+            large = tmp_path / "export.csv"
+            large.write_bytes(b"x" * (8 * 1024 * 1024))
+
+            with when("the Agent attaches a file that passes the Organization's limit part way through"):
+                result = _task_command(context, "attach", task_id, str(large))
+
+                with then("the command reports the limit, not a broken connection"):
+                    assert_that(result.returncode, equal_to(1))
+                    assert_that(result.stderr, contains_string("space left for this Organization's Task Files"))
+        finally:
+            context.stop_server()
+
+
+def test_the_command_records_a_task_end_to_end(tmp_path: Path):
+    with given([*_given(), _an_agent_with_an_ingest_key(), _the_ingest_app_is_served_over_a_socket()]) as context:
+        try:
+            report = tmp_path / "report.csv"
+            report.write_bytes(b"invoice,amount\n1,10\n")
+
+            with when("the Agent opens a Task, works it and attaches its output"):
+                created = _task_command(context, "create", "--title", "Reconcile invoices")
+                task_id = json.loads(created.stdout)["id"]
+                _task_command(context, "status", task_id, "in_progress")
+                attached = _task_command(context, "attach", task_id, str(report))
+                _task_command(context, "status", task_id, "done")
+                shown = json.loads(_task_command(context, "show", task_id).stdout)
+
+                with then("the Task carries the status and the file"):
+                    assert_that(attached.returncode, equal_to(0), attached.stderr)
+                    assert_that(shown["status"], equal_to("done"))
+                    assert_that([f["filename"] for f in shown["files"]], contains_exactly("report.csv"))
+        finally:
+            context.stop_server()

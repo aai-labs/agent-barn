@@ -19,6 +19,7 @@ from .memory import (
     memory_command_mount,
     memory_command_volume,
 )
+from .tasks import TASK_COMMAND, TASK_TOOL, TASK_TOOL_INSTRUCTIONS, task_command_mount, task_command_volume
 
 # Matches OpenClaw, so limits.memory (100Gi quota) never binds before
 # requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
@@ -424,8 +425,10 @@ def build_hermes_config_map(
         "USER.md": user_md,
         "agentbarn_memory.py": MEMORY_WRITE_TOOL,
         "agentbarn-memory": MEMORY_COMMAND,
+        "agentbarn_task.py": TASK_TOOL,
+        "agentbarn-task": TASK_COMMAND,
         "TOOLS.md": tools_md,
-        "AGENTS.md": agents_md + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
+        "AGENTS.md": agents_md + TASK_TOOL_INSTRUCTIONS + (MEMORY_TOOL_INSTRUCTIONS if memory_enabled else ""),
         "BOOT.md": boot_md,
         "HEARTBEAT.md": heartbeat_md,
         "hermes-config.yaml": yaml.dump(hermes_config, default_flow_style=False, sort_keys=False),
@@ -593,6 +596,7 @@ def build_hermes_deployment(
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
+                                task_command_mount(),
                                 client.V1VolumeMount(
                                     name="config",
                                     mount_path="/app/config",
@@ -617,6 +621,7 @@ def build_hermes_deployment(
                     ],
                     volumes=[
                         memory_command_volume(name),
+                        task_command_volume(name),
                         client.V1Volume(
                             name="config",
                             config_map=client.V1ConfigMapVolumeSource(name=name),

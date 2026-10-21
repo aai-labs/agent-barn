@@ -17,10 +17,14 @@ import pytest
 
 from api.domains.agents.builders import (
     build_config_map,
+    build_deployment,
     build_hermes_config_map,
+    build_hermes_deployment,
     build_hermes_gateway_config,
     build_openclaw_gateway_config,
 )
+from api.domains.agents.builders.memory import MEMORY_TOOL_INSTRUCTIONS
+from api.domains.agents.builders.tasks import TASK_COMMAND, TASK_COMMAND_PATH, TASK_TOOL, TASK_TOOL_INSTRUCTIONS
 
 _SCRIPTS = Path(__file__).parents[2] / "domains/agents/scripts"
 _AGENT_ID = uuid4()
@@ -101,9 +105,27 @@ def test_config_map_does_not_ship_the_other_runtime_plugin(runtime, builder, for
 @pytest.mark.parametrize("builder", [_hermes_config_map, _openclaw_config_map])
 @pytest.mark.parametrize("enabled", [False, True])
 def test_memory_writer_instructions_are_only_in_enabled_agents_startup_context(builder, enabled):
-    from api.domains.agents.builders.memory import MEMORY_TOOL_INSTRUCTIONS
-
     data = builder(memory_enabled=enabled).data
     assert (MEMORY_TOOL_INSTRUCTIONS in data["AGENTS.md"]) == enabled
     assert data["AGENTS.md"].startswith("agents")
     assert data["TOOLS.md"] == "tools"
+
+
+@pytest.mark.parametrize("builder", [_hermes_config_map, _openclaw_config_map])
+@pytest.mark.parametrize("memory_enabled", [False, True])
+def test_every_agent_ships_the_task_command_and_when_to_use_it(builder, memory_enabled):
+    data = builder(memory_enabled=memory_enabled).data
+    assert data["agentbarn_task.py"] == TASK_TOOL
+    assert data["agentbarn-task"] == TASK_COMMAND
+    assert TASK_TOOL_INSTRUCTIONS in data["AGENTS.md"]
+    assert data["AGENTS.md"].startswith("agents")
+
+
+@pytest.mark.parametrize("build", [build_hermes_deployment, build_deployment])
+def test_the_task_command_is_installed_on_the_agents_path(build):
+    pod = build(_AGENT_ID, _ORG_ID, _NS, "runtime:test").spec.template.spec
+    [mount] = [m for m in pod.containers[0].volume_mounts if m.mount_path == TASK_COMMAND_PATH]
+    [volume] = [v for v in pod.volumes if v.name == mount.name]
+    [item] = volume.config_map.items
+    assert (mount.sub_path, mount.read_only) == (item.path, True)
+    assert (item.key, item.mode) == ("agentbarn-task", 0o555)
