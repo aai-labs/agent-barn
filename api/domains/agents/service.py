@@ -2923,7 +2923,7 @@ class AgentService:
         logger.info("Managed update started for agent %s", agent_id)
 
         if skip_backup:
-            self._update_without_backup(agent_id, actor)
+            self._update_without_backup(agent_id, actor, agent.pinned_runtime_image)
             return
 
         # 1-2. Stop, then capture the pre-update state. Nothing about the Agent
@@ -2964,7 +2964,7 @@ class AgentService:
         #    configuration, then start the image the pod ran before.
         self._rollback_managed_update(agent_id, backup.id, context, actor, previous_image)
 
-    def _update_without_backup(self, agent_id: UUID, actor: ActorIdentity) -> None:
+    def _update_without_backup(self, agent_id: UUID, actor: ActorIdentity, pinned_image: str) -> None:
         try:
             self._wait_for_volume_release(agent_id)
         except Exception as exc:
@@ -2984,9 +2984,10 @@ class AgentService:
                 agent_id, ManagedUpdateOutcome.SUCCEEDED, restore_point_id=None
             )
             return
-        self._stop_after_failed_update(agent_id)
+        self._stop_after_failed_update(agent_id, pinned_image)
 
-    def _stop_after_failed_update(self, agent_id: UUID) -> None:
+    def _stop_after_failed_update(self, agent_id: UUID, pinned_image: str) -> None:
+        """Stop the Agent on the pin it had before the update, so a start goes back to that image."""
         try:
             self._teardown_workload(agent_id)
         except Exception:
@@ -2994,6 +2995,7 @@ class AgentService:
         agent = self.repository.get_by_id(agent_id)
         if agent is not None:
             agent.status = AgentStatus.STOPPED
+            agent.pinned_runtime_image = pinned_image
             self.repository.save(agent)
         self.repository.record_managed_update_outcome(
             agent_id, ManagedUpdateOutcome.UPDATE_FAILED, restore_point_id=None

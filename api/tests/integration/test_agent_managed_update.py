@@ -790,8 +790,10 @@ def test_an_update_without_a_backup_runs_on_the_stopped_agent_a_failed_backup_le
             assert_that(skipped, has_length(1))
 
 
-def test_an_update_without_a_backup_that_never_comes_up_leaves_the_agent_stopped():
+def test_an_update_without_a_backup_that_never_comes_up_leaves_the_agent_stopped_on_its_old_pin():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        # An earlier update rolled back, so the Agent is pinned to the image that worked.
+        _pin(context, _OLD_IMAGE)
         _backup_failed(context)
         k8s = _k8s(context)
         k8s.get_pod_readiness.return_value = _CRASH_LOOP
@@ -806,6 +808,9 @@ def test_an_update_without_a_backup_that_never_comes_up_leaves_the_agent_stopped
             assert_that(body["last_managed_update"]["outcome"], equal_to(ManagedUpdateOutcome.UPDATE_FAILED.value))
             assert_that(k8s.create_deployment.call_count, equal_to(1))
             assert_that(k8s.create_job.called, equal_to(False))
+
+        with then("the pin is back, so a start runs the image that worked"):
+            assert_that(_stored_agent(context).pinned_runtime_image, equal_to(_OLD_IMAGE))
 
 
 def test_skipping_the_backup_is_refused_unless_a_backup_just_failed():

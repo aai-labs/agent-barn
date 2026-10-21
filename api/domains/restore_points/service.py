@@ -16,7 +16,6 @@ from kubernetes.client import V1Job
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders.restore_point import (
-    BACKUP_SKIPPED_BY_USER_LABEL,
     build_capture_job,
     build_reset_job,
     build_restore_job,
@@ -169,11 +168,6 @@ def _ran_safety_copy(job: V1Job) -> bool:
     template = job.spec.template if job.spec is not None else None
     containers = template.spec.containers if template is not None and template.spec is not None else None
     return any(env.name == ENV_BACKUP for container in containers or [] for env in container.env or [])
-
-
-def _backup_skipped_by_user(job: V1Job) -> bool:
-    labels = job.metadata.labels if job.metadata is not None else None
-    return (labels or {}).get(BACKUP_SKIPPED_BY_USER_LABEL) == "true"
 
 
 @inject
@@ -355,13 +349,20 @@ class RestorePointService:
         missing Job is genuine. A row whose Job changes the Agent volume keeps its
         volume, since the Job may have finished before it was reaped. A capture
         releases the one it never finished writing. A reset's backup is not failed
-        either: the Agent's files may already be gone, so it stays restorable.
+        either: the Agent's files may already be gone, so it stays restorable. Nor is
+        the target of a restore the user ran without a backup, for the same reason.
         """
         grace = timedelta(seconds=RESTORE_POINT_RECONCILIATION_PENDING_GRACE_SECONDS)
         if respect_grace and row.updated_at > datetime.now(UTC) - grace:
             return
         if row.origin == RestorePointOrigin.PRE_RESET:
             self._keep_unverified_reset_backup(row, reason)
+        elif row.status == RestorePointStatus.RESTORING and row.backup_skipped_by_user:
+            if row.reapply_configuration:
+                self.repository.mark_configuration_failed(
+                    row.id, "Nothing says the restore finished, so the recorded configuration was not applied."
+                )
+            self.repository.mark_restore_retryable(row.id, reason[:_MAX_FAILURE_REASON])
         elif _wipes_volume(row):
             self._fail(row, reason)
         else:
@@ -392,7 +393,7 @@ class RestorePointService:
                 )
             if outcome == _RestoreOutcome.BACKUP_FAILED:
                 self.repository.mark_restored(row.id)
-            elif _backup_skipped_by_user(job):
+            elif row.backup_skipped_by_user:
                 self.repository.mark_restore_retryable(row.id, reason[:_MAX_FAILURE_REASON])
             else:
                 self._fail(row, reason)
@@ -694,15 +695,14 @@ class RestorePointService:
                 actor=resolve_actor_identity(context, current.organization_id),
                 payload=self._event_payload(current, target, context, backup_skipped=payload.skip_backup),
                 reapply_configuration=payload.reapply_configuration,
+                backup_skipped_by_user=payload.skip_backup and not managed_update,
                 restored_by_user_id=context.user.id,
                 restored_by_display=context.user.full_name or context.user.email,
             )
             if result is None:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOT_READY_DETAIL)
 
-            self._provision_restore(
-                current, target, backup, job_name, backup_skipped_by_user=payload.skip_backup and not managed_update
-            )
+            self._provision_restore(current, target, backup, job_name)
 
         self._dispatch(result.delivery_ids)
 
@@ -859,8 +859,6 @@ class RestorePointService:
         target: AgentRestorePoint,
         backup: AgentRestorePoint | None,
         job_name: str,
-        *,
-        backup_skipped_by_user: bool = False,
     ) -> None:
         namespace = self.config.k8s_namespace
         try:
@@ -891,7 +889,6 @@ class RestorePointService:
                     archive_pvc=target.pvc_name,
                     timeout_seconds=self.config.restore_point_restore_timeout_seconds,
                     image_pull_secret=self.config.agent_image_pull_secret or None,
-                    backup_skipped_by_user=backup_skipped_by_user,
                 ),
             )
         except Exception as exc:

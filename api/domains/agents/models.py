@@ -808,6 +808,9 @@ class AgentRestorePoint(BaseModel, table=True):
     # The configuration is written only after the Job confirms the volume is back,
     # so the intent has to outlive the request that made it.
     reapply_configuration: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+    # Set when the user chose to restore without a safety copy. A failed or lost restore
+    # then leaves this archive restorable, since nothing else holds the Agent's old files.
+    backup_skipped_by_user: bool = SqlField(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
     # Why the recorded configuration did not land, once the volume already has.
     configuration_error: str | None = SqlField(default=None, nullable=True, max_length=500)
     # Who asked for the restore, which is who authorized the configuration write that

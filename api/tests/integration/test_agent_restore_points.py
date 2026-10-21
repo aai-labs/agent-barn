@@ -642,6 +642,24 @@ def test_a_failed_extraction_without_a_backup_keeps_the_target_restorable():
             assert_that(k8s.delete_pvc.called, equal_to(False))
 
 
+def test_a_lost_restore_job_without_a_backup_keeps_the_target_restorable():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        target = _seed(context, status_value=RestorePointStatus.READY)
+        k8s = context.injector.get(KubernetesClient)
+        context.client.post(_restore_url(context, target.id), json={"skip_backup": True}, headers=_auth(context))
+        _backdate(context, target.id)
+        k8s.get_job.return_value = None
+        k8s.delete_pvc.reset_mock()
+
+        with when("the Job is deleted before anyone read how it ended"):
+            row = context.client.get(f"{_url(context)}/{target.id}", headers=_auth(context)).json()
+
+        with then("the target is ready to restore again and keeps its volume"):
+            assert_that(row["status"], equal_to(RestorePointStatus.READY.value))
+            assert_that(row["failure_reason"], contains_string("no longer available"))
+            assert_that(k8s.delete_pvc.called, equal_to(False))
+
+
 def test_restore_on_a_running_agent_returns_409():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
         target = _seed(context, status_value=RestorePointStatus.READY)
