@@ -1,3 +1,5 @@
+import { Brain, FileCode2, FolderSync, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
+
 export type OrganizationSettingsSectionKey =
   | "agents"
   | "spend-limits"
@@ -80,6 +82,17 @@ export const ORGANIZATION_SETTINGS_SECTIONS: OrganizationSettingsSection[] = [
 export const ORGANIZATION_SETTINGS_SECTION_KEYS = ORGANIZATION_SETTINGS_SECTIONS.map(
   (section) => section.key,
 );
+
+export const ORGANIZATION_SETTINGS_ICONS = {
+  agents: UserRound,
+  "spend-limits": Wallet,
+  templates: FileCode2,
+  skills: Sparkles,
+  "memory-access": Brain,
+  "organization-memory": Brain,
+  "shared-credentials": KeyRound,
+  sync: FolderSync,
+} as const;
 
 export function visibleOrganizationSettingsSections(canManage: boolean, isMembershipAdmin = canManage) {
   return ORGANIZATION_SETTINGS_SECTIONS.filter(

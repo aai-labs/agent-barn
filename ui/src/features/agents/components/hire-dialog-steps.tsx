@@ -14,6 +14,7 @@ import {
   INTEGRATION_PROVIDERS,
   getIntegrationProvider,
   isAutoConfiguredProvider,
+  isOfferedSkill,
   type IntegrationDraft,
 } from "../integrations";
 import type { TemplateRequiredSkill } from "../schemas";
@@ -120,7 +121,7 @@ export function SkillsStep({
   // between required and optional skills is consistent across requirement types.
   // Optional skills remain paginated through the catalog response.
   const orderedSkills = skills.filter(
-    (s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id),
+    (s) => !requiredSkillIds.has(s.id) && !groupMemberIds.has(s.id) && isOfferedSkill(s),
   );
   const hasTemplateRequirements =
     templateRequiredSkills.length > 0 || requiredGroups.length > 0;
@@ -541,7 +542,7 @@ export function IntegrationsStep({
 
   const usedProviders = new Set(integrations.filter((i) => !i.platformDefault).map((i) => i.provider));
   const available = INTEGRATION_PROVIDERS.filter(
-    (p) => !usedProviders.has(p.id),
+    (p) => !usedProviders.has(p.id) && p.offered !== false,
   );
   const firstCredentialProviderId = integrations[0]?.provider;
 

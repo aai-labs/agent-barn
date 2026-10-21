@@ -17,8 +17,9 @@ Delivery state is tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Provider list and routes
 
-- `GET /organizations/{organization_id}/sync-providers` requires `organization.read`, so every Organization Member sees the folder link. It has one entry per provider offered on this server, in key order:
+- `GET /organizations/{organization_id}/sync-providers` requires `organization.read`, so every Organization Member sees the folder link. It has one entry per provider shipped with Agent Barn, in key order, including providers not set up on this server:
   - the descriptor: `key`, `display_name`, `tagline`, `folder_hint`, `connect_hint`, `location_noun`, `schema_version`, `capabilities`;
+  - `available`, false when the provider's server settings are blank. An unavailable provider has no `approval_url` or `blocked_reason`, and `can_connect` is false;
   - `approval_url`;
   - `connection`: status, location name and URL, folder link and connected time, or `null`;
   - `can_connect` and `blocked_reason`.
@@ -82,7 +83,8 @@ The UI holds no rule of its own; it renders `can_connect` and `blocked_reason`.
 
 Settings → **Sync** (`?tab=sync`) is visible to every Organization Member. It reads the provider list and shows one row per offered provider (`ui/src/features/sync-provider/`). The UI has no provider-specific branches: every text it shows about a provider comes from the provider's entry.
 
-- No provider offered on this server: "No sync providers are available on this server."
+- A provider not set up on this server (`available: false`) shows "{provider} is not configured for the platform." and no buttons, the same for every role.
+- No providers at all: "No sync providers are available on this server."
 - Each row has the provider's brand mark (OneDrive's logo; a letter tile for a provider without one), the provider's name, and a subtitle: its `tagline`, "Connecting…" while pending, or "● Connected to {location}" in green when active.
 - Not connected:
   - Owners and Admins get **Connect**. It opens the provider's sign-in popup and then posts the code to the sign-in route. Connect is enabled only when `can_connect` is true:
@@ -103,7 +105,7 @@ The query is keyed by Organization id, so switching Organization never shows the
 
 A new provider is a plugin, its provider client, and tests. No route, table, migration or UI change is needed.
 
-1. **Settings.** Add its settings to `api/core/config.py` and wire them like `ONEDRIVE_SYNC_CLIENT_ID/SECRET`: the `.env` specs, the API chart, Helmfile, the deploy workflows and [operations](../../guidelines/operations.md). `is_offered()` returns whether they are set.
+1. **Settings.** Add its settings to `api/core/config.py` and wire them like `ONEDRIVE_SYNC_CLIENT_ID/SECRET`: the `.env` specs, the API chart, Helmfile, the deploy workflows and [operations](../../guidelines/operations.md). `is_offered()` returns whether they are set; while they are blank the provider is listed as not configured. Add a self-hosting step to the root `README.md`, like "Connecting OneDrive (manual step)".
 2. **The plugin.** Write `api/domains/sync_provider/plugins/<key>.py`, subclassing `SyncProviderPlugin`:
    - `key`, `display_name`, `tagline`, `folder_hint`, and optionally `connect_hint`;
    - `authorize_url`, `complete_sign_in`, `require_same_account`, `provision`, `undo_provision` and `revoke`, raising the typed failures from `base.py`.
@@ -128,7 +130,7 @@ A new provider is a plugin, its provider client, and tests. No route, table, mig
 - Application: `Sites.Selected`.
 - Delegated: `Sites.FullControl.All`, `Sites.Read.All`, `openid`, `profile`.
 
-When either setting is blank, OneDrive is left out of the list and its routes return 404 "OneDrive isn't available on this server." The secret is never returned or logged.
+When either setting is blank, OneDrive is listed as "OneDrive is not configured for the platform." and its routes return 404 "OneDrive isn't available on this server." Self-hosters set it up following "Connecting OneDrive (manual step)" in the root [`README.md`](../../../README.md#connecting-onedrive-manual-step). The secret is never returned or logged.
 
 ### Microsoft specifics
 

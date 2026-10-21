@@ -90,7 +90,7 @@ deployment limits cannot change their expected budget contracts.
 | `make fix-api` | Ruff autofix and formatting; modifies files | None |
 | `make check-migrations` | Exactly one Alembic head | None |
 | `make check-memory` | Rendered gateway/backend isolation and authentication contracts | Helm 3.19.0 |
-| `make test-api` | API unit and integration tests, excluding the Kubernetes client test | Docker for Testcontainers PostgreSQL and the pinned Prometheus image, plus Node.js for the OpenClaw plugin and healthz metrics tests |
+| `make test-api` | API unit and integration tests, excluding the Kubernetes client test; runs one pytest-xdist worker per CPU, each with its own PostgreSQL container; tests marked `xdist_group("heavy_containers")` (pinned LiteLLM/Hindsight contracts) share one worker so those containers never start concurrently | Docker for Testcontainers PostgreSQL and the pinned Prometheus image, plus Node.js for the OpenClaw plugin and healthz metrics tests |
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
 | `make test-integration-isolation RUNTIME=both` | Opt-in Secrets/PVC transition contracts in a new disposable k3d cluster | Docker, k3d, kubectl, locally built `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE`; no provider accounts |
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
@@ -240,6 +240,8 @@ file keyring, without contacting a live Google account. The Hermes broker contra
 backend: its login-shell snapshot must resolve the wrapper, and two service
 commands must each fetch a temporary token. It uses a fixture broker boundary
 and disables external networking.
+
+The Hermes auxiliary credentials contract in `../../api/runtime_tests/test_hermes_auxiliary_credentials.py` resolves the key for the main model and every auxiliary task inside the real image, from the generated config and runtime Secret, with networking disabled. Each must resolve the runtime's LiteLLM key. Which key Hermes sends depends on the resolver a task goes through, so a builder unit test cannot show it. Rerun it after a Hermes upgrade or a change to the auxiliary pin list.
 
 Apollo contracts run the patched aai-cli in both images against an offline loopback server. They check direct API-key profiles, isolated bearer profiles, typed and passthrough API paths, the separate health path, persistent-store cleanup when switching modes, and credential exclusion. Run the corresponding `test_*_apollo.py` contracts through `make test-api-runtime`; rebuild both images after changing `aai-apollo-routing.patch`.
 

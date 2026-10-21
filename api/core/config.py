@@ -69,6 +69,7 @@ class Config(BaseSettings):
     litellm_secret_name: str = "litellm"
     agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
+    workflow_authoring_enabled: bool = False
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
     # Percentages of an Organization's limit at which it is notified. Empty falls back

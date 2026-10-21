@@ -139,7 +139,7 @@ export function PlatformCostsPage() {
   }, [refetchSummary, refetchMonthly, refetch]);
 
   return (
-    <div className="max-w-[1200px] mx-auto px-10 pt-9 pb-24">
+    <div>
       <div className="flex flex-wrap items-start justify-between gap-3 mb-7">
         <div>
           <h1

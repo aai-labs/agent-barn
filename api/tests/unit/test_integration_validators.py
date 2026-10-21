@@ -12,19 +12,26 @@ from api.domains.agents.models import (
     BitbucketContent,
     ConfluenceContent,
     GithubContent,
+    GmailAppPasswordContent,
     GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
+    MerkysContent,
     PipedriveContent,
+    SecretProvider,
 )
 from api.domains.integrations.plugins.providers import GmailPlugin
+from api.infrastructure.google.gmail_imap import MailSignInFailed, MailUnavailable
+from api.infrastructure.integration_validators import PROVIDER_VALIDATORS
 from api.infrastructure.integration_validators.apollo import validate_apollo
 from api.infrastructure.integration_validators.bitbucket import validate_bitbucket
 from api.infrastructure.integration_validators.confluence import validate_confluence
 from api.infrastructure.integration_validators.github import validate_github
 from api.infrastructure.integration_validators.gmail import validate_gmail
+from api.infrastructure.integration_validators.gmail_app_password import validate_gmail_app_password
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
+from api.infrastructure.integration_validators.merkys import validate_merkys
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 
@@ -60,6 +67,7 @@ _BB = BitbucketContent(workspace="acme", repos=["backend"], email="alice@acme.co
 _PD = PipedriveContent(api_token="pd-tok")
 _PD_WITH_DOMAIN = PipedriveContent(api_token="pd-tok", domain="aai-labs")
 _APOLLO = ApolloContent(api_token="apollo-key")
+_MERKYS = MerkysContent(base_url="https://merkys.example.com", api_key="cb_key")
 
 # ── IntegrationValidationResult ───────────────────────────────────────────────
 
@@ -857,6 +865,41 @@ def test_apollo_network_error_returns_error():
     assert "apollo" in (result.error or "").lower()
 
 
+# ── Gmail app password ────────────────────────────────────────────────────────
+
+_GMAIL_APP_PASSWORD = GmailAppPasswordContent(email="someone@gmail.com", app_password="abcdefghijklmnop")
+_GMAIL_SIGN_IN = "api.infrastructure.integration_validators.gmail_app_password.gmail_imap.check_sign_in"
+
+
+def test_gmail_app_password_that_signs_in_is_valid():
+    with patch(_GMAIL_SIGN_IN) as sign_in:
+        result = validate_gmail_app_password(_GMAIL_APP_PASSWORD)
+
+    assert result.valid is True
+    assert result.identity == "someone@gmail.com"
+    sign_in.assert_called_once_with("someone@gmail.com", "abcdefghijklmnop")
+
+
+def test_gmail_app_password_gmail_rejects_is_invalid():
+    with patch(_GMAIL_SIGN_IN, side_effect=MailSignInFailed()):
+        result = validate_gmail_app_password(_GMAIL_APP_PASSWORD)
+
+    assert result.valid is False
+    assert "app password" in (result.error or "").lower()
+
+
+def test_gmail_app_password_unreachable_gmail_returns_error():
+    with patch(_GMAIL_SIGN_IN, side_effect=MailUnavailable("could not reach Gmail")):
+        result = validate_gmail_app_password(_GMAIL_APP_PASSWORD)
+
+    assert result.valid is False
+    assert "gmail" in (result.error or "").lower()
+
+
+def test_gmail_app_password_is_validated_on_save():
+    assert PROVIDER_VALIDATORS[SecretProvider.GMAIL_APP_PASSWORD] is validate_gmail_app_password
+
+
 # ── Google Workspace (gog) ────────────────────────────────────────────────────
 
 _GWS_TOKEN_MOD = "api.infrastructure.integration_validators.google_grant.httpx.post"
@@ -985,6 +1028,63 @@ def test_google_workspace_unexpected_status_returns_error():
 
     assert result.valid is False
     assert "500" in (result.error or "")
+
+
+# ── Merkys ────────────────────────────────────────────────────────────────────
+
+_MERKYS_MOD = "api.infrastructure.integration_validators.merkys.httpx.get"
+_MERKYS_LIST = {"status": "success", "items": [], "page_size": 1}
+
+
+def test_merkys_valid_key_is_valid():
+    with patch(_MERKYS_MOD, return_value=_resp(_MERKYS_LIST)) as mock_get:
+        result = validate_merkys(_MERKYS)
+
+    assert result.valid is True
+    assert result.error is None
+    mock_get.assert_called_once()
+    assert mock_get.call_args.args == ("https://merkys.example.com/api/conversation/?limit=1",)
+    assert mock_get.call_args.kwargs["headers"] == {"X-API-Key": "cb_key"}
+    # A redirect would carry the key to whichever host the first one names.
+    assert mock_get.call_args.kwargs["follow_redirects"] is False
+
+
+def test_merkys_401_is_an_invalid_key():
+    with patch(_MERKYS_MOD, return_value=_resp({"detail": "Invalid API key"}, status=401)):
+        result = validate_merkys(_MERKYS)
+
+    assert result.valid is False
+    assert result.error == "Invalid API key"
+
+
+def test_merkys_unexpected_status_returns_error():
+    with patch(_MERKYS_MOD, return_value=_resp({}, status=503)):
+        result = validate_merkys(_MERKYS)
+
+    assert result.valid is False
+    assert "503" in (result.error or "")
+
+
+def test_merkys_a_200_that_is_not_a_merkys_list_is_invalid():
+    # A wrong host behind a proxy can answer 200 with HTML or an unrelated JSON body.
+    with patch(_MERKYS_MOD, return_value=httpx.Response(200, text="<html>hi</html>", request=_REQUEST)):
+        assert validate_merkys(_MERKYS).valid is False
+    with patch(_MERKYS_MOD, return_value=_resp({"ok": True})):
+        assert validate_merkys(_MERKYS).valid is False
+
+
+def test_merkys_network_error_does_not_tell_which_ports_answer():
+    refused = httpx.ConnectError("[Errno 111] Connection refused", request=_REQUEST)
+    handshake = httpx.ConnectError("[SSL: WRONG_VERSION_NUMBER] wrong version number", request=_REQUEST)
+
+    with patch(_MERKYS_MOD, side_effect=refused):
+        closed = validate_merkys(_MERKYS)
+    with patch(_MERKYS_MOD, side_effect=handshake):
+        open_port = validate_merkys(_MERKYS)
+
+    assert closed.valid is False
+    assert closed.error == open_port.error
+    assert "Errno" not in (closed.error or "") and "SSL" not in (open_port.error or "")
 
 
 # ── Gmail ─────────────────────────────────────────────────────────────────────

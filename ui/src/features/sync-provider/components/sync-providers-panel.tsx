@@ -34,7 +34,7 @@ export function SyncProvidersPanel({ canManage }: { canManage: boolean }) {
       ) : (
         <ul
           aria-label="Sync providers"
-          className="m-0 list-none divide-y overflow-hidden rounded-xl border p-0"
+          className="m-0 list-none divide-y p-0"
           style={{ borderColor: "var(--line)" }}
         >
           {providers.map((provider) => (

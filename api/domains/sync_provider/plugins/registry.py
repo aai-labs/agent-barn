@@ -41,6 +41,10 @@ class SyncProviderPluginRegistry:
         except KeyError as exc:
             raise KeyError(f"Unsupported sync provider: {key}") from exc
 
+    def all(self) -> list[SyncProviderPlugin]:
+        """Every registered provider, offered or not, in key order."""
+        return [self._plugins[key] for key in sorted(self._plugins)]
+
     def offered(self) -> list[SyncProviderPlugin]:
         """Providers an Organization may connect on this server, in key order."""
         return [self._plugins[key] for key in sorted(self._plugins) if self._plugins[key].is_offered()]

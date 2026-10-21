@@ -36,6 +36,8 @@ const ORG_SCOPED_QUERY_KEYS = new Set([
   "playbook-extractions",
   "agent-webhooks",
   "webhook-invocations",
+  // Org-dimensioned, but evicted so returning to an org rereads current access.
+  "workflows",
 ]);
 
 type OrganizationContextValue = {

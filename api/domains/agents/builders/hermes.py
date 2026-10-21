@@ -80,10 +80,14 @@ _HERMES_AUXILIARY_TASKS = (
     "kanban_decomposer",
     "profile_describer",
     "goal_judge",
-    "curator",
     "monitor",
-    "background_review",
 )
+
+# Left unpinned on purpose. These fork the agent and resolve their key through Hermes's
+# runtime provider, which sends OPENAI_API_KEY only to OpenAI hosts, so pinned to
+# "custom" against the in-pod proxy they send a placeholder key and get a 401. Unpinned,
+# both use the main model's provider, which carries the key.
+_HERMES_RUNTIME_INHERITING_TASKS = ("curator", "background_review")
 
 HERMES_BOOT_RUN_PY: str = (_SCRIPTS / "boot-run.py").read_text()
 
@@ -161,7 +165,8 @@ def _hermes_config_core(
         # rejects: smart approval escalated every flagged command, and title
         # generation and vision failed. "custom" reuses OPENAI_API_KEY from the
         # runtime secret against the same proxy. The main model stays on
-        # "openrouter" because "custom" there drops that key.
+        # "openrouter" because "custom" there drops that key. Two tasks resolve their
+        # key differently and stay unpinned: see _HERMES_RUNTIME_INHERITING_TASKS.
         "auxiliary": {
             task: {"provider": "custom", "base_url": litellm_base_url, "model": model_name}
             for task in _HERMES_AUXILIARY_TASKS

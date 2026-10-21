@@ -128,7 +128,7 @@ test.describe("Hiring choices", () => {
         linked_by_membership_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", created_at: "2026-10-07T12:00:00Z",
       }] : []);
       await page.goto(`/dashboard/${TEST_ORG_ID}/agents/${MOCK_AGENT_ID}`);
-      await expect(page.getByRole("heading", { name: "Maya", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Switch agent. Current: Maya" })).toBeVisible();
       if (condition === "stopped") {
         await expect(page.getByRole("button", { name: "Connect Telegram", exact: true })).toBeDisabled();
         await expect(page.getByText("Start your agent, then link your Telegram account to chat with it there.")).toBeVisible();

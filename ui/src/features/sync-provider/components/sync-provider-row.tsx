@@ -36,6 +36,26 @@ export function SyncProviderRow({ provider, canManage }: { provider: SyncProvide
   const noun = provider.locationNoun ?? "location";
   const hasPicker = provider.capabilities.includes(LOCATION_PICKER) && provider.locationNoun !== null;
 
+  if (!provider.available) {
+    return (
+      <li
+        aria-label={provider.displayName}
+        className="flex flex-wrap items-center gap-3 px-4 py-3.5"
+        style={{ borderColor: "var(--line)" }}
+      >
+        <SyncProviderIcon providerKey={provider.key} displayName={provider.displayName} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[0.92rem] font-medium" style={{ color: "var(--ink)" }}>
+            {provider.displayName}
+          </div>
+          <div className="text-[0.82rem]" style={{ color: "var(--ink-3)" }}>
+            {provider.displayName} is not configured for the platform.
+          </div>
+        </div>
+      </li>
+    );
+  }
+
   async function run(action: () => Promise<unknown>, fallback: string) {
     setActionError(null);
     try {

@@ -90,8 +90,7 @@ class AaiCliAdapter:
             decrypted[binding.provider] = binding.content
             if binding.mode == EgressMode.DIRECT:
                 # Missing scoped Atlassian metadata must fail, not silently skip a profile.
-                if plugin.egress_mode == EgressMode.GATEWAY_PROXY:
-                    plugin.upstream_base_url(binding.content)
+                plugin.validate_direct_content(binding.content)
                 if isinstance(binding.content, SharePointContent) and binding.content.mode == "selected_sites":
                     assert isinstance(plugin, SharePointPlugin)
                     blocks.append(plugin.aai_cli_selected_sites_profile_block(context.sharepoint_token_url))
@@ -103,11 +102,7 @@ class AaiCliAdapter:
                 blocks.append(
                     cli_plugin.aai_cli_gateway_profile_block(
                         binding.content,
-                        base_url=(
-                            f"{context.gateway_base_url.rstrip('/')}/token"
-                            if binding.mode == EgressMode.TOKEN_BROKER
-                            else f"{context.gateway_base_url.rstrip('/')}/p/{plugin.key}"
-                        ),
+                        base_url=_gateway_endpoint(context.gateway_base_url, binding.mode, plugin.key),
                         token_env=gateway_token_env_var(binding.provider),
                     )
                 )
@@ -124,6 +119,18 @@ class AaiCliAdapter:
         if bindings:
             files["aai-cli-config.toml"] = "\n".join(blocks)
         return RuntimeArtifacts(files=files, env=build_env(direct), policy_md=build_integrations_policy_md(decrypted))
+
+
+def _gateway_endpoint(gateway_base_url: str, mode: EgressMode, key: str) -> str:
+    """Where an isolated aai-cli profile sends its requests on the credential gateway."""
+    base = gateway_base_url.rstrip("/")
+    if mode == EgressMode.TOKEN_BROKER:
+        return f"{base}/token"
+    if mode == EgressMode.GATEWAY_SERVED:
+        # aai-cli's Custom API gateway mode posts the complete request object here.
+        # /custom-api/request belongs to Custom API connections and their own credentials.
+        return f"{base}/served/request"
+    return f"{base}/p/{key}"
 
 
 class GogAdapter:

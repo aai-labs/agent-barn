@@ -14,8 +14,9 @@ export class SettingsSyncPage {
     return this.page.getByRole("region", { name: "Sync" });
   }
 
-  get sidebarItem() {
-    return this.page.getByRole("button", { name: "Sync", exact: true });
+  /** Sync's link in the settings panel beside the page. */
+  get sectionLink() {
+    return this.page.getByRole("complementary").getByRole("link", { name: "Sync", exact: true });
   }
 
   get retry() {

@@ -411,13 +411,14 @@ test.describe("Platform resource usage (platform_admin)", () => {
     await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
   });
 
-  test("marks Resources as the current platform tab", async () => {
+  test("marks Spend on the rail and Resources in its panel", async () => {
     await data.resourceUsage.interceptPlatformResourceUsage();
 
     await usagePage.goto();
 
-    await expect(usagePage.navLink("Resources")).toHaveAttribute("aria-current", "page");
+    await expect(usagePage.navLink("Spend")).toHaveAttribute("aria-current", "page");
     await expect(usagePage.navLink("Overview")).not.toHaveAttribute("aria-current", "page");
+    await expect(usagePage.panelLink("Resources")).toHaveAttribute("aria-current", "page");
   });
 });
 

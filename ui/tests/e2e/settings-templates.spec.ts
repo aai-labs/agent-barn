@@ -38,7 +38,7 @@ test.describe("Settings · Templates", () => {
 
   async function openTemplatesTab(page: import("@playwright/test").Page) {
     await page.goto(TEMPLATES_TAB);
-    await page.getByRole("button", { name: "Templates", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Templates", exact: true }).click();
   }
 
   test("lists template lineages with draft and source badges", async ({ page }) => {

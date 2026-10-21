@@ -22,7 +22,7 @@ test("Platform Admin can search and save the shared memory model", async ({
   const settings = new PlatformMemorySettingsPage(page);
   const mock = await new DataSupport(page).platformMemory.intercept();
   await settings.goto();
-  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Agent Memory", level: 1 })).toBeVisible();
   await expect(settings.summary()).toContainText("GPT-4.1 mini");
   await page.screenshot({
     path: test.info().outputPath("platform-settings.png"),

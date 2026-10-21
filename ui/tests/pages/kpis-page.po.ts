@@ -18,12 +18,13 @@ export class KpisPage {
     return this.page.getByRole("heading", { name: "KPIs", exact: true });
   }
 
-  inlineNavLinks(): Locator {
-    return this.page.locator("header nav").getByRole("link");
+  /** The rail on desktop; the bottom bar on a phone. */
+  navLinks(): Locator {
+    return this.page.getByRole("navigation", { name: "Main" }).getByRole("link");
   }
 
-  inlineNavLink(name: string): Locator {
-    return this.page.locator("header nav").getByRole("link", { name, exact: true });
+  navLink(name: string): Locator {
+    return this.page.getByRole("navigation", { name: "Main" }).getByRole("link", { name, exact: true });
   }
 
   async gotoWithRange(from: string, to: string) {
@@ -207,19 +208,20 @@ export class KpisPage {
     await days.nth(9).click();
   }
 
-  async openNavigationDrawer() {
-    await this.page.getByRole("button", { name: "Open navigation" }).click();
+  /** The phone's More sheet, which holds the rail's destinations past the bottom bar's. */
+  async openMore() {
+    await this.page.getByRole("button", { name: "More", exact: true }).click();
   }
 
-  drawer(): Locator {
+  moreSheet(): Locator {
     return this.page.getByRole("dialog");
   }
 
-  drawerLinks(): Locator {
-    return this.drawer().getByRole("link");
+  moreLinks(): Locator {
+    return this.moreSheet().getByRole("link");
   }
 
-  drawerLink(name: string): Locator {
-    return this.drawer().getByRole("link", { name, exact: true });
+  moreLink(name: string): Locator {
+    return this.moreSheet().getByRole("link", { name, exact: true });
   }
 }

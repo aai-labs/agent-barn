@@ -43,9 +43,9 @@ test.describe("Dashboard Page", () => {
       await dataSupportPage.agents.interceptNameSuggestionRequest();
       const requests = dataSupportPage.agents.trackHiringRequests();
       await dashboardPage.goto();
+      // Both ways to hire on the team page: the "Your team" header's button and the card.
       for (const header of [false, true]) {
-        if (header) await page.goto(`/dashboard/${TEST_ORG_ID}/costs`);
-        await (header ? page.getByRole("button", { name: "Hire agent", exact: true }) : dashboardPage.hireCard()).click();
+        await (header ? page.getByRole("main").getByRole("button", { name: "Hire agent", exact: true }) : dashboardPage.hireCard()).click();
         await expect(page.getByRole("heading", { name: "Build your own agent", exact: true })).toBeVisible();
         await expect(page.getByRole("heading", { name: "How would you like to start?" })).toHaveCount(0);
         await expect(page.getByRole("radio", { name: /Ready-made assistant/ })).toHaveCount(0);

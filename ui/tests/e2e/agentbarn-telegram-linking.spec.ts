@@ -92,7 +92,7 @@ async function openChannels(page: Page, allowedActions = mockAgentAllowedActions
 async function goToChannels(page: Page, agentDetailPage: AgentDetailPage) {
   await agentDetailPage.goto(MOCK_AGENT_ID);
   await agentDetailPage.configureButton().click();
-  await agentDetailPage.channelsTab().click();
+  await agentDetailPage.openConfigurationSection("Messaging");
   await expect(page.getByText("Agent Barn Telegram").first()).toBeVisible();
 }
 

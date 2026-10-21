@@ -151,7 +151,9 @@ def run_phase(cluster, runtime: str, image: str, phase: str):
             content = content.model_copy(
                 update={"refresh_token": "latest-service-grant", "store_revision": "service-revision"}
             )
-        mode = plugin.egress_mode if isolated and plugin in isolatable else EgressMode.DIRECT
+        # A provider with no direct route (a Gmail app password) stays isolated in every phase.
+        stays_isolated = not ISOLATION_CAPABILITIES[plugin.provider].supports_direct
+        mode = plugin.egress_mode if (isolated and plugin in isolatable) or stays_isolated else EgressMode.DIRECT
         bindings.append(RuntimeBinding(plugin.provider, content, mode))
     artifacts = materialize_integrations(bindings, context)
     # Direct modes still need the non-secret fixture URL for the egress check.

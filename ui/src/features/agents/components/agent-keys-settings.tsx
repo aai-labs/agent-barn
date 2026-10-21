@@ -26,7 +26,12 @@ function setupDrafts(agent: Agent): IntegrationDraft[] {
 // New credentials have no server policy yet. Describe the credential boundary;
 // the isolation endpoint validates runtime support after the credential is saved.
 function newSecret(provider: string): AgentSecretRead {
-  const name = getIntegrationProvider(provider)?.label ?? provider;
+  const definition = getIntegrationProvider(provider);
+  const name = definition?.label ?? provider;
+  if (definition?.alwaysIsolated) {
+    return { provider, secretName: name, isolation: { desired: true, switchAvailable: false, supportedModes: ["isolated"],
+      ...definition.alwaysIsolated } };
+  }
   const broker = provider === "google_workspace" || provider === "sharepoint";
   return { provider, secretName: name, isolation: { desired: false, switchAvailable: true, supportedModes: ["direct", "isolated"],
     directDescription: `This Agent receives the ${name} credentials and connects directly.`,
@@ -161,7 +166,7 @@ export function AgentKeysSettings({ agent, canEdit, editing, onEdit }: {
         <fieldset disabled={pending || customApi.isLoadingConnections || Boolean(customApi.connectionsError)} className="m-0 min-w-0 border-0 p-0">
         <IntegrationsStep agentId={agent.id}
           onAddCustomApi={() => setCustomDrafts((current) => [...current, connectionDraft()])}
-          extraIntegrations={<ConnectionIntegrations agent={agent} drafts={customDrafts} onChange={setCustomDrafts} />} integrations={drafts} onChange={(next) => setDrafts(next.map((draft) => ({ ...draft, isolated: draft.isolated ?? savedSecret(draft)?.isolation?.desired ?? false })))}
+          extraIntegrations={<ConnectionIntegrations agent={agent} drafts={customDrafts} onChange={setCustomDrafts} />} integrations={drafts} onChange={(next) => setDrafts(next.map((draft) => ({ ...draft, isolated: draft.isolated ?? savedSecret(draft)?.isolation?.desired ?? newSecret(draft.provider).isolation?.desired ?? false })))}
           canRemoveProvider={(provider) => provider !== "sharepoint" || (!sharepointAccess.isPending && !sharepointAccess.isError && sharepointAccess.data?.mode !== "selected_sites")}
           renderIsolation={(draft) => <IntegrationIsolationControl agent={agent} secret={savedSecret(draft) ?? newSecret(draft.provider)}
             isolated={draft.isolated ?? false} onChange={(isolated) => setDrafts((current) => current.map((item) => item.provider === draft.provider ? { ...item, isolated } : item))} />} />

@@ -150,7 +150,7 @@ export function SkillDetailPage({
 
   if (isLoading) {
     return (
-      <div className="af-page">
+      <div>
         <div className="af-card px-6 py-8 animate-pulse">
           <div className="h-6 w-56 rounded-md mb-3" style={{ background: "var(--bg-soft)" }} />
           <div className="h-3 w-72 rounded-md" style={{ background: "var(--bg-soft)" }} />
@@ -161,7 +161,7 @@ export function SkillDetailPage({
 
   if (error || !detail) {
     return (
-      <div className="af-page">
+      <div>
         <Link
           href={skillsHref}
           className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
@@ -426,7 +426,7 @@ export function SkillDetailPage({
               : null;
 
   return (
-    <div className="af-page">
+    <div>
       <Link
         href={skillsHref}
         className="inline-flex items-center gap-1.5 text-[0.8125rem] mb-6 px-2 py-1 -ml-2 rounded-lg hover:bg-[var(--bg-soft)] transition-colors"
