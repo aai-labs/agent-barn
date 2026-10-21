@@ -33,23 +33,23 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
 - Delivered:
   - Microsoft and runtime image verification (no code);
   - the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), with `CONTEXT.md` defining Agent Folder, File Sync and Sync Category;
-  - the sync rules (`api/domains/file_sync/rules.py`).
+  - the sync rules (`api/domains/file_sync/rules.py`);
+  - the file sync tables (migration `af95cf4c3a1e`).
 
-  Nothing calls the rules yet, and no file syncs yet.
-- Next, in this order, each as its own slice:
-  1. tables and repositories;
-  2. Graph file operations;
-  3. the `file_sync` capability, then OneDrive's implementation of it;
-  4. folder reconciliation;
-  5. the Sync Engine and its deployment;
-  6. Ingest file-sync routes;
-  7. remote change processing;
-  8. the in-pod helper;
-  9. builder and `start.sh` wiring;
-  10. pinned-image contracts;
-  11. disconnect;
-  12. docs consolidation;
-  13. an end-to-end run on local k3d against the test tenant.
+  Nothing reads or writes the tables yet, and no file syncs yet.
+- Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
+  1. Graph file operations;
+  2. the `file_sync` capability, then OneDrive's implementation of it;
+  3. folder reconciliation;
+  4. the Sync Engine and its deployment;
+  5. Ingest file-sync routes;
+  6. remote change processing;
+  7. the in-pod helper;
+  8. builder and `start.sh` wiring;
+  9. pinned-image contracts;
+  10. disconnect;
+  11. docs consolidation;
+  12. an end-to-end run on local k3d against the test tenant.
 - Docs owed by the slice that makes them true:
   - **this README:**
     - the "Agent file sync" section, with folder reconciliation;
@@ -68,7 +68,7 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
-- **Tables:** generic (`sync_agent_folder`, `sync_file`, `sync_upload`, `sync_operation`, `sync_activity`) instead of `onedrive_*`. The in-pod helper is `file-sync.py`, not `onedrive-sync.py`.
+- **Tables:** three generic tables (`sync_agent_folder`, `sync_file`, `sync_activity`) instead of the ticket's four `onedrive_*` ones. Pending uploads and pod work are columns on `sync_file`, not tables of their own. The in-pod helper is `file-sync.py`, not `onedrive-sync.py`.
 - **Never in the provider:** "No path from `HERMES_EXCLUDED` / `OPENCLAW_EXCLUDED` ever appears" applies to credentials and runtime machinery. Template-rebuilt files (`SOUL.md`, `AGENTS.md`, `IDENTITY.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`) and `skills/` are mirrored read-only, with edits undone.
 - **Conflicts:** the user's version stays in the provider's version history. No `name (your edit YYYY-MM-DD).ext` copy is made. This also applies after an Agent Restore Point restore.
 - **Folders:** created, renamed and stopped by the Sync Engine's pass, not by an event handler for `agent.created`/`agent.updated`/`agent.deleted`. No new RBAC background-work exception is needed.
@@ -80,6 +80,38 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-21 — AF-384 — File sync tables
+
+- Delivered: models in `api/domains/file_sync/models.py` and migration `af95cf4c3a1e` (revises `a4e9c2d7b615`), registered in `api/migrations/env.py`.
+  - **`sync_agent_folder`:** one Agent's folder on a connection.
+    - Columns: `folder_item_id`, `folder_web_url`, `folder_path`, `status` (`active`/`stopped`/`disabled`) and `last_contact_at`.
+    - One folder per Agent per connection.
+    - Folder names are unique per connection, case-insensitively.
+  - **`sync_file`:** one synced path.
+    - What both sides last agreed on: `item_id`, `etag`, `ctag`, `remote_hash`, `local_sha256`, `size` and `synced_at`. The provider fields are empty while the first upload is under way (`upload_started_at`).
+    - Work only the pod can do: `pending` (`download` or `reupload`), claimed until `lease_until`, with `attempts` and `retry_at`. One row per path means at most one open job per file.
+    - Paths are unique per folder, case-insensitively, matching the provider (PR 0: `notes.md` next to `Notes.md` is 409).
+    - Each provider item is recorded once per folder, so a deleted item, which carries only its id, can be matched.
+  - **`sync_activity`:** what a person should be able to see. It is indexed by Agent and time, and keeps its rows (`folder_id` set to null) when the folder row goes.
+  - **Cascades:** folders and files go with their connection, Agent or Organization. Activity goes with its Agent or Organization.
+  - **`sync_provider_connection`:** gains `sync_cursor` and `sync_retry_at`.
+- Changed:
+  - Repository queries arrive with the slice that uses them, not here, so no query is written before its caller exists.
+  - `api/ingest_app.py` imports the new models when the Ingest routes land.
+- Verified:
+  - `api/tests/integration/test_file_sync_schema.py` (12 tests) covers:
+    - each uniqueness rule, and several first uploads under way without a provider item;
+    - defaults and pending work stored on the file;
+    - the connection columns;
+    - files removed and activity kept when a folder goes;
+    - the Organization delete cascade, and a soft-deleted Agent keeping its folder.
+
+    The first five-table version failed first (models missing). The three-table rewrite was written together with its models, so it did not fail first.
+  - A one-off autogenerate comparison of the models against a database migrated to head found no difference in the four affected tables. The raw diff text was also searched for every table and new column name, with no match.
+  - One Alembic head (`af95cf4c3a1e`).
+  - `test_sync_provider_repository.py`, `test_sync_provider_connection.py` and `test_sync_provider_plugins.py` still pass.
+  - ruff, format and ty pass.
 
 ### 2026-10-21 — AF-384 — Sync rules
 

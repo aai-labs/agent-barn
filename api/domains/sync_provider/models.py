@@ -67,6 +67,8 @@ class SyncProviderConnection(BaseModel, table=True):
     disconnected_at: datetime | None = SqlField(
         default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
     )
+    sync_cursor: str | None = SqlField(default=None, nullable=True, sa_type=sa.Text, repr=False)
+    sync_retry_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
 
 
 class SyncProviderDescriptorRead(PydanticBaseModel):
