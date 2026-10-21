@@ -129,6 +129,9 @@ class AgentTaskFileCreate(PydanticBaseModel):
 
 
 class AgentTaskFilter(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: UUID | None = None
     status: AgentTaskStatus | None = None
 
 

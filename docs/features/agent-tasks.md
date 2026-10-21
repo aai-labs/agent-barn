@@ -16,7 +16,7 @@ This slice is the store and its service (`../api/domains/agent_tasks/`). It has 
 - A Task has a title, an optional description, and a status of `open`, `in_progress`, `done` or `failed`. It starts `open`, and its Agent may move it to any status.
 - Task Notes are append-only and listed oldest first.
 - Only the Task's own Agent writes: it creates Tasks, changes their status, adds Notes and attaches Files. The write methods take the Agent's Organization and id, which the caller has already authenticated, and refuse a deleted Agent or another Agent's Task with 404. People have no write path.
-- People read Tasks with `task.read`, which every locked Agent Access Role grants. Reads filter by Agent visibility in the query: one Agent's Tasks, one Task with its Notes and File metadata, one File's bytes, or every Task across the Organization the reader can see. An Agent the reader cannot see returns 404; one they can see without `task.read` returns 403. See [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md).
+- People read Tasks with `task.read`, which every locked Agent Access Role grants. Reads filter by Agent visibility in the query: one Agent's Tasks, one Task with its Notes and File metadata, one File's bytes, or every Task across the Organization the reader can see. Lists are newest first and can be filtered by Agent and status; an Agent the reader cannot see simply yields no Tasks. An Agent the reader cannot see returns 404; one they can see without `task.read` returns 403. See [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md).
 
 ## Task Files
 

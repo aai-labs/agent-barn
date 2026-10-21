@@ -227,6 +227,8 @@ class AgentTaskRepository:
         authorization_scope: AuthorizationScope,
     ) -> PaginatedItems[AgentTaskRead]:
         where = [*predicates, *agent_scope_predicates(authorization_scope)]
+        if task_filter.agent_id is not None:
+            where.append(col(AgentTask.agent_id) == task_filter.agent_id)
         if task_filter.status is not None:
             where.append(col(AgentTask.status) == task_filter.status)
 

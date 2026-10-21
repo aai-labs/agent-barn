@@ -360,3 +360,34 @@ def test_an_agent_cannot_write_to_its_tasks_once_deleted(write: str):
         }
 
         assert_that(_status_code(writes[write]), equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_the_organization_list_can_be_filtered_by_agent():
+    with given(
+        [
+            *_GIVEN,
+            there_is_an_agent(name="One"),
+            _remember_agent_as("one"),
+            there_is_an_agent(name="Two"),
+            _admin_is_signed_in(),
+        ]
+    ) as context:
+        _create(context, context.one.id, title="One's work")
+        _create(context, context.agent.id, title="Two's work")
+
+        page = _service(context).list_organization_tasks(
+            context.current_user_context, AgentTaskFilter(agent_id=context.one.id), _FIRST_PAGE
+        )
+
+        assert_that(([task.title for task in page.items], page.total), equal_to((["One's work"], 1)))
+
+
+def test_filtering_by_an_agent_the_member_cannot_read_shows_nothing():
+    with given([*_GIVEN, there_is_an_agent(name="Hidden"), _member_is_signed_in()]) as context:
+        _create(context, context.agent.id, title="Hidden work")
+
+        page = _service(context).list_organization_tasks(
+            context.current_user_context, AgentTaskFilter(agent_id=context.agent.id), _FIRST_PAGE
+        )
+
+        assert_that((page.items, page.total), equal_to(([], 0)))
