@@ -4,7 +4,7 @@
 **Author:** Ananiya
 **Scope:** Whether an existing self-hosted tracker can be the headless backend for MDP-45 ("Centralized task tracking plus UI"): Agents open a task for any non-trivial Request, and users track progress and find the files the Agent produced.
 **Status:** Spike complete. Vikunja was not adopted: tasks are a native store, see [`../../adr/2026-10-21-native-agent-task-store.md`](../../adr/2026-10-21-native-agent-task-store.md).
-**Evidence:** the harness that produced the PASS/FAIL results below is alongside this file; see [`README.md`](README.md).
+**Evidence:** the PASS/FAIL results below came from a throwaway local harness (Docker Compose and k3d stacks with an API walk-through script), which is not kept in the repository.
 
 ---
 
