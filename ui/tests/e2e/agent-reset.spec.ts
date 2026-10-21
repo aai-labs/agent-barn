@@ -16,7 +16,7 @@ const stoppedAgent = { ...mockAgent, status: "STOPPED" };
 
 async function openDangerZone(page: AgentConfigurationPage) {
   await page.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-  await page.sectionButton("Danger zone").click();
+  await page.sectionLink("Danger zone").click();
 }
 
 async function baseIntercepts(dataSupport: DataSupport, agent: unknown = stoppedAgent) {
