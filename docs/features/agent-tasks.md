@@ -1,0 +1,26 @@
+# Agent Tasks
+
+## Read when
+
+Read before changing Tasks, Task Notes, Task Files, their storage or limits, or who can read them.
+
+## Role in the system
+
+A Task is a piece of work an Agent records for itself, with a timeline of Task Notes and the Task Files it produces. Tasks live in Agent Barn's own tables in the application Postgres, not in a separate tracker; [`../adr/2026-10-21-native-agent-task-store.md`](../adr/2026-10-21-native-agent-task-store.md) records why.
+
+This slice is the store and its service (`../api/domains/agent_tasks/`). It has no HTTP routes, Agent tooling or UI yet.
+
+## Invariants
+
+- A Task belongs to one Agent and carries the same Organization identity. The database enforces this with a composite foreign key to the Agent.
+- A Task has a title, an optional description, and a status of `open`, `in_progress`, `done` or `failed`. It starts `open`, and its Agent may move it to any status.
+- Task Notes are append-only and listed oldest first.
+- Only the Task's own Agent writes: it creates Tasks, changes their status, adds Notes and attaches Files. The write methods take the Agent's Organization and id, which the caller has already authenticated, and refuse a deleted Agent or another Agent's Task with 404. People have no write path.
+- People read Tasks with `task.read`, which every locked Agent Access Role grants. Reads filter by Agent visibility in the query: one Agent's Tasks, one Task with its Notes and File metadata, one File's bytes, or every Task across the Organization the reader can see. An Agent the reader cannot see returns 404; one they can see without `task.read` returns 403. See [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md).
+
+## Task Files
+
+- A Task File's metadata (name, content type, size) sits in `agent_task_file`; its bytes sit behind the `TaskFileStorage` interface (`../api/domains/agent_tasks/file_storage.py`), keyed by File id. Tasks never touch the bytes, so moving them to object storage replaces that store and its binding in `../api/infrastructure/app.py`.
+- The Postgres store keeps each File as 1 MiB chunks in `agent_task_file_chunk`, written in the same transaction as the File's metadata and removed with it by cascade.
+- A filename is a bare name: no path separators or control characters.
+- Empty files are refused. A File may be at most `TASK_FILE_MAX_BYTES` (default 20 MiB), and one Organization's Task Files together at most `TASK_ORGANIZATION_STORAGE_MAX_BYTES` (default 2 GiB). Both are refused with 400. A per-Organization advisory lock makes the usage check and the insert one step, so concurrent uploads cannot together pass the limit.

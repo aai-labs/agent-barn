@@ -117,6 +117,17 @@ class AgentTaskNoteCreate(PydanticBaseModel):
     body: Text
 
 
+class AgentTaskFileCreate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # A bare name: no path separators or control characters, so it is safe to offer
+    # back as a download name.
+    filename: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255, pattern=r"^[^/\\\x00-\x1f]+$")
+    ]
+    content_type: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+
+
 class AgentTaskFilter(PydanticBaseModel):
     status: AgentTaskStatus | None = None
 

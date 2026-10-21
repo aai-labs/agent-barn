@@ -2,15 +2,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+import sqlalchemy as sa
 from injector import inject, singleton
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
+from api.domains.agent_tasks.file_storage import TaskFileStorage
 from api.domains.agent_tasks.models import (
     AgentTask,
     AgentTaskCreate,
     AgentTaskDetail,
     AgentTaskFile,
+    AgentTaskFileCreate,
     AgentTaskFileRead,
     AgentTaskFilter,
     AgentTaskNote,
@@ -52,11 +55,16 @@ def _agents_task(session: Session, organization_id: UUID, agent_id: UUID, task_i
     return session.exec(query).first()
 
 
+class OrganizationTaskStorageFullError(Exception):
+    """Storing the File would take the Organization's Task Files past its limit."""
+
+
 @inject
 @singleton
 @dataclass
 class AgentTaskRepository:
     delegate: PostgresRepositoryDelegate
+    file_storage: TaskFileStorage
 
     def create_for_live_agent(self, organization_id: UUID, agent_id: UUID, data: AgentTaskCreate) -> AgentTask | None:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -92,6 +100,68 @@ class AgentTaskRepository:
             session.add(note)
             session.commit()
             return note
+
+    def add_file(
+        self,
+        organization_id: UUID,
+        agent_id: UUID,
+        task_id: UUID,
+        metadata: AgentTaskFileCreate,
+        data: bytes,
+        organization_limit_bytes: int,
+    ) -> AgentTaskFile | None:
+        """Record a File and store its bytes in one transaction, within the Organization's limit.
+
+        A per-Organization advisory lock serialises the usage check with the insert, so
+        two uploads at once cannot both fit under the limit and together exceed it.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            if not _lock_live_agent(session, organization_id, agent_id):
+                return None
+            if _agents_task(session, organization_id, agent_id, task_id) is None:
+                return None
+            session.connection().execute(
+                sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                {"key": f"agent_task_file:{organization_id}"},
+            )
+            used = session.scalar(
+                select(func.coalesce(func.sum(AgentTaskFile.size_bytes), 0)).where(
+                    col(AgentTaskFile.organization_id) == organization_id
+                )
+            )
+            if (used or 0) + len(data) > organization_limit_bytes:
+                raise OrganizationTaskStorageFullError
+            stored = AgentTaskFile(
+                organization_id=organization_id,
+                task_id=task_id,
+                size_bytes=len(data),
+                **metadata.model_dump(),
+            )
+            session.add(stored)
+            session.flush()
+            self.file_storage.write(session, stored.id, data)
+            session.commit()
+            return stored
+
+    def get_file(
+        self,
+        agent_id: UUID,
+        task_id: UUID,
+        file_id: UUID,
+        authorization_scope: AuthorizationScope,
+    ) -> AgentTaskFile | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(AgentTaskFile)
+                .join(AgentTask, col(AgentTask.id) == col(AgentTaskFile.task_id))
+                .join(Agent, col(Agent.id) == col(AgentTask.agent_id))
+                .where(
+                    col(AgentTaskFile.id) == file_id,
+                    col(AgentTaskFile.task_id) == task_id,
+                    col(AgentTask.agent_id) == agent_id,
+                    *agent_scope_predicates(authorization_scope),
+                )
+            ).first()
 
     def find_by_agent(
         self,

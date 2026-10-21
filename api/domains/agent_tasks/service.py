@@ -1,19 +1,24 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
 
+from api.core.config import Config
+from api.domains.agent_tasks.file_storage import TaskFileStorage
 from api.domains.agent_tasks.models import (
     AgentTaskCreate,
     AgentTaskDetail,
+    AgentTaskFileCreate,
+    AgentTaskFileRead,
     AgentTaskFilter,
     AgentTaskNoteCreate,
     AgentTaskNoteRead,
     AgentTaskRead,
     AgentTaskStatus,
 )
-from api.domains.agent_tasks.repository import AgentTaskRepository
+from api.domains.agent_tasks.repository import AgentTaskRepository, OrganizationTaskStorageFullError
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
@@ -35,7 +40,9 @@ class AgentTaskService:
     already authenticated the Agent, so there is no Permission to check.
     """
 
+    config: Config
     repository: AgentTaskRepository
+    file_storage: TaskFileStorage
     agent_authorization: AgentAuthorization
 
     def create_task(self, organization_id: UUID, agent_id: UUID, data: AgentTaskCreate) -> AgentTaskRead:
@@ -59,6 +66,48 @@ class AgentTaskService:
         if note is None:
             raise _task_not_found(task_id)
         return AgentTaskNoteRead.model_validate(note)
+
+    def attach_file(
+        self,
+        organization_id: UUID,
+        agent_id: UUID,
+        task_id: UUID,
+        metadata: AgentTaskFileCreate,
+        data: bytes,
+    ) -> AgentTaskFileRead:
+        if not data:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The file is empty.")
+        if len(data) > self.config.task_file_max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"The file is larger than the {self.config.task_file_max_bytes}-byte limit.",
+            )
+        try:
+            stored = self.repository.add_file(
+                organization_id,
+                agent_id,
+                task_id,
+                metadata,
+                data,
+                self.config.task_organization_storage_max_bytes,
+            )
+        except OrganizationTaskStorageFullError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The Organization has no room left for Task Files.",
+            ) from None
+        if stored is None:
+            raise _task_not_found(task_id)
+        return AgentTaskFileRead.model_validate(stored)
+
+    def read_file(
+        self, agent_id: UUID, task_id: UUID, file_id: UUID, context: CurrentUserContext
+    ) -> tuple[AgentTaskFileRead, Iterator[bytes]]:
+        scope = self._agent_read_scope(agent_id, context)
+        stored = self.repository.get_file(agent_id, task_id, file_id, scope)
+        if stored is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File {file_id} not found")
+        return AgentTaskFileRead.model_validate(stored), self.file_storage.read(stored.id)
 
     def list_agent_tasks(
         self,

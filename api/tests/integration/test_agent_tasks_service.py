@@ -1,13 +1,20 @@
 """AF-411 Agent Tasks: an Agent writes its own Tasks and Notes, and people read them
 only through Agents they may read Tasks on."""
 
+from datetime import UTC, datetime
 from uuid import UUID, uuid7
 
 import pytest
 from fastapi import HTTPException, status
 from hamcrest import assert_that, calling, contains_exactly, contains_inanyorder, equal_to, has_properties, raises
 
-from api.domains.agent_tasks.models import AgentTaskCreate, AgentTaskFilter, AgentTaskNoteCreate, AgentTaskStatus
+from api.domains.agent_tasks.models import (
+    AgentTaskCreate,
+    AgentTaskFileCreate,
+    AgentTaskFilter,
+    AgentTaskNoteCreate,
+    AgentTaskStatus,
+)
 from api.domains.agent_tasks.service import AgentTaskService
 from api.domains.agents.repository import AgentRepository
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID, PERMISSION_ID_BY_KEY, PermissionKey
@@ -334,3 +341,22 @@ def test_general_access_lets_every_member_read_the_agents_tasks():
         page = _service(context).list_organization_tasks(context.current_user_context, AgentTaskFilter(), _FIRST_PAGE)
 
         assert_that([task.title for task in page.items], contains_exactly("Visible to all"))
+
+
+@pytest.mark.parametrize("write", ["status", "note", "file"])
+def test_an_agent_cannot_write_to_its_tasks_once_deleted(write: str):
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        task = _create(context, context.agent.id)
+        context.agent.deleted_at = datetime.now(UTC)
+        context.injector.get(AgentRepository).delegate.save(context.agent)
+        service = _service(context)
+        org_id, agent_id = context.organization.id, context.agent.id
+        writes = {
+            "status": lambda: service.update_status(org_id, agent_id, task.id, AgentTaskStatus.DONE),
+            "note": lambda: service.add_note(org_id, agent_id, task.id, AgentTaskNoteCreate(body="Late")),
+            "file": lambda: service.attach_file(
+                org_id, agent_id, task.id, AgentTaskFileCreate(filename="late.txt", content_type="text/plain"), b"x"
+            ),
+        }
+
+        assert_that(_status_code(writes[write]), equal_to(status.HTTP_404_NOT_FOUND))
