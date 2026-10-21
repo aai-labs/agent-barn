@@ -1,7 +1,7 @@
 # Agent workflows
 
-Status: WF01 authoring implemented; execution unavailable.
-Source: [AF-388](https://aai-labs.atlassian.net/browse/AF-388), [WF01 scope](https://aai-labs.atlassian.net/wiki/spaces/AF/pages/3067019322), [selected architecture](https://aai-labs.atlassian.net/wiki/spaces/AF/pages/3067248652), [unified UI](https://aai-labs.atlassian.net/wiki/spaces/AF/pages/3066101773).
+Status: WF01 authoring and WF02 bounded execution implemented and verified locally; steps return persisted text summaries. Merge and deployment are separate delivery steps.
+Source: [AF-388](https://aai-labs.atlassian.net/browse/AF-388), [AF-389](https://aai-labs.atlassian.net/browse/AF-389), [WF01 scope](https://aai-labs.atlassian.net/wiki/spaces/AF/pages/3067019322), [selected architecture](https://aai-labs.atlassian.net/wiki/spaces/AF/pages/3067248652), [unified UI](https://aai-labs.atlassian.net/wiki/spaces/AF/pages/3066101773).
 Delivery sequencing: [AF-387 change log](agent-workflows/CHANGELOG.md).
 
 ## Ownership and authority
@@ -48,8 +48,8 @@ label is edited. Names and descriptions cannot be blank and have bounded lengths
 Unknown fields and unsupported input/capability/destination codes are rejected.
 Artifact descriptions are free text intentions, not generated files or format
 support promises. Authoring does not compile or admit execution capabilities.
-The descriptive capability vocabulary is reasoning/business_action/native_command;
-none enables a run in WF01.
+The descriptive capability vocabulary is reasoning/business_action/native_command.
+It is descriptive only: it neither enables nor restricts what a step may do when run.
 
 A new version is an append, never an edit of an old snapshot. The definition row
 is locked, its expected revision checked, the next version inserted and its
@@ -75,8 +75,8 @@ output) before another save replaces it.
 name and outcome once in Workflow details, then add steps, inputs and output
 descriptions. Building does not save automatically; saving is explicit.
 Natural-language draft generation is deferred to a separate PR by the delivery
-scope update on 2026-10-15. This slice has no generation endpoint, model adapter,
-background completion, polling state, generation record or model configuration.
+scope update on 2026-10-15. Manual authoring has no generation endpoint, model
+adapter, background completion, polling state, generation record or model configuration.
 
 ## API
 
@@ -84,7 +84,7 @@ Base: `/api/v1/organizations/{organization_id}/agents/{agent_id}`.
 
 | Route | Behavior |
 | --- | --- |
-| `GET /workflow-capabilities` | Authoring availability; execution always false; web review only |
+| `GET /workflow-capabilities` | Independent authoring/execution availability; web review only |
 | `GET /workflows` | Scoped paginated card summaries, including archives; no full snapshots |
 | `POST /workflows` | Validated full snapshot; 201 immutable v1 |
 | `GET /workflows/{id}` | Latest saved snapshot, revision, archive status and current allowed actions |
@@ -100,7 +100,7 @@ transfer to the API or browser. Detail and version-history endpoints retain full
 snapshots. DTOs use snake_case. Definition
 `allowed_actions` contains `save_version` and `archive` only while enabled,
 unarchived and permitted for the current actor. Read APIs remain available with
-the authoring gate off. No run/start endpoint is registered in this slice.
+the authoring gate off. Run/start operations are described under WF02 below.
 
 ## Platform authoring setting
 
@@ -118,9 +118,8 @@ strict update body contains only the boolean `authoring_enabled`; reads include
 that effective value and a nullable `updated_at`.
 
 The singleton `platform_workflow_settings` row persists the choice, update time
-and acting User. Before any choice is saved, `WORKFLOW_AUTHORING_ENABLED` provides
-the deployment default (`false`). A saved choice overrides that default in both
-directions and survives API restarts. Each capability/read/mutation request reads
+and acting User. Before any choice is saved, authoring defaults to `false`.
+The saved choice survives API restarts; there is no environment override. Each capability/read/mutation request reads
 the effective setting from PostgreSQL; saving needs no redeploy. UI affordances
 in other sessions can retain the documented 30-second cached view, but the server
 checks authoring admission on every mutation. Requests already admitted may finish.
@@ -129,7 +128,7 @@ Effective changes commit atomically with a Platform-scoped
 `platform.workflow_authoring.changed` event for the Security Audit projection,
 carrying previous/current booleans and safe actor/subject display snapshots.
 Repeated saves of an unchanged choice do not emit another event. Saving the
-current deployment default still persists that explicit choice.
+current default still persists that explicit choice.
 
 ## UI and configuration
 
@@ -148,7 +147,7 @@ Removing the last step offers an empty state and disables saving; undo
 restores the most recently removed step and its edited fields/output description. Final and
 per-step output switches and descriptions are editable. Saved overview and version
 history expose actual snapshots. Discard/archive use the shared branded dialog.
-Run is disabled with an explicit execution-unavailable message. Web review is the
+Run is disabled with an explicit message while execution admission is unavailable. Web review is the
 only selectable destination until notification capabilities are delivered.
 
 The workflow list uses individual cards with the outcome, step/input counts,
@@ -205,12 +204,130 @@ Implementation lives in `api/domains/workflows/` and
 `ui/src/features/workflows/`.
 Schema migrations: `a38801c6e001` after `c42e91b7a603` creates authoring records;
 `a38802d7f002` adds the Platform authoring setting. Merge revision `c32e42bb0396`
-joins it with staging head `d72b85f19c40`. Changes to snapshots must
+joins it with staging head `d72b85f19c40`. Execution revision `a38901e8a003`
+and current staging head `a4e9c2d7b615` join at no-op merge `f8740a67b788`. Changes to snapshots must
 move DTO validation, migration where needed, UI Zod schemas, tests and this
-specification together. Future execution must pin an immutable saved version,
-validate actual run inputs and compile shipped capabilities before admission.
+specification together. Execution pins an immutable saved version and validates
+actual run inputs; what a step may do is governed by the owning Agent's configuration.
 
-Runs, isolated execution, checkpoints, actual artifacts, business/native review,
-notifications, provider adapters and fanout belong to later AF-387 slices.
-Authoring or artifact descriptions imply none of those capabilities. No workflow
-runtime image changes or release version bump accompany WF01.
+Workflow-specific approval UI, notifications, provider adapters and fanout belong
+to later AF-387 slices. No release version bump accompanies WF02.
+
+## WF02 execution and outputs
+
+WF02 runs each step as a new session in the owning Agent and persists text results
+in PostgreSQL. A step is governed by whatever is configured on the Agent: its
+tools, connected Integrations, approval mode and spend limits. A step can do
+exactly what the Agent can do in chat, under the same rules, including acting
+unattended wherever the Agent may act unattended in chat. File artifacts, object
+storage, uploads, previews, downloads and file sharing are deferred to a separate
+slice. The saved `artifact_description` and `final_artifact_description` fields
+guide each step's text result rather than requiring a file. Every completed step
+reports its actual result in its summary, bounded to 4,000 characters, including
+facts later steps need. The last step's summary also serves as the final result.
+
+Execution is independent of the authoring setting. An Editor explicitly reviews
+a saved version's typed inputs and starts it. The Agent must be running. A run
+pins version, initiator User/Membership, inputs and the Agent's runtime kind; it
+does not pin a runtime image or model, because the Agent's current configuration
+applies. Historical saved versions are addressable directly. Start identities are
+unique per definition; identical retries return the original run, including after
+archive, while changed actor/version/inputs return 409. Declared step capabilities
+do not gate admission. All subordinate reads use current Agent visibility before
+totals/pagination; start/cancel require `agent.update`, including custom and
+general Agent Access. Read-only keys cannot mutate. Viewers can inspect run
+progress, summaries and history. Run detail defaults to the overall run view,
+labelled Result ready after success and Run overview otherwise. The navigation card
+uses an icon, descriptive subtitle and chevron, with an accent background when selected.
+Successful runs retain the completion banner above the Agent's final summary. Selecting a step
+in the numbered rail replaces the main panel with that step’s persisted Markdown
+result, or its current waiting/in-progress/no-result state. The overall-view
+control stays visible so users can return to the final summary. Selection stays
+within the current run; changing runs resets to the overall view. Results use the
+shared chat Markdown viewer. A compact Time taken card replaces the activity log. Each completed step shows
+wall-clock time from its first attempt admission to its persisted checkpoint,
+including dispatch waiting and retries. The API exposes nullable `started_at` and
+`completed_at` fields derived from existing attempts/checkpoints; no migration is
+needed. Unfinished steps show their status, and missing timestamps are unavailable
+rather than zero. Total run time spans run creation through settlement and includes
+queueing and retries. Selecting a completed step also shows its duration. The
+history API remains available, but the run screen no longer fetches the event log. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
+Runs control clears only the selected run and selects the owning workflow’s Runs
+view. Overview, Runs and Version history use `workflowView=overview|runs|history`
+as their source of truth; an absent or invalid view falls back to Overview. Tab
+changes and opening/closing runs add browser-history entries without scrolling.
+Run-list pagination uses `workflowRunPage`; returning from a run retains that page.
+Reloads, direct links and browser back/forward preserve the selected view and
+workflow. The legacy workflow URL redirects preserve these parameters. The focused
+workflow layout stays consistent across its overview, list, history and run detail
+so returning to Runs does not reintroduce the surrounding Agent header.
+
+
+The PostgreSQL ledger comprises `workflow_run`, `workflow_attempt`,
+`workflow_checkpoint` and `workflow_history`. Each transition stages a safe
+`workflow.run.changed` Domain Event in the same transaction. After commit, the
+service or controller immediately enqueues the staged delivery IDs; a broker
+outage leaves durable pending deliveries for recovery. Its handler advances
+the run and sends a newly admitted step to the Agent's private trigger server
+(`POST /agent-triggers/v1/workflow-steps` on port 8082, authenticated with the
+Agent's trigger key). The scheduled pass recovers missed wakeups once per minute.
+Each attempt is sent at most once: `dispatched_at` records the Agent's acceptance,
+and the trigger server also refuses a second start for an attempt it holds. Each
+completed step checkpoints its summary and step identity. Subsequent attempts
+receive those summaries and the pinned inputs within a bounded context packet;
+completed steps are never replayed to reconstruct context. Oversized context is
+rejected rather than silently truncated.
+
+The trigger server starts a new runtime session (`workflow-<attempt id>`): Hermes
+through `/v1/runs` with its event stream, OpenClaw through
+`/v1/chat/completions`. The Agent replies with a JSON summary; plain prose is
+accepted as the summary. Machine routes at `/workflow-runtime/v1/attempts/{id}`
+(`handoff`, `result`, `failure`) are outside the product API and public discovery.
+A derived capability binds one attempt/generation. Handoff and outcome admission
+check current initiator authority, Agent lifecycle, generation, attempt state and
+deadline under the run lock. A reported failure or unmet criteria retries the step
+with a fresh attempt; at most three attempts per unfinished step are admitted, and
+an attempt that exceeds its 15-minute deadline counts as lost. When the Agent asks
+for a command approval, the session is stopped and the run becomes BLOCKED with the
+reason, until a person resolves it in chat and reruns, or cancels. Workflow-specific
+approval handling arrives with WF03. Agent stop or lost initiator authority pauses
+progression; restarting the Agent does not resume it implicitly.
+
+The result envelope accepts only `summary` and `criteria_met: true`. It does not
+accept file payloads. A completed result commits the checkpoint, progression and
+Domain Event atomically. Exact duplicate results are acknowledged without
+replaying progression; changed or stale results are rejected.
+
+Cancellation records CANCELLING before stopping. New handoff/result admission fails
+immediately; the trigger server is asked to stop the session (best effort, which
+stops a Hermes run) and CANCELLED is recorded. Work the session already performed
+is not undone. Completed summaries remain
+available. Soft deletion conceals the run tree and fences/stops attempts. Existing
+hard Agent/Organization deletion cascades workflow-owned records. Active runs
+retain their checkpoint summaries. Settled inputs, checkpoints and content-bearing
+history expire after the module-owned 90-day retention period, while run status
+and metadata remain. No external storage or object-purge machinery is required.
+
+The product API adds `POST /workflows/{id}/runs`, `GET /workflow-runs` (optional
+`workflow_id`), `GET /workflow-runs/{id}`, `GET /workflow-runs/{id}/history` and
+`POST /workflow-runs/{id}/cancel` with `expected_revision`. Collections retain the
+standard 20/100 pagination bounds. Server-derived `allowed_actions` controls
+cancellation with independent backend authorization. Artifact routes, generic
+resume and approvals are not exposed in WF02.
+
+The Workflows UI includes explicit input review, a Runs view, durable step
+progress/history and cancellation confirmation. `workflowRun` retains the run in
+the URL. Queries include Organization/Agent identity, refetch on focus, poll
+active mounted views every three seconds and stop on terminal/error/unmounted
+views. Start retries retain their identity and inputs. Access errors replace
+protected run content. Authoring retains its existing cache behavior.
+
+Run screens use the agreed Workflow Playbook layout: full-page start/run views,
+a breadcrumb, run header with status badge, a Steps rail, summaries, run activity
+and Keep running/Cancel run confirmation. The shell owns the page frame and section navigation. The Agent mobile header
+and section title remain mounted but hidden while a run or its start screen is open. Run detail returns
+each completed step's `summary`, shown under “What each step did”, and a
+`final_summary` once succeeded, shown with the chat Markdown viewer on the
+completion card. The last step is excluded from the per-step card on success to
+avoid repeating its text. File cards and preview pages are deferred, along with
+approvals and messaging.

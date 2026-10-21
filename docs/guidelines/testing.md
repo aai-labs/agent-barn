@@ -94,6 +94,7 @@ deployment limits cannot change their expected budget contracts.
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
 | `make test-integration-isolation RUNTIME=both` | Opt-in Secrets/PVC transition contracts in a new disposable k3d cluster | Docker, k3d, kubectl, locally built `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE`; no provider accounts |
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
+| `make test-workflow-runtime` | Production workflow APIs/ledger, persisted text handoff and both native reasoning entrypoints in fresh Jobs | Docker, k3d, kubectl, Helm 3.19.0, locally built `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE`, an explicitly provisioned bounded model test key |
 | `make coverage` | All API tests with terminal and XML coverage, including the Kubernetes client test | Docker, Node.js, and the Kubernetes prerequisites above |
 | `make lint-ui` | ESLint | None |
 | `make check-ui` | TypeScript type check | None |
@@ -150,6 +151,12 @@ always runs `make check-migrations` first. The rules are in
 [`operations.md`](operations.md#staging-environment).
 
 ## API tests
+
+Workflow execution is covered by `tests/integration/test_workflow_runs.py` (ledger,
+dispatch, fences, retries) and `tests/unit/test_agent_trigger_server.py` (the
+Agent-side step runner, including one test against a fake Hermes API). An
+end-to-end run needs a running local Agent restarted on the current trigger
+server script.
 
 API behavior changes MUST cover:
 

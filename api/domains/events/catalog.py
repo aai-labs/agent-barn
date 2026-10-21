@@ -75,6 +75,15 @@ AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
+WORKFLOW_RUN_CHANGED = "workflow.run.changed"
+WORKFLOW_CONTROLLER_HANDLER = "workflow.controller"
+
+
+class WorkflowRunChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: UUID
+    revision: int
+    state: str
 
 
 class PlatformWorkflowAuthoringChangedPayload(BaseModel):
@@ -701,6 +710,14 @@ class CommunicationDeliveryRecoveredPayload(BaseModel):
 
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
+    registry.register(
+        DomainEventDefinition(
+            event_name=WORKFLOW_RUN_CHANGED,
+            schema_version=1,
+            payload_model=WorkflowRunChangedPayload,
+            handler_names=(WORKFLOW_CONTROLLER_HANDLER,),
+        )
+    )
     for event_name, payload_model in (
         (AGENT_ACCESS_GRANTED, AgentAccessGrantedPayload),
         (AGENT_ACCESS_REVOKED, AgentAccessRevokedPayload),

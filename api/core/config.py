@@ -69,7 +69,8 @@ class Config(BaseSettings):
     litellm_secret_name: str = "litellm"
     agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
-    workflow_authoring_enabled: bool = False
+    # Callback address Agent pods use to report workflow step outcomes.
+    workflow_runtime_base_url: str = "http://agentbarn-api:8000/workflow-runtime/v1"
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
     # Percentages of an Organization's limit at which it is notified. Empty falls back

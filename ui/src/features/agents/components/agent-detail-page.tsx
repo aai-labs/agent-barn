@@ -74,7 +74,12 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     "range",
     parseAsString.withOptions({ history: "replace" }),
   );
-  const [, setWorkflow] = useQueryState("workflow", parseAsString.withOptions({ history: "replace" }));
+  const [workflow, setWorkflow] = useQueryState("workflow", parseAsString.withOptions({ history: "replace" }));
+
+  const [workflowRun, setWorkflowRun] = useQueryState("workflowRun", parseAsString.withOptions({ history: "replace" }));
+  const [, setWorkflowView] = useQueryState("workflowView", parseAsString.withOptions({ history: "replace", scroll: false }));
+  const [, setWorkflowRunPage] = useQueryState("workflowRunPage", parseAsString.withOptions({ history: "replace", scroll: false }));
+  const [startingRun, setStartingRun] = useState(false);
 
   function selectTab(next: AgentPageTab) {
     void setTab(next);
@@ -83,11 +88,18 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     // likewise the time range, which only the resource usage tab reads
     if (next !== "resource-usage") void setUsageRange(null);
     // and the open workflow, which only the workflows tab reads
-    if (next !== "workflows") void setWorkflow(null);
+    if (next !== "workflows") {
+      void setWorkflow(null);
+      void setWorkflowRun(null);
+      void setWorkflowView(null);
+      void setWorkflowRunPage(null);
+    }
   }
 
   // Overview is always visible, and a section the viewer cannot open falls back to it.
   const resolvedTab = tabs.includes(tab) ? tab : DEFAULT_AGENT_TAB;
+
+  const workflowFocus = resolvedTab === "workflows" && (Boolean(workflow) || Boolean(workflowRun) || startingRun);
 
   const isRunning = agent?.status === "RUNNING";
   const isAgentWorking = isRunning && health?.status === "ok";
@@ -132,6 +144,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
                 and actions, so the header is for phones. Identity and actions wrap onto
                 separate rows when they do not fit side by side, so the buttons sit under
                 the name, not over it. */}
+            <div hidden={workflowFocus}>
             <div className="flex flex-wrap items-start gap-x-5.5 gap-y-4 pb-8 lg:hidden">
               <div className="flex min-w-0 flex-1 basis-[20rem] items-start gap-4 sm:gap-5.5">
                 <AgentAvatar agent={agent} size="xl" />
@@ -168,6 +181,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
               )}
             </div>
 
+            </div>
+
             <div className={cn(fillsPage && "lg:px-6 lg:pt-4 lg:empty:hidden")}>
               <AgentNotices
                 agent={agent}
@@ -179,6 +194,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
 
             {/* The path bar names the section on desktop. */}
             <h2
+              hidden={workflowFocus}
               className="m-0 mb-7 pb-3 text-[1.125rem] font-semibold lg:hidden"
               style={{ color: "var(--ink)", borderBottom: "1px solid var(--line)" }}
             >
@@ -196,7 +212,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
             {resolvedTab === "workflows" && orgId && (
-              <WorkflowsPage key={`${orgId}:${agent.id}`} agentId={agent.id} organizationId={orgId} embedded />
+              <WorkflowsPage key={`${orgId}:${agent.id}`} agentId={agent.id} organizationId={orgId} embedded onStartingChange={setStartingRun} />
             )}
             {resolvedTab === "playbooks" && canExtractPlaybooks && <AgentPlaybooksTab agent={agent} />}
             {resolvedTab === "activity" && <ActivityTab agent={agent} />}

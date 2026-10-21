@@ -827,27 +827,65 @@ runs it.
   ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
   instead of updating them.
 
+## Workflow execution (WF02)
+
+Execution has no environment feature flag and does not require object storage.
+The Platform Admin authoring setting controls definition changes only. Before
+running saved workflows, apply the migration. The owning Agent must be running,
+and Agents started before this release must be restarted once so their trigger
+server can accept workflow steps. Each step runs as a session in that Agent, under
+its tools, Integrations, approval mode and spend limits. No runtime image pinning,
+extra Jobs or network policy are involved.
+
+The event worker sends each step to the Agent's trigger server (port 8082) through
+the Kubernetes client, so it needs the same cluster access as the API: in-cluster
+Service DNS in deployments and the k3d kubeconfig locally (Compose mounts it).
+`WORKFLOW_RUNTIME_BASE_URL` is the callback endpoint Agent pods use for step
+handoff and outcome reports. Helm defaults it to the release's API Service on port
+8000; `workflows.runtimeBaseUrl` can override it and Helmfile maps the environment
+value. Local Compose derives it from `API_PORT` through `host.docker.internal`.
+
+Workflow limits and text retention are hard coded in
+`api/domains/workflows/config.py`; they are not environment or Helm options.
+Per-Agent UI settings are future work. Waiting for an unreachable Agent consumes
+the attempt deadline. Non-successful Agent dispatch responses are logged with
+the run identity and HTTP status. A 404 on the workflow step route indicates an
+older trigger server; pause and start that Agent to load the current configuration.
+
+`workflow-maintenance-cronjob.yaml` runs once per minute. It uses the existing
+operator kubeconfig seam, reconciles up to 100 active runs, asks Agents to stop
+fenced sessions and expires text content from up to 100 settled runs per pass.
+Event workers dispatch immediately after committed workflow transitions; the
+scheduled pass recovers missed wakeups and unreachable Agents. Run `make reconcile-workflows`
+for the same bounded pass against an explicitly selected cluster. Inputs,
+checkpoint summaries and content-bearing history expire under the module-owned
+history retention period; run metadata/status remains.
+
+The unreleased migration `a38901e8a003` follows `c32e42bb0396`, adding run, attempt,
+checkpoint and history records with scope/pin constraints. No-op merge revision
+`f8740a67b788` joins it with staging head `a4e9c2d7b615` to preserve one head. No live schema change
+is performed by this work. Do not downgrade a populated execution schema: it
+drops the ledger. Existing aggregate deletion cascades workflow-owned records.
+File artifacts and shared object storage are deferred to a separate slice; WF02
+has no storage environment variables, buckets, artifact tables or file endpoints.
+
 ## Workflow authoring (WF01)
 
 After migrating and verifying WF01, Platform Administrators can enable authoring
 at **Platform Settings → Workflows** and save the choice. It takes effect on
 subsequent API requests without a redeploy and allows manual definition creation,
 version saving and archive across all Organizations. Definition/version reads
-remain available when disabled. `WORKFLOW_AUTHORING_ENABLED` defaults to `false`
-and supplies the initial deployment default only until a Platform Admin saves a
-choice; the persisted choice then overrides the environment value in either
-direction, including after restarts. Changing the environment alone cannot
-override a saved choice. Disable authoring through Platform Settings for rollback
-of admission; requests already admitted may finish.
-This gate never enables execution; WF01 has no run endpoint. Natural-language
+remain available when disabled. Authoring defaults to `false` until a Platform
+Admin saves a choice. The persisted choice survives restarts, with no environment
+or Helm override. Disable authoring through Platform Settings to stop new
+definition mutations; requests already admitted may finish. Execution of saved
+versions remains independent of this authoring setting. Natural-language
 draft generation is deferred to a separate PR, with no model setting or provider
 credential required for manual building. The [feature specification](../features/agent-workflows.md)
 owns the product contract.
 
-Local Compose passes `.env` through; `.env.spec` documents the authoring gate.
-Helm exposes `workflows.authoringEnabled`; Helmfile passes the corresponding
-environment variable. No runtime image, worker, storage service or cluster
-permission is added for workflow authoring.
+No runtime image, worker, storage service or cluster permission is added for
+workflow authoring.
 
 Migration `a38801c6e001` adds the authoring tables and immutable-version trigger
 after `c42e91b7a603`, preserving existing Agent data. Use `make check-migrations`

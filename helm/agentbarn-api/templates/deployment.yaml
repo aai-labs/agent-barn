@@ -97,8 +97,6 @@ spec:
               value: "{{ .Values.agentImagePullSecret }}"
             - name: ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS
               value: {{ .Values.organizationLlmBudgets.alertThresholds | quote }}
-            - name: WORKFLOW_AUTHORING_ENABLED
-              value: {{ .Values.workflows.authoringEnabled | quote }}
             - name: AGENT_MODEL_ALLOWLIST
               value: "{{ .Values.agentModelAllowlist }}"
             - name: AGENT_FIRECRAWL_BASE_URL

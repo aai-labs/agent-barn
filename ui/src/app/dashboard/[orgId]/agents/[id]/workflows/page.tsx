@@ -10,7 +10,14 @@ export default async function Page({
   const { orgId, id } = await params;
   const search = await searchParams;
   const query = new URLSearchParams({ tab: "workflows" });
-  for (const key of ["workflow", "workflowPage", "workflowVersionPage"]) {
+  for (const key of [
+    "workflow",
+    "workflowView",
+    "workflowRun",
+    "workflowRunPage",
+    "workflowPage",
+    "workflowVersionPage",
+  ]) {
     const value = search[key];
     if (typeof value === "string") query.set(key, value);
   }
