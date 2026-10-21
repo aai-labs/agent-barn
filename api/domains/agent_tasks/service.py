@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -18,12 +18,30 @@ from api.domains.agent_tasks.models import (
     AgentTaskRead,
     AgentTaskStatus,
 )
-from api.domains.agent_tasks.repository import AgentTaskRepository, OrganizationTaskStorageFullError
+from api.domains.agent_tasks.repository import (
+    AgentTaskRepository,
+    EmptyTaskFileError,
+    OrganizationTaskStorageFullError,
+)
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+
+class _TaskFileTooLargeError(Exception):
+    pass
+
+
+def _within_file_limit(data: Iterable[bytes], max_bytes: int) -> Iterator[bytes]:
+    """Pass the upload through, stopping as soon as it passes the per-file limit."""
+    total = 0
+    for piece in data:
+        total += len(piece)
+        if total > max_bytes:
+            raise _TaskFileTooLargeError
+        yield piece
 
 
 def _task_not_found(task_id: UUID) -> HTTPException:
@@ -73,28 +91,30 @@ class AgentTaskService:
         agent_id: UUID,
         task_id: UUID,
         metadata: AgentTaskFileCreate,
-        data: bytes,
+        data: Iterable[bytes],
     ) -> AgentTaskFileRead:
-        if not data:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The file is empty.")
-        if len(data) > self.config.task_file_max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"The file is larger than the {self.config.task_file_max_bytes}-byte limit.",
-            )
+        """Store an upload as it is read; it is refused as soon as it passes either limit."""
+        max_bytes = self.config.task_file_max_bytes
         try:
             stored = self.repository.add_file(
                 organization_id,
                 agent_id,
                 task_id,
                 metadata,
-                data,
+                _within_file_limit(data, max_bytes),
                 self.config.task_organization_storage_max_bytes,
             )
+        except EmptyTaskFileError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The file is empty.") from None
+        except _TaskFileTooLargeError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"The file is larger than the {max_bytes}-byte limit.",
+            ) from None
         except OrganizationTaskStorageFullError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The Organization has no room left for Task Files.",
+                detail="The file is larger than the space left for this Organization's Task Files.",
             ) from None
         if stored is None:
             raise _task_not_found(task_id)
@@ -117,7 +137,9 @@ class AgentTaskService:
         pagination: Pagination,
     ) -> PaginatedItems[AgentTaskRead]:
         scope = self._agent_read_scope(agent_id, context)
-        return self.repository.find_by_agent(agent_id, task_filter, pagination, scope)
+        return self.repository.find_in_organization(
+            task_filter.model_copy(update={"agent_id": agent_id}), pagination, scope
+        )
 
     def list_organization_tasks(
         self,

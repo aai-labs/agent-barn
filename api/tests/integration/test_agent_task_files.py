@@ -2,7 +2,7 @@
 and readable only by people who may read the Agent's Tasks."""
 
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from uuid import UUID, uuid7
@@ -16,6 +16,7 @@ from api.domains.agent_tasks.file_storage import CHUNK_BYTES, TaskFileStorage
 from api.domains.agent_tasks.models import AgentTaskCreate, AgentTaskFileCreate
 from api.domains.agent_tasks.repository import AgentTaskRepository
 from api.domains.agent_tasks.service import AgentTaskService
+from api.domains.agents.repository import AgentRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_injector, set_env_variable
@@ -59,15 +60,21 @@ def _task(context, agent=None):
     return _service(context).create_task(agent.organization_id, agent.id, AgentTaskCreate(title="Report"))
 
 
-def _attach(context, task, data: bytes, agent=None, filename: str = "report.csv"):
+def _attach(context, task, data: bytes | Iterable[bytes], agent=None, filename: str = "report.csv"):
     agent = agent or context.agent
     return _service(context).attach_file(
         agent.organization_id,
         agent.id,
         task.id,
         AgentTaskFileCreate(filename=filename, content_type="text/csv"),
-        data,
+        [data] if isinstance(data, bytes) else data,
     )
+
+
+def _pieces_then_fail(*pieces: bytes) -> Iterator[bytes]:
+    """Yield the pieces, then fail the test if the upload is read any further."""
+    yield from pieces
+    raise AssertionError("the upload was read past its limit")
 
 
 def _status_code(call) -> int:
@@ -81,8 +88,10 @@ def test_a_file_larger_than_one_chunk_reads_back_unchanged():
         task = _task(context)
         data = bytes(range(256)) * ((2 * CHUNK_BYTES + 1000) // 256)
 
-        with when("the Agent attaches it"):
-            stored = _attach(context, task, data)
+        with when("the Agent streams it in pieces that do not line up with chunks"):
+            stored = _attach(
+                context, task, (data[offset : offset + 700_001] for offset in range(0, len(data), 700_001))
+            )
 
             with then("its size is recorded and the same bytes come back"):
                 metadata, chunks = _service(context).read_file(
@@ -212,9 +221,9 @@ class _SlowStorage:
 
     inner: TaskFileStorage
 
-    def write(self, session: Session, file_id: UUID, data: bytes) -> None:
+    def write(self, session: Session, file_id: UUID, data: Iterable[bytes]) -> int:
         time.sleep(0.5)
-        self.inner.write(session, file_id, data)
+        return self.inner.write(session, file_id, data)
 
     def read(self, file_id: UUID) -> Iterator[bytes]:
         return self.inner.read(file_id)
@@ -239,3 +248,81 @@ def test_two_uploads_at_once_cannot_together_exceed_the_organization_limit():
 
             with then("only one fits"):
                 assert_that(outcomes, contains_inanyorder(status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST))
+
+
+def test_an_oversized_upload_is_rejected_without_reading_the_rest():
+    with given([*_given(TASK_FILE_MAX_BYTES="10"), there_is_an_agent()]) as context:
+        task = _task(context)
+
+        assert_that(
+            _status_code(lambda: _attach(context, task, _pieces_then_fail(b"x" * 6, b"x" * 6))),
+            equal_to(status.HTTP_400_BAD_REQUEST),
+        )
+
+
+def test_an_upload_past_the_organization_limit_is_rejected_without_reading_the_rest():
+    with given([*_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES="10"), there_is_an_agent()]) as context:
+        task = _task(context)
+        _attach(context, task, b"x" * 4)
+
+        with pytest.raises(HTTPException) as raised:
+            _attach(context, task, _pieces_then_fail(b"x" * 4, b"x" * 4), filename="second.csv")
+
+        assert_that(
+            (raised.value.status_code, raised.value.detail),
+            equal_to(
+                (
+                    status.HTTP_400_BAD_REQUEST,
+                    "The file is larger than the space left for this Organization's Task Files.",
+                )
+            ),
+        )
+
+
+def test_an_upload_does_not_block_updates_to_its_agent():
+    with given([*_given(), there_is_an_agent()]) as context:
+        task = _task(context)
+        repository = context.injector.get(AgentTaskRepository)
+        repository.file_storage = _SlowStorage(repository.file_storage)
+        agent_repository = context.injector.get(AgentRepository)
+
+        def rename() -> float:
+            time.sleep(0.1)
+            started = time.monotonic()
+            agent = agent_repository.get_by_id(context.agent.id)
+            assert agent is not None
+            agent.name = "Renamed"
+            agent_repository.delegate.save(agent)
+            return time.monotonic() - started
+
+        with when("the Agent is renamed while one of its uploads is being written"):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                upload = pool.submit(_attach, context, task, b"data")
+                took = pool.submit(rename).result()
+                upload.result()
+
+            with then("the rename does not wait for the upload"):
+                assert_that(took < 0.3, equal_to(True))
+
+
+@pytest.mark.parametrize("filename", [".", "..", 'quote".txt', "bidi\u202etxt.exe", "del\x7f.txt", "c1\x85.txt"])
+def test_a_filename_that_is_unsafe_to_offer_back_is_rejected(filename: str):
+    assert_that(
+        calling(AgentTaskFileCreate).with_args(filename=filename, content_type="text/plain"),
+        raises(ValueError),
+    )
+
+
+@pytest.mark.parametrize("content_type", ["text", "text/plain\r\nX-Injected: 1", "text/plain; charset=utf-8", "/plain"])
+def test_a_content_type_that_is_not_a_bare_media_type_is_rejected(content_type: str):
+    assert_that(
+        calling(AgentTaskFileCreate).with_args(filename="a.txt", content_type=content_type),
+        raises(ValueError),
+    )
+
+
+@pytest.mark.parametrize(
+    "content_type", ["text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]
+)
+def test_a_bare_media_type_is_accepted(content_type: str):
+    assert_that(AgentTaskFileCreate(filename="a.txt", content_type=content_type).content_type, equal_to(content_type))

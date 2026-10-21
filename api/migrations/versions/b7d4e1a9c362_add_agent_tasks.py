@@ -46,6 +46,7 @@ def upgrade() -> None:
             name="fk_agent_task_agent_organization",
             ondelete="CASCADE",
         ),
+        sa.UniqueConstraint("id", "organization_id", name="uq_agent_task_id_organization"),
     )
     op.create_index(
         "ix_agent_task_organization_agent_created",
@@ -78,7 +79,12 @@ def upgrade() -> None:
         sa.Column("size_bytes", sa.BigInteger(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["organization_id"], ["organization.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["task_id"], ["agent_task.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["task_id", "organization_id"],
+            ["agent_task.id", "agent_task.organization_id"],
+            name="fk_agent_task_file_task_organization",
+            ondelete="CASCADE",
+        ),
         sa.CheckConstraint("size_bytes > 0", name="ck_agent_task_file_size_positive"),
     )
     op.create_index("ix_agent_task_file_task", "agent_task_file", ["task_id"])
@@ -90,7 +96,14 @@ def upgrade() -> None:
         sa.Column("sequence", sa.Integer(), nullable=False),
         sa.Column("data", sa.LargeBinary(), nullable=False),
         sa.PrimaryKeyConstraint("file_id", "sequence"),
-        sa.ForeignKeyConstraint(["file_id"], ["agent_task_file.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["file_id"],
+            ["agent_task_file.id"],
+            name="fk_agent_task_file_chunk_file",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
     )
 
 

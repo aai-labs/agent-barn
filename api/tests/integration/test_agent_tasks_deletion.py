@@ -37,7 +37,7 @@ def _record_work(context, agent) -> None:
         agent.id,
         task.id,
         AgentTaskFileCreate(filename="out.csv", content_type="text/csv"),
-        b"a,b\n",
+        [b"a,b\n"],
     )
 
 

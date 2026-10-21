@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
@@ -15,11 +15,12 @@ class TaskFileStorage(Protocol):
     """Where Task File bytes live, keyed by the File's id.
 
     Tasks only know File metadata, so moving bytes to object storage replaces this
-    store and its binding, nothing else. `write` takes the transaction that records
-    the File; a store outside Postgres would upload before that commit.
+    store and its binding, nothing else. `write` streams the upload and returns how
+    many bytes it stored; it takes the transaction that records the File, and a store
+    outside Postgres would upload before that commit.
     """
 
-    def write(self, session: Session, file_id: UUID, data: bytes) -> None: ...
+    def write(self, session: Session, file_id: UUID, data: Iterable[bytes]) -> int: ...
 
     def read(self, file_id: UUID) -> Iterator[bytes]: ...
 
@@ -30,11 +31,29 @@ class PostgresTaskFileStorage:
 
     delegate: PostgresRepositoryDelegate
 
-    def write(self, session: Session, file_id: UUID, data: bytes) -> None:
-        for sequence, offset in enumerate(range(0, len(data), CHUNK_BYTES)):
-            session.add(
-                AgentTaskFileChunk(file_id=file_id, sequence=sequence, data=data[offset : offset + CHUNK_BYTES])
-            )
+    def write(self, session: Session, file_id: UUID, data: Iterable[bytes]) -> int:
+        """Re-cut the upload into fixed chunks, flushing each so memory stays at about one chunk."""
+        buffer = bytearray()
+        sequence = 0
+        total = 0
+
+        def store(chunk: bytes) -> None:
+            nonlocal sequence
+            row = AgentTaskFileChunk(file_id=file_id, sequence=sequence, data=chunk)
+            session.add(row)
+            session.flush()
+            session.expunge(row)
+            sequence += 1
+
+        for piece in data:
+            total += len(piece)
+            buffer += piece
+            while len(buffer) >= CHUNK_BYTES:
+                store(bytes(buffer[:CHUNK_BYTES]))
+                del buffer[:CHUNK_BYTES]
+        if buffer:
+            store(bytes(buffer))
+        return total
 
     def read(self, file_id: UUID) -> Iterator[bytes]:
         with Session(self.delegate.engine) as session:

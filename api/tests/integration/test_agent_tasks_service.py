@@ -355,7 +355,7 @@ def test_an_agent_cannot_write_to_its_tasks_once_deleted(write: str):
             "status": lambda: service.update_status(org_id, agent_id, task.id, AgentTaskStatus.DONE),
             "note": lambda: service.add_note(org_id, agent_id, task.id, AgentTaskNoteCreate(body="Late")),
             "file": lambda: service.attach_file(
-                org_id, agent_id, task.id, AgentTaskFileCreate(filename="late.txt", content_type="text/plain"), b"x"
+                org_id, agent_id, task.id, AgentTaskFileCreate(filename="late.txt", content_type="text/plain"), [b"x"]
             ),
         }
 

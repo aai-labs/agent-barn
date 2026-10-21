@@ -1,6 +1,6 @@
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid7
 
 import sqlalchemy as sa
 from injector import inject, singleton
@@ -33,6 +33,8 @@ def _lock_live_agent(session: Session, organization_id: UUID, agent_id: UUID) ->
 
     Agent deletion takes the row FOR UPDATE, so a write waiting here sees the deletion
     and stops, rather than adding a Task after the deletion removed the Agent's Tasks.
+    FOR KEY SHARE is the weakest lock that conflicts with FOR UPDATE, so a long upload
+    does not hold up ordinary updates to the Agent.
     """
     query = (
         select(Agent.id)
@@ -41,7 +43,7 @@ def _lock_live_agent(session: Session, organization_id: UUID, agent_id: UUID) ->
             col(Agent.organization_id) == organization_id,
             col(Agent.deleted_at).is_(None),
         )
-        .with_for_update(read=True)
+        .with_for_update(read=True, key_share=True)
     )
     return session.exec(query).first() is not None
 
@@ -57,6 +59,20 @@ def _find_agent_task(session: Session, organization_id: UUID, agent_id: UUID, ta
 
 class OrganizationTaskStorageFullError(Exception):
     """Storing the File would take the Organization's Task Files past its limit."""
+
+
+class EmptyTaskFileError(Exception):
+    """The upload had no bytes."""
+
+
+def _within_organization_limit(data: Iterable[bytes], remaining_bytes: int) -> Iterator[bytes]:
+    """Pass the upload through, stopping as soon as it no longer fits in the space left."""
+    total = 0
+    for piece in data:
+        total += len(piece)
+        if total > remaining_bytes:
+            raise OrganizationTaskStorageFullError
+        yield piece
 
 
 @inject
@@ -85,7 +101,6 @@ class AgentTaskRepository:
             if task is None:
                 return None
             task.status = status
-            task.updated_at = datetime.now(UTC)
             session.add(task)
             session.commit()
             return task
@@ -107,13 +122,14 @@ class AgentTaskRepository:
         agent_id: UUID,
         task_id: UUID,
         metadata: AgentTaskFileCreate,
-        data: bytes,
+        data: Iterable[bytes],
         organization_limit_bytes: int,
     ) -> AgentTaskFile | None:
-        """Record a File and store its bytes in one transaction, within the Organization's limit.
+        """Stream a File into storage and record it in one transaction, within the Organization's limit.
 
         A per-Organization advisory lock serialises the usage check with the insert, so
-        two uploads at once cannot both fit under the limit and together exceed it.
+        two uploads at once cannot both fit under the limit and together exceed it. The
+        bytes are written before the File row, which records their total.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
@@ -124,22 +140,25 @@ class AgentTaskRepository:
                 sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                 {"key": f"agent_task_file:{organization_id}"},
             )
-            used = session.scalar(
+            used = session.exec(
                 select(func.coalesce(func.sum(AgentTaskFile.size_bytes), 0)).where(
                     col(AgentTaskFile.organization_id) == organization_id
                 )
+            ).one()
+            file_id = uuid7()
+            size = self.file_storage.write(
+                session, file_id, _within_organization_limit(data, organization_limit_bytes - used)
             )
-            if (used or 0) + len(data) > organization_limit_bytes:
-                raise OrganizationTaskStorageFullError
+            if size == 0:
+                raise EmptyTaskFileError
             stored = AgentTaskFile(
+                id=file_id,
                 organization_id=organization_id,
                 task_id=task_id,
-                size_bytes=len(data),
+                size_bytes=size,
                 **metadata.model_dump(),
             )
             session.add(stored)
-            session.flush()
-            self.file_storage.write(session, stored.id, data)
             session.commit()
             return stored
 
@@ -157,33 +176,12 @@ class AgentTaskRepository:
                 .join(Agent, col(Agent.id) == col(AgentTask.agent_id))
                 .where(
                     col(AgentTaskFile.id) == file_id,
+                    col(AgentTaskFile.organization_id) == authorization_scope.organization_id,
                     col(AgentTaskFile.task_id) == task_id,
                     col(AgentTask.agent_id) == agent_id,
                     *agent_scope_predicates(authorization_scope),
                 )
             ).first()
-
-    def find_by_agent(
-        self,
-        agent_id: UUID,
-        task_filter: AgentTaskFilter,
-        pagination: Pagination,
-        authorization_scope: AuthorizationScope,
-    ) -> PaginatedItems[AgentTaskRead]:
-        return self._find(
-            (col(AgentTask.agent_id) == agent_id,),
-            task_filter,
-            pagination,
-            authorization_scope,
-        )
-
-    def find_in_organization(
-        self,
-        task_filter: AgentTaskFilter,
-        pagination: Pagination,
-        authorization_scope: AuthorizationScope,
-    ) -> PaginatedItems[AgentTaskRead]:
-        return self._find((), task_filter, pagination, authorization_scope)
 
     def get_detail(
         self,
@@ -197,6 +195,7 @@ class AgentTaskRepository:
                 .join(Agent, col(Agent.id) == col(AgentTask.agent_id))
                 .where(
                     col(AgentTask.id) == task_id,
+                    col(AgentTask.organization_id) == authorization_scope.organization_id,
                     col(AgentTask.agent_id) == agent_id,
                     *agent_scope_predicates(authorization_scope),
                 )
@@ -219,14 +218,16 @@ class AgentTaskRepository:
                 files=[AgentTaskFileRead.model_validate(stored) for stored in files],
             )
 
-    def _find(
+    def find_in_organization(
         self,
-        predicates: tuple,
         task_filter: AgentTaskFilter,
         pagination: Pagination,
         authorization_scope: AuthorizationScope,
     ) -> PaginatedItems[AgentTaskRead]:
-        where = [*predicates, *agent_scope_predicates(authorization_scope)]
+        where = [
+            col(AgentTask.organization_id) == authorization_scope.organization_id,
+            *agent_scope_predicates(authorization_scope),
+        ]
         if task_filter.agent_id is not None:
             where.append(col(AgentTask.agent_id) == task_filter.agent_id)
         if task_filter.status is not None:

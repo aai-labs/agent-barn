@@ -217,3 +217,36 @@ def test_deleting_a_task_removes_its_notes_files_and_chunks():
                         session.scalar(select(func.count()).select_from(AgentTaskFileChunk)),
                     )
                 assert_that(left, equal_to((0, 0, 0)))
+
+
+def test_a_file_cannot_be_charged_to_another_organization():
+    with given([*_GIVEN, there_is_an_agent(), _remember_agent(), there_is_an_agent_in_another_org()]) as context:
+        with Session(context.postgres_delegate.engine) as session:
+            task = AgentTask(organization_id=context.organization.id, agent_id=context.own_agent.id, title="Report")
+            session.add(task)
+            session.commit()
+            task_id = task.id
+
+        with when("a File on that Task names the other Organization"):
+            stored = AgentTaskFile(
+                organization_id=context.other_org_agent.organization_id,
+                task_id=task_id,
+                filename="report.csv",
+                content_type="text/csv",
+                size_bytes=3,
+            )
+
+            def insert():
+                with Session(context.postgres_delegate.engine) as session:
+                    session.add(stored)
+                    session.commit()
+
+            with then("the database rejects it"):
+                assert_that(calling(insert), raises(IntegrityError))
+
+
+def _remember_agent():
+    def step(context):
+        context.own_agent = context.agent
+
+    return step
