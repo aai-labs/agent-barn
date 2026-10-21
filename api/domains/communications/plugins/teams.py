@@ -123,7 +123,11 @@ class TeamsPlatformPlugin(PlatformPlugin):
         "every team and chat this Agent should serve.\n"
         "3. Files can be sent to the Agent in a one-to-one Teams chat. Teams does not support bot file uploads in channels "
         "or group chats.\n"
-        "4. Re-upload the package after renaming the Agent to refresh how it appears in Teams."
+        "4. Re-upload the package after renaming the Agent to refresh how it appears in Teams.\n\n"
+        "## Reconnecting an existing bot\n\n"
+        "If this bot's Teams app is already installed, only update the Azure Bot's messaging endpoint. The installed app "
+        "keeps working. A package downloaded for the same bot updates that app: in the Teams admin center open it under "
+        "**Teams apps → Manage apps** and upload the new file rather than adding a second app."
     )
     capabilities = frozenset(
         {
@@ -146,9 +150,9 @@ class TeamsPlatformPlugin(PlatformPlugin):
 
     def validate_external(self, settings: PlatformSettings, credentials: PlatformCredentials) -> str | None:
         assert isinstance(credentials, TeamsCredentials)
-        if self._skip_validation:
-            return "validation-skipped"
-        acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
+        # The App ID is the bot's identity even unverified; app packages key on it.
+        if not self._skip_validation:
+            acquire_token(credentials.tenant_id, credentials.app_id, credentials.app_password)
         return credentials.app_id
 
     def fingerprint_material(self, credentials: PlatformCredentials) -> str:

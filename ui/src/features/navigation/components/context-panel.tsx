@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type MouseEvent } from "react";
+import type { MouseEvent } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -21,25 +21,17 @@ import type { NavItem } from "../nav-model";
  */
 export function ContextPanel() {
   const panel = useContextPanel();
-  const pathname = usePathname() ?? "";
-  const activeKey = panel?.groups.flatMap((group) => group.items).find((item) => item.active)?.key;
-  const routeKey = `${pathname}:${activeKey}`;
-  // "Sections" from a chat list holds until you move to another section. It is dropped
-  // when the route has changed, not when a link is clicked: dropping it on the click
-  // showed the old section's list for a render before the new section arrived.
-  const [sectionsShownOn, setSectionsShownOn] = useState<string | null>(null);
-  const [seenRouteKey, setSeenRouteKey] = useState(routeKey);
-  if (routeKey !== seenRouteKey) {
-    setSeenRouteKey(routeKey);
-    setSectionsShownOn(null);
-  }
   if (!panel) return null;
 
   // Chat and Conversations take the whole page, so their thread and channel lists take
-  // the panel's place.
+  // the panel's place. What the panel shows follows the route alone.
+  const items = panel.groups.flatMap((group) => group.items);
+  const activeKey = items.find((item) => item.active)?.key;
+  const overview = items.find((item) => item.key === "about");
   const listTab =
-    panel.agent && (activeKey === "chat" || activeKey === "conversations") ? activeKey : null;
-  const showList = listTab !== null && sectionsShownOn !== routeKey;
+    panel.agent && overview && (activeKey === "chat" || activeKey === "conversations")
+      ? activeKey
+      : null;
 
   return (
     <aside
@@ -47,12 +39,8 @@ export function ContextPanel() {
       className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-[248px] flex-shrink-0 flex-col overflow-y-auto px-3 pb-4 pt-4 lg:flex"
       style={{ background: "var(--bg-elev)", borderRight: "1px solid var(--line)" }}
     >
-      {showList && panel.agent && listTab ? (
-        <AgentListPanel
-          agent={panel.agent}
-          tab={listTab}
-          onShowSections={() => setSectionsShownOn(routeKey)}
-        />
+      {panel.agent && overview && listTab ? (
+        <AgentListPanel agent={panel.agent} tab={listTab} overviewHref={overview.href} />
       ) : (
         <>
           {panel.crumb && (
@@ -83,29 +71,30 @@ export function ContextPanel() {
 
 /**
  * The panel while Chat or Conversations fills the page: that section's threads or
- * channels, and the way back to the Agent's sections. The path bar names the Agent and
- * the section.
+ * channels, and the way up to the Agent's Overview, where its sections are listed again.
+ * The path bar names the Agent and the section.
  */
 function AgentListPanel({
   agent,
   tab,
-  onShowSections,
+  overviewHref,
 }: {
   agent: Agent;
   tab: "chat" | "conversations";
-  onShowSections: () => void;
+  overviewHref: string;
 }) {
   return (
     <>
-      <button
-        type="button"
-        onClick={onShowSections}
+      <Link
+        href={overviewHref}
+        prefetch={false}
+        onClick={(event) => navigateInPlace(event, overviewHref)}
         className="af-hover-bg mb-2 inline-flex items-center gap-1 self-start rounded-md px-1.5 py-1 text-[12.5px]"
         style={{ color: "var(--ink-3)" }}
       >
         <ChevronLeft size={13} aria-hidden />
-        Sections
-      </button>
+        Overview
+      </Link>
       <div className="-mx-1.5 mt-1 flex min-h-0 flex-1 flex-col">
         {tab === "chat" ? (
           <ChatThreadList agentId={agent.id} />
@@ -229,22 +218,9 @@ export function PanelLink({
   // Opened in place (below), so there is nothing for Next.js to prefetch from the server.
   const samePage = item.href.split("?")[0] === pathname;
 
-  // A section of the page you are on differs only in its query (?tab=, ?section=), and
-  // every such page reads it on the client. Changing it in place, as the tab rows did,
-  // skips the server round trip a link makes, which flashed the route's loading screen.
-  // Next.js syncs pushState with useSearchParams. A modified click still opens normally.
   function navigate(event: MouseEvent<HTMLAnchorElement>) {
     onNavigate?.();
-    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-      return;
-    }
-    const target = new URL(item.href, window.location.href);
-    if (target.origin !== window.location.origin || target.pathname !== window.location.pathname) return;
-    event.preventDefault();
-    if (target.href !== window.location.href) {
-      window.history.pushState(null, "", target.pathname + target.search);
-      window.scrollTo({ top: 0 });
-    }
+    navigateInPlace(event, item.href);
   }
   const color = danger ? "var(--err)" : item.active ? "var(--ink)" : "var(--ink-2)";
   const iconColor = danger ? "var(--err)" : item.active ? "var(--ink)" : "var(--ink-3)";
@@ -279,4 +255,21 @@ export function PanelLink({
       )}
     </>
   );
+}
+
+// A section of the page you are on differs only in its query (?tab=, ?section=), and
+// every such page reads it on the client. Changing it in place, as the tab rows did,
+// skips the server round trip a link makes, which flashed the route's loading screen.
+// Next.js syncs pushState with useSearchParams. A modified click still opens normally.
+function navigateInPlace(event: MouseEvent<HTMLAnchorElement>, href: string) {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+    return;
+  }
+  const target = new URL(href, window.location.href);
+  if (target.origin !== window.location.origin || target.pathname !== window.location.pathname) return;
+  event.preventDefault();
+  if (target.href !== window.location.href) {
+    window.history.pushState(null, "", target.pathname + target.search);
+    window.scrollTo({ top: 0 });
+  }
 }

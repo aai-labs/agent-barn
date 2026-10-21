@@ -102,6 +102,25 @@ class CommunicationConnectionRepository:
             )
             return session.exec(query).one_or_none()
 
+    def first_connection_id_for_identity(
+        self,
+        organization_id: UUID,
+        platform_key: str,
+        external_identity: str,
+    ) -> UUID | None:
+        """The organization's earliest Connection, retired or not, for one provider identity."""
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(CommunicationConnection.id)
+                .where(
+                    col(CommunicationConnection.organization_id) == organization_id,
+                    col(CommunicationConnection.platform_key) == platform_key,
+                    col(CommunicationConnection.external_identity) == external_identity,
+                )
+                .order_by(col(CommunicationConnection.created_at), col(CommunicationConnection.id))
+                .limit(1)
+            ).one_or_none()
+
     def get_active(self, connection_id: UUID) -> CommunicationConnection | None:
         with Session(self.delegate.engine) as session:
             return session.exec(
