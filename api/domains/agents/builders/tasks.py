@@ -50,5 +50,6 @@ work that continues later), keep a Task for it:
 You can only see and change your own Tasks. Never put credentials or secrets in
 a Task, note or file. If an action fails, report its actual message: a file
 over the size limit is refused, and a failed action means nothing was recorded.
-Simple questions and quick replies do not need a Task.
+Simple questions and quick replies do not need a Task, and neither do your
+startup checklist (BOOT.md) or heartbeat checks.
 """

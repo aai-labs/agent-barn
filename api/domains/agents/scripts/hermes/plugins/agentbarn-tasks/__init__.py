@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 _TOOL = "agentbarn_task"
 _STATUSES = ["open", "in_progress", "done", "failed"]
 _WORK_THRESHOLD = 3
+# The startup checklist (boot-run.py) runs in this session; it is not a request to keep a Task for.
+_BOOT_SESSION_ID = "agentbarn-boot"
 # Hermes's own file-writing tools. A turn that produces a file is worth a Task however short it is.
 _FILE_TOOLS = {"write_file", "patch"}
 _OPEN_TASKS_TTL_SECONDS = 60
@@ -224,11 +226,15 @@ def _attach_reminder(names: list[str]) -> str:
 
 
 def _on_post_tool_call(tool_name="", args=None, session_id="", turn_id="", tool_call_id="", **_):
+    if session_id == _BOOT_SESSION_ID:
+        return
     with _lock:
         _track(tool_name, args, session_id, turn_id, tool_call_id)
 
 
 def _on_transform_tool_result(tool_name="", args=None, result=None, session_id="", turn_id="", tool_call_id="", **_):
+    if session_id == _BOOT_SESSION_ID:
+        return None
     with _lock:
         turn = _track(tool_name, args, session_id, turn_id, tool_call_id)
         missing = _missing(turn)
@@ -254,6 +260,8 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
 
 def _on_pre_verify(session_id="", **_):
     """Hold a turn that wrote files back once per gap. Hermes calls this only after file edits."""
+    if session_id == _BOOT_SESSION_ID:
+        return None
     with _lock:
         turn = _turns.get((session_id, _current_turn.get(session_id, "")))
         missing = _missing(turn)
@@ -290,6 +298,8 @@ def _open_task_lines() -> list[str] | None:
 
 
 def _on_pre_llm_call(session_id="", **_):
+    if session_id == _BOOT_SESSION_ID:
+        return None
     parts = []
     lines = _open_task_lines()
     if lines:

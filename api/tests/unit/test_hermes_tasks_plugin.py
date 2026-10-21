@@ -431,3 +431,20 @@ def test_unattached_files_are_named_on_the_next_turn(tmp_path: Path):
     plugin.end_turn()
 
     assert_that(_context(plugin.start_turn()), contains_string("states.csv"))
+
+
+# --- the boot run ---
+
+
+def test_the_boot_run_is_never_reminded(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    results = [plugin.tool_call(f"call-{n}", session_id="agentbarn-boot") for n in range(1, 5)]
+    _wrote_in_boot = plugin.tool_call(
+        "call-5", session_id="agentbarn-boot", tool_name="write_file", args={"path": "/workspace/BOOT.md"}
+    )
+    held = plugin.finish("agentbarn-boot")
+    plugin.end_turn("agentbarn-boot")
+
+    assert_that((results, _wrote_in_boot, held), equal_to(([None] * 4, None, None)))
+    assert_that(plugin.start_turn("agentbarn-boot"), equal_to(None))
