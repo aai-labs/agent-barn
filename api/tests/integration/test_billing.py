@@ -347,6 +347,18 @@ def test_payments_can_be_turned_off_and_settings_saved_while_the_keys_are_missin
         assert_that(response.json(), has_entries(payments_enabled=False, purchase_fee_percent=3.0))
 
 
+def test_settings_save_with_payments_left_on_while_the_keys_are_missing():
+    with given(_setup(a_platform_administrator(), webhook_secret="")) as context:
+        response = context.client.put(
+            SETTINGS, json={"payments_enabled": True, "purchase_fee_percent": 3}, headers=auth(context)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(response.json(), has_entries(payments_enabled=True, purchase_fee_percent=3.0))
+        (event,) = events_named(context, "platform.billing_settings.changed")
+        assert_that(event.payload, has_entries(setting="purchase_fee_percent"))
+
+
 def test_a_platform_administrator_changes_the_billing_settings_and_it_is_audited():
     with given(_setup(a_platform_administrator())) as context:
         response = context.client.put(

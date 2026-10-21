@@ -98,7 +98,10 @@ class BillingService:
 
     def update_settings(self, data: BillingSettingsUpdate, context: CurrentUserContext) -> BillingSettingsRead:
         self.authority.require_platform_admin(context.user)
-        if data.payments_enabled and not self.config.payments_configured:
+        # Only turning payments on needs the keys: payments left on while they're missing must
+        # not block saving the other settings.
+        turning_on = data.payments_enabled and not self.settings.read().payments_enabled
+        if turning_on and not self.config.payments_configured:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Payments can't be turned on until this deployment is set up to take them.",
