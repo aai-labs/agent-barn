@@ -74,6 +74,7 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.memory.manage",
   "activity.read",
   "cost.read",
+  "task.read",
 ]);
 
 export const AgentAccessRoleReadSchema = z.object({
