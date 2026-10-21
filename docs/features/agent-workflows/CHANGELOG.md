@@ -14,6 +14,12 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-21 — AF-389 — PR preparation against latest staging
+
+- Updated: Merged `origin/staging` at `58fcf60d` without conflicts, retaining the Teams identity, Hindsight hook permissions and navigation fixes. WF01 is already included in staging.
+- Evidence: Captured [seven current UI screenshots](evidence/af-389/README.md) for explicit start, progress, cancellation, final and per-step text results, and mobile. These use synthetic browser fixtures and do not claim a new live Agent run.
+- Verification: 219 workflow, trigger-server and merged Communications API tests and 76 workflow/navigation browser checks (including screenshot capture) pass after integration. API lint/format/types, UI types/lint, single migration-head validation and `make check-workflows` (default/custom kubeconfig Secret renders with Helm 3.19.0) pass. Full API/browser suites and live OpenClaw execution were not repeated.
+
 ### 2026-10-21 — AF-389 — address Opus review
 
 - Fixed: The Helm worker now receives the same operator kubeconfig Secret and release namespace as the API and maintenance job. `make check-workflows` verifies both default and custom Secret renders; the testing guide replaces its removed fresh-Job suite command with this check.
