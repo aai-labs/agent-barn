@@ -232,8 +232,10 @@ pins version, initiator User/Membership, inputs and the Agent's runtime kind; it
 does not pin a runtime image or model, because the Agent's current configuration
 applies. Historical saved versions are addressable directly. Start identities are
 unique per definition; identical retries return the original run, including after
-archive, while changed actor/version/inputs return 409. Declared step capabilities
-do not gate admission. All subordinate reads use current Agent visibility before
+archive, while changed actor/version/inputs return 409. Starts serialize per Agent across its definitions, with a
+maximum of two QUEUED/RUNNING/CANCELLING runs. PAUSED and BLOCKED runs do not
+consume capacity. Other Agents and Organizations have independent capacity.
+Declared step capabilities do not gate admission. All subordinate reads use current Agent visibility before
 totals/pagination; start/cancel require `agent.update`, including custom and
 general Agent Access. Read-only keys cannot mutate. Viewers can inspect run
 progress, summaries and history. Run detail defaults to the overall run view,
@@ -318,8 +320,9 @@ resume and approvals are not exposed in WF02.
 The Workflows UI includes explicit input review, a Runs view, durable step
 progress/history and cancellation confirmation. `workflowRun` retains the run in
 the URL. Queries include Organization/Agent identity, refetch on focus, poll
-active mounted views every three seconds and stop on terminal/error/unmounted
-views. Start retries retain their identity and inputs. Access errors replace
+queued/running/cancelling mounted views every three seconds and stop on parked
+(paused/blocked), terminal, error or unmounted views. Focus refetch and mutations
+still refresh parked views. Start retries retain their identity and inputs. Access errors replace
 protected run content. Authoring retains its existing cache behavior.
 
 Run screens use the agreed Workflow Playbook layout: full-page start/run views,

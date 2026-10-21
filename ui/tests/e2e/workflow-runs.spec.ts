@@ -81,6 +81,31 @@ test.describe("WF02 run progress and text results", () => {
     ).toBeVisible();
   });
 
+  for (const state of ["PAUSED", "BLOCKED"]) {
+    for (const detail of [false, true]) {
+      test(`${state} runs stop polling in ${detail ? "detail" : "list"} view`, async ({ page }) => {
+        await page.clock.install();
+        support.state = state;
+        const runs = new WorkflowRunsPage(page);
+        if (detail) await runs.goto(MOCK_AGENT_ID, true);
+        else await runs.gotoView(MOCK_AGENT_ID, "runs");
+        await expect(page.getByLabel(detail ? "Run detail" : "Workflow runs", { exact: true })).toBeVisible();
+        const reads = support.reads;
+        await page.clock.runFor(10_000);
+        expect(support.reads).toBe(reads);
+      });
+    }
+  }
+
+  test("running detail keeps polling and displays completion", async ({ page }) => {
+    await page.clock.install();
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    support.state = "SUCCEEDED";
+    await page.clock.runFor(3_100);
+    await expect(page.getByLabel("Run summary").getByRole("heading")).toHaveText("Run completed");
+  });
+
   test("workflow tabs persist in the URL, reload and browser history", async ({
     page,
   }) => {

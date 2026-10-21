@@ -9,6 +9,7 @@ const stepTimes = [
 ];
 export class WorkflowRunDataSupport {
   starts: Record<string, unknown>[] = [];
+  reads = 0;
   failStart = false;
   failRead = false;
   viewer = false;
@@ -116,6 +117,7 @@ export class WorkflowRunDataSupport {
       },
     );
     await this.page.route(`${base}/workflow-runs**`, async (route) => {
+      if (route.request().method() === "GET") this.reads++;
       const path = new URL(route.request().url()).pathname;
       if (this.failRead || !path.includes(`/organizations/${TEST_ORG_ID}/`)) {
         await route.fulfill({ status: 404, json: { detail: "Run not found" } });

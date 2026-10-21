@@ -20,6 +20,62 @@ def test_listener_source_parses_for_the_oldest_runtime_image() -> None:
     ast.parse(_SCRIPT.read_text(), filename=str(_SCRIPT), feature_version=(3, 12))
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '{"summary":"CRM unavailable", "criteria_met":false}\nNote: config uses {braces}.',
+        'Config uses {braces}.\n```json\n{"summary":"CRM unavailable", "criteria_met":false}\n```',
+        '{"summary":"CRM {unavailable}", "criteria_met":false} trailing {text}',
+    ],
+)
+def test_explicit_failure_survives_surrounding_braces(trigger_server, reply) -> None:
+    met, summary = trigger_server._parse_step_reply(reply)
+    assert met is False
+    assert summary.startswith("CRM")
+
+
+def test_hermes_stop_uses_the_original_session_header(monkeypatch, trigger_server) -> None:
+    requests = []
+
+    class Response:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        trigger_server.urllib.request, "urlopen", lambda request, **kw: requests.append(request) or Response()
+    )
+    trigger_server.RUNTIME_KIND = "hermes"
+    trigger_server.RUNTIME_API_URL = "http://runtime"
+    trigger_server._STEPS["a"] = {"run_id": "run-1", "session_id": "workflow-a", "stopped": False}
+    trigger_server.stop_workflow_step("a")
+    assert requests[0].full_url.endswith("/v1/runs/run-1/stop")
+    assert requests[0].get_header("X-hermes-session-key") == "workflow-a"
+
+
+def test_cancellation_while_hermes_start_is_in_flight_stops_the_accepted_run(monkeypatch, trigger_server) -> None:
+    trigger_server.RUNTIME_API_URL = "http://runtime"
+    trigger_server.RUNTIME_KIND = "hermes"
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    stopped = []
+
+    class Response:
+        def __enter__(self):
+            trigger_server.stop_workflow_step("a")
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            return b'{"run_id":"run-1"}'
+
+    monkeypatch.setattr(trigger_server.urllib.request, "urlopen", lambda *args, **kw: Response())
+    monkeypatch.setattr(trigger_server, "_stop_hermes", lambda *args: stopped.append(args))
+    with pytest.raises(RuntimeError, match="cancelled"):
+        trigger_server._hermes_step("a", "workflow-a", "Do the step")
+    assert stopped == [("run-1", "workflow-a")]
+
+
 def _payload() -> dict:
     return {
         "invocation_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e",

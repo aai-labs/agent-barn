@@ -7,7 +7,7 @@ import { api } from "@/shared/api";
 import {
   WorkflowRunListSchema,
   WorkflowRunSchema,
-  isRunTerminal,
+  isRunProgressing,
   type WorkflowRun,
   type WorkflowRunList,
 } from "../run-schemas";
@@ -35,7 +35,7 @@ export function useWorkflowRuns(
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
       !query.state.error &&
-      query.state.data?.items.some((run) => !isRunTerminal(run.state))
+      query.state.data?.items.some((run) => isRunProgressing(run.state))
         ? 3000
         : false,
     queryFn: async () =>
@@ -55,11 +55,11 @@ export function useWorkflowRun(agentId: string, runId: string) {
     enabled: scope.enabled && Boolean(runId),
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
-      query.state.error
-        ? false
-        : query.state.data && isRunTerminal(query.state.data.state)
-          ? false
-          : 3000,
+      !query.state.error &&
+      query.state.data &&
+      isRunProgressing(query.state.data.state)
+        ? 3000
+        : false,
     queryFn: async () =>
       (
         await api.get<WorkflowRun>(`${scope.base}/workflow-runs/${runId}`, {

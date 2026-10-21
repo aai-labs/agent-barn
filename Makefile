@@ -2,6 +2,7 @@ COMPOSE := docker compose -f compose.yml
 RUNTIME ?= hermes
 
 .PHONY: \
+	check-workflows \
 	reconcile-workflows \
 	setup run stop stop-clean test-api-runtime test-integration-isolation \
 	restart-ui \
@@ -89,6 +90,9 @@ dev-memory:
 
 check-memory:
 	cd api && uv run python scripts/check_memory_charts.py
+
+check-workflows:
+	cd api && uv run --frozen python scripts/check_workflow_charts.py
 
 # Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
 # in k3d, so expose one Agent's webhook port on the host. Re-run after the pod

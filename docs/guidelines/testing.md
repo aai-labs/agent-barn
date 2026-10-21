@@ -94,7 +94,7 @@ deployment limits cannot change their expected budget contracts.
 | `make test-api-k8s` | Kubernetes client integration test | Docker plus a configured, disposable Kubernetes cluster whose target namespace already exists |
 | `make test-integration-isolation RUNTIME=both` | Opt-in Secrets/PVC transition contracts in a new disposable k3d cluster | Docker, k3d, kubectl, locally built `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE`; no provider accounts |
 | `make test-api-runtime` | Runtime contract tests against an explicitly selected built image | Docker and the image variable required by the selected test, such as `HERMES_TEST_IMAGE` |
-| `make test-workflow-runtime` | Production workflow APIs/ledger, persisted text handoff and both native reasoning entrypoints in fresh Jobs | Docker, k3d, kubectl, Helm 3.19.0, locally built `HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE`, an explicitly provisioned bounded model test key |
+| `make check-workflows` | Render API, event worker and workflow maintenance cluster-access wiring with default and custom kubeconfig Secrets | Helm 3.19.0 |
 | `make coverage` | All API tests with terminal and XML coverage, including the Kubernetes client test | Docker, Node.js, and the Kubernetes prerequisites above |
 | `make lint-ui` | ESLint | None |
 | `make check-ui` | TypeScript type check | None |

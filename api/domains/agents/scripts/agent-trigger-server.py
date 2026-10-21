@@ -310,6 +310,11 @@ def _hermes_step(attempt_id: str, session_id: str, prompt: str) -> str:
     with _STEPS_LOCK:
         if attempt_id in _STEPS:
             _STEPS[attempt_id]["run_id"] = run_id
+            _STEPS[attempt_id]["session_id"] = session_id
+        stopped = _STEPS.get(attempt_id, {}).get("stopped", False)
+    if stopped:
+        _stop_hermes(run_id, session_id)
+        raise RuntimeError("Agent session cancelled")
     events = urllib.request.Request(
         f"{RUNTIME_API_URL}/v1/runs/{run_id}/events",
         method="GET",
@@ -320,7 +325,7 @@ def _hermes_step(attempt_id: str, session_id: str, prompt: str) -> str:
             payload = json.loads(data)
             event = payload.get("event")
             if event == "approval.request":
-                _stop_hermes(run_id)
+                _stop_hermes(run_id, session_id)
                 command = str(payload.get("command") or payload.get("description") or "a command")[:500]
                 raise NeedsAttention(f"The Agent needs approval to run {command}. Approve it in chat, then rerun.")
             if event == "run.completed":
@@ -330,10 +335,10 @@ def _hermes_step(attempt_id: str, session_id: str, prompt: str) -> str:
     raise RuntimeError("The Agent session ended without a result")
 
 
-def _stop_hermes(run_id: str) -> None:
+def _stop_hermes(run_id: str, session_id: str) -> None:
     try:
         stop = urllib.request.Request(
-            f"{RUNTIME_API_URL}/v1/runs/{run_id}/stop", data=b"{}", method="POST", headers=_runtime_headers(run_id)
+            f"{RUNTIME_API_URL}/v1/runs/{run_id}/stop", data=b"{}", method="POST", headers=_runtime_headers(session_id)
         )
         urllib.request.urlopen(stop, timeout=10).close()
     except (urllib.error.URLError, OSError):
@@ -360,12 +365,12 @@ def _openclaw_step(session_id: str, prompt: str) -> str:
 
 def _parse_step_reply(text: str) -> tuple[bool, str]:
     """The Agent is asked for {"summary", "criteria_met"}; plain prose still counts as the summary."""
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
         try:
-            reply = json.loads(match.group(0))
+            reply, _ = decoder.raw_decode(text, match.start())
         except ValueError:
-            reply = None
+            continue
         if isinstance(reply, dict) and isinstance(reply.get("summary"), str) and reply["summary"].strip():
             return reply.get("criteria_met") is not False, reply["summary"].strip()[:_SUMMARY_LIMIT]
     if not text.strip():
@@ -436,8 +441,9 @@ def stop_workflow_step(attempt_id: str) -> None:
             return
         step["stopped"] = True
         run_id = step.get("run_id")
-    if run_id and RUNTIME_KIND == "hermes":
-        _stop_hermes(run_id)
+        session_id = step.get("session_id")
+    if run_id and session_id and RUNTIME_KIND == "hermes":
+        _stop_hermes(run_id, session_id)
 
 
 class TriggerHandler(BaseHTTPRequestHandler):

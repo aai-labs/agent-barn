@@ -838,8 +838,12 @@ its tools, Integrations, approval mode and spend limits. No runtime image pinnin
 extra Jobs or network policy are involved.
 
 The event worker sends each step to the Agent's trigger server (port 8082) through
-the Kubernetes client, so it needs the same cluster access as the API: in-cluster
-Service DNS in deployments and the k3d kubeconfig locally (Compose mounts it).
+the Kubernetes client, so it needs the same cluster access as the API. Helm mounts
+the operator kubeconfig Secret read-only at `/etc/kubeconfig` into both workloads
+and sets `K8S_NAMESPACE` to the release namespace and `K8S_KUBECONFIG_PATH` to
+`/etc/kubeconfig/kubeconfig`. `kubeconfigSecretName` selects the Secret, defaulting
+to `<release>-kubeconfig`. Compose mounts the local k3d kubeconfig. Run
+`make check-workflows` to verify the rendered cluster-access wiring.
 `WORKFLOW_RUNTIME_BASE_URL` is the callback endpoint Agent pods use for step
 handoff and outcome reports. Helm defaults it to the release's API Service on port
 8000; `workflows.runtimeBaseUrl` can override it and Helmfile maps the environment
@@ -847,7 +851,9 @@ value. Local Compose derives it from `API_PORT` through `host.docker.internal`.
 
 Workflow limits and text retention are hard coded in
 `api/domains/workflows/config.py`; they are not environment or Helm options.
-Per-Agent UI settings are future work. Waiting for an unreachable Agent consumes
+Each Agent permits two queued/running/cancelling runs across all its workflows.
+Paused and blocked runs do not consume capacity; other Agents and Organizations
+have independent capacity. Per-Agent UI settings are future work. Waiting for an unreachable Agent consumes
 the attempt deadline. Non-successful Agent dispatch responses are logged with
 the run identity and HTTP status. A 404 on the workflow step route indicates an
 older trigger server; pause and start that Agent to load the current configuration.

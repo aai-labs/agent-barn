@@ -58,3 +58,5 @@ export const runStateLabel = (state: WorkflowRun["state"]) =>
 export type WorkflowRunList = z.infer<typeof WorkflowRunListSchema>;
 export const isRunTerminal = (state: string) =>
   ["SUCCEEDED", "FAILED", "CANCELLED"].includes(state);
+export const isRunProgressing = (state: string) =>
+  ["QUEUED", "RUNNING", "CANCELLING"].includes(state);

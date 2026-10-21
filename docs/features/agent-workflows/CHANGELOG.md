@@ -8,11 +8,18 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 - Delivered in this change: [AF-388 / WF01](https://aai-labs.atlassian.net/browse/AF-388) Agent-owned definitions, immutable schema-v1 versions, validated step/input schemas and manual authoring/inspection through the Agent’s Workflows tab. WF01 is merged into staging via PR #308, including its review follow-ups.
 - Implemented and locally verified: [AF-389 / WF02](https://aai-labs.atlassian.net/browse/AF-389) explicit version/input starts, steps run as sessions in the owning Agent under its own configuration, durable progression/cancellation, completed-step text summaries and a final text result stored in PostgreSQL. File artifacts and shared storage are deferred; no deployment or live schema change accompanies this work.
-- In transition: WF02 is an unmerged worktree change on WF01. Natural-language generation remains a separate PR; file artifacts/shared storage and approvals/notifications are later slices.
+- In transition: WF02 is committed on top of staging (which includes WF01) and remains unmerged. Natural-language generation remains a separate PR; file artifacts/shared storage and approvals/notifications are later slices.
 - Next: Merge/deployment coordination after the successful local Hermes run. Shared storage and workflow file artifacts need a separate scoped task/PR; generation and WF03 business actions remain independent follow-ups.
 - Verification limits: The original Agent-session checks passed 181 focused API, trigger-server, builder and contract tests. The wakeup repair passes 95 workflow/trigger-server tests plus lint, formatting and API type checks. A live two-step Research run on restarted local Hermes Agent Arlo completed successfully with both text summaries persisted. Live OpenClaw execution and a broad full-suite pass are not claimed.
 
 ## Changes
+
+### 2026-10-21 — AF-389 — address Opus review
+
+- Fixed: The Helm worker now receives the same operator kubeconfig Secret and release namespace as the API and maintenance job. `make check-workflows` verifies both default and custom Secret renders; the testing guide replaces its removed fresh-Job suite command with this check.
+- Capacity: Admission serializes per Agent across definitions and allows two queued/running/cancelling runs per Agent. Paused/blocked runs do not occupy capacity or block other Agents/Organizations.
+- Runtime/UI: Structured replies are decoded independently of surrounding braces so explicit failed criteria remain failures. Hermes cancellation uses the original session key and honours cancellation received during start. Parked runs stop polling but still refresh on focus or mutation.
+- Verification: Capacity isolation, parked-state capacity, structured-failure parsing, session-header and rendered worker assertions reproduce their original failures. Restoring parked-run polling makes all four new browser polling regressions fail. The fixed slice passes 106 workflow/trigger-server API tests, 53 workflow browser tests, API/UI lint/types, migration-head validation and default/custom-Secret Helm 3.19.0 renders (`make check-workflows`, using the local Helm image without networking). No live Agent execution or deployment was performed for these fixes.
 
 ### 2026-10-21 — AF-389 — redesign the result navigation card
 

@@ -107,11 +107,65 @@ def test_declared_capabilities_do_not_gate_execution(capability) -> None:
 
 def test_concurrency_bound_is_enforced(monkeypatch) -> None:
     with given(_RUN_GIVEN) as context:
-        monkeypatch.setattr(workflow_config, "MAX_ACTIVE_RUNS", 1)
+        monkeypatch.setattr(workflow_config, "MAX_ACTIVE_RUNS_PER_AGENT", 1)
         response, saved, _ = start(context)
         assert_that(response.status_code, equal_to(202))
         response, _, _ = start(context, saved)
         assert_that(response.status_code, equal_to(409))
+
+
+@pytest.mark.parametrize("other_organization", [False, True])
+def test_capacity_is_isolated_between_agents_and_organizations(other_organization) -> None:
+    from api.tests.steps.agent import there_is_an_agent
+    from api.tests.steps.organization import there_is_an_organization
+
+    with given(_RUN_GIVEN) as context:
+        response, saved, _ = start(context)
+        assert_that(response.status_code, equal_to(202))
+        response, _, _ = start(context, saved)
+        assert_that(response.status_code, equal_to(202))
+        if other_organization:
+            there_is_an_organization(name="Other workflows Organization")(context)
+        there_is_an_agent(name="Other workflow Agent")(context)
+        response, _, _ = start(context)
+        assert_that(response.status_code, equal_to(202), response.text)
+
+
+@pytest.mark.parametrize("state", ["PAUSED", "BLOCKED"])
+def test_parked_runs_do_not_consume_capacity(state) -> None:
+    with given(_RUN_GIVEN) as context:
+        for _ in range(2):
+            response, _, _ = start(context)
+            assert_that(response.status_code, equal_to(202))
+            with Session(context.postgres_delegate.engine) as session:
+                run = session.get_one(WorkflowRun, UUID(response.json()["id"]))
+                run.state = state
+                session.add(run)
+                session.commit()
+        response, _, _ = start(context)
+        assert_that(response.status_code, equal_to(202), response.text)
+
+
+def test_concurrent_starts_share_capacity_across_an_agents_workflows() -> None:
+    with given(_RUN_GIVEN) as context:
+        response, _, _ = start(context)
+        assert_that(response.status_code, equal_to(202))
+        definitions = [create(context), create(context)]
+
+        def submit(saved):
+            return context.client.post(
+                base(context) + f"/workflows/{saved['id']}/runs",
+                headers=auth(context),
+                json={
+                    "version_id": saved["version"]["id"],
+                    "client_request_id": str(uuid4()),
+                    "inputs": {"period": "This week"},
+                },
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(submit, definitions))
+        assert_that(sorted(response.status_code for response in responses), equal_to([202, 409]))
 
 
 def test_cancel_fences_current_attempt_before_quiescence() -> None:

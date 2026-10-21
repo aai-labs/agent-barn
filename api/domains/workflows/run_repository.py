@@ -178,8 +178,12 @@ class WorkflowRunRepository:
     ) -> tuple[WorkflowRun, list[UUID]]:
         request_hash = digest({**payload.model_dump(mode="json"), "user_id": str(user_id)})
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            # Serialize installation capacity and duplicate starts, including the first row.
-            session.connection().execute(sa.text("SELECT pg_advisory_xact_lock(389001)"))
+            # Serialize starts across this Agent's definitions, including its first run.
+            agent = session.exec(
+                select(Agent).where(col(Agent.id) == agent_id, *agent_scope_predicates(scope)).with_for_update(of=Agent)
+            ).one_or_none()
+            if agent is None:
+                raise WorkflowConflict("Workflow access changed")
             workflow = session.exec(
                 select(Workflow)
                 .join(Agent, col(Agent.id) == col(Workflow.agent_id))
@@ -204,10 +208,16 @@ class WorkflowRunRepository:
             if workflow.archived_at or version is None or version.workflow_id != workflow_id:
                 raise WorkflowConflict("The saved version is unavailable or the workflow is archived")
             active = session.exec(
-                select(sa.func.count()).select_from(WorkflowRun).where(col(WorkflowRun.state).not_in(TERMINAL_STATES))
+                select(sa.func.count())
+                .select_from(WorkflowRun)
+                .join(Workflow, col(Workflow.id) == col(WorkflowRun.workflow_id))
+                .where(
+                    col(Workflow.agent_id) == agent_id,
+                    col(WorkflowRun.state).in_({"QUEUED", "RUNNING", "CANCELLING"}),
+                )
             ).one()
-            if active >= workflow_config.MAX_ACTIVE_RUNS:
-                raise WorkflowConflict("Workflow concurrency limit reached; wait for an active run to settle")
+            if active >= workflow_config.MAX_ACTIVE_RUNS_PER_AGENT:
+                raise WorkflowConflict("This Agent's workflow concurrency limit was reached; wait for a run to settle")
             run = WorkflowRun(
                 workflow_id=workflow_id,
                 version_id=payload.version_id,
