@@ -35,6 +35,7 @@ class PermissionKey(str, Enum):
     SKILL_MANAGE = "skill.manage"
     ACTIVITY_READ = "activity.read"
     COST_READ = "cost.read"
+    TASK_READ = "task.read"
     LLM_BUDGET_MANAGE = "llm_budget.manage"
 
 
@@ -92,6 +93,7 @@ PERMISSIONS: tuple[PermissionSeed, ...] = (
     PermissionSeed(UUID("222ab95b-f67b-5275-8139-3f601574f3e1"), PermissionKey.SKILL_MANAGE),
     PermissionSeed(UUID("3f24e385-7c5e-56f0-828c-502985376af9"), PermissionKey.ACTIVITY_READ),
     PermissionSeed(UUID("b6557147-248a-5d34-8bb2-7c51944d9ee7"), PermissionKey.COST_READ),
+    PermissionSeed(UUID("cb4bbe39-bbc4-5569-b1f4-8aeefa91b419"), PermissionKey.TASK_READ),
     PermissionSeed(UUID("5d0c2b7e-8f41-5a6c-9e3d-1b7f4a2c6e90"), PermissionKey.LLM_BUDGET_MANAGE),
 )
 PERMISSION_ID_BY_KEY = {permission.key: permission.id for permission in PERMISSIONS}
@@ -147,6 +149,7 @@ _VIEWER_KEYS = frozenset(
         PermissionKey.AGENT_READ,
         PermissionKey.ACTIVITY_READ,
         PermissionKey.COST_READ,
+        PermissionKey.TASK_READ,
     }
 )
 _EDITOR_KEYS = _VIEWER_KEYS | {

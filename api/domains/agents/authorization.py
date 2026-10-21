@@ -27,6 +27,15 @@ _AGENT_ACTION_PERMISSIONS: tuple[PermissionKey, ...] = (
     PermissionKey.AGENT_MEMORY_MANAGE,
     PermissionKey.ACTIVITY_READ,
     PermissionKey.COST_READ,
+    PermissionKey.TASK_READ,
+)
+_READ_ONLY_ACTION_PERMISSIONS = frozenset(
+    {
+        PermissionKey.AGENT_READ,
+        PermissionKey.ACTIVITY_READ,
+        PermissionKey.COST_READ,
+        PermissionKey.TASK_READ,
+    }
 )
 
 
@@ -161,7 +170,7 @@ class AgentAuthorization:
                 if permission in permissions_by_agent.get(agent.id, set())
                 and (
                     context.api_key_access_mode != ApiKeyAccessMode.READ_ONLY
-                    or permission in {PermissionKey.AGENT_READ, PermissionKey.ACTIVITY_READ, PermissionKey.COST_READ}
+                    or permission in _READ_ONLY_ACTION_PERMISSIONS
                 )
             ]
             for agent in agents

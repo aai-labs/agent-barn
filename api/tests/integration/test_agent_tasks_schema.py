@@ -19,6 +19,13 @@ from sqlmodel import Session, SQLModel, col, select
 
 from api.core.config import get_config
 from api.domains.agent_tasks.models import AgentTask, AgentTaskFile, AgentTaskFileChunk, AgentTaskNote
+from api.domains.rbac.catalog import (
+    AGENT_EDITOR_ROLE_ID,
+    AGENT_OWNER_ROLE_ID,
+    AGENT_VIEWER_ROLE_ID,
+    PERMISSION_ID_BY_KEY,
+    PermissionKey,
+)
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import prepare_injector, set_env_variable
 from api.tests.steps.agent import (
@@ -33,6 +40,7 @@ from api.tests.steps.organization import there_is_an_organization
 
 PRE_AF411_REVISION = "a4e9c2d7b615"
 AF411_TASK_TABLES_REVISION = "b7d4e1a9c362"
+AF411_TASK_READ_REVISION = "d2f8a6c41e07"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 AF411_TABLES = ("agent_task", "agent_task_note", "agent_task_file", "agent_task_file_chunk")
 
@@ -93,6 +101,32 @@ def test_agent_task_tables_downgrade_cleanly_and_upgrade_again(scratch_database)
     command.upgrade(scratch_database.config, AF411_TASK_TABLES_REVISION)
     scratch_database.engine.dispose()
     assert_that(_task_tables(scratch_database.engine), equal_to(set(AF411_TABLES)))
+
+
+def _task_read_grants(engine) -> tuple[bool, set]:
+    task_read_id = PERMISSION_ID_BY_KEY[PermissionKey.TASK_READ]
+    with engine.connect() as connection:
+        permission = connection.execute(
+            text("SELECT 1 FROM permissions WHERE id = :id AND key = 'task.read'").bindparams(id=task_read_id)
+        ).first()
+        roles = connection.execute(
+            text("SELECT role_id FROM agent_access_role_permissions WHERE permission_id = :id").bindparams(
+                id=task_read_id
+            )
+        ).scalars()
+        return permission is not None, set(roles)
+
+
+def test_task_read_is_granted_to_every_system_role_and_removed_on_downgrade(scratch_database):
+    command.upgrade(scratch_database.config, AF411_TASK_READ_REVISION)
+    assert_that(
+        _task_read_grants(scratch_database.engine),
+        equal_to((True, {AGENT_VIEWER_ROLE_ID, AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID})),
+    )
+
+    command.downgrade(scratch_database.config, AF411_TASK_TABLES_REVISION)
+    scratch_database.engine.dispose()
+    assert_that(_task_read_grants(scratch_database.engine), equal_to((False, set())))
 
 
 def test_the_migrated_schema_matches_the_agent_task_models():
