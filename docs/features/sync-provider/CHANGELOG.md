@@ -30,22 +30,26 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
 
 ### AF-384 — Two-way file sync
 
-- Delivered: Microsoft and runtime image verification (no code), and the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md). `CONTEXT.md` defines Agent Folder, File Sync and Sync Category. No file syncs yet.
+- Delivered:
+  - Microsoft and runtime image verification (no code);
+  - the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), with `CONTEXT.md` defining Agent Folder, File Sync and Sync Category;
+  - the sync rules (`api/domains/file_sync/rules.py`).
+
+  Nothing calls the rules yet, and no file syncs yet.
 - Next, in this order, each as its own slice:
-  1. sync rules;
-  2. tables and repositories;
-  3. Graph file operations;
-  4. the `file_sync` capability, then OneDrive's implementation of it;
-  5. folder reconciliation;
-  6. the Sync Engine and its deployment;
-  7. Ingest file-sync routes;
-  8. remote change processing;
-  9. the in-pod helper;
-  10. builder and `start.sh` wiring;
-  11. pinned-image contracts;
-  12. disconnect;
-  13. docs consolidation;
-  14. an end-to-end run on local k3d against the test tenant.
+  1. tables and repositories;
+  2. Graph file operations;
+  3. the `file_sync` capability, then OneDrive's implementation of it;
+  4. folder reconciliation;
+  5. the Sync Engine and its deployment;
+  6. Ingest file-sync routes;
+  7. remote change processing;
+  8. the in-pod helper;
+  9. builder and `start.sh` wiring;
+  10. pinned-image contracts;
+  11. disconnect;
+  12. docs consolidation;
+  13. an end-to-end run on local k3d against the test tenant.
 - Docs owed by the slice that makes them true:
   - **this README:**
     - the "Agent file sync" section, with folder reconciliation;
@@ -76,6 +80,43 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-21 — AF-384 — Sync rules
+
+- Delivered: `api/domains/file_sync/rules.py`.
+  - **`classify(runtime, path)`** sorts a path relative to the Agent's volume into a Sync Category.
+    - Hermes (root `/opt/data`):
+      - memory: `memories/USER.md`, `memories/MEMORY.md`;
+      - config: `SOUL.md` and `workspace/{IDENTITY,AGENTS,TOOLS,BOOT,HEARTBEAT}.md`;
+      - skills: `workspace/skills`;
+      - work: the rest of `workspace/`.
+    - OpenClaw (root `/home/node/.openclaw`):
+      - memory: `workspace/USER.md`, `workspace/MEMORY.md`;
+      - config: `workspace/{SOUL,IDENTITY,AGENTS,TOOLS,BOOT,BOOTSTRAP,HEARTBEAT}.md`;
+      - skills: `workspace/skills`;
+      - work: the rest of `workspace/`.
+    - Config and skills entries match the entry itself and anything under it, as the Restore Point exclusions do.
+    - Never: everything else, `.git`, `node_modules` and `__pycache__` anywhere, `_Not synced/`, and malformed paths (empty, absolute, `.` or `..` or empty segments, backslashes, control characters).
+  - **`name_problem(path)`** reports a name the provider refuses:
+    - forbidden characters `: " * < > ? | \`;
+    - a leading space;
+    - a trailing dot or space;
+    - the Windows reserved device names, with or without an extension: `CON` and `aux` were observed, and `PRN`, `NUL`, `COM0-9` and `LPT0-9` are refused with them;
+    - the `_vti_` prefix.
+  - **`path_too_long`** applies the 400-character server-relative path limit.
+  - **`MAX_FILE_BYTES`** is 100 MB.
+  - **`rules_manifest(runtime)`** is the JSON form of the rules for the in-pod helper.
+- Changed: `docs/INDEX.md` routes `api/domains/file_sync/`.
+- Verified:
+  - `api/tests/unit/test_file_sync_rules.py` (118 tests) failed first (module missing), then passed.
+  - **Drift guards.** Expectations are derived from the code, not restated:
+    - the credentials and machinery entries of `HERMES_EXCLUDED`/`OPENCLAW_EXCLUDED` (and anything under them) are `never`;
+    - nothing either tuple excludes is `work` or `memory`;
+    - Hermes config comes from `start.sh`'s copy loop plus `SOUL.md`;
+    - OpenClaw config comes from every `.md` key `build_config_map` writes except `USER.md`.
+  - The first green run caught `workspace/skills` itself, and paths under a config entry, classified as `work`; prefix matching fixed both.
+  - ruff, format and ty pass for the new files.
+  - `test_restore_point_job.py` has the same 7 symlink failures with and without this change; they are a local Windows limit on creating symlinks.
 
 ### 2026-10-21 — AF-384 — ADR and glossary
 
