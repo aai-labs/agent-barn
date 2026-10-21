@@ -30,6 +30,48 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
 
 ## Changes
 
+### 2026-10-21 — AF-384 — Microsoft and runtime image verification (no code)
+
+- Verified against the test site `AgentBarnTest` (tenant `aailabs`) with the platform app's app-only token. Each line is an observed response, not a documented claim.
+  - **Change feed (T-1):**
+    - `delta` works on a folder (`/items/{Agent Barn id}/delta` → 200) as well as on the drive root with `token=latest`. Items carry `parentReference.path`, `eTag`, `cTag`, `size` and `file.hashes.quickXorHash`.
+    - `cTag` changes only with content: a rename and a move kept `cTag` `…},3` while `eTag` went to `…},5`.
+    - A deleted item has only `id`, `parentReference.id` and `deleted.state`, with no name and no path.
+    - In delta, `lastModifiedBy.application` has `displayName` only, with no `id`. The upload response does carry the app `id`.
+    - Changes also report every ancestor folder and the drive root. Folder `size` in delta can be negative.
+  - **Writes as the app:** rename and move return 200, delete returns 204, and the deleted file appears in the site recycle bin.
+  - **Version history is on:** after the app uploaded over a person's edit, `versions` listed 1.0 (app), 2.0 (the person) and 3.0 (app).
+  - **Pre-authenticated links:**
+    - `@microsoft.graph.downloadUrl` returns 200 with no `Authorization` header.
+    - From a k3d pod on `agentfarm-hermes-base:dev` with no token, a 1 MiB file uploaded in two chunks to an `uploadSession` URL (202, then 201 with `id`, `eTag`, `cTag` and `quickXorHash`), and a `downloadUrl` returned 200.
+    - Upload sessions expire 15 minutes after creation.
+    - A 0-byte `PUT` to an upload session without `Content-Range` is refused with 400.
+  - **Autosave (T-3):**
+    - Word for the web saved a new document as `Document.docx` and renamed it to `autosave.docx` 12 s later.
+    - While typing, saves came 2–45 s apart, and no save came after typing stopped.
+    - A browser text edit is one save.
+  - **Names and paths (T-4):**
+    - Refused for files and folders: `: " * < > ? |`, a leading space, the reserved names `CON` and `aux` (also `CON.txt`), and the `_vti_` prefix (files 403).
+    - Also refused for folders: `\`, a trailing `.` and a trailing space. Files were tested with a `.txt` suffix, so a trailing `.` or space on a file name is unverified.
+    - Accepted: `#`, `%`, `.lock`, `~$lock`, `desktop.ini`, `forms`, and 255- and 256-character names.
+    - The server-relative path is limited to 400 characters (Microsoft's message: "must be 400 characters or less").
+    - Names are case-insensitive: `notes.md` next to `Notes.md` gives 409 `nameAlreadyExists`.
+  - **Throttling:** no 429 was seen.
+- Verified in the runtime images with `docker run`:
+  - Hermes (`agentfarm-hermes-base:dev`): `python3` is `/opt/hermes/.venv/bin/python3`, 3.13.5.
+  - OpenClaw (`agentfarm-openclaw-base:dev`): `/usr/local/bin/python3`, 3.12.15.
+  - OpenClaw 2026.8.2's own code reads `MEMORY.md` and `USER.md` from the workspace root and daily notes from `workspace/memory/*.md`.
+- Changed (plan, before any code):
+  - **Change detection:**
+    - content edits are detected by `cTag`, renames and moves by `eTag`;
+    - deleted items are matched by item id;
+    - our own uploads are recognised by recorded tags and pending uploads, not by an app id.
+  - **Pod helper uploads:** the helper asks for an upload URL just before each upload and asks again when one expires.
+  - **Empty files:** the server creates 0-byte files itself.
+  - **Settle delay:** 30 s after an item's last change.
+  - **Name rules:** they follow the refused list above, treat a trailing `.` or space as refused for every name, and apply the 400-character path limit.
+- Follow-up: in PR 15, check the download URL lifetime, a trailing `.` or space on file names, incremental folder `delta` over time, how deleting a folder with children appears in the feed, and 429 if it appears.
+
 ### 2026-10-16 — AF-383 — OneDrive logo in the Sync list
 
 - Delivered: `ui/public/brand/onedrive.svg` (a drawn cloud mark in OneDrive's blues), `OneDriveIcon` and `syncProviderIcon` in `ui/src/components/brand-icons.tsx`. The Sync row shows the mark for `onedrive` and keeps the letter tile for a provider without one.
