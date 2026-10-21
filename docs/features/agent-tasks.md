@@ -24,3 +24,7 @@ This slice is the store and its service (`../api/domains/agent_tasks/`). It has 
 - The Postgres store keeps each File as 1 MiB chunks in `agent_task_file_chunk`, written in the same transaction as the File's metadata and removed with it by cascade.
 - A filename is a bare name: no path separators or control characters.
 - Empty files are refused. A File may be at most `TASK_FILE_MAX_BYTES` (default 20 MiB), and one Organization's Task Files together at most `TASK_ORGANIZATION_STORAGE_MAX_BYTES` (default 2 GiB). Both are refused with 400. A per-Organization advisory lock makes the usage check and the insert one step, so concurrent uploads cannot together pass the limit.
+
+## Deletion
+
+Agent deletion is a soft delete, so the Agent foreign key never cascades. The deletion transaction in `AgentRepository.soft_delete_with_event` calls `stage_agent_task_cleanup` (`../api/domains/agent_tasks/cleanup.py`), which deletes the Agent's Tasks; their Notes, Files and chunks follow by cascade. If the deletion rolls back, the Tasks stay. Agent writes lock the Agent row against a concurrent deletion, so no Task can be added after the cleanup ran.
