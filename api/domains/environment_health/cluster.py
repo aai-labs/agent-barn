@@ -521,7 +521,8 @@ def quota_lines(quotas: Sequence[V1ResourceQuota]) -> list[CapacityLineRead]:
                 continue
             line = _line(resource, quantity(used_values.get(resource, "0")), quantity(raw_hard), CapacitySource.QUOTA)
             current = lines.get(resource)
-            if current is None or (line.ratio or 0) > (current.ratio or 0):
+            # A zero quota blocks all creation and has no finite ratio.
+            if current is None or (line.hard == 0, line.ratio or 0) > (current.hard == 0, current.ratio or 0):
                 lines[resource] = line
     return _ordered(lines.values())
 
@@ -635,25 +636,28 @@ def firing_alerts(
 ) -> list[FiringAlertRead]:
     """The monitoring chart's firing alerts: the rule's name, its severity and, for an Agent's
     alert, the Agent. The rule's annotations and the series' other labels are not carried."""
-    seen: set[tuple[str, UUID | None]] = set()
-    alerts: list[FiringAlertRead] = []
+    severity_order = {"critical": 0, "warning": 1, "info": 2}
+    by_identity: dict[tuple[str, UUID | None], FiringAlertRead] = {}
     for sample in samples:
         name = sample.labels.get("alertname", "")
         if not _ALERT_NAME.fullmatch(name):
             continue
         agent_id = agent_id_from_app(sample.labels.get("app"))
-        if (name, agent_id) in seen:
-            continue
-        seen.add((name, agent_id))
         severity = sample.labels.get("severity")
-        alerts.append(
-            FiringAlertRead(
-                name=name,
-                severity=severity if severity in _ALERT_SEVERITIES else None,
-                agent=agent_ref(agent_id, identities) if agent_id else None,
-            )
+        severity = severity if severity in _ALERT_SEVERITIES else None
+        key = (name, agent_id)
+        current = by_identity.get(key)
+        # Some chart rules share a name across warning and critical thresholds.
+        if current is not None and severity_order.get(current.severity or "", 3) <= severity_order.get(
+            severity or "", 3
+        ):
+            continue
+        by_identity[key] = FiringAlertRead(
+            name=name,
+            severity=severity,
+            agent=agent_ref(agent_id, identities) if agent_id else None,
         )
-    severity_order = {"critical": 0, "warning": 1, "info": 2}
+    alerts = list(by_identity.values())
     alerts.sort(key=lambda alert: (severity_order.get(alert.severity or "", 3), alert.name))
     return alerts
 

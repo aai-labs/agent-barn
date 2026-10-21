@@ -320,6 +320,7 @@ def test_a_warning_event_is_explained_and_its_message_is_not_carried():
 
         body = _get(context).json()
 
+        assert_that(body["level"], equal_to("warning"))
         [event] = body["events"]
         assert_that(event["reason"], equal_to("FailedMount"))
         assert_that(event["agent"]["agent_name"], equal_to("Ada"))
@@ -439,3 +440,16 @@ def test_prometheus_being_down_leaves_the_cluster_parts():
         assert_that(_sources(body)["prometheus"], equal_to("unavailable"))
         assert_that(body["workloads"]["pods_total"], equal_to(1))
         assert_that(body["alerts"], equal_to([]))
+
+
+def test_a_lost_volume_makes_the_overall_health_a_warning():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-lost@example.com")]) as context:
+        _quiet_cluster(context)
+        claim = _claim("lost-volume", "1Gi")
+        claim.status.phase = "Lost"
+        _cluster(context).list_pvcs.return_value = [claim]
+
+        body = _get(context).json()
+
+        assert_that(body["volumes"]["attention"], contains_exactly(has_entries(name="lost-volume", phase="Lost")))
+        assert_that(body["level"], equal_to("warning"))

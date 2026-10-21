@@ -23,6 +23,8 @@ from api.domains.environment_health.models import (
     HealthLevel,
     SourceState,
     UnhealthyRuntimeRead,
+    VolumeAllocationRead,
+    WarningEventRead,
     WorkloadsRead,
 )
 from api.domains.environment_health.repository import EnvironmentHealthRepository
@@ -53,6 +55,8 @@ def overall_level(
     unhealthy_runtimes: Sequence[UnhealthyRuntimeRead],
     failed_agents: Sequence[FailedAgentRead],
     alerts: Sequence[FiringAlertRead],
+    volumes: VolumeAllocationRead,
+    events: Sequence[WarningEventRead],
 ) -> HealthLevel:
     """The worst of what the page shows.
 
@@ -78,6 +82,8 @@ def overall_level(
         or unhealthy_runtimes
         or failed_agents
         or alerts
+        or volumes.attention
+        or events
     ):
         return HealthLevel.WARNING
     return HealthLevel.OK
@@ -151,6 +157,8 @@ class EnvironmentHealthService:
         failed = cluster.failed_agents(self.agent_repository.find_failed_for_platform())
         ceilings = self.resource_limits_service.get_limits()
         capacity = self._capacity(now, ceilings, quotas, claims, pods)
+        volumes = cluster.volume_allocation(claims or [], identities)
+        warnings = cluster.warning_events(events or [], identities, now)
 
         return EnvironmentHealthRead(
             observed_at=now,
@@ -163,17 +171,19 @@ class EnvironmentHealthService:
                 unhealthy_runtimes=unhealthy,
                 failed_agents=failed,
                 alerts=alerts,
+                volumes=volumes,
+                events=warnings,
             ),
             sources=[EnvironmentSourceRead(source=source, state=state) for source, state in sources.items()],
             ceilings=ceilings,
             services=services,
             alerts=alerts,
             capacity=capacity,
-            volumes=cluster.volume_allocation(claims or [], identities),
+            volumes=volumes,
             workloads=workloads,
             unhealthy_runtimes=unhealthy,
             failed_agents=failed,
-            events=cluster.warning_events(events or [], identities, now),
+            events=warnings,
         )
 
     def _capacity(

@@ -197,7 +197,9 @@ class KubernetesClient:
         return self._get_or_none(self._apps_v1.read_namespaced_deployment, name, namespace)
 
     def list_deployments(self, namespace: str, label_selector: str = "") -> list[client.V1Deployment]:
-        return self._apps_v1.list_namespaced_deployment(namespace, label_selector=label_selector).items
+        return self._apps_v1.list_namespaced_deployment(
+            namespace, label_selector=label_selector, _request_timeout=10
+        ).items
 
     def create_service(self, namespace: str, manifest: client.V1Service) -> client.V1Service:
         # Not _create_or_get: agent stop keeps the Service (stable ClusterIP),
@@ -241,7 +243,9 @@ class KubernetesClient:
         return self._get_or_none(self._core_v1.read_namespaced_persistent_volume_claim, name, namespace)
 
     def list_pvcs(self, namespace: str, label_selector: str = "") -> list[client.V1PersistentVolumeClaim]:
-        return self._core_v1.list_namespaced_persistent_volume_claim(namespace, label_selector=label_selector).items
+        return self._core_v1.list_namespaced_persistent_volume_claim(
+            namespace, label_selector=label_selector, _request_timeout=10
+        ).items
 
     def create_secret(self, namespace: str, manifest: client.V1Secret) -> client.V1Secret:
         return self._create_or_get(

@@ -7,6 +7,7 @@ both what is shown and that nothing outside the allowlist is carried.
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import pytest
 from kubernetes.client import (
     CoreV1Event,
     V1ContainerState,
@@ -43,6 +44,7 @@ from api.domains.environment_health.models import (
     EnvironmentSource,
     HealthLevel,
     SourceState,
+    VolumeAllocationRead,
     VolumeGroup,
     WorkloadKind,
     WorkloadsRead,
@@ -585,6 +587,8 @@ def _level(**overrides) -> HealthLevel:
         "unhealthy_runtimes": [],
         "failed_agents": [],
         "alerts": [],
+        "volumes": VolumeAllocationRead(),
+        "events": [],
         **overrides,
     }
     return overall_level(**arguments)
@@ -604,3 +608,25 @@ def test_the_overall_level_is_the_worst_part():
     assert _level(workloads=failing) == HealthLevel.WARNING
     assert _level(capacity=full) == HealthLevel.CRITICAL
     assert _level(sources={EnvironmentSource.PODS: SourceState.FORBIDDEN}) == HealthLevel.UNKNOWN
+
+
+@pytest.mark.parametrize("zero_first", [True, False])
+def test_a_zero_quota_always_wins_over_a_nonzero_quota(zero_first):
+    zero = V1ResourceQuota(status=V1ResourceQuotaStatus(hard={"pods": "0"}, used={"pods": "0"}))
+    other = V1ResourceQuota(status=V1ResourceQuotaStatus(hard={"pods": "10"}, used={"pods": "1"}))
+    quotas = [zero, other] if zero_first else [other, zero]
+
+    [line] = cluster.quota_lines(quotas)
+
+    assert line.hard == 0
+    assert line.level == CapacityLevel.CRITICAL
+
+
+@pytest.mark.parametrize("severities", [("warning", "critical"), ("critical", "warning")])
+def test_duplicate_alerts_keep_the_highest_severity(severities):
+    samples = [PrometheusSample({"alertname": "HighAPI5xxRate", "severity": severity}, 1.0) for severity in severities]
+
+    [alert] = cluster.firing_alerts(samples, {})
+
+    assert alert.severity == "critical"
+    assert _level(alerts=[alert]) == HealthLevel.CRITICAL
