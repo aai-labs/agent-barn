@@ -293,6 +293,22 @@ class KubernetesClient:
     def list_config_maps(self, namespace: str, label_selector: str = "") -> list[client.V1ConfigMap]:
         return self._core_v1.list_namespaced_config_map(namespace, label_selector=label_selector).items
 
+    # Namespace-wide reads for the environment health page. Each is bounded by a request
+    # timeout, since one slow answer should not hold the page, and each raises ApiException
+    # as the cluster answered it: the caller tells a refusal (403) from an outage.
+
+    def list_pods(self, namespace: str) -> list[client.V1Pod]:
+        return self._core_v1.list_namespaced_pod(namespace, _request_timeout=10).items
+
+    def list_stateful_sets(self, namespace: str) -> list[client.V1StatefulSet]:
+        return self._apps_v1.list_namespaced_stateful_set(namespace, _request_timeout=10).items
+
+    def list_resource_quotas(self, namespace: str) -> list[client.V1ResourceQuota]:
+        return self._core_v1.list_namespaced_resource_quota(namespace, _request_timeout=10).items
+
+    def list_warning_events(self, namespace: str) -> list[client.CoreV1Event]:
+        return self._core_v1.list_namespaced_event(namespace, field_selector="type=Warning", _request_timeout=10).items
+
     def _newest_pod(self, label_selector: str, namespace: str) -> client.V1Pod | None:
         pods = self._core_v1.list_namespaced_pod(namespace, label_selector=label_selector)
         candidates = [p for p in pods.items if p.metadata.deletion_timestamp is None]

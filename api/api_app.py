@@ -40,6 +40,7 @@ from api.domains.costs.platform_routes import platform_costs_router
 from api.domains.costs.routes import costs_router
 from api.domains.custom_api.routes import custom_api_router
 from api.domains.discovery.routes import router as discovery_router
+from api.domains.environment_health.routes import platform_environment_health_router
 from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
@@ -155,6 +156,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(discovery_router)
     subapi.include_router(event_delivery_monitor_router)
     subapi.include_router(platform_stats_router)
+    subapi.include_router(platform_environment_health_router)
     subapi.include_router(org_router)
     subapi.include_router(platform_org_router)
     subapi.include_router(member_router)

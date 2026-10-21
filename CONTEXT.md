@@ -65,7 +65,7 @@ The product mode where a Platform Administrator manages Platform Resources and P
 _Avoid_: default Organization, admin Organization, global workspace
 
 **Platform Oversight Data**:
-An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
+An explicitly allowlisted, read-only representation of user, Organization, Membership, Agent, activity, model-usage, container resource-usage, namespace health, and platform-borne cost facts used for cross-Organization governance. It excludes tenant content, configuration payloads, credentials, Secrets, and raw telemetry.
 _Avoid_: Organization View, impersonation, unrestricted tenant access
 
 **Organization View**:
