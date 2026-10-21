@@ -1,5 +1,6 @@
 // Run the Task command through the pinned core's real exec tool, as the Agent would.
 import fs from "node:fs";
+import { o as loadPlugins } from "/usr/local/lib/node_modules/openclaw/dist/loader-DhyKX__3.js";
 
 const dist = "/usr/local/lib/node_modules/openclaw/dist";
 // Bundle file names are content hashes; find the module by what it exports.
@@ -43,8 +44,25 @@ for (const [name, command] of Object.entries(commands)) {
   const output = (result.content ?? []).map((part) => part.text ?? "").join("\n");
   results[name] = { exit_code: result.details?.exitCode ?? null, output, details: result.details ?? null };
 }
+// The agentbarn-tasks plugin, through the pinned core's real loader and contract checks.
+const registry = loadPlugins({
+  config, workspaceDir: workspace, onlyPluginIds: ["agentbarn-tasks"], resolveRawConfigEnvVars: true, cache: false,
+});
+const record = registry.plugins.find((entry) => entry.id === "agentbarn-tasks");
+const entry = registry.tools.find((candidate) => candidate.pluginId === "agentbarn-tasks");
+const pluginTool = typeof entry?.factory === "function" ? entry.factory({ agentId: "main", workspaceDir: workspace }) : null;
+const toolResult = pluginTool ? await pluginTool.execute("contract", { action: "create", title: "From the plugin" }) : null;
+const plugin = {
+  status: record?.status ?? "missing",
+  error: record?.error ?? null,
+  hooks: registry.typedHooks.filter((hook) => hook.pluginId === "agentbarn-tasks").map((hook) => hook.hookName).sort(),
+  tool_names: entry?.names ?? [],
+  tool_result: toolResult ? JSON.parse(toolResult.content[0].text) : null,
+};
+
 console.log("TASK_RUNTIME_CONTRACT=" + JSON.stringify({
   results,
+  plugin,
   instructions: fs.readFileSync(workspace + "/AGENTS.md", "utf8"),
 }));
 process.exit(0);

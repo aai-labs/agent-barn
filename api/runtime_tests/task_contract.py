@@ -19,6 +19,9 @@ TASK_ID = "0199f1d2-0000-7000-8000-0000000000aa"
 INGEST_KEY = "task-contract-ingest-key"
 REFUSAL = "The file is larger than the space left for this Organization's Task Files."
 FIXTURES = Path(__file__).parents[1] / "tests" / "fixtures" / "agent_tasks"
+HERMES_PLUGIN_HOOKS = ["on_session_end", "post_tool_call", "pre_llm_call", "transform_tool_result"]
+# Turn hooks need allowConversationAccess; without it OpenClaw drops them with only a warning.
+OPENCLAW_PLUGIN_HOOKS = ["after_tool_call", "agent_end", "before_agent_finalize", "before_prompt_build"]
 
 
 def _ingest_stub_is_ready():
@@ -165,9 +168,11 @@ def tasks_should_be_recorded_from_the_agents_shell(runtime: str, image: str, roo
                 assert_that(results[name]["exit_code"], equal_to(0), f"{name}: {results[name]}")
             assert_that(results["refused"]["exit_code"], equal_to(1), str(results["refused"]))
             assert_that(results["refused"]["output"], contains_string(REFUSAL))
-            assert_that({request["authorization"] for request in context.requests}, equal_to({f"Bearer {INGEST_KEY}"}))
             tasks = f"/ingest/v1/agents/{AGENT_ID}/tasks"
-            calls = [(request["method"], request["path"]) for request in context.requests]
+            # Other plugins loaded alongside (telemetry) post to the same stub; only Task calls matter here.
+            task_requests = [request for request in context.requests if request["path"].startswith(tasks)]
+            assert_that({request["authorization"] for request in task_requests}, equal_to({f"Bearer {INGEST_KEY}"}))
+            calls = [(request["method"], request["path"]) for request in task_requests]
             assert_that(
                 calls,
                 equal_to(
@@ -179,9 +184,23 @@ def tasks_should_be_recorded_from_the_agents_shell(runtime: str, image: str, roo
                         ("POST", f"{tasks}/{TASK_ID}/files?filename=too-big.csv"),
                         ("GET", f"{tasks}?status=open"),
                         ("GET", f"{tasks}/{TASK_ID}"),
+                        ("POST", tasks),
                     ]
                 ),
             )
-            note, upload = context.requests[2], context.requests[3]
+            note, upload, from_plugin = task_requests[2], task_requests[3], task_requests[-1]
             assert_that(json.loads(note["body"]), has_entries(body="Matched 40 of 42 invoices"))
             assert_that((upload["content_type"], upload["body"]), equal_to(("text/csv", "invoice,amount\n1,10\n")))
+            assert_that(json.loads(from_plugin["body"]), equal_to({"title": "From the plugin"}))
+
+        with then("the agentbarn-tasks plugin loads through the runtime's own loader and offers its tool"):
+            plugin = context.result["plugin"]
+            assert_that(plugin["tool_result"], has_entries(id=TASK_ID), str(plugin))
+            if context.runtime == "hermes":
+                assert_that(plugin["hooks"], equal_to(HERMES_PLUGIN_HOOKS), str(plugin))
+                assert_that(plugin["offered"], equal_to({"slack": True, "api_server": True}), str(plugin))
+                assert_that(plugin["tools"], equal_to(["agentbarn_task"]), str(plugin))
+            else:
+                assert_that((plugin["status"], plugin["error"]), equal_to(("loaded", None)), str(plugin))
+                assert_that(plugin["hooks"], equal_to(OPENCLAW_PLUGIN_HOOKS), str(plugin))
+                assert_that(plugin["tool_names"], equal_to(["agentbarn_task"]), str(plugin))
