@@ -21,7 +21,13 @@ REFUSAL = "The file is larger than the space left for this Organization's Task F
 FIXTURES = Path(__file__).parents[1] / "tests" / "fixtures" / "agent_tasks"
 HERMES_PLUGIN_HOOKS = ["on_session_end", "post_tool_call", "pre_llm_call", "pre_verify", "transform_tool_result"]
 # Turn hooks need allowConversationAccess; without it OpenClaw drops them with only a warning.
-OPENCLAW_PLUGIN_HOOKS = ["after_tool_call", "agent_end", "before_agent_finalize", "before_prompt_build"]
+OPENCLAW_PLUGIN_HOOKS = [
+    "after_tool_call",
+    "agent_end",
+    "before_agent_finalize",
+    "before_prompt_build",
+    "tool_result_persist",
+]
 
 
 def _ingest_stub_is_ready():

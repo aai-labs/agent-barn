@@ -68,11 +68,12 @@ _SCHEMA = {
 }
 
 _lock = threading.Lock()
-# (session_id, turn_id) -> {"work": set of tool call ids, "wrote_files", "recorded", "reminded", "held"}
+# (session_id, turn_id) -> what the turn did: tool call ids, files written and attached, reminders sent
 _turns: dict[tuple[str, str], dict] = {}
 # session_id -> its current turn_id; pre_verify is not told which turn it is judging.
 _current_turn: dict[str, str] = {}
-_remind_next_turn: set[str] = set()
+# session_id -> the reminder its next turn starts with
+_next_turn_reminders: dict[str, str] = {}
 _open_tasks_cache: dict = {"at": 0.0, "lines": None}
 
 
@@ -163,25 +164,63 @@ def _touches_tasks(tool_name: str, args) -> bool:
     return isinstance(command, str) and "agentbarn-task" in command
 
 
+def _attached_names(tool_name: str, args) -> set[str]:
+    """File names a call attached to a Task, through the tool or the command."""
+    if not isinstance(args, dict):
+        return set()
+    if tool_name == _TOOL:
+        path = args.get("path") if args.get("action") == "attach" else None
+        return {os.path.basename(path)} if isinstance(path, str) and path else set()
+    command = args.get("command")
+    if isinstance(command, str) and "agentbarn-task attach" in command:
+        return {os.path.basename(token) for token in command.split() if token}
+    return set()
+
+
 def _track(tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", tool_call_id: str = "") -> dict:
     """Count one tool call in its turn. Safe to call twice for the same call."""
     _current_turn[session_id] = turn_id
     turn = _turns.setdefault(
         (session_id, turn_id),
-        {"work": set(), "wrote_files": False, "recorded": False, "reminded": False, "held": False},
+        {
+            "work": set(),
+            "wrote_files": False,
+            "written": set(),
+            "recorded": False,
+            "attached": set(),
+            "reminded": set(),
+            "held": set(),
+        },
     )
     if _touches_tasks(tool_name, args):
         turn["recorded"] = True
+        turn["attached"] |= _attached_names(tool_name, args)
     else:
         if tool_call_id:
             turn["work"].add(tool_call_id)
         if tool_name in _FILE_TOOLS:
             turn["wrote_files"] = True
+            path = args.get("path") if isinstance(args, dict) else None
+            if isinstance(path, str) and path:
+                turn["written"].add(os.path.basename(path))
     return turn
 
 
-def _unrecorded_work(turn: dict | None) -> bool:
-    return bool(turn) and not turn["recorded"] and (turn["wrote_files"] or len(turn["work"]) >= _WORK_THRESHOLD)
+def _missing(turn: dict | None) -> tuple[str, list[str]] | None:
+    """What the turn still owes its Task: a record of real work, or the files it produced."""
+    if turn is None:
+        return None
+    if not turn["recorded"]:
+        return ("record", []) if turn["wrote_files"] or len(turn["work"]) >= _WORK_THRESHOLD else None
+    unattached = sorted(turn["written"] - turn["attached"])
+    return ("attach", unattached) if unattached else None
+
+
+def _attach_reminder(names: list[str]) -> str:
+    return (
+        f"You recorded a Task but have not attached the files you produced: {', '.join(names)}. Attach "
+        "each with the agentbarn_task tool (action attach) so the Task shows the result."
+    )
 
 
 def _on_post_tool_call(tool_name="", args=None, session_id="", turn_id="", tool_call_id="", **_):
@@ -192,10 +231,12 @@ def _on_post_tool_call(tool_name="", args=None, session_id="", turn_id="", tool_
 def _on_transform_tool_result(tool_name="", args=None, result=None, session_id="", turn_id="", tool_call_id="", **_):
     with _lock:
         turn = _track(tool_name, args, session_id, turn_id, tool_call_id)
-        if turn["reminded"] or not _unrecorded_work(turn):
+        missing = _missing(turn)
+        if missing is None or missing[0] in turn["reminded"]:
             return None
-        turn["reminded"] = True
-    return f"{result if isinstance(result, str) else json.dumps(result)}\n\n{_IN_TURN_REMINDER}"
+        turn["reminded"].add(missing[0])
+    reminder = _IN_TURN_REMINDER if missing[0] == "record" else "[Agent Barn] " + _attach_reminder(missing[1])
+    return f"{result if isinstance(result, str) else json.dumps(result)}\n\n{reminder}"
 
 
 def _on_session_end(session_id="", turn_id="", completed=False, **_):
@@ -204,18 +245,25 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
         turn = _turns.pop((session_id, turn_id), None)
         if _current_turn.get(session_id) == turn_id:
             del _current_turn[session_id]
-        if completed and _unrecorded_work(turn):
-            _remind_next_turn.add(session_id)
+        missing = _missing(turn) if completed else None
+        if missing is not None:
+            _next_turn_reminders[session_id] = (
+                _NEXT_TURN_REMINDER if missing[0] == "record" else _attach_reminder(missing[1])
+            )
 
 
 def _on_pre_verify(session_id="", **_):
-    """Hold back once a turn that wrote files but recorded no Task. Hermes calls this only after file edits."""
+    """Hold a turn that wrote files back once per gap. Hermes calls this only after file edits."""
     with _lock:
         turn = _turns.get((session_id, _current_turn.get(session_id, "")))
-        if turn is None or turn["held"] or not _unrecorded_work(turn):
+        missing = _missing(turn)
+        if turn is None or missing is None or missing[0] in turn["held"]:
             return None
-        turn["held"] = True
-    return {"action": "continue", "message": _BEFORE_FINISHING_REMINDER}
+        turn["held"].add(missing[0])
+    message = (
+        _BEFORE_FINISHING_REMINDER if missing[0] == "record" else "Before you finish: " + _attach_reminder(missing[1])
+    )
+    return {"action": "continue", "message": message}
 
 
 def _open_task_lines() -> list[str] | None:
@@ -252,9 +300,9 @@ def _on_pre_llm_call(session_id="", **_):
             "its work ends."
         )
     with _lock:
-        if session_id in _remind_next_turn:
-            _remind_next_turn.discard(session_id)
-            parts.append("[Agent Barn] " + _NEXT_TURN_REMINDER)
+        reminder = _next_turn_reminders.pop(session_id, None)
+    if reminder:
+        parts.append("[Agent Barn] " + reminder)
     return {"context": "\n\n".join(parts)} if parts else None
 
 

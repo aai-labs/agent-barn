@@ -3,8 +3,11 @@
 // Registers an `agentbarn_task` tool that runs the in-pod `agentbarn-task` command, so the
 // command stays the one client of the Task routes. Each turn starts with the Agent's open
 // Tasks. A run that does real work without touching a Task (three or more tool calls, or
-// any file it writes) is asked to revise once before it finishes, and reminded on the next
-// turn if it still ended without one. The plugin never records a Task itself.
+// any file it writes), or that recorded one without attaching the files it wrote, is
+// reminded in the tool result the model reads next (tool_result_persist) and asked to
+// revise before finishing; OpenClaw refuses that revise once a run has side effects, so
+// the next turn of the session carries the reminder too. The plugin never records a Task
+// itself.
 import { spawn } from "node:child_process";
 
 const TOOL = "agentbarn_task";
@@ -41,9 +44,12 @@ const PARAMETERS = {
   required: ["action"],
 };
 
-// runId -> { work: Set of tool call ids, wroteFiles, recorded, reminded, sessionKey }
+// runId -> what the run did: tool call ids, files written and attached, reminders sent
 const runs = new Map();
-const remindNextTurn = new Set();
+// sessionKey -> its current runId; tool_result_persist is not told which run a result belongs to.
+const currentRun = new Map();
+// sessionKey -> the reminder its next turn starts with
+const nextTurnReminders = new Map();
 let openTasksCache = { at: 0, lines: null };
 
 const command = () => process.env.AGENTBARN_TASK_COMMAND || "/usr/local/bin/agentbarn-task";
@@ -134,18 +140,49 @@ async function executeTool(_toolCallId, params) {
 const touchesTasks = (toolName, params) =>
   toolName === TOOL || (typeof params?.command === "string" && params.command.includes("agentbarn-task"));
 
+const basename = (path) => path.split("/").filter(Boolean).pop() ?? "";
+
+// File names a call attached to a Task, through the tool or the command.
+function attachedNames(toolName, params) {
+  if (toolName === TOOL) {
+    return params?.action === "attach" && typeof params.path === "string" ? [basename(params.path)] : [];
+  }
+  const command = params?.command;
+  return typeof command === "string" && command.includes("agentbarn-task attach")
+    ? command.split(/\s+/).filter(Boolean).map(basename)
+    : [];
+}
+
 function track(event, ctx) {
   const runId = event.runId ?? ctx.runId ?? "";
+  if (ctx.sessionKey) currentRun.set(ctx.sessionKey, runId);
   let state = runs.get(runId);
   if (!state) {
-    state = { work: new Set(), wroteFiles: false, recorded: false, reminded: false, sessionKey: ctx.sessionKey ?? "" };
+    state = {
+      work: new Set(), wroteFiles: false, written: new Set(), recorded: false, attached: new Set(),
+      reminded: new Set(), sessionKey: ctx.sessionKey ?? "",
+    };
     runs.set(runId, state);
   }
   return state;
 }
 
-const nonTrivial = (state) =>
-  state && !state.recorded && (state.wroteFiles || state.work.size >= WORK_THRESHOLD);
+// What the run still owes its Task: a record of real work, or the files it produced.
+function missing(state) {
+  if (!state) return null;
+  if (!state.recorded) {
+    return state.wroteFiles || state.work.size >= WORK_THRESHOLD ? { kind: "record", names: [] } : null;
+  }
+  const names = [...state.written].filter((name) => !state.attached.has(name)).sort();
+  return names.length ? { kind: "attach", names } : null;
+}
+
+const attachReminder = (names) =>
+  `You recorded a Task but have not attached the files you produced: ${names.join(", ")}. Attach each ` +
+  "with the agentbarn_task tool (action attach) so the Task shows the result.";
+
+const inTurnReminder = (gap) => (gap.kind === "record" ? IN_TURN_REMINDER : attachReminder(gap.names));
+const nextTurnReminder = (gap) => (gap.kind === "record" ? NEXT_TURN_REMINDER : attachReminder(gap.names));
 
 async function openTaskLines() {
   if (openTasksCache.lines && Date.now() - openTasksCache.at < OPEN_TASKS_TTL_MS) return openTasksCache.lines;
@@ -188,21 +225,47 @@ export default {
     api.on("after_tool_call", (event, ctx) => {
       if (ctx.trigger === "heartbeat") return;
       const state = track(event, ctx);
-      if (touchesTasks(event.toolName, event.params)) state.recorded = true;
-      else {
+      if (touchesTasks(event.toolName, event.params)) {
+        state.recorded = true;
+        for (const name of attachedNames(event.toolName, event.params)) state.attached.add(name);
+      } else {
         if (event.toolCallId) state.work.add(event.toolCallId);
-        if (FILE_TOOLS.has(event.toolName)) state.wroteFiles = true;
+        if (FILE_TOOLS.has(event.toolName)) {
+          state.wroteFiles = true;
+          const path = event.params?.path ?? event.params?.file_path;
+          if (typeof path === "string" && path) state.written.add(basename(path));
+        }
       }
+    });
+
+    // Synchronous: OpenClaw ignores a returned promise here.
+    api.on("tool_result_persist", (event, ctx) => {
+      if (event.isSynthetic) return;
+      const state = runs.get(currentRun.get(ctx.sessionKey ?? "") ?? "");
+      const gap = missing(state);
+      if (!gap || state.reminded.has(gap.kind)) return;
+      state.reminded.add(gap.kind);
+      const message = event.message ?? {};
+      const reminder = { type: "text", text: `[Agent Barn] ${inTurnReminder(gap)}` };
+      const content = Array.isArray(message.content)
+        ? [...message.content, reminder]
+        : [{ type: "text", text: String(message.content ?? "") }, reminder];
+      return { message: { ...message, content } };
     });
 
     api.on("before_agent_finalize", (event, ctx) => {
       const state = runs.get(event.runId ?? ctx.runId ?? "");
-      if (!nonTrivial(state) || state.reminded) return;
-      state.reminded = true;
+      const gap = missing(state);
+      if (!gap || state.reminded.has(`finalize:${gap.kind}`)) return;
+      state.reminded.add(`finalize:${gap.kind}`);
       return {
         action: "revise",
-        reason: "The run did work without recording a Task.",
-        retry: { instruction: IN_TURN_REMINDER, idempotencyKey: `agentbarn-task:${event.runId}`, maxAttempts: 1 },
+        reason: "The run has work its Task does not show yet.",
+        retry: {
+          instruction: inTurnReminder(gap),
+          idempotencyKey: `agentbarn-task:${event.runId}:${gap.kind}`,
+          maxAttempts: 1,
+        },
       };
     });
 
@@ -210,8 +273,11 @@ export default {
       const runId = event.runId ?? ctx.runId ?? "";
       const state = runs.get(runId);
       runs.delete(runId);
-      if (ctx.trigger === "heartbeat" || event.success === false || !nonTrivial(state)) return;
-      remindNextTurn.add(ctx.sessionKey ?? state.sessionKey);
+      const sessionKey = ctx.sessionKey ?? state?.sessionKey ?? "";
+      if (currentRun.get(sessionKey) === runId) currentRun.delete(sessionKey);
+      const gap = missing(state);
+      if (ctx.trigger === "heartbeat" || event.success === false || !gap) return;
+      nextTurnReminders.set(sessionKey, nextTurnReminder(gap));
     });
 
     api.on("before_prompt_build", async (_event, ctx) => {
@@ -224,7 +290,11 @@ export default {
             "and mark a Task done or failed when its work ends.",
         );
       }
-      if (remindNextTurn.delete(ctx.sessionKey ?? "")) parts.push(NEXT_TURN_REMINDER);
+      const reminder = nextTurnReminders.get(ctx.sessionKey ?? "");
+      if (reminder) {
+        nextTurnReminders.delete(ctx.sessionKey ?? "");
+        parts.push(reminder);
+      }
       return parts.length ? { appendContext: parts.join("\n\n") } : undefined;
     });
   },

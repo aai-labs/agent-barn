@@ -69,10 +69,16 @@ def _after_tool(
     tool: str = "exec",
     command: str = "ls",
     trigger: str = "user",
+    params: dict | None = None,
 ) -> dict:
     return {
         "hook": "after_tool_call",
-        "event": {"toolName": tool, "params": {"command": command}, "runId": run_id, "toolCallId": call_id},
+        "event": {
+            "toolName": tool,
+            "params": params if params is not None else {"command": command},
+            "runId": run_id,
+            "toolCallId": call_id,
+        },
         "ctx": {"sessionKey": session, "runId": run_id, "trigger": trigger},
     }
 
@@ -112,7 +118,10 @@ def test_the_task_tool_and_turn_hooks_are_registered(tmp_path: Path):
     driven = _drive(tmp_path, [])
 
     assert_that(
-        driven["hooks"], equal_to(["after_tool_call", "agent_end", "before_agent_finalize", "before_prompt_build"])
+        driven["hooks"],
+        equal_to(
+            ["after_tool_call", "agent_end", "before_agent_finalize", "before_prompt_build", "tool_result_persist"]
+        ),
     )
     [tool] = driven["tools"]
     assert_that(tool["name"], equal_to("agentbarn_task"))
@@ -312,3 +321,107 @@ def test_a_run_that_wrote_a_file_without_a_task_is_reminded_next_turn(tmp_path: 
     driven = _drive(tmp_path, [_after_tool("c1", tool="write"), _agent_end(), _prompt()])
 
     assert_that(_context(driven["results"][-1]), contains_string("did work without recording it as a Task"))
+
+
+# --- reminders in the tool result the model reads ---
+
+
+def _persist(call_id: str, tool: str = "write", session: str = "s1") -> dict:
+    return {
+        "hook": "tool_result_persist",
+        "event": {
+            "toolName": tool,
+            "toolCallId": call_id,
+            "message": {"role": "toolResult", "content": [{"type": "text", "text": "ok"}]},
+        },
+        "ctx": {"sessionKey": session, "toolName": tool, "toolCallId": call_id},
+    }
+
+
+def _persisted_text(result) -> str:
+    return " ".join(part.get("text", "") for part in ((result or {}).get("message") or {}).get("content", []))
+
+
+def test_a_run_doing_real_work_without_a_task_gets_a_reminder_in_the_tool_result_once(tmp_path: Path):
+    driven = _drive(
+        tmp_path,
+        [
+            _after_tool("c1", tool="write", params={"path": "states.csv"}),
+            _persist("c1"),
+            _after_tool("c2", tool="read", params={"path": "states.csv"}),
+            _persist("c2", tool="read"),
+        ],
+    )
+
+    first, second = driven["results"][1], driven["results"][3]
+    assert_that(_persisted_text(first), contains_string("ok"))
+    assert_that(_persisted_text(first), contains_string("agentbarn_task"))
+    assert_that(second, is_(None))
+
+
+def test_another_sessions_work_does_not_add_a_reminder(tmp_path: Path):
+    driven = _drive(tmp_path, [_after_tool("c1", tool="write", params={"path": "a.csv"}), _persist("c1", session="s2")])
+
+    assert_that(driven["results"][-1], is_(None))
+
+
+# --- files produced but not attached ---
+
+
+def _wrote(call_id: str = "c1") -> dict:
+    return _after_tool(call_id, tool="write", params={"path": "/home/node/.openclaw/workspace/states.csv"})
+
+
+def _task(call_id: str, **params) -> dict:
+    return _after_tool(call_id, tool="agentbarn_task", params=params)
+
+
+def test_a_task_missing_the_files_the_run_wrote_is_reminded_to_attach_them(tmp_path: Path):
+    driven = _drive(
+        tmp_path, [_wrote(), _task("c2", action="create", title="States"), _persist("c2", tool="agentbarn_task")]
+    )
+
+    text = _persisted_text(driven["results"][-1])
+    assert_that(text, contains_string("states.csv"))
+    assert_that(text, contains_string("attach"))
+
+
+def test_a_run_that_attached_what_it_wrote_may_finish(tmp_path: Path):
+    driven = _drive(
+        tmp_path,
+        [
+            _wrote(),
+            _task("c2", action="create", title="States"),
+            _task("c3", action="attach", task_id="t", path="states.csv"),
+            _finalize(),
+        ],
+    )
+
+    assert_that(driven["results"][-1], is_(None))
+
+
+def test_attaching_through_the_task_command_counts(tmp_path: Path):
+    driven = _drive(
+        tmp_path,
+        [
+            _wrote(),
+            _task("c2", action="create", title="States"),
+            _after_tool("c3", command="agentbarn-task attach t /home/node/.openclaw/workspace/states.csv"),
+            _finalize(),
+        ],
+    )
+
+    assert_that(driven["results"][-1], is_(None))
+
+
+def test_a_run_with_unattached_files_is_asked_to_attach_them_before_finishing(tmp_path: Path):
+    driven = _drive(tmp_path, [_wrote(), _task("c2", action="create", title="States"), _finalize()])
+
+    assert_that(driven["results"][-1], has_entries(action="revise"))
+    assert_that(driven["results"][-1]["retry"]["instruction"], contains_string("states.csv"))
+
+
+def test_unattached_files_are_named_on_the_next_turn(tmp_path: Path):
+    driven = _drive(tmp_path, [_wrote(), _task("c2", action="create", title="States"), _agent_end(), _prompt()])
+
+    assert_that(_context(driven["results"][-1]), contains_string("states.csv"))

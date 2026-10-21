@@ -64,10 +64,13 @@ class _Plugin:
         turn_id: str = "turn-1",
         tool_name: str = "terminal",
         command: str = "ls",
+        args: dict | None = None,
     ):
+        if args is None:
+            args = {"command": command} if tool_name == "terminal" else {"action": "list"}
         kwargs = {
             "tool_name": tool_name,
-            "args": {"command": command} if tool_name == "terminal" else {"action": "list"},
+            "args": args,
             "result": '{"output": "done"}',
             "session_id": session_id,
             "turn_id": turn_id,
@@ -366,3 +369,65 @@ def test_a_turn_that_wrote_a_file_without_a_task_is_reminded_next_turn(tmp_path:
     plugin.end_turn()
 
     assert_that(_context(plugin.start_turn()), contains_string("did work without recording it as a Task"))
+
+
+# --- files produced but not attached ---
+
+
+def _wrote(plugin: _Plugin, call_id: str = "call-1", path: str = "/workspace/states.csv"):
+    return plugin.tool_call(call_id, tool_name="write_file", args={"path": path, "content": "a,b"})
+
+
+def _created_task(plugin: _Plugin, call_id: str = "call-2"):
+    return plugin.tool_call(call_id, tool_name="agentbarn_task", args={"action": "create", "title": "States"})
+
+
+def test_a_task_missing_the_files_the_turn_wrote_is_reminded_to_attach_them(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin)
+
+    result = _created_task(plugin)
+
+    assert_that(result, contains_string("states.csv"))
+    assert_that(result, contains_string("attach"))
+
+
+def test_a_turn_that_attached_what_it_wrote_may_finish(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin)
+    _created_task(plugin)
+    plugin.tool_call(
+        "call-3", tool_name="agentbarn_task", args={"action": "attach", "task_id": "t", "path": "states.csv"}
+    )
+
+    assert_that(plugin.finish(), equal_to(None))
+
+
+def test_attaching_through_the_task_command_counts(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin)
+    _created_task(plugin)
+    plugin.tool_call("call-3", command="agentbarn-task attach t /workspace/states.csv")
+
+    assert_that(plugin.finish(), equal_to(None))
+
+
+def test_a_turn_with_unattached_files_must_continue_once_to_attach_them(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin)
+    _created_task(plugin)
+
+    first, second = plugin.finish(), plugin.finish(attempt=1)
+
+    assert_that(first, has_entries(action="continue", message=contains_string("states.csv")))
+    assert_that(second, equal_to(None))
+
+
+def test_unattached_files_are_named_on_the_next_turn(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin)
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_context(plugin.start_turn()), contains_string("states.csv"))
