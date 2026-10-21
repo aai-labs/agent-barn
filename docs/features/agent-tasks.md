@@ -8,7 +8,7 @@ Read before changing Tasks, Task Notes, Task Files, their storage or limits, or 
 
 A Task is a piece of work an Agent records for itself, with a timeline of Task Notes and the Task Files it produces. Tasks live in Agent Barn's own tables in the application Postgres, not in a separate tracker; [`../adr/2026-10-21-native-agent-task-store.md`](../adr/2026-10-21-native-agent-task-store.md) records why.
 
-This slice is the store and its service (`../api/domains/agent_tasks/`). It has no HTTP routes, Agent tooling or UI yet.
+The store and its service live in `../api/domains/agent_tasks/`. Agents write and read their own Tasks through the routes and command below; there is no UI yet.
 
 ## Invariants
 
@@ -17,6 +17,14 @@ This slice is the store and its service (`../api/domains/agent_tasks/`). It has 
 - Task Notes are append-only and listed oldest first.
 - Only the Task's own Agent writes: it creates Tasks, changes their status, adds Notes and attaches Files. The write methods take the Agent's Organization and id, which the caller has already authenticated, and refuse a deleted Agent or another Agent's Task with 404. People have no write path.
 - People read Tasks with `task.read`, which every locked Agent Access Role grants. Reads filter by Agent visibility in the query: one Agent's Tasks, one Task with its Notes and File metadata, one File's bytes, or every Task across the Organization the reader can see. Lists are newest first and can be filtered by Agent and status; an Agent the reader cannot see simply yields no Tasks. An Agent the reader cannot see returns 404; one they can see without `task.read` returns 403. See [`rbac/IMPLEMENTATION-BRIEF.md`](rbac/IMPLEMENTATION-BRIEF.md).
+
+## How an Agent records Tasks
+
+- Every Agent, on both Hermes and OpenClaw, has `/usr/local/bin/agentbarn-task` (`../api/domains/agents/scripts/agentbarn_task.py`, mounted from the Agent's ConfigMap by `../api/domains/agents/builders/tasks.py`). `AGENTS.md` carries `TASK_TOOL_INSTRUCTIONS`: keep a Task for any non-trivial request, check `list` before opening a new one, keep its status current, add notes and attach the files it produces. Unlike Agent Memory, there is no per-Agent switch.
+- The command calls the Agent's Task routes on the ingest app (`../api/domains/agent_tasks/agent_routes.py`, mounted by `../api/ingest_app.py`) with the pod's `AGENT_ID`, `INGEST_URL` and `INGEST_API_KEY`. The ingest app is where Agents authenticate with their ingest key; the main API authenticates people. The routes belong to this domain and only borrow the key check (`authenticated_agent` in `../api/domains/ingest/service.py`).
+- Routes under `/ingest/v1/agents/{agent_id}/tasks`: `POST` creates, `GET` lists (newest first, filter by `status`), `GET /{task_id}` shows one Task with its Notes and File metadata, `PATCH /{task_id}` sets the status, `POST /{task_id}/notes` adds a Note and `POST /{task_id}/files?filename=…` uploads a File. The Agent and its Organization always come from the key, never from the request, so an Agent only ever reaches its own Tasks; another Agent's Task is 404.
+- An upload is the raw request body, with the File's content type in `Content-Type`. The route streams the body into `attach_file` through a worker-thread bridge, so it is never held whole. A declared `Content-Length` past the per-file limit is refused before reading. A refusal part way through reads and drops the rest of the body, at most the per-file limit, so the Agent gets the 400 rather than a reset connection. The command also refuses a file past `TASK_FILE_MAX_BYTES`, which the pod secret carries, before sending it.
+- The command passes a 400 or 422 explanation through to the Agent and maps 401 and 404 to fixed messages; anything else is reported as unconfirmed, never as success.
 
 ## Task Files
 
