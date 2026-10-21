@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from api.core.config import Config
 from api.domains.activity.repository import ActivityRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
+from api.domains.agent_sizes.lookup import AgentSizeLookupService
 from api.domains.agents.aai_cli_artifacts import (
     build_local_tools_policy_md,
     build_tool_context_md,
@@ -40,6 +41,7 @@ from api.domains.agents.builders import (
     build_secret_hermes_runtime,
     build_secret_runtime,
     build_service,
+    container_resources,
     native_channel_env,
     native_discord_channel,
     native_discord_env,
@@ -350,6 +352,7 @@ class AgentService:
     activity_repository: ActivityRepository
     plugins: PlatformPluginRegistry
     agentbarn_telegram_secrets: AgentBarnTelegramService
+    agent_sizes: AgentSizeLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -2218,6 +2221,15 @@ class AgentService:
             org_name=org_name,
             agent_name=agent.name,
         )
+        # The agent container's CPU and memory: the Agent's Agent Size, read at every start
+        # so an edited size reaches the Agent the next time it starts.
+        size = self.agent_sizes.resolve()
+        resources = container_resources(
+            cpu_request_millicores=size.cpu_request_millicores,
+            cpu_limit_millicores=size.cpu_limit_millicores,
+            memory_request_bytes=size.memory_request_bytes,
+            memory_limit_bytes=size.memory_limit_bytes,
+        )
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
@@ -2266,6 +2278,7 @@ class AgentService:
                 ns,
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
+                resources=resources,
             )
         else:
             native_channels: dict[str, dict] = {}
@@ -2308,6 +2321,7 @@ class AgentService:
                 ns,
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
+                resources=resources,
             )
 
         # aai-cli integration secrets — all agent types.

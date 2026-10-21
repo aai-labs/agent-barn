@@ -48,6 +48,9 @@ PLATFORM_PLAYBOOK_MODEL_CHANGED = "platform.playbook_model.changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
+PLATFORM_AGENT_SIZE_CREATED = "platform.agent_size.created"
+PLATFORM_AGENT_SIZE_CHANGED = "platform.agent_size.changed"
+PLATFORM_AGENT_SIZE_DELETED = "platform.agent_size.deleted"
 PLATFORM_TRIAL_SETTINGS_CHANGED = "platform.trial_settings.changed"
 API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
@@ -575,6 +578,42 @@ class PlatformResourceLimitsChangedPayload(BaseModel):
     current: float | None
 
 
+class PlatformAgentSizePayload(BaseModel):
+    """A size added to or removed from the Agent Size catalog, with every value it had.
+
+    The subject is the size (`SYSTEM`, the size's id); `subject_display` is its name.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    cpu_request_millicores: int
+    cpu_limit_millicores: int
+    memory_request_bytes: int
+    memory_limit_bytes: int
+    enabled: bool
+    is_default: bool
+
+
+class PlatformAgentSizeChangedPayload(BaseModel):
+    """One changed field of one size, named by `setting`, with its before and after values.
+
+    Making a size the default changes two sizes, so it records two Events: `is_default`
+    turning false on the old default and true on the new one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    setting: str
+    previous: str | int | bool
+    current: str | int | bool
+
+
 class ApiKeyChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -929,6 +968,25 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_RESOURCE_LIMITS_CHANGED,
             schema_version=1,
             payload_model=PlatformResourceLimitsChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    for event_name in (PLATFORM_AGENT_SIZE_CREATED, PLATFORM_AGENT_SIZE_DELETED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=PlatformAgentSizePayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.PLATFORM,
+            )
+        )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_AGENT_SIZE_CHANGED,
+            schema_version=1,
+            payload_model=PlatformAgentSizeChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )
