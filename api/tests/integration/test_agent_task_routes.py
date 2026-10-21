@@ -1,5 +1,6 @@
 """AF-412: Agents record their own Tasks through the ingest app, authenticated by their ingest key."""
 
+import pytest
 from fastapi import status
 from hamcrest import assert_that, contains_exactly, equal_to, has_entries
 from starlette.testclient import TestClient
@@ -238,3 +239,94 @@ def test_an_agent_reads_its_task_with_its_notes():
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that([note["body"] for note in response.json()["notes"]], contains_exactly("First", "Second"))
         assert_that(response.json()["files"], equal_to([]))
+
+
+# --- files ---
+
+
+def _attach(context, task_id: str, data: bytes, filename: str = "report.csv", content_type: str = "text/csv"):
+    return context.ingest_client.post(
+        f"{_tasks_url(context.agent)}/{task_id}/files",
+        params={"filename": filename},
+        content=data,
+        headers={**_headers(context.ingest_key), "Content-Type": content_type},
+    )
+
+
+def test_an_agent_attaches_a_file_to_its_task():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+
+        with when("the Agent uploads a file"):
+            response = _attach(context, task_id, b"invoice,amount\n1,10\n")
+
+            with then("it is stored on the Task with its name, type and size"):
+                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+                assert_that(response.json(), has_entries(filename="report.csv", content_type="text/csv", size_bytes=20))
+                detail = context.ingest_client.get(
+                    f"{_tasks_url(context.agent)}/{task_id}", headers=_headers(context.ingest_key)
+                ).json()
+                assert_that([stored["filename"] for stored in detail["files"]], contains_exactly("report.csv"))
+
+
+def test_a_file_over_the_per_file_limit_is_rejected_with_a_clear_error():
+    with given([*_given(TASK_FILE_MAX_BYTES="10"), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+
+        response = _attach(context, task_id, b"x" * 11)
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(response.json(), has_entries(detail="The file is larger than the 10-byte limit."))
+
+
+def test_a_file_past_the_organization_limit_is_rejected_with_a_clear_error():
+    with given([*_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES="10"), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+        _attach(context, task_id, b"x" * 6)
+
+        response = _attach(context, task_id, b"x" * 5, filename="second.csv")
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+        assert_that(
+            response.json(),
+            has_entries(detail="The file is larger than the space left for this Organization's Task Files."),
+        )
+
+
+def test_an_empty_file_is_rejected():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+
+        response = _attach(context, task_id, b"")
+
+        assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type"),
+    [("../report.csv", "text/csv"), ("report.csv", "text/csv; charset=utf-8"), ("", "text/csv")],
+)
+def test_an_unsafe_filename_or_content_type_is_rejected(filename: str, content_type: str):
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+
+        response = _attach(context, task_id, b"data", filename=filename, content_type=content_type)
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_a_file_cannot_be_attached_to_another_agents_task():
+    with given(
+        [
+            *_given(),
+            _an_agent_with_an_ingest_key(),
+            _the_agent_is_remembered_as("first"),
+            _an_agent_with_an_ingest_key(name="Second", key="second-key"),
+        ]
+    ) as context:
+        first_agent, first_key = context.first
+        task_id = _create(context, agent=first_agent, key=first_key).json()["id"]
+
+        response = _attach(context, task_id, b"data")
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

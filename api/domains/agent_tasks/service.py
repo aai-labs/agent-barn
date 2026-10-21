@@ -44,6 +44,12 @@ def _within_file_limit(data: Iterable[bytes], max_bytes: int) -> Iterator[bytes]
         yield piece
 
 
+def _file_too_large(max_bytes: int) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST, detail=f"The file is larger than the {max_bytes}-byte limit."
+    )
+
+
 def _task_not_found(task_id: UUID) -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Task {task_id} not found")
 
@@ -85,6 +91,15 @@ class AgentTaskService:
             raise _task_not_found(task_id)
         return AgentTaskNoteRead.model_validate(note)
 
+    @property
+    def file_max_bytes(self) -> int:
+        return self.config.task_file_max_bytes
+
+    def refuse_oversized_file(self, size_bytes: int) -> None:
+        """Refuse an upload whose declared size is already past the per-file limit, before reading it."""
+        if size_bytes > self.config.task_file_max_bytes:
+            raise _file_too_large(self.config.task_file_max_bytes)
+
     def attach_file(
         self,
         organization_id: UUID,
@@ -107,10 +122,7 @@ class AgentTaskService:
         except EmptyTaskFileError:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The file is empty.") from None
         except _TaskFileTooLargeError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"The file is larger than the {max_bytes}-byte limit.",
-            ) from None
+            raise _file_too_large(max_bytes) from None
         except OrganizationTaskStorageFullError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
