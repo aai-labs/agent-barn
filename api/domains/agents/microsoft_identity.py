@@ -13,18 +13,22 @@ Microsoft refuses the redemption with AADSTS7000218.
 import base64
 import hashlib
 import secrets
+import threading
+import time
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
 import jwt
-from injector import singleton
+from injector import inject, singleton
 from jwt.exceptions import InvalidTokenError
 
 from api.domains.agents.microsoft_graph_scopes import APP_ONLY_SCOPE, GRAPH_SCOPE_PREFIX, sharepoint_permission
 
 _LOGIN_HOST = "https://login.microsoftonline.com"
 _TIMEOUT_SECONDS = 30
+_APP_TOKEN_REFRESH_MARGIN_SECONDS = 300
 
 
 def _tenant(tenant_id: str) -> str:
@@ -193,3 +197,31 @@ class MicrosoftIdentityClient:
             scope=str(payload.get("scope") or ""),
             id_token=payload.get("id_token"),
         )
+
+
+@singleton
+class MicrosoftAppTokens:
+    """App-only Graph tokens per tenant and app, reused until shortly before they expire.
+
+    Held in this process's memory only; a failed fetch is never remembered.
+    """
+
+    @inject
+    def __init__(self, identity: MicrosoftIdentityClient, clock: Callable[[], float] | None = None) -> None:
+        self._identity = identity
+        self._clock = clock or time.monotonic
+        self._lock = threading.Lock()
+        self._tokens: dict[tuple[str, str], tuple[str, float]] = {}
+
+    def get(self, *, tenant_id: str, client_id: str, client_secret: str) -> str:
+        key = (tenant_id.lower(), client_id)
+        with self._lock:
+            cached = self._tokens.get(key)
+            if cached is not None and self._clock() < cached[1] - _APP_TOKEN_REFRESH_MARGIN_SECONDS:
+                return cached[0]
+        tokens = self._identity.client_credentials(
+            tenant_id=tenant_id, client_id=client_id, client_secret=client_secret
+        )
+        with self._lock:
+            self._tokens[key] = (tokens.access_token, self._clock() + tokens.expires_in)
+        return tokens.access_token

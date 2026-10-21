@@ -34,22 +34,22 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - Microsoft and runtime image verification (no code);
   - the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), with `CONTEXT.md` defining Agent Folder, File Sync and Sync Category;
   - the sync rules (`api/domains/file_sync/rules.py`);
-  - the file sync tables (migration `af95cf4c3a1e`).
+  - the file sync tables (migration `af95cf4c3a1e`);
+  - the Graph file operations (`api/domains/agents/microsoft_graph_files.py`) and the app-token cache.
 
-  Nothing reads or writes the tables yet, and no file syncs yet.
+  Nothing calls them yet, and no file syncs yet.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. Graph file operations;
-  2. the `file_sync` capability, then OneDrive's implementation of it;
-  3. folder reconciliation;
-  4. the Sync Engine and its deployment;
-  5. Ingest file-sync routes;
-  6. remote change processing;
-  7. the in-pod helper;
-  8. builder and `start.sh` wiring;
-  9. pinned-image contracts;
-  10. disconnect;
-  11. docs consolidation;
-  12. an end-to-end run on local k3d against the test tenant.
+  1. the `file_sync` capability, then OneDrive's implementation of it;
+  2. folder reconciliation;
+  3. the Sync Engine and its deployment;
+  4. Ingest file-sync routes;
+  5. remote change processing;
+  6. the in-pod helper;
+  7. builder and `start.sh` wiring;
+  8. pinned-image contracts;
+  9. disconnect;
+  10. docs consolidation;
+  11. an end-to-end run on local k3d against the test tenant.
 - Docs owed by the slice that makes them true:
   - **this README:**
     - the "Agent file sync" section, with folder reconciliation;
@@ -80,6 +80,39 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-21 — AF-384 — Graph file operations and app-token cache
+
+- Delivered: `MicrosoftGraphFiles` in `api/domains/agents/microsoft_graph_files.py`. Every call is made as the app in one site's default library (`/sites/{site_id}/drive`):
+  - **reading items:** `get_item` and `get_item_by_path`, with each path segment percent-encoded;
+  - **creating, moving and deleting:**
+    - `create_folder` (conflict behaviour `fail`);
+    - `move_item` (rename, move or both);
+    - `delete_item` (recycle bin; an item already gone is not an error);
+  - **the change feed:** `delta_start_url` (from now with `token=latest`, or from the beginning) and `delta_page`, which follows absolute `nextLink`/`deltaLink` URLs and keeps deleted items, which have only an id and a parent id;
+  - **links for the pod:** `create_upload_session` (conflict behaviour `replace`, returns the URL and its expiry) and `download_url`;
+  - **empty files:** `put_empty_file` writes 0-byte files, because upload sessions refuse them.
+
+  `DriveItem` carries:
+  - `eTag`, `cTag`, `quickXorHash` and `size` (0 for folders, whose delta size can be negative);
+  - the parent id and path, and `deleted`;
+  - `modified_by_app`, true when `lastModifiedBy` names an application.
+- Delivered: typed failures.
+  - `GraphItemNotFound` (404) and `GraphAccessRefused` (401/403).
+  - `GraphRequestRejected` (400), `GraphNameConflict` (409), `GraphResyncRequired` (410), `GraphPreconditionFailed` (412), and `GraphThrottled` (429) with the full `Retry-After` in seconds. These are all `GraphUnavailable`, so a caller that undoes on any failure still does.
+- Delivered: `MicrosoftAppTokens` in `microsoft_identity.py`.
+  - App-only tokens per tenant and app, held in process memory.
+  - Reused until 5 minutes before expiry.
+  - A failed fetch is not remembered.
+- Changed: `retry_after_seconds` takes `max_seconds`. The default stays 30 s for every existing caller, and `None` lifts the cap for callers that schedule the retry instead of sleeping.
+- Not changed: `microsoft_graph_sites._call`, which the SharePoint integration and the connect flow use. The file client has its own request handling instead of a refactor of the shared one.
+- Verified:
+  - `tests/unit/test_microsoft_graph_files.py` and `test_microsoft_app_tokens.py` (33 tests) failed first (module and class missing), then passed. Their payloads are copied from the PR 0 run against the test site.
+  - Identity, Graph sites, plugin, Slack, Discord, Teams, Telegram, Communications error-detail and Communication Connection suites pass (253 tests together).
+  - ruff, format and ty pass.
+- Follow-up, for the end-to-end run (PR 0 used `/drives/{id}`, not these forms):
+  - `/sites/{site_id}/drive/items/…` addressing for delta, moves and upload sessions;
+  - whether an upload session at a nested path creates the missing parent folders.
 
 ### 2026-10-21 — AF-384 — File sync tables
 
