@@ -146,6 +146,12 @@ restorePoints:
     # time to finish.
     schedule: "*/10 * * * *"
 
+# Agent Task Files are stored in the application database. Bytes allowed for one
+# File, and for every Task File in one Organization together.
+agentTasks:
+  fileMaxBytes: 20971520
+  organizationStorageMaxBytes: 2147483648
+
 # Managed updates (the Update button): how long the new pod has to report ready
 # before the update rolls back. Covers pulling an image the node has not seen.
 managedUpdate:
