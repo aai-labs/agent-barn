@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
+from api.domains.agent_sizes.models import AgentSize
 from api.domains.agents.exceptions import TrialAgentLimitReached
 from api.domains.agents.models import (
     MANAGED_UPDATE_STALE_SECONDS,
@@ -41,6 +42,7 @@ from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, 
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
     AGENT_ACCESS_REVOKED,
+    AGENT_AGENT_SIZE_CHANGED,
     AGENT_CREATED,
     AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
@@ -76,6 +78,10 @@ from api.infrastructure.shared.models import Pagination
 class AgentLifecycleEventResult:
     agent: Agent
     delivery_ids: list[UUID]
+
+
+class AgentSizeVanished(Exception):
+    """The size being chosen was deleted after it was checked."""
 
 
 @dataclass(frozen=True)
@@ -1124,6 +1130,7 @@ class AgentRepository:
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
             persisted.memory_key_hash = agent.memory_key_hash
             persisted.running_model = agent.running_model
+            persisted.running_resources = agent.running_resources
             persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
             session.add(persisted)
@@ -1222,6 +1229,74 @@ class AgentRepository:
                     "agent_id": persisted.id,
                     "field_changes": field_changes,
                     "actor_display": actor_display or actor.type.value,
+                    "subject_display": persisted.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
+
+    def set_agent_size_with_event(
+        self,
+        agent: Agent,
+        agent_size_id: UUID | None,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+    ) -> AgentLifecycleEventResult | None:
+        """Set the size an Agent starts on next and stage `agent.agent_size.changed`.
+
+        Writes only `agent_size_id` on the locked row, so a concurrent edit is not
+        clobbered, and holds a share lock on the chosen size so it cannot be deleted
+        before this commits. No Event when nothing changed. None when the Agent is gone.
+        Raises AgentSizeVanished.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            persisted = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent.id,
+                    col(Agent.organization_id) == agent.organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).first()
+            if persisted is None:
+                return None
+            size = None
+            if agent_size_id is not None:
+                size = session.get(AgentSize, agent_size_id, with_for_update={"read": True})
+                if size is None:
+                    raise AgentSizeVanished(agent_size_id)
+            previous_id = persisted.agent_size_id
+            if previous_id == agent_size_id:
+                return AgentLifecycleEventResult(agent=persisted, delivery_ids=[])
+            previous = session.get(AgentSize, previous_id) if previous_id is not None else None
+            persisted.agent_size_id = agent_size_id
+            persisted.updated_at = datetime.now(UTC)
+            session.add(persisted)
+            session.flush()
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_AGENT_SIZE_CHANGED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=persisted.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=persisted.id,
+                    organization_id=persisted.organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": persisted.organization_id,
+                    "agent_id": persisted.id,
+                    "agent_size_id": agent_size_id,
+                    "agent_size_name": size.name if size is not None else None,
+                    "previous_agent_size_id": previous_id,
+                    "previous_agent_size_name": previous.name if previous is not None else None,
+                    "actor_display": actor_display,
                     "subject_display": persisted.name,
                 },
             )

@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
+from api.domains.agent_sizes.models import AgentSizeOption
 from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
@@ -551,6 +552,22 @@ class Agent(BaseModel, table=True):
     running_config_digest: str = SqlField(
         default="",
         sa_column=Column(sa.String(64), nullable=False, server_default=""),
+    )
+    # The Agent Size the Organization chose. None follows the platform default, so moving
+    # the default moves every Agent that never chose. See docs/features/agent-sizes.md.
+    agent_size_id: UUID | None = SqlField(
+        default=None,
+        foreign_key="agent_sizes.id",
+        nullable=True,
+        ondelete="RESTRICT",
+        index=True,
+    )
+    # The container requests and limits the running pod was started with, as
+    # `RunningResources`; None means "not running". Like `running_model`, it stays put
+    # while the size changes underneath it, which is how a pending size is told apart.
+    running_resources: dict[str, int] | None = SqlField(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
     )
     # The exact runtime image this Agent starts on. Empty means "follow the
     # platform pin" (config.openclaw_image / config.hermes_image). Only a
@@ -1142,6 +1159,9 @@ class AgentCreate(PydanticBaseModel):
     verbose_mode: bool = False
     # None follows the platform default; see AgentRead.effective_max_turns.
     max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
+    # None, or the default's id, follows the platform default. Anything else needs
+    # agent.size.manage and a size the Organization may choose.
+    agent_size_id: UUID | None = None
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
@@ -1577,6 +1597,13 @@ class AgentRead(PydanticBaseModel):
     #: Set only when a running Agent's resolved model has moved since it started, so a
     #: surface can say what a restart would switch it to without recomputing the rule.
     pending_model: str
+    #: The stored choice: null means the Agent follows the platform default size.
+    agent_size_id: UUID | None = None
+    #: The size it would start on now: its chosen one, else the default.
+    agent_size: AgentSizeOption | None = None
+    #: True only when a running Agent's pod started with other resources than
+    #: `agent_size` gives, so a restart would change them.
+    pending_size: bool = False
     update_available: bool = False
     #: A managed update is running. Lifecycle and restore point actions are
     #: refused until it ends; a client polls until this goes back to false.

@@ -135,6 +135,9 @@ class PlatformOrganizationRead(PydanticBaseModel):
     # The Organization's own limit beneath the ceiling; None when it follows it.
     llm_own_budget_usd: float | None = None
     is_trial: bool = False
+    # The Agent Sizes it may choose beyond the default, which is never listed. Empty: it
+    # cannot choose. See docs/features/agent-sizes.md.
+    agent_size_ids: list[UUID] = Field(default_factory=list)
 
 
 class OrganizationBudgetEmailReceipt(BaseModel, table=True):

@@ -3,6 +3,8 @@ import { formatBytes } from "@/features/resource-usage/format";
 export const agentSizesKey = {
   /** Platform data: no Organization's cache is its. */
   platform: ["platform", "agent-sizes"] as const,
+  /** What one Organization may choose; keyed by it, so switching Organization never reuses another's. */
+  organization: (organizationId: string) => ["organization-agent-sizes", organizationId] as const,
 };
 
 export const MIB = 1024 ** 2;
@@ -18,4 +20,13 @@ export function formatCpu(millicores: number): string {
 
 export function formatMemory(bytes: number): string {
   return formatBytes(bytes);
+}
+
+/** "Large · 2 vCPU · 4 GiB": a size by what it may grow to, the way people compare them. */
+export function describeSize(size: {
+  name: string;
+  cpuLimitMillicores: number;
+  memoryLimitBytes: number;
+}): string {
+  return `${size.name} · ${formatCpu(size.cpuLimitMillicores)} · ${formatMemory(size.memoryLimitBytes)}`;
 }

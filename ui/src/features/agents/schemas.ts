@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { AgentSizeOptionSchema } from "@/features/agent-sizes/schemas";
 import { OrganizationRoleSchema } from "@/features/organizations/schemas";
 import { SkillScopeSchema } from "@/features/skills/schemas";
 
@@ -74,6 +75,8 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.memory.manage",
   "activity.read",
   "cost.read",
+  // Held by Organization Owners and Admins through their role; no Agent Access Role grants it.
+  "agent.size.manage",
 ]);
 
 export const AgentAccessRoleReadSchema = z.object({
@@ -138,6 +141,12 @@ export const AgentSchema = z.object({
   runningModel: z.string().default(""),
   /** Set only when a restart would move a running Agent onto a different model. */
   pendingModel: z.string().default(""),
+  /** The stored size choice; null follows the platform default. */
+  agentSizeId: z.string().uuid().nullable().default(null),
+  /** The size it would start on now: its chosen one, else the default. */
+  agentSize: AgentSizeOptionSchema.nullable().default(null),
+  /** True when a restart would change a running Agent's CPU and memory. */
+  pendingSize: z.boolean().default(false),
   /** True when a running Agent's pod was built from older platform code or images. */
   updateAvailable: z.boolean().default(false),
   /** A managed update is running; lifecycle actions are refused until it ends. */

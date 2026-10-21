@@ -213,7 +213,7 @@ The email address Agent Barn allocates to one Communication Connection on a Plat
 _Avoid_: mailbox, alias, inbox
 
 **Agent Size**:
-A named amount of CPU and memory, as a request and a limit, from the platform-wide catalog Platform Administrators keep. Every Agent runs on one; until an Agent is given its own, that is the catalog's default size. Values are chosen from the catalog, never typed in per Agent.
+A named amount of CPU and memory, as a request and a limit, from the platform-wide catalog Platform Administrators keep. Every Agent runs on one: the size its Organization chose for it, or the catalog's default. A Platform Administrator decides which sizes each Organization may choose, and its Owners and Admins choose among them. Values are chosen from the catalog, never typed in per Agent.
 _Avoid_: preset (a Template word), plan, tier, instance type
 
 **Template**:

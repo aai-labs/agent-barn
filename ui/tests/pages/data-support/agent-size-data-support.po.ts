@@ -94,4 +94,57 @@ export class AgentSizeDataSupport {
 
     return { writes, catalog };
   }
+
+  /** What the active Organization may choose: the default first, then `allowed`. */
+  async interceptOrganizationSizes({
+    allowed = [],
+    defaultSize = mockSize(),
+  }: { allowed?: Size[]; defaultSize?: Size } = {}) {
+    const option = ({ id, name, cpu_request_millicores, cpu_limit_millicores, memory_request_bytes, memory_limit_bytes, is_default }: Size) => ({
+      id,
+      name,
+      cpu_request_millicores,
+      cpu_limit_millicores,
+      memory_request_bytes,
+      memory_limit_bytes,
+      is_default,
+    });
+    await this.page.route("**/api/v1/organizations/*/agent-sizes", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ can_choose: allowed.length > 0, sizes: [defaultSize, ...allowed].map(option) }),
+      }),
+    );
+  }
+
+  /** The platform setting an Organization's allowed set; answers with the Organization as saved. */
+  async interceptSetOrganizationSizes(organization: Record<string, unknown>) {
+    const writes: { agent_size_ids: string[] }[] = [];
+    await this.page.route(`**/api/v1/platform/organizations/${organization.id}/agent-sizes`, async (route) => {
+      const body = route.request().postDataJSON() as { agent_size_ids: string[] };
+      writes.push(body);
+      Object.assign(organization, { agent_size_ids: body.agent_size_ids });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(organization) });
+    });
+    return { writes };
+  }
+
+  /** Choosing an Agent's size: answers with the Agent on it, pending while it runs. */
+  async interceptSetAgentSize(agent: Record<string, unknown>, sizes: Size[]) {
+    const writes: { agent_size_id: string | null }[] = [];
+    await this.page.route(`**/api/v1/organizations/*/agents/${agent.id}/agent-size`, async (route) => {
+      const body = route.request().postDataJSON() as { agent_size_id: string | null };
+      writes.push(body);
+      const size = sizes.find((candidate) => candidate.id === body.agent_size_id) ?? sizes.find((s) => s.is_default);
+      const updated = {
+        ...agent,
+        agent_size_id: body.agent_size_id,
+        agent_size: size,
+        pending_size: agent.status === "RUNNING",
+      };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(updated) });
+    });
+    return { writes };
+  }
 }

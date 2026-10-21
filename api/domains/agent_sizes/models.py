@@ -1,8 +1,8 @@
 """Agent Sizes: the platform's catalog of the CPU and memory an Agent's container runs with.
 
-A Platform Administrator keeps the catalog; nobody types in custom values. Every Agent runs on
-the default size (`is_default`) until a later slice of the Agent Sizes epic lets an
-Organization choose one. See `docs/features/agent-sizes.md`.
+A Platform Administrator keeps the catalog and decides which sizes each Organization may
+choose; nobody types in custom values. An Agent runs on the size its Organization chose for
+it, or on the default (`is_default`). See `docs/features/agent-sizes.md`.
 
 Requests and limits are stored apart because the namespace quota binds on `requests.memory`:
 the request decides how many Agents fit, the limit how far one may grow.
@@ -14,7 +14,7 @@ from uuid import UUID
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, field_validator, model_validator
-from sqlmodel import Column
+from sqlmodel import Column, SQLModel
 from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
@@ -74,6 +74,31 @@ class AgentSize(BaseModel, table=True):
     enabled: bool = SqlField(default=True)
     is_default: bool = SqlField(default=False)
     sort_order: int = SqlField(default=0)
+
+
+class OrganizationAgentSize(SQLModel, table=True):
+    """A size an Organization may choose, beyond the default. No rows: it cannot choose.
+
+    The default is always choosable and never stored here, so changing the default never
+    leaves an Organization with a stale allowance.
+    """
+
+    __tablename__: str = "organization_agent_sizes"
+
+    organization_id: UUID = SqlField(
+        foreign_key="organization.id",
+        primary_key=True,
+        nullable=False,
+        ondelete="CASCADE",
+    )
+    # Deleting a size withdraws it from every allowed set; Agents on it block the delete.
+    agent_size_id: UUID = SqlField(
+        foreign_key="agent_sizes.id",
+        primary_key=True,
+        nullable=False,
+        ondelete="CASCADE",
+        index=True,
+    )
 
 
 class AgentSizeRead(PydanticBaseModel):
@@ -161,3 +186,58 @@ class AgentSizeUpdate(PydanticBaseModel):
         if value is False:
             raise ValueError("make another size the default instead")
         return value
+
+
+class AgentSizeOption(PydanticBaseModel):
+    """A size as an Organization sees it: what it is called and what it gives an Agent."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    cpu_request_millicores: int
+    cpu_limit_millicores: int
+    memory_request_bytes: int
+    memory_limit_bytes: int
+    is_default: bool
+
+
+class OrganizationAgentSizesRead(PydanticBaseModel):
+    """The sizes an Organization's Agents may be put on: the default, then the enabled sizes
+    the platform allowed it. `can_choose` is false when that is only the default."""
+
+    can_choose: bool
+    sizes: list[AgentSizeOption]
+
+
+class OrganizationAgentSizesUpdate(PydanticBaseModel):
+    """The sizes an Organization may choose beyond the default. Empty: it cannot choose."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_size_ids: list[UUID] = Field(max_length=100)
+
+
+class AgentSizeChoice(PydanticBaseModel):
+    """The size an Agent should start on next. None follows the platform default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_size_id: UUID | None
+
+
+def size_resources(size: AgentSize) -> dict[str, int]:
+    """The requests and limits a pod gets from a size, as `Agent.running_resources` records them."""
+    return {
+        "cpu_request_millicores": size.cpu_request_millicores,
+        "cpu_limit_millicores": size.cpu_limit_millicores,
+        "memory_request_bytes": size.memory_request_bytes,
+        "memory_limit_bytes": size.memory_limit_bytes,
+    }
+
+
+def size_is_pending(running_resources: dict[str, int] | None, size: AgentSize) -> bool:
+    """Whether a pod started with `running_resources` would get different ones from `size`
+    at its next start. Compared by value, so editing the size an Agent is on counts as well
+    as choosing another one; never pending for an Agent that is not running."""
+    return running_resources is not None and running_resources != size_resources(size)

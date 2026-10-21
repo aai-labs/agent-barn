@@ -5,16 +5,22 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 from sqlalchemy.exc import IntegrityError
 
+from api.domains.agent_sizes.lookup import AgentSizeLookupService, to_option
 from api.domains.agent_sizes.models import (
     AgentSize,
     AgentSizeCreate,
     AgentSizeRead,
     AgentSizeUpdate,
+    OrganizationAgentSizesRead,
     check_requests_within_limits,
 )
-from api.domains.agent_sizes.repository import Actor, AgentSizeRepository
+from api.domains.agent_sizes.repository import Actor, AgentSizeInUse, AgentSizeRepository, AgentSizesNotAllowable
 from api.domains.auth.models import CurrentUserContext
-from api.domains.events import EventDeliveryDispatcher
+from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
+from api.domains.organizations.models import PlatformOrganizationRead
+from api.domains.organizations.repository import OrganizationRepository
+from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import PermissionPolicy
 
 
 def to_read(size: AgentSize) -> AgentSizeRead:
@@ -100,12 +106,74 @@ class AgentSizeService:
             raise _not_found()
         if size.is_default:
             raise _conflict("The default size can't be deleted. Make another size the default first.")
-        if self.repository.is_referenced(size_id):
-            raise _conflict("Agents are on this size. Disable it instead, so it can't be chosen again.")
-        result = self.repository.delete_with_event(size_id, actor=_actor(context))
+        try:
+            result = self.repository.delete_with_event(size_id, actor=_actor(context))
+        except AgentSizeInUse:
+            raise _conflict("Agents are on this size. Disable it instead, so it can't be chosen again.") from None
         if result is None:
             raise _not_found()
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+
+
+@inject
+@singleton
+@dataclass
+class OrganizationAgentSizeService:
+    """Which sizes an Organization's Agents may be put on.
+
+    The platform decides the allowed set; any member may read what it can choose, so the
+    hire form and the Agent page can offer it. Choosing a size for an Agent is the Agents
+    domain's, under agent.size.manage.
+    """
+
+    repository: AgentSizeRepository
+    lookup: AgentSizeLookupService
+    organization_repository: OrganizationRepository
+    permission_policy: PermissionPolicy
+    event_delivery_dispatcher: EventDeliveryDispatcher
+
+    def get_choosable(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationAgentSizesRead:
+        self.permission_policy.require_organization(
+            context,
+            organization_id,
+            PermissionKey.ORGANIZATION_READ,
+            detail="You don't have permission for this organization.",
+        )
+        sizes = self.lookup.choosable(organization_id)
+        return OrganizationAgentSizesRead(can_choose=len(sizes) > 1, sizes=[to_option(size) for size in sizes])
+
+    def set_allowed(
+        self, organization_id: UUID, size_ids: list[UUID], context: CurrentUserContext
+    ) -> PlatformOrganizationRead:
+        """Replace the sizes an Organization may choose beyond the default.
+
+        Platform-administered, like the spend ceiling: a bigger size spends shared cluster
+        capacity, so an Organization cannot grant itself one. Withdrawing a size leaves
+        the Agents already on it where they are; it only stops it being chosen again.
+        """
+        try:
+            delivery_ids = self.repository.set_allowed_with_event(
+                organization_id,
+                set(size_ids),
+                actor=resolve_actor_identity(context, organization_id),
+                actor_display=context.user.full_name or context.user.email,
+            )
+        except AgentSizesNotAllowable:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only enabled sizes in the catalog can be allowed.",
+            ) from None
+        if delivery_ids is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
+            )
+        self.event_delivery_dispatcher.enqueue_immediate(delivery_ids)
+        organization = self.organization_repository.get_platform_read(organization_id)
+        if organization is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
+            )
+        return organization
 
 
 def _actor(context: CurrentUserContext) -> Actor:

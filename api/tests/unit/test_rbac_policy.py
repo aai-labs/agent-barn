@@ -68,6 +68,8 @@ def test_organization_role_permission_matrix_is_exact():
         PermissionKey.MEMORY_ACCESS_MANAGE,
         # Setting the Organization's own limit, its Agents' default and each Agent's.
         PermissionKey.LLM_BUDGET_MANAGE,
+        # Choosing an Agent's size among those the platform allowed the Organization.
+        PermissionKey.AGENT_SIZE_MANAGE,
     }
     expected = {
         OrganizationRole.OWNER: owner_permissions,

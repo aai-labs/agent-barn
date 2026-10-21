@@ -7,17 +7,32 @@ from injector import inject, singleton
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
-from api.domains.agent_sizes.models import SIZE_SETTINGS, AgentSize
+from api.domains.agent_sizes.models import SIZE_SETTINGS, AgentSize, OrganizationAgentSize
+from api.domains.agents.models import Agent
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import (
     EVENT_REGISTRY,
+    ORGANIZATION_AGENT_SIZES_CHANGED,
     PLATFORM_AGENT_SIZE_CHANGED,
     PLATFORM_AGENT_SIZE_CREATED,
     PLATFORM_AGENT_SIZE_DELETED,
 )
 from api.domains.events.models import EventScope
 from api.domains.events.repository import OutboxMessageRepository
+from api.domains.organizations.models import Organization
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+
+class AgentSizeInUse(Exception):
+    """An Agent row still references the size, so it can only be disabled."""
+
+
+class AgentSizesNotAllowable(Exception):
+    """Sizes that cannot be added to an Organization's allowed set: unknown or disabled."""
+
+    def __init__(self, size_ids: set[UUID]) -> None:
+        super().__init__(f"Agent sizes cannot be allowed: {sorted(map(str, size_ids))}")
+        self.size_ids = size_ids
 
 
 @dataclass(frozen=True)
@@ -63,13 +78,99 @@ class AgentSizeRepository:
                 query = query.where(col(AgentSize.id) != excluding)
             return session.exec(query).first() is not None
 
-    def is_referenced(self, size_id: UUID) -> bool:
-        """Whether any Agent is on this size, so it can only be disabled, not deleted.
+    def is_referenced(self, size_id: UUID, *, session: Session | None = None) -> bool:
+        """Whether any Agent row is on this size, so it can only be disabled, not deleted.
 
-        Nothing references a size until Agents can be given one (Agent Sizes PR 2 adds
-        `agent.agent_size_id`); that slice makes this answer for real.
+        Soft-deleted Agents count: their rows still hold the reference, which the foreign
+        key protects, and keeping the size keeps their history describing a real size.
         """
-        return False
+        query = select(Agent.id).where(col(Agent.agent_size_id) == size_id).limit(1)
+        if session is not None:
+            return session.exec(query).first() is not None
+        with Session(self.delegate.engine) as own_session:
+            return own_session.exec(query).first() is not None
+
+    def allowed_size_ids(self, organization_id: UUID) -> set[UUID]:
+        """The sizes an Organization may choose beyond the default, enabled or not."""
+        with Session(self.delegate.engine) as session:
+            return set(
+                session.exec(
+                    select(OrganizationAgentSize.agent_size_id).where(
+                        col(OrganizationAgentSize.organization_id) == organization_id
+                    )
+                )
+            )
+
+    def set_allowed_with_event(
+        self, organization_id: UUID, size_ids: set[UUID], *, actor: ActorIdentity, actor_display: str
+    ) -> list[UUID] | None:
+        """Replace an Organization's allowed set and record the change, in one commit.
+
+        The default is always choosable and never stored, so it is dropped from the set
+        given. A size being added must exist and be enabled; one already in the set may stay
+        after it was disabled, which is how a disabled size keeps the Agents already on it
+        without being offered again. The Organization row is locked so two administrators'
+        saves cannot both report the same "before". Returns the deliveries to dispatch
+        (none when nothing changed), or None when the Organization does not exist. Raises
+        AgentSizesNotAllowable.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            organization = session.exec(
+                select(Organization).where(col(Organization.id) == organization_id).with_for_update()
+            ).first()
+            if organization is None:
+                return None
+            sizes = {size.id: size for size in session.exec(select(AgentSize).with_for_update(read=True)).all()}
+            wanted = {size_id for size_id in size_ids if not (size_id in sizes and sizes[size_id].is_default)}
+            current = set(
+                session.exec(
+                    select(OrganizationAgentSize.agent_size_id).where(
+                        col(OrganizationAgentSize.organization_id) == organization_id
+                    )
+                )
+            )
+            added, removed = wanted - current, current - wanted
+            refused = {size_id for size_id in added if size_id not in sizes or not sizes[size_id].enabled}
+            if refused:
+                raise AgentSizesNotAllowable(refused)
+            if not added and not removed:
+                return []
+
+            for size_id in removed:
+                session.delete(session.get(OrganizationAgentSize, (organization_id, size_id)))
+            for size_id in added:
+                session.add(OrganizationAgentSize(organization_id=organization_id, agent_size_id=size_id))
+            session.flush()
+
+            def ordered(ids: set[UUID]) -> list[AgentSize]:
+                return sorted((sizes[size_id] for size_id in ids), key=lambda size: (size.sort_order, size.name))
+
+            event = EVENT_REGISTRY.build_event(
+                event_name=ORGANIZATION_AGENT_SIZES_CHANGED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.ORGANIZATION,
+                    id=organization_id,
+                    organization_id=organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "agent_size_ids": [size.id for size in ordered(wanted)],
+                    "agent_size_names": [size.name for size in ordered(wanted)],
+                    "previous_agent_size_ids": [size.id for size in ordered(current)],
+                    "previous_agent_size_names": [size.name for size in ordered(current)],
+                    "actor_display": actor_display,
+                    "subject_display": organization.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = self._delivery_ids(session, [event.event_id])
+            session.commit()
+            return delivery_ids
 
     def create_with_event(self, size: AgentSize, *, actor: Actor) -> AgentSizeWriteResult:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -140,10 +241,17 @@ class AgentSizeRepository:
             return AgentSizeWriteResult(size=size, delivery_ids=delivery_ids)
 
     def delete_with_event(self, size_id: UUID, *, actor: Actor) -> AgentSizeWriteResult | None:
+        """Delete a size nothing references. Raises AgentSizeInUse otherwise.
+
+        Choosing a size for an Agent holds a share lock on the size row, so once this holds
+        its update lock no Agent can start referencing it before the delete commits.
+        """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             size = session.get(AgentSize, size_id, with_for_update=True)
             if size is None:
                 return None
+            if self.is_referenced(size_id, session=session):
+                raise AgentSizeInUse(size_id)
             event_id = self._stage(session, PLATFORM_AGENT_SIZE_DELETED, size, actor, self._values(size), uuid4())
             delivery_ids = self._delivery_ids(session, [event_id])
             session.delete(size)

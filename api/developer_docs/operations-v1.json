@@ -231,6 +231,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agent-sizes",
+    "get_organization_agent_sizes_organizations__organization_id__agent_sizes_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents",
     "list_agents_organizations__organization_id__agents_get"
   ],
@@ -1366,6 +1371,11 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/agent-size",
+    "set_agent_size_organizations__organization_id__agents__agent_id__agent_size_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/isolation",
     "apply_integration_isolation_organizations__organization_id__agents__agent_id__integrations__provider__isolation_put"
   ],
@@ -1393,6 +1403,11 @@
     "PUT",
     "/organizations/{organization_id}/value-settings",
     "update_value_settings_organizations__organization_id__value_settings_put"
+  ],
+  [
+    "PUT",
+    "/platform/organizations/{organization_id}/agent-sizes",
+    "set_organization_agent_sizes_platform_organizations__organization_id__agent_sizes_put"
   ],
   [
     "PUT",

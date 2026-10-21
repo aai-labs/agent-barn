@@ -69,6 +69,8 @@ ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED = "organization.llm_budget.threshold_r
 ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
 ORGANIZATION_LLM_BUDGET_CHANGED = "organization.llm_budget.changed"
 ORGANIZATION_TRIAL_ENDED = "organization.trial.ended"
+ORGANIZATION_AGENT_SIZES_CHANGED = "organization.agent_sizes.changed"
+AGENT_AGENT_SIZE_CHANGED = "agent.agent_size.changed"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
 AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
 AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
@@ -401,6 +403,41 @@ class OrganizationLlmBudgetChangedPayload(BaseModel):
     previous_own_limit_usd: float | None
     window: str
     reason: str | None = None
+    actor_display: str
+    subject_display: str
+
+
+class OrganizationAgentSizesChangedPayload(BaseModel):
+    """The Agent Sizes an Organization may choose, before and after, set by the platform.
+
+    The platform default is always choosable and never listed. Names travel with the ids so
+    the record still reads after a size is renamed or deleted; an empty list means the
+    Organization cannot choose.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_size_ids: list[UUID]
+    agent_size_names: list[str]
+    previous_agent_size_ids: list[UUID]
+    previous_agent_size_names: list[str]
+    actor_display: str
+    subject_display: str
+
+
+class AgentAgentSizeChangedPayload(BaseModel):
+    """An Agent's chosen size before and after. A None id (and name) means the Agent
+    follows the platform default. The change applies at the Agent's next start."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    agent_size_id: UUID | None
+    agent_size_name: str | None
+    previous_agent_size_id: UUID | None
+    previous_agent_size_name: str | None
     actor_display: str
     subject_display: str
 
@@ -753,6 +790,8 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
         (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
         (ORGANIZATION_TRIAL_ENDED, OrganizationTrialEndedPayload),
+        (ORGANIZATION_AGENT_SIZES_CHANGED, OrganizationAgentSizesChangedPayload),
+        (AGENT_AGENT_SIZE_CHANGED, AgentAgentSizeChangedPayload),
     ):
         registry.register(
             DomainEventDefinition(
