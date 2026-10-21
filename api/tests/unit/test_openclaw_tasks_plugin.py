@@ -296,3 +296,19 @@ def test_an_unavailable_task_service_does_not_break_the_turn(tmp_path: Path):
     driven = _drive(tmp_path, [_prompt()], AGENTBARN_TASK_COMMAND="/nonexistent/agentbarn-task")
 
     assert_that(driven["results"][0], is_(None))
+
+
+# --- runs that produce files ---
+
+
+@pytest.mark.parametrize("tool", ["write", "edit", "apply_patch"])
+def test_a_run_that_writes_a_file_without_a_task_is_asked_to_revise(tmp_path: Path, tool: str):
+    driven = _drive(tmp_path, [_after_tool("c1", tool=tool), _finalize()])
+
+    assert_that(driven["results"][-1], has_entries(action="revise"))
+
+
+def test_a_run_that_wrote_a_file_without_a_task_is_reminded_next_turn(tmp_path: Path):
+    driven = _drive(tmp_path, [_after_tool("c1", tool="write"), _agent_end(), _prompt()])
+
+    assert_that(_context(driven["results"][-1]), contains_string("did work without recording it as a Task"))

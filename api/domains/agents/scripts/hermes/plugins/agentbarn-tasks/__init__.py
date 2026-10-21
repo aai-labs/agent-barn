@@ -2,9 +2,11 @@
 
 Registers an `agentbarn_task` tool that runs the in-pod `agentbarn-task` command, so the
 command stays the one client of the Task routes. Each turn starts with the Agent's open
-Tasks. A turn that does real work without touching a Task is reminded once, inside the
-turn through the tool result the model reads next, and again on the next turn if it
-still ended without one. The plugin never records a Task itself.
+Tasks. A turn that does real work without touching a Task (three or more tool calls, or
+any file it writes) is reminded inside the turn through the tool result the model reads
+next; a turn that wrote files is also held back once before it finishes (`pre_verify`).
+If it still ends without a Task, the next turn carries a reminder. The plugin never
+records a Task itself.
 """
 
 import json
@@ -19,6 +21,8 @@ logger = logging.getLogger(__name__)
 _TOOL = "agentbarn_task"
 _STATUSES = ["open", "in_progress", "done", "failed"]
 _WORK_THRESHOLD = 3
+# Hermes's own file-writing tools. A turn that produces a file is worth a Task however short it is.
+_FILE_TOOLS = {"write_file", "patch"}
 _OPEN_TASKS_TTL_SECONDS = 60
 _OPEN_TASKS_SHOWN = 10
 _COMMAND_TIMEOUT_SECONDS = 150
@@ -27,6 +31,11 @@ _IN_TURN_REMINDER = (
     "[Agent Barn] This request has taken several steps and has no Task yet. Record it with the "
     "agentbarn_task tool: create a Task, keep its status current, add notes as you go and attach "
     "the files you produce."
+)
+_BEFORE_FINISHING_REMINDER = (
+    "Before you finish: this turn produced files but recorded no Task. Record it now with the "
+    "agentbarn_task tool (create the Task, add a note on what was done, attach the files you produced, "
+    "set its status), then give your answer."
 )
 _NEXT_TURN_REMINDER = (
     "Your previous turn did work without recording it as a Task. If it was more than a quick answer, "
@@ -59,8 +68,10 @@ _SCHEMA = {
 }
 
 _lock = threading.Lock()
-# (session_id, turn_id) -> {"work": set of tool call ids, "recorded": bool, "reminded": bool}
+# (session_id, turn_id) -> {"work": set of tool call ids, "wrote_files", "recorded", "reminded", "held"}
 _turns: dict[tuple[str, str], dict] = {}
+# session_id -> its current turn_id; pre_verify is not told which turn it is judging.
+_current_turn: dict[str, str] = {}
 _remind_next_turn: set[str] = set()
 _open_tasks_cache: dict = {"at": 0.0, "lines": None}
 
@@ -154,12 +165,23 @@ def _touches_tasks(tool_name: str, args) -> bool:
 
 def _track(tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", tool_call_id: str = "") -> dict:
     """Count one tool call in its turn. Safe to call twice for the same call."""
-    turn = _turns.setdefault((session_id, turn_id), {"work": set(), "recorded": False, "reminded": False})
+    _current_turn[session_id] = turn_id
+    turn = _turns.setdefault(
+        (session_id, turn_id),
+        {"work": set(), "wrote_files": False, "recorded": False, "reminded": False, "held": False},
+    )
     if _touches_tasks(tool_name, args):
         turn["recorded"] = True
-    elif tool_call_id:
-        turn["work"].add(tool_call_id)
+    else:
+        if tool_call_id:
+            turn["work"].add(tool_call_id)
+        if tool_name in _FILE_TOOLS:
+            turn["wrote_files"] = True
     return turn
+
+
+def _unrecorded_work(turn: dict | None) -> bool:
+    return bool(turn) and not turn["recorded"] and (turn["wrote_files"] or len(turn["work"]) >= _WORK_THRESHOLD)
 
 
 def _on_post_tool_call(tool_name="", args=None, session_id="", turn_id="", tool_call_id="", **_):
@@ -170,7 +192,7 @@ def _on_post_tool_call(tool_name="", args=None, session_id="", turn_id="", tool_
 def _on_transform_tool_result(tool_name="", args=None, result=None, session_id="", turn_id="", tool_call_id="", **_):
     with _lock:
         turn = _track(tool_name, args, session_id, turn_id, tool_call_id)
-        if turn["recorded"] or turn["reminded"] or len(turn["work"]) < _WORK_THRESHOLD:
+        if turn["reminded"] or not _unrecorded_work(turn):
             return None
         turn["reminded"] = True
     return f"{result if isinstance(result, str) else json.dumps(result)}\n\n{_IN_TURN_REMINDER}"
@@ -180,8 +202,20 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
     """Hermes fires this at the end of every turn, despite its name."""
     with _lock:
         turn = _turns.pop((session_id, turn_id), None)
-        if turn and completed and not turn["recorded"] and len(turn["work"]) >= _WORK_THRESHOLD:
+        if _current_turn.get(session_id) == turn_id:
+            del _current_turn[session_id]
+        if completed and _unrecorded_work(turn):
             _remind_next_turn.add(session_id)
+
+
+def _on_pre_verify(session_id="", **_):
+    """Hold back once a turn that wrote files but recorded no Task. Hermes calls this only after file edits."""
+    with _lock:
+        turn = _turns.get((session_id, _current_turn.get(session_id, "")))
+        if turn is None or turn["held"] or not _unrecorded_work(turn):
+            return None
+        turn["held"] = True
+    return {"action": "continue", "message": _BEFORE_FINISHING_REMINDER}
 
 
 def _open_task_lines() -> list[str] | None:
@@ -239,3 +273,4 @@ def register(ctx):
     ctx.register_hook("post_tool_call", _on_post_tool_call)
     ctx.register_hook("transform_tool_result", _on_transform_tool_result)
     ctx.register_hook("on_session_end", _on_session_end)
+    ctx.register_hook("pre_verify", _on_pre_verify)

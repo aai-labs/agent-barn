@@ -19,7 +19,7 @@ TASK_ID = "0199f1d2-0000-7000-8000-0000000000aa"
 INGEST_KEY = "task-contract-ingest-key"
 REFUSAL = "The file is larger than the space left for this Organization's Task Files."
 FIXTURES = Path(__file__).parents[1] / "tests" / "fixtures" / "agent_tasks"
-HERMES_PLUGIN_HOOKS = ["on_session_end", "post_tool_call", "pre_llm_call", "transform_tool_result"]
+HERMES_PLUGIN_HOOKS = ["on_session_end", "post_tool_call", "pre_llm_call", "pre_verify", "transform_tool_result"]
 # Turn hooks need allowConversationAccess; without it OpenClaw drops them with only a warning.
 OPENCLAW_PLUGIN_HOOKS = ["after_tool_call", "agent_end", "before_agent_finalize", "before_prompt_build"]
 
@@ -200,6 +200,8 @@ def tasks_should_be_recorded_from_the_agents_shell(runtime: str, image: str, roo
                 assert_that(plugin["hooks"], equal_to(HERMES_PLUGIN_HOOKS), str(plugin))
                 assert_that(plugin["offered"], equal_to({"slack": True, "api_server": True}), str(plugin))
                 assert_that(plugin["tools"], equal_to(["agentbarn_task"]), str(plugin))
+                # Deferred behind tool search, the model has to look the tool up first and skips it.
+                assert_that(plugin["tool_search"], equal_to("off"), str(plugin))
             else:
                 assert_that((plugin["status"], plugin["error"]), equal_to(("loaded", None)), str(plugin))
                 assert_that(plugin["hooks"], equal_to(OPENCLAW_PLUGIN_HOOKS), str(plugin))

@@ -112,6 +112,10 @@ def _hermes_config_core(
         model_name = model
     return {
         "toolsets": ["all"],
+        # Tool search hides plugin and MCP tools behind a search bridge, so the model must look
+        # agentbarn_task up before every use and, in practice, skips it. Our Agents have no other
+        # deferrable tools, so serving them all directly costs one schema; revisit if MCP lands.
+        "tools": {"tool_search": {"enabled": "off"}},
         "model": {
             "provider": "openrouter",
             "default": model_name,

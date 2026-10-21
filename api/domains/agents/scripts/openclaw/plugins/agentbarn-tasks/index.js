@@ -2,14 +2,16 @@
 //
 // Registers an `agentbarn_task` tool that runs the in-pod `agentbarn-task` command, so the
 // command stays the one client of the Task routes. Each turn starts with the Agent's open
-// Tasks. A run that does real work without touching a Task is asked to revise once before
-// it finishes, and reminded on the next turn if it still ended without one. The plugin
-// never records a Task itself.
+// Tasks. A run that does real work without touching a Task (three or more tool calls, or
+// any file it writes) is asked to revise once before it finishes, and reminded on the next
+// turn if it still ended without one. The plugin never records a Task itself.
 import { spawn } from "node:child_process";
 
 const TOOL = "agentbarn_task";
 const STATUSES = ["open", "in_progress", "done", "failed"];
 const WORK_THRESHOLD = 3;
+// OpenClaw's file-writing tools. A run that produces a file is worth a Task however short it is.
+const FILE_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const OPEN_TASKS_TTL_MS = 60_000;
 const OPEN_TASKS_SHOWN = 10;
 const COMMAND_TIMEOUT_MS = 150_000;
@@ -39,7 +41,7 @@ const PARAMETERS = {
   required: ["action"],
 };
 
-// runId -> { work: Set of tool call ids, recorded, reminded, sessionKey }
+// runId -> { work: Set of tool call ids, wroteFiles, recorded, reminded, sessionKey }
 const runs = new Map();
 const remindNextTurn = new Set();
 let openTasksCache = { at: 0, lines: null };
@@ -136,13 +138,14 @@ function track(event, ctx) {
   const runId = event.runId ?? ctx.runId ?? "";
   let state = runs.get(runId);
   if (!state) {
-    state = { work: new Set(), recorded: false, reminded: false, sessionKey: ctx.sessionKey ?? "" };
+    state = { work: new Set(), wroteFiles: false, recorded: false, reminded: false, sessionKey: ctx.sessionKey ?? "" };
     runs.set(runId, state);
   }
   return state;
 }
 
-const nonTrivial = (state) => state && !state.recorded && state.work.size >= WORK_THRESHOLD;
+const nonTrivial = (state) =>
+  state && !state.recorded && (state.wroteFiles || state.work.size >= WORK_THRESHOLD);
 
 async function openTaskLines() {
   if (openTasksCache.lines && Date.now() - openTasksCache.at < OPEN_TASKS_TTL_MS) return openTasksCache.lines;
@@ -186,7 +189,10 @@ export default {
       if (ctx.trigger === "heartbeat") return;
       const state = track(event, ctx);
       if (touchesTasks(event.toolName, event.params)) state.recorded = true;
-      else if (event.toolCallId) state.work.add(event.toolCallId);
+      else {
+        if (event.toolCallId) state.work.add(event.toolCallId);
+        if (FILE_TOOLS.has(event.toolName)) state.wroteFiles = true;
+      }
     });
 
     api.on("before_agent_finalize", (event, ctx) => {

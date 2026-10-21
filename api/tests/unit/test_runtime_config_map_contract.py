@@ -168,3 +168,8 @@ def test_openclaw_loads_and_enables_the_tasks_plugin(native_channels):
 )
 def test_start_script_installs_the_tasks_plugin(runtime, installed):
     assert installed in (_SCRIPTS / runtime / "start.sh").read_text()
+
+
+def test_hermes_offers_plugin_tools_directly_rather_than_behind_tool_search():
+    config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
+    assert config["tools"]["tool_search"] == {"enabled": "off"}

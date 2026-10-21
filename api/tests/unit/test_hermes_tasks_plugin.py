@@ -79,6 +79,18 @@ class _Plugin:
             self.hooks["post_tool_call"](**kwargs)
             return self.hooks["transform_tool_result"](**kwargs)
 
+    def finish(self, session_id: str = "s1", attempt: int = 0):
+        """Hermes asking whether a turn that edited files may finish."""
+        return self.hooks["pre_verify"](
+            session_id=session_id,
+            platform="slack",
+            model="m",
+            coding=False,
+            attempt=attempt,
+            final_response="Done.",
+            changed_paths=["/workspace/states.csv"],
+        )
+
     def end_turn(self, session_id: str = "s1", turn_id: str = "turn-1", completed: bool = True):
         self.hooks["on_session_end"](
             session_id=session_id, turn_id=turn_id, completed=completed, failed=False, interrupted=False
@@ -121,7 +133,8 @@ def test_the_task_tool_and_turn_hooks_are_registered(tmp_path: Path):
     plugin = _Plugin(tmp_path)
 
     assert_that(
-        sorted(plugin.hooks), equal_to(["on_session_end", "post_tool_call", "pre_llm_call", "transform_tool_result"])
+        sorted(plugin.hooks),
+        equal_to(["on_session_end", "post_tool_call", "pre_llm_call", "pre_verify", "transform_tool_result"]),
     )
     tool = plugin.tools["agentbarn_task"]
     assert_that(tool["schema"]["name"], equal_to("agentbarn_task"))
@@ -308,3 +321,48 @@ def test_the_tool_answer_is_always_json(tmp_path: Path):
     raw = plugin.tools["agentbarn_task"]["handler"]({"action": "unknown"}, task_id="t")
 
     assert_that(json.loads(raw), not_none())
+
+
+# --- turns that produce files ---
+
+
+def test_a_turn_that_writes_a_file_counts_as_real_work(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    result = plugin.tool_call("call-1", tool_name="write_file")
+
+    assert_that(result, contains_string("agentbarn_task"))
+
+
+def test_a_turn_that_wrote_files_without_a_task_must_continue_once_before_finishing(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.tool_call("call-1", tool_name="write_file")
+
+    first, second = plugin.finish(), plugin.finish(attempt=1)
+
+    assert_that(first, has_entries(action="continue", message=contains_string("agentbarn_task")))
+    assert_that(second, equal_to(None))
+
+
+def test_a_turn_that_wrote_files_and_recorded_a_task_may_finish(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.tool_call("call-1", tool_name="write_file")
+    plugin.tool_call("call-2", tool_name="agentbarn_task")
+
+    assert_that(plugin.finish(), equal_to(None))
+
+
+def test_finishing_is_judged_on_the_sessions_current_turn(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.tool_call("call-1", session_id="s2", tool_name="write_file")
+
+    assert_that(plugin.finish("s1"), equal_to(None))
+
+
+def test_a_turn_that_wrote_a_file_without_a_task_is_reminded_next_turn(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.tool_call("call-1", tool_name="patch")
+
+    plugin.end_turn()
+
+    assert_that(_context(plugin.start_turn()), contains_string("did work without recording it as a Task"))

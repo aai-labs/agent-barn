@@ -11,6 +11,7 @@ from hermes_cli.plugins import discover_plugins, get_plugin_manager  # ty: ignor
 from hermes_cli.tools_config import _get_platform_tools  # ty: ignore[unresolved-import]
 from model_tools import get_tool_definitions, handle_function_call  # ty: ignore[unresolved-import]
 from tools.terminal_tool import terminal_tool  # ty: ignore[unresolved-import]
+from tools.tool_search import load_config as load_tool_search_config  # ty: ignore[unresolved-import]
 
 TASK_ID = sys.argv[1]
 COMMANDS = {
@@ -43,10 +44,11 @@ definitions = get_tool_definitions(enabled_toolsets=["agentbarn"], quiet_mode=Tr
 plugin = {
     "hooks": sorted(
         hook
-        for hook in ("pre_llm_call", "post_tool_call", "transform_tool_result", "on_session_end")
+        for hook in ("pre_llm_call", "post_tool_call", "transform_tool_result", "on_session_end", "pre_verify")
         if manager.has_hook(hook)
     ),
     "offered": offered,
+    "tool_search": load_tool_search_config().enabled,
     "tools": sorted(definition["function"]["name"] for definition in definitions),
     "tool_result": json.loads(
         handle_function_call("agentbarn_task", {"action": "create", "title": "From the plugin"}, task_id="contract")
