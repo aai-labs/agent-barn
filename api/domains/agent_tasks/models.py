@@ -1,7 +1,11 @@
 import enum
+from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 import sqlalchemy as sa
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import ConfigDict, StringConstraints
 from sqlmodel import Column, SQLModel
 from sqlmodel import Field as SqlField
 
@@ -94,3 +98,59 @@ class AgentTaskFileChunk(SQLModel, table=True):
     file_id: UUID = SqlField(foreign_key="agent_task_file.id", primary_key=True, ondelete="CASCADE")
     sequence: int = SqlField(primary_key=True)
     data: bytes = SqlField(sa_column=Column(sa.LargeBinary(), nullable=False))
+
+
+Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10000)]
+
+
+class AgentTaskCreate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: Title
+    description: Text | None = None
+
+
+class AgentTaskNoteCreate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    body: Text
+
+
+class AgentTaskFilter(PydanticBaseModel):
+    status: AgentTaskStatus | None = None
+
+
+class AgentTaskRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    agent_id: UUID
+    title: str
+    description: str | None
+    status: AgentTaskStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentTaskNoteRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    body: str
+    created_at: datetime
+
+
+class AgentTaskFileRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    filename: str
+    content_type: str
+    size_bytes: int
+    created_at: datetime
+
+
+class AgentTaskDetail(AgentTaskRead):
+    notes: list[AgentTaskNoteRead]
+    files: list[AgentTaskFileRead]
