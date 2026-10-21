@@ -29,12 +29,11 @@ class PostgresTaskFileStorage:
     """Stores each File as ordered chunks, removed with their File by cascade."""
 
     delegate: PostgresRepositoryDelegate
-    chunk_bytes: int = CHUNK_BYTES
 
     def write(self, session: Session, file_id: UUID, data: bytes) -> None:
-        for sequence, offset in enumerate(range(0, len(data), self.chunk_bytes)):
+        for sequence, offset in enumerate(range(0, len(data), CHUNK_BYTES)):
             session.add(
-                AgentTaskFileChunk(file_id=file_id, sequence=sequence, data=data[offset : offset + self.chunk_bytes])
+                AgentTaskFileChunk(file_id=file_id, sequence=sequence, data=data[offset : offset + CHUNK_BYTES])
             )
 
     def read(self, file_id: UUID) -> Iterator[bytes]:

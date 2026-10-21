@@ -101,20 +101,20 @@ class AgentTaskFileChunk(SQLModel, table=True):
 
 
 Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
-Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10000)]
+LongText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10000)]
 
 
 class AgentTaskCreate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: Title
-    description: Text | None = None
+    description: LongText | None = None
 
 
 class AgentTaskNoteCreate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    body: Text
+    body: LongText
 
 
 class AgentTaskFileCreate(PydanticBaseModel):

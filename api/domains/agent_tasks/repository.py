@@ -46,7 +46,7 @@ def _lock_live_agent(session: Session, organization_id: UUID, agent_id: UUID) ->
     return session.exec(query).first() is not None
 
 
-def _agents_task(session: Session, organization_id: UUID, agent_id: UUID, task_id: UUID) -> AgentTask | None:
+def _find_agent_task(session: Session, organization_id: UUID, agent_id: UUID, task_id: UUID) -> AgentTask | None:
     query = select(AgentTask).where(
         col(AgentTask.id) == task_id,
         col(AgentTask.agent_id) == agent_id,
@@ -81,7 +81,7 @@ class AgentTaskRepository:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return None
-            task = _agents_task(session, organization_id, agent_id, task_id)
+            task = _find_agent_task(session, organization_id, agent_id, task_id)
             if task is None:
                 return None
             task.status = status
@@ -94,7 +94,7 @@ class AgentTaskRepository:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return None
-            if _agents_task(session, organization_id, agent_id, task_id) is None:
+            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
                 return None
             note = AgentTaskNote(task_id=task_id, body=body)
             session.add(note)
@@ -118,7 +118,7 @@ class AgentTaskRepository:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return None
-            if _agents_task(session, organization_id, agent_id, task_id) is None:
+            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
                 return None
             session.connection().execute(
                 sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
