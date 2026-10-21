@@ -13,6 +13,13 @@ from api.domains.events.constants import (
     EVENT_DELIVERY_REDIS_NAMESPACE,
 )
 from api.domains.events.transport import safe_transport_metadata
+from api.domains.playbooks import worker as playbooks_worker
+from api.domains.playbooks.constants import (
+    PLAYBOOK_EXTRACTION_ACTOR_NAME,
+    PLAYBOOK_EXTRACTION_MAX_RETRIES,
+    PLAYBOOK_EXTRACTION_QUEUE_NAME,
+    PLAYBOOK_EXTRACTION_TIME_LIMIT_MS,
+)
 from api.infrastructure.dramatiq import build_redis_broker
 
 _config = get_config()
@@ -36,3 +43,13 @@ def event_delivery_actor(delivery_id: str, metadata: dict[str, Any] | None = Non
 def event_delivery_retry_exhausted(message: dict[str, Any], metadata: dict[str, Any] | None = None) -> None:
     retries = metadata.get("retries") if isinstance(metadata, dict) else None
     events_worker.handle_retry_exhausted(message, retries=retries)
+
+
+@dramatiq.actor(
+    actor_name=PLAYBOOK_EXTRACTION_ACTOR_NAME,
+    queue_name=PLAYBOOK_EXTRACTION_QUEUE_NAME,
+    max_retries=PLAYBOOK_EXTRACTION_MAX_RETRIES,
+    time_limit=PLAYBOOK_EXTRACTION_TIME_LIMIT_MS,
+)
+def playbook_extraction_actor(extraction_id: str) -> None:
+    playbooks_worker.process_playbook_extraction(UUID(extraction_id))

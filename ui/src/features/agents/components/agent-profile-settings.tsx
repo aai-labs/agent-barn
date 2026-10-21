@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { currentModelOf, formatModelName } from "../utils";
+import { MAX_TURNS_MAX, MAX_TURNS_MIN, currentModelOf, formatModelName, turnLimitLabel } from "../utils";
 import { useAgentApplyAndRestart } from "../hooks/use-agent-apply-and-restart";
 import { useModels } from "../hooks/use-models";
 import { useUpdateAgent } from "../hooks/use-update-agent";
@@ -41,13 +41,22 @@ export function AgentProfileSettings({
   const [model, setModel] = useState<string | null>(agent.model || null);
   const [approvalMode, setApprovalMode] = useState<CommandApprovalMode>(agent.approvalMode);
   const [verboseMode, setVerboseMode] = useState(agent.verboseMode);
+  // Kept as text so the field can be emptied, which means "follow the platform default".
+  const [maxTurns, setMaxTurns] = useState(agent.maxTurns === null ? "" : String(agent.maxTurns));
+  const parsedMaxTurns = maxTurns.trim() === "" ? null : Number(maxTurns);
+  const maxTurnsValid =
+    parsedMaxTurns === null ||
+    (Number.isInteger(parsedMaxTurns) && parsedMaxTurns >= MAX_TURNS_MIN && parsedMaxTurns <= MAX_TURNS_MAX);
+  // Only an Agent on the default reports what the default is.
+  const platformDefaultMaxTurns = agent.maxTurns === null ? agent.effectiveMaxTurns : null;
   const { applyAndRestart } = useAgentApplyAndRestart(agent);
   const approvalLabel = agent.agentType === "hermes" ? agent.approvalMode : "Full access — no approval prompts";
   const isDirty =
     name.trim() !== agent.name ||
     (model ?? "") !== agent.model ||
     (agent.agentType === "hermes" && approvalMode !== agent.approvalMode) ||
-    (agent.agentType === "hermes" && verboseMode !== agent.verboseMode);
+    (agent.agentType === "hermes" && verboseMode !== agent.verboseMode) ||
+    (agent.agentType === "hermes" && parsedMaxTurns !== agent.maxTurns);
 
   async function applyChanges() {
     await applyAndRestart(() =>
@@ -55,7 +64,7 @@ export function AgentProfileSettings({
         agentId: agent.id,
         name: name.trim(),
         model,
-        ...(agent.agentType === "hermes" ? { approvalMode, verboseMode } : {}),
+        ...(agent.agentType === "hermes" ? { approvalMode, verboseMode, maxTurns: parsedMaxTurns } : {}),
       }).then(() => undefined),
     );
   }
@@ -65,6 +74,7 @@ export function AgentProfileSettings({
     setModel(agent.model || null);
     setApprovalMode(agent.approvalMode);
     setVerboseMode(agent.verboseMode);
+    setMaxTurns(agent.maxTurns === null ? "" : String(agent.maxTurns));
     updateAgent.reset();
     onEdit();
   }
@@ -79,7 +89,7 @@ export function AgentProfileSettings({
       onApply={applyChanges}
       onCancel={cancelChanges}
       onApplied={onEdit}
-      applyDisabled={!isDirty || updateAgent.isPending}
+      applyDisabled={!isDirty || !maxTurnsValid || updateAgent.isPending}
       restartOnApply={agent.status === "RUNNING"}
     >
       {editing && canEdit ? (
@@ -122,6 +132,28 @@ export function AgentProfileSettings({
               Verbose mode — show progress while the Agent is working
             </Label>
           )}
+          {agent.agentType === "hermes" && (
+            <label className="flex flex-col gap-1.5 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+              Turn limit
+              <input
+                className="af-input"
+                type="number"
+                inputMode="numeric"
+                min={MAX_TURNS_MIN}
+                max={MAX_TURNS_MAX}
+                step={1}
+                placeholder={platformDefaultMaxTurns === null ? "Platform default" : `Platform default (${platformDefaultMaxTurns})`}
+                value={maxTurns}
+                aria-invalid={!maxTurnsValid}
+                onChange={(event) => setMaxTurns(event.target.value)}
+              />
+              <span className="text-xs font-normal" style={{ color: maxTurnsValid ? "var(--ink-3)" : "var(--err)" }}>
+                {maxTurnsValid
+                  ? "How many turns one run may take before Hermes stops it. Leave empty to follow the platform default."
+                  : `Enter a whole number from ${MAX_TURNS_MIN} to ${MAX_TURNS_MAX}, or leave it empty.`}
+              </span>
+            </label>
+          )}
           {updateAgent.error && (
             <span className="text-xs" style={{ color: "var(--err)" }}>
               {updateAgent.error instanceof Error ? updateAgent.error.message : "Save failed"}
@@ -156,6 +188,12 @@ export function AgentProfileSettings({
               <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>
                 {agent.verboseMode ? "Shown while the Agent is working" : "Hidden — only the final reply is sent"}
               </dd>
+            </div>
+          )}
+          {agent.agentType === "hermes" && (
+            <div>
+              <dt className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Turn limit</dt>
+              <dd className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>{turnLimitLabel(agent)}</dd>
             </div>
           )}
         </dl>

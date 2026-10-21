@@ -38,7 +38,7 @@ test.describe("Agent Detail Page — Activity tab", () => {
 
   async function openActivity(page: import("@playwright/test").Page) {
     await agentDetailPage.goto(MOCK_AGENT_ID);
-    await page.getByRole("button", { name: "Activity", exact: true }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Activity", exact: true }).click();
   }
 
   test("shows crash evidence separately from historical spend", async ({ page }) => {
@@ -317,8 +317,8 @@ test.describe("Agent Detail Page — Activity tab", () => {
     });
     await agentDetailPage.goto(MOCK_AGENT_ID);
 
-    await expect(page.getByRole("button", { name: "About", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Activity", exact: true })).toBeHidden();
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Overview", exact: true })).toBeVisible();
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Activity", exact: true })).toBeHidden();
   });
 
   test("offers a retry when wakes fail to load", async ({ page }) => {

@@ -1,8 +1,10 @@
 import logging
 import os
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
+import bcrypt
 import httpx
 import pytest
 from alembic import command
@@ -43,6 +45,11 @@ _set_default("PLATFORM_ADMIN_CREDENTIALS", "admin@example.com:StrongPass123")
 os.environ["CLOUDFLARE_ACCOUNT_ID"] = "test-account-id"
 os.environ["CLOUDFLARE_API_TOKEN"] = "test-api-token"
 os.environ["SENDER_EMAIL"] = "noreply@example.com"
+# Forced off for the same reason: with a developer's real shared bot in .env, any test
+# that starts the Communications app would poll Telegram and consume real users' updates.
+# Tests that need the bot set fake values through set_env_variable.
+os.environ["AGENTBARN_TELEGRAM_BOT_TOKEN"] = ""
+os.environ["AGENTBARN_TELEGRAM_BOT_USERNAME"] = ""
 os.environ["ANALYTICS_ENABLED"] = "false"
 
 alembic_dir = Path(__file__).resolve().parents[1]
@@ -62,6 +69,13 @@ def setup_test_database():
         get_config.cache_clear()
         logger.info("Upgrading test database to head")
         command.upgrade(config, "head")
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def fast_password_hashing():
+    """Production bcrypt cost (12 rounds) is ~0.2s per hash; minimum cost keeps the suite fast."""
+    with patch("api.domains.auth.hashing.bcrypt.gensalt", new=partial(bcrypt.gensalt, rounds=4)):
         yield
 
 

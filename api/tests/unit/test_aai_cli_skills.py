@@ -15,10 +15,12 @@ _EXPECTED_PROVIDER_NAMES = {
     "Jira",
     "Confluence",
     "GitHub",
+    "Gmail",
     "Bitbucket",
     "Google Drive",
     "Excel",
     "HubSpot",
+    "Merkys",
     "OpenPanel",
     "Pipedrive",
     "PostHog",
@@ -49,6 +51,25 @@ def test_apollo_skill_requires_the_apollo_credential():
     assert {f["skill_file_path"] for f in skill_def["files"]} == {
         "aai-apollo/SKILL.md",
         "aai-apollo/references/command-reference.md",
+    }
+
+
+def test_merkys_skill_requires_the_merkys_credential():
+    (skill_def,) = [s for s in AAI_CLI_PROVIDER_SKILLS if s["slug"] == "aai-merkys"]
+    assert skill_def["required_providers"] == [SecretProvider.MERKYS]
+    assert {f["skill_file_path"] for f in skill_def["files"]} == {
+        "aai-merkys/SKILL.md",
+        "aai-merkys/references/api-endpoints.md",
+        "aai-merkys/references/command-reference.md",
+    }
+
+
+def test_gmail_skill_requires_the_gmail_credential():
+    (skill_def,) = [s for s in AAI_CLI_PROVIDER_SKILLS if s["slug"] == "aai-gmail"]
+    assert skill_def["required_providers"] == [SecretProvider.GMAIL]
+    assert {f["skill_file_path"] for f in skill_def["files"]} == {
+        "aai-gmail/SKILL.md",
+        "aai-gmail/references/command-reference.md",
     }
 
 

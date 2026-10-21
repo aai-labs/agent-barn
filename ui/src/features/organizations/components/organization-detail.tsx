@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   CalendarDays,
-  ChevronLeft,
   Loader2,
   Trash2,
   UserRound,
@@ -78,7 +76,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
   if (isLoading) {
     return (
-      <div className="af-page">
+      <div>
         <div
           className="flex items-center gap-2 py-10 text-[13.5px]"
           style={{ color: "var(--ink-3)" }}
@@ -92,7 +90,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
 
   if (!organization) {
     return (
-      <div className="af-page">
+      <div>
         <div className="text-[14px]" style={{ color: "var(--ink-3)" }}>
           Organization not found.
         </div>
@@ -103,17 +101,7 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
   const memberCount = membersLoading ? null : members.length;
 
   return (
-    <div className="af-page">
-      {user.isPlatformAdmin && (
-        <Link
-          href="/dashboard/platform/organizations"
-          className="inline-flex items-center gap-1 text-[13px] mb-4"
-          style={{ color: "var(--ink-3)" }}
-        >
-          <ChevronLeft width={14} height={14} /> Organizations
-        </Link>
-      )}
-
+    <div>
       {/* Header: monogram + name/description, quiet delete on the right */}
       <div className="flex items-start gap-4 mb-7">
         <div
@@ -202,6 +190,14 @@ export function OrganizationDetail({ organizationId }: { organizationId: string 
               This permanently deletes <strong>{organization.name}</strong>{" "}
               and all its agents, templates, skills, and memberships. This
               can&apos;t be undone. Type the organization name to confirm.
+              {organization.isTrial && (
+                <>
+                  <br />
+                  <br />
+                  This also ends your free trial for good: this account can&apos;t start another trial or create
+                  an organization of its own afterwards.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <input

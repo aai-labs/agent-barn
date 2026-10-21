@@ -5,7 +5,7 @@ import { ApiKeysSection } from "./api-keys-section";
 
 export function AccountPage() {
   return (
-    <div className="af-page">
+    <div>
       <h1
         className="text-[28px] font-semibold tracking-tight m-0 mb-1"
         style={{ color: "var(--ink)" }}

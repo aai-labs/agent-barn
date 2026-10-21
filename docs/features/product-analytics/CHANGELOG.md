@@ -37,10 +37,223 @@ Related context: [Domain Events](../domain-events.md), [Identity and Organizatio
 - Also delivered: the handler supports platform-scoped events (installation group only).
 - Also delivered: `organization.created`, `organization.updated`, `organization.deleted`, `user.logged_in`, `user.signed_up`.
 - Also delivered: hourly message counts (CronJob).
+- Also delivered (AF-374, trial funnel): every Organization-scoped event carries `is_trial`, and the `organization` group gets `$group_set: {is_trial}`.
+- Also delivered (AF-374): `organization.llm_budget.exhausted` reaches PostHog, attributed to the Organization's creator.
+- Also delivered (AF-374): a Google sign-in to an existing, verified account records `user.logged_in` with `method: "google"`.
+- Also delivered (AF-374): `user.onboarding.completed`, sent once per user on the first onboarding completion.
+- Also delivered (AF-374): `telegram.account.linked`, and `telegram.account.unlinked` with reason `relinked`, `user_removed`, `blocked_bot` or `access_lost`.
+- Also delivered (AF-374): `telegram.first_message.received`, once per Telegram link (migration `a78bcde4b918`).
+- Also delivered (AF-374): a Google self-signup records `user.signed_up` (`method: google`) and `organization.created` for its trial Organization. An invitee enrolled through Google records `user.signed_up` (`method: invite`).
+- In progress (AF-374): onboarding completion, Telegram link/unlink and first-message events, then Google sign-up after the onboarding redesign merges.
 - Next: local E2E of the new events and the CronJob against the fake PostHog, then the production confirmation after release.
 - Blockers: the Group Analytics add-on must be enabled on the Agent Barn PostHog project before the production confirmation.
 
 ## Changes
+
+### 2026-10-15 — AF-374 — Google sign-up events
+
+- Delivered: `GoogleSignInService._sign_up` stages two events in the transaction that creates the User, the trial Organization and the Owner Membership:
+  - `user.signed_up` with `method: "google"`
+  - `organization.created`, with the new user as a User actor
+- Delivered: `_link` stages `user.signed_up` with `method: "invite"` when it enrolls a pending invitee.
+- Delivery: `complete()` enqueues both after sign-in. Refusals (signup closed, trial used, trials full) raise before anything is staged. Returning sign-ins and the losing side of simultaneous first sign-ins stage nothing.
+- `UserSignedUpPayload` gains `method: Literal["invite", "google"] = "invite"`. The default keeps queued rows valid. The invitation path (`PasswordResetTokenRepository.redeem`) now sends `"invite"` explicitly.
+- The handler sends `method`.
+- New `UserRepository.stage_user_signed_up(session, user_id, method)`, mirroring `OrganizationRepository.stage_organization_created`.
+- Known gap: Organizations inserted by migration `d72b85f19c40`'s backfill never emit `organization.created`.
+- Changed:
+  - `events/catalog.py`
+  - `users/repository.py`
+  - `auth/repository.py`
+  - `auth/google_sign_in.py` (gains `EventDeliveryDispatcher`)
+  - `analytics/event_handlers.py`
+  - `domain-events.md`, `product-analytics.md`, `identity-and-organizations.md`
+- Verified:
+  - New `test_google_signup_events.py`:
+    - both events with the right scopes, actors, payloads and handler
+    - both deliveries enqueued
+    - closed, used and full refusals record nothing
+    - an enrolled invitee gets `invite` and no `organization.created`
+    - a returning user records no second signup
+    - simultaneous first sign-ins record one of each
+  - New handler test (`method` is sent). `test_user_signed_up_event.py` now expects `method: "invite"`.
+  - 7 tests failed before the change.
+  - The sign-up, signed-up, Google login, handler and wiring suites pass (80).
+
+### 2026-10-15 — AF-374 — First Telegram message
+
+- Delivered: `telegram.first_message.received`, Organization-scoped and attributed to the link's issuing Member. It carries `agent_id` and `connection_id`, and never content, Telegram id or username. It is the trial funnel's "first message" step for the user.
+- How it fires: once per link. In the transaction that queues a linked user's new message, a conditional update sets `agentbarn_telegram_link.first_message_at` only while the link is active and the column is null, and stages the event only when that update changed the row.
+  - Edits, button presses and messages that reach no Agent don't count.
+  - A new link has its own first message.
+  - It is delivered by the outbox reconciler.
+- Migration `a78bcde4b918` adds the column and sets it to `created_at` for existing links, so their next message is not reported as a first.
+  - After merging staging with the onboarding redesign (`c61a94e72b30` → `d72b85f19c40`), it was re-pointed to `down_revision = "d72b85f19c40"`, and after the next staging merge to `down_revision = "877273bff59e"`, so there is a single head.
+- Changed:
+  - `communications/models.py`, `agentbarn_telegram_repository.py` (`queue_update` takes `first_message_link_id` and returns delivery ids), `agentbarn_telegram_processor.py`
+  - `events/catalog.py`, `analytics/event_handlers.py`
+  - the new migration
+  - `domain-events.md`, `product-analytics.md`, `communications/CHANGELOG.md`
+- Verified:
+  - New migration tests: existing links get `created_at`, upgrade and downgrade, and the model matches the schema.
+  - New processor tests:
+    - the first message is recorded once, as the linker
+    - each new link gets its own first message
+    - a message reaching no Agent records nothing
+  - New repository tests:
+    - no link id records nothing
+    - only the first queued message stages, and returns its ids
+    - simultaneous first messages record one
+    - an ended link records nothing
+  - Handler and wiring rows.
+  - All failed before the change.
+  - `make check-migrations` shows one head. The Telegram, ingest, handler, wiring and outbox suites pass (361). Ruff and ty are clean.
+
+### 2026-10-15 — AF-374 — Every Telegram unlink path
+
+- Delivered: every path that ends a Telegram link now stages `telegram.account.unlinked` in the same transaction, and only when a link actually ended. An already-ended link stages nothing.
+
+  | Reason | Where it comes from | Attributed to |
+  |---|---|---|
+  | `user_removed` | the web app's unlink (`DELETE …/telegram-links/{id}`) | the clicking user, via `resolve_actor_identity`; enqueued by the service |
+  | `blocked_bot` | the poller seeing `my_chat_member` "kicked", or the proxy getting Telegram's "bot was blocked by the user" | the link's issuing Membership |
+  | `access_lost` | the poller, forwarder or proxy finding that the linking Member lost `agent.update` | the link's issuing Membership |
+
+  The poller, forwarder and proxy paths rely on the outbox reconciler.
+- Not covered, and documented as known gaps:
+  - a Membership deletion cascading its links away
+  - links left active when their Connection is retired or their Agent deleted
+- Changed:
+  - `agentbarn_telegram_repository.py`:
+    - `unlink_in_scope` takes `actor` and returns delivery ids or `None`
+    - `end_active_link` and `end_link_for_connection` take `reason` and return delivery ids, through one `_end_link` that uses `UPDATE … RETURNING` of the whole link
+  - `agentbarn_telegram_service.py`, `_processor.py`, `_forwarder.py`, `_proxy.py`
+  - `domain-events.md`, `product-analytics.md`, `communications/CHANGELOG.md`
+- Verified:
+  - Event assertions added to the existing tests for each path:
+    - processor: blocked and lost access
+    - forwarder: lost access
+    - proxy: blocked and lost access
+    - link API: user removed, as the clicking Member
+  - New repository tests:
+    - both end methods record their reason as the linker, with no Telegram identity, and return the staged ids
+    - an already-ended link records nothing
+  - `test_agentbarn_telegram_links.py` and one forwarder call were updated for the new signatures.
+  - 11 tests failed before the change.
+  - All Telegram suites plus the handler, wiring and outbox suites pass (293). Ruff and ty are clean.
+
+### 2026-10-15 — AF-374 — Telegram link events
+
+- Delivered: new Organization-scoped Domain Events `telegram.account.linked` and `telegram.account.unlinked`, handled only by `product_analytics.posthog`.
+  - Sent properties: `agent_id`, `connection_id`, and `reason` on unlink.
+  - `link_id` stays in the payload and is not sent.
+  - The Telegram user id and username are never in either.
+- **Linked:** `AgentBarnTelegramRepository._consume` stages it in the transaction that spends the link token. The actor is the Membership that issued the token.
+- **Relinked:** the same transaction stages `unlinked` with `reason: "relinked"` for the link it ends. That link can be in another Organization, so the event uses the ended link's own Organization and linker; otherwise the registry would reject it and break linking.
+- **Delivery:** the delivery ids come back on `LinkTokenConsumption.delivery_ids`, and `AgentBarnTelegramService.consume_link_token` enqueues them after commit. This runs in the Communications process; the outbox reconciler covers anything not enqueued.
+- Changed:
+  - `events/catalog.py`
+  - `communications/agentbarn_telegram_repository.py` (gains `OutboxMessageRepository`)
+  - `communications/agentbarn_telegram_service.py` (gains `EventDeliveryDispatcher`)
+  - `analytics/event_handlers.py`
+  - `domain-events.md`, `product-analytics.md`, `rbac/IMPLEMENTATION-BRIEF.md`, `communications/CHANGELOG.md`
+- Verified:
+  - New `test_agentbarn_telegram_link_events.py`:
+    - the linked event's scope, actor, subject, payload, handler and returned delivery ids
+    - no Telegram id or username in any payload
+    - a replaced link gives `relinked`
+    - a link replaced from another Organization is recorded in its own Organization, by its own linker
+    - expired, unknown and used tokens record nothing
+    - racing first links record each link once
+    - the service enqueues the staged deliveries
+  - New handler test for both events, which never sends `link_id`, plus 2 wiring rows. The repository unit test now passes the new dependency.
+  - All failed before the change, because the events didn't exist.
+  - Every Telegram suite plus the handler, wiring and outbox suites pass (255). Ruff and ty are clean.
+
+### 2026-10-15 — AF-374 — Onboarding completion event
+
+- Delivered: new Domain Event `user.onboarding.completed` (payload `user_id`, User actor and subject), handled only by `product_analytics.posthog` with no extra properties.
+- How it fires: `POST /onboarding/complete` now goes through `UserRepository.complete_onboarding`. That sets `onboarding_completed_at` with a conditional update (only while null) and stages the event in the same transaction only when the row changed. A repeat or a simultaneous second call emits nothing.
+- Scope: the first Organization the user created (the trial, so it carries `is_trial`), otherwise the platform. The definition has no fixed scope.
+- Meaning: it records that onboarding was closed. After the onboarding redesign merges, that also covers skipping or deferring setup (user decision: no extra flags).
+- Changed:
+  - `events/catalog.py`
+  - `users/repository.py`, `users/service.py` (`complete_onboarding(user_id, organization_id)` enqueues the deliveries)
+  - `onboarding/service.py`
+  - `analytics/event_handlers.py`
+  - `domain-events.md`, `product-analytics.md`, `trial-onboarding.md`
+- Verified:
+  - New `test_onboarding_completed_event.py`:
+    - one event in the trial Organization with the right actor, payload and handler
+    - a repeat records nothing more
+    - a user who created no Organization gets a platform event
+    - simultaneous completions record one event
+  - New handler test: sent as the user with no extra fields, carrying `is_trial`.
+  - New wiring row.
+  - All of them failed before the change, because the event didn't exist.
+  - The onboarding, handler, wiring and outbox suites pass (100). Ruff and ty are clean.
+
+### 2026-10-15 — AF-374 — Google sign-in records a login
+
+- Delivered: `GoogleSignInService.complete` records `user.logged_in` with `method: "google"` after issuing the session. It does so only when the account already existed and was verified: one found by its Google id, or an existing verified account linked to Google by its address.
+- Not logins:
+  - a first sign-in that creates the account
+  - an invitee enrolled through Google
+  - the losing side of two simultaneous first sign-ins
+
+  The first two are sign-ups, which come in PR 3.
+- `AuthService._record_login` is now the public `record_login(user_id, method)`. Password login passes `"password"`, so its behaviour is unchanged. A failure to record is still logged and never fails the sign-in.
+- Changed: `auth/service.py`, `auth/google_sign_in.py` (`_sign_in` / `_find_or_create` return the user and whether they were returning), `domain-events.md` (User login events), `product-analytics.md` (`user.logged_in` row).
+- Verified:
+  - New `test_google_login_event.py`:
+    - a returning Google user records one `google` login with the right scope, actor, payload and handler
+    - a first sign-in records none
+    - linking a verified password account records one
+    - an enrolling invitee records none
+    - simultaneous first sign-ins are both "not returning"
+    - an outbox failure still signs in
+  - 3 of these tests failed before the change.
+  - `test_google_sign_in.py` now reads `.user` from `_sign_in`.
+  - The Google sign-in, Google login and password login suites pass (46). Ruff and ty are clean.
+
+### 2026-10-15 — AF-374 — Credit exhaustion reaches PostHog
+
+- Delivered: `organization.llm_budget.exhausted` now also lists `product_analytics.posthog`. `organization.llm_budget.threshold_reached` stays email-only.
+- The event's actor is the System budget-alert job, so the handler makes one exception to its human-actor rule:
+  - It is sent as the Organization's `created_by_user_id`, with the organization group, `is_trial`, and `limit_usd`.
+  - Spend, threshold, renewal time and the Organization name are not sent.
+  - An Organization that is gone, or that has no recorded creator, is skipped.
+- The handler now reads the Organization once per event, and uses it for both the creator and `is_trial`.
+- Changed: `events/catalog.py` (exhausted gets both handlers), `analytics/event_handlers.py`, `product-analytics.md` (attribution invariant, events table), `domain-events.md`, `costs.md`.
+- Verified:
+  - New handler tests:
+    - sent as the creator with the allowlisted fields only
+    - no creator is skipped
+    - a reached threshold is not sent
+  - New wiring rows: exhausted → email + analytics, threshold → email. Both are in the "every handler is registered" loop, with the email handler added to the test registry.
+  - 2 of these tests failed before the change.
+  - Handler, wiring, message-count, organization-event, `test_organization_llm.py` and `test_outbox_messages.py` suites pass (198). Ruff and ty are clean.
+
+### 2026-10-15 — AF-374 — Trial flag on Organization events
+
+- Delivered: every Organization-scoped capture carries `is_trial`, read from the Organization when the event is sent. An event whose Organization is gone carries none.
+- Delivered: the `organization` group gets `$group_set: {is_trial}` in a `$groupidentify`.
+  - Each worker process sends it once per Organization value, and again after the value changes.
+  - A failed send does not count.
+  - Its `uuid` is `uuid5(event_id, "organization")`.
+- Changed: `analytics/event_handlers.py` (reads the Organization through `OrganizationRepository`, with its own cache lock separate from the Installation naming lock), `product-analytics.md` (Trial flag invariant, data flow, common properties).
+- Verified:
+  - New handler tests:
+    - `is_trial` true and false
+    - the organization `$groupidentify` shape and its deterministic uuid
+    - sent once, and resent after a trial change
+    - resent after a failed send
+    - a deleted Organization sends no flag
+    - platform events carry neither
+  - Existing tests that assumed a fixed batch shape now select messages by `$group_type`.
+  - 8 of the new and updated tests failed before the change: 7 handler tests and the registry wiring test.
+  - Handler, wiring, message-count and organization-event suites pass (60). Ruff and ty are clean.
+- Known limit: ending a trial is not sent, so the group property updates with that Organization's next event.
 
 ### 2026-10-12 — AF-357 — Staging and local stacks report analytics
 

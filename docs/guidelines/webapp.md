@@ -8,6 +8,16 @@
 
 Read `../architecture/ui.md` before changing authentication, organization scoping, provider composition, query-cache isolation, or SSE behavior.
 
+## Dashboard page frame
+
+The dashboard shell frames every `/dashboard/**` page: its `<main>` carries the canonical
+width and margins (`.af-page`). A page MUST NOT set its own width, horizontal margins or
+page padding (no `af-page`, `max-w-[...] mx-auto`, `px-10 pt-9 pb-24` wrappers); it renders
+its content and the frame does the rest. A page that needs a different frame on desktop
+(edge to edge, or grown to the window's height) is named in `usePageFrame`
+(`../../ui/src/features/navigation/hooks/use-page-frame.ts`), which is the one place frames
+are chosen.
+
 ## Feature structure
 
 Use this baseline when the feature earns each part:

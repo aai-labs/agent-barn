@@ -39,7 +39,7 @@ Credentials are encrypted at rest in your own PostgreSQL.
 - [What ships in the box](#what-ships-in-the-box) — [agents](#agents), [skills](#skills), [runtimes](#runtimes)
 - [Capabilities](#capabilities)
 - [Development](#development) — [native](#native-non-docker-development), [k3d](#local-kubernetes-k3d), [migrations](#database-migrations), [tests](#tests-and-checks), [troubleshooting](#troubleshooting)
-- [Deploying to Kubernetes](#deploying-to-kubernetes) — [usage analytics](#usage-analytics), [connecting agent email](#connecting-agent-email-manual-step)
+- [Deploying to Kubernetes](#deploying-to-kubernetes) — [usage analytics](#usage-analytics), [connecting agent email](#connecting-agent-email-manual-step), [connecting OneDrive](#connecting-onedrive-manual-step)
 - [Repository layout](#repository-layout)
 - [Getting help and contributing](#getting-help-and-contributing)
 
@@ -249,7 +249,7 @@ Each template has a guided setup at
 Skills are what agents can actually do:
 
 Apollo · Bitbucket · Confluence · Excel · GitHub · Google Drive · HubSpot ·
-Jira · OpenPanel · Pipedrive · PostHog · Zoho Mail
+Jira · Merkys · OpenPanel · Pipedrive · PostHog · Zoho Mail
 
 Each mounts documentation into the agent's workspace and is gated on the
 credential its provider needs, so an agent only gets a skill once the matching
@@ -285,7 +285,7 @@ builders that turn an agent record into Kubernetes resources.
 | Templates and skills    | Versioned templates and skills, seeded on startup, forkable per organisation, with per-agent overrides; agents pin the skill version they run                                                                                                | [`features/templates-and-skills.md`](docs/features/templates-and-skills.md)             |
 | Activity                | Conversation history and a tool-call audit log per agent, pushed from the runtime to the ingest API                                                                                                                                          | [`features/activity-and-ingest.md`](docs/features/activity-and-ingest.md)               |
 | Costs                   | Per-agent and per-organisation token and spend attribution                                                                                                                                                                                   | [`features/costs.md`](docs/features/costs.md)                                           |
-| Identity and access     | Sign-up, login, logout, access + refresh tokens in an httpOnly cookie, password change and reset; organisations with fixed permission-backed roles, plus separate per-agent access roles and assignments                                     | [`features/identity-and-organizations.md`](docs/features/identity-and-organizations.md) |
+| Identity and access     | Sign-up and sign-in with Google into a trial organization, login, logout, access + refresh tokens in an httpOnly cookie, password change and reset; organisations with fixed permission-backed roles, plus separate per-agent access roles and assignments                                     | [`features/identity-and-organizations.md`](docs/features/identity-and-organizations.md) |
 | Platform administration | User and organisation management, platform statistics, and the Event Delivery Monitor                                                                                                                                                        | [`features/platform-administration/`](docs/features/platform-administration/)           |
 | Integrations            | Per-agent provider credentials, organisation-scoped shared credentials, Google OAuth for Google Workspace (Gmail, Calendar, Drive, Sheets)                                                                                                   | [`features/integrations.md`](docs/features/integrations.md)                             |
 | Domain events           | Transactional outbox, a Dramatiq worker, event handlers, and a security-audit projection                                                                                                                                                     | [`features/domain-events.md`](docs/features/domain-events.md)                           |
@@ -701,6 +701,36 @@ Do this once per environment, in this order:
 Full setup — the two separate Cloudflare onboardings, the environment variables
 and secrets, quota limits, and secret rotation — is in
 [`docs/guidelines/operations.md`](docs/guidelines/operations.md#per-agent-email-addresses).
+
+### Connecting OneDrive (manual step)
+
+Organizations can connect OneDrive from **Settings → Sync**, so Agent Barn keeps
+an "Agent Barn" folder in one of their SharePoint sites. It is optional and needs
+your own Microsoft app: until `ONEDRIVE_SYNC_CLIENT_ID` and
+`ONEDRIVE_SYNC_CLIENT_SECRET` are both set, Settings → Sync says "OneDrive is
+not configured for the platform." Do this once per install, in the Microsoft Entra
+admin center (needs the Application Administrator or Application Developer role):
+
+1. **App registrations → New registration.** Choose **Accounts in any
+   organizational directory (Multitenant)**. Single-tenant apps are refused,
+   because Agent Barn signs in through Microsoft's shared `organizations`
+   endpoint.
+2. **Redirect URI:** platform **Web**,
+   `<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback`.
+   Microsoft requires HTTPS unless the host is `localhost`.
+3. **API permissions → Microsoft Graph:** application `Sites.Selected`;
+   delegated `Sites.FullControl.All`, `Sites.Read.All`, `openid`, `profile`.
+4. **Certificates & secrets → New client secret.** Copy the value at once and
+   note its expiry; OneDrive connections stop working when it expires.
+5. Put the app's **Application (client) ID** and the secret in `.env.deploy` as
+   `ONEDRIVE_SYNC_CLIENT_ID` and `ONEDRIVE_SYNC_CLIENT_SECRET`, then redeploy.
+6. A Microsoft Global Administrator of each organization that connects approves
+   the app once (for your own organization: **API permissions → Grant admin
+   consent**). An Owner or Admin who is a SharePoint Administrator then clicks
+   **Connect** in Settings → Sync and picks a site.
+
+How connecting works, and its limits:
+[`docs/features/sync-provider/README.md`](docs/features/sync-provider/README.md).
 
 ## Repository layout
 

@@ -1,7 +1,10 @@
 "use client";
 
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useQueryState, parseAsString } from "nuqs";
+
+import { Skeleton } from "@/components/ui/skeleton";
 
 import type { Agent, ConversationChannel, ConversationMessage, ConversationThread } from "../schemas";
 import {
@@ -11,6 +14,10 @@ import {
 
 interface ConversationsTabProps {
   agent: Agent;
+}
+
+function useSelectedChannel() {
+  return useQueryState("channel", parseAsString.withOptions({ history: "replace", scroll: false }));
 }
 
 function channelLabel(ch: ConversationChannel): string {
@@ -24,17 +31,22 @@ function channelSelectionKey(channel: ConversationChannel): string {
   return `${channel.connectionId}:${channel.channelId}`;
 }
 
+/**
+ * Below the breakpoint a framed panel with its own channel list; on desktop the page's whole
+ * height, with the channels in the navigation panel beside it. The switch is CSS, so the
+ * open conversation stays mounted when the window crosses the breakpoint.
+ */
 export function ConversationsTab({ agent }: ConversationsTabProps) {
   const { channels, isLoading, error, refetch } = useConversationChannels(agent.id);
-  const [selectedChannel, setSelectedChannel] = useQueryState(
-    "channel",
-    parseAsString.withOptions({ history: "replace", scroll: false }),
-  );
+  const [selectedChannel, setSelectedChannel] = useSelectedChannel();
+  // On desktop the loading and empty states keep a margin; only the message panel runs
+  // edge to edge.
+  const inset = (node: ReactNode) => <div className="lg:p-6">{node}</div>;
 
-  if (isLoading) return <ConversationsSkeleton />;
+  if (isLoading) return inset(<ConversationsSkeleton />);
 
   if (error) {
-    return (
+    return inset(
       <div
         className="flex flex-col items-center justify-center text-center py-20 rounded-2xl"
         style={{ border: "1px dashed var(--line-strong)" }}
@@ -54,7 +66,7 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
   }
 
   if (channels.length === 0) {
-    return (
+    return inset(
       <div
         className="flex flex-col items-center justify-center text-center py-20 rounded-2xl"
         style={{ border: "1px dashed var(--line-strong)" }}
@@ -78,21 +90,102 @@ export function ConversationsTab({ agent }: ConversationsTabProps) {
 
   return (
     <div
-      className="flex rounded-2xl overflow-hidden"
-      style={{ border: "1px solid var(--line-strong)", height: "min(760px, 80vh)" }}
+      className="flex h-[min(760px,80vh)] overflow-hidden rounded-2xl border lg:h-full lg:rounded-none lg:border-0"
+      style={{ borderColor: "var(--line-strong)" }}
     >
-      <ConversationSidebar
-        channelConvos={channelConvos}
-        dmConvos={dmConvos}
-        activeChannelKey={channelSelectionKey(activeChannel)}
-        onSelect={setSelectedChannel}
-      />
+      <div className="contents lg:hidden">
+        <ConversationSidebar
+          channelConvos={channelConvos}
+          dmConvos={dmConvos}
+          activeChannelKey={channelSelectionKey(activeChannel)}
+          onSelect={setSelectedChannel}
+        />
+      </div>
       <MessagePanel
         key={channelSelectionKey(activeChannel)}
         agentId={agent.id}
         agentName={agent.name}
         channel={activeChannel}
       />
+    </div>
+  );
+}
+
+/**
+ * The Agent's conversation channels for the navigation panel. The selection lives in
+ * the URL, so it stays in step with the message panel beside it.
+ */
+export function ConversationChannelList({ agentId }: { agentId: string }) {
+  const { channels, isLoading } = useConversationChannels(agentId);
+  const [selectedChannel, setSelectedChannel] = useSelectedChannel();
+
+  // Rows the shape of the list, so the panel keeps its form while the channels arrive
+  // instead of emptying and then filling.
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-1.5 px-2.5 pt-4" aria-busy="true" aria-label="Loading conversations">
+        {[0, 1, 2].map((row) => (
+          <div key={row} className="py-1.5">
+            <Skeleton className="h-3.5 w-3/4" />
+            <Skeleton className="mt-1.5 h-3 w-1/2" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (channels.length === 0) {
+    return (
+      <p className="m-0 px-2.5 py-3 text-[0.8125rem]" style={{ color: "var(--ink-3)" }}>
+        No conversations yet.
+      </p>
+    );
+  }
+
+  // The message panel opens the first channel when none is chosen; mark that one.
+  const activeKey = channels.some((channel) => channelSelectionKey(channel) === selectedChannel)
+    ? selectedChannel
+    : channelSelectionKey(channels[0]);
+  const groups = [
+    { label: "Channels", items: channels.filter((c) => c.conversationType === "CHANNEL") },
+    { label: "Direct messages", items: channels.filter((c) => c.conversationType === "DM") },
+  ].filter((group) => group.items.length > 0);
+
+  return (
+    <div className="flex flex-col">
+      {groups.map((group) => (
+        <div key={group.label}>
+          <div
+            className="px-2.5 pb-1 pt-3.5 text-[10.5px] font-semibold uppercase tracking-[0.09em]"
+            style={{ color: "var(--ink-4)" }}
+          >
+            {group.label}
+          </div>
+          {group.items.map((channel) => {
+            const key = channelSelectionKey(channel);
+            const active = key === activeKey;
+            return (
+              <button
+                key={key}
+                type="button"
+                aria-current={active ? "true" : undefined}
+                onClick={() => void setSelectedChannel(key)}
+                className={`w-full rounded-lg px-2.5 py-2 text-left ${active ? "" : "af-hover-bg"}`}
+                style={{ background: active ? "var(--bg-soft)" : undefined }}
+              >
+                <span
+                  className="block truncate text-[13.5px]"
+                  style={{ color: "var(--ink)", fontWeight: active ? 600 : 500 }}
+                >
+                  {channelLabel(channel)}
+                </span>
+                <span className="block truncate text-[12px]" style={{ color: "var(--ink-4)" }}>
+                  {channel.connectionName}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }

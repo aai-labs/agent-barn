@@ -33,8 +33,11 @@ const ORG_SCOPED_QUERY_KEYS = new Set([
   "shared-credentials",
   "memory-grants",
   "organization-memory-items",
+  "playbook-extractions",
   "agent-webhooks",
   "webhook-invocations",
+  // Org-dimensioned, but evicted so returning to an org rereads current access.
+  "workflows",
 ]);
 
 type OrganizationContextValue = {

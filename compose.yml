@@ -217,6 +217,11 @@ services:
       - .env
     environment:
       <<: *api-env
+      # Playbook Extractions call models through the proxy over the compose network;
+      # .env's LITELLM_BASE_URL is host-facing, as for the api service above.
+      LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
+      # They also read the source Agent's long-term memories through the viewer.
+      MEMORY_VIEW_BASE_URL: ${MEMORY_VIEW_BASE_URL:-http://memory:8003/memory/view/v1}
     volumes:
       - ./api:/app/api
 
@@ -283,6 +288,9 @@ services:
       - .env
     environment:
       <<: *api-env
+      # Agent Barn Telegram forwards linked users' updates to the Agent's webhook in
+      # k3d, which this container cannot resolve; `make forward-telegram` bridges it.
+      AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL: ${AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL:-http://host.docker.internal:8443/telegram}
     volumes:
       - ./api:/app/api
     ports:

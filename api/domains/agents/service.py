@@ -24,8 +24,12 @@ from api.domains.agents.aai_cli_artifacts import (
 from api.domains.agents.aai_cli_skills import build_skills_manifest
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.agents.builders import (
+    HERMES_DEFAULT_MAX_TURNS,
     HERMES_WORKSPACE_DIR,
     OPENCLAW_WORKSPACE_DIR,
+    agentbarn_telegram_channel,
+    agentbarn_telegram_channel_env,
+    agentbarn_telegram_env,
     build_config_map,
     build_deployment,
     build_hermes_config_map,
@@ -47,7 +51,7 @@ from api.domains.agents.builders import (
     runtime_teams_env,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
-from api.domains.agents.exceptions import AgentProvisioningPrecondition
+from api.domains.agents.exceptions import AgentProvisioningPrecondition, TrialAgentLimitReached
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
     PROVIDER_DISPLAY_NAMES,
@@ -90,6 +94,7 @@ from api.domains.agents.models import (
     CommandApprovalMode,
     ConfluenceContent,
     FirecrawlContent,
+    GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
     ManagedUpdateOutcome,
@@ -125,18 +130,28 @@ from api.domains.agents.runtime_policy import (
 from api.domains.agents.selection import (
     SelectionValidator,
     ensure_approval_mode_supported,
+    ensure_max_turns_supported,
     ensure_verbose_mode_supported,
     is_model_allowed,
 )
 from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
 from api.domains.auth.models import CurrentUserContext
+from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
+from api.domains.communications.plugins.agentbarn_telegram import (
+    AgentBarnTelegramRuntime,
+    runtime_api_token,
+    runtime_webhook_secret,
+)
 from api.domains.communications.plugins.registry import PlatformPluginRegistry
 from api.domains.communications.repository import CommunicationConnectionRepository
 from api.domains.communications.transport import NATIVE_PLATFORM_KEYS
 from api.domains.conversations.repository import ConversationRepository
 from api.domains.credential_gateway.models import gateway_token_env_var
 from api.domains.credential_gateway.service import CredentialGatewayService
+from api.domains.custom_api.models import CustomApiConnection
+from api.domains.custom_api.repository import CustomApiRepository
+from api.domains.custom_api.runtime import connection_snapshot, materialize_custom_api
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.events.catalog import (
     AGENT_SECRET_ADDED,
@@ -152,6 +167,7 @@ from api.domains.integrations.runtime import (
     materialize_integrations,
     select_egress_mode,
 )
+from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.restore_points.constants import RESTORE_POINT_POD_TERMINATION_POLL_SECONDS
@@ -199,6 +215,10 @@ _CREDENTIAL_FIELDS = frozenset(
 
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
+
+# Google-backed providers whose credential may omit its OAuth client, in which case the
+# server-owned client is filled in at agent start and before live validation.
+_GOOGLE_OAUTH_PROVIDERS = (SecretProvider.GOOGLE_WORKSPACE, SecretProvider.GMAIL)
 
 RESTORE_POINT_IN_FLIGHT_DETAIL = (
     "A restore point capture or restore is still running for this Agent. Wait for it to finish."
@@ -317,9 +337,11 @@ class AgentService:
     shared_credential_repository: SharedCredentialRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
     organization_lookup: OrganizationLookupService
+    trial_settings: TrialSettingsService
     restore_points: RestorePointService
     agent_settings_lookup: AgentSettingsLookupService
     credential_gateway: CredentialGatewayService
+    custom_api: CustomApiRepository
     integrations: IntegrationRepository
     agent_budgets: AgentLlmBudgetService
     selection: SelectionValidator
@@ -327,6 +349,7 @@ class AgentService:
     conversation_repository: ConversationRepository
     activity_repository: ActivityRepository
     plugins: PlatformPluginRegistry
+    agentbarn_telegram_secrets: AgentBarnTelegramService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -367,6 +390,10 @@ class AgentService:
     @staticmethod
     def _ensure_verbose_mode_supported(agent_type: AgentType, verbose_mode: bool | None) -> None:
         ensure_verbose_mode_supported(agent_type, verbose_mode)
+
+    @staticmethod
+    def _ensure_max_turns_supported(agent_type: AgentType, max_turns: int | None) -> None:
+        ensure_max_turns_supported(agent_type, max_turns)
 
     @staticmethod
     def _build_skill_pointers(skills: list[Skill]) -> str:
@@ -609,6 +636,13 @@ class AgentService:
             # OpenClaw ignores verbose_mode for the same reason; report the
             # effective no-op default rather than a stored value.
             verbose_mode=agent.verbose_mode if agent.agent_type == AgentType.HERMES else False,
+            # Same for max_turns: only the Hermes builder reads it.
+            max_turns=agent.max_turns if agent.agent_type == AgentType.HERMES else None,
+            effective_max_turns=(
+                agent.max_turns
+                if agent.agent_type == AgentType.HERMES and agent.max_turns is not None
+                else HERMES_DEFAULT_MAX_TURNS
+            ),
             memory_enabled=agent.memory_enabled,
             last_error=_provisioning_error_read(agent),
             secrets=secrets_read,
@@ -824,6 +858,7 @@ class AgentService:
         self._ensure_model_allowed(data.model, org_id)
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
+        self._ensure_max_turns_supported(data.agent_type, data.max_turns)
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -834,6 +869,11 @@ class AgentService:
             missing_detail = f"Template {data.template_key} not found"
         if template is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=missing_detail)
+        # Checked again under a lock when the Agent is stored; checked here too so a
+        # refused create never allocates a LiteLLM key.
+        agent_limit = self.trial_settings.agent_limit() if self.organization_lookup.is_trial(org_id) else None
+        if agent_limit is not None and self.repository.count_active_by_org(org_id) >= agent_limit:
+            raise TrialAgentLimitReached(agent_limit)
 
         agent = Agent(
             organization_id=org_id,
@@ -843,6 +883,7 @@ class AgentService:
             agent_type=data.agent_type,
             approval_mode=data.approval_mode,
             verbose_mode=data.verbose_mode,
+            max_turns=data.max_turns,
         )
         self._set_pin(agent, template)
 
@@ -995,6 +1036,7 @@ class AgentService:
                 secrets=prepared_secrets,
                 skills=prepared_skills,
                 actor_display=secret_actor_display,
+                agent_limit=agent_limit,
             )
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
@@ -1737,6 +1779,9 @@ class AgentService:
         if "verbose_mode" in updated:
             self._ensure_verbose_mode_supported(agent.agent_type, updated["verbose_mode"])
 
+        if "max_turns" in updated:
+            self._ensure_max_turns_supported(agent.agent_type, updated["max_turns"])
+
         # Validate every requested skill pin before mutating the Agent, its
         # template pin, or any attached credential.
         current_skill_rows = self.repository.get_skills_for_agent(agent.id)
@@ -1779,6 +1824,10 @@ class AgentService:
 
         if "verbose_mode" in updated:
             agent.verbose_mode = updated["verbose_mode"]
+
+        if "max_turns" in updated:
+            # Nullable column: null is the Agent returning to the platform default.
+            agent.max_turns = updated["max_turns"]
 
         # Validate skill changes against the effective template's required skills
         if effective_template is None:
@@ -1998,6 +2047,31 @@ class AgentService:
         )
         return _NativeConnectionConfiguration(settings=connection.settings, credentials=credentials)
 
+    def _agentbarn_telegram_runtime(self, agent_id: UUID) -> AgentBarnTelegramRuntime | None:
+        """Runtime settings for an enabled Agent Barn Telegram Connection.
+
+        The runtime gets a stand-in token and the proxy's address; the shared
+        bot's real token is only ever sent to Telegram, by the Communications process.
+        """
+        bot_token = self.config.agentbarn_telegram_bot_token.strip()
+        if not bot_token or not self.config.agentbarn_telegram_bot_username.strip():
+            return None
+        connection = self.connection_repository.get_active_by_platform_key(agent_id, "agentbarn_telegram")
+        if connection is None or not connection.enabled:
+            return None
+        # Created on the Agent's first start with this Connection and kept after
+        # that, so a restarted pod presents the same credentials.
+        connection_secret = self.agentbarn_telegram_secrets.runtime_secret(connection.id, create=True)
+        assert connection_secret is not None
+        return AgentBarnTelegramRuntime(
+            api_root=f"{self.config.communications_base_url.rstrip('/')}/telegram/{connection.id}",
+            api_token=runtime_api_token(connection_secret, bot_token),
+            webhook_secret=runtime_webhook_secret(connection_secret),
+            webhook_url=self.config.agentbarn_telegram_runtime_webhook_url.format(
+                agent_id=agent_id, namespace=self.config.k8s_namespace
+            ),
+        )
+
     def _native_slack_connection(self, agent_id: UUID) -> tuple[dict, dict, ConversationLocation | None] | None:
         """The settings, credentials, and resolved home channel of a native Slack Connection."""
         connection = self._native_connection_configuration(agent_id, "slack")
@@ -2077,6 +2151,7 @@ class AgentService:
         *,
         preflight: bool = False,
         isolation_overrides: Mapping[SecretProvider, bool] | None = None,
+        custom_api_overrides: Mapping[UUID, CustomApiConnection | None] | None = None,
     ) -> str:
         """Build and create the Agent's Kubernetes resources. Returns its previous status."""
         agent_id = agent.id
@@ -2133,11 +2208,13 @@ class AgentService:
 
         runtime_api_key = secrets.token_urlsafe(32)
         runtime_teams = self._native_connection_configuration(agent.id, "teams")
+        agentbarn_telegram = self._agentbarn_telegram_runtime(agent.id)
         service = build_service(
             agent.id,
             org_id,
             ns,
             include_webhook_port=runtime_teams is not None,
+            include_telegram_webhook_port=agentbarn_telegram is not None,
             org_name=org_name,
             agent_name=agent.name,
         )
@@ -2158,7 +2235,9 @@ class AgentService:
                 telegram_settings=native_telegram.settings if native_telegram else None,
                 runtime_teams=runtime_teams is not None,
                 verbose_mode=agent.verbose_mode,
+                agentbarn_telegram=agentbarn_telegram,
                 memory_enabled=agent.memory_enabled,
+                max_turns=agent.max_turns,
             )
             secret = build_secret_hermes_runtime(
                 agent.id,
@@ -2179,6 +2258,8 @@ class AgentService:
                 secret.string_data.update(native_telegram_env(native_telegram.settings, native_telegram.credentials))
             if runtime_teams is not None:
                 secret.string_data.update(runtime_teams_env(runtime_teams.settings, runtime_teams.credentials))
+            if agentbarn_telegram is not None:
+                secret.string_data.update(agentbarn_telegram_env(agentbarn_telegram))
             deployment = build_hermes_deployment(
                 agent.id,
                 org_id,
@@ -2201,6 +2282,10 @@ class AgentService:
             if runtime_teams is not None:
                 native_credentials["msteams"] = runtime_teams.credentials
                 native_channels["msteams"] = runtime_teams_channel(runtime_teams.settings)
+            if agentbarn_telegram is not None:
+                # The runtime's Telegram channel, carried through Agent Barn's proxy.
+                native_credentials["telegram"] = {"bot_token": agentbarn_telegram.api_token}
+                native_channels["telegram"] = agentbarn_telegram_channel(agentbarn_telegram)
             overlay = build_openclaw_gateway_config(
                 effective_model, llm_proxy_url, native_channels, memory_enabled=agent.memory_enabled
             )
@@ -2215,6 +2300,8 @@ class AgentService:
             )
             if native_credentials:
                 secret.string_data.update(native_channel_env(native_credentials))
+            if agentbarn_telegram is not None:
+                secret.string_data.update(agentbarn_telegram_channel_env(agentbarn_telegram))
             deployment = build_deployment(
                 agent.id,
                 org_id,
@@ -2268,21 +2355,21 @@ class AgentService:
                     ),
                 ) from exc
         self._backfill_google_client_credentials(decrypted)
-        # Only google_workspace is materialized. The retired per-service Google providers
-        # and their rows were deleted by migration; affected agents must reconnect through
-        # Google Workspace.
-        gws_content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
-        if isinstance(gws_content, GoogleWorkspaceContent) and (
-            not gws_content.client_id or not gws_content.client_secret
-        ):
-            raise AgentProvisioningPrecondition(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"{PROVIDER_DISPLAY_NAMES[SecretProvider.GOOGLE_WORKSPACE]} is missing a client id/secret "
-                    "and Google OAuth is not configured on this server. Reconnect via "
-                    "Authenticate with Google, or configure google_cloud_client_id/secret."
-                ),
-            )
+        # A Google refresh token is useless without the client it was issued under: either
+        # the credential's own, or the server-owned one backfilled just above.
+        for google_provider in _GOOGLE_OAUTH_PROVIDERS:
+            google_content = decrypted.get(google_provider)
+            if isinstance(google_content, (GoogleWorkspaceContent, GmailContent)) and (
+                not google_content.client_id or not google_content.client_secret
+            ):
+                raise AgentProvisioningPrecondition(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"{PROVIDER_DISPLAY_NAMES[google_provider]} is missing a client id/secret "
+                        "and Google OAuth is not configured on this server. Reconnect via "
+                        "Authenticate with Google, or configure google_cloud_client_id/secret."
+                    ),
+                )
         policies = self.integrations.policies(agent.id)
         default_firecrawl = SecretProvider.FIRECRAWL not in decrypted and bool(
             self.config.agent_firecrawl_api_key and self.config.agent_firecrawl_base_url
@@ -2329,6 +2416,20 @@ class AgentService:
                 "isolated": policies[SecretProvider.FIRECRAWL],
                 "source": "platform_default",
             }
+        custom_connections = self.custom_api.runtime_connections(agent.id)
+        if custom_api_overrides:
+            by_id: dict[UUID, CustomApiConnection | None] = {row.id: row for row in custom_connections}
+            by_id.update(custom_api_overrides)
+            custom_connections = sorted((row for row in by_id.values() if row is not None), key=lambda row: row.slug)
+        snapshot.update(connection_snapshot(custom_connections))
+        custom_artifacts = materialize_custom_api(
+            custom_connections,
+            self.config.agent_token_encryption_key,
+            self.config.credential_gateway_base_url,
+            self.custom_api,
+            home_dir=aai_home,
+            store_dir=aai_store_dir,
+        )
         gateway_tokens = []
         if not preflight:
             runtime = self.integrations.begin(agent.id, snapshot)
@@ -2339,9 +2440,24 @@ class AgentService:
                 bindings,
                 replace(runtime_context, gateway_tokens={issued.provider: issued.value for issued in gateway_tokens}),
             )
+        if not preflight:
+            custom_artifacts = materialize_custom_api(
+                custom_connections,
+                self.config.agent_token_encryption_key,
+                self.config.credential_gateway_base_url,
+                self.custom_api,
+                runtime.generation,
+                home_dir=aai_home,
+                store_dir=aai_store_dir,
+            )
+        secret.string_data.update(custom_artifacts.env)
         secret.string_data.update(artifacts.env)
-        aai_config_toml = artifacts.files.get("aai-cli-config.toml")
-        aai_setup_sh = artifacts.files["aai-cli-setup.sh"]
+        aai_config_toml = artifacts.files.get("aai-cli-config.toml") or (
+            f'secrets_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/aai-secrets.enc.json"\n'
+            f'key_file = "{aai_store_dir or aai_home + "/.config/aai-cli"}/key"\n'
+        )
+        aai_config_toml += "\n" + custom_artifacts.files["custom-api-profiles.toml"]
+        aai_setup_sh = artifacts.files["aai-cli-setup.sh"] + custom_artifacts.files["custom-api-setup.sh"]
         gog_setup_sh = artifacts.files.get("gog-setup.sh")
         gog_shim_sh = artifacts.files.get("gog-shim.sh")
         fc_api_key = artifacts.env.get("FIRECRAWL_API_KEY", self.config.agent_firecrawl_api_key)
@@ -2452,7 +2568,9 @@ class AgentService:
             + build_local_tools_policy_md(s.name for s in mounted_skills)
             + build_file_delivery_policy_md(
                 # Native adapters attach MEDIA: files; gateway-owned Connections send text only.
-                workspace_dir if any(c is not None for c in (native_slack, native_discord, native_telegram)) else None
+                workspace_dir
+                if any(c is not None for c in (native_slack, native_discord, native_telegram, agentbarn_telegram))
+                else None
             )
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
@@ -2501,6 +2619,8 @@ class AgentService:
                 gog_shim_sh=gog_shim_sh,
                 skills_json=skills_json,
             )
+
+        config_map.data["AGENTS.md"] += custom_artifacts.policy_md
 
         if preflight:
             return previous_status
@@ -3159,17 +3279,18 @@ class AgentService:
         return options
 
     def _backfill_google_client_credentials(self, decrypted: dict[SecretProvider, Any]) -> None:
-        """Inject the server-owned OAuth client when a Google Workspace secret omits it.
+        """Inject the server-owned OAuth client when a Google-backed secret omits it.
 
         Backfill only when empty so a user-supplied client (the one the refresh token
         was issued under) keeps working.
         """
-        content = decrypted.get(SecretProvider.GOOGLE_WORKSPACE)
-        if isinstance(content, GoogleWorkspaceContent):
-            if not content.client_id:
-                content.client_id = self.config.google_cloud_client_id
-            if not content.client_secret:
-                content.client_secret = self.config.google_cloud_client_secret
+        for provider in _GOOGLE_OAUTH_PROVIDERS:
+            content = decrypted.get(provider)
+            if isinstance(content, (GoogleWorkspaceContent, GmailContent)):
+                if not content.client_id:
+                    content.client_id = self.config.google_cloud_client_id
+                if not content.client_secret:
+                    content.client_secret = self.config.google_cloud_client_secret
 
     def _refuse_forgetting_granted_sites(self, agent_id: UUID) -> None:
         """Removing SharePoint would forget sites still granted to the Teams app, which its next
@@ -3195,7 +3316,7 @@ class AgentService:
             return
 
         validation_content = content
-        if provider == SecretProvider.GOOGLE_WORKSPACE and isinstance(content, GoogleWorkspaceContent):
+        if provider in _GOOGLE_OAUTH_PROVIDERS and isinstance(content, (GoogleWorkspaceContent, GmailContent)):
             # The stored payload may intentionally omit the deployment-owned OAuth client;
             # validate with the same server-side backfill used during runtime materialization
             # without changing the caller's encrypted payload.

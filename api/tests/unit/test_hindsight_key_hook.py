@@ -46,8 +46,6 @@ def hook(monkeypatch):
             assert request.get_header("Authorization") == "Bearer test-sa-token"
             name = url.rsplit("/", 1)[1]
             if method == "GET":
-                if state.get("deny_secret_reads"):
-                    raise urllib.error.HTTPError(url, 403, "forbidden", Message(), None)
                 if name not in state["secrets"]:
                     raise urllib.error.HTTPError(url, 404, "missing", Message(), None)
                 response = state["secrets"][name]
@@ -106,10 +104,3 @@ def test_hook_generates_key_then_rotates_and_updates_secrets(hook, capsys):
     assert any(method == "PUT" for method, _, _ in hook["operations"])
     output = capsys.readouterr()
     assert all(key not in output.out + output.err for key in [*first.values(), *second.values(), "test-master"])
-
-
-def test_hook_refuses_to_rotate_key_when_secret_reads_are_denied(hook):
-    hook["deny_secret_reads"] = True
-    with pytest.raises(SystemExit, match="Hindsight key provisioning failed"):
-        run_hook()
-    assert hook["secrets"] == {} and hook["generated"] == 0

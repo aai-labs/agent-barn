@@ -7,6 +7,7 @@ import {
 } from "../pages/data-support/agent-data-support.po";
 import {
   mockCustomSkill,
+  mockGmailSkill,
   mockJiraSkill,
   mockSharePointSkill,
 } from "../pages/data-support/skill-data-support.po";
@@ -14,7 +15,7 @@ import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
 
 async function chooseTemplate(page: Page) {
-  await page.getByRole("combobox").nth(1).click();
+  await page.getByRole("combobox", { name: "Template", exact: true }).click();
   await page.getByRole("option", { name: "General Purpose · v1" }).click();
 }
 
@@ -38,7 +39,7 @@ test.describe("Hire Dialog", () => {
     await dataSupport.agents.interceptNameSuggestionRequest();
 
     await dashboardPage.goto();
-    await page.getByRole("button", { name: /hire agent/i }).click();
+    await dashboardPage.openHireCard();
   });
 
   test("hires a headless Agent without communication credentials", async ({ page }) => {
@@ -47,7 +48,7 @@ test.describe("Hire Dialog", () => {
     });
     await dataSupport.agents.interceptStartAgentRequest();
 
-    await expect(page.getByRole("heading", { name: "Hire a headless Agent" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Build your own agent" })).toBeVisible();
     await expect(
       page.getByText("Communication connections and integration credentials are configured independently after hiring."),
     ).toBeVisible();
@@ -87,13 +88,13 @@ test.describe("Hire Dialog", () => {
     await expect(page.getByRole("button", { name: "Hire Agent", exact: true })).toBeDisabled();
   });
 
-  test("updates the generated suffix for a different template", async ({ page }) => {
+  test("updates the generated suffix for a different template", async () => {
     await dataSupport.agents.interceptGetTemplatesRequest({ body: {
       page: 1, page_size: 50, total: 2,
       items: [mockTemplates[0], { ...mockTemplates[0], template_key: "reviewer", template_name: "PR Reviewer" }],
     } });
     await dashboardPage.goto();
-    await page.getByRole("button", { name: /hire agent/i }).click();
+    await dashboardPage.openHireCard();
     await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
     await dashboardPage.chooseHireTemplate("PR Reviewer · v1");
     await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the PR Reviewer");
@@ -104,7 +105,7 @@ test.describe("Hire Dialog", () => {
   test("allows manual naming when suggestion retrieval fails", async ({ page }) => {
     await dataSupport.agents.interceptNameSuggestionRequest({ status: 503 });
     await dashboardPage.goto();
-    await page.getByRole("button", { name: /hire agent/i }).click();
+    await dashboardPage.openHireCard();
     await expect(dashboardPage.nameSuggestionError()).toBeVisible();
     await dashboardPage.agentNameInput().fill("My assistant");
     await dashboardPage.chooseHireTemplate("General Purpose · v1");
@@ -115,13 +116,13 @@ test.describe("Hire Dialog", () => {
     await expect(dashboardPage.agentNameInput()).toHaveValue("My assistant");
   });
 
-  test("keeps an open suggestion stable and fetches a fresh one after cancellation", async ({ page }) => {
+  test("keeps an open suggestion stable and fetches a fresh one after cancellation", async () => {
     await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
     await dataSupport.agents.interceptNameSuggestionRequest({ firstName: "Benny" });
     await dashboardPage.chooseHireTemplate("General Purpose · v1");
     await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
     await dashboardPage.closeHireDialog();
-    await page.getByRole("button", { name: /hire agent/i }).click();
+    await dashboardPage.openHireCard();
     await expect(dashboardPage.agentNameInput()).toHaveValue("Benny the Assistant");
   });
 
@@ -154,7 +155,7 @@ test.describe("Hire Dialog", () => {
     // The dialog's initial template query is already cached by the dashboard;
     // reload so this test-specific template response is consumed.
     await dashboardPage.goto();
-    await page.getByRole("button", { name: /hire agent/i }).click();
+    await dashboardPage.openHireCard();
     await chooseTemplate(page);
     await expect(page.getByText("Template skills and credentials")).toBeVisible();
     await expect(page.getByText("jira", { exact: true })).toBeVisible();
@@ -209,7 +210,7 @@ test.describe("Hire Dialog", () => {
     });
 
     await dashboardPage.goto();
-    await page.getByRole("button", { name: /hire agent/i }).click();
+    await dashboardPage.openHireCard();
     await chooseTemplate(page);
 
     const requiredSection = page.getByRole("region", { name: "Required by template" });
@@ -218,6 +219,32 @@ test.describe("Hire Dialog", () => {
     await expect(requiredSection.getByText("my-tool", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Additional skills" })).toBeVisible();
     await expect(page.getByText("my-tool", { exact: true })).toBeVisible();
+  });
+
+  test("does not offer a skill that needs Gmail sign-in", async ({ page }) => {
+    const jiraRequiredSkill = {
+      id: mockJiraSkill.id,
+      name: mockJiraSkill.name,
+      source: mockJiraSkill.source,
+      required_providers: mockJiraSkill.requiredProviders,
+      tools_pointer: mockJiraSkill.toolsPointer,
+      required: true,
+      created_at: mockJiraSkill.createdAt,
+      updated_at: mockJiraSkill.updatedAt,
+      group_key: null,
+    };
+    await dataSupport.agents.interceptGetTemplatesRequest({
+      body: { page: 1, page_size: 50, total: 1, items: [{ ...mockTemplates[0], required_skills: [jiraRequiredSkill] }] },
+    });
+    await dataSupport.skills.interceptGetSkillsRequest({ body: [mockJiraSkill, mockCustomSkill, mockGmailSkill] });
+
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+    await chooseTemplate(page);
+
+    await expect(page.getByRole("heading", { name: "Additional skills" })).toBeVisible();
+    await expect(page.getByText("my-tool", { exact: true })).toBeVisible();
+    await expect(page.getByText(mockGmailSkill.name, { exact: true })).toHaveCount(0);
   });
 
   test("explains that a template requiring SharePoint can't be hired yet", async ({ page }) => {
@@ -243,7 +270,7 @@ test.describe("Hire Dialog", () => {
     await dataSupport.skills.interceptGetSkillsRequest({ body: [mockSharePointSkill] });
 
     await dashboardPage.goto();
-    await page.getByRole("button", { name: /hire agent/i }).click();
+    await dashboardPage.openHireCard();
     await chooseTemplate(page);
 
     await expect(page.getByText("needs the agent to exist first", { exact: false })).toBeVisible();
@@ -278,7 +305,7 @@ test.describe("Hire Dialog", () => {
     });
 
     await dashboardPage.goto();
-    await page.getByRole("button", { name: /hire agent/i }).click();
+    await dashboardPage.openHireCard();
     await chooseTemplate(page);
     await expect(page.getByText("Template skills and credentials")).toBeVisible();
 
@@ -301,11 +328,20 @@ test.describe("Hire Dialog", () => {
 
     // Pick a non-default approval mode while still on Hermes, then switch to
     // OpenClaw, to prove the stale value is dropped rather than sent along.
-    await page.getByRole("combobox").nth(2).click();
+    await page.getByRole("combobox", { name: "Command approval", exact: true }).click();
     await page.getByRole("option", { name: "Manual" }).click();
 
-    await page.getByRole("combobox").first().click();
-    await page.getByRole("option", { name: "OpenClaw" }).click();
+    const runtime = page.getByRole("radiogroup", { name: "Runtime" });
+    const hermes = runtime.getByRole("radio", { name: "Hermes", exact: true });
+    const openclaw = runtime.getByRole("radio", { name: "OpenClaw", exact: true });
+    await hermes.focus();
+    await hermes.press("ArrowRight");
+    await expect(openclaw).toBeChecked();
+    await expect(openclaw).toBeFocused();
+    await openclaw.press("ArrowLeft");
+    await expect(hermes).toBeChecked();
+    await expect(hermes).toBeFocused();
+    await hermes.press("ArrowRight");
     await chooseTemplate(page);
 
     const createRequest = page.waitForRequest(
@@ -323,13 +359,12 @@ test.describe("Hire Dialog", () => {
 
   test("shows Command approval only for the Hermes runtime", async ({ page }) => {
     await expect(page.getByText("Command approval", { exact: true })).toBeVisible();
-    await expect(page.getByRole("combobox")).toHaveCount(3);
+    await expect(page.getByRole("combobox")).toHaveCount(2);
 
-    await page.getByRole("combobox").first().click();
-    await page.getByRole("option", { name: "OpenClaw" }).click();
+    await page.getByRole("radiogroup", { name: "Runtime" }).getByRole("radio", { name: "OpenClaw", exact: true }).click();
 
     await expect(page.getByText("Command approval", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("combobox")).toHaveCount(2);
+    await expect(page.getByRole("combobox")).toHaveCount(1);
   });
 
   test("keeps hire disabled until a template is selected", async ({ page }) => {
@@ -472,7 +507,7 @@ test.describe("Hire Dialog", () => {
       // The dialog's initial template query is already cached by the dashboard;
       // reload so this test-specific template response is consumed.
       await dashboardPage.goto();
-      await page.getByRole("button", { name: /hire agent/i }).click();
+      await dashboardPage.openHireCard();
       await chooseTemplate(page);
       await expect(page.getByText("Template skills and credentials")).toBeVisible();
       await expect(page.getByText("jira", { exact: true })).toBeVisible();

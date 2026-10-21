@@ -146,6 +146,10 @@ export const AgentSchema = z.object({
   lastManagedUpdate: AgentManagedUpdateSchema.nullish(),
   approvalMode: z.enum(["manual", "auto", "off"]).default("auto"),
   verboseMode: z.boolean().default(false),
+  /** The Agent's own Hermes turn limit; null follows the platform default. */
+  maxTurns: z.number().int().nullable().default(null),
+  /** The limit a run actually gets: the Agent's own, or the platform default. */
+  effectiveMaxTurns: z.number().int().default(0),
   memoryEnabled: z.boolean().default(false),
   lastError: AgentProvisioningErrorSchema.nullish(),
   secrets: z.array(AgentSecretReadSchema).optional(),
@@ -491,6 +495,8 @@ export const RestorePointConfigManifestSchema = z.object({
   effectiveModel: z.string().default(""),
   approvalMode: z.string().default(""),
   verboseMode: z.boolean().default(false),
+  /** Absent on manifests recorded before the turn limit existed; kept undefined so a diff can say so. */
+  maxTurns: z.number().int().nullable().optional(),
   skills: z.array(RestorePointSkillSchema).default([]),
 });
 

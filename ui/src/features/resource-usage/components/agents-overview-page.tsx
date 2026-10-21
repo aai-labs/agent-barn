@@ -43,7 +43,7 @@ export function AgentsOverviewPage() {
   const { overview, isLoadingOverview, error, refetch } = useAgentsOverview(period);
 
   return (
-    <div className="af-page" data-testid="agents-overview-page">
+    <div data-testid="agents-overview-page">
       <div className="mb-7 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1

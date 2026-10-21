@@ -32,6 +32,18 @@ _Avoid_: budget, allowance, quota, cap
 The most an Organization may spend on model calls in one renewal period, set by a Platform Administrator. Every Organization has one, starting at the deployment default. The Organization may set a lower Model Spend Limit of its own, never a higher one, and lowering the ceiling beneath that limit pulls it down.
 _Avoid_: allowance, plan limit, platform budget
 
+**Trial Organization**:
+The one Organization a self-signed-up user gets; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A Platform Administrator ends the trial, choosing the spend limit it goes on to, after which it is an ordinary Organization.
+_Avoid_: free plan, trial account, demo org
+
+**Trial Credit**:
+The one-off Model Spend Limit a new Trial Organization starts with, set by Platform Administrators for trials created afterwards. When it is spent the trial's Agent stops; it never renews.
+_Avoid_: free credits, balance, allowance
+
+**Trial Onboarding**:
+The steps a self-signed-up user goes through after their first sign-in: their Agent is set up and started, they link Telegram to it, and they finish. Returning users who finished go straight to the dashboard.
+_Avoid_: signup wizard, setup flow
+
 **Spend Limit Coverage**:
 Whether an Organization's Agents are actually bound by its Model Spend Limit. An Agent issued a key before the Organization had one is not covered until it is enrolled, so a limit set over uncovered Agents would silently miss them.
 _Avoid_: enrolment status, team membership
@@ -151,6 +163,14 @@ _Avoid_: runtime
 **Communication Connection**:
 An Agent-owned configured relationship to one bot, application, account, or endpoint on a Platform. An Agent may have one active Communication Connection per Platform; retired Connections preserve history and may be replaced.
 _Avoid_: channel, integration, platform config
+
+**Agent Barn Telegram**:
+The Platform through which Agents use one Telegram bot owned by Agent Barn and shared by every Organization, instead of a bot the Organization brings to the `telegram` Platform. Its Connections hold no credentials. People reach an Agent on it only after Telegram Account Linking, and only in private chats.
+_Avoid_: shared Telegram, Agent Barn bot Connection
+
+**Telegram Account Linking**:
+Tying one person's Telegram account to one Agent's Agent Barn Telegram Connection, by opening a single-use link that a Member with `agent.update` issued and pressing Start. The link acts on that Member's authority and ends when they lose it. A Telegram account is linked to at most one Agent at a time; linking another ends the previous link, and that Agent keeps its own messages and files in the chat.
+_Avoid_: pairing, Telegram login
 
 **Agent Webhook**:
 An Agent-owned HTTP endpoint through which an authenticated external system submits discrete work to that Agent. It is not a Platform or Communication Connection.
@@ -276,6 +296,18 @@ _Avoid_: version pruning, archive, soft-delete
 An explicit action that copies a newer direct source Skill Version into a fork. With no Draft it publishes immediately; with a Draft it replaces the Draft and leaves it unpublished. It never repins existing consumers automatically.
 _Avoid_: automatic merge, live sync
 
+**Playbook**:
+An Organization Skill whose content was produced by a Playbook Extraction from one source Agent's work and then reviewed by a person. It is published, assigned, and required like any other Organization Skill; nothing about it is installed automatically.
+_Avoid_: training, compiled config, template
+
+**Playbook Extraction**:
+One recorded run that reads a source Agent's Conversation Messages, Tool Calls, and long-term memories over a time window, asks a model for the recurring practices they show, and writes the result into an Organization Skill Draft for review. It is billed to the source Agent's model key and never publishes.
+_Avoid_: training job, sync, import
+
+**Organization Conventions**:
+Rules every Agent in an Organization should follow whatever its role, such as time zones, approval before changes, and message format. A Playbook Extraction proposes them; people review them and add them to a marked section of Organization Templates' AGENTS.md. They are not a Skill.
+_Avoid_: playbook, org prompt, global instructions
+
 **Agent Secret**:
 An encrypted, provider-specific credential payload assigned to one agent so its runtime can access an external service. May hold its own encrypted content or reference a Shared Credential.
 _Avoid_: skill, application secret
@@ -291,6 +323,14 @@ _Avoid_: credential
 **Credential Isolation Policy**:
 The Agent-specific choice of whether a tool Integration keeps long-lived provider credentials outside its runtime. It is independent of credential ownership; Agents sharing a Shared Credential can choose independently. New bindings default OFF, and running changes require explicit application and restart. See [Integrations](docs/features/integrations.md#optional-credential-isolation) for routing, applied generations and recovery.
 _Avoid_: encryption toggle, Shared Credential setting
+
+**Sync Provider**:
+A storage service an Organization can connect so Agent Barn keeps an "Agent Barn" folder there, implemented as a Sync Provider Plugin. OneDrive is the first. See [Sync providers](docs/features/sync-provider/README.md).
+_Avoid_: storage integration, Platform
+
+**Sync Provider Connection**:
+An Organization's connection to one Sync Provider: for OneDrive, one SharePoint site through the platform Microsoft app. An Organization has at most one open (pending or active) connection across all providers. It is not an Integration: no Agent is given access to it.
+_Avoid_: OneDrive integration, SharePoint integration, OneDrive Sync Connection
 
 **Conversation Message**:
 An inbound or outbound chat message ingested from an agent runtime and associated with a channel, direct message, session, and optional thread.
@@ -371,6 +411,8 @@ _Avoid_: webhook
 - An **Agent** belongs to one **Organization**, has one original **Agent Creator**, pins one active shared **Template Version** or **Agent Template Override Version**, uses one **Runtime**, and owns zero or more **Communication Connections** and **Agent Webhooks**.
 - Each **Communication Connection** belongs to one **Agent**, targets one **Platform**, and is interpreted by that Platform's **Platform Plugin**.
 - A **Communication Connection** on a mailbox-addressed **Platform** holds at most one active **Agent Email Address**.
+- An **Agent** holds at most one non-retired Telegram-type **Communication Connection**, on `telegram` or **Agent Barn Telegram** but not both, because a Runtime runs one Telegram adapter. A disabled Connection still counts; it must be removed before the Agent can take the other type.
+- A Telegram account has at most one active **Telegram Account Linking** to an **Agent Barn Telegram** Connection, and each link records the Membership that issued it.
 - Each **Agent Webhook** belongs to one **Agent** and owns zero or more **Webhook Invocations**.
 - Each **Webhook Invocation** may submit one **Agent Trigger Job** per dispatch generation.
 - An **Agent** has one current **Configured Model** and may have **Observed Model Usage** for multiple models over time.
@@ -378,6 +420,7 @@ _Avoid_: webhook
 - An **Agent** has one **Agent General Access** setting whose Permissions combine with (never subtract from) explicit Agent Access grants.
 - An **Agent** has zero or more **Agent Restore Points**, each capturing its persistent volume at one instant. They exist only after the Agent has run at least once, and they are destroyed when the Agent is deleted.
 - A **Template Version** may require multiple immutable **Skill Versions**.
+- A **Playbook Extraction** reads one source **Agent** and writes into one **Organization Skill**'s **Skill Draft**; a **Playbook** may be refreshed by later extractions from the same or other Agents.
 - A **Platform Skill** has no owner; an **Organization Skill** belongs to one Organization; an **Agent Skill** belongs to one Agent and retains its Organization for tenant isolation.
 - An **Agent** can see Platform Skills, its Organization's Skills, and its own Agent Skills, but never another Agent's private Skills. Agent assignments and Template requirements pin exact Skill Versions.
 - A custom **Skill Lineage** can be hard-deleted from its owning Platform, Organization, or Agent scope only when no Agent pins any of its versions and no Template, Override, or fork-source reference remains; the delete cascades the lineage's own Drafts, Versions, and files.
@@ -400,3 +443,14 @@ _Avoid_: webhook
 - “Integration” is sometimes used for both the external service and its credential. Use **Integration** for the service and **Agent Secret** for the stored credential payload.
 - “Owner” names both an Organization Role and a default Agent Access Role. Use **Organization Owner** for tenant governance and **Agent Owner** for full authority over one Agent.
 - “Restore” names two unrelated actions. **Template Restore** seeds a Draft Template Version from an earlier published version and is additive — it never destroys anything. Restoring an **Agent Restore Point** replaces an Agent's volume contents in place and is destructive. Always qualify which one is meant; never write “restore” unqualified.
+
+**Workflow**:
+An Agent-owned repeatable plan, explicitly saved before execution. Its ordered
+steps describe goals, required inputs, completion criteria and preserved outputs.
+See [Agent workflows](docs/features/agent-workflows.md).
+_Avoid_: Agent Skill, native scheduled job
+
+**Workflow Version**:
+An immutable saved snapshot of a Workflow. Editing and saving appends a new
+version; a future run pins the version it starts with.
+_Avoid_: mutable draft, runtime session

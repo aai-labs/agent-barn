@@ -72,7 +72,7 @@ export function UsersGrid() {
   });
 
   return (
-    <div className="af-page">
+    <div>
       <ListPageHeader
         title="Users"
         description="Platform view of all users."

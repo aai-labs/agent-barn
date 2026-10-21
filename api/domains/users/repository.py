@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from injector import inject, singleton
-from sqlalchemy import or_
+from sqlalchemy import func, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -11,6 +11,8 @@ from api.domains.events.catalog import (
     EVENT_REGISTRY,
     PLATFORM_USER_PRIVILEGE_GRANTED,
     PLATFORM_USER_PRIVILEGE_REVOKED,
+    USER_ONBOARDING_COMPLETED,
+    USER_SIGNED_UP,
 )
 from api.domains.events.models import (
     ActorIdentity,
@@ -33,6 +35,9 @@ from api.domains.users.organization_users.models import (
 )
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.shared.models import PaginatedItems, Pagination
+
+INVITE_SIGNUP_METHOD = "invite"
+GOOGLE_SIGNUP_METHOD = "google"
 
 
 @dataclass(frozen=True)
@@ -232,8 +237,61 @@ class UserRepository:
                 delivery_ids=delivery_ids,
             )
 
+    def stage_user_signed_up(self, session: Session, user_id: UUID, method: str) -> list[UUID]:
+        event = EVENT_REGISTRY.build_event(
+            event_name=USER_SIGNED_UP,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=None,
+            actor=ActorIdentity(type=ActorIdentityType.USER, id=user_id),
+            subject=SubjectIdentity(type=SubjectIdentityType.USER, id=user_id),
+            correlation_id=uuid4(),
+            payload={"user_id": user_id, "method": method},
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return self.outbox_repository.delivery_ids_for_event(session, event.event_id)
+
+    def complete_onboarding(self, user_id: UUID, organization_id: UUID | None) -> list[UUID]:
+        with Session(self.delegate.engine) as session:
+            completed = session.exec(
+                update(User)
+                .where(col(User.id) == user_id, col(User.onboarding_completed_at).is_(None))
+                .values(onboarding_completed_at=datetime.now(UTC))
+                .returning(col(User.id))
+            ).first()  # type: ignore[call-overload]
+            if completed is None:
+                return []
+            event = EVENT_REGISTRY.build_event(
+                event_name=USER_ONBOARDING_COMPLETED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                event_scope=EventScope.ORGANIZATION if organization_id is not None else EventScope.PLATFORM,
+                organization_id=organization_id,
+                actor=ActorIdentity(type=ActorIdentityType.USER, id=user_id),
+                subject=SubjectIdentity(type=SubjectIdentityType.USER, id=user_id),
+                correlation_id=uuid4(),
+                payload={"user_id": user_id},
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = self.outbox_repository.delivery_ids_for_event(session, event.event_id)
+            session.commit()
+            return delivery_ids
+
     def get_by_email_with_session(self, email: str, session: Session) -> User | None:
         return session.exec(select(User).where(col(User.email) == email)).first()
+
+    def get_by_google_sub_for_update(self, google_sub: str, session: Session) -> User | None:
+        return session.exec(select(User).where(col(User.google_sub) == google_sub).with_for_update()).first()
+
+    def get_by_email_ignoring_case_for_update(self, email: str, session: Session) -> User | None:
+        """A Google address and the one an account was created with can differ only in
+        case; both name the same mailbox."""
+        return session.exec(
+            select(User)
+            .where(func.lower(col(User.email)) == email.lower())
+            .order_by(col(User.created_at))
+            .with_for_update()
+        ).first()
 
     def save_with_session(self, user: User, session: Session) -> User:
         email = user.email

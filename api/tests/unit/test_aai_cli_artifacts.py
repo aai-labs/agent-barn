@@ -18,13 +18,22 @@ from api.domains.agents.models import (
     ApolloContent,
     ConfluenceContent,
     FirecrawlContent,
+    GmailContent,
     JiraContent,
+    MerkysContent,
     PipedriveContent,
     SecretProvider,
     SharePointContent,
     validate_content,
 )
-from api.domains.integrations.plugins.providers import ApolloPlugin, ConfluencePlugin, JiraPlugin, PipedrivePlugin
+from api.domains.integrations.plugins.providers import (
+    ApolloPlugin,
+    ConfluencePlugin,
+    GmailPlugin,
+    JiraPlugin,
+    MerkysPlugin,
+    PipedrivePlugin,
+)
 
 _GITHUB = validate_content(
     SecretProvider.GITHUB,
@@ -64,6 +73,10 @@ _PIPEDRIVE_WITH_DOMAIN = cast(
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
 )
 _APOLLO = cast(ApolloContent, validate_content(SecretProvider.APOLLO, {"api_token": "apollo_key"}))
+_MERKYS = cast(
+    MerkysContent,
+    validate_content(SecretProvider.MERKYS, {"base_url": "https://merkys.aai-labs.com", "api_key": "cb_merkys_key"}),
+)
 
 _SHAREPOINT = cast(
     SharePointContent,
@@ -148,6 +161,7 @@ def test_config_toml_gateway_github_uses_existing_aai_cli_contract():
         (SecretProvider.CONFLUENCE, _CONFLUENCE, "site_url"),
         (SecretProvider.BITBUCKET, _BITBUCKET, "base_url"),
         (SecretProvider.PIPEDRIVE, _PIPEDRIVE, "base_url"),
+        (SecretProvider.MERKYS, _MERKYS, "base_url"),
     ],
 )
 def test_config_toml_gateway_http_provider_uses_existing_bearer_contract(provider, content, endpoint_field):
@@ -169,6 +183,7 @@ def test_store_excludes_every_gateway_aai_cli_provider():
         SecretProvider.CONFLUENCE: _CONFLUENCE,
         SecretProvider.BITBUCKET: _BITBUCKET,
         SecretProvider.PIPEDRIVE: _PIPEDRIVE,
+        SecretProvider.MERKYS: _MERKYS,
     }
 
     assert store_providers_for(decrypted) == {}
@@ -233,6 +248,86 @@ def test_apollo_direct_profile_uses_api_key():
     assert "apollo_key" not in toml
 
 
+def test_merkys_direct_profile_sends_the_key_in_a_header_to_the_saved_url():
+    toml = MerkysPlugin().aai_cli_profile_block(_MERKYS)
+    assert "[profiles.merkys-work]" in toml
+    assert 'provider = "merkys"' in toml
+    assert 'auth_type = "api_key_header"' in toml
+    assert 'base_url = "https://merkys.aai-labs.com"' in toml
+    assert 'api_token_secret = "merkys.api_key"' in toml
+    assert "cb_merkys_key" not in toml
+
+
+def test_merkys_direct_profile_is_valid_aai_cli_config():
+    import tomllib
+
+    profile = tomllib.loads(MerkysPlugin().aai_cli_profile_block(_MERKYS))["profiles"]["merkys-work"]
+    assert profile == {
+        "provider": "merkys",
+        "auth_type": "api_key_header",
+        "base_url": "https://merkys.aai-labs.com",
+        "api_token_secret": "merkys.api_key",
+    }
+
+
+_GMAIL = cast(
+    GmailContent,
+    validate_content(
+        SecretProvider.GMAIL,
+        {
+            "email": "alice@example.com",
+            "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            "refresh_token": "gmail_rt",
+            "client_id": "client.apps.googleusercontent.com",
+            "client_secret": "gmail_cs",
+        },
+    ),
+)
+
+
+def test_gmail_profile_refreshes_through_the_secret_store():
+    toml = GmailPlugin().aai_cli_profile_block(_GMAIL)
+    assert "[profiles.gmail-work]" in toml
+    assert 'provider = "google"' in toml
+    assert 'auth_type = "bearer_token"' in toml
+    assert 'client_id = "client.apps.googleusercontent.com"' in toml
+    assert 'client_secret_secret = "google.gmail_client_secret"' in toml
+    assert 'refresh_token_secret = "google.gmail_refresh_token"' in toml
+    assert 'user_id = "me"' in toml
+    # Only references go in the mounted config; the values ride in the pod Secret.
+    assert "gmail_rt" not in toml
+    assert "gmail_cs" not in toml
+
+
+def test_setup_sh_gmail_stores_client_secret_and_refresh_token():
+    setup = build_setup_sh([SecretProvider.GMAIL])
+    assert (
+        f"printf '%s' \"$AAI_SECRET_GOOGLE_GMAIL_CLIENT_SECRET\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_client_secret" in setup
+    )
+    assert (
+        f"printf '%s' \"$AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set google.gmail_refresh_token" in setup
+    )
+
+
+def test_build_env_gmail_emits_client_secret_and_refresh_token():
+    assert build_env({SecretProvider.GMAIL: _GMAIL}) == {
+        "AAI_SECRET_GOOGLE_GMAIL_CLIENT_SECRET": "gmail_cs",
+        "AAI_SECRET_GOOGLE_GMAIL_REFRESH_TOKEN": "gmail_rt",
+    }
+
+
+def test_gmail_context_and_policy_name_the_account_and_read_only_access():
+    context = build_tool_context_md({SecretProvider.GMAIL: _GMAIL})
+    assert "- **Gmail** (`gmail-work`): signed in as alice@example.com (read-only)" in context
+    policy = build_integrations_policy_md({SecretProvider.GMAIL: _GMAIL})
+    assert "- **Gmail**: `--profile gmail-work`" in policy
+    assert "read-only" in policy
+    assert "aai-gmail" in policy
+    assert "gmail_rt" not in context + policy
+
+
 def test_setup_sh_cp_always_and_secrets_set_per_store_provider():
     setup = build_setup_sh([SecretProvider.JIRA, SecretProvider.GITHUB])
     assert f"cp /app/config/aai-cli-config.toml {CONFIG_PATH}" in setup
@@ -250,6 +345,20 @@ def test_setup_sh_pipedrive_sets_secret():
         f"printf '%s' \"$AAI_SECRET_PIPEDRIVE_API_TOKEN\" | "
         f"aai-cli --config {CONFIG_PATH} secrets set pipedrive.api_token" in setup
     )
+
+
+def test_setup_sh_merkys_sets_secret():
+    setup = build_setup_sh([SecretProvider.MERKYS])
+    assert (
+        f"printf '%s' \"$AAI_SECRET_MERKYS_API_KEY\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set merkys.api_key" in setup
+    )
+
+
+def test_build_env_carries_the_merkys_key_for_the_store():
+    from api.domains.agents.aai_cli_artifacts import build_env
+
+    assert build_env({SecretProvider.MERKYS: _MERKYS}) == {"AAI_SECRET_MERKYS_API_KEY": "cb_merkys_key"}
 
 
 def test_setup_sh_apollo_sets_secret():
@@ -358,6 +467,12 @@ def test_tool_context_md_lists_pipedrive():
 def test_tool_context_md_lists_apollo():
     md = build_tool_context_md({SecretProvider.APOLLO: _APOLLO})
     assert "- **Apollo** (`apollo-work`)" in md
+
+
+def test_tool_context_md_lists_merkys_with_its_url():
+    md = build_tool_context_md({SecretProvider.MERKYS: _MERKYS})
+    assert "- **Merkys** (`merkys-work`): https://merkys.aai-labs.com" in md
+    assert "cb_merkys_key" not in md
 
 
 def test_tool_context_md_never_leaks_tokens():
@@ -540,6 +655,14 @@ def test_integrations_policy_md_apollo_names_profile_and_access_limits():
     assert "endpoints chosen when it was created" in md
     assert "paid Apollo plan" in md
     assert "apollo_key" not in md
+
+
+def test_integrations_policy_md_merkys_names_profile_and_whose_access_it_has():
+    md = build_integrations_policy_md({SecretProvider.MERKYS: _MERKYS})
+    assert "- **Merkys**: `--profile merkys-work` — ask questions" in md
+    # The agent must not read an empty list or a 403 as "no such data" or "Merkys is down".
+    assert "API key's owner" in md
+    assert "cb_merkys_key" not in md
 
 
 def test_profile_slugs_are_single_source_of_truth_for_jira():

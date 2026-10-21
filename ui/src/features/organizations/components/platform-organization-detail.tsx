@@ -19,6 +19,7 @@ import { usePlatformOrganization } from "../hooks/use-platform-organization";
 import { usePlatformOrganizationMembers } from "../hooks/use-platform-organization-members";
 import type { PlatformOrganizationMember } from "../schemas";
 import { LlmBudgetCard } from "./llm-budget-card";
+import { TrialCard } from "./trial-card";
 import { organizationInitials } from "./organization-detail-utils";
 
 function initialsOf(member: PlatformOrganizationMember) {
@@ -52,7 +53,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
 
   if (isLoading) {
     return (
-      <div className="af-page">
+      <div>
         <div
           className="flex items-center gap-2 py-10 text-[13.5px]"
           style={{ color: "var(--ink-3)" }}
@@ -65,7 +66,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
 
   if (error) {
     return (
-      <div className="af-page">
+      <div>
         <AppErrorState
           error={error}
           title="We couldn't load this organization"
@@ -80,7 +81,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
 
   if (!organization) {
     return (
-      <div className="af-page">
+      <div>
         <div className="text-[14px]" style={{ color: "var(--ink-3)" }}>
           Organization not found.
         </div>
@@ -89,7 +90,7 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
   }
 
   return (
-    <div className="af-page">
+    <div>
       <Link
         href="/dashboard/platform/organizations"
         className="inline-flex items-center gap-1 text-[13px] mb-4"
@@ -144,6 +145,8 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
       </div>
 
       <LlmBudgetCard organization={organization} />
+
+      <TrialCard organization={organization} />
 
       <div style={{ borderTop: "1px solid var(--line)" }} className="pt-8">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">

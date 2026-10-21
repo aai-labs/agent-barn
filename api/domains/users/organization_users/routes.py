@@ -56,8 +56,8 @@ def add_member(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[OrganizationUserService, Injected(OrganizationUserService)],
 ):
-    member, invite_link = service.add_member(context, organization_id, data)
-    return MemberInviteResult(member=member, invite_link=invite_link)
+    member, _emailed_link = service.add_member(context, organization_id, data)
+    return MemberInviteResult(member=member)
 
 
 @member_router.patch("/{organization_id}/members/{user_id}", response_model=OrganizationMemberRead)
@@ -109,5 +109,5 @@ def resend_invite(
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[OrganizationUserService, Injected(OrganizationUserService)],
 ):
-    invite_link = service.resend_invite(context, organization_id, user_id)
-    return InviteLinkResult(invite_link=invite_link)
+    service.resend_invite(context, organization_id, user_id)
+    return InviteLinkResult()

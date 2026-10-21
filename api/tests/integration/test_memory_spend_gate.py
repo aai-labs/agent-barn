@@ -168,3 +168,38 @@ def test_capped_organizations_require_the_attribution_key_configuration():
         with then("the gateway refuses to spend against incomplete attribution"):
             assert_that(response.status_code, equal_to(503))
             assert_that(context.backend_requests, equal_to([]))
+
+
+@pytest.mark.parametrize("endpoint", ["memories", "reflect"])
+def test_a_one_off_limit_with_credit_left_forwards_memory_operations(endpoint):
+    """Trial credit never renews, so there is no renewal date to anchor a window on: the
+    whole of the Organization's life is the window."""
+    with given(
+        _setup(memory_budget_is_present(runtime_spend=4, llm_budget_duration="once", llm_budget_renews_at=None))
+    ) as context:
+        with when("a trial Agent uses memory with credit left"):
+            response = _post(context, endpoint)
+        with then("the request reaches Hindsight"):
+            assert_that(response.status_code, equal_to(200))
+            assert_that(context.backend_requests, has_length(1))
+
+
+@pytest.mark.parametrize("endpoint", ["memories", "reflect"])
+def test_a_spent_one_off_limit_blocks_memory_operations(endpoint):
+    with given(
+        _setup(
+            memory_budget_is_present(
+                runtime_spend=4,
+                memory_spend="6",
+                llm_budget_duration="once",
+                llm_budget_renews_at=None,
+                # Memory spent since the trial began counts, however long ago that was.
+                created_at=datetime.now(UTC) - timedelta(days=40),
+            )
+        )
+    ) as context:
+        with when("a trial Agent has spent its credit, counting memory"):
+            response = _post(context, endpoint)
+        with then("the gateway rejects it"):
+            assert_that(response.status_code, equal_to(429))
+            assert_that(context.backend_requests, equal_to([]))

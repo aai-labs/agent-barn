@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { GoogleOAuthResult } from "../hooks/use-google-oauth";
 import { isOAuthConnected, type IntegrationDraft, type IntegrationProvider } from "../integrations";
@@ -42,6 +42,18 @@ export function IntegrationFields({
   disabled?: boolean;
 }) {
   const [visible, setVisible] = useState<Record<string, boolean>>({});
+
+  // A fixed field shows its value but the draft is what gets submitted, so put it there.
+  // Skipped for credentials that are saved already or taken from a shared credential,
+  // whose content is not sent.
+  useEffect(() => {
+    if (draft.existing || draft.sharedCredentialId) return;
+    for (const field of provider.fields) {
+      if (field.fixedValue !== undefined && draft.content[field.key] !== field.fixedValue) {
+        onFieldChange(field.key, field.fixedValue);
+      }
+    }
+  }, [provider, draft.existing, draft.sharedCredentialId, draft.content, onFieldChange]);
 
   // Scopes are derived from these fields at consent time, so they must be filled in
   // before the popup opens — hence fields render above the button, and the button is
@@ -149,6 +161,21 @@ export function IntegrationFields({
       );
     }
 
+    if (field.fixedValue !== undefined) {
+      return (
+        <FormField key={field.key} label={field.label} hint={field.hint}>
+          <input
+            className="af-input"
+            value={field.fixedValue}
+            readOnly
+            aria-readonly="true"
+            style={{ color: "var(--ink-2)", cursor: "default" }}
+            autoComplete="off"
+          />
+        </FormField>
+      );
+    }
+
     return (
       <FormField key={field.key} label={label} hint={field.hint}>
         <input
@@ -191,7 +218,8 @@ export function IntegrationFields({
           connectedNote={provider.oauthConnectedNote}
           connectedEmail={connectedEmail || undefined}
           authorizeParams={authorizeParams}
-          requireEmail={needsServices}
+          // Every Google credential is stored with the account it signed in as.
+          requireEmail
         />
       )}
     </>

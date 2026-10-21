@@ -83,6 +83,8 @@ def _check_egress_seam(plugin: IntegrationPlugin) -> None:
         raise ValueError(
             f"Integration Plugin {plugin.key!r} is {plugin.egress_mode.value} but never overrides mint_upstream_token"
         )
+    elif plugin.egress_mode == EgressMode.GATEWAY_SERVED and not _overrides(plugin, "serve"):
+        raise ValueError(f"Integration Plugin {plugin.key!r} is {plugin.egress_mode.value} but never overrides serve")
 
 
 def _overrides(plugin: IntegrationPlugin, method: str) -> bool:

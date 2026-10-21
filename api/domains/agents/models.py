@@ -1,8 +1,10 @@
 import enum
+import ipaddress
 import json
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Self
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -13,7 +15,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Index
 from sqlmodel import Field as SqlField
 
-from api.domains.agents.google_workspace_scopes import required_service_scopes
+from api.domains.agents.google_workspace_scopes import GMAIL_READONLY_SCOPE, required_service_scopes
 from api.domains.agents.provisioning_errors import AgentProvisioningErrorCategory
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.users.organization_users.models import OrganizationRole
@@ -57,6 +59,12 @@ class ManagedUpdateOutcome(str, enum.Enum):
     ROLLBACK_FAILED = "ROLLBACK_FAILED"
 
 
+# Bounds for an Agent's own Hermes turn limit. The lower bound keeps a run able to
+# answer at all; the upper one keeps a runaway run inside one spend-limit window.
+MAX_TURNS_MIN = 1
+MAX_TURNS_MAX = 500
+
+
 class CommandApprovalMode(str, enum.Enum):
     MANUAL = "manual"
     AUTO = "auto"
@@ -91,6 +99,9 @@ class SecretProvider(str, enum.Enum):
     GOOGLE_WORKSPACE = "google_workspace"
     SHAREPOINT = "sharepoint"
     APOLLO = "apollo"
+    MERKYS = "merkys"
+    GMAIL = "gmail"
+    GMAIL_APP_PASSWORD = "gmail_app_password"
 
 
 # Google services a google_workspace credential may cover, as named by the gog CLI.
@@ -109,6 +120,9 @@ PROVIDER_DISPLAY_NAMES: dict[SecretProvider, str] = {
     SecretProvider.GOOGLE_WORKSPACE: "Google Workspace credential",
     SecretProvider.SHAREPOINT: "SharePoint credential",
     SecretProvider.APOLLO: "Apollo credential",
+    SecretProvider.MERKYS: "Merkys credential",
+    SecretProvider.GMAIL: "Gmail credential",
+    SecretProvider.GMAIL_APP_PASSWORD: "Gmail app password",
 }
 
 
@@ -209,6 +223,28 @@ class GoogleWorkspaceContent(SecretContent):
             raise ValueError(
                 "scopes do not cover the selected Google services at the configured access level: " + ", ".join(missing)
             )
+        return self
+
+
+class GmailContent(SecretContent):
+    """Credential for aai-cli's Gmail profile: one read-only Gmail grant.
+
+    Separate from Google Workspace: it covers Gmail alone, is always read-only, and is
+    reached through aai-cli rather than gog. ``scopes`` records what Google granted.
+    ``client_id``/``client_secret`` are optional: empty means the server-owned client
+    is backfilled from config at agent-start time, which is the one-click path.
+    """
+
+    email: str = Field(min_length=1)
+    scopes: list[str] = Field(default_factory=list)
+    refresh_token: str
+    client_id: str = ""
+    client_secret: str = ""
+
+    @model_validator(mode="after")
+    def _validate_granted_scopes(self) -> Self:
+        if self.scopes and GMAIL_READONLY_SCOPE not in self.scopes:
+            raise ValueError(f"scopes do not include read-only Gmail access ({GMAIL_READONLY_SCOPE})")
         return self
 
 
@@ -315,6 +351,88 @@ class ApolloContent(SecretContent):
     api_token: str = Field(min_length=1)
 
 
+class MerkysContent(SecretContent):
+    # Unlike Apollo, Merkys has no single public host: each deployment (cloud or on-prem)
+    # has its own, so the origin is part of the credential. It is reduced to a bare https
+    # origin because the API server, the agent's aai-cli and the credential gateway all
+    # send the key there; a path, userinfo or query would let a pasted URL move it.
+    base_url: str
+    api_key: str = Field(min_length=1)
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value.strip())
+        try:
+            port = parsed.port
+        except ValueError:
+            raise ValueError("base_url has an invalid port") from None
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("base_url must be an https origin such as https://merkys.example.com")
+        host = parsed.hostname.lower()
+        # A typo guard, not SSRF protection: a hostname or a short or decimal IP form can still
+        # resolve to these addresses. The validator limits what a probe can learn instead.
+        if host == "localhost" or host.endswith(".localhost"):
+            raise ValueError("base_url must not point at localhost")
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            address = None  # a DNS name
+        if address is not None:
+            # Private ranges stay allowed: an on-prem Merkys is often reached over a VPN.
+            if address.is_loopback or address.is_link_local or address.is_unspecified:
+                raise ValueError("base_url must not be a loopback or link-local address")
+            host = f"[{host}]" if address.version == 6 else host
+        return f"https://{host}" + (f":{port}" if port else "")
+
+    @field_validator("api_key")
+    @classmethod
+    def _validate_api_key(cls, value: str) -> str:
+        key = value.strip()
+        if not key or any(ch.isspace() for ch in key):
+            raise ValueError("api_key must not be empty or contain whitespace")
+        return key
+
+
+class GmailAppPasswordContent(SecretContent):
+    """A Gmail address and Google app password, read over IMAP by the credential gateway.
+
+    An app password cannot be limited to reading, so it never enters the agent pod: the
+    gateway signs in on the agent's behalf and only opens the mailbox read-only. There is
+    no host field, so the password can only ever be sent to Gmail.
+    """
+
+    email: str = Field(min_length=3)
+    app_password: str = Field(min_length=1)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _trim_email(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("email")
+    @classmethod
+    def _require_address(cls, value: str) -> str:
+        local, _, domain = value.partition("@")
+        if not local or "." not in domain:
+            raise ValueError("email must be an email address")
+        return value
+
+    @field_validator("app_password", mode="before")
+    @classmethod
+    def _drop_display_spaces(cls, value: object) -> object:
+        # Google displays the password in groups of four; the spaces are not part of it.
+        return "".join(value.split()) if isinstance(value, str) else value
+
+
 PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GITHUB: GithubContent,
     SecretProvider.JIRA: JiraContent,
@@ -325,6 +443,9 @@ PROVIDER_CONTENT_MODELS: dict[SecretProvider, type[SecretContent]] = {
     SecretProvider.GOOGLE_WORKSPACE: GoogleWorkspaceContent,
     SecretProvider.SHAREPOINT: SharePointContent,
     SecretProvider.APOLLO: ApolloContent,
+    SecretProvider.MERKYS: MerkysContent,
+    SecretProvider.GMAIL: GmailContent,
+    SecretProvider.GMAIL_APP_PASSWORD: GmailAppPasswordContent,
 }
 
 
@@ -482,6 +603,10 @@ class Agent(BaseModel, table=True):
         default=False,
         sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    # How many turns one Hermes run may take before the runtime stops it. NULL
+    # follows the platform default (builders/hermes.py). Hermes-only, like
+    # verbose_mode: OpenClaw has no equivalent runtime setting.
+    max_turns: int | None = SqlField(default=None, nullable=True)
     # Opt-in Agent Memory. Turning it off stops recall and retain but keeps stored memories.
     memory_enabled: bool = SqlField(
         default=False,
@@ -1015,6 +1140,8 @@ class AgentCreate(PydanticBaseModel):
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
     approval_mode: CommandApprovalMode = CommandApprovalMode.AUTO
     verbose_mode: bool = False
+    # None follows the platform default; see AgentRead.effective_max_turns.
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:
@@ -1047,6 +1174,9 @@ class AgentUpdate(PydanticBaseModel):
     removed_secret_providers: list[SecretProvider] | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
+    # Unset leaves the limit alone; an explicit null returns the Agent to the
+    # platform default, as `model: null` does for the model.
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
     @model_validator(mode="before")
     @classmethod
@@ -1204,12 +1334,13 @@ class AgentTemplateSelection(PydanticBaseModel):
     removed_skill_ids: list[UUID] = Field(default_factory=list)
     skill_versions: list[SkillVersionPin] = Field(default_factory=list)
 
-    # Unset means "leave as it is"; a null model clears the override, as in AgentUpdate.
+    # Unset means "leave as it is"; a null model or max_turns clears the override, as in AgentUpdate.
     model: str | None = None
     approval_mode: CommandApprovalMode | None = None
     verbose_mode: bool | None = None
+    max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
 
-    # These columns are not nullable; only `model` gives null a meaning.
+    # These columns are not nullable; only `model` and `max_turns` give null a meaning.
     @model_validator(mode="before")
     @classmethod
     def reject_null_approval_mode(cls, values: object) -> object:
@@ -1459,6 +1590,10 @@ class AgentRead(PydanticBaseModel):
     native_platform_keys: list[str] = Field(default_factory=list)
     approval_mode: CommandApprovalMode
     verbose_mode: bool
+    #: The Agent's own turn limit; null when it follows the platform default.
+    max_turns: int | None = None
+    #: The limit a Hermes run actually gets: the Agent's own, or the platform default.
+    effective_max_turns: int
     memory_enabled: bool = False
     last_error: AgentProvisioningErrorRead | None = None
     allowed_actions: list[PermissionKey] = Field(default_factory=list)

@@ -11,8 +11,9 @@ export class AgentConfigurationPage {
     return this.page.getByRole("heading", { name: "Profile", exact: true });
   }
 
-  sectionButton(name: string): Locator {
-    return this.page.getByRole("button", { name, exact: true });
+  /** A settings section in the navigation panel beside the page. */
+  sectionLink(name: string): Locator {
+    return this.page.getByRole("complementary").getByRole("link", { name, exact: true });
   }
 
   startDraftButton(): Locator {

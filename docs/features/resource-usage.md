@@ -11,7 +11,7 @@ Resource usage answers how much CPU and memory an Agent's container is using, ag
 Three surfaces show it:
 
 - The **Resource usage** tab on the Agent page: current figures, peak memory, CPU throttling, and charts over 1 hour to 14 days.
-- The **Agents overview** at `/dashboard/{org}/agents`, reached from the **Usage** tab in the top nav: every Agent the viewer can read, with status, spend, CPU and memory in the row. A row opens to status, cost and resource usage in full, each linking to its own tab.
+- The **Agents overview** at `/dashboard/{org}/agents`, reached from **Usage** on the navigation rail: every Agent the viewer can read, with status, spend, CPU and memory in the row. A row opens to status, cost and resource usage in full, each linking to its own tab.
 - The **Platform Resource Usage** page at `/dashboard/platform/resource-usage`, for Platform Administrators: the same figures across every Organization, as totals, a table by Organization, the heaviest Agents, and two charts. It can be narrowed to one Organization.
 
 The data path has no table of its own:
@@ -131,7 +131,7 @@ Local Docker Compose has no Prometheus, so the views say resource usage is not c
 | API settings                     | `../../api/core/config.py` (`prometheus_*`), `../../helm/agentbarn-api/values.yaml` (`prometheus`), `../../helmfile.yaml.gotmpl` |
 | Local Prometheus                 | `../../docker/k3d/k3d-monitoring.sh`, `../../docker/k3d/monitoring-values.yaml`, `make dev-monitoring`, `make forward-prometheus` |
 | UI feature                       | `../../ui/src/features/resource-usage/` (capacity: `components/capacity-section.tsx`, `components/capacity-limits-dialog.tsx`; opened rows: `components/platform-agent-details.tsx`, shared panels in `components/agent-detail-panels.tsx`) |
-| UI page and tab wiring           | `../../ui/src/app/dashboard/[orgId]/agents/page.tsx`, `../../ui/src/app/dashboard/platform/resource-usage/page.tsx`, `../../ui/src/features/agents/components/agent-detail-page.tsx`, `../../ui/src/components/top-nav.tsx` |
+| UI page and tab wiring           | `../../ui/src/app/dashboard/[orgId]/agents/page.tsx`, `../../ui/src/app/dashboard/platform/resource-usage/page.tsx`, `../../ui/src/features/agents/components/agent-detail-page.tsx`, `../../ui/src/features/navigation/hooks/use-rail-model.ts` |
 | Script tests                     | `../../api/tests/unit/test_healthz_server_metrics.py` (both runtimes, parity), `../../hermes-base/test-image.sh`, `../../openclaw-base/test-healthz-metrics.sh` (real images) |
 | API tests                        | `../../api/tests/unit/test_prometheus_client.py`, `../../api/tests/unit/test_resource_usage_queries.py`, `../../api/tests/unit/test_platform_resource_usage.py`, `../../api/tests/integration/test_resource_usage.py`, `../../api/tests/integration/test_agent_overview.py`, `../../api/tests/integration/test_platform_resource_usage.py`, `../../api/tests/integration/test_resource_limits.py`, `../../api/tests/integration/test_agent_rbac.py` |
 | Contract test (real Prometheus)  | `../../api/tests/integration/test_resource_usage_prometheus_contract.py` |

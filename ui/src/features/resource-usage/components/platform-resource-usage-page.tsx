@@ -65,7 +65,7 @@ export function PlatformResourceUsagePage() {
   };
 
   return (
-    <div className="af-page" data-testid="platform-resource-usage-page">
+    <div data-testid="platform-resource-usage-page">
       <div className="mb-7 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="m-0 mb-1 text-[28px] font-semibold tracking-tight" style={{ color: "var(--ink)" }}>

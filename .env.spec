@@ -56,11 +56,32 @@ ANALYTICS_ENABLED=true
 AGENT_EMAIL_DOMAIN=
 EMAIL_INBOUND_SECRET=
 
+# Optional: Agent Barn's own Telegram bot, shared by every Organization. Unset hides
+# the Agent Barn Telegram platform; bring-your-own Telegram is unaffected. Create the
+# bot with @BotFather and use a separate bot per environment. Both are required.
+AGENTBARN_TELEGRAM_BOT_TOKEN=
+AGENTBARN_TELEGRAM_BOT_USERNAME=
+# Optional. Where the Communications process delivers linked users' messages to an
+# Agent's Telegram webhook; defaults to the Agent's in-cluster Service on port 8443.
+AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL=
+# Optional. Calls per second Agents may make through the shared bot, in total
+# (default 25, under Telegram's limit of about 30) and per Organization (default 5).
+AGENTBARN_TELEGRAM_BOT_RATE_PER_SECOND=
+AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND=
+
 # Optional: shared Google OAuth 2.0 "Web application" client for the Gmail
 # "Authenticate with Google" flow. If unset, the flow is disabled. Register
 # "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
+
+# Optional: multi-tenant Microsoft Entra app for Organization OneDrive sync. If
+# unset, OneDrive sync is unavailable. Register
+# "<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback" as a Web redirect URI
+# (Microsoft requires HTTPS unless the host is localhost). Permissions: application
+# Sites.Selected; delegated Sites.FullControl.All, Sites.Read.All, openid, profile.
+ONEDRIVE_SYNC_CLIENT_ID=
+ONEDRIVE_SYNC_CLIENT_SECRET=
 
 # Kubernetes client
 # Path to kubeconfig file. If unset, tries in-cluster auth then ~/.kube/config.
@@ -125,6 +146,9 @@ ORGANIZATION_DEFAULT_LLM_BUDGET_USD=
 AGENT_DEFAULT_LLM_BUDGET_USD=
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
+# WF01 authoring gate. Saving never enables workflow execution.
+# Initial default; a saved Platform Settings → Workflows choice overrides this.
+WORKFLOW_AUTHORING_ENABLED=false
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —
 # the public catalogue endpoint works unauthenticated.
 OPENROUTER_API_KEY=

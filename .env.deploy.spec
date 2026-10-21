@@ -109,12 +109,22 @@ API_HOST=api.agentbarn.local
 UI_HOST=agentbarn.local
 WEB_APP_URL=http://agentbarn.local
 
-# ── Gmail OAuth (AF-153) ─────────────────────────────────────────────────────
-# Shared Google OAuth 2.0 "Web application" client for the Gmail "Authenticate
-# with Google" flow. Leave blank to disable. Register
-# "<WEB_APP_URL>/api/v1/integrations/google/callback" as an authorized redirect URI.
+# ── Google OAuth (AF-153, AF-368) ────────────────────────────────────────────
+# Shared Google OAuth 2.0 "Web application" client for "Sign in with Google" and
+# the Gmail "Authenticate with Google" flow. Leave blank to disable both. Register
+# both "<WEB_APP_URL>/api/v1/auth/google/callback" and
+# "<WEB_APP_URL>/api/v1/integrations/google/callback" as authorized redirect URIs.
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
+
+# ── OneDrive sync ───────────────────────────────────────────────────
+# Multi-tenant Microsoft Entra app for Organization OneDrive sync. Leave blank to
+# disable. Register "<WEB_APP_URL>/api/v1/integrations/sync-provider/onedrive/callback" as a
+# Web redirect URI (Microsoft requires HTTPS unless the host is localhost).
+# Permissions: application Sites.Selected; delegated Sites.FullControl.All,
+# Sites.Read.All, openid, profile.
+ONEDRIVE_SYNC_CLIENT_ID=
+ONEDRIVE_SYNC_CLIENT_SECRET=
 
 # ── Ingress TLS ──────────────────────────────────────────────────────────────
 # cert-manager ClusterIssuer that signs the api/ui ingress certs. cert-manager
@@ -154,6 +164,11 @@ POSTGRES_FIRECRAWL_DB=firecrawl
 # Comma-separated fnmatch globs limiting OpenRouter models, e.g. z-ai/glm-5.2,openai/gpt-5*
 # Empty offers the full catalogue.
 AGENT_MODEL_ALLOWLIST=
+# Optional: Agent Barn's own Telegram bot for this environment. The token is a GitHub
+# secret (STAGING_/PUBLIC_ variants per environment), the username a variable. Unset
+# hides the Agent Barn Telegram platform. Never reuse one bot across environments.
+AGENTBARN_TELEGRAM_BOT_TOKEN=
+AGENTBARN_TELEGRAM_BOT_USERNAME=
 # Default model. Format: litellm/openrouter/<slug>
 # e.g. litellm/openrouter/z-ai/glm-5.2. Empty uses the API's built-in default.
 AGENT_DEFAULT_MODEL=

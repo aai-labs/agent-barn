@@ -34,7 +34,7 @@ def _binding(provider: SecretProvider, isolated: bool) -> RuntimeBinding:
     return RuntimeBinding(provider, credential_for(provider), select_egress_mode(provider, isolated=isolated))
 
 
-@pytest.mark.parametrize("provider", list(SecretProvider))
+@pytest.mark.parametrize("provider", [p for p in SecretProvider if ISOLATION_CAPABILITIES[p].supports_direct])
 def test_direct_mode_materializes_provider_credentials_only_in_secret_environment(provider):
     artifacts = materialize_integrations([_binding(provider, False)], _CONTEXT)
     assert_that(json.dumps(artifacts.env), contains_string(f"{provider.value}-provider-secret"))
@@ -157,3 +157,71 @@ def test_empty_bindings_retain_persistent_sharepoint_cleanup_without_credentials
         artifacts.files["aai-cli-setup.sh"], contains_string("secrets remove microsoft.sharepoint_refresh_token")
     )
     assert_that("aai-cli-config.toml" in artifacts.files, is_(False))
+
+
+def _merkys_binding(base_url: str, isolated: bool) -> RuntimeBinding:
+    from api.domains.agents.models import MerkysContent
+
+    return RuntimeBinding(
+        SecretProvider.MERKYS,
+        MerkysContent(base_url=base_url, api_key="cb_onprem_key"),
+        select_egress_mode(SecretProvider.MERKYS, isolated=isolated),
+    )
+
+
+def test_on_prem_merkys_materializes_directly_with_the_key_header_and_store_secret():
+    artifacts = materialize_integrations([_merkys_binding("https://merkys.customer.example", False)], _CONTEXT)
+
+    profile = tomllib.loads(artifacts.files["aai-cli-config.toml"])["profiles"]["merkys-work"]
+    assert_that(profile["auth_type"], equal_to("api_key_header"))
+    assert_that(profile["base_url"], equal_to("https://merkys.customer.example"))
+    assert_that(artifacts.env["AAI_SECRET_MERKYS_API_KEY"], equal_to("cb_onprem_key"))
+    assert_that(artifacts.files["aai-cli-setup.sh"], contains_string("secrets set merkys.api_key"))
+    assert_that(json.dumps(artifacts.files), is_not(contains_string("cb_onprem_key")))
+
+
+def test_on_prem_merkys_cannot_be_switched_to_isolated():
+    with pytest.raises(ValueError):
+        materialize_integrations([_merkys_binding("https://merkys.customer.example", True)], _CONTEXT)
+
+
+def test_hosted_merkys_isolated_profile_points_at_the_gateway_and_holds_no_key():
+    artifacts = materialize_integrations([_merkys_binding("https://merkys.aai-labs.com", True)], _CONTEXT)
+
+    profile = tomllib.loads(artifacts.files["aai-cli-config.toml"])["profiles"]["merkys-work"]
+    assert_that(profile["base_url"], equal_to("http://credential-gateway:8003/gateway/v1/p/merkys"))
+    assert_that(profile["token_env"], equal_to(gateway_token_env_var(SecretProvider.MERKYS)))
+    assert_that("AAI_SECRET_MERKYS_API_KEY" in artifacts.env, is_(False))
+    assert_that(json.dumps({"env": artifacts.env, "files": artifacts.files}), is_not(contains_string("cb_onprem_key")))
+
+
+# --- Gmail app password: the gateway reads mail; the pod gets an aai-cli profile and a gateway token ---
+
+
+def _gmail_app_password_artifacts():
+    return materialize_integrations([_binding(SecretProvider.GMAIL_APP_PASSWORD, True)], _CONTEXT)
+
+
+def test_gmail_app_password_gives_the_pod_only_its_gateway_token_and_an_aai_cli_profile():
+    artifacts = _gmail_app_password_artifacts()
+    token = gateway_token_env_var(SecretProvider.GMAIL_APP_PASSWORD)
+    assert_that(
+        artifacts.env, equal_to({token: "gateway-gmail_app_password", "AF_GATEWAY_URL": _CONTEXT.gateway_base_url})
+    )
+    assert_that(set(artifacts.files), equal_to({"aai-cli-setup.sh", "aai-cli-config.toml"}))
+    config = artifacts.files["aai-cli-config.toml"]
+    assert_that(config, contains_string('provider = "custom_api"'))
+    assert_that(config, contains_string(f'gateway_url = "{_CONTEXT.gateway_base_url.rstrip("/")}/served/request"'))
+    assert_that(config, contains_string(f'gateway_token_env = "{token}"'))
+    serialized = json.dumps({"env": artifacts.env, "files": artifacts.files, "policy": artifacts.policy_md})
+    assert_that(serialized, is_not(contains_string("gmail-app-password-provider-secret")))
+    assert_that(artifacts.files["aai-cli-setup.sh"], is_not(contains_string("secrets set")))
+
+
+def test_gmail_app_password_instructions_name_only_aai_cli_commands():
+    # Hermes refuses a whole AGENTS.md that shows curl sending a token variable
+    # ("exfil_curl"), which would also drop every other platform instruction.
+    policy = _gmail_app_password_artifacts().policy_md
+    assert_that(policy, contains_string("aai-cli --profile gmail-inbox custom-api request"))
+    for forbidden in ("curl ", "AF_GATEWAY", "Authorization", "Bearer", "$"):
+        assert_that(policy, is_not(contains_string(forbidden)))

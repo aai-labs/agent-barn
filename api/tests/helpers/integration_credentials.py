@@ -28,6 +28,7 @@ def credential_for(provider: SecretProvider) -> SecretContent:
             "api_token": "bitbucket-provider-secret",
         },
         SecretProvider.APOLLO: {"api_token": "apollo-provider-secret"},
+        SecretProvider.MERKYS: {"base_url": "https://merkys.aai-labs.com", "api_key": "merkys-provider-secret"},
         SecretProvider.PIPEDRIVE: {"domain": "acme", "api_token": "pipedrive-provider-secret"},
         SecretProvider.GOOGLE_WORKSPACE: {
             "email": "fixture@example.com",
@@ -35,6 +36,17 @@ def credential_for(provider: SecretProvider) -> SecretContent:
             "refresh_token": "google_workspace-provider-secret",
             "client_id": "fixture.apps.googleusercontent.com",
             "client_secret": "google-client-secret",
+        },
+        SecretProvider.GMAIL: {
+            "email": "fixture@example.com",
+            "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            "refresh_token": "gmail-provider-secret",
+            "client_id": "fixture.apps.googleusercontent.com",
+            "client_secret": "google-client-secret",
+        },
+        SecretProvider.GMAIL_APP_PASSWORD: {
+            "email": "fixture@example.com",
+            "app_password": "gmail-app-password-provider-secret",
         },
         SecretProvider.FIRECRAWL: {"api_key": "firecrawl-provider-secret", "base_url": "https://api.firecrawl.dev"},
         SecretProvider.SHAREPOINT: {

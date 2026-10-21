@@ -29,6 +29,7 @@ AGENT_MEMORY_ENABLED = "agent.memory.enabled"
 AGENT_MEMORY_DISABLED = "agent.memory.disabled"
 AGENT_MEMORY_GRANT_CREATED = "agent.memory_grant.created"
 AGENT_MEMORY_GRANT_REVOKED = "agent.memory_grant.revoked"
+PLAYBOOK_EXTRACTION_REQUESTED = "playbook.extraction.requested"
 TEMPLATE_CREATED = "template.created"
 TEMPLATE_UPDATED = "template.updated"
 TEMPLATE_DELETED = "template.deleted"
@@ -41,14 +42,21 @@ ORGANIZATION_DELETED = "organization.deleted"
 ORGANIZATION_MEMBER_ADDED = "organization.member.added"
 ORGANIZATION_MEMBER_REMOVED = "organization.member.removed"
 ORGANIZATION_OWNERSHIP_TRANSFERRED = "organization.ownership_transferred"
+PLATFORM_WORKFLOW_AUTHORING_CHANGED = "platform.workflow_authoring.changed"
 PLATFORM_MEMORY_MODEL_CHANGED = "platform.memory_model.changed"
+PLATFORM_PLAYBOOK_MODEL_CHANGED = "platform.playbook_model.changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
+PLATFORM_TRIAL_SETTINGS_CHANGED = "platform.trial_settings.changed"
 API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
 USER_LOGGED_IN = "user.logged_in"
 USER_SIGNED_UP = "user.signed_up"
+USER_ONBOARDING_COMPLETED = "user.onboarding.completed"
+TELEGRAM_ACCOUNT_LINKED = "telegram.account.linked"
+TELEGRAM_ACCOUNT_UNLINKED = "telegram.account.unlinked"
+TELEGRAM_FIRST_MESSAGE_RECEIVED = "telegram.first_message.received"
 COMMUNICATION_CONNECTION_HEALTH_CHANGED = "communication.connection.health.changed"
 COMMUNICATION_CONNECTION_RECONNECT_REQUESTED = "communication.connection.reconnect.requested"
 COMMUNICATION_DELIVERY_DEAD_LETTERED = "communication.delivery.dead_lettered"
@@ -57,6 +65,7 @@ COMMUNICATION_DELIVERY_RECOVERED = "communication.delivery.recovered"
 ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED = "organization.llm_budget.threshold_reached"
 ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
 ORGANIZATION_LLM_BUDGET_CHANGED = "organization.llm_budget.changed"
+ORGANIZATION_TRIAL_ENDED = "organization.trial.ended"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
 AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
 AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
@@ -66,6 +75,14 @@ AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
+
+
+class PlatformWorkflowAuthoringChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    previous: bool
+    current: bool
+    actor_display: str
+    subject_display: str
 
 
 class PlatformMemoryModelChangedPayload(BaseModel):
@@ -267,6 +284,34 @@ class AgentMemoryGrantPayload(BaseModel):
     source_display: str
     # Absent in original combined grants; "write" preserves historical split-grant events.
     access: Literal["read", "read_write", "write"] | None = None
+    actor_display: str
+    subject_display: str
+
+
+class PlatformPlaybookModelChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    previous: str
+    current: str
+    actor_display: str
+    subject_display: str
+
+
+class PlaybookExtractionRequestedPayload(BaseModel):
+    """The Subject is the source Agent whose transcripts and memories the run reads.
+
+    skill_id is None when the run creates a new playbook; skill_name is the target's
+    name at request time. Never carries transcript or playbook content.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    extraction_id: UUID
+    agent_id: UUID
+    skill_id: UUID | None
+    skill_name: str
+    window_days: int
+    max_sessions: int
     actor_display: str
     subject_display: str
 
@@ -489,6 +534,30 @@ class PlatformUserPrivilegeChangedPayload(BaseModel):
     reason: str
 
 
+class OrganizationTrialEndedPayload(BaseModel):
+    """A Platform Administrator made a trial an ordinary Organization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    actor_display: str
+    subject_display: str
+
+
+class PlatformTrialSettingsChangedPayload(BaseModel):
+    """One changed trial setting, named by `setting`, before and after. None is a removed
+    cap on active trials."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    setting: str
+    previous: bool | float | None
+    current: bool | float | None
+
+
 class PlatformResourceLimitsChangedPayload(BaseModel):
     """One changed capacity limit, named by `setting`, with its before and after values.
 
@@ -527,6 +596,41 @@ class UserSignedUpPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_id: UUID
+    method: Literal["invite", "google"] = "invite"
+
+
+class UserOnboardingCompletedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: UUID
+
+
+class TelegramAccountLinkedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    link_id: UUID
+
+
+class TelegramFirstMessageReceivedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    link_id: UUID
+
+
+class TelegramAccountUnlinkedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    connection_id: UUID
+    link_id: UUID
+    reason: Literal["user_removed", "relinked", "blocked_bot", "access_lost"]
 
 
 class CommunicationConnectionHealthChangedPayload(BaseModel):
@@ -609,6 +713,7 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_VALUE_SETTINGS_CHANGED, OrganizationValueSettingsChangedPayload),
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
         (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
+        (ORGANIZATION_TRIAL_ENDED, OrganizationTrialEndedPayload),
     ):
         registry.register(
             DomainEventDefinition(
@@ -686,6 +791,15 @@ def build_default_event_registry() -> DomainEventRegistry:
                 event_scope=EventScope.ORGANIZATION,
             )
         )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLAYBOOK_EXTRACTION_REQUESTED,
+            schema_version=1,
+            payload_model=PlaybookExtractionRequestedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
     for event_name in (ORGANIZATION_MEMBER_ADDED, ORGANIZATION_MEMBER_REMOVED):
         registry.register(
             DomainEventDefinition(
@@ -705,13 +819,16 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_scope=EventScope.ORGANIZATION,
         )
     )
-    for event_name in (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, ORGANIZATION_LLM_BUDGET_EXHAUSTED):
+    for event_name, handler_names in (
+        (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,)),
+        (ORGANIZATION_LLM_BUDGET_EXHAUSTED, (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER)),
+    ):
         registry.register(
             DomainEventDefinition(
                 event_name=event_name,
                 schema_version=1,
                 payload_model=OrganizationLlmBudgetPayload,
-                handler_names=(ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,),
+                handler_names=handler_names,
                 event_scope=EventScope.ORGANIZATION,
             )
         )
@@ -776,6 +893,24 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_scope=EventScope.PLATFORM,
         )
     )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_PLAYBOOK_MODEL_CHANGED,
+            schema_version=1,
+            payload_model=PlatformPlaybookModelChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_WORKFLOW_AUTHORING_CHANGED,
+            schema_version=1,
+            payload_model=PlatformWorkflowAuthoringChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
     for event_name in (
         PLATFORM_USER_PRIVILEGE_GRANTED,
         PLATFORM_USER_PRIVILEGE_REVOKED,
@@ -794,6 +929,15 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_RESOURCE_LIMITS_CHANGED,
             schema_version=1,
             payload_model=PlatformResourceLimitsChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_TRIAL_SETTINGS_CHANGED,
+            schema_version=1,
+            payload_model=PlatformTrialSettingsChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )
@@ -826,6 +970,28 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_scope=EventScope.PLATFORM,
         )
     )
+    registry.register(
+        DomainEventDefinition(
+            event_name=USER_ONBOARDING_COMPLETED,
+            schema_version=1,
+            payload_model=UserOnboardingCompletedPayload,
+            handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+        )
+    )
+    for event_name, payload_model in (
+        (TELEGRAM_ACCOUNT_LINKED, TelegramAccountLinkedPayload),
+        (TELEGRAM_ACCOUNT_UNLINKED, TelegramAccountUnlinkedPayload),
+        (TELEGRAM_FIRST_MESSAGE_RECEIVED, TelegramFirstMessageReceivedPayload),
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=payload_model,
+                handler_names=(PRODUCT_ANALYTICS_HANDLER,),
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
     for event_name, payload_model in (
         (COMMUNICATION_CONNECTION_HEALTH_CHANGED, CommunicationConnectionHealthChangedPayload),
         (COMMUNICATION_CONNECTION_RECONNECT_REQUESTED, CommunicationConnectionReconnectRequestedPayload),

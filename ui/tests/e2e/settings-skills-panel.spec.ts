@@ -26,7 +26,7 @@ test.describe("Settings — Skills panel", () => {
     await dataSupportPage.agents.interceptGetTemplatesRequest();
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
-    await page.getByRole("button", { name: "Skills" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Skills", exact: true }).click();
   });
 
   test("shows built-in skills hint text", async ({ page }) => {
@@ -36,7 +36,8 @@ test.describe("Settings — Skills panel", () => {
   });
 
   test("does not show an organization avatar in the settings header", async ({ page }) => {
-    await expect(page.getByText("AL", { exact: true })).toHaveCount(0);
+    // The path bar's Organization switcher carries the initials; the page itself does not.
+    await expect(page.getByRole("main").getByText("AL", { exact: true })).toHaveCount(0);
   });
 
   test("shows search input and source filter", async ({ page }) => {
@@ -125,7 +126,7 @@ test.describe("Settings — Skills panel (empty state)", () => {
     await dataSupportPage.skills.interceptGetSkillsRequest({ body: [] });
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
-    await page.getByRole("button", { name: "Skills" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Skills", exact: true }).click();
 
     await expect(page.getByText("No skills yet")).toBeVisible();
     await expect(
@@ -148,7 +149,7 @@ test.describe("Settings — Skills panel (empty state)", () => {
     });
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
-    await page.getByRole("button", { name: "Skills" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Skills", exact: true }).click();
 
     await expect(page.getByText("We couldn't load skills")).toBeVisible();
   });
@@ -179,7 +180,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
     });
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
-    await page.getByRole("button", { name: "Skills" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Skills", exact: true }).click();
 
     await expect(page.getByRole("button", { name: "Next", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Previous", exact: true })).toBeVisible();
@@ -190,7 +191,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
     await dataSupportPage.agents.interceptGetTemplatesRequest();
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
-    await page.getByRole("button", { name: "Skills" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Skills", exact: true }).click();
 
     await expect(page.getByRole("button", { name: "Next", exact: true })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "Previous", exact: true })).not.toBeVisible();
@@ -222,7 +223,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
     });
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
-    await page.getByRole("button", { name: "Skills" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Skills", exact: true }).click();
 
     await expect(page.getByText("skill-page1-0")).toBeVisible();
 
@@ -258,7 +259,7 @@ test.describe("Settings — Skills panel (pagination)", () => {
     });
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
-    await page.getByRole("button", { name: "Skills" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Skills", exact: true }).click();
 
     // Advance to page 2.
     await page.getByRole("button", { name: "Next", exact: true }).click();

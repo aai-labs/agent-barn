@@ -69,7 +69,7 @@ async function openSharedCredentials(page: Page) {
   // The Settings page opens on the Agents tab before this test clicks through.
   await new DataSupport(page).organizations.interceptAgentSettings();
   await page.goto(`/dashboard/${TEST_ORG_ID}/settings`);
-  await page.getByRole("button", { name: "Shared Credentials" }).click();
+  await page.getByRole("complementary").getByRole("link", { name: "Shared Credentials", exact: true }).click();
 }
 
 // FormField renders a bare <label> with no htmlFor, so getByLabel cannot resolve
