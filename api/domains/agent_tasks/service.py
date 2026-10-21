@@ -120,6 +120,22 @@ class AgentTaskService:
             raise _task_not_found(task_id)
         return AgentTaskFileRead.model_validate(stored)
 
+    def list_own_tasks(
+        self, organization_id: UUID, agent_id: UUID, task_status: AgentTaskStatus | None, pagination: Pagination
+    ) -> PaginatedItems[AgentTaskRead]:
+        """An Agent's own Tasks, for the Agent itself; a deleted Agent has none."""
+        return self.repository.find_in_organization(
+            AgentTaskFilter(agent_id=agent_id, status=task_status),
+            pagination,
+            AuthorizationScope(organization_id=organization_id),
+        )
+
+    def get_own_task(self, organization_id: UUID, agent_id: UUID, task_id: UUID) -> AgentTaskDetail:
+        task = self.repository.get_detail(agent_id, task_id, AuthorizationScope(organization_id=organization_id))
+        if task is None:
+            raise _task_not_found(task_id)
+        return task
+
     def read_file(
         self, agent_id: UUID, task_id: UUID, file_id: UUID, context: CurrentUserContext
     ) -> tuple[AgentTaskFileRead, Iterator[bytes]]:

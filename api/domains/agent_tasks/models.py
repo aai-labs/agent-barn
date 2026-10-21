@@ -134,6 +134,12 @@ class AgentTaskCreate(PydanticBaseModel):
     description: LongText | None = None
 
 
+class AgentTaskStatusUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: AgentTaskStatus
+
+
 class AgentTaskNoteCreate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 

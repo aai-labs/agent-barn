@@ -1,0 +1,240 @@
+"""AF-412: Agents record their own Tasks through the ingest app, authenticated by their ingest key."""
+
+from fastapi import status
+from hamcrest import assert_that, contains_exactly, equal_to, has_entries
+from starlette.testclient import TestClient
+
+from api.domains.agents.repository import AgentRepository
+from api.infrastructure.crypto import encrypt_token
+from api.ingest_app import create_ingest_app
+from api.tests.core.givenpy import given, then, when
+from api.tests.core.modules import prepare_injector, set_env_variable
+from api.tests.steps.agent import (
+    TEST_ENCRYPTION_KEY,
+    MockK8sModule,
+    MockLiteLLMModule,
+    there_is_an_agent,
+)
+from api.tests.steps.database import database_is_clean, database_repo_is_ready
+from api.tests.steps.organization import there_is_an_organization
+
+
+def _given(**env: str):
+    return [
+        set_env_variable({"AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY, **env}),
+        prepare_injector(modules=[MockK8sModule(), MockLiteLLMModule()]),
+        database_repo_is_ready(),
+        database_is_clean(),
+        there_is_an_organization(),
+    ]
+
+
+def _an_agent_with_an_ingest_key(name: str = "Test Agent", key: str = "test-ingest-key-abc"):
+    def step(context):
+        there_is_an_agent(name=name)(context)
+        repository: AgentRepository = context.injector.get(AgentRepository)
+        agent = repository.get_by_id(context.agent.id)
+        assert agent is not None
+        agent.ingest_key_encrypted = encrypt_token(key, TEST_ENCRYPTION_KEY)
+        repository.save(agent)
+        context.agent = agent
+        context.ingest_key = key
+        context.ingest_client = TestClient(create_ingest_app(injector=context.injector))
+
+    return step
+
+
+def _the_agent_is_remembered_as(name: str):
+    def step(context):
+        setattr(context, name, (context.agent, context.ingest_key))
+
+    return step
+
+
+def _headers(key: str) -> dict:
+    return {"Authorization": f"Bearer {key}"}
+
+
+def _tasks_url(agent) -> str:
+    return f"/ingest/v1/agents/{agent.id}/tasks"
+
+
+def _create(context, title: str = "Reconcile invoices", agent=None, key: str | None = None, **fields):
+    agent = agent or context.agent
+    return context.ingest_client.post(
+        _tasks_url(agent), json={"title": title, **fields}, headers=_headers(key or context.ingest_key)
+    )
+
+
+# --- authentication ---
+
+
+def test_a_task_cannot_be_created_without_the_agents_ingest_key():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        response = _create(context, key="wrong-key")
+
+        assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_a_task_cannot_be_created_without_an_authorization_header():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        response = context.ingest_client.post(_tasks_url(context.agent), json={"title": "Reconcile invoices"})
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_an_agent_cannot_act_as_another_agent_with_its_own_key():
+    with given(
+        [
+            *_given(),
+            _an_agent_with_an_ingest_key(),
+            _the_agent_is_remembered_as("first"),
+            _an_agent_with_an_ingest_key(name="Second", key="second-key"),
+        ]
+    ) as context:
+        first_agent, _ = context.first
+
+        response = _create(context, agent=first_agent, key="second-key")
+
+        assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+# --- writes ---
+
+
+def test_an_agent_creates_an_open_task():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        with when("the Agent creates a Task"):
+            response = _create(context, description="For October")
+
+            with then("it is open and belongs to the Agent"):
+                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+                assert_that(
+                    response.json(),
+                    has_entries(
+                        agent_id=str(context.agent.id),
+                        title="Reconcile invoices",
+                        description="For October",
+                        status="open",
+                    ),
+                )
+
+
+def test_the_agent_and_organization_come_from_the_key_not_the_body():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        response = _create(context, agent_id="00000000-0000-0000-0000-000000000000")
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_an_agent_updates_its_tasks_status():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+
+        response = context.ingest_client.patch(
+            f"{_tasks_url(context.agent)}/{task_id}", json={"status": "done"}, headers=_headers(context.ingest_key)
+        )
+
+        assert_that((response.status_code, response.json()["status"]), equal_to((status.HTTP_200_OK, "done")))
+
+
+def test_an_unknown_status_is_rejected():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+
+        response = context.ingest_client.patch(
+            f"{_tasks_url(context.agent)}/{task_id}", json={"status": "paused"}, headers=_headers(context.ingest_key)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_an_agent_adds_notes_to_its_task():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+
+        response = context.ingest_client.post(
+            f"{_tasks_url(context.agent)}/{task_id}/notes",
+            json={"body": "Matched 40 of 42 invoices"},
+            headers=_headers(context.ingest_key),
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+        assert_that(response.json(), has_entries(body="Matched 40 of 42 invoices"))
+
+
+def test_an_agent_cannot_touch_another_agents_task():
+    with given(
+        [
+            *_given(),
+            _an_agent_with_an_ingest_key(),
+            _the_agent_is_remembered_as("first"),
+            _an_agent_with_an_ingest_key(name="Second", key="second-key"),
+        ]
+    ) as context:
+        first_agent, first_key = context.first
+        task_id = _create(context, agent=first_agent, key=first_key).json()["id"]
+        url = f"{_tasks_url(context.agent)}/{task_id}"
+        headers = _headers(context.ingest_key)
+
+        with when("the second Agent reaches for the first Agent's Task through its own routes"):
+            responses = [
+                context.ingest_client.patch(url, json={"status": "failed"}, headers=headers),
+                context.ingest_client.post(f"{url}/notes", json={"body": "Mine now"}, headers=headers),
+                context.ingest_client.get(url, headers=headers),
+            ]
+
+            with then("the Task is not found"):
+                assert_that([response.status_code for response in responses], equal_to([status.HTTP_404_NOT_FOUND] * 3))
+
+
+# --- reads ---
+
+
+def test_an_agent_lists_its_own_tasks_newest_first():
+    with given(
+        [
+            *_given(),
+            _an_agent_with_an_ingest_key(),
+            _the_agent_is_remembered_as("first"),
+            _an_agent_with_an_ingest_key(name="Second", key="second-key"),
+        ]
+    ) as context:
+        first_agent, first_key = context.first
+        _create(context, title="Someone else's", agent=first_agent, key=first_key)
+        _create(context, title="Older")
+        _create(context, title="Newer")
+
+        response = context.ingest_client.get(_tasks_url(context.agent), headers=_headers(context.ingest_key))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that([task["title"] for task in response.json()["items"]], contains_exactly("Newer", "Older"))
+
+
+def test_an_agent_filters_its_tasks_by_status():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        done_id = _create(context, title="Finished").json()["id"]
+        _create(context, title="Still open")
+        context.ingest_client.patch(
+            f"{_tasks_url(context.agent)}/{done_id}", json={"status": "done"}, headers=_headers(context.ingest_key)
+        )
+
+        response = context.ingest_client.get(
+            _tasks_url(context.agent), params={"status": "open"}, headers=_headers(context.ingest_key)
+        )
+
+        assert_that([task["title"] for task in response.json()["items"]], contains_exactly("Still open"))
+
+
+def test_an_agent_reads_its_task_with_its_notes():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+        url = f"{_tasks_url(context.agent)}/{task_id}"
+        context.ingest_client.post(f"{url}/notes", json={"body": "First"}, headers=_headers(context.ingest_key))
+        context.ingest_client.post(f"{url}/notes", json={"body": "Second"}, headers=_headers(context.ingest_key))
+
+        response = context.ingest_client.get(url, headers=_headers(context.ingest_key))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that([note["body"] for note in response.json()["notes"]], contains_exactly("First", "Second"))
+        assert_that(response.json()["files"], equal_to([]))
