@@ -36,23 +36,23 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the sync rules (`api/domains/file_sync/rules.py`);
   - the file sync tables (migration `af95cf4c3a1e`);
   - the Graph file operations (`api/domains/agents/microsoft_graph_files.py`) and the app-token cache.
-  - the `file_sync` capability on the plugin seam, implemented by OneDrive, and a test-only `file_sync` provider.
+  - the `file_sync` capability on the plugin seam, implemented by OneDrive, and a test-only `file_sync` provider;
+  - folder reconciliation (`FileSyncEngine.reconcile_folders`), not yet run by any process.
 
   Nothing calls them yet, and no file syncs yet.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. folder reconciliation;
-  2. the Sync Engine and its deployment;
-  3. Ingest file-sync routes;
-  4. remote change processing;
-  5. the in-pod helper;
-  6. builder and `start.sh` wiring;
-  7. pinned-image contracts;
-  8. disconnect;
-  9. docs consolidation;
-  10. an end-to-end run on local k3d against the test tenant.
+  1. the Sync Engine and its deployment;
+  2. Ingest file-sync routes;
+  3. remote change processing;
+  4. the in-pod helper;
+  5. builder and `start.sh` wiring;
+  6. pinned-image contracts;
+  7. disconnect;
+  8. docs consolidation;
+  9. an end-to-end run on local k3d against the test tenant.
 - Docs owed by the slice that makes them true:
   - **this README:**
-    - the "Agent file sync" section, with folder reconciliation;
+    - the "Agent file sync" section, with the Sync Engine process (folder naming is written up there, once something runs it);
     - the Organization Member visibility limit, with the helper wiring;
     - the disconnect section, with disconnect;
   - **RBAC brief:**
@@ -79,6 +79,43 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — Folder reconciliation
+
+- Delivered: `FileSyncEngine.reconcile_folders(connection)` in `api/domains/file_sync/engine.py`, with `FileSyncRepository` (`repository.py`). For an active connection whose provider declares `file_sync`, one pass:
+  1. stops (`stopped`) the folder of every deleted Agent, without calling the provider; the folder stays there;
+  2. reserves a folder row for every live Agent of the Organization without one, oldest Agent first. The database's unique name index decides who gets a name;
+  3. creates the reserved folder under "Agent Barn" and records its item id, link and server-relative path. A failed create leaves the row reserved, and the next pass creates it;
+  4. renames the folder when the Agent's name changed.
+- **Folder names:**
+  - `: " * < > ? | \ /` and control characters become `-`;
+  - spaces are trimmed, and trailing dots removed;
+  - an empty name, or one the provider refuses (a reserved name such as `CON`, or the `_vti_` prefix), becomes `Agent`;
+  - names are at most 255 characters, cut before ` (n)` is added.
+- **Duplicates:**
+  - Duplicates, compared case-insensitively, get the lowest free ` (2)`, ` (3)`… Names of stopped and disabled folders stay taken, so a new Agent named like a deleted one gets a number.
+  - A name already used at the provider (`RemoteNameTaken`) moves on to the next number.
+  - A numbered name drops its number once the plain name is free, so two Agents swapping names settle within two passes without ever sharing a name.
+- **Skipped:** disabled folders, a provider without `file_sync`, and a connection without a root folder. A pass with nothing to do makes no provider call. Throttling and other provider failures propagate to the caller, the engine loop that arrives in the next slice.
+- **Tenant scoping:** queries are by the connection's own Organization and connection id, read from persisted rows. Only the engine calls them, never a router.
+- Changed (plan):
+  - **People's own folder changes move to remote change processing.** A person renaming or deleting an Agent's folder, or the "Agent Barn" root, is detected there from the change feed, instead of by asking the provider about every folder on every pass (one call per Agent every 30 s).
+  - **README section:** the "Agent file sync" section lands with the engine process, because nothing runs this pass yet.
+- Changed: `tests/steps/file_sync_provider.py` gains `TestDriveModule` (Test Drive and Other Drive beside the shipped plugins), `fake_drive` and `there_is_a_sync_connection`.
+- Verified:
+  - `tests/integration/test_file_sync_folders.py` (24 tests) failed first (engine missing), then passed. It covers:
+    - connecting with existing Agents, a later Agent, and a pass with nothing to do;
+    - duplicates, including case-only ones;
+    - eight naming cases and long names;
+    - rename, a swap, and a number dropped;
+    - delete and name reuse;
+    - a disabled folder;
+    - a name taken at the provider;
+    - a create retried after throttling;
+    - a provider without `file_sync`;
+    - another Organization's Agents.
+  - Sync provider connection, repository, schema and plugin suites pass (213 tests together).
+  - ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — Test-only `file_sync` provider
 

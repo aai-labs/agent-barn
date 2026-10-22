@@ -3,7 +3,13 @@ import itertools
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from api.domains.sync_provider.models import SyncProviderCapability
+from injector import Module, provider, singleton
+
+from api.core.config import Config
+from api.domains.agents.microsoft_graph_files import MicrosoftGraphFiles
+from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
+from api.domains.agents.microsoft_identity import MicrosoftAppTokens, MicrosoftIdentityClient
+from api.domains.sync_provider.models import SyncProviderCapability, SyncProviderConnection
 from api.domains.sync_provider.plugins.base import (
     ProviderThrottled,
     Provisioned,
@@ -19,6 +25,11 @@ from api.domains.sync_provider.plugins.base import (
     SyncRoot,
     UploadTarget,
 )
+from api.domains.sync_provider.plugins.providers import shipped_plugins
+from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
+from api.domains.sync_provider.repository import SyncProviderRepository
+from api.domains.sync_provider.service import FOLDER_NAME
+from api.tests.steps.sync_provider import OtherDrivePlugin
 
 TEST_DRIVE = "testdrive"
 TEST_DRIVE_ACCOUNT_ID = "test-drive-account"
@@ -310,3 +321,80 @@ class TestDrivePlugin(SyncProviderPlugin):
 def _parse_cursor(cursor: str) -> tuple[str, int, int]:
     kind, since, offset = cursor.split(":")
     return kind, int(since), int(offset)
+
+
+class TestDriveModule(Module):
+    __test__ = False
+
+    @provider
+    @singleton
+    def provide_test_drive(self) -> TestDrivePlugin:
+        return TestDrivePlugin()
+
+    @provider
+    @singleton
+    def provide_other_drive(self) -> OtherDrivePlugin:
+        return OtherDrivePlugin()
+
+    @provider
+    @singleton
+    def provide_registry(
+        self,
+        config: Config,
+        identity: MicrosoftIdentityClient,
+        graph_sites: MicrosoftGraphSites,
+        graph_files: MicrosoftGraphFiles,
+        app_tokens: MicrosoftAppTokens,
+        test_drive: TestDrivePlugin,
+        other_drive: OtherDrivePlugin,
+    ) -> SyncProviderPluginRegistry:
+        return SyncProviderPluginRegistry(
+            [*shipped_plugins(config, identity, graph_sites, graph_files, app_tokens), test_drive, other_drive]
+        )
+
+
+def fake_drive(context) -> TestDrivePlugin:
+    return context.injector.get(TestDrivePlugin)
+
+
+def there_is_a_sync_connection(provider_key: str = TEST_DRIVE, organization_id=None):
+    def step(context):
+        org_id = organization_id or context.organization.id
+        repository = context.injector.get(SyncProviderRepository)
+        plugin = context.injector.get(SyncProviderPluginRegistry).require(provider_key)
+        provisioned = plugin.provision(
+            TEST_DRIVE_TOKEN, account_id=TEST_DRIVE_ACCOUNT_ID, location=None, folder_name=FOLDER_NAME
+        )
+        pending = repository.create_pending(
+            org_id,
+            provider_key,
+            schema_version=1,
+            account_id=TEST_DRIVE_ACCOUNT_ID,
+            connected_by_user_id=context.user.id,
+            credentials_encrypted="encrypted-token",
+            pending_expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        connection = repository.activate(
+            pending.id,
+            location_id=None,
+            location_name=None,
+            location_url=None,
+            folder_id=provisioned.folder.id,
+            folder_web_url=provisioned.folder.web_url,
+            provider_data=provisioned.provider_data,
+        )
+        assert connection is not None
+        context.connection = connection
+        context.sync_root = sync_root(connection)
+
+    return step
+
+
+def sync_root(connection: SyncProviderConnection) -> SyncRoot:
+    assert connection.folder_id is not None
+    return SyncRoot(
+        account_id=connection.account_id,
+        location_id=connection.location_id,
+        folder_id=connection.folder_id,
+        folder_name=FOLDER_NAME,
+    )
