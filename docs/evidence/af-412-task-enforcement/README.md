@@ -4,17 +4,22 @@ Date: 2026-10-22. Environment: local k3d (`agentfarm-dev`) with the compose stac
 proxying `openrouter/qwen/qwen3.6-plus`, runtime images `agentfarm-hermes-base:0.2.10` and
 `agentfarm-openclaw-base:0.7.7` built from the tested branch.
 
-- **Baseline:** AF-411, commit `edf3a199c35160ad50a2dcb8bf0ce25f4f8df772`. The Task store exists; Agents have
-  no Task command, no tasks plugin and no Task instructions.
-- **Treatment:** AF-412, commit `aea286d4363042286c30406a37fac56935c04a14`. The `agentbarn_task` tool, the
-  `agentbarn-tasks` plugin (request line, open Tasks each turn, reminders, auto-attach), and Hermes tool search off.
+## What was compared
 
-## Method
+Five cohorts, each two Agents per runtime (Hermes and OpenClaw) from the `general-purpose` template with a $2
+spend limit, all running the same 15-turn conversation through the dashboard chat:
 
-Eight Agents from the `general-purpose` template, two per runtime per cohort, each with a $2 spend limit.
-The baseline Agents were created while the API served the AF-411 code, so their configuration is AF-411's;
-none of the eight pods restarted during the run, so none picked up the other cohort's configuration. All
-eight then ran the same 15-turn conversation concurrently through the dashboard chat:
+| Cohort | Code | What the Agents had |
+|---|---|---|
+| baseline | AF-411, `edf3a199` | The Task store; no Task command, plugin or instructions. |
+| treatment (round 1) | AF-412, `aea286d4` | The `agentbarn_task` tool and `agentbarn-tasks` plugin: a request line, open Tasks each turn, in-turn and next-turn reminders, automatic file attachment; Hermes tool search off. |
+| optimised (round 2) | `4bea6213` | The plugin closes a Task left `in_progress` when the turn ends; `create` starts `in_progress` and takes a note; `attach --replace`; no request line on small talk; shorter instructions. |
+| fixed (round 3) | `754f693d` | Also lists the three latest finished Tasks, so follow-ups reopen their Task; files carried to the next turns. |
+| automatic (round 4) | `0d8e4a32` | The plugin records work the Agent left unrecorded as a Task with origin `automatic`, replacing the next-turn catch-up; Hermes background review and subagent runs are left alone. |
+
+The baseline Agents were created while the API served the AF-411 code, so their configuration is AF-411's. The
+first two cohorts ran concurrently; each later round ran on its own, on fresh Agents, after the previous round's
+Agents were stopped. None of the pods restarted during a run.
 
 | Turn | Kind | Request |
 |---|---|---|
@@ -37,81 +42,85 @@ eight then ran the same 15-turn conversation concurrently through the dashboard 
 Token use and cost come from LiteLLM's spend log (attributed to each Agent by its key alias, and to each turn by
 time); tool calls from the `tool_call` telemetry; Tasks from the Task tables; latency from send to first reply.
 The driver and analysis scripts were run from a local scratch directory and are not part of the repository.
-
-## Results
-
-All 120 turns were answered, none timed out, and every Agent in both cohorts produced every deliverable
-(`largest_states.csv` with a population column, `meeting-notes.md`, `fizzbuzz.py`, `offsite.md` with an agenda).
-
-### Per cell, per Agent over the whole conversation (mean of 2 Agents)
-
-| Cohort | Runtime | Input tokens | Output tokens | Cost (USD) | Model calls | Tool calls | of which Task | Median latency (s) |
-|---|---|---|---|---|---|---|---|---|
-| baseline | hermes | 1,232,438 | 6,581 | 0.413 | 39.0 | 21.0 | 0.0 | 10 |
-| baseline | openclaw | 955,154 | 4,918 | 0.320 | 31.0 | 20.0 | 0.0 | 15 |
-| treatment | hermes | 1,791,126 | 10,316 | 0.602 | 50.5 | 38.5 | 14.0 | 15 |
-| treatment | openclaw | 1,767,030 | 7,672 | 0.589 | 49.0 | 40.5 | 15.0 | 15 |
-
-### Overhead of Task-keeping
-
-| Runtime | Input tokens | Cost per conversation | Model calls | Tool calls | Median latency |
-|---|---|---|---|---|---|
-| hermes | +45% | +46% (+$0.19) | +29% | +83% | +5 s |
-| openclaw | +85% | +84% (+$0.27) | +58% | +102% | +0 s |
-
-Where the extra input tokens come from:
-
-| | Hermes | OpenClaw |
-|---|---|---|
-| Extra model calls, each re-sending the whole context (Task tool calls add round trips) | ≈ 363k (65%) | ≈ 554k (68%) |
-| Larger context on every call (tool schema, Task instructions, request line, open Tasks, Task calls in history) | ≈ 197k (35%) | ≈ 260k (32%) |
-
 No prompt caching was in effect (LiteLLM reported 0 cached tokens), so every call paid for its full context.
 
-### Mean input tokens and cost per turn, by kind
+## Cost
 
-| Kind | Baseline Hermes | Baseline OpenClaw | Treatment Hermes | Treatment OpenClaw |
-|---|---|---|---|---|
-| small | 38,840 / $0.0134 | 30,731 / $0.0102 | 43,727 / $0.0155 | 58,060 / $0.0193 |
-| fact | 39,342 / $0.0131 | 26,666 / $0.0088 | 42,843 / $0.0144 | 36,090 / $0.0120 |
-| file | 106,256 / $0.0354 | 77,678 / $0.0258 | 154,098 / $0.0514 | 146,080 / $0.0486 |
-| followup | 94,252 / $0.0313 | 73,676 / $0.0245 | 141,680 / $0.0472 | 154,571 / $0.0515 |
-| research | 165,504 / $0.0550 | 151,730 / $0.0510 | 234,364 / $0.0788 | 220,791 / $0.0742 |
-| impossible | 38,162 / $0.0128 | 32,964 / $0.0110 | 40,478 / $0.0135 | 99,089 / $0.0333 |
-| long | 143,728 / $0.0487 | 106,910 / $0.0367 | 255,018 / $0.0854 | 197,674 / $0.0659 |
+Per Agent over the whole conversation, mean of two Agents:
 
-### Task behaviour (treatment)
+| Cohort | Runtime | Input tokens | Cost (USD) | Model calls | Tool calls | of which Task |
+|---|---|---|---|---|---|---|
+| baseline | hermes | 1,232,438 | 0.413 | 39.0 | 21.0 | 0 |
+| baseline | openclaw | 955,154 | 0.320 | 31.0 | 20.0 | 0 |
+| treatment | hermes | 1,791,126 | 0.602 | 50.5 | 38.5 | 14.0 |
+| treatment | openclaw | 1,767,030 | 0.589 | 49.0 | 40.5 | 15.0 |
+| optimised | hermes | 1,490,754 | 0.499 | 46.5 | 28.0 | 7.0 |
+| optimised | openclaw | 1,132,284 | 0.379 | 35.0 | 24.0 | 8.0 |
+| fixed | hermes | 1,431,987 | 0.480 | 42.0 | 24.5 | 5.5 |
+| fixed | openclaw | 1,696,030 | 0.564 | 44.0 | 34.5 | 7.5 |
+| automatic | hermes | 1,533,276 | 0.517 | 47.0 | 29.0 | 4.5 |
+| automatic | openclaw | 1,348,410 | 0.450 | 39.0 | 31.0 | 8.0 |
 
-| Agent | Tasks | Final statuses | Files attached | Notes | Turns with a Task call |
+Input tokens against the baseline:
+
+| Runtime | treatment | optimised | fixed | automatic | Rounds 2–4 pooled |
 |---|---|---|---|---|---|
-| T-hermes-1 | 6 | 6 done | 6 | 1 | 3, 4, 6, 8, 10, 13, 14, 15 |
-| T-hermes-2 | 7 | 7 done | 6 | 0 | 3, 4, 6, 8, 10, 13, 14 |
-| T-openclaw-1 | 8 | 7 done, 1 failed | 5 | 0 | 3, 4, 6, 8, 9, 10, 11, 12, 13, 15 |
-| T-openclaw-2 | 7 | 7 done | 5 | 0 | 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 15 |
+| hermes | +45% | +21% | +16% | +24% | +21% |
+| openclaw | +85% | +19% | +78% | +41% | +46% |
 
-### Replies that talk about Tasks
+In round 1, about two thirds of the overhead was extra model round trips for Task tool calls (create, status,
+attach), each re-sending the whole context, and one third the larger context on every call. Rounds 2–4 halve the
+Task calls or better (14–15 per conversation down to 4.5–8): closing, attaching and recording missed work are done by
+the plugin without a model call.
 
-Both cohorts used the word "tasks" when describing their capabilities in turn 1. The only replies that talked
-about Task bookkeeping were two OpenClaw replies to "Thanks, that's great." (turn 5), for example "Got it — I'll
-keep creating and tracking Tasks for any work that needs tools or produces files, and I won't mention them
-unless you ask". Hermes never did.
+The later rounds swing more than the Task calls explain. Work tool calls, the ones that are not Task calls, varied
+from 16 to 27 per OpenClaw Agent between rounds, and one OpenClaw Agent in round 3 made 11 web calls on the research
+turn and spent 482k tokens on the first offsite turn; every later turn re-sends that history. With two Agents per
+cell, that variance is larger than the Task overhead itself, so the pooled figure is the better estimate.
+
+## Task behaviour
+
+| Cohort | Agent | Tasks | Files attached | Notes | Recorded automatically |
+|---|---|---|---|---|---|
+| treatment | T-hermes-1 / -2 | 6 / 7 | 6 / 6 | 1 / 0 | n/a |
+| treatment | T-openclaw-1 / -2 | 8 / 7 | 5 / 5 | 0 / 0 | n/a |
+| optimised | O-hermes-1 / -2 | 7 / 6 | 3 / 5 | 3 / 5 | n/a |
+| optimised | O-openclaw-1 / -2 | 8 / 5 | 4 / 4 | 2 / 2 | n/a |
+| fixed | F-hermes-1 / -2 | 5 / 3 | 4 / 3 | 3 / 0 | n/a |
+| fixed | F-openclaw-1 / -2 | 5 / 6 | 4 / 4 | 0 / 0 | n/a |
+| automatic | A-hermes-1 / -2 | 5 / 6 | 4 / 5 | 1 / 0 | 1 / 4 |
+| automatic | A-openclaw-1 / -2 | 6 / 6 | 4 / 4 | 0 / 0 | 0 / 0 |
+
+- **Round 1** recorded every piece of work, but OpenClaw also made Tasks for a rename and touched Tasks on small
+  talk and a quick fact. One file reworked over two turns was attached twice.
+- **Round 2** recorded work, but follow-ups produced empty duplicate Tasks: the closed Task was no longer listed, the
+  follow-up edit went unrecorded, and the next-turn catch-up created a new Task without the file. On Hermes the
+  Task was sometimes created by Hermes's own background review run, which follows the turn in the same session and
+  never saw the files.
+- **Round 3** removed the duplicates: follow-ups reopened the Task they continued. One Hermes Agent ignored both the
+  in-turn and the next-turn reminders and recorded only three of its jobs.
+- **Round 4** recorded every job on all four Agents. One Hermes Agent recorded two of its six Tasks itself; the
+  plugin recorded the other four, titled with the user's request and with their files attached. The OpenClaw Agents
+  needed no automatic Task. Turns below the work threshold (the Hermes rename, the impossible booking) have no Task,
+  as intended.
+
+Small talk stopped producing Task calls from round 2. Replies occasionally mention Tasks (two or three per cohort,
+mostly a turn-1 capability list); this is tolerated.
 
 ## Findings
 
-1. **Task-keeping works.** Every piece of real work got a Task, almost always closed `done`; OpenClaw used `failed`
-   for the impossible booking, while Hermes made no Task for it. Produced files were attached, and no Task was
-   left open. Deliverables were the same as the baseline's.
-2. **It costs about +45% (Hermes) and +85% (OpenClaw) in input tokens per conversation**, about $0.19 and $0.27
-   per 15 turns at this model's prices. Two thirds of that is extra model round trips for Task tool calls
-   (create, status, attach); one third is the larger context on every call.
-3. **OpenClaw is over-eager.** It made Tasks for a rename and touched Tasks on small talk and a quick fact, and the
-   request line on small talk produced the only bookkeeping mentions in replies.
-4. **Notes are almost never written** (one in 28 Tasks), so Tasks show what was done and its output, not the steps.
-5. **A file produced across turns is attached once per turn.** T-hermes-1's offsite Task holds `offsite.md` twice,
-   from turns 13 and 14.
+1. **Task-keeping works and every job is recorded.** With automatic recording, work the Agent leaves unrecorded is
+   still captured, labelled `automatic` so it can be told apart from Tasks the Agent wrote.
+2. **The reminders are a nudge, not a guarantee.** In round 3 one Hermes Agent ignored both reminders for three jobs;
+   automatic recording is what closes that gap.
+3. **The cost of Task-keeping is roughly +20% input tokens on Hermes and +45% on OpenClaw**, down from +45% and +85%,
+   at this model's prices about $0.09 and $0.14 per 15 turns. Most of what remains is the per-turn context (tool
+   schema, instructions, request line, the Task list) and one or two Task calls per job.
+4. **Notes stay rare.** Tasks show what was done and its output, not the steps.
 
 ## Limitations
 
-Two Agents per cell, one model, one scripted conversation, and no prompt caching. The cost ratios depend on how
-large the Agent's base context is relative to the Task overhead; a model with prompt caching would pay much less
-for the repeated context.
+Two Agents per cell, one model, one scripted conversation, and no prompt caching. The cost ratios depend on how large
+the Agent's base context is relative to the Task overhead, and on how much work the model chooses to do; a model with
+prompt caching would pay much less for the repeated context. One Hermes research turn in round 4 timed out (over seven
+minutes of web calls, no Task calls); its work was still recorded automatically.
