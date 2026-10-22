@@ -81,6 +81,31 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 ## Changes
 
+### 2026-10-22 — AF-384 — Builders and start.sh run the pod helper
+
+- **Delivered:**
+  - **ConfigMaps:** both carry `file-sync.py` and `file-sync-rules.json` (`rules_manifest` for that runtime). For OpenClaw they sit beside the other start scripts.
+  - **start.sh:**
+    - Hermes runs `file-sync.py --once || true` after the Template files and skills are written.
+    - OpenClaw runs it after `init-openclaw.js`, the aai-cli and gog setup, and the memory gateway wait.
+    - Both then start it in the background before the ready file is touched.
+  - **Hermes path:** `/workspace` is the PVC's `workspace` subPath, so the rules' `/opt/data/workspace` is the same files.
+  - **CI:** `ci.yml` runs both runtime workflows when `scripts/file-sync.py` or `file_sync/rules.py` change.
+  - **Runtime digest:** the builders call `rules_manifest`, so the rules module is part of the digest, and so is the script. Running Agents show an update and start syncing after their next restart or managed update.
+- **Docs:**
+  - the README "The Agent's pod" section;
+  - the runtime-and-deployment start-up paragraph.
+- **Verified:**
+  - **Builder and digest tests:** 2 builder tests per runtime (ConfigMap contents and start order) and 1 digest closure test failed first. The asset-name assertion passed before, because the script already existed.
+  - **`test_file_sync_pod_secrets.py`:** starts an OpenClaw and a Hermes Agent through the API while a OneDrive connection is active and `MicrosoftAppTokens` holds an app token. Nothing sent to Kubernetes contains the token or the client secret. It failed first only on its check that the ConfigMap carries the helper; the credential check is a guard.
+  - **Targeted suites:**
+    - the builder, start, ConfigMap contract, digest, file sync helper and Agent start suites pass;
+    - **failing on this Windows machine with or without this change:**
+      - the symlink tests in `test_restore_point_job.py` (WinError 1314);
+      - two `test_agents.py` concurrency tests (they also fail with this slice's code stashed);
+      - two `test_sharepoint_agent_start.py` tests, because the local `.env` sets `INGEST_BASE_URL`.
+  - ruff, format and ty pass.
+
 ### 2026-10-22 — AF-384 — Pod helper: downloads and re-uploads
 
 - **Delivered:** after each report and its uploads, `file-sync.py` claims its jobs (`GET …/file-sync/operations`) and applies them.

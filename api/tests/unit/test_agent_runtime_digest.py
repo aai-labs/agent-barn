@@ -145,3 +145,9 @@ def test_asset_files_cover_both_runtime_script_trees():
     assert "init-openclaw.js" in names
     assert "bootloader-footer.md" in names
     assert "SKILL.md" in names
+    assert "file-sync.py" in names
+
+
+def test_closure_covers_the_file_sync_rules_shipped_to_pods():
+    modules = {module for module, _ in discover_closure()}
+    assert "api.domains.file_sync.rules" in modules

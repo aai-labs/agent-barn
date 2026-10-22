@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from uuid import UUID
 
 from api.domains.agents.builders import (
@@ -14,6 +16,7 @@ from api.domains.agents.builders import (
 from api.domains.agents.builders.hermes import HERMES_BOOTLOADER_FOOTER, HERMES_DEFAULT_MAX_TURNS, HERMES_START_SH
 from api.domains.communications.models import ConversationLocation
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramRuntime
+from api.domains.file_sync.rules import rules_manifest
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
@@ -477,3 +480,32 @@ def test_agentbarn_telegram_env_runs_hermes_in_webhook_mode_with_the_stand_in_to
         "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
         "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
+
+
+def test_config_map_ships_the_file_sync_helper_and_the_hermes_rules() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000"),
+    )
+
+    helper = Path(__file__).parents[2] / "domains/agents/scripts/file-sync.py"
+    assert config_map.data["file-sync.py"] == helper.read_text()
+    assert json.loads(config_map.data["file-sync-rules.json"]) == rules_manifest("hermes")
+
+
+def test_startup_syncs_files_once_after_template_files_and_skills_then_keeps_syncing() -> None:
+    once = HERMES_START_SH.index("python3 /app/config/file-sync.py --once || true")
+    loop = HERMES_START_SH.index("python3 /app/config/file-sync.py &")
+
+    assert HERMES_START_SH.index("cp /app/config/$f /workspace/$f") < once
+    assert HERMES_START_SH.index("Wrote {written} skill files") < once < loop
+    assert loop < HERMES_START_SH.index('touch "$AGENT_RUNTIME_SETUP_READY_FILE"')
