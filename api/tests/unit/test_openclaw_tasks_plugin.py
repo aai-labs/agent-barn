@@ -255,25 +255,6 @@ def test_heartbeat_runs_are_not_reminded(tmp_path: Path):
     assert_that("did work without recording" in _context(driven["results"][-1]), is_(False))
 
 
-def test_a_run_that_ends_without_a_task_is_reminded_on_the_next_turn_of_that_session(tmp_path: Path):
-    driven = _drive(
-        tmp_path,
-        [
-            _after_tool("c1"),
-            _after_tool("c2"),
-            _after_tool("c3"),
-            _agent_end(),
-            _prompt("s2"),
-            _prompt("s1"),
-            _prompt("s1"),
-        ],
-    )
-
-    other, reminded, after = (_context(result) for result in driven["results"][4:])
-    assert_that(["did work without recording" in context for context in (other, after)], equal_to([False, False]))
-    assert_that(reminded, contains_string("did work without recording it as a Task"))
-
-
 # --- open Tasks each turn ---
 
 
@@ -319,12 +300,6 @@ def test_a_run_that_writes_a_file_without_a_task_is_asked_to_revise(tmp_path: Pa
     driven = _drive(tmp_path, [_after_tool("c1", tool=tool), _finalize()])
 
     assert_that(driven["results"][-1], has_entries(action="revise"))
-
-
-def test_a_run_that_wrote_a_file_without_a_task_is_reminded_next_turn(tmp_path: Path):
-    driven = _drive(tmp_path, [_after_tool("c1", tool="write"), _agent_end(), _prompt()])
-
-    assert_that(_context(driven["results"][-1]), contains_string("did work without recording it as a Task"))
 
 
 # --- reminders in the tool result the model reads ---
@@ -496,12 +471,6 @@ def test_heartbeats_do_not_carry_the_task_line(tmp_path: Path):
     assert_that(driven["results"][0], is_(None))
 
 
-def test_the_catch_up_reminder_asks_for_quiet_bookkeeping(tmp_path: Path):
-    driven = _drive(tmp_path, [_after_tool("c1", tool="write", params={"path": "a.csv"}), _agent_end(), _prompt()])
-
-    assert_that(_context(driven["results"][-1]), contains_string("answer the user's message as normal"))
-
-
 def test_create_passes_a_starting_status(tmp_path: Path):
     _drive(tmp_path, [_tool(action="create", title="Report", status="in_progress")])
 
@@ -647,37 +616,91 @@ def _created_in(run_id: str, task_id: str) -> dict:
     return step
 
 
-def test_files_a_run_could_not_attach_go_to_the_task_a_later_run_works_on(tmp_path: Path):
-    wrote, states = _wrote(tmp_path)
-
-    _drive(tmp_path, [wrote, _agent_end(), _created_in("run-2", "task-2"), _agent_end("run-2")])
-
-    assert_that(_attaches(tmp_path), equal_to([["attach", "task-2", states, "--replace"]]))
+# --- work the Agent left unrecorded ---
 
 
-def test_files_carried_over_do_not_count_as_work_in_the_later_run(tmp_path: Path):
-    wrote, _ = _wrote(tmp_path)
-
-    driven = _drive(tmp_path, [wrote, _agent_end(), _after_tool("c2", run_id="run-2"), _finalize("run-2")])
-
-    assert_that(driven["results"][-1], is_(None))
+def _creates(tmp_path: Path) -> list[list[str]]:
+    return [call["argv"] for call in _calls(tmp_path) if call["argv"][0] == "create"]
 
 
-def test_a_carried_over_file_is_dropped_after_two_more_runs_without_a_task(tmp_path: Path):
-    wrote, _ = _wrote(tmp_path)
-
+def test_work_left_unrecorded_is_recorded_automatically_when_the_run_ends(tmp_path: Path):
     _drive(
         tmp_path,
         [
-            wrote,
+            _prompt(prompt="Please summarise the October invoices"),
+            *[_after_tool(f"c{n}") for n in range(1, 4)],
             _agent_end(),
-            _after_tool("c2", run_id="run-2", command="date"),
-            _agent_end("run-2"),
-            _after_tool("c3", run_id="run-3", command="date"),
-            _agent_end("run-3"),
-            _created_in("run-4", "task-4"),
-            _agent_end("run-4"),
         ],
     )
 
-    assert_that(_attaches(tmp_path), equal_to([]))
+    assert_that(
+        _creates(tmp_path),
+        equal_to(
+            [
+                [
+                    "create",
+                    "--title",
+                    "Please summarise the October invoices",
+                    "--status",
+                    "done",
+                    "--origin",
+                    "automatic",
+                    "--description",
+                    "Please summarise the October invoices",
+                ]
+            ]
+        ),
+    )
+
+
+def test_the_automatic_task_gets_the_files_the_run_wrote(tmp_path: Path):
+    wrote, states = _wrote(tmp_path)
+
+    _drive(tmp_path, [_prompt(prompt="Write the states CSV"), wrote, _agent_end()])
+
+    assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, states, "--replace"]]))
+
+
+def test_a_long_request_is_shortened_for_the_automatic_title(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    _drive(tmp_path, [_prompt(prompt="Please " + "compare these regional sales figures " * 10), wrote, _agent_end()])
+
+    [create] = _creates(tmp_path)
+    title = create[create.index("--title") + 1]
+    assert_that((len(title), title.endswith("…")), equal_to((120, True)))
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_nothing_is_recorded_automatically_for_a_short_or_failed_run(tmp_path: Path, success: bool):
+    wrote, _ = _wrote(tmp_path)
+    steps = [_prompt(), _after_tool("c9")] + ([] if success else [wrote])
+
+    _drive(tmp_path, [*steps, _agent_end(success=success)])
+
+    assert_that(_creates(tmp_path), equal_to([]))
+
+
+def test_a_run_the_agent_recorded_is_not_recorded_again(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    _drive(tmp_path, [_prompt(), wrote, _created(), _agent_end()])
+
+    assert_that(_creates(tmp_path), equal_to([]))
+
+
+def test_the_next_turn_carries_no_catch_up_reminder(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    driven = _drive(tmp_path, [_prompt(), wrote, _agent_end(), _prompt()])
+
+    assert_that("did work without recording" in _context(driven["results"][-1]), is_(False))
+
+
+def test_heartbeat_work_is_not_recorded_automatically(tmp_path: Path):
+    _drive(
+        tmp_path,
+        [*[_after_tool(f"c{n}", trigger="heartbeat") for n in range(1, 4)], _agent_end(trigger="heartbeat")],
+    )
+
+    assert_that(_creates(tmp_path), equal_to([]))

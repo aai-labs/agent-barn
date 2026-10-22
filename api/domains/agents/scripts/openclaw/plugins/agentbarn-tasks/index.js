@@ -5,11 +5,11 @@
 // Tasks. A run that does real work without touching a Task (three or more tool calls, or
 // any file it writes), or that recorded one without attaching the files it wrote, is
 // reminded in the tool result the model reads next (tool_result_persist) and asked to
-// revise before finishing; OpenClaw refuses that revise once a run has side effects, so
-// the next turn of the session carries the reminder too. The plugin never creates a Task
-// itself, but it does the bookkeeping that would otherwise cost the model a call each: when
-// a run ends, the files it wrote go to the Task it worked on and a Task it left in progress
-// is marked done.
+// revise before finishing (OpenClaw refuses that revise once a run has side effects). If
+// the run still ends without a Task, the plugin records one itself, named after the
+// request, with origin `automatic`. It also does the bookkeeping that would otherwise cost
+// the model a call each: when a run ends, the files it wrote go to the Task it worked on
+// and a Task it left in progress is marked done.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { resolve as resolvePath } from "node:path";
@@ -23,10 +23,8 @@ const OPEN_TASKS_TTL_MS = 60_000;
 const OPEN_TASKS_SHOWN = 10;
 // Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 const DONE_TASKS_SHOWN = 3;
-const PENDING_FILES_KEPT = 20;
-// How many later runs an unattached file waits for a Task (the catch-up usually comes on the next
-// message). After that it is dropped rather than attached to unrelated work.
-const CARRY_RUNS = 2;
+const AUTOMATIC_TITLE_CHARS = 120;
+const AUTOMATIC_DESCRIPTION_CHARS = 2000;
 const COMMAND_TIMEOUT_MS = 150_000;
 // A short message made only of these words is small talk ("Thanks!", "That's all for now"): it
 // gets no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
@@ -48,10 +46,6 @@ const REQUEST_LINE =
   "If this request needs tools or produces files, create a Task with agentbarn_task before you start, " +
   "or continue an open one. Don't mention Tasks in your reply unless the user asks.";
 const QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping.";
-const NEXT_TURN_REMINDER =
-  "Your previous turn did work without recording it as a Task. If it was more than a quick answer, " +
-  "record it now with the agentbarn_task tool: create its Task, or set the Task it continues back to " +
-  "in_progress, with a body on what was done. Its files are attached for you.";
 
 const PARAMETERS = {
   type: "object",
@@ -80,8 +74,8 @@ const runs = new Map();
 const currentRun = new Map();
 // sessionKey -> the reminder its next turn starts with
 const nextTurnReminders = new Map();
-// sessionKey -> files written in a run that ended without attaching them: name -> [path, runs left]
-const pendingFiles = new Map();
+// sessionKey -> the user's latest request, the title of a Task recorded automatically
+const requests = new Map();
 let openTasksCache = { at: 0, lines: null };
 
 const command = () => process.env.AGENTBARN_TASK_COMMAND || "/usr/local/bin/agentbarn-task";
@@ -224,30 +218,11 @@ function track(event, ctx) {
       // taskId -> the last status the Agent set this run
       statuses: new Map(),
       attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "",
-      // name -> runs left, for files carried over from an earlier run
-      carried: new Map(),
     };
     runs.set(runId, state);
-    for (const [name, [path, runsLeft]] of pendingFiles.get(state.sessionKey) ?? []) {
-      if (!state.written.has(name)) state.written.set(name, path);
-      state.carried.set(name, runsLeft);
-    }
-    pendingFiles.delete(state.sessionKey);
   }
   return state;
 }
-
-// Hand files on to the session's next run: new ones for CARRY_RUNS runs, carried ones for one fewer.
-function keepForNextRun(sessionKey, state, names) {
-  const pending = new Map(pendingFiles.get(sessionKey) ?? []);
-  for (const name of names) {
-    const runsLeft = state.carried.has(name) ? state.carried.get(name) - 1 : CARRY_RUNS;
-    if (runsLeft > 0) pending.set(name, [state.written.get(name), runsLeft]);
-  }
-  if (pending.size) pendingFiles.set(sessionKey, new Map([...pending].slice(-PENDING_FILES_KEPT)));
-}
-
-const unattachedNames = (state) => [...state.written.keys()].filter((name) => !state.attached.has(name));
 
 const unrecordedWork = (state) =>
   Boolean(state) && !state.recorded && (state.wroteFiles || state.work.size >= WORK_THRESHOLD);
@@ -282,6 +257,28 @@ async function closeInProgress(state) {
   const inProgress = [...state.statuses].filter(([, status]) => status === "in_progress").map(([id]) => id).sort();
   for (const taskId of inProgress) await run(["status", taskId, "done"]);
   if (inProgress.length) openTasksCache = { at: 0, lines: null };
+}
+
+// Record a Task for work the Agent left unrecorded. Returns the files it could not attach.
+async function recordAutomatically(sessionKey, state) {
+  const request = (requests.get(sessionKey) ?? "").split(/\s+/).filter(Boolean).join(" ");
+  let title = request || "Work recorded automatically";
+  if (title.length > AUTOMATIC_TITLE_CHARS) title = `${title.slice(0, AUTOMATIC_TITLE_CHARS - 1).trimEnd()}…`;
+  const argv = ["create", "--title", title, "--status", "done", "--origin", "automatic"];
+  if (request) argv.push("--description", request.slice(0, AUTOMATIC_DESCRIPTION_CHARS));
+  const { ok, output } = await run(argv);
+  openTasksCache = { at: 0, lines: null };
+  let taskId;
+  try {
+    taskId = ok ? JSON.parse(output).id : undefined;
+  } catch {
+    taskId = undefined;
+  }
+  if (typeof taskId !== "string") {
+    return [...state.written.keys()].filter((name) => !state.attached.has(name)).sort();
+  }
+  state.taskIds = new Set([taskId]);
+  return attachAutomatically(state);
 }
 
 function smallTalk(message) {
@@ -389,24 +386,26 @@ export default {
       runs.delete(runId);
       const sessionKey = ctx.sessionKey ?? state?.sessionKey ?? "";
       if (currentRun.get(sessionKey) === runId) currentRun.delete(sessionKey);
-      if (!state || ctx.trigger === "heartbeat") return;
-      if (event.success === false || !state.recorded) {
-        keepForNextRun(sessionKey, state, unattachedNames(state));
-        if (event.success !== false && unrecordedWork(state)) nextTurnReminders.set(sessionKey, NEXT_TURN_REMINDER + QUIET);
+      if (!state || ctx.trigger === "heartbeat" || event.success === false) return;
+      let failed;
+      if (unrecordedWork(state)) {
+        failed = await recordAutomatically(sessionKey, state);
+      } else if (state.recorded) {
+        failed = await attachAutomatically(state);
+        await closeInProgress(state);
+      } else {
         return;
       }
-      const failed = await attachAutomatically(state);
-      await closeInProgress(state);
-      if (failed.length) {
-        keepForNextRun(sessionKey, state, failed);
-        nextTurnReminders.set(sessionKey, attachReminder(failed) + QUIET);
-      }
+      if (failed.length) nextTurnReminders.set(sessionKey, attachReminder(failed) + QUIET);
     });
 
     api.on("before_prompt_build", async (event, ctx) => {
       if (ctx.trigger === "heartbeat") return;
       const parts = [];
-      if ((ctx.trigger === "user" || ctx.trigger === "cron") && !smallTalk(event.prompt)) parts.push(REQUEST_LINE);
+      if (ctx.trigger === "user" || ctx.trigger === "cron") {
+        if (typeof event.prompt === "string") requests.set(ctx.sessionKey ?? "", event.prompt);
+        if (!smallTalk(event.prompt)) parts.push(REQUEST_LINE);
+      }
       const lines = await openTaskLines();
       if (lines?.length) {
         parts.push(

@@ -101,12 +101,19 @@ class _Plugin:
                 session_id=session_id, turn_id=turn_id, completed=completed, failed=False, interrupted=False
             )
 
-    def start_turn(self, session_id: str = "s1", user_message: str = "Please summarise the October invoices"):
+    def start_turn(
+        self,
+        session_id: str = "s1",
+        user_message: str = "Please summarise the October invoices",
+        turn_id: str = "next",
+        parent_session_id: str = "",
+    ):
         with patch.dict(os.environ, self.env, clear=True):
             return self.hooks["pre_llm_call"](
                 session_id=session_id,
-                turn_id="next",
+                turn_id=turn_id,
                 user_message=user_message,
+                parent_session_id=parent_session_id,
                 conversation_history=[],
                 is_first_turn=False,
                 platform="slack",
@@ -270,18 +277,6 @@ def test_counting_is_per_session(tmp_path: Path):
     assert_that(result, equal_to(None))
 
 
-def test_a_turn_that_ends_without_a_task_is_reminded_on_the_next_turn_of_that_session(tmp_path: Path):
-    plugin = _Plugin(tmp_path)
-    for n in range(1, 4):
-        plugin.tool_call(f"call-{n}")
-
-    plugin.end_turn()
-
-    assert_that("did work without recording" in _context(plugin.start_turn("s2")), is_(False))
-    assert_that(_context(plugin.start_turn("s1")), contains_string("did work without recording it as a Task"))
-    assert_that("did work without recording" in _context(plugin.start_turn("s1")), is_(False))
-
-
 # --- open Tasks each turn ---
 
 
@@ -365,15 +360,6 @@ def test_finishing_is_judged_on_the_sessions_current_turn(tmp_path: Path):
     plugin.tool_call("call-1", session_id="s2", tool_name="write_file")
 
     assert_that(plugin.finish("s1"), equal_to(None))
-
-
-def test_a_turn_that_wrote_a_file_without_a_task_is_reminded_next_turn(tmp_path: Path):
-    plugin = _Plugin(tmp_path)
-    plugin.tool_call("call-1", tool_name="patch")
-
-    plugin.end_turn()
-
-    assert_that(_context(plugin.start_turn()), contains_string("did work without recording it as a Task"))
 
 
 # --- files produced but not attached ---
@@ -509,14 +495,6 @@ def test_the_boot_run_is_never_reminded(tmp_path: Path):
 
     assert_that((results, _wrote_in_boot, held), equal_to(([None] * 4, None, None)))
     assert_that(plugin.start_turn("agentbarn-boot"), equal_to(None))
-
-
-def test_the_catch_up_reminder_asks_for_quiet_bookkeeping(tmp_path: Path):
-    plugin = _Plugin(tmp_path)
-    plugin.tool_call("call-1", tool_name="write_file", args={"path": "/workspace/a.csv"})
-    plugin.end_turn()
-
-    assert_that(_context(plugin.start_turn()), contains_string("answer the user's message as normal"))
 
 
 # --- starting a Task in progress, and the request line ---
@@ -683,49 +661,105 @@ def test_only_the_three_latest_done_tasks_are_shown(tmp_path: Path):
     assert_that([f"task-{n} [done]" in context for n in range(1, 6)], equal_to([True, True, True, False, False]))
 
 
-def test_files_a_turn_could_not_attach_go_to_the_task_a_later_turn_works_on(tmp_path: Path):
+# --- work the Agent left unrecorded ---
+
+
+def _creates(plugin: _Plugin) -> list[list[str]]:
+    return [call["argv"] for call in plugin.calls() if call["argv"][0] == "create"]
+
+
+def test_work_left_unrecorded_is_recorded_automatically_when_the_turn_ends(tmp_path: Path):
     plugin = _Plugin(tmp_path)
+    plugin.start_turn(user_message="Please summarise the October invoices")
+    for n in range(1, 4):
+        plugin.tool_call(f"call-{n}")
+
+    plugin.end_turn()
+
+    assert_that(
+        _creates(plugin),
+        equal_to(
+            [
+                [
+                    "create",
+                    "--title",
+                    "Please summarise the October invoices",
+                    "--status",
+                    "done",
+                    "--origin",
+                    "automatic",
+                    "--description",
+                    "Please summarise the October invoices",
+                ]
+            ]
+        ),
+    )
+
+
+def test_the_automatic_task_gets_the_files_the_turn_wrote(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.start_turn(user_message="Write the states CSV")
     states = _wrote(plugin)
+
     plugin.end_turn()
 
-    plugin.tool_call(
-        "call-2",
-        turn_id="turn-2",
-        tool_name="agentbarn_task",
-        args={"action": "create", "title": "States"},
-        result=json.dumps({"id": "task-2", "status": "in_progress"}),
-    )
-    plugin.end_turn(turn_id="turn-2")
-
-    assert_that(_attaches(plugin), equal_to([["attach", "task-2", states, "--replace"]]))
+    assert_that(_attaches(plugin), equal_to([["attach", _TASK_ID, states, "--replace"]]))
 
 
-def test_files_carried_over_do_not_count_as_work_in_the_later_turn(tmp_path: Path):
+def test_a_long_request_is_shortened_for_the_automatic_title(tmp_path: Path):
     plugin = _Plugin(tmp_path)
+    request = "Please " + "compare these regional sales figures " * 10
+    plugin.start_turn(user_message=request)
     _wrote(plugin)
+
     plugin.end_turn()
+
+    [create] = _creates(plugin)
+    title = create[create.index("--title") + 1]
+    assert_that((len(title), title.endswith("…")), equal_to((120, True)))
+
+
+@pytest.mark.parametrize("completed", [True, False])
+def test_nothing_is_recorded_automatically_for_a_short_or_unfinished_turn(tmp_path: Path, completed: bool):
+    plugin = _Plugin(tmp_path)
     plugin.start_turn()
+    plugin.tool_call("call-1")
+    if not completed:
+        _wrote(plugin, "call-2")
 
-    reminded = plugin.tool_call("call-2", turn_id="turn-2")
+    plugin.end_turn(completed=completed)
 
-    assert_that(reminded, equal_to(None))
+    assert_that(_creates(plugin), equal_to([]))
 
 
-def test_a_carried_over_file_is_dropped_after_two_more_turns_without_a_task(tmp_path: Path):
+def test_a_turn_the_agent_recorded_is_not_recorded_again(tmp_path: Path):
     plugin = _Plugin(tmp_path)
+    plugin.start_turn()
+    _wrote(plugin)
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_creates(plugin), equal_to([]))
+
+
+def test_the_next_turn_carries_no_catch_up_reminder(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.start_turn()
     _wrote(plugin)
     plugin.end_turn()
-    for turn_id in ("turn-2", "turn-3"):
-        plugin.tool_call(f"call-{turn_id}", turn_id=turn_id, command="date")
-        plugin.end_turn(turn_id=turn_id)
 
-    plugin.tool_call(
-        "call-4",
-        turn_id="turn-4",
-        tool_name="agentbarn_task",
-        args={"action": "create", "title": "Unrelated"},
-        result=json.dumps({"id": "task-4", "status": "in_progress"}),
+    assert_that("did work without recording" in _context(plugin.start_turn()), is_(False))
+
+
+def test_review_and_subagent_runs_are_left_alone(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.start_turn(user_message="Write the states CSV")
+
+    context = plugin.start_turn(
+        user_message="Review the conversation above", turn_id="review-1", parent_session_id="s1"
     )
-    plugin.end_turn(turn_id="turn-4")
+    reminders = [plugin.tool_call(f"call-{n}", turn_id="review-1") for n in range(1, 5)]
+    plugin.end_turn(turn_id="review-1")
 
-    assert_that(_attaches(plugin), equal_to([]))
+    assert_that((context, reminders, _creates(plugin)), equal_to((None, [None] * 4, [])))

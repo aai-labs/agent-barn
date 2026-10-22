@@ -5,10 +5,11 @@ command stays the one client of the Task routes. Each turn starts with the Agent
 Tasks. A turn that does real work without touching a Task (three or more tool calls, or
 any file it writes) is reminded inside the turn through the tool result the model reads
 next; a turn that wrote files is also held back once before it finishes (`pre_verify`).
-If it still ends without a Task, the next turn carries a reminder. The plugin never
-creates a Task itself, but it does the bookkeeping that would otherwise cost the model a
-call each: when a turn ends, the files it wrote go to the Task it worked on and a Task it
-left in progress is marked done.
+If it still ends without a Task, the plugin records one itself, named after the request,
+with origin `automatic`. It also does the bookkeeping that would otherwise cost the model
+a call each: when a turn ends, the files it wrote go to the Task it worked on and a Task
+it left in progress is marked done. Runs with a parent session (Hermes's background
+review, subagents) are left alone: they are not the user's request.
 """
 
 import json
@@ -32,10 +33,8 @@ _OPEN_TASKS_TTL_SECONDS = 60
 _OPEN_TASKS_SHOWN = 10
 # Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 _DONE_TASKS_SHOWN = 3
-_PENDING_FILES_KEPT = 20
-# How many later turns an unattached file waits for a Task: on Hermes the background review run and
-# then the user's next message. After that it is dropped rather than attached to unrelated work.
-_CARRY_TURNS = 2
+_AUTOMATIC_TITLE_CHARS = 120
+_AUTOMATIC_DESCRIPTION_CHARS = 2000
 _COMMAND_TIMEOUT_SECONDS = 150
 # A short message made only of these words is small talk ("Thanks!", "That's all for now"): it gets
 # no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
@@ -107,11 +106,6 @@ _REQUEST_LINE = (
     "or continue an open one. Don't mention Tasks in your reply unless the user asks."
 )
 _QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping."
-_NEXT_TURN_REMINDER = (
-    "Your previous turn did work without recording it as a Task. If it was more than a quick answer, "
-    "record it now with the agentbarn_task tool: create its Task, or set the Task it continues back to "
-    "in_progress, with a body on what was done. Its files are attached for you."
-)
 
 _SCHEMA = {
     "name": _TOOL,
@@ -154,10 +148,10 @@ _current_turn: dict[str, str] = {}
 # session_id -> the reminder its next turn starts with
 _next_turn_reminders: dict[str, str] = {}
 _open_tasks_cache: dict = {"at": 0.0, "lines": None}
-# session_id -> files written in a turn that ended without attaching them: name -> (path, turns
-# left). The session's next turns take them over: the Task is often created there, by the catch-up
-# on the next message or by Hermes's own background review run.
-_pending_files: dict[str, dict[str, tuple[str, int]]] = {}
+# session_id -> the user's latest request, the title of a Task recorded automatically
+_requests: dict[str, str] = {}
+# (session_id, turn_id) of runs with a parent session: the background review and subagents
+_side_runs: set[tuple[str, str]] = set()
 
 
 def _command() -> str:
@@ -302,10 +296,8 @@ def _track(
 ) -> dict:
     """Count one tool call in its turn. Safe to call twice for the same call."""
     _current_turn[session_id] = turn_id
-    key = (session_id, turn_id)
-    new_turn = key not in _turns
     turn = _turns.setdefault(
-        key,
+        (session_id, turn_id),
         {
             "work": set(),
             "wrote_files": False,
@@ -317,14 +309,8 @@ def _track(
             "attached": set(),
             "reminded": False,
             "held": False,
-            # name -> turns left, for files carried over from an earlier turn
-            "carried": {},
         },
     )
-    if new_turn:
-        for name, (path, turns_left) in _pending_files.pop(session_id, {}).items():
-            turn["written"].setdefault(name, path)
-            turn["carried"][name] = turns_left
     if _touches_tasks(tool_name, args):
         turn["recorded"] = True
         turn["attached"] |= _attached_names(tool_name, args)
@@ -392,15 +378,43 @@ def _close_in_progress(turn: dict) -> None:
             _open_tasks_cache["lines"] = None
 
 
+def _record_automatically(session_id: str, turn: dict) -> list[str]:
+    """Record a Task for work the Agent left unrecorded. Returns the files it could not attach."""
+    with _lock:
+        request = " ".join(_requests.get(session_id, "").split())
+    title = request or "Work recorded automatically"
+    if len(title) > _AUTOMATIC_TITLE_CHARS:
+        title = title[: _AUTOMATIC_TITLE_CHARS - 1].rstrip() + "…"
+    argv = ["create", "--title", title, "--status", "done", "--origin", "automatic"]
+    if request:
+        argv += ["--description", request[:_AUTOMATIC_DESCRIPTION_CHARS]]
+    ok, output = _run(argv)
+    with _lock:
+        _open_tasks_cache["lines"] = None
+    try:
+        task_id = json.loads(output).get("id") if ok else None
+    except (ValueError, AttributeError):
+        task_id = None
+    if not isinstance(task_id, str):
+        return sorted(_unattached(turn))
+    turn["task_ids"] = {task_id}
+    return _attach_automatically(turn)
+
+
+def _side_run(session_id: str, turn_id: str) -> bool:
+    with _lock:
+        return session_id == _BOOT_SESSION_ID or (session_id, turn_id) in _side_runs
+
+
 def _on_post_tool_call(tool_name="", args=None, result=None, session_id="", turn_id="", tool_call_id="", **_):
-    if session_id == _BOOT_SESSION_ID:
+    if _side_run(session_id, turn_id):
         return
     with _lock:
         _track(tool_name, args, session_id, turn_id, tool_call_id, result)
 
 
 def _on_transform_tool_result(tool_name="", args=None, result=None, session_id="", turn_id="", tool_call_id="", **_):
-    if session_id == _BOOT_SESSION_ID:
+    if _side_run(session_id, turn_id):
         return None
     with _lock:
         turn = _track(tool_name, args, session_id, turn_id, tool_call_id, result)
@@ -414,43 +428,26 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
     """Hermes fires this at the end of every turn, despite its name.
 
     A turn's files go to the one Task it touched without asking the model; the Agent can
-    remove any that are not part of the result. Only what could not be attached is named
-    on the next turn.
+    remove any that are not part of the result. Work the Agent did not record at all is
+    recorded automatically. Only what could not be attached is named on the next turn.
     """
     with _lock:
+        _side_runs.discard((session_id, turn_id))
         turn = _turns.pop((session_id, turn_id), None)
         if _current_turn.get(session_id) == turn_id:
             del _current_turn[session_id]
-    if turn is None:
+    if turn is None or not completed:
         return
-    if not completed or not turn["recorded"]:
-        _keep_for_next_turn(session_id, turn, _unattached(turn))
-        if not completed or not _unrecorded_work(turn):
-            return
-        reminder = _NEXT_TURN_REMINDER
-    else:
+    if _unrecorded_work(turn):
+        failed = _record_automatically(session_id, turn)
+    elif turn["recorded"]:
         failed = _attach_automatically(turn)
         _close_in_progress(turn)
-        if not failed:
-            return
-        _keep_for_next_turn(session_id, turn, {name: turn["written"][name] for name in failed})
-        reminder = _attach_reminder(failed)
-    with _lock:
-        _next_turn_reminders[session_id] = reminder + _QUIET
-
-
-def _keep_for_next_turn(session_id: str, turn: dict, files: dict[str, str]) -> None:
-    """Hand files on to the session's next turn: new ones for _CARRY_TURNS turns, carried ones for one fewer."""
-    kept = {}
-    for name, path in files.items():
-        turns_left = turn["carried"][name] - 1 if name in turn["carried"] else _CARRY_TURNS
-        if turns_left > 0:
-            kept[name] = (path, turns_left)
-    if not kept:
+    else:
         return
-    with _lock:
-        pending = {**_pending_files.get(session_id, {}), **kept}
-        _pending_files[session_id] = dict(list(pending.items())[-_PENDING_FILES_KEPT:])
+    if failed:
+        with _lock:
+            _next_turn_reminders[session_id] = _attach_reminder(failed) + _QUIET
 
 
 def _on_pre_verify(session_id="", **_):
@@ -492,9 +489,16 @@ def _small_talk(message) -> bool:
     return 0 < len(words) <= _SMALL_TALK_MAX_WORDS and all(word in _SMALL_TALK_WORDS for word in words)
 
 
-def _on_pre_llm_call(session_id="", user_message="", **_):
+def _on_pre_llm_call(session_id="", turn_id="", user_message="", parent_session_id="", **_):
     if session_id == _BOOT_SESSION_ID:
         return None
+    if parent_session_id:
+        with _lock:
+            _side_runs.add((session_id, turn_id))
+        return None
+    if isinstance(user_message, str):
+        with _lock:
+            _requests[session_id] = user_message
     parts = [] if _small_talk(user_message) else ["[Agent Barn] " + _REQUEST_LINE]
     lines = _open_task_lines()
     if lines:
