@@ -8,7 +8,7 @@ from api.domains.sync_provider.plugins.base import RemoteItemMissing
 from api.infrastructure.crypto import encrypt_token
 from api.tests.core.modules import prepare_ingest_server, prepare_injector, set_env_variable
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, there_is_an_agent
-from api.tests.steps.database import database_repo_is_ready
+from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.file_sync_provider import TestDriveModule, fake_drive, there_is_a_sync_connection
 from api.tests.steps.organization import there_is_an_organization
 
@@ -17,11 +17,12 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 
 
-def file_sync_ingest_base() -> list:
+def file_sync_ingest_base(*, clean_database: bool = False) -> list:
     return [
         set_env_variable({"AGENT_TOKEN_ENCRYPTION_KEY": TEST_ENCRYPTION_KEY}),
         prepare_injector(modules=[TestDriveModule()]),
         database_repo_is_ready(),
+        *([database_is_clean()] if clean_database else []),
         prepare_ingest_server(),
         there_is_an_organization(),
     ]

@@ -10,7 +10,7 @@ from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent
+from api.domains.agents.models import Agent, AgentType
 from api.domains.file_sync.models import (
     SyncActivity,
     SyncActivityKind,
@@ -160,6 +160,43 @@ class FileSyncRepository:
                 session.add(row)
             session.commit()
             return rows
+
+    def save_cursor(self, connection_id: UUID, cursor: str) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(SyncProviderConnection)
+                .where(col(SyncProviderConnection.id) == connection_id)
+                .values(sync_cursor=cursor)
+            )
+            session.commit()
+
+    def folders_with_runtime(self, connection_id: UUID) -> list[tuple[SyncAgentFolder, str]]:
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(SyncAgentFolder, Agent.agent_type)
+                .join(Agent, col(Agent.id) == col(SyncAgentFolder.agent_id))
+                .where(col(SyncAgentFolder.connection_id) == connection_id)
+            )
+            return [(folder, AgentType(agent_type).value) for folder, agent_type in rows]
+
+    def file_by_item(self, folder_id: UUID, item_id: str) -> SyncFile | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(SyncFile).where(col(SyncFile.folder_id) == folder_id, col(SyncFile.item_id) == item_id)
+            ).first()
+
+    def mark_remote_change(self, file_id: UUID, action: SyncPendingAction, retry_at: datetime) -> bool:
+        with Session(self.delegate.engine) as session:
+            result = session.exec(
+                sa.update(SyncFile)
+                .where(
+                    col(SyncFile.id) == file_id,
+                    or_(col(SyncFile.pending).is_(None), col(SyncFile.pending) == action),
+                )
+                .values(pending=action, retry_at=retry_at)
+            )
+            session.commit()
+            return result.rowcount > 0
 
     def clear_pending(self, file_id: UUID) -> None:
         self._update_file(file_id, pending=None, lease_until=None, attempts=0, retry_at=None)

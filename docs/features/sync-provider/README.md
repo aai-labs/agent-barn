@@ -122,7 +122,7 @@ A new provider is a plugin, its provider client, and tests. No route, table, mig
 
 ## Agent file sync
 
-Decided in the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md). Delivery is in progress, and this section describes only what runs today: each Agent's folder. Files are not synced yet ([`CHANGELOG.md`](CHANGELOG.md)).
+Decided in the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md). Delivery is in progress, and this section describes only what runs today: each Agent's folder, and the jobs people's edits create. No pod calls the [Ingest file sync routes](../activity-and-ingest.md) yet, so files are not synced ([`CHANGELOG.md`](CHANGELOG.md)).
 
 ### Sync Engine
 
@@ -140,7 +140,7 @@ Every live Agent of the Organization gets a folder directly under "Agent Barn", 
 - **New Agents:** the row is reserved first, oldest Agent first, and the database's unique name index decides ties. The folder is then created at the provider. A failed create is finished on the next pass.
 - **Renamed Agents:** their folder is renamed.
 - **Deleted Agents:** their folder is marked `stopped` without calling the provider, and stays at the provider with its files.
-- **Disabled folders** are left alone. A pass with nothing to do makes no provider call.
+- **Disabled folders** are left alone. When no folder needs changing, this part of the pass makes no provider call.
 
 Folder names follow the Agent's name:
 - `: " * < > ? | \ /` and control characters become `-`;
@@ -153,6 +153,25 @@ Duplicate names, compared case-insensitively, get the lowest free ` (2)`, ` (3)`
 - **Dropping the number:** a numbered folder drops its number once the plain name is free. Two Agents swapping names therefore settle within two passes without ever sharing a name.
 
 A person renaming or deleting an Agent's folder, or the "Agent Barn" root, at the provider is not handled yet.
+
+### People's edits
+
+After the folders, each pass reads the provider's changes under "Agent Barn" since the connection's `sync_cursor`. That is one provider call per page, and normally one per pass.
+- **Starting point:** a connection's first pass only records a cursor starting now, so files already there are not treated as edits.
+- **Saving progress:** the cursor is saved after each page.
+
+A changed file is matched to its Agent Folder by its first path segment, and to its `sync_file` row by the provider's item id. It is ignored when:
+- its folder is not active;
+- the item has no row, or its path differs (new, renamed and moved files are not handled yet);
+- the provider says an app changed it;
+- an upload of it is under way;
+- its content version equals the one recorded.
+
+Otherwise a person changed its content:
+- **Work and memory files:** a `download` job for the pod. An edit over 100 MB is not downloaded, and is recorded once as `skipped_too_large`.
+- **Config and skills files:** a `reupload` job, which undoes the edit with the Agent's copy, and `edit_undone` recorded once per provider version.
+- **Autosave:** a job is not handed out until 30 s after the item's last modification (`retry_at`). Each further autosave pushes that back, and the cursor never waits.
+- **One job per file:** a pending re-upload is never turned into a download.
 
 ## OneDrive provider
 

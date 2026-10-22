@@ -40,11 +40,12 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - folder reconciliation (`FileSyncEngine.reconcile_folders`);
   - the Sync Engine (`api/sync_engine_main.py`) and its deployment: Helm `syncEngine`, `make dev-sync-engine`, and the `sync-engine` Compose service started by `run.sh`;
   - the pod's file report route (`POST …/file-sync/changes`): authentication, readiness checks and path rules; upload links, empty files, skips, and deletes for a complete report. Upload completion is at `POST …/file-sync/uploads/complete`;
-  - the pod's jobs (`GET …/file-sync/operations`, `POST …/file-sync/operations/result`): downloads and re-uploads with leases, retries and the Agent-wins conflict rule. Nothing creates jobs yet; remote change processing will.
+  - the pod's jobs (`GET …/file-sync/operations`, `POST …/file-sync/operations/result`): downloads and re-uploads with leases, retries and the Agent-wins conflict rule;
+  - remote edits: the engine reads the change feed and turns people's content edits into downloads (work, memory) or undos (config, skills).
 
   Folders follow Agents on every connected Organization. No pod calls these routes yet, so files are not synced.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. remote change processing;
+  1. remote change processing: new, moved, renamed and deleted files and folders, then cursor robustness;
   2. the in-pod helper;
   3. builder and `start.sh` wiring;
   4. pinned-image contracts;
@@ -75,6 +76,44 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — People's edits become downloads or undos
+
+- Delivered: `FileSyncEngine.process_changes(connection)`, run by every engine pass after the folders.
+  - **No cursor yet:** it stores a cursor starting now (`changes(root, None)`) and processes nothing.
+  - **Otherwise:** it reads every page since `sync_cursor` and saves the new cursor after each page.
+- **Matching a changed item:**
+  - its folder by the path's first segment, among active folders that exist at the provider;
+  - its `sync_file` row by item id, with the same path, case-insensitively.
+- **Ignored:**
+  - folders, deleted items, and items without a path, folder or row (new, renamed and moved files come in the next slice);
+  - changes the provider attributes to an app (`modified_by_app`);
+  - files with an upload under way;
+  - an unchanged `content_version`.
+- **A person's content edit:**
+  - **Work and memory:** `pending = download`. Over 100 MB, `skipped_too_large` is recorded once per version and nothing is downloaded.
+  - **Config and skills:** `pending = reupload`, with `edit_undone` recorded once per provider version.
+  - **Not before:** `retry_at` is the item's last modification plus 30 s (the PR 0 autosave finding). The pod's job claim already waits for `retry_at`, so each autosave pushes the job back without holding the cursor.
+  - **One action per file:** a pending action is only refreshed by the same action (`mark_remote_change`), so an undo is never turned into a download.
+- Delivered: `FileSyncRepository.save_cursor`, `folders_with_runtime`, `file_by_item` and `mark_remote_change`.
+- Changed:
+  - Sync provider README: the "People's edits" section. The folder note "a pass with nothing to do makes no provider call" is corrected to cover the folder part only, because every pass now reads the change feed.
+  - `file_sync_ingest_base(clean_database=True)` cleans the database before the Organization is created.
+- Verified:
+  - `tests/integration/test_file_sync_remote_edits.py` (14 tests) failed first. The first run failed in setup, because the database was cleaned after the Organization was made. After that was fixed, all 14 failed on the missing `process_changes`; they now pass.
+  - They cover:
+    - the cursor starting now;
+    - the Agent's own uploads ignored;
+    - work and memory edits becoming downloads after 30 s;
+    - config and skill edits undone and recorded;
+    - repeated edits;
+    - an undo not replaced;
+    - an upload under way;
+    - an edit over 100 MB;
+    - a disabled folder;
+    - the cursor moving on;
+    - a full `run_pass`.
+  - All file sync suites pass together twice (141 tests). ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — Pod jobs: downloads, re-uploads and the Agent-wins rule
 

@@ -2,16 +2,22 @@ import logging
 import re
 import urllib.parse
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from injector import inject, singleton
 
-from api.domains.file_sync.models import SyncAgentFolder, SyncFolderStatus
+from api.domains.file_sync.models import SyncActivityKind, SyncAgentFolder, SyncFolderStatus, SyncPendingAction
 from api.domains.file_sync.repository import FileSyncRepository
-from api.domains.file_sync.rules import FORBIDDEN_CHARACTERS, name_problem
+from api.domains.file_sync.rules import FORBIDDEN_CHARACTERS, MAX_FILE_BYTES, SyncCategory, classify, name_problem
 from api.domains.sync_provider.models import SyncProviderCapability, SyncProviderConnection
-from api.domains.sync_provider.plugins.base import ProviderThrottled, RemoteNameTaken, SyncProviderPlugin, SyncRoot
+from api.domains.sync_provider.plugins.base import (
+    ProviderThrottled,
+    RemoteItem,
+    RemoteNameTaken,
+    SyncProviderPlugin,
+    SyncRoot,
+)
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
 from api.domains.sync_provider.service import FOLDER_NAME
 
@@ -19,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 FOLDER_NAME_MAX = 255
 THROTTLE_FALLBACK_SECONDS = 60
+SETTLE_DELAY = timedelta(seconds=30)
 FOLDER_NAME_FALLBACK = "Agent"
 FOLDER_FORBIDDEN_CHARACTERS = FORBIDDEN_CHARACTERS | {"/"}
 NAME_ATTEMPTS = 100
@@ -78,12 +85,62 @@ class FileSyncEngine:
                     continue
                 try:
                     self.reconcile_folders(connection)
+                    self.process_changes(connection)
                 except ProviderThrottled as exc:
                     wait = exc.retry_after or THROTTLE_FALLBACK_SECONDS
                     self.repository.postpone(connection.id, now + timedelta(seconds=wait))
                     logger.info("File sync for connection %s throttled for %ss", connection.id, wait)
                 except Exception:
                     logger.exception("File sync pass failed for connection %s", connection.id)
+
+    def process_changes(self, connection: SyncProviderConnection) -> None:
+        plugin = self.plugins.require(connection.provider_key)
+        root = sync_root(connection)
+        if SyncProviderCapability.FILE_SYNC not in plugin.capabilities or root is None:
+            return
+        if connection.sync_cursor is None:
+            self.repository.save_cursor(connection.id, plugin.changes(root, None).cursor)
+            return
+        folders = {
+            folder.folder_name.lower(): (folder, runtime)
+            for folder, runtime in self.repository.folders_with_runtime(connection.id)
+            if folder.status == SyncFolderStatus.ACTIVE and folder.folder_item_id is not None
+        }
+        cursor = connection.sync_cursor
+        while True:
+            page = plugin.changes(root, cursor)
+            for item in page.items:
+                self._remote_change(folders, item)
+            cursor = page.cursor
+            self.repository.save_cursor(connection.id, cursor)
+            if not page.more:
+                return
+
+    def _remote_change(self, folders: dict[str, tuple[SyncAgentFolder, str]], item: RemoteItem) -> None:
+        if item.is_folder or item.deleted or item.path is None:
+            return
+        folder_name, _, rel_path = item.path.partition("/")
+        entry = folders.get(folder_name.lower())
+        if not rel_path or entry is None:
+            return
+        folder, runtime = entry
+        row = self.repository.file_by_item(folder.id, item.id)
+        if row is None or row.path.lower() != rel_path.lower():
+            return
+        if item.modified_by_app or row.upload_started_at is not None or item.content_version == row.ctag:
+            return
+        now = datetime.now(UTC)
+        settle_at = (item.modified_at or now) + SETTLE_DELAY
+        version = item.content_version or ""
+        category = classify(runtime, rel_path)
+        if category in (SyncCategory.WORK, SyncCategory.MEMORY):
+            if item.size > MAX_FILE_BYTES:
+                self.repository.record_activity_once(folder, SyncActivityKind.SKIPPED_TOO_LARGE, row.path, version, now)
+                return
+            self.repository.mark_remote_change(row.id, SyncPendingAction.DOWNLOAD, settle_at)
+        elif category in (SyncCategory.CONFIG, SyncCategory.SKILLS):
+            if self.repository.mark_remote_change(row.id, SyncPendingAction.REUPLOAD, settle_at):
+                self.repository.record_activity_once(folder, SyncActivityKind.EDIT_UNDONE, row.path, version, now)
 
     def reconcile_folders(self, connection: SyncProviderConnection) -> None:
         plugin = self.plugins.require(connection.provider_key)
