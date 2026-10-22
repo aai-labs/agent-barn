@@ -109,7 +109,7 @@ def _local_files(rules):
     return found, complete
 
 
-def scan(rules, cache):
+def scan(rules, cache, settle_seconds=SETTLE_SECONDS):
     found, complete = _local_files(rules)
     entries = []
     fresh_cache = {}
@@ -119,7 +119,7 @@ def scan(rules, cache):
         stamp = [info.st_size, info.st_mtime_ns]
         if cached is not None and cached[:2] == stamp:
             digest = cached[2]
-        elif now - info.st_mtime_ns / 1e9 < SETTLE_SECONDS:
+        elif now - info.st_mtime_ns / 1e9 < settle_seconds:
             digest = None
         else:
             try:
@@ -315,8 +315,8 @@ def _apply(ingest, rules, reported, operation, cache):
     ingest.post("operations/result", result)
 
 
-def run_cycle(ingest, rules, state_path):
-    entries, complete, cache = scan(rules, load_state(state_path))
+def run_cycle(ingest, rules, state_path, settle_seconds=SETTLE_SECONDS):
+    entries, complete, cache = scan(rules, load_state(state_path), settle_seconds)
     save_state(state_path, cache)
     answer = ingest.post("changes", {"complete": complete, "entries": entries})
     reported = {entry["path"]: entry for entry in entries}
@@ -356,7 +356,7 @@ def run_once(timeout_seconds):
 
     def attempt():
         try:
-            run_cycle(*settings)
+            run_cycle(*settings, settle_seconds=0)
         except Unauthorized:
             log("ingest refused the key; skipping")
         except Exception as error:

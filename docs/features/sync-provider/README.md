@@ -128,6 +128,7 @@ Decided in the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-throug
 
 Every Hermes and OpenClaw ConfigMap carries `file-sync.py` and `file-sync-rules.json`, which is `rules_manifest` for that runtime. After the Template files and skills are written, `start.sh` runs the helper once, bounded at 60 s and never failing the start, then keeps it running every 15 s while the runtime starts.
 - **Each round:** it scans the synced paths, reports them, uploads what the server asks for, and applies its download and re-upload jobs.
+- **Files being written:** in the background loop, a file changed within the last 5 s keeps its last reported version, or is left out and the report marked incomplete. The run before start skips this wait, because the runtime is not yet writing, so the files `start.sh` has just written are offered at once.
 - **When it stops:** a refused key (401) stops it. An Agent without an active folder gets 404 or 409 and keeps asking, so sync starts once a connection is made.
 - **No provider credentials:** the pod only ever holds per-file upload and download links.
 

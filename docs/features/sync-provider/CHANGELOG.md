@@ -81,6 +81,29 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 ## Changes
 
+### 2026-10-22 — AF-384 — Pinned-image file sync contracts
+
+- **Delivered:** `api/runtime_tests/test_{hermes,openclaw}_file_sync.py` over the shared `file_sync_contract.py`.
+  - **Setup:**
+    - each runs the real `start.sh` from the generated ConfigMap in the pinned image with `--network=none`;
+    - a loopback ingest stub (`runtime_tests/fixtures/file_sync_ingest_stub.py`) logs requests to a mounted folder;
+    - a probe replaces `hermes` / `openclaw gateway` and records how many requests had arrived when the runtime started.
+  - **Checks:**
+    - the first round (report, uploads, confirmations, jobs) finishes before the runtime starts;
+    - the report is complete and offers the Template files, the skill and native memory;
+    - no path the rules never sync is offered, and planted `config.yaml` / `openclaw.json` / `.env` / `aai-cli/key` are absent;
+    - uploads carry no `Authorization` and match the reported hashes;
+    - the runtime still starts when ingest cannot be reached.
+- **Fixed:** the helper's `--once` run reported nothing at start.
+  - **Cause:** `start.sh` writes the Template files and skills moments before it, and the 5-second settle rule treated all of them as still being written. The real image showed an empty report with `complete: false`.
+  - **Fix:** `--once` now scans without the settle wait, since the runtime has not started. The background loop keeps it.
+  - **Tests:** a new `test_file_sync_helper.py` test failed first. The two settle tests now run one loop round instead of `--once`.
+- **Verified:**
+  - the 4 contracts pass against `k3d-registry:5000/agentfarm-{hermes,openclaw}-base:dev` (Python 3.13.5 and 3.12.13) and against `hermes-base:local` / `openclaw-base:local`;
+  - the helper suite has 25 passing and 2 skipped on Windows;
+  - ruff, format and ty pass.
+- **Noted:** generated files are written with `newline="\n"`, so the contracts also run from Windows.
+
 ### 2026-10-22 — AF-384 — Builders and start.sh run the pod helper
 
 - **Delivered:**

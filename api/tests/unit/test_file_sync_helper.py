@@ -38,6 +38,7 @@ class _Ingest:
         self.hang = False
         self.request_times: list[float] = []
         self.operations: list[dict] = []
+        self.rounds = 0
         self.results: list[FileSyncOperationResultCreate] = []
         self.downloads: dict[str, tuple[int, bytes]] = {}
         self.on_download: Callable[[], None] | None = None
@@ -147,6 +148,7 @@ class _Ingest:
                     handed_out = FileSyncOperationsRead.model_validate({"operations": ingest.operations})
                     ingest.operations = []
                     self._send(200, handed_out.model_dump(mode="json"))
+                    ingest.rounds += 1
                 else:
                     self._send(404)
 
@@ -206,6 +208,18 @@ def _run(tmp_path: Path, ingest_url: str, runtime: str = "openclaw", *args: str)
         check=False,
     )
     return result, time.monotonic() - started
+
+
+def _loop_round(tmp_path: Path, ingest: _Ingest) -> None:
+    rounds = ingest.rounds
+    process = subprocess.Popen([sys.executable, str(_SCRIPT), "--interval", "60"], env=_env(tmp_path, ingest.url))
+    try:
+        deadline = time.monotonic() + 20
+        while ingest.rounds == rounds and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:
@@ -292,12 +306,24 @@ def test_symlinks_and_files_behind_them_are_never_reported(tmp_path):
     assert_that([entry.path for entry in ingest.reports[0].entries], equal_to(["workspace/real.md"]))
 
 
+def test_once_offers_files_written_a_moment_before_it_runs(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/AGENTS.md", b"template", age_seconds=0)
+    with _Ingest() as ingest:
+        _run(tmp_path, ingest.url)
+
+    report = ingest.reports[0]
+    assert_that(report.complete, equal_to(True))
+    assert_that([entry.path for entry in report.entries], equal_to(["workspace/AGENTS.md"]))
+    assert_that(ingest.completed, equal_to(["workspace/AGENTS.md"]))
+
+
 def test_a_file_still_being_written_is_left_out_and_the_report_marked_incomplete(tmp_path):
     volume = tmp_path / "volume"
     _write(volume, "workspace/done.md", b"done")
     _write(volume, "workspace/writing.md", b"partial", age_seconds=0)
     with _Ingest() as ingest:
-        _run(tmp_path, ingest.url)
+        _loop_round(tmp_path, ingest)
 
     report = ingest.reports[0]
     assert_that(report.complete, equal_to(False))
@@ -312,7 +338,7 @@ def test_a_known_file_still_being_written_keeps_its_last_reported_version(tmp_pa
         _run(tmp_path, ingest.url)
         ingest.known["workspace/notes.md"] = hashlib.sha256(b"first").hexdigest()
         _write(volume, "workspace/notes.md", b"second version", age_seconds=0)
-        _run(tmp_path, ingest.url)
+        _loop_round(tmp_path, ingest)
 
     second = ingest.reports[1]
     assert_that(second.complete, equal_to(True))

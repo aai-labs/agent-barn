@@ -247,6 +247,15 @@ Apollo contracts run the patched aai-cli in both images against an offline loopb
 
 SharePoint contracts run the pinned patched aai-cli in both real images with external networking disabled. A loopback stub verifies POST token requests, dedicated-token failure without environment fallback, typed files/Excel auth, sign-in-marker continuity, failed handoff preservation, mixed provider cleanup and latest-grant handback. The API matrix covers both directions for every provider/runtime, legacy migration, source ownership, failure/retry/restore permissions, durable broker rotation/cache and reconnect. These tests use fixture grants only. Run `make test-api-runtime RUNTIME=hermes` with `HERMES_TEST_IMAGE`, or the OpenClaw equivalent with `OPENCLAW_TEST_IMAGE`. The image must be rebuilt after the pinned CLI/patch changes; an old local tag cannot prove this contract.
 
+File sync contracts (`../../api/runtime_tests/test_{hermes,openclaw}_file_sync.py`) run each image's real `start.sh` from the generated ConfigMap with external networking disabled. A loopback ingest stub (`runtime_tests/fixtures/file_sync_ingest_stub.py`) logs every request, and a probe replaces the runtime command. They check:
+- the helper runs on the image's own `python3`;
+- its first round finishes before the runtime starts;
+- the Template files, skills and native memory are offered, nothing the rules never sync is offered, and the planted secrets stay out;
+- uploads carry no credential and are confirmed;
+- the runtime still starts when ingest cannot be reached.
+
+Bodies are validated against the API's Pydantic models. Run them through `make test-api-runtime` with the image variable; they need no image rebuild after a helper change, because the helper ships in the ConfigMap.
+
 Agent Memory gateway tests replay sanitized Hermes and OpenClaw request captures
 from `../../api/tests/fixtures/agent_memory/` through a real HTTP listener. They
 cover the outbound bank, forced tags, document/operation namespaces, lifecycle
