@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
 
 STATUSES = ("open", "in_progress", "done", "failed")
+ORIGINS = ("agent", "automatic")
 NOTE_LIMIT = 10000
 UNCONFIRMED = "Agent Barn Tasks are unavailable right now, so the change was not confirmed. Try again shortly."
 
@@ -76,6 +77,9 @@ def main() -> int:
     create.add_argument("--description")
     create.add_argument("--status", choices=STATUSES, help="Start the Task in this status rather than open.")
     create.add_argument("--note", help="Add this note to the new Task.")
+    create.add_argument(
+        "--origin", choices=ORIGINS, help="automatic when the Task plugin records work the Agent did not."
+    )
     status = commands.add_parser("status", help="Change a Task's status.")
     status.add_argument("task_id")
     status.add_argument("status", choices=STATUSES)
@@ -137,6 +141,8 @@ def main() -> int:
         payload = {"title": args.title}
         if args.description:
             payload["description"] = args.description
+        if args.origin:
+            payload["origin"] = args.origin
         if (not args.status or args.status == "open") and not note_text:
             return send(json_request(tasks_url, "POST", payload))
         ok, task = fetch(json_request(tasks_url, "POST", payload))

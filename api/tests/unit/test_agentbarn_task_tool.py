@@ -352,3 +352,11 @@ def test_attach_replace_keeps_the_earlier_file_when_the_upload_is_refused(tmp_pa
 
     assert_that((result.returncode, result.stderr.strip()), equal_to((1, "Storage is full")))
     assert_that([request["method"] for request in stub.requests], equal_to(["GET", "POST"]))
+
+
+def test_create_can_say_the_task_was_recorded_automatically():
+    with _IngestStub(status=201, body={"id": TASK_ID, "status": "open", "origin": "automatic"}) as stub:
+        result = _run(stub, "create", "--title", "Reconcile invoices", "--origin", "automatic")
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(json.loads(stub.requests[0]["body"]), equal_to({"title": "Reconcile invoices", "origin": "automatic"}))

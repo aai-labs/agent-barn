@@ -127,8 +127,31 @@ def test_an_agent_creates_an_open_task():
                         title="Reconcile invoices",
                         description="For October",
                         status="open",
+                        origin="agent",
                     ),
                 )
+
+
+def test_a_task_recorded_automatically_says_so():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        with when("the Agent's runtime records a Task the Agent did not"):
+            response = _create(context, origin="automatic")
+            shown = context.ingest_client.get(
+                f"{_tasks_url(context.agent)}/{response.json()['id']}", headers=_headers(context.ingest_key)
+            )
+
+            with then("the Task carries its origin"):
+                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+                assert_that(shown.json(), has_entries(origin="automatic"))
+
+
+def test_an_unknown_origin_is_rejected():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        with when("a Task is created with an origin that does not exist"):
+            response = _create(context, origin="person")
+
+            with then("it is rejected"):
+                assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_CONTENT))
 
 
 def test_the_agent_and_organization_come_from_the_key_not_the_body():
