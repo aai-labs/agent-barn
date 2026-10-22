@@ -21,6 +21,12 @@ const WORK_THRESHOLD = 3;
 const FILE_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const OPEN_TASKS_TTL_MS = 60_000;
 const OPEN_TASKS_SHOWN = 10;
+// Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
+const DONE_TASKS_SHOWN = 3;
+const PENDING_FILES_KEPT = 20;
+// How many later runs an unattached file waits for a Task (the catch-up usually comes on the next
+// message). After that it is dropped rather than attached to unrelated work.
+const CARRY_RUNS = 2;
 const COMMAND_TIMEOUT_MS = 150_000;
 // A short message made only of these words is small talk ("Thanks!", "That's all for now"): it
 // gets no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
@@ -44,8 +50,8 @@ const REQUEST_LINE =
 const QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping.";
 const NEXT_TURN_REMINDER =
   "Your previous turn did work without recording it as a Task. If it was more than a quick answer, " +
-  "record it now with the agentbarn_task tool: create the Task with a body on what was done, and attach " +
-  "any files it produced.";
+  "record it now with the agentbarn_task tool: create its Task, or set the Task it continues back to " +
+  "in_progress, with a body on what was done. Its files are attached for you.";
 
 const PARAMETERS = {
   type: "object",
@@ -74,6 +80,8 @@ const runs = new Map();
 const currentRun = new Map();
 // sessionKey -> the reminder its next turn starts with
 const nextTurnReminders = new Map();
+// sessionKey -> files written in a run that ended without attaching them: name -> [path, runs left]
+const pendingFiles = new Map();
 let openTasksCache = { at: 0, lines: null };
 
 const command = () => process.env.AGENTBARN_TASK_COMMAND || "/usr/local/bin/agentbarn-task";
@@ -216,11 +224,30 @@ function track(event, ctx) {
       // taskId -> the last status the Agent set this run
       statuses: new Map(),
       attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "",
+      // name -> runs left, for files carried over from an earlier run
+      carried: new Map(),
     };
     runs.set(runId, state);
+    for (const [name, [path, runsLeft]] of pendingFiles.get(state.sessionKey) ?? []) {
+      if (!state.written.has(name)) state.written.set(name, path);
+      state.carried.set(name, runsLeft);
+    }
+    pendingFiles.delete(state.sessionKey);
   }
   return state;
 }
+
+// Hand files on to the session's next run: new ones for CARRY_RUNS runs, carried ones for one fewer.
+function keepForNextRun(sessionKey, state, names) {
+  const pending = new Map(pendingFiles.get(sessionKey) ?? []);
+  for (const name of names) {
+    const runsLeft = state.carried.has(name) ? state.carried.get(name) - 1 : CARRY_RUNS;
+    if (runsLeft > 0) pending.set(name, [state.written.get(name), runsLeft]);
+  }
+  if (pending.size) pendingFiles.set(sessionKey, new Map([...pending].slice(-PENDING_FILES_KEPT)));
+}
+
+const unattachedNames = (state) => [...state.written.keys()].filter((name) => !state.attached.has(name));
 
 const unrecordedWork = (state) =>
   Boolean(state) && !state.recorded && (state.wroteFiles || state.work.size >= WORK_THRESHOLD);
@@ -265,7 +292,7 @@ function smallTalk(message) {
 async function openTaskLines() {
   if (openTasksCache.lines && Date.now() - openTasksCache.at < OPEN_TASKS_TTL_MS) return openTasksCache.lines;
   const lines = [];
-  for (const status of ["in_progress", "open"]) {
+  for (const status of ["in_progress", "open", "done"]) {
     const { ok, output } = await run(["list", "--status", status]);
     if (!ok) return null;
     let items;
@@ -275,9 +302,11 @@ async function openTaskLines() {
       return null;
     }
     if (!Array.isArray(items)) return null;
-    for (const task of items) lines.push(`- ${task.id} [${task.status}] ${String(task.title ?? "").slice(0, 120)}`);
+    for (const task of items.slice(0, status === "done" ? DONE_TASKS_SHOWN : OPEN_TASKS_SHOWN)) {
+      lines.push(`- ${task.id} [${task.status}] ${String(task.title ?? "").slice(0, 120)}`);
+    }
   }
-  openTasksCache = { at: Date.now(), lines: lines.slice(0, OPEN_TASKS_SHOWN) };
+  openTasksCache = { at: Date.now(), lines };
   return openTasksCache.lines;
 }
 
@@ -360,14 +389,18 @@ export default {
       runs.delete(runId);
       const sessionKey = ctx.sessionKey ?? state?.sessionKey ?? "";
       if (currentRun.get(sessionKey) === runId) currentRun.delete(sessionKey);
-      if (!state || ctx.trigger === "heartbeat" || event.success === false) return;
-      if (unrecordedWork(state)) {
-        nextTurnReminders.set(sessionKey, NEXT_TURN_REMINDER + QUIET);
+      if (!state || ctx.trigger === "heartbeat") return;
+      if (event.success === false || !state.recorded) {
+        keepForNextRun(sessionKey, state, unattachedNames(state));
+        if (event.success !== false && unrecordedWork(state)) nextTurnReminders.set(sessionKey, NEXT_TURN_REMINDER + QUIET);
         return;
       }
-      const failed = state.recorded ? await attachAutomatically(state) : [];
+      const failed = await attachAutomatically(state);
       await closeInProgress(state);
-      if (failed.length) nextTurnReminders.set(sessionKey, attachReminder(failed) + QUIET);
+      if (failed.length) {
+        keepForNextRun(sessionKey, state, failed);
+        nextTurnReminders.set(sessionKey, attachReminder(failed) + QUIET);
+      }
     });
 
     api.on("before_prompt_build", async (event, ctx) => {
@@ -377,8 +410,8 @@ export default {
       const lines = await openTaskLines();
       if (lines?.length) {
         parts.push(
-          `Your open Tasks:\n${lines.join("\n")}\nContinue one of these with the agentbarn_task tool rather ` +
-            "than creating another.",
+          `Your open and latest finished Tasks:\n${lines.join("\n")}\nIf the request continues one of these, ` +
+            "keep using it with the agentbarn_task tool (set a done one back to in_progress) rather than creating another.",
         );
       }
       const reminder = nextTurnReminders.get(ctx.sessionKey ?? "");

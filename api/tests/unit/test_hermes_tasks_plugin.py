@@ -299,7 +299,7 @@ def test_each_turn_starts_with_the_agents_open_tasks(tmp_path: Path):
 
     assert_that(context, contains_string("task-1 [in_progress] Reconcile invoices"))
     assert_that(context, contains_string("task-2 [open] Draft summary"))
-    assert_that("Old work" in context, is_(False))
+    assert_that(context, contains_string("task-3 [done] Old work"))
 
 
 def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path):
@@ -312,7 +312,7 @@ def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path
     plugin.start_turn()
     lists_after = sum(call["argv"][0] == "list" for call in plugin.calls())
 
-    assert_that((lists_before, lists_after), equal_to((2, 4)))
+    assert_that((lists_before, lists_after), equal_to((3, 6)))
 
 
 def test_an_unavailable_task_service_does_not_break_the_turn(tmp_path: Path):
@@ -651,7 +651,7 @@ def test_closing_a_task_refreshes_the_open_tasks_shown(tmp_path: Path):
     plugin.end_turn()
     plugin.start_turn()
 
-    assert_that(len([call for call in plugin.calls() if call["argv"][0] == "list"]), equal_to(4))
+    assert_that(len([call for call in plugin.calls() if call["argv"][0] == "list"]), equal_to(6))
 
 
 @pytest.mark.parametrize("message", ["Thanks!", "Thanks, that's great.", "That's all for now, thanks!", "Good morning"])
@@ -669,3 +669,63 @@ def test_requests_and_approvals_carry_the_task_line(tmp_path: Path, message: str
     plugin = _Plugin(tmp_path)
 
     assert_that(_context(plugin.start_turn(user_message=message)), contains_string("agentbarn_task before you start"))
+
+
+# --- files and Tasks across turns ---
+
+
+def test_only_the_three_latest_done_tasks_are_shown(tmp_path: Path):
+    done = [{"id": f"task-{n}", "title": f"Job {n}", "status": "done"} for n in range(1, 6)]
+    plugin = _Plugin(tmp_path, open_tasks=done)
+
+    context = _context(plugin.start_turn())
+
+    assert_that([f"task-{n} [done]" in context for n in range(1, 6)], equal_to([True, True, True, False, False]))
+
+
+def test_files_a_turn_could_not_attach_go_to_the_task_a_later_turn_works_on(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    states = _wrote(plugin)
+    plugin.end_turn()
+
+    plugin.tool_call(
+        "call-2",
+        turn_id="turn-2",
+        tool_name="agentbarn_task",
+        args={"action": "create", "title": "States"},
+        result=json.dumps({"id": "task-2", "status": "in_progress"}),
+    )
+    plugin.end_turn(turn_id="turn-2")
+
+    assert_that(_attaches(plugin), equal_to([["attach", "task-2", states, "--replace"]]))
+
+
+def test_files_carried_over_do_not_count_as_work_in_the_later_turn(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin)
+    plugin.end_turn()
+    plugin.start_turn()
+
+    reminded = plugin.tool_call("call-2", turn_id="turn-2")
+
+    assert_that(reminded, equal_to(None))
+
+
+def test_a_carried_over_file_is_dropped_after_two_more_turns_without_a_task(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _wrote(plugin)
+    plugin.end_turn()
+    for turn_id in ("turn-2", "turn-3"):
+        plugin.tool_call(f"call-{turn_id}", turn_id=turn_id, command="date")
+        plugin.end_turn(turn_id=turn_id)
+
+    plugin.tool_call(
+        "call-4",
+        turn_id="turn-4",
+        tool_name="agentbarn_task",
+        args={"action": "create", "title": "Unrelated"},
+        result=json.dumps({"id": "task-4", "status": "in_progress"}),
+    )
+    plugin.end_turn(turn_id="turn-4")
+
+    assert_that(_attaches(plugin), equal_to([]))

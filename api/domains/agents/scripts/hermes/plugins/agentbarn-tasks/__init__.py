@@ -30,6 +30,12 @@ _BOOT_SESSION_ID = "agentbarn-boot"
 _FILE_TOOLS = {"write_file", "patch"}
 _OPEN_TASKS_TTL_SECONDS = 60
 _OPEN_TASKS_SHOWN = 10
+# Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
+_DONE_TASKS_SHOWN = 3
+_PENDING_FILES_KEPT = 20
+# How many later turns an unattached file waits for a Task: on Hermes the background review run and
+# then the user's next message. After that it is dropped rather than attached to unrelated work.
+_CARRY_TURNS = 2
 _COMMAND_TIMEOUT_SECONDS = 150
 # A short message made only of these words is small talk ("Thanks!", "That's all for now"): it gets
 # no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
@@ -103,8 +109,8 @@ _REQUEST_LINE = (
 _QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping."
 _NEXT_TURN_REMINDER = (
     "Your previous turn did work without recording it as a Task. If it was more than a quick answer, "
-    "record it now with the agentbarn_task tool: create the Task with a body on what was done, and attach "
-    "any files it produced."
+    "record it now with the agentbarn_task tool: create its Task, or set the Task it continues back to "
+    "in_progress, with a body on what was done. Its files are attached for you."
 )
 
 _SCHEMA = {
@@ -148,6 +154,10 @@ _current_turn: dict[str, str] = {}
 # session_id -> the reminder its next turn starts with
 _next_turn_reminders: dict[str, str] = {}
 _open_tasks_cache: dict = {"at": 0.0, "lines": None}
+# session_id -> files written in a turn that ended without attaching them: name -> (path, turns
+# left). The session's next turns take them over: the Task is often created there, by the catch-up
+# on the next message or by Hermes's own background review run.
+_pending_files: dict[str, dict[str, tuple[str, int]]] = {}
 
 
 def _command() -> str:
@@ -292,8 +302,10 @@ def _track(
 ) -> dict:
     """Count one tool call in its turn. Safe to call twice for the same call."""
     _current_turn[session_id] = turn_id
+    key = (session_id, turn_id)
+    new_turn = key not in _turns
     turn = _turns.setdefault(
-        (session_id, turn_id),
+        key,
         {
             "work": set(),
             "wrote_files": False,
@@ -305,8 +317,14 @@ def _track(
             "attached": set(),
             "reminded": False,
             "held": False,
+            # name -> turns left, for files carried over from an earlier turn
+            "carried": {},
         },
     )
+    if new_turn:
+        for name, (path, turns_left) in _pending_files.pop(session_id, {}).items():
+            turn["written"].setdefault(name, path)
+            turn["carried"][name] = turns_left
     if _touches_tasks(tool_name, args):
         turn["recorded"] = True
         turn["attached"] |= _attached_names(tool_name, args)
@@ -403,18 +421,36 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
         turn = _turns.pop((session_id, turn_id), None)
         if _current_turn.get(session_id) == turn_id:
             del _current_turn[session_id]
-    if turn is None or not completed:
+    if turn is None:
         return
-    if _unrecorded_work(turn):
+    if not completed or not turn["recorded"]:
+        _keep_for_next_turn(session_id, turn, _unattached(turn))
+        if not completed or not _unrecorded_work(turn):
+            return
         reminder = _NEXT_TURN_REMINDER
     else:
-        failed = _attach_automatically(turn) if turn["recorded"] else []
+        failed = _attach_automatically(turn)
         _close_in_progress(turn)
         if not failed:
             return
+        _keep_for_next_turn(session_id, turn, {name: turn["written"][name] for name in failed})
         reminder = _attach_reminder(failed)
     with _lock:
         _next_turn_reminders[session_id] = reminder + _QUIET
+
+
+def _keep_for_next_turn(session_id: str, turn: dict, files: dict[str, str]) -> None:
+    """Hand files on to the session's next turn: new ones for _CARRY_TURNS turns, carried ones for one fewer."""
+    kept = {}
+    for name, path in files.items():
+        turns_left = turn["carried"][name] - 1 if name in turn["carried"] else _CARRY_TURNS
+        if turns_left > 0:
+            kept[name] = (path, turns_left)
+    if not kept:
+        return
+    with _lock:
+        pending = {**_pending_files.get(session_id, {}), **kept}
+        _pending_files[session_id] = dict(list(pending.items())[-_PENDING_FILES_KEPT:])
 
 
 def _on_pre_verify(session_id="", **_):
@@ -435,7 +471,7 @@ def _open_task_lines() -> list[str] | None:
         if cached is not None and time.monotonic() - _open_tasks_cache["at"] < _OPEN_TASKS_TTL_SECONDS:
             return cached
     lines = []
-    for task_status in ("in_progress", "open"):
+    for task_status in ("in_progress", "open", "done"):
         ok, output = _run(["list", "--status", task_status])
         if not ok:
             return None
@@ -443,10 +479,9 @@ def _open_task_lines() -> list[str] | None:
             items = json.loads(output)["items"]
         except (ValueError, KeyError, TypeError):
             return None
-        for task in items:
+        for task in items[: _DONE_TASKS_SHOWN if task_status == "done" else _OPEN_TASKS_SHOWN]:
             title = str(task.get("title", ""))[:120]
             lines.append(f"- {task.get('id')} [{task.get('status')}] {title}")
-    lines = lines[:_OPEN_TASKS_SHOWN]
     with _lock:
         _open_tasks_cache.update({"at": time.monotonic(), "lines": lines})
     return lines
@@ -464,9 +499,10 @@ def _on_pre_llm_call(session_id="", user_message="", **_):
     lines = _open_task_lines()
     if lines:
         parts.append(
-            "[Agent Barn] Your open Tasks:\n"
+            "[Agent Barn] Your open and latest finished Tasks:\n"
             + "\n".join(lines)
-            + "\nContinue one of these with the agentbarn_task tool rather than creating another."
+            + "\nIf the request continues one of these, keep using it with the agentbarn_task tool (set a done "
+            "one back to in_progress) rather than creating another."
         )
     with _lock:
         reminder = _next_turn_reminders.pop(session_id, None)

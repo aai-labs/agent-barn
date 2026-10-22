@@ -291,7 +291,7 @@ def test_each_turn_starts_with_the_agents_open_tasks(tmp_path: Path):
     context = _context(driven["results"][0])
     assert_that(context, contains_string("task-1 [in_progress] Reconcile invoices"))
     assert_that(context, contains_string("task-2 [open] Draft summary"))
-    assert_that("Old work" in context, is_(False))
+    assert_that(context, contains_string("task-3 [done] Old work"))
 
 
 def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path):
@@ -301,7 +301,7 @@ def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path
         open_tasks=[{"id": "task-1", "title": "Report", "status": "open"}],
     )
 
-    assert_that(sum(call["argv"][0] == "list" for call in _calls(tmp_path)), equal_to(4))
+    assert_that(sum(call["argv"][0] == "list" for call in _calls(tmp_path)), equal_to(6))
 
 
 def test_an_unavailable_task_service_does_not_break_the_turn(tmp_path: Path):
@@ -604,7 +604,7 @@ def test_closing_a_task_refreshes_the_open_tasks_shown(tmp_path: Path):
         open_tasks=[{"id": _TASK_ID, "status": "in_progress", "title": "States"}],
     )
 
-    assert_that(sum(call["argv"][0] == "list" for call in _calls(tmp_path)), equal_to(4))
+    assert_that(sum(call["argv"][0] == "list" for call in _calls(tmp_path)), equal_to(6))
 
 
 @pytest.mark.parametrize("message", ["Thanks!", "Thanks, that's great.", "That's all for now, thanks!", "Good morning"])
@@ -622,3 +622,62 @@ def test_requests_and_approvals_carry_the_task_line(tmp_path: Path, message: str
     driven = _drive(tmp_path, [_prompt(prompt=message)])
 
     assert_that(_context(driven["results"][0]), contains_string("agentbarn_task before you start"))
+
+
+# --- files and Tasks across runs ---
+
+
+def test_only_the_three_latest_done_tasks_are_shown(tmp_path: Path):
+    done = [{"id": f"task-{n}", "title": f"Job {n}", "status": "done"} for n in range(1, 6)]
+
+    context = _context(_drive(tmp_path, [_prompt()], open_tasks=done)["results"][0])
+
+    assert_that([f"task-{n} [done]" in context for n in range(1, 6)], equal_to([True, True, True, False, False]))
+
+
+def _created_in(run_id: str, task_id: str) -> dict:
+    details = {"id": task_id, "status": "in_progress"}
+    step = _after_tool(
+        "c9",
+        run_id=run_id,
+        tool="agentbarn_task",
+        params={"action": "create", "title": "States"},
+        result={"content": [{"type": "text", "text": json.dumps(details)}], "details": details},
+    )
+    return step
+
+
+def test_files_a_run_could_not_attach_go_to_the_task_a_later_run_works_on(tmp_path: Path):
+    wrote, states = _wrote(tmp_path)
+
+    _drive(tmp_path, [wrote, _agent_end(), _created_in("run-2", "task-2"), _agent_end("run-2")])
+
+    assert_that(_attaches(tmp_path), equal_to([["attach", "task-2", states, "--replace"]]))
+
+
+def test_files_carried_over_do_not_count_as_work_in_the_later_run(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    driven = _drive(tmp_path, [wrote, _agent_end(), _after_tool("c2", run_id="run-2"), _finalize("run-2")])
+
+    assert_that(driven["results"][-1], is_(None))
+
+
+def test_a_carried_over_file_is_dropped_after_two_more_runs_without_a_task(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    _drive(
+        tmp_path,
+        [
+            wrote,
+            _agent_end(),
+            _after_tool("c2", run_id="run-2", command="date"),
+            _agent_end("run-2"),
+            _after_tool("c3", run_id="run-3", command="date"),
+            _agent_end("run-3"),
+            _created_in("run-4", "task-4"),
+            _agent_end("run-4"),
+        ],
+    )
+
+    assert_that(_attaches(tmp_path), equal_to([]))

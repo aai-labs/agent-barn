@@ -33,8 +33,10 @@ for can follow it. Use the `agentbarn_task` tool. If the tool is not available,
 run `/usr/local/bin/agentbarn-task` through your terminal tool instead
 (`agentbarn-task --help`), and then set the status and attach files yourself.
 
-- Before you start, continue an open Task that covers the request (they are
-  listed at the start of each turn), or `create` one with a short title.
+- Before you start, check the Tasks listed at the start of each turn (your open
+  ones and the latest finished ones). If the request continues one, keep using
+  it (set a finished one back to `in_progress`); otherwise `create` one with a
+  short title.
 - The Task you worked on is marked `done` when your turn ends, and the files you
   wrote are attached to it. `show` lists them; remove any that are not part of
   the result with `remove_file`.
