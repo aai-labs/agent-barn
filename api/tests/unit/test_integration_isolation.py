@@ -20,7 +20,11 @@ def test_foundation_default_preserves_current_route(provider):
     read = isolation_read(provider, None)
     # Providers added after the isolation rollout have no legacy rows to preserve.
     assert_that(
-        read.desired, is_(provider not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO, SecretProvider.GMAIL})
+        read.desired,
+        is_(
+            provider
+            not in {SecretProvider.SHAREPOINT, SecretProvider.APOLLO, SecretProvider.GMAIL, SecretProvider.MERKYS}
+        ),
     )
     assert_that(read.switch_available, is_(ISOLATION_CAPABILITIES[provider].supports_isolated))
     assert_that(read.applied, is_(none()))

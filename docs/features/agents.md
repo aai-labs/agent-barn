@@ -2,8 +2,9 @@
 
 The Home page shows a single first-Agent panel when the user's visible team is empty,
 with example use cases and direct ready-made/custom hiring choices. Once
-Agents exist, Home shows the Agent grid and its hire tile. Home owns its hire entry
-point; the top navigation keeps its hire action on other Organization pages.
+Agents exist, Home shows the Agent grid, its hire tile and a **Hire agent** button
+beside the "Your team" heading. Home is the only place hiring starts; the navigation
+has no hire action of its own.
 
 ## Hiring choices
 
@@ -53,6 +54,10 @@ states that deleting an Agent frees a slot and stopping one does not. A failed c
 check offers retry and keeps both choices disabled. Creation still enforces the quota
 under the existing database lock, including when capacity changes after the check.
 Creating or deleting an Agent invalidates the Organization read as well as Agent lists.
+
+Any other Organization goes straight to the hiring form, unless its read's
+`agent_limit_reached` flag (counted the same way, against the Agent limit in force)
+says it already has all its Agents; then the dialog says so instead of showing the form.
 
 ## Messaging connection choices
 

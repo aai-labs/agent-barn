@@ -210,7 +210,7 @@ test.describe("Apply & Restart provisioning failure", () => {
     });
 
     await configurationPage.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-    await configurationPage.sectionButton("Profile").click();
+    await configurationPage.sectionLink("Profile").click();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Agent name").fill("Maya restarted");
 

@@ -569,6 +569,16 @@ Agent Barn's own Telegram bot lets Organizations use Telegram without bringing a
 - Optional tunables, normally left unset: `AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL` (where linked users' messages are delivered to an Agent; defaults to its in-cluster Service on port 8443) and `AGENTBARN_TELEGRAM_BOT_RATE_PER_SECOND` / `AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND` (defaults 25 and 5).
 - Polling and proxying run on one Communications replica at a time (a database lease decides which). Rate limits are per process, which holds while `communications.replicaCount` is 1.
 
+## Payments (Stripe)
+
+Organizations on Credit buy more through Stripe Checkout (see `../features/credit.md`). Off until a Platform Administrator turns payments on.
+
+- **Turning payments on** is a platform setting: **Take payments** under Billing on the platform settings page, off by default, and refused until the deployment has both Stripe secrets below. Off stops new purchases (checkout answers 404, and the Billing page offers no Buy credit); balances and history stay readable. The webhook is served whenever `STRIPE_WEBHOOK_SECRET` is set, so payments already made, refunds and disputes still land after payments are turned off. A webhook secret requires the secret key whether payments are on or off (the webhook reads refunds from Stripe): the API refuses to boot otherwise.
+- **`STRIPE_SECRET_KEY`** and **`STRIPE_WEBHOOK_SECRET`** are GitHub secrets with the same prefixes, flowing through `helmfile.yaml.gotmpl` into the API chart's shared Secret. Give each environment its own: staging a Stripe sandbox, production the live account. The secret key may be a restricted key with write access to Customers and Checkout Sessions and read access to Refunds and PaymentIntents (the webhook reads a refund's current status, and whether a payment is a credit purchase, because Stripe doesn't deliver events in order).
+- **Webhook endpoint:** in the Stripe Dashboard, point an endpoint at `https://<API host>/api/v1/billing/stripe/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `refund.created`, `refund.updated`, `refund.failed`, `charge.dispute.funds_withdrawn` and `charge.dispute.funds_reinstated`, and store its signing secret as `STRIPE_WEBHOOK_SECRET`. Locally, `stripe listen --print-secret` prints a `whsec_` to use instead, and `stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded,refund.created,refund.updated,refund.failed,charge.dispute.funds_withdrawn,charge.dispute.funds_reinstated --forward-to localhost:<API port>/api/v1/billing/stripe/webhook` relays them (recent Stripe CLIs refuse to listen without `--events`).
+- Minimum and maximum purchase and the purchase fee are platform settings, edited on the platform settings page. $1 of credit is always $1 of model spend; the purchase fee (0% by default, so the platform absorbs Stripe's fee) is the only markup. The minimum can't go below $0.50, Stripe's smallest card payment.
+- A payment for an Organization that has left credit meanwhile grants nothing: it is recorded on the platform audit log as `platform.credit_purchase.unapplied` (and logged as an error) for someone to refund in Stripe.
+
 ## Staging environment
 
 Staging is a fully separate stack in its own namespace (`agent-farm-staging`),
@@ -635,6 +645,7 @@ git push origin "$RELEASE_TAG"
 | `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
 | `PUBLIC_AGENT_EMAIL_DOMAIN` | `agents.agentbarn.dev`. Unset leaves agent email inert and skips the Worker publish |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME` | The public deployment's own bot, without `@`. Unset hides Agent Barn Telegram |
+| `PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT` | How many Agents a non-trial Organization may run until a Platform Administrator saves a default on the platform settings page. Unset is 10 |
 | `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
 
 ### Public GitHub secrets
@@ -662,6 +673,7 @@ kubeconfig portably with
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 | `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
+| `PUBLIC_STRIPE_SECRET_KEY` / `PUBLIC_STRIPE_WEBHOOK_SECRET` | Needed before payments can be turned on in the platform Billing settings. The live account's key and this deployment's webhook endpoint secret |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`,
@@ -826,3 +838,38 @@ runs it.
 - Classifier code changes that alter how a command is split into invocations can shift
   ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
   instead of updating them.
+
+## Workflow authoring (WF01)
+
+After migrating and verifying WF01, Platform Administrators can enable authoring
+at **Platform Settings → Workflows** and save the choice. It takes effect on
+subsequent API requests without a redeploy and allows manual definition creation,
+version saving and archive across all Organizations. Definition/version reads
+remain available when disabled. `WORKFLOW_AUTHORING_ENABLED` defaults to `false`
+and supplies the initial deployment default only until a Platform Admin saves a
+choice; the persisted choice then overrides the environment value in either
+direction, including after restarts. Changing the environment alone cannot
+override a saved choice. Disable authoring through Platform Settings for rollback
+of admission; requests already admitted may finish.
+This gate never enables execution; WF01 has no run endpoint. Natural-language
+draft generation is deferred to a separate PR, with no model setting or provider
+credential required for manual building. The [feature specification](../features/agent-workflows.md)
+owns the product contract.
+
+Local Compose passes `.env` through; `.env.spec` documents the authoring gate.
+Helm exposes `workflows.authoringEnabled`; Helmfile passes the corresponding
+environment variable. No runtime image, worker, storage service or cluster
+permission is added for workflow authoring.
+
+Migration `a38801c6e001` adds the authoring tables and immutable-version trigger
+after `c42e91b7a603`, preserving existing Agent data. Use `make check-migrations`
+and the migrated WF01 API contracts before rollout. Migration `a38802d7f002`
+follows it and creates the singleton Platform workflow setting. Merge revision
+`c32e42bb0396` joins that workflow branch with staging head `d72b85f19c40`;
+merge revision `49e4d8bea6de` joins it with the later staging head `517d402a59fd`,
+so fresh installs and upgrades retain a single migration head. Downgrading only
+that migration removes the saved choice and restores the environment default;
+workflow definitions and versions remain. Schema downgrade of WF01 drops
+WF01 records and is appropriate only for a disposable/empty installation or an
+explicitly approved data-removal operation; take a backup before intentional
+removal. Release versions are unchanged until release preparation is requested.

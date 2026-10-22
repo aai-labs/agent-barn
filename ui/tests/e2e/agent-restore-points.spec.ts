@@ -17,7 +17,7 @@ const stoppedAgent = { ...mockAgent, status: "STOPPED" };
 
 async function openRestorePoints(page: AgentConfigurationPage) {
   await page.goto(MOCK_AGENT_ID, TEST_ORG_ID);
-  await page.sectionButton("Restore points").click();
+  await page.sectionLink("Restore points").click();
 }
 
 async function baseIntercepts(dataSupport: DataSupport, agent: unknown = stoppedAgent) {

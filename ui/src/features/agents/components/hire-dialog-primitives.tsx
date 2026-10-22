@@ -18,7 +18,9 @@ export function DialogShell({
       <DialogContent
         showCloseButton={false}
         aria-describedby={undefined}
-        className="flex w-[calc(100%-2rem)] max-w-4xl max-h-[90svh] flex-col gap-0 overflow-hidden rounded-2xl border-0 p-0 shadow-2xl"
+        // On a phone the dialog fills the screen; its header and footer stay put while
+        // the fields between them scroll.
+        className="flex h-dvh w-full max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 shadow-2xl sm:h-auto sm:max-h-[90svh] sm:w-[calc(100%-2rem)] sm:max-w-4xl sm:rounded-2xl"
         style={{ background: "var(--bg-elev)" }}
         onEscapeKeyDown={(event) => { if (!shadeClick) event.preventDefault(); }}
         onPointerDownOutside={(event) => { if (!shadeClick) event.preventDefault(); }}

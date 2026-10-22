@@ -1,10 +1,8 @@
 "use client";
 
-import { Brain, FileCode2, FolderSync, KeyRound, Sparkles, UserRound, Wallet } from "lucide-react";
 import { parseAsStringEnum, useQueryState } from "nuqs";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
-import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { MemoryItemsViewer } from "@/features/agent-memory/components/memory-items-viewer";
 import { MemoryAccessPanel } from "@/features/agent-memory/components/memory-access-panel";
 import { AgentDefaultsPanel } from "@/features/agent-settings/components/agent-defaults-panel";
@@ -20,21 +18,11 @@ import { SkillsPanel } from "@/features/skills/components/skills-panel";
 import { SpendLimitsPanel } from "@/features/spend-limits/components/spend-limits-panel";
 import { SyncProvidersPanel } from "@/features/sync-provider/components/sync-providers-panel";
 
-const ICONS = {
-  agents: UserRound,
-  "spend-limits": Wallet,
-  templates: FileCode2,
-  skills: Sparkles,
-  "memory-access": Brain,
-  "organization-memory": Brain,
-  "shared-credentials": KeyRound,
-  sync: FolderSync,
-} as const;
 
 export default function SettingsPage() {
   const { role, canManage, selectedOrganization } = useActiveOrgRole();
   const isMembershipAdmin = role === "OWNER" || role === "ADMIN";
-  const [activeSection, setActiveSection] = useQueryState(
+  const [activeSection] = useQueryState(
     "tab",
     parseAsStringEnum<OrganizationSettingsSectionKey>(ORGANIZATION_SETTINGS_SECTION_KEYS)
       .withDefault("agents")
@@ -51,45 +39,18 @@ export default function SettingsPage() {
 
   return (
     <div style={{ background: "var(--bg)" }}>
-      <main className="af-page">
-        <div className="mb-8 flex flex-wrap items-start gap-4">
-          <div className="min-w-0 flex-1">
-            <h1
-              className="m-0 text-[2rem] font-semibold tracking-[-0.025em]"
-              style={{ color: "var(--ink)" }}
-            >
-              Settings
-            </h1>
-            <p className="mb-0 mt-1 text-[0.9rem]" style={{ color: "var(--ink-3)" }}>
-              {selectedOrganization?.name ?? "Organization"}
-            </p>
-          </div>
-          <div
-            className="rounded-full border px-3 py-1.5 text-[0.78rem]"
-            style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}
-          >
-            {canManage ? "Admin access" : "Read-only access"}
-          </div>
-        </div>
-
+      <div>
         <SettingsPageLayout
-          sidebar={
-            <SettingsSidebar
-              eyebrow="Organization"
-              items={visibleSections.map((item) => {
-                const Icon = ICONS[item.key];
-                return {
-                  key: item.key,
-                  label: item.label,
-                  icon: <Icon size={15} aria-hidden />,
-                };
-              })}
-              activeKey={section.key}
-              onSelect={(key) => void setActiveSection(key as OrganizationSettingsSectionKey)}
-            />
-          }
           heading={section.label}
           description={section.description}
+          aside={
+            <div
+              className="rounded-full border px-3 py-1.5 text-[0.78rem]"
+              style={{ borderColor: "var(--line)", color: "var(--ink-3)" }}
+            >
+              {canManage ? "Admin access" : "Read-only access"}
+            </div>
+          }
         >
           {section.key === "agents" && <AgentDefaultsPanel canEdit={canManage} />}
           {section.key === "spend-limits" && <SpendLimitsPanel />}
@@ -102,7 +63,7 @@ export default function SettingsPage() {
           {section.key === "shared-credentials" && <SharedCredentialsPanel />}
           {section.key === "sync" && <SyncProvidersPanel canManage={canManage} />}
         </SettingsPageLayout>
-      </main>
+      </div>
     </div>
   );
 }

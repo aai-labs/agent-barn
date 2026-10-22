@@ -14,7 +14,7 @@ from fastapi import HTTPException, status
 from injector import inject, singleton
 
 from api.core.config import Config
-from api.domains.agents.exceptions import TrialAgentLimitReached
+from api.domains.agents.exceptions import AgentLimitReached
 from api.domains.agents.models import AgentCreate, AgentFilter, AgentRead, AgentStatus, AgentType
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
@@ -135,7 +135,7 @@ class OnboardingService:
             return self.agents.create_agent(
                 AgentCreate(name=name, agent_type=AgentType.HERMES, template_key=TRIAL_TEMPLATE_KEY), trial
             )
-        except TrialAgentLimitReached:
+        except AgentLimitReached:
             # Another onboarding request created it first.
             agent = self._agent(trial)
             if agent is None:

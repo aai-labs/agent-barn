@@ -3,6 +3,9 @@
  * built from older platform code. Its button asks the server for a managed
  * update; the server's updateInProgress flag then keeps it busy until the
  * update ends, and a note says how it ended when that was not a success.
+ *
+ * The banner is the phone form; on desktop the path bar carries an "Update
+ * available" notice that opens the same explanation and button (covered last).
  */
 
 import { expect, test } from "@playwright/test";
@@ -19,7 +22,7 @@ test.describe("Agent update banner", () => {
   let agentDetailPage: AgentDetailPage;
   let dataSupport: DataSupport;
 
-  test.use({ storageState: { cookies: [], origins: [] } });
+  test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 390, height: 844 } });
 
   test.beforeEach(async ({ page }) => {
     agentDetailPage = new AgentDetailPage(page);
@@ -249,5 +252,70 @@ test.describe("Agent update banner", () => {
     await expect(agentDetailPage.agentName("Maya")).toBeVisible();
     await expect(agentDetailPage.updateButton()).toHaveCount(0);
     await expect(agentDetailPage.updateReleasesLink()).toHaveCount(0);
+  });
+});
+
+test.describe("Agent update notice in the path bar", () => {
+  let agentDetailPage: AgentDetailPage;
+  let dataSupport: DataSupport;
+
+  test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1440, height: 900 } });
+
+  test.beforeEach(async ({ page }) => {
+    agentDetailPage = new AgentDetailPage(page);
+    dataSupport = new DataSupport(page);
+
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.agents.interceptGetAgentsRequest();
+    await dataSupport.agents.interceptGetAgentTemplateRequest();
+    await dataSupport.agents.interceptGetConversationChannelsRequest();
+    await dataSupport.agents.interceptGetModelsRequest();
+    await dataSupport.agents.interceptGetAgentHealthRequest();
+  });
+
+  test("stays out of the path bar while the Agent runs the current configuration", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "RUNNING", update_available: false },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(agentDetailPage.agentName("Maya")).toBeVisible();
+    await expect(agentDetailPage.updateNotice()).toHaveCount(0);
+  });
+
+  test("opens the explanation, release notes and Update from the path bar", async ({ page }) => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: { ...mockAgent, status: "RUNNING", update_available: true },
+    });
+    await page.route(`**/agents/${MOCK_AGENT_ID}/managed-update`, async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ ...mockAgent, status: "RUNNING", update_available: true }),
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    // The phone's banner stays in the page, hidden by CSS on desktop.
+    await expect(agentDetailPage.updateBanner()).toBeHidden();
+
+    await agentDetailPage.updateNotice().click();
+    const details = agentDetailPage.updateNoticeDetails();
+    await expect(details).toContainText(/new version.*is available/i);
+    await expect(details.getByRole("link", { name: "Release notes" })).toHaveAttribute(
+      "href",
+      "https://github.com/aai-labs/agent-barn/releases",
+    );
+
+    const requested = page.waitForRequest(
+      (request) =>
+        request.url().endsWith(`/agents/${MOCK_AGENT_ID}/managed-update`) &&
+        request.method() === "POST",
+    );
+    await details.getByRole("button", { name: "Update", exact: true }).click();
+    await requested;
   });
 });

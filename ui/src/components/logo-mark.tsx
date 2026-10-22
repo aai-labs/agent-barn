@@ -2,52 +2,23 @@ interface LogoMarkProps {
   size?: number;
 }
 
+/** The Agent Barn mark: the orange pixel barn, the same drawing as the favicon (`app/icon.svg`). */
 export function LogoMark({ size = 26 }: LogoMarkProps) {
-  const radius = size <= 28 ? 8 : 12;
-  const padding = Math.round(size * 0.14);
-
   return (
-    <div
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="-0.7 -0.7 8.4 8.4"
+      role="img"
       aria-label="Agent Barn"
-      style={{
-        width: size,
-        height: size,
-        background: "var(--ink)",
-        borderRadius: radius,
-        display: "grid",
-        placeItems: "center",
-        flexShrink: 0,
-        padding,
-        boxSizing: "border-box",
-      }}
+      width={size}
+      height={size}
+      style={{ display: "block", flexShrink: 0 }}
     >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        fill="none"
-        viewBox="0 0 100 100"
-        aria-hidden
-        style={{ display: "block", width: "100%", height: "100%" }}
-      >
-        {/* Outer barn silhouette */}
-        <path
-          d="M50,8 L82,28 L88,88 L12,88 L18,28 Z"
-          stroke="var(--bg)"
-          strokeWidth="8"
-          strokeLinejoin="round"
-          strokeLinecap="round"
-          fill="none"
-        />
-        {/* Inner house outline */}
-        <path
-          d="M50,30 L70,43 L70,70 L30,70 L30,43 Z"
-          stroke="var(--bg)"
-          strokeWidth="6"
-          strokeLinejoin="round"
-          fill="none"
-        />
-        {/* Door / focal dot */}
-        <circle cx="50" cy="55" r="6" fill="var(--bg)" />
-      </svg>
-    </div>
+      <path
+        fill="#f45a17"
+        shapeRendering="crispEdges"
+        d="M2 0h3v1h1v1h1v5H6V6H2v1H0V2h1V1h1V0Zm0 4v1h4V4H2Z"
+      />
+    </svg>
   );
 }

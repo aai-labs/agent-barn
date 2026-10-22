@@ -154,7 +154,7 @@ test("a run can write the next draft of an existing playbook", async ({ page }) 
 test("a Member who can read the Agent sees no Playbooks tab and sends no playbook requests", async ({ page }) => {
   const { mock, playbooks } = await open(page, { role: "MEMBER" });
 
-  await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeVisible();
+  await expect(page.getByRole("complementary").getByRole("link", { name: "Chat", exact: true })).toBeVisible();
   await expect(playbooks.tab()).toHaveCount(0);
   expect(mock.requests).toEqual([]);
 });

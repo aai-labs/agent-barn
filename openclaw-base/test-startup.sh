@@ -17,7 +17,7 @@ from api.domains.agents.builders.openclaw import LEGACY_WORKSPACE_MIGRATION_SH
 print(json.dumps(build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")))
 open(sys.argv[1], "w").write(LEGACY_WORKSPACE_MIGRATION_SH)
 ' "$work/legacy-workspace-migration.sh") > "$work/openclaw-config-overlay.json"
-cp "$scripts/init-openclaw.js" "$work/"
+cp "$scripts/init-openclaw.js" "$scripts/plugins.sh" "$work/"
 chmod -R a+rX "$work"
 
 run() {
@@ -53,6 +53,49 @@ mkdir -p "$W"
 echo "{\"version\":1}" > "$W/openclaw-workspace-state.json"
 PATH=/tmp/bin:$PATH sh /app/config/legacy-workspace-migration.sh
 [ -e /tmp/doctor-ran ] || { echo "workspace marker not detected: is the workspace path filled in?"; exit 1; }
+'
+
+echo 'plugin with missing files: repaired with npm and re-indexed, not reinstalled'
+run '
+mkdir -p /tmp/bin /tmp/core
+# Like npm, skip a package whose package.json is already there, complete or not.
+cat > /tmp/bin/npm <<EOF
+#!/bin/sh
+[ -f node_modules/@openclaw/slack/package.json ] && exit 0
+mkdir -p node_modules/@openclaw/slack/dist
+touch node_modules/@openclaw/slack/dist/index.js node_modules/@openclaw/slack/dist/setup-entry.js
+echo "{\"version\":\"2026.8.2\"}" > node_modules/@openclaw/slack/package.json
+EOF
+printf "#!/bin/sh\necho \"\$*\" >> /tmp/openclaw-calls\n" > /tmp/bin/openclaw
+chmod +x /tmp/bin/npm /tmp/bin/openclaw
+P=/tmp/projects/openclaw-slack-abc
+mkdir -p "$P/node_modules/@openclaw/slack"
+echo "{\"dependencies\":{\"@openclaw/slack\":\"2026.8.2\"}}" > "$P/package.json"
+echo "{\"version\":\"2026.8.2\",\"openclaw\":{\"runtimeExtensions\":[\"./dist/index.js\"],\"runtimeSetupEntry\":\"./dist/setup-entry.js\"}}" > "$P/node_modules/@openclaw/slack/package.json"
+export PATH=/tmp/bin:$PATH OPENCLAW_VERSION=2026.8.2 CORE_DIR=/tmp/core PLUGIN_PROJECTS=/tmp/projects
+. /app/config/plugins.sh
+install_plugin @openclaw/slack >/dev/null
+[ -f "$P/node_modules/@openclaw/slack/dist/setup-entry.js" ] || { echo "plugin files were not restored"; exit 1; }
+grep -q "plugins registry --refresh" /tmp/openclaw-calls || { echo "registry was not refreshed"; exit 1; }
+! grep -q "plugins install" /tmp/openclaw-calls || { echo "openclaw plugins install ran over the existing record"; exit 1; }
+[ -L "$P/node_modules/@openclaw/slack/node_modules/openclaw" ] || { echo "peer link missing"; exit 1; }
+'
+
+echo 'healthy plugin: left alone'
+run '
+mkdir -p /tmp/bin /tmp/core
+printf "#!/bin/sh\ntouch /tmp/npm-ran\n" > /tmp/bin/npm
+printf "#!/bin/sh\necho \"\$*\" >> /tmp/openclaw-calls\n" > /tmp/bin/openclaw
+chmod +x /tmp/bin/npm /tmp/bin/openclaw
+D=/tmp/projects/openclaw-slack-abc/node_modules/@openclaw/slack
+mkdir -p "$D/dist" && touch "$D/dist/index.js" "$D/dist/setup-entry.js"
+echo "{}" > /tmp/projects/openclaw-slack-abc/package.json
+echo "{\"version\":\"2026.8.2\",\"openclaw\":{\"runtimeExtensions\":[\"./dist/index.js\"],\"runtimeSetupEntry\":\"./dist/setup-entry.js\"}}" > "$D/package.json"
+export PATH=/tmp/bin:$PATH OPENCLAW_VERSION=2026.8.2 CORE_DIR=/tmp/core PLUGIN_PROJECTS=/tmp/projects
+. /app/config/plugins.sh
+install_plugin @openclaw/slack >/dev/null
+[ ! -e /tmp/npm-ran ] || { echo "npm ran for a healthy plugin"; exit 1; }
+[ ! -e /tmp/openclaw-calls ] || { echo "openclaw was called for a healthy plugin: $(cat /tmp/openclaw-calls)"; exit 1; }
 '
 
 echo 'clean PVC: doctor must not run'

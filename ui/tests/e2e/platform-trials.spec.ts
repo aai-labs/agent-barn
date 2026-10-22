@@ -48,7 +48,9 @@ test.describe("Platform trials", () => {
     });
 
     await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Signup & trials" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
+    // The panel link changes the URL; act on the section only once it is showing.
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
 
     await expect(page.getByTestId("saved-trial-credit")).toHaveText("$10.00");
     await expect(page.getByTestId("saved-trial-agent-limit")).toHaveText("1 agent");
@@ -72,7 +74,9 @@ test.describe("Platform trials", () => {
       return route.fulfill({ json: settings });
     });
     await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Signup & trials" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
+    // The panel link changes the URL; act on the section only once it is showing.
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await expect(page.getByTestId("saved-self-signup")).toHaveText("Disabled");
     await expect(page.getByTestId("saved-trial-credit")).toHaveText("$0.00");
     await page.getByRole("button", { name: "Edit", exact: true }).click();
@@ -87,7 +91,9 @@ test.describe("Platform trials", () => {
     await expect(page.getByTestId("saved-self-signup")).toHaveText("Enabled");
     expect(settings).toEqual({ self_signup_enabled: true, credit_usd: 20, agent_limit: 1, max_active_trials: null });
     await page.reload();
-    await page.getByRole("button", { name: "Signup & trials" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
+    // The panel link changes the URL; act on the section only once it is showing.
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await expect(page.getByTestId("saved-self-signup")).toHaveText("Enabled");
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Trial credit (USD)").fill("0");
@@ -115,7 +121,9 @@ test.describe("Platform trials", () => {
     });
 
     await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Signup & trials" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
+    // The panel link changes the URL; act on the section only once it is showing.
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
 
     await expect(page.getByTestId("saved-trial-cap")).toHaveText("3 active, no cap");
     await page.getByRole("button", { name: "Edit", exact: true }).click();
@@ -143,7 +151,9 @@ test.describe("Platform trials", () => {
     });
 
     await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Signup & trials" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
+    // The panel link changes the URL; act on the section only once it is showing.
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Active trials at once").fill("");
     await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -160,7 +170,9 @@ test.describe("Platform trials", () => {
     );
 
     await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Signup & trials" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
+    // The panel link changes the URL; act on the section only once it is showing.
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Active trials at once").fill("0");
 
@@ -176,7 +188,9 @@ test.describe("Platform trials", () => {
     );
 
     await page.goto("/dashboard/platform/settings");
-    await page.getByRole("button", { name: "Signup & trials" }).click();
+    await page.getByRole("complementary").getByRole("link", { name: "Signup & trials", exact: true }).click();
+    // The panel link changes the URL; act on the section only once it is showing.
+    await expect(page.getByRole("heading", { name: "Signup & trials", level: 1 })).toBeVisible();
     await page.getByRole("button", { name: "Edit", exact: true }).click();
     await page.getByLabel("Trial credit (USD)").fill("-5");
     await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
@@ -250,5 +264,71 @@ test.describe("Platform trials", () => {
 
     await expect(page.getByRole("heading", { name: /model spend limit/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Free trial" })).toHaveCount(0);
+  });
+});
+
+test.describe("Platform · Agent limits", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  async function openOrganization(page: Page, organization: Record<string, unknown>, saved: unknown[]) {
+    const data = await signInAsPlatformAdmin(page);
+    await data.organizations.interceptGetPlatformOrganizationMembers();
+    await data.organizations.interceptGetOrganizationLlmCoverage();
+    let current: Record<string, unknown> = trialOrganization({
+      is_trial: false,
+      llm_budget_duration: "30d",
+      ...organization,
+    });
+    await page.route(`**/api/v1/platform/organizations/${ORG_A_ID}`, (route) => route.fulfill({ json: current }));
+    await page.route(`**/api/v1/platform/organizations/${ORG_A_ID}/agent-limit`, (route) => {
+      const body = route.request().postDataJSON() as { agent_limit: number | null };
+      saved.push(body);
+      current = { ...current, agent_limit: body.agent_limit, agent_limit_in_force: body.agent_limit ?? 5 };
+      return route.fulfill({ json: current });
+    });
+    await page.goto(`/dashboard/platform/organizations/${ORG_A_ID}`);
+    return page.getByRole("region", { name: "Agents" });
+  }
+
+  test("a Platform Administrator sets how many agents an organization may run", async ({ page }) => {
+    const saved: unknown[] = [];
+    const card = await openOrganization(page, { agent_limit: null, agent_limit_in_force: null }, saved);
+    await expect(card).toContainText("No limit");
+
+    await card.getByRole("button", { name: "Change" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Agents it may run").fill("3");
+    await dialog.getByRole("button", { name: "Save" }).click();
+
+    await expect.poll(() => saved).toEqual([{ agent_limit: 3 }]);
+    await expect(card).toContainText("3 agents");
+    await expect(card).toContainText("Set for this organization");
+  });
+
+  test("clearing it returns the organization to the default", async ({ page }) => {
+    const saved: unknown[] = [];
+    const card = await openOrganization(page, { agent_limit: 3, agent_limit_in_force: 3 }, saved);
+
+    await card.getByRole("button", { name: "Change" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Use the default" }).click();
+    await dialog.getByRole("button", { name: "Save" }).click();
+
+    await expect.poll(() => saved).toEqual([{ agent_limit: null }]);
+    await expect(card).toContainText("5 agents");
+    await expect(card).toContainText("The default");
+  });
+
+  test("a negative or fractional number is refused before any request", async ({ page }) => {
+    const saved: unknown[] = [];
+    const card = await openOrganization(page, { agent_limit: null, agent_limit_in_force: null }, saved);
+
+    await card.getByRole("button", { name: "Change" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Agents it may run").fill("1.5");
+
+    await expect(dialog.getByText("Enter a whole number of zero or more.")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(saved).toEqual([]);
   });
 });

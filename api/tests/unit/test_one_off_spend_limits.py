@@ -5,10 +5,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+import pytest
 from hamcrest import assert_that, equal_to
 
+from api.domains.agents.llm_budget import resolve_agent_limit
 from api.domains.costs.memory_budget import MemoryBudgetAccounting
 from api.domains.events.catalog import AGENT_LLM_BUDGET_EXHAUSTED, ORGANIZATION_LLM_BUDGET_EXHAUSTED
+from api.domains.organizations.lookup import OrganizationLlmLimit
+from api.domains.organizations.models import Organization
 from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW, LiteLLMClient
 from api.tests.unit.test_organization_llm import (
     budget_email_handler,
@@ -177,3 +181,26 @@ def test_legacy_memory_spend_under_a_one_off_limit_counts_since_the_organization
 
     assert_that(spent, equal_to(1.25))
     assert_that(costs.memory_spend.call_args.args[1], equal_to(created))
+
+
+# --- an Organization on credit (AF-381) -------------------------------------------
+# Under a one-off limit any lower limit is a lifetime cap, so a top-up would never
+# reach it. Only the Organization's balance binds.
+
+
+@pytest.mark.parametrize("own,default", [(None, 25.0), (None, 2.0), (5.0, 25.0), (0.0, 25.0)])
+def test_an_agent_on_credit_spends_from_its_organizations_whole_balance(own, default):
+    resolved = resolve_agent_limit(own, default, OrganizationLlmLimit(limit_usd=10.0, window=ONE_OFF_BUDGET_WINDOW))
+    assert_that((resolved.limit_usd, resolved.source), equal_to((10.0, "organization")))
+
+
+def test_an_organization_on_credit_is_held_to_its_ceiling_alone():
+    organization = Organization(
+        name="On credit", llm_budget_usd=10.0, llm_budget_duration=ONE_OFF_BUDGET_WINDOW, llm_own_budget_usd=4.0
+    )
+    assert_that((organization.runs_on_credit, organization.effective_llm_budget_usd), equal_to((True, 10.0)))
+
+
+def test_an_organization_on_a_renewing_limit_still_keeps_its_own():
+    organization = Organization(name="Monthly", llm_budget_usd=10.0, llm_budget_duration="30d", llm_own_budget_usd=4.0)
+    assert_that((organization.runs_on_credit, organization.effective_llm_budget_usd), equal_to((False, 4.0)))

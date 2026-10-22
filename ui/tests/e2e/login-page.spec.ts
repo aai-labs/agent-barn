@@ -19,6 +19,8 @@ test.describe("Login Page", () => {
     await dataSupportPage.auth.interceptLoginRequest();
     await dataSupportPage.users.interceptGetUserContextRequest();
     await dataSupportPage.users.interceptGetOrganizationsRequest();
+    // The dashboard an owner lands on shows the spend-limit banner, which reads this.
+    await dataSupportPage.organizations.interceptGetOrganizationLlmBudget();
     await dataSupportPage.agents.interceptGetAgentsRequest();
     await dataSupportPage.agents.interceptGetAgentHealthRequest();
 

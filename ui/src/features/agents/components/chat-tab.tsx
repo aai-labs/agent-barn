@@ -254,45 +254,24 @@ function ThreadListItem({ thread, active, onSelect, onRename, onArchive }: Threa
   );
 }
 
-export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
-  const [threadId, setThreadId] = useQueryState(
+function useChatThreadId() {
+  return useQueryState(
     "thread",
     parseAsString.withDefault(MAIN_THREAD_ID).withOptions({ history: "replace" }),
   );
+}
 
-  const { messages, sendMessage, stopGeneration, isAwaitingReply, streamStatus } = useWebChat(
-    agent.id,
-    threadId,
-    true,
-  );
-  const {
-    threads,
-    refetch: refetchThreads,
-    renameThread,
-    deleteThread,
-  } = useWebChatThreads(agent.id, true);
-  const handleSent = useCallback(() => void refetchThreads(), [refetchThreads]);
-
-  const [isMaximized, setIsMaximized] = useState(false);
-
-  useEffect(() => {
-    if (!isMaximized) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setIsMaximized(false);
-    }
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = "";
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [isMaximized]);
+/**
+ * The Agent's Web Chat threads with a New chat button. The selected thread lives in
+ * the URL, so this list and the chat beside it stay in step wherever each is mounted.
+ */
+export function ChatThreadList({ agentId }: { agentId: string }) {
+  const [threadId, setThreadId] = useChatThreadId();
+  const { threads, renameThread, deleteThread } = useWebChatThreads(agentId, true);
 
   function startNewChat() {
     void setThreadId(crypto.randomUUID());
   }
-
-  const isLive = streamStatus === "streaming";
 
   // `threads` is already most-recent-first. A brand-new thread (no messages
   // sent yet) isn't in that list, so it goes first — it's the newest one, by
@@ -322,47 +301,83 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
   }
 
   return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="p-2.5">
+        <button
+          className="af-btn af-btn-sm w-full flex items-center justify-center gap-1.5"
+          onClick={startNewChat}
+        >
+          <Plus size={14} /> New chat
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-1.5 pb-2">
+        <div
+          className="px-2 pt-1 pb-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.06em]"
+          style={{ color: "var(--ink-3)" }}
+        >
+          Threads
+        </div>
+        {sidebarThreads.map((t) => (
+          <ThreadListItem
+            key={t.threadId}
+            thread={t}
+            active={t.threadId === threadId}
+            onSelect={() => void setThreadId(t.threadId)}
+            onRename={(title) => void renameThread(t.threadId, title)}
+            onArchive={() => handleArchive(t.threadId)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
+  const [threadId] = useChatThreadId();
+
+  const { messages, sendMessage, stopGeneration, isAwaitingReply, streamStatus } = useWebChat(
+    agent.id,
+    threadId,
+    true,
+  );
+  const { refetch: refetchThreads } = useWebChatThreads(agent.id, true);
+  const handleSent = useCallback(() => void refetchThreads(), [refetchThreads]);
+
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    if (!isMaximized) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setIsMaximized(false);
+    }
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isMaximized]);
+
+  const isLive = streamStatus === "streaming";
+
+  return (
       <div
         className={cn(
           "flex overflow-hidden",
-          isMaximized ? "fixed inset-4 z-50 rounded-2xl shadow-2xl" : "rounded-2xl",
+          // Below the breakpoint a framed panel with its own thread list; on desktop the
+          // page's whole height, with the threads in the navigation panel beside it.
+          isMaximized
+            ? "fixed inset-4 z-50 rounded-2xl shadow-2xl"
+            : "h-[min(760px,80vh)] rounded-2xl border",
+          "lg:static lg:inset-auto lg:z-auto lg:h-full lg:rounded-none lg:border-0 lg:shadow-none",
         )}
-        style={{
-          border: "1px solid var(--line)",
-          height: isMaximized ? undefined : "min(760px, 80vh)",
-          background: "var(--bg)",
-        }}
+        style={{ borderColor: "var(--line)", background: "var(--bg)" }}
       >
         <div
-          className="flex w-56 flex-shrink-0 flex-col"
+          className="flex w-56 flex-shrink-0 flex-col lg:hidden"
           style={{ borderRight: "1px solid var(--line)" }}
         >
-          <div className="p-2.5">
-            <button
-              className="af-btn af-btn-sm w-full flex items-center justify-center gap-1.5"
-              onClick={startNewChat}
-            >
-              <Plus size={14} /> New chat
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto px-1.5 pb-2">
-            <div
-              className="px-2 pt-1 pb-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.06em]"
-              style={{ color: "var(--ink-3)" }}
-            >
-              Threads
-            </div>
-            {sidebarThreads.map((t) => (
-              <ThreadListItem
-                key={t.threadId}
-                thread={t}
-                active={t.threadId === threadId}
-                onSelect={() => void setThreadId(t.threadId)}
-                onRename={(title) => void renameThread(t.threadId, title)}
-                onArchive={() => handleArchive(t.threadId)}
-              />
-            ))}
-          </div>
+          <ChatThreadList agentId={agent.id} />
         </div>
 
         <div className="flex flex-1 flex-col overflow-hidden">
@@ -402,14 +417,17 @@ export function ChatTab({ agent, isAgentWorking }: ChatTabProps) {
                     ? "Connecting…"
                     : "Updates paused"}
               </span>
-              <button
-                type="button"
-                className="af-btn af-btn-ghost af-btn-icon"
-                onClick={() => setIsMaximized((v) => !v)}
-                aria-label={isMaximized ? "Restore" : "Maximize"}
-              >
-                {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-              </button>
+              {/* Wrapped: .af-btn sets its own display, which would win over lg:hidden. */}
+              <span className="lg:hidden">
+                <button
+                  type="button"
+                  className="af-btn af-btn-ghost af-btn-icon"
+                  onClick={() => setIsMaximized((v) => !v)}
+                  aria-label={isMaximized ? "Restore" : "Maximize"}
+                >
+                  {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                </button>
+              </span>
             </div>
           </div>
 

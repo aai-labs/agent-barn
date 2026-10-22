@@ -67,6 +67,15 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `platform.trial_settings.changed` — emitted atomically when a Platform Administrator changes a trial setting (`self_signup_enabled`, `credit_usd`, `agent_limit` or `max_active_trials`), one event per setting that moved, with its previous and current value (booleans for signup, numbers for credit and limits, `null` for no cap). The subject is the `SYSTEM` trial settings row. Not emitted when a save leaves the value unchanged.
 - `organization.trial.ended` — emitted atomically when a Platform Administrator ends a Trial Organization's trial. Not emitted when the Organization was not a trial.
 
+AF-381 (prepaid credit) adds, all projected by `security_audit.projection`:
+
+- `organization.trial.ended` is also emitted when a credit purchase converts a trial (actor: the payment system, `actor_display` "Credit purchase").
+- `organization.trial.expired` — emitted once when a trial runs out of credit; it then no longer counts toward the cap on active trials. Emitted by the `organization.trial_expiry.projection` Event Handler, which handles `organization.llm_budget.exhausted` (alongside the budget email and product analytics handlers).
+- `organization.agent_limit.changed` — emitted atomically when a Platform Administrator sets or clears an Organization's own Agent limit, with the previous and current limit (`null` follows the default).
+- `platform.billing_settings.changed` — emitted atomically when a Platform Administrator changes a billing setting (`payments_enabled`, `min_purchase_usd`, `max_purchase_usd`, `purchase_fee_percent`), one event per setting that moved, same payload shape as `platform.trial_settings.changed`.
+- `platform.organization_settings.changed` — the same, for the platform's Organization settings (`default_agent_limit`).
+- `platform.credit_purchase.unapplied` — emitted when a paid credit purchase arrives for an Organization that no longer runs on Credit, so nothing was granted; carries the payment reference, the credit, the amount paid and the reason (for example, the amount paid doesn't match the checkout we created), and names the Organization in `subject_display` (a Platform event carries no Organization id). Also emitted for a paid session that doesn't match a checkout we created.
+
 AF-167 broadens Security Audit Record coverage to additional mutations:
 
 - `agent.updated` — emitted when `update_agent` changes a tracked scalar field (name, model, approval_mode, template pin); carries a generic `field_changes` diff and is not emitted when no tracked field actually changed.
@@ -84,6 +93,11 @@ AF-167 broadens Security Audit Record coverage to additional mutations:
 - `organization.updated` — emitted by `PATCH /organizations/{organization_id}` only when the Organization's name or description actually changes. Its actor is the acting User, not their Membership, so it is still attributable if the Organization is deleted before delivery. It carries the changed field names, never their values, and its only intended handler is `product_analytics.posthog`. An allowlist change in the same request still emits `organization.model_allowlist.changed` alongside it.
 - `organization.deleted` — staged in the same transaction as the Organization's hard delete, with a User Actor (the deleting Owner). The outbox and delivery rows have no foreign key to the Organization, so they outlive it. Its only intended handler is `product_analytics.posthog`.
 - `organization.ownership_transferred` — emitted when Organization ownership transfers between Memberships.
+
+Workflow authoring adds the Platform-scoped `platform.workflow_authoring.changed`
+event, carrying previous/current booleans and safe actor/subject display snapshots,
+projected by `security_audit.projection`. Its atomic settings boundary and no-op
+behavior are owned by [Agent workflows](agent-workflows.md#platform-authoring-setting).
 
 Agent Memory adds the Platform-scoped `platform.memory_model.changed` event, carrying previous/current model IDs and safe actor/subject display snapshots, projected by `security_audit.projection`.
 

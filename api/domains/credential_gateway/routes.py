@@ -14,7 +14,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi_injector import Injected
 from starlette.concurrency import run_in_threadpool
 
-from api.domains.credential_gateway.forwarding import UpstreamUnreachable
+from api.domains.credential_gateway.forwarding import UpstreamBusy, UpstreamUnreachable
 from api.domains.credential_gateway.models import (
     BrokeredTokenRead,
     GatewayTokenResolution,
@@ -98,6 +98,15 @@ async def forward_to_provider(
         # Same opaque refusal as /identity: an agent must not learn whether its token was
         # unknown, revoked, aimed at the wrong provider, or rolled back.
         raise _refused("The presented gateway token is not valid for this request.") from exc
+    except UpstreamBusy as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "upstream_busy",
+                "message": "The provider has too many requests in flight. Retry shortly.",
+            },
+            headers={"Retry-After": "5"},
+        ) from exc
     except UpstreamUnreachable as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

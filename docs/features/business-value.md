@@ -42,7 +42,7 @@ The classifier (`api/domains/business_value/classifier.py`) is a pure function o
 4. Drop the global flags `--profile`, `--config`, `--secrets-file`, and `--key-file` with their values, in both `--flag VALUE` and `--flag=VALUE` form and in any position.
 5. Ignore any invocation that has `--help` or `-h`, a `help` subcommand, or no command path, and any invocation in the aai-cli tooling groups `config`, `skills`, `secrets`, or `help`. `--version` is not a help flag, because `confluence pages update` takes `--version N`.
 6. Match the longest known command path. `verb` is its last token and `resource` is the tokens in between.
-   - Passthrough `request` commands (microsoft, pipedrive, hubspot, openpanel, apollo) read their HTTP method: `get` and `head` are reads, and any other method is a write with no Outcome Type.
+   - Passthrough `request` commands (microsoft, pipedrive, hubspot, openpanel, apollo, merkys) read their HTTP method: `get` and `head` are reads, and any other method is a write with no Outcome Type.
    - An unknown path keeps the deepest known resource. It keeps the next token as `verb` only if that token looks like a command word, so no argument text is stored.
 
 ### gog commands
@@ -427,7 +427,7 @@ Ingest owns authentication and the transaction. The Business Value domain owns t
 | Organization value aggregates | `../../api/domains/business_value/repository.py` (`BusinessActionRepository.category_counts`, `successful_counts_by_bucket`, `successful_counts_by_agent`) |
 | Organization activity aggregates | `../../api/domains/business_value/repository.py` (`ValueActivityRepository`: inbound messages, webhook invocations, delivery outcomes, and tool calls, all scoped through the Agent join), served by migration `45bcefcb0749` (`ix_communication_delivery_agent_direction_completed`, `ix_agent_chat_message_agent_direction_occurred`) |
 | HTTP routes | `../../api/domains/business_value/routes.py` |
-| KPI dashboard UI | `../../ui/src/features/business-value/`, route `../../ui/src/app/dashboard/[orgId]/kpis/page.tsx`, navigation entry in `../../ui/src/components/top-nav.tsx` |
+| KPI dashboard UI | `../../ui/src/features/business-value/`, route `../../ui/src/app/dashboard/[orgId]/kpis/page.tsx`, navigation entry in `../../ui/src/features/navigation/hooks/use-rail-model.ts` |
 | KPI dashboard tests | `../../ui/tests/e2e/kpis.spec.ts`, `../../ui/tests/e2e/kpis-guidance.spec.ts`, `../../ui/tests/pages/kpis-page.po.ts` |
 | Test seeding | `../../api/tests/steps/business_action.py`, `../../api/tests/steps/cost.py` (`without_agent`), `../../api/tests/steps/communication.py` (connections, deliveries, messages, webhook invocations, tool calls) |
 | Tests | `../../api/tests/unit/test_business_action_catalogue.py`, `../../api/tests/unit/test_gog_catalogue.py`, `../../api/tests/unit/test_business_action_classifier.py`, `../../api/tests/unit/test_metrics.py`, `../../api/tests/unit/test_business_value_valuation.py`, `../../api/tests/integration/test_business_action_repository.py`, `../../api/tests/integration/test_ingest.py`, `../../api/tests/integration/test_business_action_backfill.py`, `../../api/tests/integration/test_value_settings.py`, `../../api/tests/integration/test_organization_value.py`, `../../api/tests/integration/test_organization_activity.py`, `../../api/tests/integration/test_cross_org_isolation.py` |

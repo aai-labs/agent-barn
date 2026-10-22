@@ -17,7 +17,7 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.selection import is_model_allowed
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import ActorIdentity, EventDeliveryDispatcher, resolve_actor_identity
-from api.domains.organizations.lookup import OrganizationLookupService
+from api.domains.organizations.lookup import ON_CREDIT_LIMIT_REFUSED, OrganizationLookupService
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 from api.infrastructure.openrouter.client import OpenRouterClient
@@ -106,6 +106,8 @@ class AgentSettingsService:
         organization = self.organization_lookup.get_llm_limit(organization_id)
         if organization is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+        if candidate is not None and organization.runs_on_credit:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=ON_CREDIT_LIMIT_REFUSED)
         if candidate is not None and candidate > organization.limit_usd:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

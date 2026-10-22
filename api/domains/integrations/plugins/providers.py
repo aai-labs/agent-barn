@@ -28,6 +28,7 @@ from api.domains.agents.models import (
     GmailContent,
     GoogleWorkspaceContent,
     JiraContent,
+    MerkysContent,
     PipedriveContent,
     SecretProvider,
     SharePointContent,
@@ -64,6 +65,7 @@ from api.infrastructure.integration_validators.gmail import validate_gmail
 from api.infrastructure.integration_validators.gmail_app_password import validate_gmail_app_password
 from api.infrastructure.integration_validators.google_workspace import validate_google_workspace
 from api.infrastructure.integration_validators.jira import validate_jira
+from api.infrastructure.integration_validators.merkys import validate_merkys
 from api.infrastructure.integration_validators.pipedrive import validate_pipedrive
 from api.infrastructure.integration_validators.result import IntegrationValidationResult
 
@@ -83,6 +85,11 @@ _GMAIL_DEFAULT_LIMIT = 20
 _PIPEDRIVE_DOMAIN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _ATLASSIAN_CLOUD_ID = re.compile(r"^[A-Za-z0-9-]+$")
+#: Hosts the credential gateway may forward a Merkys key to. A Merkys base URL is entered
+#: by the user, so without this list the gateway would send the key to any https host a
+#: user typed. Other deployments (on-prem) keep working in direct mode, where the key goes
+#: to the agent's own aai-cli rather than through a shared service.
+_MERKYS_GATEWAY_HOST_SUFFIXES = (".aai-labs.com",)
 
 
 def _basic_auth(username: str, password: str) -> str:
@@ -496,6 +503,86 @@ class ApolloPlugin(AaiCliPlugin[ApolloContent]):
         )
 
 
+def _merkys_gateway_origin(base_url: str) -> str:
+    """Return the Merkys origin the gateway may forward to, or raise ``ValueError``."""
+    parsed = urlsplit(base_url)
+    hostname = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or not any(
+            hostname.endswith(suffix) and hostname != suffix.lstrip(".") for suffix in _MERKYS_GATEWAY_HOST_SUFFIXES
+        )
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port not in {None, 443}
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Merkys isolated mode needs an https URL on an Agent Barn–approved host")
+    return urlunsplit(("https", hostname, "", "", ""))
+
+
+class MerkysPlugin(AaiCliPlugin[MerkysContent]):
+    key = "merkys"
+    egress_mode = EgressMode.GATEWAY_PROXY
+    provider = SecretProvider.MERKYS
+    display_name = "Merkys credential"
+    credentials_model = MerkysContent
+    shared_credential_eligible = True
+    bundled_skill_slugs = ("aai-merkys",)
+    upstream_timeout_seconds = 90
+    max_concurrent_upstream = 8
+
+    aai_cli_slug = "merkys-work"
+    aai_cli_label = "Merkys"
+    aai_cli_capability = (
+        "ask questions of the organization's knowledge base and get answers with cited sources, "
+        "run deep research, list conversations, documents and data sources; "
+        "calls run as the API key's owner, so a 403 or an empty list can mean that user lacks access"
+    )
+    aai_cli_secret_entries = (("merkys.api_key", "api_key"),)
+
+    def validate_external(self, content: MerkysContent) -> IntegrationValidationResult:
+        return validate_merkys(content)
+
+    def upstream_base_url(self, content: MerkysContent) -> str:
+        return _merkys_gateway_origin(content.base_url)
+
+    def validate_direct_content(self, content: MerkysContent) -> None:
+        # The gateway allowlist does not apply to direct mode: the key goes from the agent's
+        # own aai-cli to the URL the model already reduced to an https origin, which is how
+        # an on-prem Merkys is reached.
+        del content
+
+    def apply_upstream_auth(self, content: MerkysContent, request: OutboundRequest) -> OutboundRequest:
+        return request.with_headers({"X-API-Key": content.api_key}, sensitive=True)
+
+    def aai_cli_profile_block(self, content: MerkysContent) -> str:
+        return (
+            f"[profiles.{self.aai_cli_slug}]\n"
+            'provider = "merkys"\n'
+            'auth_type = "api_key_header"\n'
+            f"base_url = {quote(content.base_url)}\n"
+            'api_token_secret = "merkys.api_key"\n'
+        )
+
+    def aai_cli_gateway_profile_block(self, content: MerkysContent, *, base_url: str, token_env: str) -> str:
+        # Checked here too so that switching an agent to isolated mode fails in the apply
+        # preflight, not later when the pod's first request is refused at the gateway.
+        _merkys_gateway_origin(content.base_url)
+        return "".join(
+            [
+                f"[profiles.{self.aai_cli_slug}]\n",
+                'provider = "merkys"\n',
+                *_gateway_bearer_lines(endpoint_field="base_url", base_url=base_url, token_env=token_env),
+            ]
+        )
+
+    def aai_cli_context_line(self, content: MerkysContent) -> str:
+        return f"- **Merkys** (`{self.aai_cli_slug}`): {content.base_url}"
+
+
 class GoogleWorkspacePlugin(IntegrationPlugin[GoogleWorkspaceContent]):
     """Google Workspace, reached by gog rather than aai-cli.
 
@@ -835,6 +922,7 @@ SHIPPED_PLUGINS: tuple[IntegrationPlugin, ...] = (
     FirecrawlPlugin(),
     PipedrivePlugin(),
     ApolloPlugin(),
+    MerkysPlugin(),
     GoogleWorkspacePlugin(),
     GmailPlugin(),
     GmailAppPasswordPlugin(),

@@ -136,7 +136,7 @@ test.describe("Settings — Skill detail page", () => {
     await dataSupportPage.skills.interceptGetSkillVersionsRequest();
 
     await page.goto(`/dashboard/${TEST_ORG_ID}/settings/skills/${MOCK_CUSTOM_SKILL_ID}`);
-    await expect(page.getByRole("link", { name: "Skills" })).toHaveAttribute(
+    await expect(page.getByRole("main").getByRole("link", { name: "Skills" })).toHaveAttribute(
       "href",
       `/dashboard/${TEST_ORG_ID}/settings?tab=skills`,
     );

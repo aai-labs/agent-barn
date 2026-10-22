@@ -144,8 +144,20 @@ ORGANIZATION_DEFAULT_LLM_BUDGET_USD=
 # Required. Model spend limit (USD) an Agent is held to until its Organization sets a
 # default or the Agent its own. Must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD.
 AGENT_DEFAULT_LLM_BUDGET_USD=
+# Administrator sets its own on the Organization's page, until a Platform
+# Administrator saves a default on the platform settings page. Empty is 10.
+ORGANIZATION_DEFAULT_AGENT_LIMIT=
+# Buying credit with Stripe, once a Platform Administrator turns payments on in the
+# platform Billing settings (they can't without both). Use a Stripe sandbox's secret key
+# (sk_test_…) locally; STRIPE_WEBHOOK_SECRET is the whsec_… that
+# `stripe listen --forward-to localhost:<api port>/api/v1/billing/stripe/webhook` prints.
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
 # Default model for openclaw agents when agent.model is not set. Format: litellm/openrouter/<slug>
 AGENT_DEFAULT_MODEL=litellm/openrouter/z-ai/glm-5.2
+# WF01 authoring gate. Saving never enables workflow execution.
+# Initial default; a saved Platform Settings → Workflows choice overrides this.
+WORKFLOW_AUTHORING_ENABLED=false
 # OpenRouter API key used to fetch the model catalogue for the picker. Optional —
 # the public catalogue endpoint works unauthenticated.
 OPENROUTER_API_KEY=

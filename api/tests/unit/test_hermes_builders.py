@@ -295,6 +295,16 @@ def test_gateway_config_routes_auxiliary_llm_tasks_through_the_litellm_proxy() -
     assert all(task == expected for task in auxiliary.values())
 
 
+def test_gateway_config_leaves_the_forking_tasks_on_the_main_model() -> None:
+    """Pinned to "custom", these resolve a placeholder key and every call gets a 401.
+    ``runtime_tests/test_hermes_auxiliary_credentials.py`` proves which key each task
+    resolves; this only keeps them out of the pin list.
+    """
+    auxiliary = build_hermes_gateway_config("litellm/gpt-5", "http://localhost:8090")["auxiliary"]
+
+    assert auxiliary.keys().isdisjoint({"curator", "background_review"})
+
+
 def test_gateway_config_pins_approval_policy_rather_than_inheriting_upstream_defaults() -> None:
     """Every key here matches the pinned image's own default, so this changes no
     behaviour today -- it stops a Hermes upgrade from moving the policy silently.

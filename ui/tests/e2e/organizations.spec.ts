@@ -175,8 +175,8 @@ test.describe("Organization creation for ordinary users", () => {
     page,
   }) => {
     await page.goto(`/dashboard/${ORG_A_ID}`);
-    await page.locator('button[aria-haspopup="listbox"]').click();
-    await page.getByRole("button", { name: /create organization/i }).click();
+    await page.getByRole("button", { name: /^Switch organization/ }).click();
+    await page.getByRole("menuitem", { name: /create organization/i }).click();
     await expect(
       page.getByRole("heading", { name: /^create organization$/i }),
     ).toBeVisible();
@@ -198,8 +198,8 @@ test.describe("Organization creation for ordinary users", () => {
       detail: "You can create up to 5 organizations",
     });
     await page.goto(`/dashboard/${ORG_A_ID}`);
-    await page.locator('button[aria-haspopup="listbox"]').click();
-    await page.getByRole("button", { name: /create organization/i }).click();
+    await page.getByRole("button", { name: /^Switch organization/ }).click();
+    await page.getByRole("menuitem", { name: /create organization/i }).click();
     await page.getByLabel("Name", { exact: true }).fill("Sixth Org");
     await page.getByRole("button", { name: /^create$/i }).click();
 
@@ -284,10 +284,10 @@ test.describe("Organization detail — delete", () => {
 
     await page.goto(DETAIL_URL);
 
-    const switcher = page.locator('button[aria-haspopup="listbox"]');
+    const switcher = page.getByRole("button", { name: /^Switch organization/ });
     await switcher.click();
     await expect(
-      page.getByRole("listbox").getByRole("option", { name: /aai labs/i }),
+      page.getByRole("menuitem", { name: /aai labs/i }),
     ).toBeVisible();
     await page.keyboard.press("Escape");
 
@@ -299,12 +299,12 @@ test.describe("Organization detail — delete", () => {
     await expect(page.getByText(/organization deleted/i)).toBeVisible();
 
     await switcher.click();
-    const listbox = page.getByRole("listbox");
+    const switcherMenu = page.getByRole("menu");
     await expect(
-      listbox.getByRole("option", { name: /globex/i }),
+      switcherMenu.getByRole("menuitem", { name: /globex/i }),
     ).toBeVisible();
     await expect(
-      listbox.getByRole("option", { name: /aai labs/i }),
+      switcherMenu.getByRole("menuitem", { name: /aai labs/i }),
     ).toHaveCount(0);
   });
 });
@@ -489,11 +489,9 @@ test.describe("Org switcher on the detail page", () => {
   }) => {
     await page.goto(DETAIL_URL);
 
-    const switcher = page.locator('button[aria-haspopup="listbox"]');
+    const switcher = page.getByRole("button", { name: /^Switch organization/ });
     await switcher.click();
-    await page
-      .getByRole("listbox")
-      .getByRole("option", { name: /globex/i })
+    await page.getByRole("menuitem", { name: /globex/i })
       .click();
 
     await expect(page).toHaveURL(new RegExp(ORG_B_ID));
@@ -530,11 +528,9 @@ test.describe("Org switcher — manage page for a member-only org", () => {
       page.getByRole("heading", { name: /AAI Labs/i }),
     ).toBeVisible();
 
-    const switcher = page.locator('button[aria-haspopup="listbox"]');
+    const switcher = page.getByRole("button", { name: /^Switch organization/ });
     await switcher.click();
-    await page
-      .getByRole("listbox")
-      .getByRole("option", { name: /globex/i })
+    await page.getByRole("menuitem", { name: /globex/i })
       .click();
 
     // The guard redirects to org B's home instead of /members (which would 403).
@@ -570,22 +566,22 @@ test.describe("Org switcher (platform_admin)", () => {
   }) => {
     await page.goto(ORGS_URL);
 
-    const switcher = page.locator('button[aria-haspopup="listbox"]');
+    const switcher = page.getByRole("button", { name: /^Switch organization/ });
     await expect(switcher).toContainText("Platform");
 
     await switcher.click();
-    const listbox = page.getByRole("listbox");
+    const switcherMenu = page.getByRole("menu");
     await expect(
-      listbox.getByRole("option", { name: /aai labs/i }),
+      switcherMenu.getByRole("menuitem", { name: /aai labs/i }),
     ).toBeVisible();
     await expect(
-      listbox.getByRole("option", { name: /globex/i }),
+      switcherMenu.getByRole("menuitem", { name: /globex/i }),
     ).toBeVisible();
     await expect(
-      listbox.getByRole("option", { name: /umbrella/i }),
+      switcherMenu.getByRole("menuitem", { name: /umbrella/i }),
     ).toHaveCount(0);
 
-    await listbox.getByRole("option", { name: /globex/i }).click();
+    await switcherMenu.getByRole("menuitem", { name: /globex/i }).click();
     await expect(page).toHaveURL(new RegExp(`/dashboard/${ORG_B_ID}$`));
   });
 });
@@ -700,7 +696,7 @@ test.describe("Organization rename", () => {
       await expect(detail.dialog).not.toBeVisible();
       expect(state.payload).toEqual({ name: "Renamed Org" });
       await expect(page.getByRole("heading", { name: "Renamed Org", exact: true })).toBeVisible();
-      await expect(page.locator('button[aria-haspopup="listbox"]')).toContainText("Renamed Org");
+      await expect(page.getByRole("button", { name: /^Switch organization/ })).toContainText("Renamed Org");
     });
   }
 

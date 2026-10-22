@@ -1587,6 +1587,26 @@ def test_teams_connection_serves_a_downloadable_app_package() -> None:
             assert_that("placeholder" in archive_text(response.content), equal_to(False))
 
 
+def test_recreated_teams_connection_packages_the_same_teams_app() -> None:
+    with given(_GIVEN) as context:
+        first = context.client.post(_base(context), json=_teams_payload(), headers=_auth(context)).json()
+        first_package = context.client.get(f"{_base(context)}/{first['id']}/app-package", headers=_auth(context))
+        context.client.delete(f"{_base(context)}/{first['id']}?revision={first['revision']}", headers=_auth(context))
+
+        with when("the Connection is re-created for the same bot and its package downloaded"):
+            second = context.client.post(_base(context), json=_teams_payload(), headers=_auth(context)).json()
+            second_package = context.client.get(
+                f"{_base(context)}/{second['id']}/app-package",
+                headers=_auth(context),
+            )
+
+        with then("the package updates the installed Teams app instead of adding a second app for the bot"):
+            assert_that(second["id"], not_(equal_to(first["id"])))
+            first_manifest = json.loads(archive_text(first_package.content))
+            second_manifest = json.loads(archive_text(second_package.content))
+            assert_that(second_manifest["id"], equal_to(first_manifest["id"]))
+
+
 def test_app_package_is_rejected_for_a_platform_without_provisioning() -> None:
     with given(_GIVEN) as context:
         created = context.client.post(_base(context), json=_discord_payload(), headers=_auth(context))

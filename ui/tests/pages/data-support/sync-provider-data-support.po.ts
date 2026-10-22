@@ -6,6 +6,11 @@ export const ONEDRIVE_FOLDER_URL =
 export const ONEDRIVE_APPROVAL_URL =
   "https://login.microsoftonline.com/organizations/v2.0/adminconsent?client_id=app&scope=https%3A%2F%2Fgraph.microsoft.com%2F.default";
 
+/** OneDrive as listed on a server without its Microsoft app settings. */
+export function unavailableOneDriveEntry(): Entry {
+  return oneDriveEntry({ available: false, approval_url: null, can_connect: false });
+}
+
 export const OTHER_DRIVE_FOLDER_URL = "https://otherdrive.example.test/Agent%20Barn";
 
 export const ONEDRIVE_SITE = {
@@ -28,6 +33,7 @@ export function oneDriveEntry(overrides: Entry = {}): Entry {
     location_noun: "SharePoint site",
     schema_version: 1,
     capabilities: ["admin_approval", "location_picker"],
+    available: true,
     approval_url: ONEDRIVE_APPROVAL_URL,
     connection: null,
     can_connect: true,
@@ -47,6 +53,7 @@ export function otherDriveEntry(overrides: Entry = {}): Entry {
     location_noun: null,
     schema_version: 1,
     capabilities: [],
+    available: true,
     approval_url: null,
     connection: null,
     can_connect: true,

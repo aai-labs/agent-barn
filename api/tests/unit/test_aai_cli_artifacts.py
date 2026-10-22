@@ -20,6 +20,7 @@ from api.domains.agents.models import (
     FirecrawlContent,
     GmailContent,
     JiraContent,
+    MerkysContent,
     PipedriveContent,
     SecretProvider,
     SharePointContent,
@@ -30,6 +31,7 @@ from api.domains.integrations.plugins.providers import (
     ConfluencePlugin,
     GmailPlugin,
     JiraPlugin,
+    MerkysPlugin,
     PipedrivePlugin,
 )
 
@@ -71,6 +73,10 @@ _PIPEDRIVE_WITH_DOMAIN = cast(
     validate_content(SecretProvider.PIPEDRIVE, {"api_token": "pd_tok", "domain": "aai-labs"}),
 )
 _APOLLO = cast(ApolloContent, validate_content(SecretProvider.APOLLO, {"api_token": "apollo_key"}))
+_MERKYS = cast(
+    MerkysContent,
+    validate_content(SecretProvider.MERKYS, {"base_url": "https://merkys.aai-labs.com", "api_key": "cb_merkys_key"}),
+)
 
 _SHAREPOINT = cast(
     SharePointContent,
@@ -155,6 +161,7 @@ def test_config_toml_gateway_github_uses_existing_aai_cli_contract():
         (SecretProvider.CONFLUENCE, _CONFLUENCE, "site_url"),
         (SecretProvider.BITBUCKET, _BITBUCKET, "base_url"),
         (SecretProvider.PIPEDRIVE, _PIPEDRIVE, "base_url"),
+        (SecretProvider.MERKYS, _MERKYS, "base_url"),
     ],
 )
 def test_config_toml_gateway_http_provider_uses_existing_bearer_contract(provider, content, endpoint_field):
@@ -176,6 +183,7 @@ def test_store_excludes_every_gateway_aai_cli_provider():
         SecretProvider.CONFLUENCE: _CONFLUENCE,
         SecretProvider.BITBUCKET: _BITBUCKET,
         SecretProvider.PIPEDRIVE: _PIPEDRIVE,
+        SecretProvider.MERKYS: _MERKYS,
     }
 
     assert store_providers_for(decrypted) == {}
@@ -238,6 +246,28 @@ def test_apollo_direct_profile_uses_api_key():
     # aai-cli's default is Apollo's public API; nothing may redirect the key elsewhere.
     assert "base_url" not in toml
     assert "apollo_key" not in toml
+
+
+def test_merkys_direct_profile_sends_the_key_in_a_header_to_the_saved_url():
+    toml = MerkysPlugin().aai_cli_profile_block(_MERKYS)
+    assert "[profiles.merkys-work]" in toml
+    assert 'provider = "merkys"' in toml
+    assert 'auth_type = "api_key_header"' in toml
+    assert 'base_url = "https://merkys.aai-labs.com"' in toml
+    assert 'api_token_secret = "merkys.api_key"' in toml
+    assert "cb_merkys_key" not in toml
+
+
+def test_merkys_direct_profile_is_valid_aai_cli_config():
+    import tomllib
+
+    profile = tomllib.loads(MerkysPlugin().aai_cli_profile_block(_MERKYS))["profiles"]["merkys-work"]
+    assert profile == {
+        "provider": "merkys",
+        "auth_type": "api_key_header",
+        "base_url": "https://merkys.aai-labs.com",
+        "api_token_secret": "merkys.api_key",
+    }
 
 
 _GMAIL = cast(
@@ -315,6 +345,20 @@ def test_setup_sh_pipedrive_sets_secret():
         f"printf '%s' \"$AAI_SECRET_PIPEDRIVE_API_TOKEN\" | "
         f"aai-cli --config {CONFIG_PATH} secrets set pipedrive.api_token" in setup
     )
+
+
+def test_setup_sh_merkys_sets_secret():
+    setup = build_setup_sh([SecretProvider.MERKYS])
+    assert (
+        f"printf '%s' \"$AAI_SECRET_MERKYS_API_KEY\" | "
+        f"aai-cli --config {CONFIG_PATH} secrets set merkys.api_key" in setup
+    )
+
+
+def test_build_env_carries_the_merkys_key_for_the_store():
+    from api.domains.agents.aai_cli_artifacts import build_env
+
+    assert build_env({SecretProvider.MERKYS: _MERKYS}) == {"AAI_SECRET_MERKYS_API_KEY": "cb_merkys_key"}
 
 
 def test_setup_sh_apollo_sets_secret():
@@ -423,6 +467,12 @@ def test_tool_context_md_lists_pipedrive():
 def test_tool_context_md_lists_apollo():
     md = build_tool_context_md({SecretProvider.APOLLO: _APOLLO})
     assert "- **Apollo** (`apollo-work`)" in md
+
+
+def test_tool_context_md_lists_merkys_with_its_url():
+    md = build_tool_context_md({SecretProvider.MERKYS: _MERKYS})
+    assert "- **Merkys** (`merkys-work`): https://merkys.aai-labs.com" in md
+    assert "cb_merkys_key" not in md
 
 
 def test_tool_context_md_never_leaks_tokens():
@@ -605,6 +655,14 @@ def test_integrations_policy_md_apollo_names_profile_and_access_limits():
     assert "endpoints chosen when it was created" in md
     assert "paid Apollo plan" in md
     assert "apollo_key" not in md
+
+
+def test_integrations_policy_md_merkys_names_profile_and_whose_access_it_has():
+    md = build_integrations_policy_md({SecretProvider.MERKYS: _MERKYS})
+    assert "- **Merkys**: `--profile merkys-work` — ask questions" in md
+    # The agent must not read an empty list or a 403 as "no such data" or "Merkys is down".
+    assert "API key's owner" in md
+    assert "cb_merkys_key" not in md
 
 
 def test_profile_slugs_are_single_source_of_truth_for_jira():

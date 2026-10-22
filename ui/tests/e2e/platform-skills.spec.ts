@@ -46,7 +46,7 @@ test.describe("Platform Skills", () => {
     await expect(page).toHaveURL(new RegExp(`/dashboard/platform/skills/${MOCK_PLATFORM_SKILL_ID}$`));
     await expect(page.getByRole("heading", { name: mockPlatformSkill.name })).toBeVisible();
 
-    const backLink = page.getByRole("link", { name: "Skills" }).filter({
+    const backLink = page.getByRole("main").getByRole("link", { name: "Skills" }).filter({
       has: page.locator("svg"),
     });
     await expect(backLink).toHaveAttribute("href", "/dashboard/platform/skills");
