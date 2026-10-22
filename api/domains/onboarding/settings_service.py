@@ -13,6 +13,8 @@ from api.domains.onboarding.repository import TrialSettingsRepository
 from api.domains.organizations.lookup import OrganizationLookupService
 from api.domains.platform_admin.service import PlatformAdminService
 
+_GMAIL_DOMAINS = frozenset({"gmail.com", "googlemail.com"})
+
 
 @inject
 @singleton
@@ -30,6 +32,11 @@ class TrialSettingsService:
     def signup_settings(self, session: Session) -> TrialSettingsRead:
         """Read signup policy and credit together, held stable through trial creation."""
         return self.repository.read_for_signup(session)
+
+    def signup_policy(self) -> TrialSettingsRead:
+        """Signup policy and trial credit as they stand, for a member creating an
+        Organization rather than signing up."""
+        return self.repository.read()
 
     def agent_limit(self) -> int:
         """How many Agents a Trial Organization may run."""
@@ -63,11 +70,29 @@ class TrialSettingsService:
         return settings.model_copy(update={"active_trials": self.organizations.count_trials()})
 
     @staticmethod
-    def email_hash(email: str) -> str:
+    def inbox(email: str) -> str:
+        """The inbox an address delivers to, so its free variants count as one: a `+tag`
+        is dropped on any address, and Gmail also ignores dots and answers to
+        googlemail.com."""
+        local, _, domain = email.strip().lower().rpartition("@")
+        local = local.split("+", 1)[0]
+        if domain in _GMAIL_DOMAINS:
+            local, domain = local.replace(".", ""), "gmail.com"
+        return f"{local}@{domain}"
+
+    @classmethod
+    def email_hash(cls, email: str) -> str:
+        return hashlib.sha256(cls.inbox(email).encode()).hexdigest()
+
+    @staticmethod
+    def _legacy_email_hash(email: str) -> str:
+        """How grants were keyed before addresses were normalised: lowercased only."""
         return hashlib.sha256(email.strip().lower().encode()).hexdigest()
 
     def has_had_trial(self, email: str, session: Session) -> bool:
-        return self.repository.has_grant(self.email_hash(email), session)
+        return self.repository.has_grant(self.email_hash(email), session) or self.repository.has_grant(
+            self._legacy_email_hash(email), session
+        )
 
     def record_trial(self, email: str, session: Session) -> None:
         self.repository.record_grant(self.email_hash(email), session)

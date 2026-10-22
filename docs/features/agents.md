@@ -55,6 +55,10 @@ check offers retry and keeps both choices disabled. Creation still enforces the 
 under the existing database lock, including when capacity changes after the check.
 Creating or deleting an Agent invalidates the Organization read as well as Agent lists.
 
+Any other Organization goes straight to the hiring form, unless its read's
+`agent_limit_reached` flag (counted the same way, against the Agent limit in force)
+says it already has all its Agents; then the dialog says so instead of showing the form.
+
 ## Messaging connection choices
 
 The general Messaging picker offers users' own Telegram bots and other supported

@@ -205,7 +205,7 @@ def organization_service(**overrides):
         "litellm": MagicMock(),
         "permission_policy": MagicMock(),
         "event_delivery_dispatcher": MagicMock(),
-        "memory_accounting": MagicMock(legacy_spend=MagicMock(return_value=0)),
+        "memory_accounting": MagicMock(spend_outside_team=MagicMock(return_value=0)),
         "memory_keys": MagicMock(),
     }
     deps.update(overrides)

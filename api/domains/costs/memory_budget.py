@@ -1,4 +1,5 @@
-"""Historical shared-key charges not already included in the Organization team."""
+"""Charges an Organization's LiteLLM team does not count: historical shared-key memory
+charges, and, on credit, calls whose cost only healing found."""
 
 import re
 from dataclasses import dataclass
@@ -17,6 +18,25 @@ from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 class MemoryBudgetAccounting:
     costs: CostRepository
     config: Config
+
+    def spend_outside_team(self, organization: Organization) -> float:
+        """What the Organization spent that its team's own spend leaves out, so limits
+        pushed to the team are lowered by it and spend read from the team is raised."""
+        return self.legacy_spend(organization) + self.healed_spend(organization)
+
+    def healed_spend(self, organization: Organization) -> float:
+        """On credit only: everything granted is spent down once, so a cost the team never
+        counted would be free credit. A renewing limit lets a missed cost go with the
+        period it fell in."""
+        if organization.llm_budget_duration != ONE_OFF_BUDGET_WINDOW:
+            return 0.0
+        return float(
+            self.costs.healed_spend(
+                organization.id,
+                organization.created_at,
+                exclude_memory_key_hashes=self.config.memory_cost_key_hashes or frozenset(),
+            )
+        )
 
     def legacy_spend(self, organization: Organization) -> float:
         if not self.config.memory_cost_key_hashes:
