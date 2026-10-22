@@ -1,5 +1,7 @@
 import secrets
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -43,6 +45,7 @@ OPERATION_LEASE = timedelta(minutes=10)
 NO_SPACE_RETRY = timedelta(minutes=5)
 FAILED_RETRY_BASE_SECONDS = 60
 FAILED_RETRY_MAX_SECONDS = 1800
+DISCONNECT_LOCK_WAIT_SECONDS = 15
 
 
 class FileSyncUnauthorized(Exception):
@@ -68,6 +71,10 @@ class FileSyncProviderBusy(Exception):
 
 
 class FileSyncProviderFailed(Exception):
+    pass
+
+
+class FileSyncBusy(Exception):
     pass
 
 
@@ -303,3 +310,27 @@ class FileSyncIngestService:
             root=root,
             folder_item_id=folder.folder_item_id,
         )
+
+
+@inject
+@singleton
+@dataclass
+class FileSyncFolderRemoval:
+    repository: FileSyncRepository
+
+    @contextmanager
+    def holding(self, connection_id: UUID) -> Iterator[None]:
+        with self.repository.connection_lock(connection_id, wait_seconds=DISCONNECT_LOCK_WAIT_SECONDS) as acquired:
+            if not acquired:
+                raise FileSyncBusy
+            yield
+
+    def remove_agent_folders(self, connection: SyncProviderConnection, plugin: SyncProviderPlugin) -> None:
+        root = sync_root(connection)
+        for folder in self.repository.folders(connection.id):
+            if root is not None and folder.folder_item_id is not None:
+                try:
+                    plugin.delete_item(root, item_id=folder.folder_item_id)
+                except RemoteItemMissing:
+                    pass
+            self.repository.remove_folder(folder.id)

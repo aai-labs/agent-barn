@@ -81,6 +81,35 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 ## Changes
 
+### 2026-10-22 — AF-384 — Disconnect removes the Agent folders
+
+- **Delivered:** after the sign-in and same-account checks, `SyncProviderService.disconnect` holds the connection's Sync Engine lock through `FileSyncFolderRemoval.holding`.
+  - **Lock:** `FileSyncRepository.connection_lock` gains `wait_seconds` and polls every 0.1 s. Disconnect waits up to 15 s (`DISCONNECT_LOCK_WAIT_SECONDS`); if the lock isn't free by then, it answers 409 and changes nothing.
+  - **Order:**
+    1. every Agent Folder is deleted at the provider with Agent Barn's own access (`delete_item`), and its row removed (`remove_folder`). `sync_file` rows cascade, and `sync_activity` keeps its history with `folder_id` cleared. A folder already gone (`RemoteItemMissing`) is skipped.
+    2. the grant is revoked.
+    3. the connection is marked disconnected.
+  - **On failure:** a provider failure leaves the connection active, and the next engine pass gives every Agent without a folder a new one.
+- **Changed:**
+  - `FOLDER_NAME` moved from `sync_provider/service.py` to `sync_provider/models.py`. The engine imported it from the service, which made the service's new import of `file_sync.service` circular.
+  - The ADR's disconnect line now says the folders are deleted with Agent Barn's own access, as the PR 5a amendment decided.
+- **UI:** the disconnect dialog's wording follows the provider's `file_sync` capability. The e2e OneDrive fixture now lists `file_sync`, as the API has since the OneDrive plugin declared it.
+- **Verified:**
+  - **`tests/integration/test_file_sync_disconnect.py` (7 tests), through the real route with Test Drive:**
+    - deletes before the revoke, the root kept, rows removed, activity kept, no Kubernetes call;
+    - no folders after a later engine pass;
+    - an already-gone folder is skipped;
+    - a failure on the second folder leaves the connection active, and the engine rebuilds the folder;
+    - a failed revoke leaves the connection active, and the folders are rebuilt;
+    - a held lock gives 409 with nothing changed;
+    - disconnect waits for a running pass.
+
+    6 failed first. The failed-revoke test passed before and after, because nothing was deleted before.
+  - **Other checks:**
+    - the sync provider and file sync suites pass together (378 tests);
+    - all 24 tests in `ui/tests/e2e/sync-provider.spec.ts` pass. The OneDrive wording test failed first; the test for a provider without file sync is a guard;
+    - `pnpm lint`, `tsc --noEmit`, ruff, format and ty pass.
+
 ### 2026-10-22 — AF-384 — Pinned-image file sync contracts
 
 - **Delivered:** `api/runtime_tests/test_{hermes,openclaw}_file_sync.py` over the shared `file_sync_contract.py`.

@@ -10,7 +10,7 @@ from api.core.config import Config
 from api.domains.agents.microsoft_graph_files import MicrosoftGraphFiles
 from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
 from api.domains.agents.microsoft_identity import MicrosoftAppTokens, MicrosoftIdentityClient
-from api.domains.sync_provider.models import SyncProviderCapability, SyncProviderConnection
+from api.domains.sync_provider.models import FOLDER_NAME, SyncProviderCapability, SyncProviderConnection
 from api.domains.sync_provider.plugins.base import (
     ProviderThrottled,
     Provisioned,
@@ -29,7 +29,6 @@ from api.domains.sync_provider.plugins.base import (
 from api.domains.sync_provider.plugins.providers import shipped_plugins
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
 from api.domains.sync_provider.repository import SyncProviderRepository
-from api.domains.sync_provider.service import FOLDER_NAME
 from api.tests.steps.sync_provider import OtherDrivePlugin
 
 TEST_DRIVE = "testdrive"

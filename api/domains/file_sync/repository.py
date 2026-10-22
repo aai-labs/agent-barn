@@ -1,3 +1,4 @@
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ from api.domains.file_sync.models import (
 from api.domains.sync_provider.models import SyncProviderConnection, SyncProviderStatus
 from api.domains.sync_provider.plugins.base import RemoteItem
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+
+LOCK_POLL_SECONDS = 0.1
 
 
 @inject
@@ -57,12 +60,18 @@ class FileSyncRepository:
             session.commit()
 
     @contextmanager
-    def connection_lock(self, connection_id: UUID) -> Iterator[bool]:
+    def connection_lock(self, connection_id: UUID, wait_seconds: float = 0) -> Iterator[bool]:
         lock_key = f"file-sync-connection:{connection_id}"
+        deadline = time.monotonic() + wait_seconds
         with Session(self.delegate.engine) as session:
-            acquired = bool(
-                session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
-            )
+            acquired = False
+            while True:
+                acquired = bool(
+                    session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
+                )
+                if acquired or time.monotonic() >= deadline:
+                    break
+                time.sleep(LOCK_POLL_SECONDS)
             try:
                 yield acquired
             finally:
@@ -367,6 +376,11 @@ class FileSyncRepository:
                 return True
         except IntegrityError:
             return False
+
+    def remove_folder(self, folder_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(sa.delete(SyncAgentFolder).where(col(SyncAgentFolder.id) == folder_id))
+            session.commit()
 
     def stop_folders(self, folder_ids: list[UUID]) -> None:
         if not folder_ids:

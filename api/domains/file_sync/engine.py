@@ -23,7 +23,7 @@ from api.domains.file_sync.rules import (
     classify,
     name_problem,
 )
-from api.domains.sync_provider.models import SyncProviderCapability, SyncProviderConnection
+from api.domains.sync_provider.models import FOLDER_NAME, SyncProviderCapability, SyncProviderConnection
 from api.domains.sync_provider.plugins.base import (
     ProviderThrottled,
     RemoteItem,
@@ -34,7 +34,6 @@ from api.domains.sync_provider.plugins.base import (
     SyncRoot,
 )
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
-from api.domains.sync_provider.service import FOLDER_NAME
 
 logger = logging.getLogger(__name__)
 

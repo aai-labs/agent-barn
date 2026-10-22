@@ -54,8 +54,13 @@ Paths below are relative to `/organizations/{organization_id}/sync-providers/{pr
 7. Disconnect:
    1. `GET …/connection/authorize-url?purpose=disconnect` (409 unless active) returns the sign-in URL.
    2. `POST …/connection/disconnect {code, state}` requires a disconnect state for this caller, Organization and provider (400), and an active connection (409).
-   3. The plugin redeems the code, requires the same account that connected, and revokes Agent Barn's access with that fresh sign-in.
-   4. The connection is marked disconnected. The folder and its files are left in place, and the Organization may connect again.
+   3. The plugin redeems the code and requires the same account that connected.
+   4. Holding the connection's Sync Engine lock (`FileSyncFolderRemoval`), it waits up to 15 s for a running engine pass. If the lock isn't free by then, the answer is 409 "File sync is busy with this connection. Try again in a moment." and nothing changes.
+   5. Every Agent Folder, including stopped and disabled ones, is deleted at the provider with Agent Barn's own access, and its row is removed, together with its `sync_file` rows. A folder already gone at the provider is skipped. `sync_activity` keeps its history, with `folder_id` cleared.
+   6. The plugin revokes Agent Barn's access with the fresh sign-in.
+   7. The connection is marked disconnected. The "Agent Barn" root folder is left in place, and the Organization may connect again. Agents' volumes and pods are not touched.
+
+   If a provider call fails at step 5 or 6, the connection stays active. The next engine pass gives every Agent without a folder a new one, and their pods upload their files again.
 
 Plugin failures map to HTTP the same way for every provider:
 
@@ -96,7 +101,7 @@ Settings → **Sync** (`?tab=sync`) is visible to every Organization Member. It 
 - Pending:
   - Owners and Admins of a provider with `location_picker` get the picker inline: a search that needs a term (labelled from `location_noun`), a result list, and **Use**. The API's `detail` is shown inline when choosing fails. Reloading the page resumes at the picker while the sign-in is fresh. **Start over** abandons the unfinished connection.
   - Members are told no {location_noun} has been chosen yet.
-- Active: **Open in {provider}** links to the folder in a new tab, with the provider's `folder_hint` underneath. Owners and Admins also get **Disconnect**, confirmed in a dialog that says the folder and its files stay where they are. It then opens the sign-in popup and posts the code to the disconnect route. A refusal is shown inline and the connection stays.
+- Active: **Open in {provider}** links to the folder in a new tab, with the provider's `folder_hint` underneath. Owners and Admins also get **Disconnect**, confirmed in a dialog. For a provider with `file_sync` it says each Agent's folder is deleted first, and that the "Agent Barn" folder and the Agents' own files stay. For any other provider it says the folder and its files stay where they are. It then opens the sign-in popup and posts the code to the disconnect route. A refusal is shown inline and the connection stays.
 - Connecting or disconnecting one provider refetches the list, because it changes whether the others may connect.
 
 The query is keyed by Organization id, so switching Organization never shows the previous one's providers.

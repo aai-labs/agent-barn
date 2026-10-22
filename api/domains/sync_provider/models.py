@@ -10,6 +10,7 @@ from sqlmodel import Field as SqlField
 from api.infrastructure.postgres.models import BaseModel
 
 OPEN_CONNECTION_INDEX = "uq_sync_provider_connection_open"
+FOLDER_NAME = "Agent Barn"
 
 
 class SyncProviderCapability(StrEnum):
