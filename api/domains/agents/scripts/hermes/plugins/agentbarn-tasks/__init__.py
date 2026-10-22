@@ -31,20 +31,19 @@ _COMMAND_TIMEOUT_SECONDS = 150
 
 _IN_TURN_REMINDER = (
     "[Agent Barn] This request has taken several steps and has no Task yet. Record it with the "
-    "agentbarn_task tool: create a Task, keep its status current, add notes as you go and attach "
-    "the files you produce."
+    "agentbarn_task tool: create a Task, keep its status current and add notes as you go. The files you "
+    "produce are attached to it for you."
 )
 _BEFORE_FINISHING_REMINDER = (
     "Before you finish: this turn produced files but recorded no Task. Record it now with the "
-    "agentbarn_task tool (create the Task, add a note on what was done, attach the files you produced, "
-    "set its status), then give your answer."
+    "agentbarn_task tool (create the Task, add a note on what was done, set its status), then give your "
+    "answer. The files you produced are attached to it for you."
 )
 # Next to every request, as on OpenClaw: so the Task exists from the start of the work, not the end.
-# About 50 tokens per request.
+# About 45 tokens per request.
 _REQUEST_LINE = (
     "If this request needs tools or produces files, create a Task with agentbarn_task as in_progress before "
-    "you start, keep it current and attach the files you produce. Don't mention Tasks in your reply unless "
-    "the user asks."
+    "you start and keep it current. Don't mention Tasks in your reply unless the user asks."
 )
 _QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping."
 _NEXT_TURN_REMINDER = (
@@ -86,7 +85,7 @@ _SCHEMA = {
 }
 
 _lock = threading.Lock()
-# (session_id, turn_id) -> what the turn did: tool call ids, files written and attached, reminders sent
+# (session_id, turn_id) -> what the turn did: tool call ids, files written and attached, Tasks touched
 _turns: dict[tuple[str, str], dict] = {}
 # session_id -> its current turn_id; pre_verify is not told which turn it is judging.
 _current_turn: dict[str, str] = {}
@@ -201,7 +200,25 @@ def _attached_names(tool_name: str, args) -> set[str]:
     return set()
 
 
-def _track(tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", tool_call_id: str = "") -> dict:
+def _task_id(tool_name: str, args, result) -> str | None:
+    """The Task a call of the Task tool acted on: its task_id, or the id a create returned."""
+    if tool_name != _TOOL or not isinstance(args, dict):
+        return None
+    if isinstance(args.get("task_id"), str) and args["task_id"]:
+        return args["task_id"]
+    if args.get("action") == "create" and isinstance(result, str):
+        try:
+            created = json.loads(result)
+        except ValueError:
+            return None
+        if isinstance(created, dict) and isinstance(created.get("id"), str):
+            return created["id"]
+    return None
+
+
+def _track(
+    tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", tool_call_id: str = "", result=None
+) -> dict:
     """Count one tool call in its turn. Safe to call twice for the same call."""
     _current_turn[session_id] = turn_id
     turn = _turns.setdefault(
@@ -209,16 +226,20 @@ def _track(tool_name: str = "", args=None, session_id: str = "", turn_id: str = 
         {
             "work": set(),
             "wrote_files": False,
-            "written": set(),
+            "written": {},
             "recorded": False,
+            "task_ids": set(),
             "attached": set(),
-            "reminded": set(),
-            "held": set(),
+            "reminded": False,
+            "held": False,
         },
     )
     if _touches_tasks(tool_name, args):
         turn["recorded"] = True
         turn["attached"] |= _attached_names(tool_name, args)
+        task_id = _task_id(tool_name, args, result)
+        if task_id:
+            turn["task_ids"].add(task_id)
     else:
         if tool_call_id:
             turn["work"].add(tool_call_id)
@@ -226,74 +247,97 @@ def _track(tool_name: str = "", args=None, session_id: str = "", turn_id: str = 
             turn["wrote_files"] = True
             path = args.get("path") if isinstance(args, dict) else None
             if isinstance(path, str) and path:
-                turn["written"].add(os.path.basename(path))
+                full = os.path.normpath(os.path.join(_workspace(), path))
+                turn["written"][os.path.basename(full)] = full
     return turn
 
 
-def _missing(turn: dict | None) -> tuple[str, list[str]] | None:
-    """What the turn still owes its Task: a record of real work, or the files it produced."""
-    if turn is None:
-        return None
-    if not turn["recorded"]:
-        return ("record", []) if turn["wrote_files"] or len(turn["work"]) >= _WORK_THRESHOLD else None
-    unattached = sorted(turn["written"] - turn["attached"])
-    return ("attach", unattached) if unattached else None
+def _unrecorded_work(turn: dict | None) -> bool:
+    return bool(turn) and not turn["recorded"] and (turn["wrote_files"] or len(turn["work"]) >= _WORK_THRESHOLD)
+
+
+def _unattached(turn: dict) -> dict[str, str]:
+    return {name: path for name, path in turn["written"].items() if name not in turn["attached"]}
 
 
 def _attach_reminder(names: list[str]) -> str:
     return (
-        f"You recorded a Task but have not attached the files you produced: {', '.join(names)}. Attach "
-        "each with the agentbarn_task tool (action attach) so the Task shows the result."
+        f"These files you produced are not on a Task yet: {', '.join(names)}. Attach the ones that are part of "
+        "the result with the agentbarn_task tool (action attach)."
     )
 
 
-def _on_post_tool_call(tool_name="", args=None, session_id="", turn_id="", tool_call_id="", **_):
+def _attach_automatically(turn: dict) -> list[str]:
+    """Attach the turn's files to the one Task it touched. Returns the names it could not attach."""
+    unattached = _unattached(turn)
+    if len(turn["task_ids"]) != 1:
+        return sorted(unattached)
+    (task_id,) = turn["task_ids"]
+    limit = os.environ.get("TASK_FILE_MAX_BYTES", "")
+    failed = []
+    for name, path in sorted(unattached.items()):
+        if not os.path.isfile(path):
+            continue
+        if limit.isdigit() and os.path.getsize(path) > int(limit):
+            continue
+        ok, _ = _run(["attach", task_id, path])
+        if not ok:
+            failed.append(name)
+    return failed
+
+
+def _on_post_tool_call(tool_name="", args=None, result=None, session_id="", turn_id="", tool_call_id="", **_):
     if session_id == _BOOT_SESSION_ID:
         return
     with _lock:
-        _track(tool_name, args, session_id, turn_id, tool_call_id)
+        _track(tool_name, args, session_id, turn_id, tool_call_id, result)
 
 
 def _on_transform_tool_result(tool_name="", args=None, result=None, session_id="", turn_id="", tool_call_id="", **_):
     if session_id == _BOOT_SESSION_ID:
         return None
     with _lock:
-        turn = _track(tool_name, args, session_id, turn_id, tool_call_id)
-        missing = _missing(turn)
-        if missing is None or missing[0] in turn["reminded"]:
+        turn = _track(tool_name, args, session_id, turn_id, tool_call_id, result)
+        if turn["reminded"] or not _unrecorded_work(turn):
             return None
-        turn["reminded"].add(missing[0])
-    reminder = _IN_TURN_REMINDER if missing[0] == "record" else "[Agent Barn] " + _attach_reminder(missing[1])
-    return f"{result if isinstance(result, str) else json.dumps(result)}\n\n{reminder}"
+        turn["reminded"] = True
+    return f"{result if isinstance(result, str) else json.dumps(result)}\n\n{_IN_TURN_REMINDER}"
 
 
 def _on_session_end(session_id="", turn_id="", completed=False, **_):
-    """Hermes fires this at the end of every turn, despite its name."""
+    """Hermes fires this at the end of every turn, despite its name.
+
+    A turn's files go to the one Task it touched without asking the model; the Agent can
+    remove any that are not part of the result. Only what could not be attached is named
+    on the next turn.
+    """
     with _lock:
         turn = _turns.pop((session_id, turn_id), None)
         if _current_turn.get(session_id) == turn_id:
             del _current_turn[session_id]
-        missing = _missing(turn) if completed else None
-        if missing is not None:
-            _next_turn_reminders[session_id] = (
-                _NEXT_TURN_REMINDER if missing[0] == "record" else _attach_reminder(missing[1])
-            ) + _QUIET
+    if turn is None or not completed:
+        return
+    if _unrecorded_work(turn):
+        reminder = _NEXT_TURN_REMINDER
+    else:
+        failed = _attach_automatically(turn) if turn["recorded"] else []
+        if not failed:
+            return
+        reminder = _attach_reminder(failed)
+    with _lock:
+        _next_turn_reminders[session_id] = reminder + _QUIET
 
 
 def _on_pre_verify(session_id="", **_):
-    """Hold a turn that wrote files back once per gap. Hermes calls this only after file edits."""
+    """Hold back once a turn that wrote files but recorded no Task. Hermes calls this only after file edits."""
     if session_id == _BOOT_SESSION_ID:
         return None
     with _lock:
         turn = _turns.get((session_id, _current_turn.get(session_id, "")))
-        missing = _missing(turn)
-        if turn is None or missing is None or missing[0] in turn["held"]:
+        if turn is None or turn["held"] or not _unrecorded_work(turn):
             return None
-        turn["held"].add(missing[0])
-    message = (
-        _BEFORE_FINISHING_REMINDER if missing[0] == "record" else "Before you finish: " + _attach_reminder(missing[1])
-    )
-    return {"action": "continue", "message": message}
+        turn["held"] = True
+    return {"action": "continue", "message": _BEFORE_FINISHING_REMINDER}
 
 
 def _open_task_lines() -> list[str] | None:

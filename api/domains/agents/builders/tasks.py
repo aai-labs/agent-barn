@@ -44,8 +44,10 @@ work that continues later), keep a Task for it:
 3. Keep its status current: `done` when you finish, `failed` if you cannot
    finish.
 4. Add a `note` for each meaningful step, decision or problem.
-5. `attach` every file you produce for the request. `show` gives a Task with its
-   notes and files.
+5. Files you write during a turn are attached to the Task you worked on at the
+   end of that turn. `show` lists a Task's notes and files; remove any file that
+   is not part of the result with `remove_file`. You can also `attach` a file
+   yourself, for example one you produced in an earlier turn.
 
 Tasks are background bookkeeping. Do not mention Tasks in your replies unless the user asks
 about them; answer the request itself.

@@ -70,6 +70,7 @@ def _after_tool(
     command: str = "ls",
     trigger: str = "user",
     params: dict | None = None,
+    result: dict | None = None,
 ) -> dict:
     return {
         "hook": "after_tool_call",
@@ -78,6 +79,7 @@ def _after_tool(
             "params": params if params is not None else {"command": command},
             "runId": run_id,
             "toolCallId": call_id,
+            **({"result": result} if result is not None else {}),
         },
         "ctx": {"sessionKey": session, "runId": run_id, "trigger": trigger},
     }
@@ -367,66 +369,110 @@ def test_another_sessions_work_does_not_add_a_reminder(tmp_path: Path):
     assert_that(driven["results"][-1], is_(None))
 
 
-# --- files produced but not attached ---
+# --- files the run produced are attached when it ends ---
 
 
-def _wrote(call_id: str = "c1") -> dict:
-    return _after_tool(call_id, tool="write", params={"path": "/home/node/.openclaw/workspace/states.csv"})
+def _wrote(tmp_path: Path, call_id: str = "c1", name: str = "states.csv") -> tuple[dict, str]:
+    workspace = tmp_path / ".openclaw" / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    path = workspace / name
+    path.write_text("a,b\n")
+    return _after_tool(call_id, tool="write", params={"path": str(path)}), str(path)
 
 
-def _task(call_id: str, **params) -> dict:
-    return _after_tool(call_id, tool="agentbarn_task", params=params)
+def _task(call_id: str, result: dict | None = None, **params) -> dict:
+    return _after_tool(call_id, tool="agentbarn_task", params=params, result=result)
 
 
-def test_a_task_missing_the_files_the_run_wrote_is_reminded_to_attach_them(tmp_path: Path):
-    driven = _drive(
-        tmp_path, [_wrote(), _task("c2", action="create", title="States"), _persist("c2", tool="agentbarn_task")]
+def _created(call_id: str = "c2", task_id: str = _TASK_ID) -> dict:
+    details = {"id": task_id, "status": "in_progress"}
+    return _task(
+        call_id,
+        result={"content": [{"type": "text", "text": json.dumps(details)}], "details": details},
+        action="create",
+        title="States",
     )
 
-    text = _persisted_text(driven["results"][-1])
-    assert_that(text, contains_string("states.csv"))
-    assert_that(text, contains_string("attach"))
+
+def _attaches(tmp_path: Path) -> list[list[str]]:
+    return [call["argv"] for call in _calls(tmp_path) if call["argv"][0] == "attach"]
+
+
+def test_files_the_run_wrote_are_attached_to_its_task_when_it_ends(tmp_path: Path):
+    wrote_states, states = _wrote(tmp_path)
+    wrote_chart, chart = _wrote(tmp_path, "c3", "chart.png")
+
+    _drive(tmp_path, [wrote_states, wrote_chart, _created(), _agent_end()])
+
+    assert_that(_attaches(tmp_path), equal_to(sorted([["attach", _TASK_ID, chart], ["attach", _TASK_ID, states]])))
+
+
+def test_files_go_to_a_task_the_run_touched_by_id(tmp_path: Path):
+    wrote, states = _wrote(tmp_path)
+
+    _drive(tmp_path, [wrote, _task("c2", action="status", task_id="task-9", status="done"), _agent_end()])
+
+    assert_that(_attaches(tmp_path), equal_to([["attach", "task-9", states]]))
+
+
+def test_a_file_the_agent_attached_is_not_attached_again(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    _drive(
+        tmp_path,
+        [wrote, _created(), _task("c3", action="attach", task_id=_TASK_ID, path="states.csv"), _agent_end()],
+    )
+
+    assert_that(_attaches(tmp_path), equal_to([]))
+
+
+def test_a_file_that_no_longer_exists_is_not_attached(tmp_path: Path):
+    wrote, states = _wrote(tmp_path)
+    Path(states).unlink()
+
+    _drive(tmp_path, [wrote, _created(), _agent_end()])
+
+    assert_that(_attaches(tmp_path), equal_to([]))
+
+
+def test_files_are_not_attached_when_the_run_touched_several_tasks(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    driven = _drive(tmp_path, [wrote, _created("c2", "task-1"), _created("c3", "task-2"), _agent_end(), _prompt()])
+
+    assert_that(_attaches(tmp_path), equal_to([]))
+    assert_that(_context(driven["results"][-1]), contains_string("states.csv"))
+
+
+def test_a_file_that_could_not_be_attached_is_named_on_the_next_turn(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    driven = _drive(
+        tmp_path, [wrote, _created(), _agent_end(), _prompt()], AGENTBARN_TASK_COMMAND="/nonexistent/agentbarn-task"
+    )
+
+    assert_that(_context(driven["results"][-1]), contains_string("states.csv"))
+
+
+def test_nothing_about_attaching_is_said_within_the_run_or_after_an_automatic_attach(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    driven = _drive(
+        tmp_path, [wrote, _created(), _persist("c2", tool="agentbarn_task"), _finalize(), _agent_end(), _prompt()]
+    )
+
+    assert_that((driven["results"][2], driven["results"][3]), equal_to((None, None)))
+    assert_that("states.csv" in _context(driven["results"][-1]), is_(False))
 
 
 def test_a_run_that_attached_what_it_wrote_may_finish(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
     driven = _drive(
-        tmp_path,
-        [
-            _wrote(),
-            _task("c2", action="create", title="States"),
-            _task("c3", action="attach", task_id="t", path="states.csv"),
-            _finalize(),
-        ],
+        tmp_path, [wrote, _created(), _task("c3", action="attach", task_id="t", path="states.csv"), _finalize()]
     )
 
     assert_that(driven["results"][-1], is_(None))
-
-
-def test_attaching_through_the_task_command_counts(tmp_path: Path):
-    driven = _drive(
-        tmp_path,
-        [
-            _wrote(),
-            _task("c2", action="create", title="States"),
-            _after_tool("c3", command="agentbarn-task attach t /home/node/.openclaw/workspace/states.csv"),
-            _finalize(),
-        ],
-    )
-
-    assert_that(driven["results"][-1], is_(None))
-
-
-def test_a_run_with_unattached_files_is_asked_to_attach_them_before_finishing(tmp_path: Path):
-    driven = _drive(tmp_path, [_wrote(), _task("c2", action="create", title="States"), _finalize()])
-
-    assert_that(driven["results"][-1], has_entries(action="revise"))
-    assert_that(driven["results"][-1]["retry"]["instruction"], contains_string("states.csv"))
-
-
-def test_unattached_files_are_named_on_the_next_turn(tmp_path: Path):
-    driven = _drive(tmp_path, [_wrote(), _task("c2", action="create", title="States"), _agent_end(), _prompt()])
-
-    assert_that(_context(driven["results"][-1]), contains_string("states.csv"))
 
 
 # --- the request-time line ---
@@ -438,7 +484,6 @@ def test_each_request_carries_the_task_line(tmp_path: Path, trigger: str):
 
     context = _context(driven["results"][0])
     assert_that(context, contains_string("create a Task with agentbarn_task as in_progress before you start"))
-    assert_that(context, contains_string("attach the files you produce"))
     assert_that(context, contains_string("Don't mention Tasks in your reply"))
 
 
