@@ -426,3 +426,71 @@ def test_the_command_records_a_task_end_to_end(tmp_path: Path):
                     assert_that([f["filename"] for f in shown["files"]], contains_exactly("report.csv"))
         finally:
             context.stop_server()
+
+
+# --- removing files ---
+
+
+def _remove(context, task_id: str, file_id: str):
+    return context.ingest_client.delete(
+        f"{_tasks_url(context.agent)}/{task_id}/files/{file_id}", headers=_headers(context.ingest_key)
+    )
+
+
+def test_an_agent_removes_a_file_from_its_task():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+        file_id = _attach(context, task_id, b"scratch").json()["id"]
+
+        with when("the Agent removes the file"):
+            response = _remove(context, task_id, file_id)
+
+            with then("it is gone from the Task"):
+                assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+                detail = context.ingest_client.get(
+                    f"{_tasks_url(context.agent)}/{task_id}", headers=_headers(context.ingest_key)
+                ).json()
+                assert_that(detail["files"], equal_to([]))
+
+
+def test_removing_a_file_frees_the_organizations_space():
+    with given([*_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES="10"), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+        file_id = _attach(context, task_id, b"x" * 8).json()["id"]
+
+        _remove(context, task_id, file_id)
+        response = _attach(context, task_id, b"x" * 8, filename="second.csv")
+
+        assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+
+
+def test_an_unknown_file_is_not_found():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        task_id = _create(context).json()["id"]
+
+        response = _remove(context, task_id, "00000000-0000-7000-8000-000000000000")
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_an_agent_cannot_remove_another_agents_file():
+    with given(
+        [
+            *_given(),
+            _an_agent_with_an_ingest_key(),
+            _the_agent_is_remembered_as("first"),
+            _an_agent_with_an_ingest_key(name="Second", key="second-key"),
+        ]
+    ) as context:
+        first_agent, first_key = context.first
+        task_id = _create(context, agent=first_agent, key=first_key).json()["id"]
+        file_id = context.ingest_client.post(
+            f"{_tasks_url(first_agent)}/{task_id}/files",
+            params={"filename": "report.csv"},
+            content=b"data",
+            headers={**_headers(first_key), "Content-Type": "text/csv"},
+        ).json()["id"]
+
+        response = _remove(context, task_id, file_id)
+
+        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))

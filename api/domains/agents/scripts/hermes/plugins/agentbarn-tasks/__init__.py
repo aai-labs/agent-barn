@@ -63,7 +63,10 @@ _SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["create", "status", "note", "attach", "list", "show"]},
+            "action": {
+                "type": "string",
+                "enum": ["create", "status", "note", "attach", "remove_file", "list", "show"],
+            },
             "task_id": {"type": "string", "description": "The Task's id, for status, note, attach and show."},
             "title": {"type": "string", "description": "A short title, for create."},
             "description": {"type": "string", "description": "What was asked, for create."},
@@ -76,6 +79,7 @@ _SCHEMA = {
             "path": {"type": "string", "description": "The file to attach, absolute or relative to your workspace."},
             "name": {"type": "string", "description": "The file's name as shown on the Task, for attach."},
             "content_type": {"type": "string", "description": "A bare type/subtype, for attach."},
+            "file_id": {"type": "string", "description": "The file's id from show, for remove_file."},
         },
         "required": ["action"],
     },
@@ -136,6 +140,10 @@ def _argv(args: dict) -> tuple[list[str], str] | str:
         return f"{action} needs a task_id."
     if action == "show":
         return ["show", task_id], ""
+    if action == "remove_file":
+        if not args.get("file_id"):
+            return "remove_file needs a file_id, from the Task's files in show."
+        return ["remove-file", task_id, args["file_id"]], ""
     if action == "status":
         if args.get("status") not in _STATUSES:
             return "status needs one of: " + ", ".join(_STATUSES) + "."
@@ -153,7 +161,7 @@ def _argv(args: dict) -> tuple[list[str], str] | str:
         if args.get("content_type"):
             argv += ["--content-type", args["content_type"]]
         return argv, ""
-    return "action must be one of: create, status, note, attach, list, show."
+    return "action must be one of: create, status, note, attach, remove_file, list, show."
 
 
 def _handle_tool(args: dict, **_) -> str:

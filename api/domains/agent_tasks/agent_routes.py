@@ -8,7 +8,7 @@ from typing import Annotated
 from uuid import UUID
 
 from anyio import from_thread
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi_injector import Injected
@@ -132,3 +132,14 @@ async def attach_file(
     except HTTPException:
         await _drain(body, service.file_max_bytes)
         raise
+
+
+@agent_task_router.delete("/{agent_id}/tasks/{task_id}/files/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_file(
+    agent: Annotated[Agent, Depends(authenticated_agent)],
+    task_id: UUID,
+    file_id: UUID,
+    service: Annotated[AgentTaskService, Injected(AgentTaskService)],
+):
+    service.remove_file(agent.organization_id, agent.id, task_id, file_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

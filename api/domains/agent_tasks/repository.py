@@ -162,6 +162,26 @@ class AgentTaskRepository:
             session.commit()
             return stored
 
+    def remove_file(self, organization_id: UUID, agent_id: UUID, task_id: UUID, file_id: UUID) -> bool:
+        """Delete one of the Agent's own Files. Its chunks go with it by cascade, freeing the space."""
+        with Session(self.delegate.engine) as session:
+            if not _lock_live_agent(session, organization_id, agent_id):
+                return False
+            if _find_agent_task(session, organization_id, agent_id, task_id) is None:
+                return False
+            stored = session.exec(
+                select(AgentTaskFile).where(
+                    col(AgentTaskFile.id) == file_id,
+                    col(AgentTaskFile.task_id) == task_id,
+                    col(AgentTaskFile.organization_id) == organization_id,
+                )
+            ).first()
+            if stored is None:
+                return False
+            session.delete(stored)
+            session.commit()
+            return True
+
     def get_file(
         self,
         agent_id: UUID,

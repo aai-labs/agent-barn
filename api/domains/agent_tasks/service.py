@@ -148,6 +148,10 @@ class AgentTaskService:
             raise _task_not_found(task_id)
         return task
 
+    def remove_file(self, organization_id: UUID, agent_id: UUID, task_id: UUID, file_id: UUID) -> None:
+        if not self.repository.remove_file(organization_id, agent_id, task_id, file_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File {file_id} not found")
+
     def read_file(
         self, agent_id: UUID, task_id: UUID, file_id: UUID, context: CurrentUserContext
     ) -> tuple[AgentTaskFileRead, Iterator[bytes]]:

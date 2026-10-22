@@ -142,7 +142,7 @@ def test_the_task_tool_and_turn_hooks_are_registered(tmp_path: Path):
     tool = plugin.tools["agentbarn_task"]
     assert_that(tool["schema"]["name"], equal_to("agentbarn_task"))
     actions = tool["schema"]["parameters"]["properties"]["action"]["enum"]
-    assert_that(sorted(actions), equal_to(["attach", "create", "list", "note", "show", "status"]))
+    assert_that(sorted(actions), equal_to(["attach", "create", "list", "note", "remove_file", "show", "status"]))
     statuses = tool["schema"]["parameters"]["properties"]["status"]["enum"]
     assert_that(statuses, equal_to(["open", "in_progress", "done", "failed"]))
 
@@ -477,3 +477,19 @@ def test_each_request_carries_the_task_line(tmp_path: Path):
 
     assert_that(context, contains_string("create a Task with agentbarn_task as in_progress before you start"))
     assert_that(context, contains_string("Don't mention Tasks in your reply"))
+
+
+def test_remove_file_maps_onto_the_task_command(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    plugin.tool(action="remove_file", task_id=_TASK_ID, file_id="0199f1d2-0000-7000-8000-0000000000ff")
+
+    assert_that(plugin.calls()[-1]["argv"], equal_to(["remove-file", _TASK_ID, "0199f1d2-0000-7000-8000-0000000000ff"]))
+
+
+def test_remove_file_needs_a_file_id(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    result = plugin.tool(action="remove_file", task_id=_TASK_ID)
+
+    assert_that((result.get("error") is not None, plugin.calls()), equal_to((True, [])))

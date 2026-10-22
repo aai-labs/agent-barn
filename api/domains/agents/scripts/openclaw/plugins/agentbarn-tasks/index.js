@@ -38,7 +38,7 @@ const NEXT_TURN_REMINDER =
 const PARAMETERS = {
   type: "object",
   properties: {
-    action: { type: "string", enum: ["create", "status", "note", "attach", "list", "show"] },
+    action: { type: "string", enum: ["create", "status", "note", "attach", "remove_file", "list", "show"] },
     task_id: { type: "string", description: "The Task's id, for status, note, attach and show." },
     title: { type: "string", description: "A short title, for create." },
     description: { type: "string", description: "What was asked, for create." },
@@ -47,6 +47,7 @@ const PARAMETERS = {
     path: { type: "string", description: "The file to attach, absolute or relative to your workspace." },
     name: { type: "string", description: "The file's name as shown on the Task, for attach." },
     content_type: { type: "string", description: "A bare type/subtype, for attach." },
+    file_id: { type: "string", description: "The file's id from show, for remove_file." },
   },
   required: ["action"],
 };
@@ -111,11 +112,15 @@ function argvFor(params) {
     ];
   }
   if (action === "list") return [params.status ? ["list", "--status", params.status] : ["list"], ""];
-  if (!["status", "note", "attach", "show"].includes(action)) {
-    return "action must be one of: create, status, note, attach, list, show.";
+  if (!["status", "note", "attach", "remove_file", "show"].includes(action)) {
+    return "action must be one of: create, status, note, attach, remove_file, list, show.";
   }
   if (!taskId) return `${action} needs a task_id.`;
   if (action === "show") return [["show", taskId], ""];
+  if (action === "remove_file") {
+    if (!params.file_id) return "remove_file needs a file_id, from the Task's files in show.";
+    return [["remove-file", taskId, params.file_id], ""];
+  }
   if (action === "status") {
     if (!STATUSES.includes(params.status)) return `status needs one of: ${STATUSES.join(", ")}.`;
     return [["status", taskId, params.status], ""];

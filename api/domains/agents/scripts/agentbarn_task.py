@@ -48,6 +48,8 @@ def fetch(request: urllib.request.Request):
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         with opener.open(request, timeout=120) as response:
+            if response.status == 204:
+                return True, None
             raw = response.read(1_000_001)
             if len(raw) > 1_000_000:
                 raise ValueError("Response too large")
@@ -87,6 +89,9 @@ def main() -> int:
     listing.add_argument("--status", choices=STATUSES)
     show = commands.add_parser("show", help="Show one Task with its notes and files.")
     show.add_argument("task_id")
+    remove = commands.add_parser("remove-file", help="Remove a file from a Task, by the file id `show` lists.")
+    remove.add_argument("task_id")
+    remove.add_argument("file_id")
     args = parser.parse_args()
 
     agent_id = os.environ.get("AGENT_ID", "")
@@ -143,6 +148,12 @@ def main() -> int:
         return send(json_request(tasks_url + query, "GET"))
     if args.command == "show":
         return send(json_request(task_url, "GET"))
+    if args.command == "remove-file":
+        ok, result = fetch(json_request(f"{task_url}/files/{quote(args.file_id, safe='')}", "DELETE"))
+        if not ok:
+            return fail(result)
+        print(json.dumps({"removed": args.file_id}))
+        return 0
 
     path = Path(args.path)
     if not path.is_file():

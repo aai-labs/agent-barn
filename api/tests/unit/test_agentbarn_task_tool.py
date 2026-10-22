@@ -40,7 +40,7 @@ class _IngestStub:
                 self.end_headers()
                 self.wfile.write(payload)
 
-            do_GET = do_POST = do_PATCH = _handle
+            do_GET = do_POST = do_PATCH = do_DELETE = _handle
 
             def log_message(self, format: str, *args: object) -> None:
                 pass
@@ -263,3 +263,15 @@ def test_create_can_start_the_task_in_progress():
     )
     assert_that(json.loads(stub.requests[1]["body"]), equal_to({"status": "in_progress"}))
     assert_that(json.loads(result.stdout), has_entries(status="in_progress"))
+
+
+def test_remove_file_deletes_it_from_the_task():
+    with _IngestStub(status=204, body="") as stub:
+        result = _run(stub, "remove-file", TASK_ID, "0199f1d2-0000-7000-8000-0000000000ff")
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(
+        (stub.requests[0]["method"], stub.requests[0]["path"]),
+        equal_to(("DELETE", _tasks_path(f"/{TASK_ID}/files/0199f1d2-0000-7000-8000-0000000000ff"))),
+    )
+    assert_that(json.loads(result.stdout), has_entries(removed="0199f1d2-0000-7000-8000-0000000000ff"))

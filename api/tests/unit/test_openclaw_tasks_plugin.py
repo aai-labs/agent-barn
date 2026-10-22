@@ -127,7 +127,7 @@ def test_the_task_tool_and_turn_hooks_are_registered(tmp_path: Path):
     assert_that(tool["name"], equal_to("agentbarn_task"))
     assert_that(
         sorted(tool["parameters"]["properties"]["action"]["enum"]),
-        equal_to(["attach", "create", "list", "note", "show", "status"]),
+        equal_to(["attach", "create", "list", "note", "remove_file", "show", "status"]),
     )
 
 
@@ -464,3 +464,17 @@ def test_the_task_line_asks_for_a_task_in_progress(tmp_path: Path):
     driven = _drive(tmp_path, [_prompt()])
 
     assert_that(_context(driven["results"][0]), contains_string("as in_progress before you start"))
+
+
+def test_remove_file_maps_onto_the_task_command(tmp_path: Path):
+    _drive(tmp_path, [_tool(action="remove_file", task_id=_TASK_ID, file_id="0199f1d2-0000-7000-8000-0000000000ff")])
+
+    assert_that(
+        _calls(tmp_path)[-1]["argv"], equal_to(["remove-file", _TASK_ID, "0199f1d2-0000-7000-8000-0000000000ff"])
+    )
+
+
+def test_remove_file_needs_a_file_id(tmp_path: Path):
+    driven = _drive(tmp_path, [_tool(action="remove_file", task_id=_TASK_ID)])
+
+    assert_that((_tool_output(driven["results"][0]).get("error") is not None, _calls(tmp_path)), equal_to((True, [])))
