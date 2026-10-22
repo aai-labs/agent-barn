@@ -39,10 +39,10 @@ work that continues later), keep a Task for it:
 1. Check your open Tasks first (they are listed at the start of each turn, or
    use the `list` action). If one already covers the request, keep using it
    rather than opening another.
-2. Otherwise `create` one with a short title and a description of what was
-   asked. Keep the `id` it returns.
-3. Keep its status current: `in_progress` when you start, `done` when you
-   finish, `failed` if you cannot finish.
+2. Otherwise `create` one as `in_progress` before you start, with a short
+   title and a description of what was asked. Keep the `id` it returns.
+3. Keep its status current: `done` when you finish, `failed` if you cannot
+   finish.
 4. Add a `note` for each meaningful step, decision or problem.
 5. `attach` every file you produce for the request. `show` gives a Task with its
    notes and files.

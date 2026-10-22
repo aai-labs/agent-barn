@@ -250,3 +250,16 @@ def test_a_missing_configuration_is_reported():
     result = _run(None, "list", INGEST_API_KEY="")
 
     assert_that((result.returncode, "not configured" in result.stderr), equal_to((1, True)))
+
+
+def test_create_can_start_the_task_in_progress():
+    with _IngestStub(status=201, body={"id": TASK_ID, "status": "in_progress"}) as stub:
+        result = _run(stub, "create", "--title", "Reconcile invoices", "--status", "in_progress")
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(
+        [(request["method"], request["path"]) for request in stub.requests],
+        equal_to([("POST", _tasks_path()), ("PATCH", _tasks_path(f"/{TASK_ID}"))]),
+    )
+    assert_that(json.loads(stub.requests[1]["body"]), equal_to({"status": "in_progress"}))
+    assert_that(json.loads(result.stdout), has_entries(status="in_progress"))

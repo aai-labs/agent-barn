@@ -39,6 +39,13 @@ _BEFORE_FINISHING_REMINDER = (
     "agentbarn_task tool (create the Task, add a note on what was done, attach the files you produced, "
     "set its status), then give your answer."
 )
+# Next to every request, as on OpenClaw: so the Task exists from the start of the work, not the end.
+# About 50 tokens per request.
+_REQUEST_LINE = (
+    "If this request needs tools or produces files, create a Task with agentbarn_task as in_progress before "
+    "you start, keep it current and attach the files you produce. Don't mention Tasks in your reply unless "
+    "the user asks."
+)
 _QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping."
 _NEXT_TURN_REMINDER = (
     "Your previous turn did work without recording it as a Task. If it was more than a quick answer, "
@@ -60,7 +67,11 @@ _SCHEMA = {
             "task_id": {"type": "string", "description": "The Task's id, for status, note, attach and show."},
             "title": {"type": "string", "description": "A short title, for create."},
             "description": {"type": "string", "description": "What was asked, for create."},
-            "status": {"type": "string", "enum": _STATUSES, "description": "The new status, or a list filter."},
+            "status": {
+                "type": "string",
+                "enum": _STATUSES,
+                "description": "The new status, a list filter, or the starting status for create.",
+            },
             "body": {"type": "string", "description": "The note, for note."},
             "path": {"type": "string", "description": "The file to attach, absolute or relative to your workspace."},
             "name": {"type": "string", "description": "The file's name as shown on the Task, for attach."},
@@ -116,6 +127,8 @@ def _argv(args: dict) -> tuple[list[str], str] | str:
         argv = ["create", "--title", args["title"]]
         if args.get("description"):
             argv += ["--description", args["description"]]
+        if args.get("status") in _STATUSES:
+            argv += ["--status", args["status"]]
         return argv, ""
     if action == "list":
         return (["list", "--status", args["status"]] if args.get("status") else ["list"]), ""
@@ -301,7 +314,7 @@ def _open_task_lines() -> list[str] | None:
 def _on_pre_llm_call(session_id="", **_):
     if session_id == _BOOT_SESSION_ID:
         return None
-    parts = []
+    parts = ["[Agent Barn] " + _REQUEST_LINE]
     lines = _open_task_lines()
     if lines:
         parts.append(

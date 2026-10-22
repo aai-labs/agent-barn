@@ -437,7 +437,7 @@ def test_each_request_carries_the_task_line(tmp_path: Path, trigger: str):
     driven = _drive(tmp_path, [_prompt(trigger=trigger)])
 
     context = _context(driven["results"][0])
-    assert_that(context, contains_string("create a Task with agentbarn_task before you start"))
+    assert_that(context, contains_string("create a Task with agentbarn_task as in_progress before you start"))
     assert_that(context, contains_string("attach the files you produce"))
     assert_that(context, contains_string("Don't mention Tasks in your reply"))
 
@@ -452,3 +452,15 @@ def test_the_catch_up_reminder_asks_for_quiet_bookkeeping(tmp_path: Path):
     driven = _drive(tmp_path, [_after_tool("c1", tool="write", params={"path": "a.csv"}), _agent_end(), _prompt()])
 
     assert_that(_context(driven["results"][-1]), contains_string("answer the user's message as normal"))
+
+
+def test_create_passes_a_starting_status(tmp_path: Path):
+    _drive(tmp_path, [_tool(action="create", title="Report", status="in_progress")])
+
+    assert_that(_calls(tmp_path)[-1]["argv"], equal_to(["create", "--title", "Report", "--status", "in_progress"]))
+
+
+def test_the_task_line_asks_for_a_task_in_progress(tmp_path: Path):
+    driven = _drive(tmp_path, [_prompt()])
+
+    assert_that(_context(driven["results"][0]), contains_string("as in_progress before you start"))

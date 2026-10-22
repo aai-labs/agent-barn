@@ -253,7 +253,7 @@ def test_a_short_turn_is_not_reminded(tmp_path: Path):
     plugin.tool_call("call-2")
     plugin.end_turn()
 
-    assert_that(_context(plugin.start_turn()), equal_to(""))
+    assert_that("did work without recording" in _context(plugin.start_turn()), is_(False))
 
 
 def test_counting_is_per_session(tmp_path: Path):
@@ -273,9 +273,9 @@ def test_a_turn_that_ends_without_a_task_is_reminded_on_the_next_turn_of_that_se
 
     plugin.end_turn()
 
-    assert_that(_context(plugin.start_turn("s2")), equal_to(""))
+    assert_that("did work without recording" in _context(plugin.start_turn("s2")), is_(False))
     assert_that(_context(plugin.start_turn("s1")), contains_string("did work without recording it as a Task"))
-    assert_that(_context(plugin.start_turn("s1")), equal_to(""))
+    assert_that("did work without recording" in _context(plugin.start_turn("s1")), is_(False))
 
 
 # --- open Tasks each turn ---
@@ -315,7 +315,8 @@ def test_an_unavailable_task_service_does_not_break_the_turn(tmp_path: Path):
     plugin = _Plugin(tmp_path)
     plugin.env["AGENTBARN_TASK_COMMAND"] = "/nonexistent/agentbarn-task"
 
-    assert_that(plugin.start_turn(), equal_to(None))
+    context = _context(plugin.start_turn())
+    assert_that(("Your open Tasks" in context, "agentbarn_task" in context), equal_to((False, True)))
 
 
 def test_the_tool_answer_is_always_json(tmp_path: Path):
@@ -456,3 +457,23 @@ def test_the_catch_up_reminder_asks_for_quiet_bookkeeping(tmp_path: Path):
     plugin.end_turn()
 
     assert_that(_context(plugin.start_turn()), contains_string("answer the user's message as normal"))
+
+
+# --- starting a Task in progress, and the request line ---
+
+
+def test_create_passes_a_starting_status(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    plugin.tool(action="create", title="Report", status="in_progress")
+
+    assert_that(plugin.calls()[-1]["argv"], equal_to(["create", "--title", "Report", "--status", "in_progress"]))
+
+
+def test_each_request_carries_the_task_line(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    context = _context(plugin.start_turn())
+
+    assert_that(context, contains_string("create a Task with agentbarn_task as in_progress before you start"))
+    assert_that(context, contains_string("Don't mention Tasks in your reply"))

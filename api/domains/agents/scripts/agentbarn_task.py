@@ -43,19 +43,27 @@ def refusal(error: urllib.error.HTTPError) -> str:
     }.get(error.code, UNCONFIRMED)
 
 
-def send(request: urllib.request.Request) -> int:
+def fetch(request: urllib.request.Request):
+    """The JSON response, or the message to report instead."""
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         with opener.open(request, timeout=120) as response:
             raw = response.read(1_000_001)
             if len(raw) > 1_000_000:
                 raise ValueError("Response too large")
-            print(json.dumps(json.loads(raw)))
-            return 0
+            return True, json.loads(raw)
     except urllib.error.HTTPError as error:
-        return fail(refusal(error))
+        return False, refusal(error)
     except (OSError, ValueError):
-        return fail(UNCONFIRMED)
+        return False, UNCONFIRMED
+
+
+def send(request: urllib.request.Request) -> int:
+    ok, result = fetch(request)
+    if not ok:
+        return fail(result)
+    print(json.dumps(result))
+    return 0
 
 
 def main() -> int:
@@ -64,6 +72,7 @@ def main() -> int:
     create = commands.add_parser("create", help="Open a Task and print it, with its id.")
     create.add_argument("--title", required=True)
     create.add_argument("--description")
+    create.add_argument("--status", choices=STATUSES, help="Start the Task in this status rather than open.")
     status = commands.add_parser("status", help="Change a Task's status.")
     status.add_argument("task_id")
     status.add_argument("status", choices=STATUSES)
@@ -108,7 +117,19 @@ def main() -> int:
         payload = {"title": args.title}
         if args.description:
             payload["description"] = args.description
-        return send(json_request(tasks_url, "POST", payload))
+        if not args.status or args.status == "open":
+            return send(json_request(tasks_url, "POST", payload))
+        ok, created = fetch(json_request(tasks_url, "POST", payload))
+        if not ok:
+            return fail(created)
+        task_id = created.get("id") if isinstance(created, dict) else None
+        if not isinstance(task_id, str):
+            return fail(UNCONFIRMED)
+        ok, updated = fetch(json_request(f"{tasks_url}/{quote(task_id, safe='')}", "PATCH", {"status": args.status}))
+        if not ok:
+            return fail(f"The Task {task_id} was created but its status was not set: {updated}")
+        print(json.dumps(updated))
+        return 0
     if args.command == "status":
         return send(json_request(task_url, "PATCH", {"status": args.status}))
     if args.command == "note":

@@ -23,11 +23,11 @@ const IN_TURN_REMINDER =
   "This request has taken several steps and has no Task yet. Before you finish, record it with the " +
   "agentbarn_task tool: create a Task, add a note on what was done, attach the files you produced and " +
   "set its status.";
-// Next to every request: OpenClaw's model has the tool and the instructions but, unlike Hermes's,
-// did not use them within the turn in end-to-end runs, and it cannot be held back once a run has
-// side effects. About 50 tokens per request. Hermes records within the turn and does not need it.
+// Next to every request, as on Hermes: in end-to-end runs OpenClaw's model did not use the tool
+// within the turn from the instructions alone, and it cannot be held back once a run has side
+// effects. About 50 tokens per request.
 const REQUEST_LINE =
-  "If this request needs tools or produces files, create a Task with agentbarn_task before you start, " +
+  "If this request needs tools or produces files, create a Task with agentbarn_task as in_progress before you start, " +
   "keep it current and attach the files you produce. Don't mention Tasks in your reply unless the user asks.";
 const QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping.";
 const NEXT_TURN_REMINDER =
@@ -42,7 +42,7 @@ const PARAMETERS = {
     task_id: { type: "string", description: "The Task's id, for status, note, attach and show." },
     title: { type: "string", description: "A short title, for create." },
     description: { type: "string", description: "What was asked, for create." },
-    status: { type: "string", enum: STATUSES, description: "The new status, or a list filter." },
+    status: { type: "string", enum: STATUSES, description: "The new status, a list filter, or the starting status for create." },
     body: { type: "string", description: "The note, for note." },
     path: { type: "string", description: "The file to attach, absolute or relative to your workspace." },
     name: { type: "string", description: "The file's name as shown on the Task, for attach." },
@@ -101,7 +101,14 @@ function argvFor(params) {
   const { action, task_id: taskId } = params;
   if (action === "create") {
     if (!params.title) return "create needs a title.";
-    return [["create", "--title", params.title, ...(params.description ? ["--description", params.description] : [])], ""];
+    return [
+      [
+        "create", "--title", params.title,
+        ...(params.description ? ["--description", params.description] : []),
+        ...(STATUSES.includes(params.status) ? ["--status", params.status] : []),
+      ],
+      "",
+    ];
   }
   if (action === "list") return [params.status ? ["list", "--status", params.status] : ["list"], ""];
   if (!["status", "note", "attach", "show"].includes(action)) {
