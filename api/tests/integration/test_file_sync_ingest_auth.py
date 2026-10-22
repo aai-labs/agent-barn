@@ -83,7 +83,7 @@ def test_a_ready_agent_reports_its_files():
 
         response = _report(context, agent)
 
-        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
 
 
 def test_a_hermes_agent_reports_paths_in_its_own_layout():
@@ -102,7 +102,7 @@ def test_a_hermes_agent_reports_paths_in_its_own_layout():
             ],
         )
 
-        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
 
 
 @pytest.mark.parametrize("key", ["wrong-key", ""])
@@ -292,7 +292,7 @@ def test_one_agents_key_never_opens_another_agents_sync():
 
         assert_that(_report(context, theirs, key=_KEY).status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
         assert_that(_report(context, ours, key=_OTHER_KEY).status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
-        assert_that(_report(context, ours, key=_KEY).status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(_report(context, ours, key=_KEY).status_code, equal_to(status.HTTP_200_OK))
 
 
 def test_an_agent_is_judged_by_its_own_organizations_connection_only():
@@ -303,5 +303,5 @@ def test_an_agent_is_judged_by_its_own_organizations_connection_only():
         there_is_an_organization(name="Other Org")(context)
         unconnected = _agent(context, name="Elsewhere", key=_OTHER_KEY)
 
-        assert_that(_report(context, connected, key=_KEY).status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        assert_that(_report(context, connected, key=_KEY).status_code, equal_to(status.HTTP_200_OK))
         assert_that(_report(context, unconnected, key=_OTHER_KEY).status_code, equal_to(status.HTTP_409_CONFLICT))

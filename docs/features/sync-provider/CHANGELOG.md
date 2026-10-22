@@ -39,11 +39,11 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the `file_sync` capability on the plugin seam, implemented by OneDrive, and a test-only `file_sync` provider;
   - folder reconciliation (`FileSyncEngine.reconcile_folders`);
   - the Sync Engine (`api/sync_engine_main.py`) and its deployment: Helm `syncEngine`, `make dev-sync-engine`, and the `sync-engine` Compose service started by `run.sh`;
-  - the pod's file report route (`POST …/file-sync/changes`): authentication, readiness checks and path rules, answering 204 without acting on the report.
+  - the pod's file report route (`POST …/file-sync/changes`): authentication, readiness checks and path rules; upload links, empty files and skips. Upload completion is at `POST …/file-sync/uploads/complete`.
 
-  Folders follow Agents on every connected Organization. Files are not synced yet.
+  Folders follow Agents on every connected Organization. No pod calls these routes yet, so files are not synced.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. Ingest file-sync routes: upload targets, deletes and skips for the report, then pending work and conflicts;
+  1. Ingest file-sync routes: deletes for a complete report, then pending work and conflicts;
   2. remote change processing;
   3. the in-pod helper;
   4. builder and `start.sh` wiring;
@@ -75,6 +75,47 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — Upload links, empty files, skips and upload completion
+
+- Changed: `POST …/file-sync/changes` answers 200 with `uploads` (`path`, `url`, `expires_at`). Each entry is compared, case-insensitively, with its `sync_file` row:
+  - **Already synced with the same `sha256`:** nothing to do.
+  - **Upload under way with the same content:** not reissued for 14 minutes (`UPLOAD_REISSUE_AFTER`); upload sessions last 15.
+  - **Empty file:** written by the server (`write_empty_file`) and recorded as synced, with no upload.
+  - **Anything else:** the plugin's `upload_target` under the Agent's folder, with the row marked under way (`upload_started_at`, `local_sha256`, `size`).
+- Delivered: skips, recorded once per path and content (`sync_activity.detail` holds the `sha256`), with no upload:
+  - over 100 MB: `skipped_too_large`;
+  - a name the provider refuses, a path over 400 characters with the folder's path, or a second path in one report differing only in case: `skipped_name`.
+- Delivered: `POST …/file-sync/uploads/complete {path}`.
+  - It requires an upload under way at that path, reads the item by path from the provider, and requires a file of the reported size.
+  - It then records `item_id`, `etag`, `ctag`, `remote_hash` and `synced_at`, and clears `upload_started_at`.
+  - It never takes an item id from the pod. Otherwise it is 409.
+- Delivered:
+  - provider throttling answers 503 with the provider's `Retry-After` (60 s when none), and other provider failures 502;
+  - every authenticated call sets the folder's `last_contact_at`.
+- Changed:
+  - `sync_root(connection)` is shared by the engine and the Ingest service;
+  - `FileSyncRepository` gains `touch_folder`, `files`, `file_at`, `start_upload`, `record_synced` and `record_activity_once`.
+- Fixed (tests):
+  - Test Drive item ids are now unique per instance. Leftover connections from earlier tests in the same worker database had pointed at another instance's `td-1` root, so a global engine pass created their folders inside this test's root.
+  - `test_file_sync_engine_pass.py` now starts from `database_is_clean`, because a pass reads every active connection in the database.
+  - Both showed up as intermittent failures in combined runs.
+- Verified:
+  - `tests/integration/test_file_sync_ingest_uploads.py` (15 tests) failed first (15 of 15), then passed. They cover:
+    - a new file's upload link and under-way row;
+    - completion recorded from the provider and not asked for again;
+    - a changed file;
+    - not reissuing within 14 minutes, then reissuing;
+    - an empty file;
+    - a file over 100 MB, refused names and an over-long path, each recorded once;
+    - case collisions;
+    - three completion conflicts;
+    - completion needing the key and an allowed path;
+    - throttling;
+    - `last_contact_at`.
+  - The four authentication tests that expected 204 now expect 200.
+  - The file sync suites passed four times in a row together (87 tests). Ingest, SharePoint token endpoint and sync provider connection suites pass (146 tests).
+  - ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — Pod file report route: authentication and refusals
 

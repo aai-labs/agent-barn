@@ -21,7 +21,13 @@ Conversation Messages and Tool Calls share the Agent Activity UI but have differ
 - Product API conversation and tool-call reads require `activity.read` and are scoped through an accessible, organization-owned, non-deleted Agent. Assigned Members cannot bypass Agent Access through activity endpoints.
 - Runtime Ingest Tool Call writes use Agent identity plus ingest-key authentication rather than a human Membership or Agent Access check. Runtime communication claims/replies use a separate versioned Communications protocol credential.
 - Telemetry Events are runtime-originated operational facts. They are not Domain Events, Outbox Messages, Event Deliveries, or Security Audit Records.
-- Ingest also serves [Agent file sync](sync-provider/README.md#agent-file-sync) to the Agent's pod: `POST /ingest/v1/agents/{agent_id}/file-sync/changes` takes the Agent's file list (`complete`, and `entries` of `path`, `size`, `sha256`; at most 10,000 entries, paths up to 1,024 characters) and answers 204. These are not Telemetry Events.
+- Ingest also serves [Agent file sync](sync-provider/README.md#agent-file-sync) to the Agent's pod: `POST /ingest/v1/agents/{agent_id}/file-sync/changes` takes the Agent's file list (`complete`, and `entries` of `path`, `size`, `sha256`; at most 10,000 entries, paths up to 1,024 characters). These are not Telemetry Events.
+  - **Answer:** 200 with `uploads`, a pre-authenticated upload URL and its expiry for each new or changed file. An upload already under way for the same content is not handed out again for 14 minutes; upload links last 15.
+  - **Empty files:** the server writes them itself, with no upload.
+  - **Skips:** a file over 100 MB, a name the provider refuses, a path over its 400-character limit, or a second path differing only in case is not uploaded, and is recorded once per path and content.
+  - **`POST …/file-sync/uploads/complete {path}`:** when the pod finishes an upload, it sends this. The server reads the file at that path from the provider, never taking an item id from the pod, and records it as synced. With no upload under way, no file at the provider yet, or a different size there, it answers 409.
+  - **Provider failures:** throttling is 503 with `Retry-After`, and other provider failures are 502.
+  - **Contact:** every authenticated call records the folder's `last_contact_at`.
   - **Authentication:** a wrong or missing key, or an Agent that does not exist, is 401, before anything else is revealed. The lookup includes deleted Agents, so a deleted Agent presenting its last key is 404.
   - **Target:** the folder comes only from the authenticated Agent's own Organization.
   - **Not ready (409):** no active connection, a provider without `file_sync`, sync turned off for the folder, or a folder still being created at the provider. A folder the Sync Engine has not made yet is 404.

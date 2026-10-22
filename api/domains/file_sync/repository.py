@@ -11,8 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent
-from api.domains.file_sync.models import SyncAgentFolder, SyncFolderStatus
+from api.domains.file_sync.models import SyncActivity, SyncActivityKind, SyncAgentFolder, SyncFile, SyncFolderStatus
 from api.domains.sync_provider.models import SyncProviderConnection, SyncProviderStatus
+from api.domains.sync_provider.plugins.base import RemoteItem
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -84,6 +85,81 @@ class FileSyncRepository:
                 )
             ).first()
             return connection, folder
+
+    def touch_folder(self, folder_id: UUID, now: datetime) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(SyncAgentFolder).where(col(SyncAgentFolder.id) == folder_id).values(last_contact_at=now)
+            )
+            session.commit()
+
+    def files(self, folder_id: UUID) -> list[SyncFile]:
+        with Session(self.delegate.engine) as session:
+            return list(session.exec(select(SyncFile).where(col(SyncFile.folder_id) == folder_id)))
+
+    def file_at(self, folder_id: UUID, path: str) -> SyncFile | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(self._file_at(folder_id, path)).first()
+
+    def start_upload(self, folder_id: UUID, path: str, *, sha256: str, size: int, now: datetime) -> None:
+        with Session(self.delegate.engine) as session:
+            row = session.exec(self._file_at(folder_id, path)).first()
+            row = row or SyncFile(folder_id=folder_id, path=path, local_sha256=sha256, size=size)
+            row.local_sha256 = sha256
+            row.size = size
+            row.upload_started_at = now
+            session.add(row)
+            session.commit()
+
+    def record_synced(
+        self, folder_id: UUID, path: str, item: RemoteItem, *, sha256: str, size: int, now: datetime
+    ) -> None:
+        with Session(self.delegate.engine) as session:
+            row = session.exec(self._file_at(folder_id, path)).first()
+            row = row or SyncFile(folder_id=folder_id, path=path, local_sha256=sha256, size=size)
+            row.item_id = item.id
+            row.etag = item.version
+            row.ctag = item.content_version
+            row.remote_hash = item.content_hash
+            row.local_sha256 = sha256
+            row.size = size
+            row.synced_at = now
+            row.upload_started_at = None
+            session.add(row)
+            session.commit()
+
+    @staticmethod
+    def _file_at(folder_id: UUID, path: str):
+        return select(SyncFile).where(
+            col(SyncFile.folder_id) == folder_id, sa.func.lower(col(SyncFile.path)) == path.lower()
+        )
+
+    def record_activity_once(
+        self, folder: SyncAgentFolder, kind: SyncActivityKind, path: str, detail: str, now: datetime
+    ) -> None:
+        with Session(self.delegate.engine) as session:
+            existing = session.exec(
+                select(SyncActivity.id).where(
+                    col(SyncActivity.folder_id) == folder.id,
+                    col(SyncActivity.kind) == kind,
+                    col(SyncActivity.path) == path,
+                    col(SyncActivity.detail) == detail,
+                )
+            ).first()
+            if existing is not None:
+                return
+            session.add(
+                SyncActivity(
+                    organization_id=folder.organization_id,
+                    agent_id=folder.agent_id,
+                    folder_id=folder.id,
+                    kind=kind,
+                    path=path,
+                    detail=detail,
+                    occurred_at=now,
+                )
+            )
+            session.commit()
 
     def live_agent_names(self, organization_id: UUID) -> list[tuple[UUID, str]]:
         with Session(self.delegate.engine) as session:

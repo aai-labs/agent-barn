@@ -1,5 +1,6 @@
 import hashlib
 import itertools
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -71,6 +72,7 @@ class TestDrivePlugin(SyncProviderPlugin):
     throttle_seconds: int | None = None
     calls: list[str] = field(default_factory=list)
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
+    _instance: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
     def authorize_url(self, *, redirect_uri: str, state: str, code_challenge: str) -> str:
         return f"https://testdrive.example.test/authorize?state={state}"
@@ -204,7 +206,7 @@ class TestDrivePlugin(SyncProviderPlugin):
             raise ProviderThrottled("Test Drive is limiting requests.", retry_after=retry_after)
 
     def _add(self, name: str, parent_id: str | None, *, is_folder: bool, by_app: bool) -> _Node:
-        node = _Node(id=f"td-{next(self._ids)}", name=name, parent_id=parent_id, is_folder=is_folder)
+        node = _Node(id=f"td-{self._instance}-{next(self._ids)}", name=name, parent_id=parent_id, is_folder=is_folder)
         self.nodes[node.id] = node
         self._touch(node, content_changed=not is_folder, by_app=by_app)
         return node

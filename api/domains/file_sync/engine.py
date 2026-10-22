@@ -49,6 +49,17 @@ def _number_of(folder_name: str, base: str) -> int | None:
     return None
 
 
+def sync_root(connection: SyncProviderConnection) -> SyncRoot | None:
+    if connection.folder_id is None:
+        return None
+    return SyncRoot(
+        account_id=connection.account_id,
+        location_id=connection.location_id,
+        folder_id=connection.folder_id,
+        folder_name=FOLDER_NAME,
+    )
+
+
 def _server_path(web_url: str | None) -> str | None:
     return urllib.parse.unquote(urllib.parse.urlparse(web_url).path) if web_url else None
 
@@ -76,14 +87,9 @@ class FileSyncEngine:
 
     def reconcile_folders(self, connection: SyncProviderConnection) -> None:
         plugin = self.plugins.require(connection.provider_key)
-        if SyncProviderCapability.FILE_SYNC not in plugin.capabilities or connection.folder_id is None:
+        root = sync_root(connection)
+        if SyncProviderCapability.FILE_SYNC not in plugin.capabilities or root is None:
             return
-        root = SyncRoot(
-            account_id=connection.account_id,
-            location_id=connection.location_id,
-            folder_id=connection.folder_id,
-            folder_name=FOLDER_NAME,
-        )
         agents = self.repository.live_agent_names(connection.organization_id)
         live = {agent_id for agent_id, _ in agents}
         folders = self.repository.folders(connection.id)

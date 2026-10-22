@@ -129,3 +129,17 @@ class FileSyncEntryCreate(PydanticBaseModel):
 class FileSyncChangesCreate(PydanticBaseModel):
     complete: bool
     entries: list[FileSyncEntryCreate] = Field(max_length=MAX_MANIFEST_ENTRIES)
+
+
+class FileSyncUploadRead(PydanticBaseModel):
+    path: str
+    url: str
+    expires_at: datetime
+
+
+class FileSyncChangesRead(PydanticBaseModel):
+    uploads: list[FileSyncUploadRead]
+
+
+class FileSyncUploadCompleteCreate(PydanticBaseModel):
+    path: str = Field(min_length=1, max_length=MAX_PATH_LENGTH)

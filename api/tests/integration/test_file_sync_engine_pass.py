@@ -11,11 +11,11 @@ from api.domains.sync_provider.repository import SyncProviderRepository
 from api.tests.core.givenpy import given
 from api.tests.core.modules import prepare_injector
 from api.tests.steps.agent import there_is_an_agent
-from api.tests.steps.database import database_repo_is_ready
+from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.file_sync_provider import TestDriveModule, fake_drive, there_is_a_sync_connection
 from api.tests.steps.organization import there_is_an_organization
 
-_BASE = [prepare_injector(modules=[TestDriveModule()]), database_repo_is_ready()]
+_BASE = [prepare_injector(modules=[TestDriveModule()]), database_repo_is_ready(), database_is_clean()]
 
 
 def _connected_organization(context, name: str, agent_name: str) -> SyncProviderConnection:
