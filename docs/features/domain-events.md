@@ -340,6 +340,20 @@ Adding a Domain Event requires a registered event name/version, payload schema, 
 
 Changes to the Platform Event Delivery Monitor's summary/explorer response contract, stale-threshold semantics, redaction behavior, or supported filters require updating `api/domains/events/models.py` (DTOs), `repository.py` (query composition), `service.py`/`routes.py`, the matching UI schemas/hooks/components under `ui/src/features/event-deliveries/`, this document, and both test suites listed in the source map. A new index needed for a monitor query requires an Alembic migration under `api/migrations/versions/`.
 
+## Workflow run wakeups
+
+Workflow run transitions stage `workflow.run.changed` v1 with the run identity,
+revision and state only, alongside their ledger/history transaction. The
+`workflow.controller` handler advances durable intent and dispatches steps to the
+owning Agent through the Kubernetes client. It tolerates duplicate events and
+uses the same cluster access as the API. Services and the controller enqueue
+staged delivery IDs immediately after each successful ledger commit, including
+starts, cancellation, step results, failures and recovery transitions. Broker
+failures leave committed deliveries pending for reconciliation. A scheduled
+workflow operator pass handles missed events, expired attempts and retention. Run inputs, reasoning, files and capability credentials never enter
+the event payload. These are workflow wakeup facts, not Security Audit or product
+analytics projections. See the [workflow feature](agent-workflows.md#wf02-execution-and-outputs).
+
 ## Personal API Key security events
 
 Platform-scoped `api_key.created` and `api_key.revoked` events record account credential lifecycle with a User actor and User subject. Their payloads contain only the User ID, key record ID, access mode, and safe display fields. The API Key repository commits each key mutation and outbox/delivery rows in one transaction; the Security Audit projection persists the resulting record.

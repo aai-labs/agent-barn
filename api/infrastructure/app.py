@@ -31,6 +31,7 @@ from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
 from api.domains.sync_provider.plugins.providers import shipped_plugins
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
+from api.domains.workflows.controller import WorkflowControllerHandler
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.email.client import EmailClient
@@ -100,6 +101,7 @@ class AppModule(Module):
         agent_budget_email_handler: AgentBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
         product_analytics_handler: ProductAnalyticsHandler,
+        workflow_controller_handler: WorkflowControllerHandler,
     ) -> EventHandlerRegistry:
         return EventHandlerRegistry(
             [
@@ -109,6 +111,7 @@ class AppModule(Module):
                 agent_budget_email_handler,
                 security_audit_projection,
                 product_analytics_handler,
+                workflow_controller_handler,
             ]
         )
 
