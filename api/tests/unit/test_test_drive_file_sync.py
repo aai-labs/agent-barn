@@ -125,6 +125,16 @@ def test_an_expired_cursor_asks_for_a_resync():
         plugin.changes(root, cursor)
 
 
+def test_a_cursor_from_a_fresh_listing_after_expiry_is_valid():
+    plugin, root = _connected()
+    plugin.changes(root, None)
+    plugin.expire_cursors()
+
+    fresh = plugin.changes(root, None, from_start=True).cursor
+
+    assert_that(plugin.changes(root, fresh).items, equal_to([]))
+
+
 def test_throttling_the_next_call_carries_the_wait_once():
     plugin, root = _connected()
     plugin.throttle_next(120)
@@ -134,6 +144,18 @@ def test_throttling_the_next_call_carries_the_wait_once():
 
     assert_that(exc.value.retry_after, equal_to(120))
     assert_that(plugin.get_item(root, item_id=root.folder_id).id, equal_to(root.folder_id))
+
+
+def test_throttling_one_kind_of_call_leaves_the_others_alone():
+    plugin, root = _connected()
+    plugin.throttle_call("move_item", 45)
+    folder = plugin.create_folder(root, parent_id=root.folder_id, name="Sales Bot")
+
+    with pytest.raises(ProviderThrottled) as exc:
+        plugin.move_item(root, item_id=folder.id, name="Renamed")
+
+    assert_that(exc.value.retry_after, equal_to(45))
+    assert_that(plugin.move_item(root, item_id=folder.id, name="Renamed").path, equal_to("Renamed"))
 
 
 def test_an_upload_lands_only_when_the_pod_completes_it_and_replaces_the_file():

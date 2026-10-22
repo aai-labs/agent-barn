@@ -188,6 +188,15 @@ class FileSyncRepository:
             ).first()
             return (row[0], row[1]) if row is not None else None
 
+    def synced_files_in_connection(self, connection_id: UUID) -> list[tuple[SyncFile, SyncAgentFolder]]:
+        with Session(self.delegate.engine) as session:
+            rows = session.exec(
+                select(SyncFile, SyncAgentFolder)
+                .join(SyncAgentFolder, col(SyncAgentFolder.id) == col(SyncFile.folder_id))
+                .where(col(SyncAgentFolder.connection_id) == connection_id, col(SyncFile.item_id).is_not(None))
+            )
+            return [(row, folder) for row, folder in rows]
+
     def restore_from_agent(self, file_id: UUID) -> None:
         self._update_file(file_id, **self._restore_values())
 

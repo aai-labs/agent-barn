@@ -45,17 +45,17 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
     - people's content edits become downloads (work, memory) or undos (config, skills);
     - added files are parked in `_Not synced/`;
     - deleted or moved-away files are restored, and renamed ones are moved back;
-    - Agent folders are put back or re-created.
+    - Agent folders are put back or re-created;
+    - an expired cursor triggers a full re-listing.
 
   Folders follow Agents on every connected Organization. No pod calls these routes yet, so files are not synced.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. remote change processing: cursor robustness (expired cursor, stopped Agents);
-  2. the in-pod helper;
-  3. builder and `start.sh` wiring;
-  4. pinned-image contracts;
-  5. disconnect;
-  6. docs consolidation;
-  7. an end-to-end run on local k3d against the test tenant.
+  1. the in-pod helper;
+  2. builder and `start.sh` wiring;
+  3. pinned-image contracts;
+  4. disconnect;
+  5. docs consolidation;
+  6. an end-to-end run on local k3d against the test tenant.
 - Docs owed by the slice that makes them true:
   - **this README:**
     - the Organization Member visibility limit, with the helper wiring;
@@ -80,6 +80,27 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — Change feed robustness: expired cursor, throttling, stopped Agents
+
+- Delivered: when the provider reports the stored cursor as no longer valid (`RemoteResyncRequired`), `process_changes` re-lists everything under "Agent Barn" from the start (`changes(root, None, from_start=True)`, every page) and passes each item through the normal change handling. Recorded content versions mean unchanged files create no jobs and no activity. Afterwards:
+  - every active Agent folder that was not listed is rebuilt (`_rebuild_folder`, shared with the folder-change handling);
+  - every synced file that was not listed, in a folder that was, is restored from the Agent;
+  - the listing's final cursor is saved, only at the end, so an interrupted re-listing starts again.
+- **Verified rather than built:**
+  - throttling while reading changes pauses only that connection by the provider's `Retry-After` and keeps the cursor, and the next due pass handles the change;
+  - a page interrupted by throttling mid-way is read again with nothing done twice (no double parking, moves or activity);
+  - a stopped Agent's jobs wait and are handed out to its pod later.
+- Delivered: `FileSyncRepository.synced_files_in_connection`.
+- **Known limit, unchanged:** deleting the "Agent Barn" root is not handled.
+- Fixed (tests):
+  - **Expired cursors:** Test Drive treated a cursor issued just after `expire_cursors` as expired too, which would have made the engine re-list forever. Expiry now invalidates only earlier cursors. A new contract test failed before the fix.
+  - **`throttle_call(name, retry_after)`:** new in Test Drive, so a test can throttle one kind of call, with its own contract test.
+- Verified:
+  - `tests/integration/test_file_sync_remote_resync.py` (10 tests). The 7 for re-listing failed first. The 3 behaviour proofs (throttling while reading changes, an interrupted page, a stopped Agent) passed before and after.
+  - The fake's fix was found by the first green run: 9 of 10 passed, and the remaining failure was the fake's cursor.
+  - All file sync suites pass together twice (168 tests).
+  - ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — People adding, moving and deleting files and Agent folders
 

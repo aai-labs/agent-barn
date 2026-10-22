@@ -156,7 +156,12 @@ Duplicate names, compared case-insensitively, get the lowest free ` (2)`, ` (3)`
 
 After the folders, each pass reads the provider's changes under "Agent Barn" since the connection's `sync_cursor`. That is one provider call per page, and normally one per pass.
 - **Starting point:** a connection's first pass only records a cursor starting now, so files already there are not treated as edits.
-- **Saving progress:** the cursor is saved after each page.
+- **Saving progress:** the cursor is saved after each page. A page interrupted by throttling or a failure is read again on the next pass; handling the same change twice does nothing more.
+- **Expired cursor:** when the provider says the cursor is no longer valid (`RemoteResyncRequired`), the pass lists everything under "Agent Barn" from the start and handles each item as a change. Matching content versions mean no edit is invented. Afterwards:
+  - an active Agent folder that was not listed is rebuilt;
+  - a synced file not listed, in a folder that was, is restored from the Agent;
+  - the cursor from the end of the listing is saved, but only then, so an interrupted listing starts again.
+- **Stopped Agents:** their jobs wait in `sync_file` until the pod asks for them.
 
 A changed item is matched to its Agent Folder by its first path segment, and to its `sync_file` row by the provider's item id, across every folder of the connection.
 - **Always ignored:** changes the provider attributes to an app, which includes the engine's own moves and renames, and anything inside `<Agent>/_Not synced/`.

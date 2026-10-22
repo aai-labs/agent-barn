@@ -29,6 +29,7 @@ from api.domains.sync_provider.plugins.base import (
     RemoteItem,
     RemoteItemMissing,
     RemoteNameTaken,
+    RemoteResyncRequired,
     SyncProviderPlugin,
     SyncRoot,
 )
@@ -153,15 +154,42 @@ class FileSyncEngine:
             by_name={folder.folder_name.lower(): (folder, runtime) for folder, runtime in active},
             by_item={folder.folder_item_id: folder for folder, _ in active if folder.folder_item_id is not None},
         )
-        cursor = connection.sync_cursor
+        try:
+            self._follow(changes, connection.sync_cursor)
+        except RemoteResyncRequired:
+            self._relist(changes)
+
+    def _follow(self, changes: _Changes, cursor: str) -> None:
         while True:
-            page = plugin.changes(root, cursor)
+            page = changes.plugin.changes(changes.root, cursor)
             for item in page.items:
                 self._remote_change(changes, item)
             cursor = page.cursor
-            self.repository.save_cursor(connection.id, cursor)
+            self.repository.save_cursor(changes.connection.id, cursor)
             if not page.more:
                 return
+
+    def _relist(self, changes: _Changes) -> None:
+        seen: set[str] = set()
+        cursor: str | None = None
+        while True:
+            page = changes.plugin.changes(changes.root, cursor, from_start=cursor is None)
+            for item in page.items:
+                if not item.deleted:
+                    seen.add(item.id)
+                self._remote_change(changes, item)
+            cursor = page.cursor
+            if not page.more:
+                break
+        now = datetime.now(UTC)
+        for folder_item_id, folder in changes.by_item.items():
+            if folder_item_id not in seen:
+                self._rebuild_folder(folder, now)
+        for row, folder in self.repository.synced_files_in_connection(changes.connection.id):
+            if row.item_id not in seen and folder.folder_item_id in changes.by_item and folder.folder_item_id in seen:
+                self.repository.restore_from_agent(row.id)
+                self.repository.record_activity(folder, SyncActivityKind.RESTORED, row.path, now)
+        self.repository.save_cursor(changes.connection.id, cursor)
 
     def _remote_change(self, changes: _Changes, item: RemoteItem) -> None:
         if item.modified_by_app:
@@ -281,6 +309,9 @@ class FileSyncEngine:
                 return
             except RemoteItemMissing, RemoteNameTaken:
                 pass
+        self._rebuild_folder(folder, now)
+
+    def _rebuild_folder(self, folder: SyncAgentFolder, now: datetime) -> None:
         self.repository.forget_folder_item(folder.id)
         self.repository.restore_folder_files(folder.id)
         self.repository.record_activity(folder, SyncActivityKind.FOLDER_RESTORED, None, now)

@@ -72,6 +72,7 @@ class TestDrivePlugin(SyncProviderPlugin):
     throttle_seconds: int | None = None
     calls: list[str] = field(default_factory=list)
     moved_out: set[str] = field(default_factory=set)
+    throttled_calls: dict[str, int] = field(default_factory=dict)
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
     _instance: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
@@ -201,13 +202,19 @@ class TestDrivePlugin(SyncProviderPlugin):
         return self._item(root, node)
 
     def expire_cursors(self) -> None:
-        self.oldest_valid_cursor = self.seq + 1
+        self.seq += 1
+        self.oldest_valid_cursor = self.seq
 
     def throttle_next(self, retry_after: int) -> None:
         self.throttle_seconds = retry_after
 
+    def throttle_call(self, name: str, retry_after: int) -> None:
+        self.throttled_calls[name] = retry_after
+
     def _call(self, name: str) -> None:
         self.calls.append(name)
+        if name in self.throttled_calls:
+            raise ProviderThrottled("Test Drive is limiting requests.", retry_after=self.throttled_calls.pop(name))
         if self.throttle_seconds is not None:
             retry_after, self.throttle_seconds = self.throttle_seconds, None
             raise ProviderThrottled("Test Drive is limiting requests.", retry_after=retry_after)
