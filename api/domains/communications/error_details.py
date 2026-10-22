@@ -74,6 +74,10 @@ _RUNTIME_CODES = {
         "A model spend limit has been reached, so this agent cannot reply right now. "
         "Contact your administrator to raise it or wait for the limit to renew."
     ),
+    "CREDIT_EXHAUSTED": (
+        "This organization has used all its credit, so this agent cannot reply right now. "
+        "Ask the organization's owner to add more credit."
+    ),
 }
 _SUMMARY_BY_HTTP_STATUS = {
     402: "The provider reports exhausted credits or billing; add credits to the provider account, then retry",

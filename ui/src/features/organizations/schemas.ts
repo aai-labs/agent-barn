@@ -12,6 +12,10 @@ export const OrganizationSchema = z.object({
   // that don't carry the allowlist; the full org endpoint always sends it.
   allowedModels: z.array(z.string()).default([]),
   isTrial: z.boolean().default(false),
+  // How many agents it may run, null for no limit; only the organization read carries it.
+  agentLimit: z.number().int().nullable().optional(),
+  // Whether it runs as many agents as that limit allows, counting ones a member can't see.
+  agentLimitReached: z.boolean().optional(),
   // How many agents a trial may run; only the organization read carries it.
   trialAgentLimit: z.number().int().nullable().optional(),
   trialAgentLimitReached: z.boolean().optional(),
@@ -78,6 +82,10 @@ export const PlatformOrganizationSchema = z.object({
   llmBudgetDuration: z.string().nullable().optional(),
   // The organization's own limit beneath the ceiling. Null follows the ceiling.
   llmOwnBudgetUsd: z.number().nullable().optional(),
+  // How many agents it may run: its own (null follows the default) and the one in
+  // force (null for no limit). Only the single organization read carries the latter.
+  agentLimit: z.number().int().nullable().optional(),
+  agentLimitInForce: z.number().int().nullable().optional(),
 });
 
 export const OrganizationLlmBudgetSchema = z.object({
@@ -163,3 +171,11 @@ export type RenameOrganizationFormData = z.infer<typeof RenameOrganizationFormSc
 export type AgentLlmCoverage = z.infer<typeof AgentLlmCoverageSchema>;
 export type OrganizationLlmCoverage = z.infer<typeof OrganizationLlmCoverageSchema>;
 export type OrganizationLlmBudget = z.infer<typeof OrganizationLlmBudgetSchema>;
+
+export const OrganizationSettingsSchema = z.object({
+  // How many agents an organization that isn't a trial may run, unless it has its own.
+  defaultAgentLimit: z.number().int(),
+  updatedAt: z.string().nullable().optional(),
+});
+
+export type OrganizationSettings = z.infer<typeof OrganizationSettingsSchema>;

@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import {
   ArrowLeft,
   ChartColumn,
+  CreditCard,
   House,
   Receipt,
   Settings2,
@@ -11,6 +12,7 @@ import {
   Users,
 } from "lucide-react";
 
+import { useOrganizationBilling } from "@/features/billing/hooks/use-organization-billing";
 import { usePlatformView } from "@/features/organizations/hooks/use-platform-view";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
 
@@ -34,9 +36,13 @@ export type RailModel = {
 export function useRailModel(): RailModel {
   const pathname = usePathname() ?? "";
   // Owners/admins (and platform admins) manage members and see org spend; plain members can't.
-  const { canManage, selectedOrganization } = useActiveOrgRole();
+  const { canManage, role, selectedOrganization } = useActiveOrgRole();
   // From the view you are in, which a page outside both (your Account) keeps.
   const isPlatformView = usePlatformView();
+  // Only the owner buys credit, and only where this organization can.
+  const { billing } = useOrganizationBilling(selectedOrganization?.id, {
+    enabled: role === "OWNER" && !isPlatformView,
+  });
   const orgBase = selectedOrganization ? `/dashboard/${selectedOrganization.id}` : "/dashboard";
 
   if (isPlatformView) {
@@ -98,6 +104,17 @@ export function useRailModel(): RailModel {
             href: `${orgBase}/members`,
             icon: Users,
             active: pathname.startsWith(`${orgBase}/members`),
+          },
+        ]
+      : []),
+    ...(billing?.available
+      ? [
+          {
+            key: "billing",
+            label: "Billing",
+            href: `${orgBase}/billing`,
+            icon: CreditCard,
+            active: pathname.startsWith(`${orgBase}/billing`),
           },
         ]
       : []),
