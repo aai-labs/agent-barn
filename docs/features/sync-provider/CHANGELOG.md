@@ -81,6 +81,33 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 ## Changes
 
+### 2026-10-22 — AF-384 — Pod helper: scan, report and upload
+
+- **Delivered:** `api/domains/agents/scripts/file-sync.py`, stdlib only and pinned to Python 3.12 for ruff in `pyproject.toml`. Nothing starts it yet; the builders and `start.sh` come in a later slice.
+  - It reads `AGENT_ID`, `INGEST_URL` and `INGEST_API_KEY`, the rules JSON produced by `rules_manifest` (`FILE_SYNC_RULES`, default `/app/config/file-sync-rules.json`), and a scan cache in `/tmp` (`FILE_SYNC_STATE`), never on the volume.
+  - **Scan:**
+    - it decides the same as the server's `classify` (parity test for both runtimes);
+    - it enters only directories that can hold synced files;
+    - it skips symlinks, the skip directories, `_Not synced`, non-NFC names, paths over 1,024 characters and `.file-sync-` temp files;
+    - hashes are cached by size and modification time.
+  - **Files still being written** (changed within the last 5 seconds, or during hashing) keep their last reported version. If there is none, the file is left out and the report is marked incomplete, so nothing is deleted at the provider. Read errors or more than 10,000 files also mark the report incomplete.
+  - **Uploads:**
+    - for each upload link, the file is re-hashed first and left alone if it changed;
+    - it is sent in 10 MiB chunks (a multiple of 320 KiB) with `Content-Range`;
+    - `uploads/complete` is called only when the bytes sent match the reported hash.
+  - **Responses:**
+    - a 401 stops the helper quietly;
+    - a 429 or 503 with `Retry-After` waits that long;
+    - other failures wait for the interval.
+  - **Network:** ingest calls bypass proxies, like the other pod scripts. Upload links are never logged.
+  - **`--once --timeout N`** (default 60) always exits 0 within the timeout. **Loop mode** uses `--interval` (default 15).
+  - The helper never deletes or changes a file on the volume.
+- **Verified:**
+  - `tests/unit/test_file_sync_helper.py` (16 tests) runs the script as a subprocess against a real local HTTP server that checks every body with the ingest Pydantic models, and loads it with `importlib` for chunking and classify parity. Before the script existed, the run stopped at the first test, which failed.
+  - The symlink test is skipped on Windows and runs on Linux.
+  - `test_agent_runtime_digest.py` still passes.
+  - ruff, format and ty pass.
+
 ### 2026-10-22 — AF-384 — Change feed robustness: expired cursor, throttling, stopped Agents
 
 - Delivered: when the provider reports the stored cursor as no longer valid (`RemoteResyncRequired`), `process_changes` re-lists everything under "Agent Barn" from the start (`changes(root, None, from_start=True)`, every page) and passes each item through the normal change handling. Recorded content versions mean unchanged files create no jobs and no activity. Afterwards:
