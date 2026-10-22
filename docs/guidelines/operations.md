@@ -851,9 +851,8 @@ value. Local Compose derives it from `API_PORT` through `host.docker.internal`.
 
 Workflow limits and text retention are hard coded in
 `api/domains/workflows/config.py`; they are not environment or Helm options.
-Each Agent permits two queued/running/cancelling runs across all its workflows.
-Paused and blocked runs do not consume capacity; other Agents and Organizations
-have independent capacity. Per-Agent UI settings are future work. Waiting for an unreachable Agent consumes
+Workflow admission has no active-run concurrency cap. Runs execute as sessions
+in the owning Agent and share its resources. Waiting for an unreachable Agent consumes
 the attempt deadline. Non-successful Agent dispatch responses are logged with
 the run identity and HTTP status. A 404 on the workflow step route indicates an
 older trigger server; pause and start that Agent to load the current configuration.

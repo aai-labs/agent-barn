@@ -14,6 +14,18 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-22 — AF-389 — remove the workflow concurrency cap
+
+- Changed: Removed the separate two-active-runs admission cap and its policy constant. Multiple runs of one or several workflows can start as sessions in the owning Agent; transactional start serialization and authorization remain in place.
+- Documentation: Updated the feature contract and operations guidance; removed obsolete capacity tests in favor of acceptance beyond the former cap.
+- Verification: Both updated acceptance tests failed against the original cap with HTTP 409. After removal, all 79 workflow run/authoring integration tests pass, along with `make check-api` and `git diff --check`.
+
+### 2026-10-22 — AF-389 — synchronize the public Agent API guide
+
+- Corrected: The developer guide now describes steps as sessions in the owning Agent, inheriting its current configuration. Removed stale reasoning-only rejection and runtime-image pinning claims. Clarified current permissions, attention-blocked runs, unavailable approval/resume operations and best-effort cancellation.
+- Limits: Documented that failed/expired unfinished steps can currently retry automatically, dispatch deduplication does not guarantee exactly-once external effects, and the agreed uncertain-effect handling remains unimplemented. This documentation change does not change runtime behavior.
+- Verification: Compared the guide with the start/read/cancel services, runtime dispatch, DTOs and controller; checked Markdown structure and whitespace. No application tests were rerun for this prose-only correction.
+
 ### 2026-10-21 — AF-389 — PR preparation against latest staging
 
 - Updated: Merged `origin/staging` at `58fcf60d` without conflicts, retaining the Teams identity, Hindsight hook permissions and navigation fixes. WF01 is already included in staging.

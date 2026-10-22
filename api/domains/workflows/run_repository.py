@@ -207,17 +207,6 @@ class WorkflowRunRepository:
             version = session.get(WorkflowVersion, payload.version_id)
             if workflow.archived_at or version is None or version.workflow_id != workflow_id:
                 raise WorkflowConflict("The saved version is unavailable or the workflow is archived")
-            active = session.exec(
-                select(sa.func.count())
-                .select_from(WorkflowRun)
-                .join(Workflow, col(Workflow.id) == col(WorkflowRun.workflow_id))
-                .where(
-                    col(Workflow.agent_id) == agent_id,
-                    col(WorkflowRun.state).in_({"QUEUED", "RUNNING", "CANCELLING"}),
-                )
-            ).one()
-            if active >= workflow_config.MAX_ACTIVE_RUNS_PER_AGENT:
-                raise WorkflowConflict("This Agent's workflow concurrency limit was reached; wait for a run to settle")
             run = WorkflowRun(
                 workflow_id=workflow_id,
                 version_id=payload.version_id,
