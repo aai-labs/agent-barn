@@ -36,21 +36,20 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the sync rules (`api/domains/file_sync/rules.py`);
   - the file sync tables (migration `af95cf4c3a1e`);
   - the Graph file operations (`api/domains/agents/microsoft_graph_files.py`) and the app-token cache.
-  - the `file_sync` capability on the plugin seam, implemented by OneDrive.
+  - the `file_sync` capability on the plugin seam, implemented by OneDrive, and a test-only `file_sync` provider.
 
   Nothing calls them yet, and no file syncs yet.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. a test fake of a `file_sync` provider;
-  2. folder reconciliation;
-  3. the Sync Engine and its deployment;
-  4. Ingest file-sync routes;
-  5. remote change processing;
-  6. the in-pod helper;
-  7. builder and `start.sh` wiring;
-  8. pinned-image contracts;
-  9. disconnect;
-  10. docs consolidation;
-  11. an end-to-end run on local k3d against the test tenant.
+  1. folder reconciliation;
+  2. the Sync Engine and its deployment;
+  3. Ingest file-sync routes;
+  4. remote change processing;
+  5. the in-pod helper;
+  6. builder and `start.sh` wiring;
+  7. pinned-image contracts;
+  8. disconnect;
+  9. docs consolidation;
+  10. an end-to-end run on local k3d against the test tenant.
 - Docs owed by the slice that makes them true:
   - **this README:**
     - the "Agent file sync" section, with folder reconciliation;
@@ -80,6 +79,28 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — Test-only `file_sync` provider
+
+- Delivered: `TestDrivePlugin` (key `testdrive`) in `api/tests/steps/file_sync_provider.py`. It declares only `file_sync` and keeps an in-memory folder tree with a change log.
+  - **Plugin calls** behave like OneDrive's:
+    - paths are relative to the root folder;
+    - a content edit changes both versions, and a rename or move only `version`;
+    - deleted items have no name or path;
+    - names are taken case-insensitively;
+    - deleting an item already gone is not an error;
+    - changes start from now or from the beginning, in pages of `page_size` with `more`;
+    - an upload replaces the file only when the pod completes it;
+    - empty files are written without an upload.
+  - **Test helpers:**
+    - acting as a person at the provider: `user_adds`, `user_edits`, `user_deletes`, `user_renames`, `user_moves`, `user_moves_outside`;
+    - acting as the pod: `complete_upload` and `content_at`;
+    - failures: `throttle_next(retry_after)` throttles the next call once, and `expire_cursors` makes stored cursors need a resync.
+  - `OtherDrivePlugin` still declares no capability, so tests can show that a connection without `file_sync` is skipped.
+- Verified:
+  - `tests/unit/test_test_drive_file_sync.py` (12 tests) failed first (module missing), then passed. It holds the fake to the contract the OneDrive tests show: registry acceptance, paths, name conflicts, version semantics, deletion, change pages and cursors, resync, throttling once, uploads landing on completion, downloads, empty files, and a move out of the root losing its path.
+  - `test_sync_provider_plugins.py` still passes.
+  - ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — OneDrive implements `file_sync`
 
