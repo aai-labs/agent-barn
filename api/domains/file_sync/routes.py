@@ -5,7 +5,13 @@ from uuid import UUID
 from fastapi import APIRouter, Header, HTTPException, Response, status
 from fastapi_injector import Injected
 
-from api.domains.file_sync.models import FileSyncChangesCreate, FileSyncChangesRead, FileSyncUploadCompleteCreate
+from api.domains.file_sync.models import (
+    FileSyncChangesCreate,
+    FileSyncChangesRead,
+    FileSyncOperationResultCreate,
+    FileSyncOperationsRead,
+    FileSyncUploadCompleteCreate,
+)
 from api.domains.file_sync.service import (
     FileSyncConflict,
     FileSyncIngestService,
@@ -62,4 +68,24 @@ def complete_file_upload(
     authorization: Annotated[str, Header()],
 ):
     _answer(lambda: service.complete_upload(agent_id, _key(authorization), upload.path))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@file_sync_ingest_router.get("/{agent_id}/file-sync/operations", response_model=FileSyncOperationsRead)
+def claim_file_operations(
+    agent_id: UUID,
+    service: Annotated[FileSyncIngestService, Injected(FileSyncIngestService)],
+    authorization: Annotated[str, Header()],
+) -> FileSyncOperationsRead:
+    return _answer(lambda: service.claim_operations(agent_id, _key(authorization)))
+
+
+@file_sync_ingest_router.post("/{agent_id}/file-sync/operations/result", status_code=status.HTTP_204_NO_CONTENT)
+def report_file_operation_result(
+    agent_id: UUID,
+    result: FileSyncOperationResultCreate,
+    service: Annotated[FileSyncIngestService, Injected(FileSyncIngestService)],
+    authorization: Annotated[str, Header()],
+):
+    _answer(lambda: service.report_result(agent_id, _key(authorization), result))
     return Response(status_code=status.HTTP_204_NO_CONTENT)

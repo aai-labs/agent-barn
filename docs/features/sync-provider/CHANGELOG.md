@@ -39,18 +39,18 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the `file_sync` capability on the plugin seam, implemented by OneDrive, and a test-only `file_sync` provider;
   - folder reconciliation (`FileSyncEngine.reconcile_folders`);
   - the Sync Engine (`api/sync_engine_main.py`) and its deployment: Helm `syncEngine`, `make dev-sync-engine`, and the `sync-engine` Compose service started by `run.sh`;
-  - the pod's file report route (`POST …/file-sync/changes`): authentication, readiness checks and path rules; upload links, empty files, skips, and deletes for a complete report. Upload completion is at `POST …/file-sync/uploads/complete`.
+  - the pod's file report route (`POST …/file-sync/changes`): authentication, readiness checks and path rules; upload links, empty files, skips, and deletes for a complete report. Upload completion is at `POST …/file-sync/uploads/complete`;
+  - the pod's jobs (`GET …/file-sync/operations`, `POST …/file-sync/operations/result`): downloads and re-uploads with leases, retries and the Agent-wins conflict rule. Nothing creates jobs yet; remote change processing will.
 
   Folders follow Agents on every connected Organization. No pod calls these routes yet, so files are not synced.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. Ingest file-sync routes: pending work and conflicts;
-  2. remote change processing;
-  3. the in-pod helper;
-  4. builder and `start.sh` wiring;
-  5. pinned-image contracts;
-  6. disconnect;
-  7. docs consolidation;
-  8. an end-to-end run on local k3d against the test tenant.
+  1. remote change processing;
+  2. the in-pod helper;
+  3. builder and `start.sh` wiring;
+  4. pinned-image contracts;
+  5. disconnect;
+  6. docs consolidation;
+  7. an end-to-end run on local k3d against the test tenant.
 - Docs owed by the slice that makes them true:
   - **this README:**
     - the Organization Member visibility limit, with the helper wiring;
@@ -75,6 +75,42 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — Pod jobs: downloads, re-uploads and the Agent-wins rule
+
+- Delivered: `GET /ingest/v1/agents/{agent_id}/file-sync/operations`.
+  - It claims the folder's due `sync_file` jobs (`pending` set, no live `lease_until`, no future `retry_at`) with `SELECT … FOR UPDATE SKIP LOCKED`, leases them for 10 minutes, and counts `attempts`.
+  - **`download`:** the provider's current `content_version` and a download URL. If the item is gone, or no item was ever recorded, the job is dropped.
+  - **`reupload`:** an upload URL, with the row marked under way. The existing `uploads/complete` finishes it.
+  - If the provider fails while jobs are being handed out, every claimed job is released.
+- Delivered: `POST …/file-sync/operations/result {path, outcome, version?, sha256?, size?}`. It needs a leased job at that path (otherwise 409); `done` without `version`, `sha256` and `size` is 422.
+  - **`done`:** the item is read again. With an unchanged `content_version` it is recorded as synced. If the version has moved on, the download is queued again; if the item is gone, the job is dropped.
+  - **`skipped_no_space`:** recorded once per path and version, and retried in 5 minutes.
+  - **`failed`:** retried after `60 × 2^(attempts-1)` seconds, at most 30 minutes.
+  - **`local_changed`:** the job is dropped and `conflict_agent_won` recorded.
+- Delivered: a report bringing new local content for a path with a pending download clears the download, records `conflict_agent_won`, and uploads the Agent's version. Unchanged local content leaves the download pending.
+- Changed:
+  - `record_synced` also clears `pending`, the lease, `attempts` and `retry_at`;
+  - `FileSyncRepository` gains `claim_operations`, `clear_pending`, `release` and `requeue_download`;
+  - the report tests' helpers moved to `api/tests/steps/file_sync_ingest.py`, the third file to need them.
+- Verified:
+  - `tests/integration/test_file_sync_ingest_operations.py` (18 tests). 17 failed first. The guard that a report with unchanged content leaves a download pending passed before and after.
+  - They cover:
+    - the download hand-out;
+    - leases and their expiry;
+    - `retry_at`;
+    - `done`, and `done` overtaken by another edit;
+    - no space recorded once;
+    - four retry waits;
+    - `local_changed`;
+    - both report conflict cases;
+    - a re-upload finished by upload completion;
+    - a gone item;
+    - results without a job;
+    - key, path and outcome validation;
+    - response fields.
+  - The file sync, schema and Ingest suites pass together (178 tests).
+  - ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — Files the Agent deleted are deleted at the provider
 

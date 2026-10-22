@@ -27,7 +27,15 @@ Conversation Messages and Tool Calls share the Agent Activity UI but have differ
   - **Skips:** a file over 100 MB, a name the provider refuses, a path over its 400-character limit, or a second path differing only in case is not uploaded, and is recorded once per path and content.
   - **Deletes:** only when the report is `complete`. A synced file missing from it is deleted at the provider (its recycle bin), forgotten, and recorded as `deleted_by_agent`. A path still listed (even if skipped) is never deleted, nor is a path listed in another case. A first upload that never finished is forgotten without calling the provider.
   - **`POST …/file-sync/uploads/complete {path}`:** when the pod finishes an upload, it sends this. The server reads the file at that path from the provider, never taking an item id from the pod, and records it as synced. With no upload under way, no file at the provider yet, or a different size there, it answers 409.
-  - **Provider failures:** throttling is 503 with `Retry-After`, and other provider failures are 502.
+  - **`GET …/file-sync/operations`:** hands the pod its due jobs, each leased for 10 minutes, so a crashed pod's job comes back. A job is due when it has no live lease and no `retry_at` in the future.
+    - A `download` (a person's edit to fetch) carries a download URL and the provider's content `version`. One whose file is gone at the provider is dropped.
+    - A `reupload` (the Agent's copy to put back) carries an upload URL and is finished with `uploads/complete`.
+  - **`POST …/file-sync/operations/result {path, outcome}`:** needs a job handed out for that path (otherwise 409).
+    - **`done`** (with `version`, `sha256` and `size`): the download is recorded as synced, unless the provider's version has moved on, in which case the download is queued again.
+    - **`skipped_no_space`:** recorded once per path and version, and retried in 5 minutes.
+    - **`failed`:** retried after 60 s, doubling per attempt up to 30 minutes.
+    - **`local_changed`:** the Agent wins. The download is dropped and `conflict_agent_won` is recorded. The same happens when a report brings new local content for a path with a download pending; the Agent's version is then uploaded, and the person's edit stays in the provider's version history.
+  - **Provider failures:** throttling is 503 with `Retry-After`, and other provider failures are 502. Jobs claimed in a call that fails this way are released.
   - **Contact:** every authenticated call records the folder's `last_contact_at`.
   - **Authentication:** a wrong or missing key, or an Agent that does not exist, is 401, before anything else is revealed. The lookup includes deleted Agents, so a deleted Agent presenting its last key is 404.
   - **Target:** the folder comes only from the authenticated Agent's own Organization.

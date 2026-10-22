@@ -13,11 +13,16 @@ from api.domains.file_sync.models import (
     FileSyncChangesCreate,
     FileSyncChangesRead,
     FileSyncEntryCreate,
+    FileSyncOperationOutcome,
+    FileSyncOperationRead,
+    FileSyncOperationResultCreate,
+    FileSyncOperationsRead,
     FileSyncUploadRead,
     SyncActivityKind,
     SyncAgentFolder,
     SyncFile,
     SyncFolderStatus,
+    SyncPendingAction,
 )
 from api.domains.file_sync.repository import FileSyncRepository
 from api.domains.file_sync.rules import MAX_FILE_BYTES, SyncCategory, classify, name_problem, path_too_long
@@ -34,6 +39,10 @@ from api.infrastructure.crypto import decrypt_token
 
 UPLOAD_REISSUE_AFTER = timedelta(minutes=14)
 THROTTLE_FALLBACK_SECONDS = 60
+OPERATION_LEASE = timedelta(minutes=10)
+NO_SPACE_RETRY = timedelta(minutes=5)
+FAILED_RETRY_BASE_SECONDS = 60
+FAILED_RETRY_MAX_SECONDS = 1800
 
 
 class FileSyncUnauthorized(Exception):
@@ -123,6 +132,94 @@ class FileSyncIngestService:
             target.folder.id, path, item, sha256=row.local_sha256, size=row.size, now=datetime.now(UTC)
         )
 
+    def claim_operations(self, agent_id: UUID, provided_key: str) -> FileSyncOperationsRead:
+        target = self._target(agent_id, provided_key)
+        now = datetime.now(UTC)
+        claimed = self.repository.claim_operations(target.folder.id, now, now + OPERATION_LEASE)
+        operations: list[FileSyncOperationRead] = []
+        try:
+            for row in claimed:
+                operation = self._hand_out(target, row, now)
+                if operation is not None:
+                    operations.append(operation)
+        except ProviderThrottled as exc:
+            for row in claimed:
+                self.repository.release(row.id, None)
+            raise FileSyncProviderBusy(exc.retry_after or THROTTLE_FALLBACK_SECONDS) from exc
+        except SyncProviderError as exc:
+            for row in claimed:
+                self.repository.release(row.id, None)
+            raise FileSyncProviderFailed(exc.message) from exc
+        return FileSyncOperationsRead(operations=operations)
+
+    def report_result(self, agent_id: UUID, provided_key: str, result: FileSyncOperationResultCreate) -> None:
+        target = self._target(agent_id, provided_key)
+        self._require_allowed(target, result.path)
+        row = self.repository.file_at(target.folder.id, result.path)
+        if row is None or row.pending is None or row.lease_until is None:
+            raise FileSyncConflict("No job was handed out for this path")
+        now = datetime.now(UTC)
+        match result.outcome:
+            case FileSyncOperationOutcome.DONE:
+                self._finish_download(target, row, result, now)
+            case FileSyncOperationOutcome.SKIPPED_NO_SPACE:
+                detail = result.version or row.ctag or ""
+                self.repository.record_activity_once(
+                    target.folder, SyncActivityKind.SKIPPED_NO_SPACE, row.path, detail, now
+                )
+                self.repository.release(row.id, now + NO_SPACE_RETRY)
+            case FileSyncOperationOutcome.FAILED:
+                wait = min(FAILED_RETRY_BASE_SECONDS * 2 ** max(row.attempts - 1, 0), FAILED_RETRY_MAX_SECONDS)
+                self.repository.release(row.id, now + timedelta(seconds=wait))
+            case FileSyncOperationOutcome.LOCAL_CHANGED:
+                self.repository.clear_pending(row.id)
+                self.repository.record_activity(target.folder, SyncActivityKind.CONFLICT_AGENT_WON, row.path, now)
+
+    def _hand_out(self, target: FileSyncTarget, row: SyncFile, now: datetime) -> FileSyncOperationRead | None:
+        if row.pending == SyncPendingAction.REUPLOAD:
+            upload = target.plugin.upload_target(target.root, parent_id=target.folder_item_id, rel_path=row.path)
+            self.repository.start_upload(target.folder.id, row.path, sha256=row.local_sha256, size=row.size, now=now)
+            return FileSyncOperationRead(
+                path=row.path,
+                action=SyncPendingAction.REUPLOAD,
+                url=upload.url,
+                expires_at=upload.expires_at,
+                version=None,
+            )
+        if row.item_id is None:
+            self.repository.clear_pending(row.id)
+            return None
+        try:
+            item = target.plugin.get_item(target.root, item_id=row.item_id)
+        except RemoteItemMissing:
+            self.repository.clear_pending(row.id)
+            return None
+        url = target.plugin.download_url(target.root, item_id=row.item_id)
+        return FileSyncOperationRead(
+            path=row.path, action=SyncPendingAction.DOWNLOAD, url=url, expires_at=None, version=item.content_version
+        )
+
+    def _finish_download(
+        self, target: FileSyncTarget, row: SyncFile, result: FileSyncOperationResultCreate, now: datetime
+    ) -> None:
+        if row.pending != SyncPendingAction.DOWNLOAD or row.item_id is None:
+            raise FileSyncConflict("Only a download is finished with a done result")
+        try:
+            item = target.plugin.get_item(target.root, item_id=row.item_id)
+        except RemoteItemMissing:
+            self.repository.clear_pending(row.id)
+            return
+        except ProviderThrottled as exc:
+            raise FileSyncProviderBusy(exc.retry_after or THROTTLE_FALLBACK_SECONDS) from exc
+        except SyncProviderError as exc:
+            raise FileSyncProviderFailed(exc.message) from exc
+        if item.content_version != result.version:
+            self.repository.requeue_download(row.id)
+            return
+        if result.sha256 is None or result.size is None:
+            raise FileSyncConflict("A done result names the written content")
+        self.repository.record_synced(target.folder.id, row.path, item, sha256=result.sha256, size=result.size, now=now)
+
     def _delete_missing(
         self, target: FileSyncTarget, known: dict[str, SyncFile], reported: set[str], now: datetime
     ) -> None:
@@ -158,6 +255,9 @@ class FileSyncIngestService:
                 return None
             if known.upload_started_at is not None and now - known.upload_started_at < UPLOAD_REISSUE_AFTER:
                 return None
+        if known is not None and known.pending == SyncPendingAction.DOWNLOAD:
+            self.repository.clear_pending(known.id)
+            self.repository.record_activity(target.folder, SyncActivityKind.CONFLICT_AGENT_WON, known.path, now)
         if entry.size == 0:
             item = target.plugin.write_empty_file(target.root, parent_id=target.folder_item_id, rel_path=entry.path)
             self.repository.record_synced(target.folder.id, entry.path, item, sha256=entry.sha256, size=0, now=now)

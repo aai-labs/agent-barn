@@ -11,7 +11,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent
-from api.domains.file_sync.models import SyncActivity, SyncActivityKind, SyncAgentFolder, SyncFile, SyncFolderStatus
+from api.domains.file_sync.models import (
+    SyncActivity,
+    SyncActivityKind,
+    SyncAgentFolder,
+    SyncFile,
+    SyncFolderStatus,
+    SyncPendingAction,
+)
 from api.domains.sync_provider.models import SyncProviderConnection, SyncProviderStatus
 from api.domains.sync_provider.plugins.base import RemoteItem
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -125,7 +132,47 @@ class FileSyncRepository:
             row.size = size
             row.synced_at = now
             row.upload_started_at = None
+            row.pending = None
+            row.lease_until = None
+            row.attempts = 0
+            row.retry_at = None
             session.add(row)
+            session.commit()
+
+    def claim_operations(self, folder_id: UUID, now: datetime, lease_until: datetime) -> list[SyncFile]:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            rows = list(
+                session.exec(
+                    select(SyncFile)
+                    .where(
+                        col(SyncFile.folder_id) == folder_id,
+                        col(SyncFile.pending).is_not(None),
+                        or_(col(SyncFile.lease_until).is_(None), col(SyncFile.lease_until) < now),
+                        or_(col(SyncFile.retry_at).is_(None), col(SyncFile.retry_at) <= now),
+                    )
+                    .order_by(col(SyncFile.path))
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            for row in rows:
+                row.lease_until = lease_until
+                row.attempts += 1
+                session.add(row)
+            session.commit()
+            return rows
+
+    def clear_pending(self, file_id: UUID) -> None:
+        self._update_file(file_id, pending=None, lease_until=None, attempts=0, retry_at=None)
+
+    def release(self, file_id: UUID, retry_at: datetime | None) -> None:
+        self._update_file(file_id, lease_until=None, retry_at=retry_at)
+
+    def requeue_download(self, file_id: UUID) -> None:
+        self._update_file(file_id, pending=SyncPendingAction.DOWNLOAD, lease_until=None, retry_at=None)
+
+    def _update_file(self, file_id: UUID, **values) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(sa.update(SyncFile).where(col(SyncFile.id) == file_id).values(**values))
             session.commit()
 
     def remove_file(self, file_id: UUID) -> None:

@@ -4,7 +4,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import Field
+from pydantic import Field, model_validator
 from sqlalchemy import Column
 from sqlmodel import Field as SqlField
 
@@ -143,3 +143,38 @@ class FileSyncChangesRead(PydanticBaseModel):
 
 class FileSyncUploadCompleteCreate(PydanticBaseModel):
     path: str = Field(min_length=1, max_length=MAX_PATH_LENGTH)
+
+
+class FileSyncOperationRead(PydanticBaseModel):
+    path: str
+    action: SyncPendingAction
+    url: str
+    expires_at: datetime | None
+    version: str | None
+
+
+class FileSyncOperationsRead(PydanticBaseModel):
+    operations: list[FileSyncOperationRead]
+
+
+class FileSyncOperationOutcome(StrEnum):
+    DONE = "done"
+    SKIPPED_NO_SPACE = "skipped_no_space"
+    FAILED = "failed"
+    LOCAL_CHANGED = "local_changed"
+
+
+class FileSyncOperationResultCreate(PydanticBaseModel):
+    path: str = Field(min_length=1, max_length=MAX_PATH_LENGTH)
+    outcome: FileSyncOperationOutcome
+    version: str | None = Field(default=None, max_length=512)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    size: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _done_names_what_was_written(self) -> FileSyncOperationResultCreate:
+        if self.outcome == FileSyncOperationOutcome.DONE and (
+            self.version is None or self.sha256 is None or self.size is None
+        ):
+            raise ValueError("a done result needs version, sha256 and size")
+        return self
