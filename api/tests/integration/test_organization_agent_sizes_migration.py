@@ -77,6 +77,56 @@ def test_existing_agents_follow_the_default_and_the_permission_exists(database_b
     assert_that(_permission_count(database.engine), equal_to(1))
 
 
+def _insert_agent(connection, organization_id, name: str, status: str, *, deleted: bool = False) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO agent (id, created_at, updated_at, organization_id, name, litellm_key_encrypted, model,"
+            " approval_mode, verbose_mode, status, deleted_at)"
+            " VALUES (:id, now(), now(), :organization_id, :name, '', '', 'auto', false,"
+            " CAST(:status AS agentstatus), CASE WHEN :deleted THEN now() END)"
+        ),
+        {"id": uuid7(), "organization_id": organization_id, "name": name, "status": status, "deleted": deleted},
+    )
+
+
+def test_agents_already_running_record_the_default_they_were_started_on(database_before_organization_agent_sizes):
+    database = database_before_organization_agent_sizes
+    organization_id = uuid7()
+    with database.engine.begin() as connection:
+        # A Template pin is beside the point here, and only a live Agent needs one.
+        connection.execute(text("ALTER TABLE agent DROP CONSTRAINT ck_agent_template_pin_state"))
+        connection.execute(
+            text(
+                "INSERT INTO organization (id, created_at, updated_at, name, llm_budget_usd, llm_budget_duration)"
+                " VALUES (:id, now(), now(), 'Sizes', 100, '30d')"
+            ),
+            {"id": organization_id},
+        )
+        _insert_agent(connection, organization_id, "Running", "RUNNING")
+        _insert_agent(connection, organization_id, "Stopped", "STOPPED")
+        _insert_agent(connection, organization_id, "Deleted", "RUNNING", deleted=True)
+
+    command.upgrade(database.config, ORGANIZATION_AGENT_SIZES_REVISION)
+
+    with database.engine.connect() as connection:
+        rows = dict(connection.execute(text("SELECT name, running_resources FROM agent")).all())
+    assert_that(
+        rows,
+        equal_to(
+            {
+                "Running": {
+                    "cpu_request_millicores": 50,
+                    "cpu_limit_millicores": 500,
+                    "memory_request_bytes": 320 * 1024**2,
+                    "memory_limit_bytes": 1024**3,
+                },
+                "Stopped": None,
+                "Deleted": None,
+            }
+        ),
+    )
+
+
 def test_the_migration_downgrades_cleanly(database_before_organization_agent_sizes):
     database = database_before_organization_agent_sizes
     command.upgrade(database.config, ORGANIZATION_AGENT_SIZES_REVISION)

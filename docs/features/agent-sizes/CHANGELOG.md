@@ -20,7 +20,7 @@ Platform Administrators keep a catalog of CPU and memory sizes. Organizations th
 
 - Delivered: a Platform Administrator sets which sizes an Organization may choose on the Platform Organization page. Its Owners and Admins pick one when hiring or change it on the Agent's Profile; the change applies at the next start, with a pending note meanwhile. Withdrawing or disabling a size leaves the Agents on it. Every other Agent runs on the default, exactly as before.
 - Changed:
-  - Schema (migration `3046153d9447`): `organization_agent_sizes`; `agent.agent_size_id` (null follows the default, `ON DELETE RESTRICT`); `agent.running_resources`; the `agent.size.manage` Permission row.
+  - Schema (migration `3046153d9447`): `organization_agent_sizes`; `agent.agent_size_id` (null follows the default, `ON DELETE RESTRICT`); `agent.running_resources`, filled in for Agents already running with the default's values; the `agent.size.manage` Permission row.
   - API: `PUT /platform/organizations/{id}/agent-sizes`, `GET /organizations/{id}/agent-sizes`, `PUT /organizations/{id}/agents/{agent_id}/agent-size`; `AgentCreate.agent_size_id`; `AgentRead.agent_size_id`, `agent_size`, `pending_size`; `PlatformOrganizationRead.agent_size_ids`.
   - Rules: deleting a size any Agent row is on, soft-deleted ones included, is refused (`409`), checked under the size's lock.
   - RBAC: `agent.size.manage` for Organization Owners and Admins; no Agent Access Role grants it.

@@ -33,7 +33,7 @@ The catalog is being delivered as the Agent Sizes epic ([`agent-sizes/CHANGELOG.
 - **What can be chosen.** The default, or an enabled size in the Organization's allowed set (`400` otherwise). Choosing the default stores `agent_size_id = NULL`, so the Agent keeps following the default wherever it moves. Re-sending the size an Agent is already on is a no-op even when that size can no longer be chosen.
 - **Withdrawing or disabling a size leaves the Agents on it.** It only stops the size being chosen again; those Agents keep starting on it until someone chooses another.
 - **A change never stops the Agent.** It applies at the next start. Choosing takes the Agent's lifecycle lock (`409` while a start, stop or other lifecycle operation holds it), because those paths can save the whole Agent row on failure, and writes only `agent_size_id` on the locked row.
-- **`pending_size`.** At start, `agent.running_resources` records the requests and limits the pod got, alongside `running_model`; stop clears it. `AgentRead.pending_size` is true when a running Agent's recorded resources differ from those its size gives now, so choosing another size, editing the one it is on, or moving the default under it all read as pending until the next start.
+- **`pending_size`.** At start, `agent.running_resources` records the requests and limits the pod got, alongside `running_model`; stop clears it. The migration that added the column filled it in for Agents already running with the default's values, since that is what they were started on. `AgentRead.pending_size` is true when a running Agent's recorded resources differ from those its size gives now, so choosing another size, editing the one it is on, or moving the default under it all read as pending until the next start.
 
 ## API
 
@@ -71,7 +71,7 @@ Platform → Settings → **Agent sizes** (`?section=agent-sizes`) lists the cat
 
 - **Platform Organization page** (Platform → Organizations → one Organization): the **Agent sizes** card, with the "Can choose CPU & memory" switch and a checkbox per enabled size besides the default. A disabled size the Organization still has stays listed, checked and marked, until it is unchecked; it cannot be checked again. Switching on needs at least one size before it saves.
 - **Hire dialog**: a **CPU & memory** choice beside the runtime, shown only to Owners and Admins of an Organization that can choose, with the default preselected. Onboarding's hire step shares the form hook but not the field.
-- **Agent configuration → Profile → Runtime & deployment**: the **CPU & memory** tile names the Agent's size (marked default when it follows it). Owners and Admins of an Organization that can choose change it there with a picker, saved at once; a size no longer offered shows as such and cannot be picked. "Pending: applies on restart" shows while `pending_size` is true.
+- **Agent configuration → Profile → Runtime & deployment**: the **CPU & memory** tile names the Agent's size (marked default when it follows it). Owners and Admins of an Organization that can choose change it there with a picker, saved at once; a size no longer offered shows as such and cannot be picked. "Pending: applies on restart" shows while `pending_size` is true, with a Restart button for whoever holds `agent.lifecycle.manage`. The Profile's own Apply & Restart is for its edit form and does not cover the size.
 
 ## Source map
 

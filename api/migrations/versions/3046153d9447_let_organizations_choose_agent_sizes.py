@@ -10,8 +10,10 @@ choosable without a row). An Agent records the size its Organization chose
 (`agent.agent_size_id`, NULL following the platform default) and the requests and limits its
 running pod was started with (`agent.running_resources`, NULL when not running).
 
-Every existing Agent gets NULL for both, so it keeps starting on the default, which PR 1 seeded
-with the values the builders always used. `agent.size.manage` is added to the Permission
+Every existing Agent gets a NULL `agent_size_id`, so it keeps starting on the default, which PR 1
+seeded with the values the builders always used. An Agent already running was started on the
+default, so its `running_resources` is filled in with the default's values; left NULL, choosing a
+size for it would not read as pending until it next restarted. `agent.size.manage` is added to the Permission
 catalogue; Organization Owners and Admins hold it through their role, from code.
 """
 
@@ -61,6 +63,18 @@ def upgrade() -> None:
     # Deleting a size asks whether any Agent references it.
     op.create_index("ix_agent_agent_size_id", "agent", ["agent_size_id"])
     op.add_column("agent", sa.Column("running_resources", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
+    op.execute(
+        """
+        UPDATE agent SET running_resources = jsonb_build_object(
+            'cpu_request_millicores', size.cpu_request_millicores,
+            'cpu_limit_millicores', size.cpu_limit_millicores,
+            'memory_request_bytes', size.memory_request_bytes,
+            'memory_limit_bytes', size.memory_limit_bytes
+        )
+        FROM agent_sizes AS size
+        WHERE size.is_default AND agent.status = 'RUNNING' AND agent.deleted_at IS NULL
+        """
+    )
 
     _with_catalogue_unlocked(
         sa.text(

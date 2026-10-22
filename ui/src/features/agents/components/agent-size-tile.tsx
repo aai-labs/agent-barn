@@ -1,5 +1,6 @@
 "use client";
 
+import { RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 import { AgentSizeSelect } from "@/features/agent-sizes/components/agent-size-select";
@@ -7,6 +8,7 @@ import { useOrganizationAgentSizes } from "@/features/agent-sizes/hooks/use-orga
 import { describeSize } from "@/features/agent-sizes/utils";
 import { toastError } from "@/shared/toast";
 
+import { useRestartAgent } from "../hooks/use-restart-agent";
 import { useSetAgentSize } from "../hooks/use-set-agent-size";
 import type { Agent } from "../schemas";
 import { canAgent } from "../utils";
@@ -16,11 +18,13 @@ import { canAgent } from "../utils";
  *
  * Owners and Admins of an Organization the platform lets choose change it here. The change is
  * saved at once and never restarts the Agent: a running one keeps its resources until its next
- * start, and says so meanwhile.
+ * start, and says so meanwhile, with a restart for whoever may restart it.
  */
 export function AgentSizeTile({ agent }: { agent: Agent }) {
   const { agentSizes } = useOrganizationAgentSizes();
   const setSize = useSetAgentSize();
+  const restartAgent = useRestartAgent();
+  const canRestart = canAgent(agent, "agent.lifecycle.manage");
   const choices = canAgent(agent, "agent.size.manage") && agentSizes?.canChoose ? agentSizes.sizes : null;
   const size = agent.agentSize;
   const defaultId = choices?.find((choice) => choice.isDefault)?.id ?? "";
@@ -70,8 +74,21 @@ export function AgentSizeTile({ agent }: { agent: Agent }) {
         </div>
       )}
       {agent.pendingSize && (
-        <div className="mt-1 text-[0.72rem]" data-testid="agent-pending-size-note" style={{ color: "var(--ink-4)" }}>
-          Pending: applies on restart
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <span className="text-[0.72rem]" data-testid="agent-pending-size-note" style={{ color: "var(--ink-4)" }}>
+            Pending: applies on restart
+          </span>
+          {canRestart && (
+            <button
+              type="button"
+              className="af-btn af-btn-sm"
+              data-testid="agent-pending-size-restart"
+              disabled={restartAgent.isPending || agent.updateInProgress}
+              onClick={() => void restartAgent.restart(agent.id).catch(toastError)}
+            >
+              <RotateCcw size={13} /> {restartAgent.isPending ? "Restarting…" : "Restart"}
+            </button>
+          )}
         </div>
       )}
     </div>

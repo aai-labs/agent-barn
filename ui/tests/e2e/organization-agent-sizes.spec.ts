@@ -190,6 +190,7 @@ test.describe("Organizations choosing Agent sizes", () => {
 
     await expect(size).toHaveText("Large · 2 vCPU · 4 GiB");
     await expect(page.getByTestId("agent-pending-size-note")).toHaveText("Pending: applies on restart");
+    await expect(page.getByTestId("agent-pending-size-restart")).toBeEnabled();
     expect(writes).toEqual([{ agent_size_id: LARGE.id }]);
   });
 
