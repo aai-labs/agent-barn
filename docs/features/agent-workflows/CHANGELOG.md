@@ -8,13 +8,13 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 - Delivered: AF-388 manual authoring is merged through PR #308.
 - In transition: AF-389 Agent-session text execution is in open PR [#326](https://github.com/aai-labs/agent-barn/pull/326) against staging. This AF-415 worktree starts at local head `6e109add`; neither PR merge nor deployment is implied.
-- Implemented in AF-415: shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
+- Implemented in AF-415 draft [PR #328](https://github.com/aai-labs/agent-barn/pull/328): shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
 - Next: review and deploy AF-415 with private Garage configuration, then AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
 - Blockers: AF-389's uncertain-effect automatic retry, truthful stop/quiescence, live OpenClaw Agent-session acceptance and run-read-policy coordination remain open. Storage does not resolve them. Production Garage provisioning and rollout are separate authorized operational steps.
 
 ## Changes
 
-### 2026-10-22 — AF-415 — shared Agent artifacts and file sharing
+### 2026-10-22 — AF-415 — [PR #328](https://github.com/aai-labs/agent-barn/pull/328) — shared Agent artifacts and file sharing
 
 - Changed: Additive artifact/reference schema, private Garage-compatible S3 adapter, credential-derived runtime identity and current attempt/initiator fences. Published bytes are immutable and verified before READY.
 - Delivered: one scoped CLI on both runtimes, ordinary chat publication, fresh signed links, Agent Files and workflow downloads alongside text results; active run pins and 30-day retention after release; deletion journals survive aggregate hard deletion.
