@@ -7,6 +7,7 @@ from sqlmodel import Session, col, select
 from api.domains.agents.models import Agent, AgentType
 from api.domains.file_sync.engine import FileSyncEngine
 from api.domains.file_sync.models import SyncActivity, SyncActivityKind, SyncAgentFolder, SyncFile
+from api.domains.sync_provider.plugins.base import RemoteItemMissing
 from api.infrastructure.crypto import encrypt_token
 from api.tests.core.givenpy import given
 from api.tests.core.modules import prepare_ingest_server, prepare_injector, set_env_variable
@@ -289,3 +290,104 @@ def test_every_report_records_when_the_pod_last_checked_in():
         contact = _folder(context).last_contact_at
         assert contact is not None
         assert_that((datetime.now(UTC) - contact).total_seconds(), close_to(0, 10))
+
+
+def _provider_has(context, path: str) -> bool:
+    folder_item_id = _folder(context).folder_item_id
+    assert folder_item_id is not None
+    try:
+        fake_drive(context).get_item_by_path(context.sync_root, parent_id=folder_item_id, rel_path=path)
+    except RemoteItemMissing:
+        return False
+    return True
+
+
+def test_a_file_missing_from_a_complete_report_is_deleted_at_the_provider_and_recorded():
+    with given(_BASE) as context:
+        agent = _ready(context)
+        _upload_through_the_pod(context, agent, "workspace/notes.md", b"hello")
+        _upload_through_the_pod(context, agent, "workspace/kept.md", b"hello")
+
+        response = _report(context, agent, _entry("workspace/kept.md"))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(
+            (_provider_has(context, "workspace/notes.md"), _provider_has(context, "workspace/kept.md")),
+            equal_to((False, True)),
+        )
+        assert_that(sorted(_files(context)), equal_to(["workspace/kept.md"]))
+        assert_that(_activity(context), equal_to([(SyncActivityKind.DELETED_BY_AGENT, "workspace/notes.md")]))
+
+
+def test_an_incomplete_report_never_deletes():
+    with given(_BASE) as context:
+        agent = _ready(context)
+        _upload_through_the_pod(context, agent, "workspace/notes.md", b"hello")
+
+        _report(context, agent, complete=False)
+
+        assert_that(_provider_has(context, "workspace/notes.md"), equal_to(True))
+        assert_that(sorted(_files(context)), equal_to(["workspace/notes.md"]))
+        assert_that(_activity(context), equal_to([]))
+
+
+def test_a_file_still_listed_but_now_skipped_is_not_deleted():
+    with given(_BASE) as context:
+        agent = _ready(context)
+        _upload_through_the_pod(context, agent, "workspace/video.mp4", b"small")
+
+        _report(context, agent, _entry("workspace/video.mp4", sha=_SHA_B, size=100 * 1024 * 1024 + 1))
+
+        assert_that(_provider_has(context, "workspace/video.mp4"), equal_to(True))
+        assert_that(_activity(context), equal_to([(SyncActivityKind.SKIPPED_TOO_LARGE, "workspace/video.mp4")]))
+
+
+def test_a_path_listed_in_another_case_is_not_deleted():
+    with given(_BASE) as context:
+        agent = _ready(context)
+        _upload_through_the_pod(context, agent, "workspace/notes.md", b"hello")
+
+        _report(context, agent, _entry("workspace/NOTES.md"))
+
+        assert_that(_provider_has(context, "workspace/notes.md"), equal_to(True))
+        assert_that(_activity(context), equal_to([]))
+
+
+def test_a_first_upload_that_never_finished_is_forgotten_without_calling_the_provider():
+    with given(_BASE) as context:
+        agent = _ready(context)
+        _report(context, agent, _entry("workspace/draft.md"))
+        calls_before = len(fake_drive(context).calls)
+
+        _report(context, agent)
+
+        assert_that(_files(context), equal_to({}))
+        assert_that("delete_item" in fake_drive(context).calls[calls_before:], equal_to(False))
+        assert_that(_activity(context), equal_to([]))
+
+
+def test_a_file_already_gone_at_the_provider_is_simply_forgotten():
+    with given(_BASE) as context:
+        agent = _ready(context)
+        _upload_through_the_pod(context, agent, "workspace/notes.md", b"hello")
+        fake_drive(context).user_deletes(context.sync_root, "Sales Bot/workspace/notes.md")
+
+        response = _report(context, agent)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(_files(context), equal_to({}))
+
+
+def test_a_delete_interrupted_by_throttling_is_retried_on_the_next_report():
+    with given(_BASE) as context:
+        agent = _ready(context)
+        _upload_through_the_pod(context, agent, "workspace/notes.md", b"hello")
+        fake_drive(context).throttle_next(30)
+
+        throttled = _report(context, agent)
+        kept = sorted(_files(context))
+        retried = _report(context, agent)
+
+        assert_that((throttled.status_code, retried.status_code), equal_to((503, 200)))
+        assert_that((kept, sorted(_files(context))), equal_to((["workspace/notes.md"], [])))
+        assert_that(_provider_has(context, "workspace/notes.md"), equal_to(False))

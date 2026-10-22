@@ -39,11 +39,11 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the `file_sync` capability on the plugin seam, implemented by OneDrive, and a test-only `file_sync` provider;
   - folder reconciliation (`FileSyncEngine.reconcile_folders`);
   - the Sync Engine (`api/sync_engine_main.py`) and its deployment: Helm `syncEngine`, `make dev-sync-engine`, and the `sync-engine` Compose service started by `run.sh`;
-  - the pod's file report route (`POST …/file-sync/changes`): authentication, readiness checks and path rules; upload links, empty files and skips. Upload completion is at `POST …/file-sync/uploads/complete`.
+  - the pod's file report route (`POST …/file-sync/changes`): authentication, readiness checks and path rules; upload links, empty files, skips, and deletes for a complete report. Upload completion is at `POST …/file-sync/uploads/complete`.
 
   Folders follow Agents on every connected Organization. No pod calls these routes yet, so files are not synced.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. Ingest file-sync routes: deletes for a complete report, then pending work and conflicts;
+  1. Ingest file-sync routes: pending work and conflicts;
   2. remote change processing;
   3. the in-pod helper;
   4. builder and `start.sh` wiring;
@@ -75,6 +75,22 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — Files the Agent deleted are deleted at the provider
+
+- Delivered: when a report is `complete`, every known `sync_file` whose path (case-insensitively) is not in the report is handled as follows:
+  - **Synced:** deleted at the provider with `delete_item` (recycle bin; an item already gone is not an error), its row removed, and `deleted_by_agent` recorded with the path.
+  - **First upload never finished:** the row is removed without calling the provider.
+- **Never deleted:**
+  - anything, by a report that is not `complete`;
+  - a path still in the report, even when it is skipped (for example, now over 100 MB);
+  - a path listed in another case.
+- **Throttling:** the delete answers 503, the row stays, and the next report deletes it.
+- Delivered: `FileSyncRepository.remove_file` and `record_activity`.
+- Verified:
+  - 7 new tests in `tests/integration/test_file_sync_ingest_uploads.py`. The 4 for deleting failed first. The 3 guards (an incomplete report, a skipped file, another case) passed before and after, because they check that nothing is deleted.
+  - The file sync suites pass together (94 tests).
+  - ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — Upload links, empty files, skips and upload completion
 

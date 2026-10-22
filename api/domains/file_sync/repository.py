@@ -128,6 +128,25 @@ class FileSyncRepository:
             session.add(row)
             session.commit()
 
+    def remove_file(self, file_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(sa.delete(SyncFile).where(col(SyncFile.id) == file_id))
+            session.commit()
+
+    def record_activity(self, folder: SyncAgentFolder, kind: SyncActivityKind, path: str, now: datetime) -> None:
+        with Session(self.delegate.engine) as session:
+            session.add(
+                SyncActivity(
+                    organization_id=folder.organization_id,
+                    agent_id=folder.agent_id,
+                    folder_id=folder.id,
+                    kind=kind,
+                    path=path,
+                    occurred_at=now,
+                )
+            )
+            session.commit()
+
     @staticmethod
     def _file_at(folder_id: UUID, path: str):
         return select(SyncFile).where(

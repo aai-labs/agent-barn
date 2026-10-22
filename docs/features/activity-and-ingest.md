@@ -25,6 +25,7 @@ Conversation Messages and Tool Calls share the Agent Activity UI but have differ
   - **Answer:** 200 with `uploads`, a pre-authenticated upload URL and its expiry for each new or changed file. An upload already under way for the same content is not handed out again for 14 minutes; upload links last 15.
   - **Empty files:** the server writes them itself, with no upload.
   - **Skips:** a file over 100 MB, a name the provider refuses, a path over its 400-character limit, or a second path differing only in case is not uploaded, and is recorded once per path and content.
+  - **Deletes:** only when the report is `complete`. A synced file missing from it is deleted at the provider (its recycle bin), forgotten, and recorded as `deleted_by_agent`. A path still listed (even if skipped) is never deleted, nor is a path listed in another case. A first upload that never finished is forgotten without calling the provider.
   - **`POST …/file-sync/uploads/complete {path}`:** when the pod finishes an upload, it sends this. The server reads the file at that path from the provider, never taking an item id from the pod, and records it as synced. With no upload under way, no file at the provider yet, or a different size there, it answers 409.
   - **Provider failures:** throttling is 503 with `Retry-After`, and other provider failures are 502.
   - **Contact:** every authenticated call records the folder's `last_contact_at`.

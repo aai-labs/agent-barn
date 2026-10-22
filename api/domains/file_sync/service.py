@@ -95,6 +95,8 @@ class FileSyncIngestService:
                 upload = self._sync_entry(target, entry, known.get(entry.path.lower()), now)
                 if upload is not None:
                     uploads.append(upload)
+            if changes.complete:
+                self._delete_missing(target, known, seen, now)
         except ProviderThrottled as exc:
             raise FileSyncProviderBusy(exc.retry_after or THROTTLE_FALLBACK_SECONDS) from exc
         except SyncProviderError as exc:
@@ -120,6 +122,17 @@ class FileSyncIngestService:
         self.repository.record_synced(
             target.folder.id, path, item, sha256=row.local_sha256, size=row.size, now=datetime.now(UTC)
         )
+
+    def _delete_missing(
+        self, target: FileSyncTarget, known: dict[str, SyncFile], reported: set[str], now: datetime
+    ) -> None:
+        for lowered, row in known.items():
+            if lowered in reported:
+                continue
+            if row.item_id is not None:
+                target.plugin.delete_item(target.root, item_id=row.item_id)
+                self.repository.record_activity(target.folder, SyncActivityKind.DELETED_BY_AGENT, row.path, now)
+            self.repository.remove_file(row.id)
 
     def _skipped(self, target: FileSyncTarget, entry: FileSyncEntryCreate, seen: set[str], now: datetime) -> bool:
         kind = None
