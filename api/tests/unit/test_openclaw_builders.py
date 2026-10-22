@@ -405,3 +405,12 @@ def test_gateway_config_allows_native_message_tool() -> None:
     config = build_openclaw_gateway_config("litellm/gpt-5", "http://litellm:4000")
 
     assert "message" not in config["tools"].get("deny", [])
+
+
+def test_artifact_command_and_instructions_are_available_without_memory() -> None:
+    config_map = build_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "bootstrap", "heartbeat"
+    )
+    assert "agentbarn_artifacts.py" in config_map.data
+    assert "exec python3 /app/config/agentbarn_artifacts.py" in config_map.data["agentbarn-artifacts"]
+    assert "/usr/local/bin/agentbarn-artifacts upload" in config_map.data["AGENTS.md"]

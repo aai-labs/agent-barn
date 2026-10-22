@@ -905,3 +905,105 @@ workflow definitions and versions remain. Schema downgrade of WF01 drops
 WF01 records and is appropriate only for a disposable/empty installation or an
 explicitly approved data-removal operation; take a backup before intentional
 removal. Release versions are unchanged until release preparation is requested.
+
+## Agent artifact storage (Garage)
+
+[Agent artifacts](../features/agent-artifacts.md) owns the access, upload,
+immutable-reference, bearer-link and retention contract. Garage is the intended
+S3-compatible deployment. Provision it independently before enabling artifacts;
+this feature does not create production storage. Follow Garage's
+[cluster guide](https://garagehq.deuxfleurs.fr/documentation/cookbook/real-world/)
+for replicated persistent storage, backups, repair, TLS and capacity monitoring.
+The disposable single-node test setup is not a production topology.
+
+Garage uses per-key/per-bucket permissions rather than AWS ACLs or IAM bucket
+policies ([compatibility reference](https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/)).
+Create a private bucket and a dedicated service access key with read/write access
+only to that bucket. Keep bucket ownership/admin, key creation, website serving
+and cluster administration outside the application identity. Never enable public
+website access. Only API and purge workloads receive service credentials; Agent
+Secrets receive only their scoped artifact capability. Do not put Garage admin
+or RPC secrets in the API Secret. Use a dedicated bucket per installation.
+
+Provision a dedicated existing Kubernetes Secret with the `ARTIFACT_S3_*` values
+below, and set `artifacts.existingSecret` to its name. The chart mounts it only
+into the API and purge Job; its pre-upgrade hook must not own or recreate this
+storage Secret. Set the non-secret limits through `artifacts.maxBytes`,
+`linkMaxSeconds`, `retentionDays` and `runtimeBaseUrl` so API and workflow workers
+agree on retention. Restart the API after rotating an existing Secret's values.
+For local development put the equivalent values in the ignored `.env`:
+
+```dotenv
+ARTIFACT_S3_BUCKET=agent-artifacts
+ARTIFACT_S3_ENDPOINT_URL=https://s3.example.invalid
+ARTIFACT_S3_REGION=garage
+ARTIFACT_S3_ACCESS_KEY=<dedicated bucket access key>
+ARTIFACT_S3_SECRET_KEY=<dedicated bucket secret>
+ARTIFACT_RUNTIME_BASE_URL=http://agentbarn-api:8000/artifact-runtime/v1
+ARTIFACT_MAX_BYTES=26214400
+ARTIFACT_LINK_MAX_SECONDS=3600
+ARTIFACT_RETENTION_DAYS=30
+```
+
+The S3 endpoint is also the signed URL origin: it must be reachable by the API,
+Agent runtimes and human browsers with a valid TLS certificate. Preserve its
+host/path through the reverse proxy; rewriting a signed URL invalidates it.
+Locally use a host/published endpoint reachable by all intended clients and set
+`ARTIFACT_RUNTIME_BASE_URL` to the worktree API's reachable port. Compose defaults
+the runtime service address to `host.docker.internal:$API_PORT`. Native
+`make dev-api` users must set the equivalent in `.env`.
+
+For AWS S3 instead, use the correct region and leave explicit credentials empty
+when using workload identity; grant only object Put/Get/Delete on the installation's
+`artifacts/*` prefix. The app never creates buckets or changes policies. The
+adapter uses SigV4 path-style Put, verified byte readback and presigned Get.
+Garage 2.4.1 does not enforce conditional Put; the application owns immutable
+publication through its locked, checksum-bound lifecycle. Do not allow other
+writers into the installation bucket. Optional SDK checksum trailers are disabled in favor of the
+service's SHA-256 verification for Garage compatibility.
+
+Leave the bucket empty to disable publication while retaining text-only chat and
+workflows. Missing/unreachable storage causes artifact operations to fail
+truthfully; it is not a prerequisite for API readiness. Restart existing Agents
+to load the executable, environment and instructions. API/UI schema changes are
+additive; no base runtime image rebuild is needed for the ConfigMap command.
+
+Migration `a4150b8c9d10` follows `f8740a67b788` and creates metadata/references
+without rewriting existing workflow text. Run `make migrate` before deploying
+new API/worker code. It deliberately preserves cleanup rows across owner deletion.
+Enable `artifacts.purgeEnabled=true` in the API chart after bucket configuration;
+the ten-minute bounded CronJob consumes shared configuration and the dedicated
+storage Secret without cluster credentials.
+For local/operator recovery run `make purge-artifacts`; repeat bounded passes to
+clear backlog. S3 failures retain tombstones and retry. Monitor failed jobs,
+DELETING age and `purge_attempts`. Never manually discard the metadata journal.
+Bucket-wide age lifecycle rules must not delete actively pinned objects; let the
+application own object retention. Configure storage-side cleanup only for abandoned
+multipart uploads if other clients use them (this service uses single Put).
+
+Rollback admission/UI first, retain metadata and purge tooling, and let in-flight
+uploads settle/expire. A downgrade refuses while any non-DELETED artifact remains;
+export/retain required files or authorize their deletion, release active references
+through their owning lifecycle, and complete purge before dropping tables. An old
+API may run with the additive tables retained. Never change the configured bucket
+or endpoint while retained metadata still targets the old store; migrate and verify
+bytes explicitly, or keep that store/key available to the purge worker. Back up
+PostgreSQL metadata and Garage data together for recovery; restore neither as a
+substitute for the other.
+
+Focused local checks use disposable Garage `dxflrs/garage:v2.4.1` and PostgreSQL:
+
+```bash
+cd api
+uv run pytest tests/integration/test_artifacts.py -q
+```
+
+They require Docker and use fixture-only credentials and the tracked test-node
+configuration. Garage's container bootstraps a private default bucket; no production
+resource is contacted. See [verification evidence](../features/agent-artifacts/EVIDENCE.md)
+for runtime, browser and operational acceptance limits.
+
+For the cross-runtime byte contract use
+`HERMES_TEST_IMAGE=<built-image> OPENCLAW_TEST_IMAGE=<built-image> make test-artifact-runtime`.
+It uses fixture credentials, disposable storage and Linux host networking. This
+is separate from live model/session/provider acceptance.

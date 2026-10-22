@@ -44,6 +44,11 @@ The application lifespan ensures a bootstrap Platform Administrator, seeds built
 
 Product API startup deliberately does **not** reconcile [Organization LiteLLM budgets](../features/costs.md#organization-llm-budgets). That runs as its own CronJob alongside cost sync and event-delivery reconciliation, so the API's readiness never depends on the proxy being reachable.
 
+Agent artifact machine routes live outside the product schema at `/artifact-runtime/v1`
+on port 8000 and derive one running Agent from a per-start capability. Product
+artifact routes reuse current `agent.read`/`agent.update` scopes. The shared
+[artifact contract](../features/agent-artifacts.md) owns immutable file lifecycle.
+
 ## Testing
 
 - Integration tests use the real FastAPI app and migrated PostgreSQL with additive Injector overrides.

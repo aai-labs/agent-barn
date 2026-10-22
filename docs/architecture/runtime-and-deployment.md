@@ -14,6 +14,13 @@ Agent's own tools, Integrations, approval mode and spend limits govern it. The
 owns admission and text-checkpoint invariants; [operations](../guidelines/operations.md#workflow-execution-wf02)
 owns installation prerequisites.
 
+Both runtime builders mount the shared `agentbarn-artifacts` CLI and append its
+instructions to AGENTS.md. The runtime Secret contains a purpose-separated
+per-start Agent service capability and no bucket credentials. File publication
+and sharing follow the [artifact contract](../features/agent-artifacts.md), using
+existing native messaging tools and policy. The [Garage setup](../guidelines/operations.md#agent-artifact-storage-garage)
+is optional for text-only operation.
+
 Starting an agent is an API-orchestrated deployment flow:
 
 1. Load the organization-owned agent and its pinned template version.

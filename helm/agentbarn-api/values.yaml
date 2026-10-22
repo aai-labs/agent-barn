@@ -299,3 +299,14 @@ resources:
   limits:
     memory: 1Gi
     cpu: 500m
+
+# Enable after provisioning the private bucket and service-only ARTIFACT_S3_* Secret values.
+artifacts:
+  purgeEnabled: false
+  # Pre-created Secret containing ARTIFACT_S3_BUCKET/ENDPOINT_URL/REGION/ACCESS_KEY/SECRET_KEY.
+  # Mounted only by the API and purge workload, never Agent pods or unrelated services.
+  existingSecret: ""
+  runtimeBaseUrl: ""
+  maxBytes: 26214400
+  linkMaxSeconds: 3600
+  retentionDays: 30

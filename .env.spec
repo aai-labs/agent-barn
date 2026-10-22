@@ -229,3 +229,15 @@ MEMORY_LITELLM_KEY_HASHES=
 # HINDSIGHT_BASE_URL=http://hindsight:8888 when this profile is enabled.
 COMPOSE_PROFILES=
 HINDSIGHT_DB_PASSWORD=
+
+# Optional private Agent artifacts (text-only operation works with an empty bucket).
+ARTIFACT_S3_BUCKET=
+ARTIFACT_S3_ENDPOINT_URL=
+ARTIFACT_S3_REGION=us-east-1
+# Service-only credentials; leave empty to use the API workload's AWS identity.
+ARTIFACT_S3_ACCESS_KEY=
+ARTIFACT_S3_SECRET_KEY=
+ARTIFACT_RUNTIME_BASE_URL=http://host.docker.internal:8000/artifact-runtime/v1
+ARTIFACT_MAX_BYTES=26214400
+ARTIFACT_LINK_MAX_SECONDS=3600
+ARTIFACT_RETENTION_DAYS=30

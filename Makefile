@@ -286,3 +286,17 @@ redis-down:
 
 redis-logs:
 	$(COMPOSE) logs -f redis
+
+# Bounded operator-only private file cleanup (requires configured artifact storage).
+.PHONY: purge-artifacts
+purge-artifacts:
+	cd api && PYTHONPATH=.. uv run python -m api.domains.artifacts.maintenance
+
+# Explicit real-image artifact contract (both image variables are required).
+.PHONY: test-artifact-runtime
+test-artifact-runtime:
+	cd api && uv run python -m pytest runtime_tests/test_artifacts.py -v
+
+.PHONY: check-artifacts
+check-artifacts:
+	cd api && uv run python scripts/check_artifact_charts.py

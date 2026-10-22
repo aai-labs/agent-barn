@@ -23,3 +23,9 @@ Changes to any user-authenticated route must preserve session and key access and
 The checked-in `api/developer_docs/operations-v1.json` records current method, path, and operation ID pairs. The API contract test detects accidental operation removal or renaming; reviewers update it intentionally for additions. Schema shape and behavioral compatibility still require API review and integration tests.
 
 The provider-session reconnect operation remains in the v1 inventory and discovery for compatibility, with OpenAPI `deprecated: true`. Authorized active-Connection requests receive terminal `409` and Agent restart guidance; existing authentication, permission, and tenant-concealment responses remain unchanged. See the [developer resource guide](../../api/developer_docs/resources.md).
+
+Agent artifact staging, raw byte publication, paginated metadata, fresh download
+links and deletion are included in the v1 inventory under each Agent. Reads use
+`agent.read`; writes use `agent.update`. The protocol-specific
+`/artifact-runtime/v1` routes use Agent capabilities and remain outside the public
+schema. See [Agent artifacts](agent-artifacts.md).
