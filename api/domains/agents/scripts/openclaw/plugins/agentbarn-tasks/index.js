@@ -25,10 +25,10 @@ const IN_TURN_REMINDER =
   "set its status.";
 // Next to every request: OpenClaw's model has the tool and the instructions but, unlike Hermes's,
 // did not use them within the turn in end-to-end runs, and it cannot be held back once a run has
-// side effects. About 45 tokens per request. Hermes records within the turn and does not need it.
+// side effects. About 50 tokens per request. Hermes records within the turn and does not need it.
 const REQUEST_LINE =
   "If this request needs tools or produces files, create a Task with agentbarn_task before you start, " +
-  "and keep it current. Don't mention Tasks in your reply unless the user asks.";
+  "keep it current and attach the files you produce. Don't mention Tasks in your reply unless the user asks.";
 const QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping.";
 const NEXT_TURN_REMINDER =
   "Your previous turn did work without recording it as a Task. If it was more than a quick answer, " +

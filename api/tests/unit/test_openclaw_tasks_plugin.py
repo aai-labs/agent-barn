@@ -438,6 +438,7 @@ def test_each_request_carries_the_task_line(tmp_path: Path, trigger: str):
 
     context = _context(driven["results"][0])
     assert_that(context, contains_string("create a Task with agentbarn_task before you start"))
+    assert_that(context, contains_string("attach the files you produce"))
     assert_that(context, contains_string("Don't mention Tasks in your reply"))
 
 
