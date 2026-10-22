@@ -37,11 +37,12 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the file sync tables (migration `af95cf4c3a1e`);
   - the Graph file operations (`api/domains/agents/microsoft_graph_files.py`) and the app-token cache.
   - the `file_sync` capability on the plugin seam, implemented by OneDrive, and a test-only `file_sync` provider;
-  - folder reconciliation (`FileSyncEngine.reconcile_folders`), not yet run by any process.
+  - folder reconciliation (`FileSyncEngine.reconcile_folders`);
+  - the Sync Engine loop (`api/sync_engine_main.py`), not yet deployed or wired to a Make target.
 
-  Nothing calls them yet, and no file syncs yet.
+  No file syncs yet.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. the Sync Engine and its deployment;
+  1. the Sync Engine deployment (Helm, Make target, compose) and its docs;
   2. Ingest file-sync routes;
   3. remote change processing;
   4. the in-pod helper;
@@ -79,6 +80,31 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — Sync Engine loop
+
+- Delivered: `FileSyncEngine.run_pass(now)`. For every active connection with a root folder whose `sync_retry_at` is empty or due, oldest connection first:
+  1. takes the connection's session-scoped advisory lock (`pg_try_advisory_lock`, the pattern Agents use), skipping a connection another engine holds;
+  2. runs the folder pass;
+  3. on `ProviderThrottled`, sets `sync_retry_at` to now plus the provider's `retry_after`, or 60 s when it gives none, and logs it;
+  4. logs any other failure, including a provider no longer registered, and goes on with the other connections.
+
+  Pending and disconnected connections are not synced.
+- Delivered: `FileSyncRepository.due_connections`, `postpone` and `connection_lock`.
+- Delivered: `api/sync_engine_main.py`.
+  - `main()` builds the app injector and runs one pass every 30 s.
+  - After each pass that completes, it touches `/tmp/sync-engine-heartbeat` for a liveness probe. A pass that raises is logged and does not touch the heartbeat, and the loop goes on.
+  - SIGTERM and SIGINT end the loop at once, including during the wait.
+- Verified:
+  - `tests/integration/test_file_sync_engine_pass.py` (6 tests) and `tests/unit/test_sync_engine_main.py` (3 tests) failed first (`run_pass`, `connection_lock` and the module missing), then passed. They cover:
+    - every active connection in one pass;
+    - a postponed connection skipped until due;
+    - throttling postponing only that connection by 120 s while the other still syncs;
+    - a connection to an unregistered provider not stopping the others;
+    - a held lock skipping the connection;
+    - disconnected connections not synced;
+    - the loop repeating, refreshing the heartbeat only on success, surviving a failing pass, and stopping during the wait.
+  - The folder tests still pass (33 tests together). ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — Folder reconciliation
 

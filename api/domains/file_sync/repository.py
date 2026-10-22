@@ -1,14 +1,18 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 import sqlalchemy as sa
 from injector import inject, singleton
+from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent
 from api.domains.file_sync.models import SyncAgentFolder, SyncFolderStatus
-from api.domains.sync_provider.models import SyncProviderConnection
+from api.domains.sync_provider.models import SyncProviderConnection, SyncProviderStatus
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
@@ -17,6 +21,45 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 @dataclass
 class FileSyncRepository:
     delegate: PostgresRepositoryDelegate
+
+    def due_connections(self, now: datetime) -> list[SyncProviderConnection]:
+        with Session(self.delegate.engine) as session:
+            return list(
+                session.exec(
+                    select(SyncProviderConnection)
+                    .where(
+                        col(SyncProviderConnection.status) == SyncProviderStatus.ACTIVE,
+                        col(SyncProviderConnection.folder_id).is_not(None),
+                        or_(
+                            col(SyncProviderConnection.sync_retry_at).is_(None),
+                            col(SyncProviderConnection.sync_retry_at) <= now,
+                        ),
+                    )
+                    .order_by(col(SyncProviderConnection.connected_at), col(SyncProviderConnection.id))
+                )
+            )
+
+    def postpone(self, connection_id: UUID, until: datetime) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(SyncProviderConnection)
+                .where(col(SyncProviderConnection.id) == connection_id)
+                .values(sync_retry_at=until)
+            )
+            session.commit()
+
+    @contextmanager
+    def connection_lock(self, connection_id: UUID) -> Iterator[bool]:
+        lock_key = f"file-sync-connection:{connection_id}"
+        with Session(self.delegate.engine) as session:
+            acquired = bool(
+                session.scalar(text("SELECT pg_try_advisory_lock(hashtext(:lock_key))"), {"lock_key": lock_key})
+            )
+            try:
+                yield acquired
+            finally:
+                if acquired:
+                    session.scalar(text("SELECT pg_advisory_unlock(hashtext(:lock_key))"), {"lock_key": lock_key})
 
     def live_agent_names(self, organization_id: UUID) -> list[tuple[UUID, str]]:
         with Session(self.delegate.engine) as session:

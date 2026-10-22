@@ -1,6 +1,8 @@
+import logging
 import re
 import urllib.parse
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from injector import inject, singleton
@@ -9,11 +11,14 @@ from api.domains.file_sync.models import SyncAgentFolder, SyncFolderStatus
 from api.domains.file_sync.repository import FileSyncRepository
 from api.domains.file_sync.rules import FORBIDDEN_CHARACTERS, name_problem
 from api.domains.sync_provider.models import SyncProviderCapability, SyncProviderConnection
-from api.domains.sync_provider.plugins.base import RemoteNameTaken, SyncProviderPlugin, SyncRoot
+from api.domains.sync_provider.plugins.base import ProviderThrottled, RemoteNameTaken, SyncProviderPlugin, SyncRoot
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
 from api.domains.sync_provider.service import FOLDER_NAME
 
+logger = logging.getLogger(__name__)
+
 FOLDER_NAME_MAX = 255
+THROTTLE_FALLBACK_SECONDS = 60
 FOLDER_NAME_FALLBACK = "Agent"
 FOLDER_FORBIDDEN_CHARACTERS = FORBIDDEN_CHARACTERS | {"/"}
 NAME_ATTEMPTS = 100
@@ -54,6 +59,20 @@ def _server_path(web_url: str | None) -> str | None:
 class FileSyncEngine:
     repository: FileSyncRepository
     plugins: SyncProviderPluginRegistry
+
+    def run_pass(self, now: datetime) -> None:
+        for connection in self.repository.due_connections(now):
+            with self.repository.connection_lock(connection.id) as acquired:
+                if not acquired:
+                    continue
+                try:
+                    self.reconcile_folders(connection)
+                except ProviderThrottled as exc:
+                    wait = exc.retry_after or THROTTLE_FALLBACK_SECONDS
+                    self.repository.postpone(connection.id, now + timedelta(seconds=wait))
+                    logger.info("File sync for connection %s throttled for %ss", connection.id, wait)
+                except Exception:
+                    logger.exception("File sync pass failed for connection %s", connection.id)
 
     def reconcile_folders(self, connection: SyncProviderConnection) -> None:
         plugin = self.plugins.require(connection.provider_key)
