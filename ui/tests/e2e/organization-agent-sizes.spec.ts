@@ -194,6 +194,31 @@ test.describe("Organizations choosing Agent sizes", () => {
     expect(writes).toEqual([{ agent_size_id: LARGE.id }]);
   });
 
+  test("an owner sees a size the platform set as locked, with no picker", async ({ page }) => {
+    const data = await signIn(page);
+    await data.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        agent_size_id: LARGE.id,
+        agent_size: LARGE,
+        agent_size_set_by_platform: true,
+        pending_size: false,
+        allowed_actions: [...mockAgentAllowedActions, "agent.size.manage"],
+      },
+    });
+    await data.agents.interceptGetAgentConfigurationRequest();
+    await data.agents.interceptGetTemplatesRequest();
+    await data.agents.interceptGetTemplateVersionsRequest();
+    await new AgentSizeDataSupport(page).interceptOrganizationSizes({ allowed: [LARGE] });
+
+    await new AgentConfigurationPage(page).goto(MOCK_AGENT_ID, TEST_ORG_ID);
+    const tile = page.getByTestId("agent-size-tile");
+
+    await expect(tile).toContainText("Large · 2 vCPU · 4 GiB");
+    await expect(tile.getByTestId("agent-size-set-by-platform")).toHaveText("Set by platform");
+    await expect(tile.getByRole("combobox")).toHaveCount(0);
+  });
+
   test("an agent editor sees the size but cannot change it", async ({ page }) => {
     const data = await signIn(page);
     await data.agents.interceptGetAgentRequest({

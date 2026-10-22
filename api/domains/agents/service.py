@@ -122,7 +122,7 @@ from api.domains.agents.provisioning_errors import (
     normalize_agent_provisioning_error,
     persisted_provisioning_error,
 )
-from api.domains.agents.repository import AgentRepository, AgentSizeVanished
+from api.domains.agents.repository import AgentRepository, AgentSizeSetByPlatform, AgentSizeVanished
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
@@ -266,6 +266,13 @@ def _provisioning_error_read(agent: Agent) -> AgentProvisioningErrorRead | None:
 def _refuse_during_managed_update(agent: Agent) -> None:
     if managed_update_in_flight(agent):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
+
+
+def _size_set_by_platform() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="A platform administrator set this agent's size, so it can't be changed here.",
+    )
 
 
 def _managed_update_failure_text(exc: Exception) -> str:
@@ -650,6 +657,7 @@ class AgentService:
             agent_size_id=agent.agent_size_id,
             agent_size=to_option(size),
             pending_size=size_is_pending(agent.running_resources, size),
+            agent_size_set_by_platform=agent.agent_size_set_by_platform,
             # The recorded digest names the image the pod actually started on, so an
             # Agent pinned behind the platform pin (rolled back) reports an update too.
             update_available=(
@@ -1125,6 +1133,8 @@ class AgentService:
         # The Organization grant, which the Agent check above takes for granted from an
         # Owner or Admin role.
         self._require_size_manage(context, agent.organization_id)
+        if agent.agent_size_set_by_platform:
+            raise _size_set_by_platform()
         if agent_size_id == agent.agent_size_id:
             # Before the size rules, so re-sending a size that has since been disabled or
             # withdrawn succeeds as the no-op it is.
@@ -1148,6 +1158,9 @@ class AgentService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="That size isn't available to your organization.",
                 ) from None
+            except AgentSizeSetByPlatform:
+                # A Platform Administrator set it after the check above.
+                raise _size_set_by_platform() from None
         if result is None:
             # Deleted between the visibility check and the write.
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent.id} not found")

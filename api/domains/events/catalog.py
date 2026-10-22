@@ -428,7 +428,12 @@ class OrganizationAgentSizesChangedPayload(BaseModel):
 
 class AgentAgentSizeChangedPayload(BaseModel):
     """An Agent's chosen size before and after. A None id (and name) means the Agent
-    follows the platform default. The change applies at the Agent's next start."""
+    follows the platform default. The change applies at the Agent's next start.
+
+    `by_platform` marks a Platform Administrator's override: setting a size locks it for
+    the Organization, and None clears the override. It defaults to false so records
+    written before overrides existed still read.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -438,6 +443,7 @@ class AgentAgentSizeChangedPayload(BaseModel):
     agent_size_name: str | None
     previous_agent_size_id: UUID | None
     previous_agent_size_name: str | None
+    by_platform: bool = False
     actor_display: str
     subject_display: str
 

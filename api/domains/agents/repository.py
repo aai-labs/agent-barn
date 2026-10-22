@@ -28,6 +28,7 @@ from api.domains.agents.models import (
     AgentStatus,
     ManagedUpdateOutcome,
     PlatformAgentIdentity,
+    PlatformAgentRow,
     SecretProvider,
 )
 from api.domains.communications.email_address_repository import release_agent_email_addresses
@@ -82,6 +83,10 @@ class AgentLifecycleEventResult:
 
 class AgentSizeVanished(Exception):
     """The size being chosen was deleted after it was checked."""
+
+
+class AgentSizeSetByPlatform(Exception):
+    """The Organization tried to change a size a Platform Administrator set."""
 
 
 @dataclass(frozen=True)
@@ -1244,13 +1249,19 @@ class AgentRepository:
         *,
         actor: ActorIdentity,
         actor_display: str,
+        by_platform: bool = False,
     ) -> AgentLifecycleEventResult | None:
         """Set the size an Agent starts on next and stage `agent.agent_size.changed`.
 
-        Writes only `agent_size_id` on the locked row, so a concurrent edit is not
+        Writes only the size columns on the locked row, so a concurrent edit is not
         clobbered, and holds a share lock on the chosen size so it cannot be deleted
         before this commits. No Event when nothing changed. None when the Agent is gone.
-        Raises AgentSizeVanished.
+
+        `by_platform` is a Platform Administrator's override: a size locks it for the
+        Organization, None clears the override and puts the Agent back on the default.
+        Without it, a size the platform set is refused here, under the row lock, so an
+        override cannot slip in between the caller's check and this write.
+        Raises AgentSizeVanished and AgentSizeSetByPlatform.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             persisted = session.exec(
@@ -1264,16 +1275,20 @@ class AgentRepository:
             ).first()
             if persisted is None:
                 return None
+            if persisted.agent_size_set_by_platform and not by_platform:
+                raise AgentSizeSetByPlatform(persisted.id)
             size = None
             if agent_size_id is not None:
                 size = session.get(AgentSize, agent_size_id, with_for_update={"read": True})
                 if size is None:
                     raise AgentSizeVanished(agent_size_id)
             previous_id = persisted.agent_size_id
-            if previous_id == agent_size_id:
+            set_by_platform = by_platform and agent_size_id is not None
+            if previous_id == agent_size_id and persisted.agent_size_set_by_platform == set_by_platform:
                 return AgentLifecycleEventResult(agent=persisted, delivery_ids=[])
             previous = session.get(AgentSize, previous_id) if previous_id is not None else None
             persisted.agent_size_id = agent_size_id
+            persisted.agent_size_set_by_platform = set_by_platform
             persisted.updated_at = datetime.now(UTC)
             session.add(persisted)
             session.flush()
@@ -1296,6 +1311,7 @@ class AgentRepository:
                     "agent_size_name": size.name if size is not None else None,
                     "previous_agent_size_id": previous_id,
                     "previous_agent_size_name": previous.name if previous is not None else None,
+                    "by_platform": by_platform,
                     "actor_display": actor_display,
                     "subject_display": persisted.name,
                 },
@@ -1660,6 +1676,68 @@ class AgentRepository:
         )
         with self.delegate.engine.connect() as connection:
             return [PlatformAgentIdentity(*row) for row in connection.execute(query).all()]
+
+    def find_platform_agents(
+        self,
+        *,
+        organization_id: UUID | None,
+        search: str | None,
+        pagination: Pagination,
+    ) -> tuple[list[PlatformAgentRow], int]:
+        """A page of live Agents across every Organization, and how many there are in all.
+
+        Platform-wide by design, for the Platform Agents page behind `require_platform_admin`.
+        Ordered by Organization name, then Agent name, so a page reads as consecutive
+        Organization groups. `search` matches the Agent's or the Organization's name.
+        """
+        query = self._platform_agent_rows()
+        if organization_id is not None:
+            query = query.where(col(Agent.organization_id) == organization_id)
+        if search:
+            pattern = f"%{search}%"
+            query = query.where(or_(col(Agent.name).ilike(pattern), col(Organization.name).ilike(pattern)))
+        total_query = sa.select(func.count()).select_from(query.order_by(None).subquery())
+        page_query = (
+            query.order_by(
+                func.lower(col(Organization.name)),
+                col(Organization.id),
+                func.lower(col(Agent.name)),
+                col(Agent.id),
+            )
+            .offset((pagination.page - 1) * pagination.size)
+            .limit(pagination.size)
+        )
+        with self.delegate.engine.connect() as connection:
+            total = connection.execute(total_query).scalar_one()
+            rows = [PlatformAgentRow(*row) for row in connection.execute(page_query).all()]
+        return rows, total
+
+    def get_platform_agent(self, agent_id: UUID) -> PlatformAgentRow | None:
+        """One live Agent as the Platform Agents page reads it; None when absent or deleted."""
+        query = self._platform_agent_rows().where(col(Agent.id) == agent_id)
+        with self.delegate.engine.connect() as connection:
+            row = connection.execute(query).first()
+        return PlatformAgentRow(*row) if row is not None else None
+
+    @staticmethod
+    def _platform_agent_rows():
+        # The column list is the allowlist: see PlatformAgentRow.
+        return (
+            sa.select(
+                col(Agent.id),
+                col(Agent.name),
+                col(Agent.status),
+                col(Agent.agent_type),
+                col(Agent.created_at),
+                col(Agent.organization_id),
+                col(Organization.name),
+                col(Agent.agent_size_id),
+                col(Agent.agent_size_set_by_platform),
+                col(Agent.running_resources),
+            )
+            .join(Organization, col(Organization.id) == col(Agent.organization_id))
+            .where(col(Agent.deleted_at).is_(None))
+        )
 
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""

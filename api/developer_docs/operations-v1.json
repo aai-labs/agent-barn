@@ -701,6 +701,11 @@
   ],
   [
     "GET",
+    "/platform/agents",
+    "list_platform_agents_platform_agents_get"
+  ],
+  [
+    "GET",
     "/platform/costs",
     "list_platform_costs_platform_costs_get"
   ],
@@ -1403,6 +1408,11 @@
     "PUT",
     "/organizations/{organization_id}/value-settings",
     "update_value_settings_organizations__organization_id__value_settings_put"
+  ],
+  [
+    "PUT",
+    "/platform/agents/{agent_id}/agent-size",
+    "set_platform_agent_size_platform_agents__agent_id__agent_size_put"
   ],
   [
     "PUT",

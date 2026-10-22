@@ -1,6 +1,6 @@
 "use client";
 
-import { RotateCcw } from "lucide-react";
+import { Lock, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 import { AgentSizeSelect } from "@/features/agent-sizes/components/agent-size-select";
@@ -18,14 +18,18 @@ import { canAgent } from "../utils";
  *
  * Owners and Admins of an Organization the platform lets choose change it here. The change is
  * saved at once and never restarts the Agent: a running one keeps its resources until its next
- * start, and says so meanwhile, with a restart for whoever may restart it.
+ * start, and says so meanwhile, with a restart for whoever may restart it. A size a Platform
+ * Administrator set is shown locked instead.
  */
 export function AgentSizeTile({ agent }: { agent: Agent }) {
   const { agentSizes } = useOrganizationAgentSizes();
   const setSize = useSetAgentSize();
   const restartAgent = useRestartAgent();
   const canRestart = canAgent(agent, "agent.lifecycle.manage");
-  const choices = canAgent(agent, "agent.size.manage") && agentSizes?.canChoose ? agentSizes.sizes : null;
+  const choices =
+    !agent.agentSizeSetByPlatform && canAgent(agent, "agent.size.manage") && agentSizes?.canChoose
+      ? agentSizes.sizes
+      : null;
   const size = agent.agentSize;
   const defaultId = choices?.find((choice) => choice.isDefault)?.id ?? "";
   // A size withdrawn or disabled since it was chosen still applies to this Agent.
@@ -71,6 +75,15 @@ export function AgentSizeTile({ agent }: { agent: Agent }) {
               (default)
             </span>
           )}
+        </div>
+      )}
+      {agent.agentSizeSetByPlatform && (
+        <div
+          className="mt-1 flex items-center gap-1 text-[0.72rem]"
+          data-testid="agent-size-set-by-platform"
+          style={{ color: "var(--ink-4)" }}
+        >
+          <Lock size={11} /> Set by platform
         </div>
       )}
       {agent.pendingSize && (

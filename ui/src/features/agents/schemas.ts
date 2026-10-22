@@ -147,6 +147,8 @@ export const AgentSchema = z.object({
   agentSize: AgentSizeOptionSchema.nullable().default(null),
   /** True when a restart would change a running Agent's CPU and memory. */
   pendingSize: z.boolean().default(false),
+  /** A Platform Administrator set the size; the Organization cannot change it. */
+  agentSizeSetByPlatform: z.boolean().default(false),
   /** True when a running Agent's pod was built from older platform code or images. */
   updateAvailable: z.boolean().default(false),
   /** A managed update is running; lifecycle actions are refused until it ends. */

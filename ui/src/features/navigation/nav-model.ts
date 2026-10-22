@@ -1,6 +1,7 @@
 import {
   Activity,
   BookOpen,
+  Bot,
   Brain,
   Building2,
   Cpu,
@@ -113,6 +114,19 @@ export const PLATFORM_AREAS: PlatformArea[] = [
         label: "Organizations",
         href: `${PLATFORM_BASE}/organizations`,
         icon: Building2,
+      },
+    ],
+  },
+  {
+    key: "agents",
+    label: "Agents",
+    icon: Bot,
+    pages: [
+      {
+        key: "agents",
+        label: "Agents",
+        href: `${PLATFORM_BASE}/agents`,
+        icon: Bot,
       },
     ],
   },

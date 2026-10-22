@@ -66,7 +66,7 @@ These **under-report** — a real change that the digest does not move:
 These **over-report** — the digest moves without a behavioural change:
 
 - The two asset roots are compared byte for byte, so a comment-only edit to `start.sh` or `init-openclaw.js` moves the digest. Shell and JavaScript cannot be normalised the way Python can.
-- `Agent` is inside the closure, so adding any column to that table moves the digest once. Agent Sizes PR 2 (`agent_size_id`, `running_resources`) did, together with its provisioning change.
+- `Agent` is inside the closure, so adding any column to that table moves the digest once. Agent Sizes PR 2 (`agent_size_id`, `running_resources`) did, together with its provisioning change, and PR 3 (`agent_size_set_by_platform`) did again.
 - A Python minor-version upgrade can change `ast.dump` output, moving the digest once across the fleet.
 
 Over-reporting is the safe direction: the prompt is advisory, and a restart preserves the PVC, conversation history, Communication Connections, and Hermes `always` grants, rebuilding only the ConfigMap, Secret, and per-start credentials. The under-reporting cases are the ones to watch, because an Agent silently keeps serving older behaviour.

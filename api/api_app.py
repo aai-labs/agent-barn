@@ -31,6 +31,7 @@ from api.domains.agent_sizes.routes import (
     platform_organization_agent_sizes_router,
 )
 from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agent_webhooks_router
+from api.domains.agents.platform_routes import platform_agents_router
 from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.api_keys.routes import router as api_keys_router
@@ -145,6 +146,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_memory_router)
     subapi.include_router(platform_agent_sizes_router)
     subapi.include_router(platform_organization_agent_sizes_router)
+    subapi.include_router(platform_agents_router)
     subapi.include_router(organization_agent_sizes_router)
     subapi.include_router(platform_trial_settings_router)
     subapi.include_router(onboarding_router)

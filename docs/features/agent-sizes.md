@@ -2,13 +2,13 @@
 
 ## Read when
 
-Read before changing the Agent Size catalog, its Platform Settings section, which sizes an Organization may choose and who chooses them, how an Agent's CPU and memory are resolved at start, `pending_size`, or the init container's fixed resources.
+Read before changing the Agent Size catalog, its Platform Settings section, which sizes an Organization may choose and who chooses them, the Platform Agents page or a Platform Administrator's per-Agent override, how an Agent's CPU and memory are resolved at start, `pending_size`, or the init container's fixed resources.
 
 ## Role in the system
 
 An **Agent Size** is a named amount of CPU and memory, as a request and a limit, from a catalog that Platform Administrators keep. Every Agent runs on one. Nobody types in custom values: a size is picked from the catalog.
 
-The catalog is being delivered as the Agent Sizes epic ([`agent-sizes/CHANGELOG.md`](agent-sizes/CHANGELOG.md)). An Agent runs on the size its Organization chose for it, or on the catalog's **default** size. A Platform Administrator decides which sizes, if any, each Organization may choose; its Owners and Admins then choose when hiring or later. A Platform Administrator giving one Agent its own size is a later slice.
+The catalog is being delivered as the Agent Sizes epic ([`agent-sizes/CHANGELOG.md`](agent-sizes/CHANGELOG.md)). An Agent runs on the size its Organization, or a Platform Administrator, chose for it, or on the catalog's **default** size. A Platform Administrator decides which sizes, if any, each Organization may choose; its Owners and Admins then choose when hiring or later. A Platform Administrator can also give one Agent any enabled size, which locks it for the Organization; see [Platform override](#platform-override).
 
 ## The catalog
 
@@ -34,6 +34,19 @@ The catalog is being delivered as the Agent Sizes epic ([`agent-sizes/CHANGELOG.
 - **Withdrawing or disabling a size leaves the Agents on it.** It only stops the size being chosen again; those Agents keep starting on it until someone chooses another.
 - **A change never stops the Agent.** It applies at the next start. Choosing takes the Agent's lifecycle lock (`409` while a start, stop or other lifecycle operation holds it), because those paths can save the whole Agent row on failure, and writes only `agent_size_id` on the locked row.
 - **`pending_size`.** At start, `agent.running_resources` records the requests and limits the pod got, alongside `running_model`; stop clears it. The migration that added the column filled it in for Agents already running with the default's values, since that is what they were started on. `AgentRead.pending_size` is true when a running Agent's recorded resources differ from those its size gives now, so choosing another size, editing the one it is on, or moving the default under it all read as pending until the next start.
+- **Not over a platform override.** An Agent whose size a Platform Administrator set refuses the Organization's choice (`409`), for Owners and Admins alike, until the override is cleared.
+
+## Platform override
+
+A Platform Administrator gives one Agent a size from Platform View, so an Organization that may not choose (the platform's own default Organization, say) can still have one Agent on more memory. Why this one platform write on an Organization's Agent exists, and why it is no wider, is in [its ADR](../adr/2026-10-22-platform-administrators-set-an-agents-size.md).
+
+- **Any enabled size.** The override is not limited to the Organization's allowed set, and may name the default, which holds the Agent on it even if the default moves. A disabled or unknown size is refused (`400`); re-sending the size an override already holds is a no-op even after that size is disabled.
+- **It locks.** `agent.agent_size_set_by_platform` turns on with the size. The flag and the size are written together in `set_agent_size_with_event`, which re-checks the lock under the Agent's row lock, so an Organization choice cannot slip in between.
+- **Clearing** (`null`) puts the Agent back on the default (`agent_size_id = NULL`) and turns the flag off; the Organization may choose again.
+- **Never restarts.** Like the Organization's choice it holds the Agent's lifecycle lock (`409` while one is held) and applies at the next start, with `pending_size` meanwhile. Restarting stays with the Organization: Platform View has no lifecycle controls.
+- **Audited** as `agent.agent_size.changed` with `by_platform: true`, Organization scope.
+
+The **Platform Agents page** (Platform → Agents, `GET /platform/agents`) is where it is done: every live Agent across Organizations, ordered by Organization name and then Agent name and shown one group per Organization, searchable by either name and filterable to one Organization. Each row is Platform Oversight Data (name, runtime, status, size, whether the platform set it, whether it is pending), read through a fixed column list (`PlatformAgentRow`), never the Agent's configuration.
 
 ## API
 
@@ -47,9 +60,11 @@ The catalog and the allowed sets are under `require_platform_admin`, which refus
 | `DELETE /api/v1/platform/agent-sizes/{id}` | Removes a size that is not the default and no Agent row is on (`204`) |
 | `PUT /api/v1/platform/organizations/{id}/agent-sizes` | Replaces the Organization's allowed set, `{agent_size_ids}`; answers with `PlatformOrganizationRead`, whose `agent_size_ids` lists it |
 | `GET /api/v1/organizations/{id}/agent-sizes` | What the Organization can choose: `sizes` (the default first, then enabled allowed sizes in catalog order) and `can_choose`. Any member (`organization.read`) |
-| `PUT /api/v1/organizations/{id}/agents/{agent_id}/agent-size` | Chooses the Agent's size, `{agent_size_id}`, or `null` for the default; answers with `AgentRead`. Separate from the Agent update so it is accepted while the Agent runs |
+| `PUT /api/v1/organizations/{id}/agents/{agent_id}/agent-size` | Chooses the Agent's size, `{agent_size_id}`, or `null` for the default; answers with `AgentRead`. Separate from the Agent update so it is accepted while the Agent runs; `409` while the platform's override stands |
+| `GET /api/v1/platform/agents` | Every live Agent, `PaginatedItems[PlatformAgentRead]`, by Organization name then Agent name; `search` (Agent or Organization name), `organization_id`, `page`, `page_size` (at most 100) |
+| `PUT /api/v1/platform/agents/{agent_id}/agent-size` | The platform's override, `{agent_size_id}`: a size locks it, `null` clears it; answers with `PlatformAgentRead` |
 
-`AgentCreate.agent_size_id` chooses on hire with the same rules; omitted, the Agent is on the default and no permission beyond `agent.create` is needed. `AgentRead` carries `agent_size_id` (the stored choice), `agent_size` (the resolved size: id, name, values, `is_default`), `pending_size`, and `agent.size.manage` in `allowed_actions` for Owners and Admins.
+`AgentCreate.agent_size_id` chooses on hire with the same rules; omitted, the Agent is on the default and no permission beyond `agent.create` is needed. `AgentRead` carries `agent_size_id` (the stored choice), `agent_size` (the resolved size: id, name, values, `is_default`), `pending_size`, `agent_size_set_by_platform`, and `agent.size.manage` in `allowed_actions` for Owners and Admins.
 
 The size route follows the RBAC brief: an Agent the caller cannot see is `404`; one they can see without `agent.size.manage` is `403`, re-checked through `AgentAuthorization.require_action` and the Organization grant.
 
@@ -57,7 +72,7 @@ Each change is audited, Security Audit, and a save that changes nothing records 
 
 - Catalog: `platform.agent_size.created`, `.changed` (one per field that moved; a default switch records both sides in one correlation) and `.deleted`, Platform scope.
 - `organization.agent_sizes.changed`: the allowed set before and after, ids and names, Organization scope, as the platform-set `organization.llm_budget.changed` is.
-- `agent.agent_size.changed`: an Agent's size before and after (a null id and name mean the default), Organization scope. A dedicated Event rather than a field of `agent.updated`: the size is written by its own route under its own permission, never by the general Agent update, so a stale general edit can never write a size back, and the payload names the sizes so the record still reads after one is renamed or deleted.
+- `agent.agent_size.changed`: an Agent's size before and after (a null id and name mean the default), Organization scope; `by_platform` marks the platform's override and its clearing. A dedicated Event rather than a field of `agent.updated`: the size is written by its own route under its own permission, never by the general Agent update, so a stale general edit can never write a size back, and the payload names the sizes so the record still reads after one is renamed or deleted.
 
 ## How a size reaches the pod
 
@@ -71,7 +86,8 @@ Platform → Settings → **Agent sizes** (`?section=agent-sizes`) lists the cat
 
 - **Platform Organization page** (Platform → Organizations → one Organization): the **Agent sizes** card, with the "Can choose CPU & memory" switch and a checkbox per enabled size besides the default. A disabled size the Organization still has stays listed, checked and marked, until it is unchecked; it cannot be checked again. Switching on needs at least one size before it saves.
 - **Hire dialog**: a **CPU & memory** choice beside the runtime, shown only to Owners and Admins of an Organization that can choose, with the default preselected. Onboarding's hire step shares the form hook but not the field.
-- **Agent configuration → Profile → Runtime & deployment**: the **CPU & memory** tile names the Agent's size (marked default when it follows it). Owners and Admins of an Organization that can choose change it there with a picker, saved at once; a size no longer offered shows as such and cannot be picked. "Pending: applies on restart" shows while `pending_size` is true, with a Restart button for whoever holds `agent.lifecycle.manage`. The Profile's own Apply & Restart is for its edit form and does not cover the size.
+- **Agent configuration → Profile → Runtime & deployment**: the **CPU & memory** tile names the Agent's size (marked default when it follows it). Owners and Admins of an Organization that can choose change it there with a picker, saved at once; a size no longer offered shows as such and cannot be picked. "Pending: applies on restart" shows while `pending_size` is true, with a Restart button for whoever holds `agent.lifecycle.manage`. The Profile's own Apply & Restart is for its edit form and does not cover the size. A size the platform set shows with "Set by platform" and no picker.
+- **Platform Agents page** (Platform → Agents): one card per Organization, linking to its Platform Organization page, with each Agent's runtime, status, size ("Set by platform" when overridden, the pending note) and an **Override size** button. Its dialog offers the enabled sizes and, on an overridden Agent, **Clear override**.
 
 ## Source map
 
@@ -83,12 +99,13 @@ Platform → Settings → **Agent sizes** (`?section=agent-sizes`) lists the cat
 | Resolution for provisioning and Agent reads, choosable sizes | `../../api/domains/agent_sizes/lookup.py` |
 | Routes (platform catalog, platform allowed set, Organization read) | `../../api/domains/agent_sizes/routes.py` |
 | Choosing an Agent's size, `AgentRead` fields, `running_resources` | `set_agent_size`, `_size_to_store`, `_build_agent_read` and `_provision_and_start` in `../../api/domains/agents/service.py`; `set_agent_size_with_event` in `../../api/domains/agents/repository.py` |
+| Platform Agents list and override | `../../api/domains/agents/platform_service.py`, `../../api/domains/agents/platform_routes.py`; `find_platform_agents` and `get_platform_agent` in `../../api/domains/agents/repository.py`; `PlatformAgentRow`, `PlatformAgentRead` in `../../api/domains/agents/models.py` |
 | Permission | `AGENT_SIZE_MANAGE` in `../../api/domains/rbac/catalog.py`; `allowed_actions` in `../../api/domains/agents/authorization.py` |
-| Migrations | `../../api/migrations/versions/dd9ef852a427_add_agent_sizes.py` (catalog and seed), `../../api/migrations/versions/3046153d9447_let_organizations_choose_agent_sizes.py` (allowed sets, Agent columns, permission) |
+| Migrations | `../../api/migrations/versions/dd9ef852a427_add_agent_sizes.py` (catalog and seed), `../../api/migrations/versions/3046153d9447_let_organizations_choose_agent_sizes.py` (allowed sets, Agent columns, permission), `../../api/migrations/versions/8b2e4f61c9d3_platform_sets_an_agents_size.py` (`agent_size_set_by_platform`) |
 | Rendering into the pod | `container_resources` and `INIT_CONTAINER_RESOURCES` in `../../api/domains/agents/builders/common.py`; `build_deployment`, `build_hermes_deployment` |
-| UI | `../../ui/src/features/agent-sizes/` (settings section, Organization card, size picker, hooks), the `agent-sizes` entry in `../../ui/src/features/platform-settings/components/platform-settings.tsx`, `agent-size-tile.tsx` and the hire form in `../../ui/src/features/agents/` |
-| Tests | `../../api/tests/integration/test_agent_sizes.py`, `../../api/tests/integration/test_organization_agent_sizes.py`, the two migration tests, `../../api/tests/unit/test_agent_container_resources.py`, `../../api/tests/unit/test_agent_size_choice.py`, the builder unit tests, `../../ui/tests/e2e/platform-agent-sizes.spec.ts`, `../../ui/tests/e2e/organization-agent-sizes.spec.ts` |
+| UI | `../../ui/src/features/agent-sizes/` (settings section, Organization card, size picker, hooks), the `agent-sizes` entry in `../../ui/src/features/platform-settings/components/platform-settings.tsx`, `agent-size-tile.tsx` and the hire form in `../../ui/src/features/agents/`; the Platform Agents page in `../../ui/src/features/platform-agents/` |
+| Tests | `../../api/tests/integration/test_agent_sizes.py`, `../../api/tests/integration/test_organization_agent_sizes.py`, the two migration tests, `../../api/tests/unit/test_agent_container_resources.py`, `../../api/tests/unit/test_agent_size_choice.py`, the builder unit tests, `../../ui/tests/e2e/platform-agent-sizes.spec.ts`, `../../ui/tests/e2e/organization-agent-sizes.spec.ts`; for the override, `../../api/tests/integration/test_platform_agent_sizes.py`, its migration test and `../../ui/tests/e2e/platform-agents.spec.ts` |
 
 ## Change impact
 
-A new size column is a migration, a DTO field, a change Event setting (`SIZE_SETTINGS`) and a dialog field; one an Organization should see also goes in `AgentSizeOption` and its Zod schema. A new `Agent` column moves the runtime configuration digest once. Writing an Agent's size anywhere but `set_agent_size_with_event` skips its audit Event and its locks. Changing how a size renders changes every Agent's pod spec at its next start, so keep Standard rendering the pre-sizes strings (`test_agent_container_resources.py`). Changing the init container's block changes what every Agent costs the quota.
+A new size column is a migration, a DTO field, a change Event setting (`SIZE_SETTINGS`) and a dialog field; one an Organization should see also goes in `AgentSizeOption` and its Zod schema. A new `Agent` column moves the runtime configuration digest once. Writing an Agent's size anywhere but `set_agent_size_with_event` skips its audit Event, its locks and the platform override's lock. A new Platform Agents column is an oversight-data decision under the platform-oversight ADR: add it to `PlatformAgentRow` deliberately, never by reusing `AgentRead`. Changing how a size renders changes every Agent's pod spec at its next start, so keep Standard rendering the pre-sizes strings (`test_agent_container_resources.py`). Changing the init container's block changes what every Agent costs the quota.
