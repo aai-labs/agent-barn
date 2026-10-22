@@ -67,6 +67,12 @@ emailInboundSecret: ""
 googleCloudClientId: ""
 googleCloudClientSecret: ""
 
+# Buying credit with Stripe: the account's secret key and the signing secret of the
+# webhook endpoint pointed at "<API host>/api/v1/billing/stripe/webhook". With both, a
+# Platform Administrator can turn payments on in the platform Billing settings.
+stripe:
+  secretKey: ""
+  webhookSecret: ""
 # Multi-tenant Microsoft Entra app for Organization OneDrive sync. Leave blank to
 # disable. Registered Web redirect URI must be
 # "<webAppUrl>/api/v1/integrations/sync-provider/onedrive/callback".
@@ -103,6 +109,10 @@ prometheus:
 # Comma-separated fnmatch globs limiting which OpenRouter models the picker
 # offers, e.g. "z-ai/glm-5.2,openai/gpt-5*". Empty offers the full catalogue.
 agentModelAllowlist: ""
+
+# How many Agents an Organization that is not a trial may run, unless a Platform
+# Administrator sets its own. Empty means the default of 10.
+organizationDefaultAgentLimit: ""
 
 # Agent Barn's own Telegram bot (token from @BotFather, and its @username without
 # the @). Empty hides the Agent Barn Telegram Platform. Use a separate bot per

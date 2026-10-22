@@ -4,6 +4,7 @@ import {
   Bot,
   Brain,
   Building2,
+  CreditCard,
   Cpu,
   FileText,
   LayoutDashboard,
@@ -140,6 +141,12 @@ export const PLATFORM_AREAS: PlatformArea[] = [
         label: "Costs",
         href: `${PLATFORM_BASE}/costs`,
         icon: Receipt,
+      },
+      {
+        key: "billing",
+        label: "Billing",
+        href: `${PLATFORM_BASE}/billing`,
+        icon: CreditCard,
       },
       {
         key: "resources",

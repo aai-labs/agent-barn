@@ -1,7 +1,7 @@
 """Add the Agent Size catalog, seeded with the size every Agent runs on today
 
 Revision ID: dd9ef852a427
-Revises: a4e9c2d7b615
+Revises: 3bbf2465b9cb
 Create Date: 2026-10-22
 
 Agent Sizes, PR 1: a platform-managed catalog of the CPU and memory an Agent's container runs
@@ -22,7 +22,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "dd9ef852a427"
-down_revision: str | Sequence[str] | None = "a4e9c2d7b615"
+down_revision: str | Sequence[str] | None = "3bbf2465b9cb"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

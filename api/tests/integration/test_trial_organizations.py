@@ -9,13 +9,16 @@ from fastapi import status
 from hamcrest import assert_that, contains_string, equal_to, has_entries, has_length, not_none
 from sqlmodel import Session, select
 
-from api.domains.agents.exceptions import TrialAgentLimitReached
+from api.domains.agents.exceptions import AgentLimitReached
 from api.domains.agents.models import Agent, AgentType
 from api.domains.agents.repository import AgentRepository
 from api.domains.events import ActorIdentity, ActorIdentityType
 from api.domains.events.catalog import ORGANIZATION_TRIAL_ENDED
 from api.domains.events.models import OutboxMessage
+from api.domains.onboarding.models import TrialGrant
 from api.domains.onboarding.repository import TrialSettingsRepository
+from api.domains.onboarding.settings_service import TrialSettingsService
+from api.domains.organizations.models import CreditGrantKind
 from api.domains.organizations.repository import OrganizationRepository
 from api.domains.users.organization_users.models import OrganizationRole
 from api.domains.users.repository import UserRepository
@@ -26,6 +29,7 @@ from api.tests.core.modules import create_test_client, prepare_api_server, prepa
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, MockLiteLLMModule, use_org_for_auth
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.events import event_delivery_tables_are_clean
+from api.tests.steps.onboarding import trial_settings_are_configured
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
@@ -34,7 +38,7 @@ AGENTS = "/api/v1/organizations/{organization_id}/agents"
 CREATE = {"name": "Trial Agent", "template_key": "test-template"}
 
 
-def _setup(*steps):
+def _setup(*steps, self_signup: bool = True):
     return [
         set_env_variable(
             {
@@ -51,6 +55,7 @@ def _setup(*steps):
         database_repo_is_ready(),
         database_is_clean(),
         event_delivery_tables_are_clean(),
+        trial_settings_are_configured(enabled=self_signup, credit=10 if self_signup else 0),
         there_is_an_organization_with_user_and_access_token(),
         use_org_for_auth(),
         there_is_a_template(),
@@ -76,6 +81,7 @@ def the_user_signed_themselves_up():
         users = context.injector.get(UserRepository)
         user = users.get(context.user.id)
         user.signed_up_at = datetime.now(UTC)
+        user.platform_provisioned_at = None
         users.save(user)
 
     return step
@@ -177,7 +183,7 @@ def test_two_hires_racing_for_a_trials_last_slot_cannot_both_win():
             try:
                 repository.create_with_creator_access(agent, None, actor=actor, agent_limit=1)
                 outcomes.append("hired")
-            except TrialAgentLimitReached:
+            except AgentLimitReached:
                 outcomes.append("refused")
 
         with when("two hires race for the trial's one slot"):
@@ -214,7 +220,10 @@ def test_the_organization_read_says_whether_it_is_a_trial():
     with given(_setup(the_organization_is_a_trial())) as context:
         response = context.client.get(f"/api/v1/organizations/{context.organization.id}", headers=auth(context))
 
-        assert_that(response.json(), has_entries(is_trial=True, trial_agent_limit=1, trial_agent_limit_reached=False))
+        assert_that(
+            response.json(),
+            has_entries(is_trial=True, agent_limit=1, trial_agent_limit=1, trial_agent_limit_reached=False),
+        )
 
 
 def test_trial_capacity_counts_hidden_and_stopped_agents_but_not_deleted_agents():
@@ -276,8 +285,183 @@ def test_a_self_signed_up_user_creates_organizations_once_their_trial_has_ended(
                 "/api/v1/organizations", json={"name": "Second Org"}, headers=auth(context, context.owner_token)
             )
 
-        with then("it is created"):
+        with then("it is created on credit, with none yet: it spends only what is bought for it"):
             assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+            created = context.injector.get(OrganizationRepository).get(UUID(response.json()["id"]))
+            assert created is not None
+            assert_that((created.llm_budget_duration, created.llm_budget_usd), equal_to((ONE_OFF_BUDGET_WINDOW, 0.0)))
+            grants = context.injector.get(OrganizationRepository).list_credit_grants(created.id)
+            assert_that(
+                [(grant.kind, grant.credit_usd) for grant in grants], equal_to([(CreditGrantKind.ADJUSTMENT, 0)])
+            )
+
+
+def _organization_created_by(context, token: str):
+    response = context.client.post(
+        "/api/v1/organizations", json={"name": "Side Org"}, headers={"Authorization": f"Bearer {token}"}
+    )
+    assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+    created = context.injector.get(OrganizationRepository).get(UUID(response.json()["id"]))
+    assert created is not None
+    return created
+
+
+def _token_for(context, email: str) -> str:
+    """Sign in as an account someone else set up, as if its invite had been accepted."""
+    users = context.injector.get(UserRepository)
+    user = users.get_by_email(email)
+    assert user is not None
+    user.email_verified_at = datetime.now(UTC)
+    users.save(user)
+    previous_token, previous_user = context.access_token, context.user
+    there_is_an_access_token_for_user(user.id)(context)
+    token, context.access_token, context.user = context.access_token, previous_token, previous_user
+    return token
+
+
+def a_member_invited_by_email(email: str):
+    """Someone this Organization's Owner invited, who has accepted: not set up by the
+    platform, and never signed themselves up."""
+
+    def step(context):
+        invited = context.client.post(
+            f"/api/v1/organizations/{context.organization.id}/members",
+            json={"email": email, "role": "MEMBER"},
+            headers=auth(context),
+        )
+        assert_that(invited.status_code, equal_to(status.HTTP_201_CREATED), invited.text)
+        context.member_token = _token_for(context, email)
+
+    return step
+
+
+def _trial_grants(context) -> int:
+    with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+        return len(session.exec(select(TrialGrant)).all())
+
+
+def test_an_invited_members_first_organization_of_their_own_is_a_trial():
+    with given(_setup(a_member_invited_by_email("colleague@example.com"))) as context:
+        created = _organization_created_by(context, context.member_token)
+
+        with then("it is a trial with the trial's credit, and their address has had its trial"):
+            assert_that(
+                (created.is_trial, created.llm_budget_duration, created.llm_budget_usd),
+                equal_to((True, ONE_OFF_BUDGET_WINDOW, 10.0)),
+            )
+            grants = context.injector.get(OrganizationRepository).list_credit_grants(created.id)
+            assert_that([(g.kind, g.credit_usd) for g in grants], equal_to([(CreditGrantKind.TRIAL, 10)]))
+            assert_that(_trial_grants(context), equal_to(1))
+
+
+def test_an_invited_member_on_a_trial_creates_no_more_organizations():
+    with given(_setup(a_member_invited_by_email("colleague@example.com"))) as context:
+        _organization_created_by(context, context.member_token)
+
+        second = context.client.post(
+            "/api/v1/organizations", json={"name": "Another"}, headers=auth(context, context.member_token)
+        )
+
+        assert_that(second.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_someone_whose_address_has_had_a_trial_gets_an_organization_on_credit_instead():
+    """Inviting an address of your own gets it no more than signing up with it would:
+    one trial per address, then credit."""
+    with given(_setup(a_member_invited_by_email("second-self@example.com"))) as context:
+        with Session(context.injector.get(PostgresRepositoryDelegate).engine) as session:
+            context.injector.get(TrialSettingsService).record_trial("second-self@example.com", session)
+            session.commit()
+
+        created = _organization_created_by(context, context.member_token)
+
+        assert_that(
+            (created.is_trial, created.llm_budget_duration, created.llm_budget_usd),
+            equal_to((False, ONE_OFF_BUDGET_WINDOW, 0.0)),
+        )
+
+
+def test_an_invited_member_is_told_when_no_trials_are_available():
+    with given(_setup(a_member_invited_by_email("colleague@example.com"))) as context:
+        context.injector.get(TrialSettingsRepository).set_settings(
+            {"max_active_trials": 1}, context.user.id, "Platform Admin"
+        )
+        the_organization_is_a_trial()(context)
+
+        response = context.client.post(
+            "/api/v1/organizations", json={"name": "Side Org"}, headers=auth(context, context.member_token)
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("No free trials are available right now"))
+        assert_that(_trial_grants(context), equal_to(0))
+
+
+def test_a_trial_taken_by_the_same_inbox_meanwhile_is_a_clean_refusal_and_a_retry_gets_credit(monkeypatch):
+    """A double submit, or a sign-up with a variant of the same inbox, can record the
+    address's trial after it was looked up but before the cap is checked under the lock."""
+    with given(_setup(a_member_invited_by_email("colleague@example.com"))) as context:
+        trials_full = TrialSettingsService.trials_full
+
+        def a_sign_up_lands_first(service, session):
+            with Session(context.injector.get(PostgresRepositoryDelegate).engine) as other:
+                service.record_trial("colleague+side@example.com", other)
+                other.commit()
+            monkeypatch.setattr(TrialSettingsService, "trials_full", trials_full)
+            return trials_full(service, session)
+
+        monkeypatch.setattr(TrialSettingsService, "trials_full", a_sign_up_lands_first)
+
+        with when("the member creates their first Organization"):
+            response = context.client.post(
+                "/api/v1/organizations", json={"name": "Side Org"}, headers=auth(context, context.member_token)
+            )
+
+        with then("it is refused cleanly, with no second trial recorded"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
+            assert_that(response.json()["detail"], contains_string("Try again"))
+            assert_that(_trial_grants(context), equal_to(1))
+
+        with then("trying again creates it on credit"):
+            created = _organization_created_by(context, context.member_token)
+            assert_that((created.is_trial, created.llm_budget_usd), equal_to((False, 0.0)))
+
+
+def test_without_self_signup_someone_an_organization_invites_creates_organizations_on_the_platform_budget():
+    """With nobody able to sign themselves up, every account traces back to a Platform
+    Administrator or an Organization they set up: no credit to buy, nothing to close."""
+    with given(_setup(self_signup=False)) as context:
+        invited = context.client.post(
+            f"/api/v1/organizations/{context.organization.id}/members",
+            json={"email": "colleague@example.com", "role": "MEMBER"},
+            headers=auth(context),
+        )
+        assert_that(invited.status_code, equal_to(status.HTTP_201_CREATED), invited.text)
+
+        created = _organization_created_by(context, _token_for(context, "colleague@example.com"))
+
+        assert_that(created.runs_on_credit, equal_to(False))
+
+
+def test_someone_a_platform_administrator_sets_up_creates_organizations_on_the_platform_budget():
+    with given(_setup(a_platform_admin_token())) as context:
+        set_up = context.client.post(
+            "/api/v1/platform/users",
+            json={"email": "customer@example.com", "full_name": "Customer"},
+            headers=auth(context),
+        )
+        assert_that(set_up.status_code, equal_to(status.HTTP_201_CREATED), set_up.text)
+
+        created = _organization_created_by(context, _token_for(context, "customer@example.com"))
+
+        assert_that(created.runs_on_credit, equal_to(False))
+
+
+def test_a_platform_administrator_creates_organizations_on_the_platform_budget():
+    with given(_setup(a_platform_admin_token())) as context:
+        created = _organization_created_by(context, context.access_token)
+
+        assert_that(created.runs_on_credit, equal_to(False))
 
 
 def test_a_user_brought_in_by_an_administrator_still_creates_organizations():
@@ -285,6 +469,9 @@ def test_a_user_brought_in_by_an_administrator_still_creates_organizations():
         response = context.client.post("/api/v1/organizations", json={"name": "Second Org"}, headers=auth(context))
 
         assert_that(response.status_code, equal_to(status.HTTP_201_CREATED), response.text)
+        created = context.injector.get(OrganizationRepository).get(UUID(response.json()["id"]))
+        assert created is not None
+        assert_that(created.runs_on_credit, equal_to(False))
 
 
 # --- ending a trial ---------------------------------------------------------------------

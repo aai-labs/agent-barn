@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
-PRE_MIGRATION_REVISION = "a4e9c2d7b615"
+PRE_MIGRATION_REVISION = "3bbf2465b9cb"
 AGENT_SIZES_REVISION = "dd9ef852a427"
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 _MIB = 1024**2

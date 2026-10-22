@@ -1,18 +1,20 @@
 import enum
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
 import sqlalchemy as sa
 from fastapi import Query
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 from pydantic import Field as PydanticField
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import CheckConstraint, Field
+from sqlmodel import CheckConstraint, Field, SQLModel
 from sqlmodel import Field as SqlField
 
 from api.core.config import get_config
+from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 from api.infrastructure.postgres.models import BaseModel
 
 # The windows LiteLLM snaps to calendar boundaries (next midnight, next Monday, the
@@ -44,6 +46,17 @@ class Organization(BaseModel, table=True):
     # Created by self-signup. A trial runs one Agent on a one-off spend limit until a
     # Platform Administrator ends the trial.
     is_trial: bool = Field(default=False, nullable=False, sa_column_kwargs={"server_default": "false"})
+    # When a trial ran out of credit. An expired trial is still a trial — it keeps its
+    # Agents and can still buy credit — but no longer counts toward the cap on active
+    # trials.
+    trial_expired_at: datetime | None = SqlField(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+        nullable=True,
+    )
+    # How many Agents it may run, set by a Platform Administrator. NULL follows the
+    # default: the trial setting for a trial, the deployment's for any other.
+    agent_limit: int | None = Field(default=None, nullable=True)
 
     # Platform-administered LLM spend ceiling. Always set: a new Organization starts at
     # the deployment default, and 0 is a real zero allowance. A float is enough here
@@ -82,6 +95,7 @@ class Organization(BaseModel, table=True):
         CheckConstraint("length(name) >= 3", name="check_name_length_min"),
         CheckConstraint("length(name) <= 255", name="check_name_length_max"),
         CheckConstraint("llm_budget_usd IS NULL OR llm_budget_usd >= 0", name="check_llm_budget_non_negative"),
+        CheckConstraint("agent_limit IS NULL OR agent_limit >= 0", name="check_agent_limit_non_negative"),
         CheckConstraint(
             "llm_own_budget_usd IS NULL OR (llm_own_budget_usd >= 0 AND llm_own_budget_usd <= llm_budget_usd)",
             name="check_llm_own_budget_within_ceiling",
@@ -89,9 +103,98 @@ class Organization(BaseModel, table=True):
     )
 
     @property
+    def runs_on_credit(self) -> bool:
+        """A one-off limit is credit: everything granted, spent down and never renewed."""
+        return self.llm_budget_duration == ONE_OFF_BUDGET_WINDOW
+
+    @property
+    def own_llm_budget_in_force_usd(self) -> float | None:
+        """The Organization's own limit, unless it runs on credit. There it would be a
+        lifetime cap that no top-up could lift, so the balance is the only limit; a
+        value left from before is kept but not applied."""
+        return None if self.runs_on_credit else self.llm_own_budget_usd
+
+    @property
     def effective_llm_budget_usd(self) -> float:
         """The limit the proxy enforces on the Organization's team."""
-        return self.llm_own_budget_usd if self.llm_own_budget_usd is not None else self.llm_budget_usd
+        own = self.own_llm_budget_in_force_usd
+        return own if own is not None else self.llm_budget_usd
+
+
+class CreditGrantKind(str, enum.Enum):
+    TRIAL = "trial"
+    PURCHASE = "purchase"
+    REFUND = "refund"
+    CHARGEBACK = "chargeback"
+    # A platform administrator setting the ceiling of an Organization on credit; also
+    # the opening balance of one that was on credit before the ledger existed.
+    ADJUSTMENT = "adjustment"
+
+
+# A purchase can only add credit, a refund or chargeback only take it back off. Trial
+# credit may be zero, as the platform's trial setting allows.
+_DEBITING_KINDS = frozenset({CreditGrantKind.REFUND, CreditGrantKind.CHARGEBACK})
+
+
+class OrganizationCreditGrant(BaseModel, table=True):
+    """One change to an Organization's credit. The ledger is append-only: an Organization
+    on credit has a ceiling equal to the sum of its grants, written in the same
+    transaction as each new grant."""
+
+    __tablename__: str = "organization_credit_grant"
+
+    organization_id: UUID = Field(foreign_key="organization.id", nullable=False, ondelete="CASCADE", index=True)
+    kind: CreditGrantKind = Field(
+        sa_column=sa.Column(sa.Enum(CreditGrantKind, name="credit_grant_kind"), nullable=False)
+    )
+    # Signed: refunds and chargebacks are negative. NUMERIC, not float: the ceiling is
+    # their sum, so it must add up exactly.
+    credit_usd: Decimal = SqlField(sa_column=sa.Column(sa.Numeric(14, 6), nullable=False))
+    # What was charged for it, when anything was. Kept apart from `credit_usd` so a
+    # purchase fee or margin changes one without the other.
+    amount_paid_usd: Decimal | None = SqlField(default=None, sa_column=sa.Column(sa.Numeric(14, 2), nullable=True))
+    # The payment provider's reference, unique so a payment reported twice is granted once.
+    external_ref: str | None = Field(default=None, nullable=True, max_length=255, unique=True)
+    actor_display: str = Field(nullable=False, max_length=255)
+    note: str | None = Field(default=None, nullable=True, max_length=500)
+
+
+class CreditGrantRead(PydanticBaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    organization_id: UUID
+    kind: CreditGrantKind
+    credit_usd: Decimal
+    amount_paid_usd: Decimal | None = None
+    external_ref: str | None = None
+    actor_display: str
+    created_at: datetime
+
+
+class PlatformCreditGrantRead(CreditGrantRead):
+    """A Credit Grant with the Organization it belongs to, for the platform's view."""
+
+    organization_name: str
+
+
+class CreditGrantCreate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: CreditGrantKind
+    credit_usd: Decimal = PydanticField(allow_inf_nan=False, max_digits=14, decimal_places=6)
+    amount_paid_usd: Decimal | None = PydanticField(default=None, ge=0, allow_inf_nan=False, decimal_places=2)
+    external_ref: str | None = PydanticField(default=None, max_length=255)
+    note: str | None = PydanticField(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _sign_matches_kind(self) -> CreditGrantCreate:
+        if self.kind is CreditGrantKind.PURCHASE and self.credit_usd <= 0:
+            raise ValueError("A purchase must add credit")
+        if self.kind is CreditGrantKind.TRIAL and self.credit_usd < 0:
+            raise ValueError("Trial credit cannot be negative")
+        if self.kind in _DEBITING_KINDS and self.credit_usd >= 0:
+            raise ValueError(f"A {self.kind.value} grant must take credit off")
+        return self
 
 
 class OrganizationRead(PydanticBaseModel):
@@ -106,6 +209,11 @@ class OrganizationRead(PydanticBaseModel):
     owner_name: str | None = None
     allowed_models: list[str] = Field(default_factory=list)
     is_trial: bool = False
+    trial_expired_at: datetime | None = None
+    # How many Agents the Organization may run; None when there is no limit.
+    agent_limit: int | None = None
+    # Whether it already runs that many, counting Agents this member can't read.
+    agent_limit_reached: bool = False
     # How many Agents the trial may run; None for an Organization that is not a trial.
     trial_agent_limit: int | None = None
     # Creation capacity, independent of which Agents this member may read.
@@ -138,6 +246,12 @@ class PlatformOrganizationRead(PydanticBaseModel):
     # The Agent Sizes it may choose beyond the default, which is never listed. Empty: it
     # cannot choose. See docs/features/agent-sizes.md.
     agent_size_ids: list[UUID] = Field(default_factory=list)
+    trial_expired_at: datetime | None = None
+    # Its own Agent limit; None when it follows the default.
+    agent_limit: int | None = None
+    # The Agent limit in force, own or default; None means no limit. Only the single
+    # Organization read fills it in.
+    agent_limit_in_force: int | None = None
 
 
 class OrganizationBudgetEmailReceipt(BaseModel, table=True):
@@ -238,6 +352,14 @@ class OrganizationLlmBudgetUpdate(PydanticBaseModel):
     budget_duration: LlmBudgetWindow | None = None
 
 
+class OrganizationAgentLimitUpdate(PydanticBaseModel):
+    """An Organization's own Agent limit; null returns it to the default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_limit: int | None = PydanticField(ge=0, strict=True)
+
+
 class OrganizationTrialEnd(PydanticBaseModel):
     """The spend limit an Organization goes on to when its trial ends."""
 
@@ -276,3 +398,39 @@ def get_organization_filter(
     search: str | None = Query(default=None),
 ) -> OrganizationFilter:
     return OrganizationFilter(search=search)
+
+
+ORGANIZATION_SETTINGS_SUBJECT_DISPLAY = "Organization settings"
+# A bound no real Organization reaches; it only stops a typo.
+MAX_DEFAULT_AGENT_LIMIT = 1000
+
+
+class PlatformOrganizationSettings(SQLModel, table=True):
+    """The one row of platform-wide Organization settings, created on first save. Without
+    a row, the deployment's defaults apply."""
+
+    __tablename__: str = "platform_organization_settings"
+    __table_args__ = (
+        sa.CheckConstraint("id = 1", name="ck_platform_organization_settings_singleton"),
+        sa.CheckConstraint(
+            "default_agent_limit >= 1", name="ck_platform_organization_settings_default_agent_limit_positive"
+        ),
+    )
+    id: int = SqlField(default=1, primary_key=True)
+    # How many Agents an Organization that is not a trial may run, unless it has its own.
+    default_agent_limit: int
+    updated_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False))
+    updated_by: UUID | None = SqlField(default=None, foreign_key="user.id", ondelete="SET NULL")
+
+
+class OrganizationSettingsRead(PydanticBaseModel):
+    default_agent_limit: int
+    # None until the first save.
+    updated_at: datetime | None = None
+
+
+class OrganizationSettingsUpdate(PydanticBaseModel):
+    """Omitting a setting leaves it as it is; none can be removed."""
+
+    model_config = ConfigDict(extra="forbid")
+    default_agent_limit: int = PydanticField(ge=1, le=MAX_DEFAULT_AGENT_LIMIT, strict=True)

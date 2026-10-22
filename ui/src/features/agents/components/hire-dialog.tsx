@@ -23,7 +23,8 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
   const router = useRouter();
   const { selectedOrganization } = useOrganizationContext();
   const isTrial = Boolean(selectedOrganization?.isTrial);
-  const { organization, isLoading, isFetching, error, refetch } = useOrganization(isTrial ? selectedOrganization!.id : "");
+  // The membership list doesn't carry the agent limit; the organization read does.
+  const { organization, isLoading, isFetching, error, refetch } = useOrganization(selectedOrganization?.id ?? "");
   const [selected, setSelected] = useState<HireChoice | null>(null);
   const [started, setStarted] = useState<HireChoice | null>(null);
   const limit = organization?.trialAgentLimit;
@@ -32,7 +33,29 @@ export function HireDialog({ onClose, onHired, initialChoice }: {
   const unavailable = isTrial && !checking && (Boolean(error) || organization?.trialAgentLimitReached === undefined || limit == null);
   const disabled = checking || unavailable || full;
 
-  if (!isTrial) return <HireFormDialog onClose={onClose} onHired={onHired} />;
+  if (!isTrial) {
+    // An organization at its agent limit is refused by the API, so say so before the form.
+    const agentLimit = organization?.agentLimit;
+    if (organization?.agentLimitReached && agentLimit != null) {
+      return (
+        <DialogShell shadeClick={onClose}>
+          <header className="flex items-start justify-between border-b px-6 py-5" style={{ borderColor: "var(--line)" }}>
+            <div>
+              <h2 className="m-0 text-xl font-semibold tracking-tight">Your organization has all its agents</h2>
+              <p className="mb-0 mt-1 text-sm" style={{ color: "var(--ink-3)" }}>
+                This organization can have {agentLimit} {agentLimit === 1 ? "agent" : "agents"}.
+              </p>
+            </div>
+            <button type="button" aria-label="Close hiring dialog" className="af-btn af-btn-ghost af-btn-icon" onClick={onClose}><X size={18} aria-hidden /></button>
+          </header>
+          <footer className="flex justify-end px-6 py-4">
+            <button type="button" className="af-btn" onClick={onClose}>Close</button>
+          </footer>
+        </DialogShell>
+      );
+    }
+    return <HireFormDialog onClose={onClose} onHired={onHired} />;
+  }
 
   // An explicit dashboard choice advances as soon as its capacity check succeeds.
   // Latch that transition: this Agent may itself fill the trial during creation.
