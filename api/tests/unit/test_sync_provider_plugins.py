@@ -4,6 +4,7 @@ One parametrized sweep over every shipped plugin, so a new provider cannot be ad
 """
 
 import urllib.parse
+from datetime import UTC, datetime
 
 import pytest
 from hamcrest import assert_that, contains_string, empty, equal_to, has_entries, is_, starts_with
@@ -19,17 +20,26 @@ from api.domains.sync_provider.plugins.base import (
     ProviderUnavailable,
     Provisioned,
     ProvisioningFailed,
+    RemoteChangeRejected,
+    RemoteChanges,
+    RemoteItem,
+    RemoteItemMissing,
+    RemoteNameTaken,
+    RemoteResyncRequired,
     SignedIn,
     SignInIncomplete,
     SignInRefused,
     SyncFolder,
     SyncLocation,
     SyncLocationGuard,
+    SyncProviderError,
     SyncProviderPlugin,
+    SyncRoot,
+    UploadTarget,
 )
 from api.domains.sync_provider.plugins.onedrive import OneDriveSyncProviderPlugin
 from api.domains.sync_provider.plugins.providers import shipped_plugins
-from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
+from api.domains.sync_provider.plugins.registry import CAPABILITY_METHODS, SyncProviderPluginRegistry
 from api.tests.steps.sharepoint import (
     FOLDER_WEB_URL,
     TEAMS_TENANT_ID,
@@ -177,6 +187,101 @@ def test_registry_rejects_admin_approval_without_an_approval_link():
 
 def test_registry_rejects_an_unknown_location_guard():
     assert_that(_registry_error(_stub(location_guard="sharepoint_agent_sites")), contains_string("location guard"))
+
+
+_FILE_SYNC_METHODS = (
+    "create_folder",
+    "get_item",
+    "get_item_by_path",
+    "move_item",
+    "delete_item",
+    "changes",
+    "upload_target",
+    "download_url",
+    "write_empty_file",
+)
+_ROOT = SyncRoot(account_id="tenant-1", location_id=SITE_ID, folder_id="barn-1", folder_name="Agent Barn")
+_ITEM = RemoteItem(
+    id="item-1",
+    name="notes.md",
+    parent_id="folder-1",
+    path="Sales Bot/workspace/notes.md",
+    version='"{A},2"',
+    content_version='"c:{A},2"',
+    size=22,
+    content_hash="aSxzM1vs4ODedgYgJoMc3tAGEIQ=",
+    is_folder=False,
+    deleted=False,
+    modified_at=None,
+    modified_by_app=False,
+    web_url=None,
+)
+
+
+class _FileSync(_Stub):
+    capabilities = frozenset({SyncProviderCapability.FILE_SYNC})
+
+    def create_folder(self, root: SyncRoot, *, parent_id: str, name: str) -> RemoteItem:
+        return _ITEM
+
+    def get_item(self, root: SyncRoot, *, item_id: str) -> RemoteItem:
+        return _ITEM
+
+    def get_item_by_path(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> RemoteItem:
+        return _ITEM
+
+    def move_item(
+        self, root: SyncRoot, *, item_id: str, name: str | None = None, parent_id: str | None = None
+    ) -> RemoteItem:
+        return _ITEM
+
+    def delete_item(self, root: SyncRoot, *, item_id: str) -> None:
+        return None
+
+    def changes(self, root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
+        return RemoteChanges(items=[], cursor="next", more=False)
+
+    def upload_target(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> UploadTarget:
+        return UploadTarget(url="https://stub.example.test/upload", expires_at=datetime(2026, 10, 22, tzinfo=UTC))
+
+    def download_url(self, root: SyncRoot, *, item_id: str) -> str:
+        return "https://stub.example.test/download"
+
+    def write_empty_file(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> RemoteItem:
+        return _ITEM
+
+
+def test_file_sync_names_every_method_the_engine_and_pod_routes_call():
+    assert_that(CAPABILITY_METHODS[SyncProviderCapability.FILE_SYNC], equal_to(_FILE_SYNC_METHODS))
+
+
+def test_registry_accepts_file_sync_when_every_method_is_implemented():
+    registry = SyncProviderPluginRegistry([_FileSync()])
+
+    assert_that(registry.require("stub").capabilities, equal_to(frozenset({SyncProviderCapability.FILE_SYNC})))
+
+
+@pytest.mark.parametrize("missing", _FILE_SYNC_METHODS)
+def test_registry_rejects_file_sync_missing_any_method(missing: str):
+    partial = type("_Partial", (_FileSync,), {missing: getattr(SyncProviderPlugin, missing)})()
+
+    assert_that(_registry_error(partial), contains_string(f"declares file_sync but never overrides {missing}"))
+
+
+def test_a_plugin_without_file_sync_refuses_file_calls():
+    with pytest.raises(NotImplementedError, match="stub has no file sync"):
+        _stub().get_item(_ROOT, item_id="item-1")
+
+
+def test_throttling_can_carry_the_providers_requested_wait():
+    assert_that(ProviderThrottled("busy").retry_after, equal_to(None))
+    assert_that(ProviderThrottled("busy", retry_after=120).retry_after, equal_to(120))
+    assert_that(ProviderThrottled("busy", retry_after=120).message, equal_to("busy"))
+
+
+def test_file_sync_failures_are_provider_errors():
+    for error in (RemoteItemMissing, RemoteNameTaken, RemoteChangeRejected, RemoteResyncRequired):
+        assert_that(issubclass(error, SyncProviderError), is_(True))
 
 
 def test_require_names_an_unknown_provider():

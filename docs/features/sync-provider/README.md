@@ -111,7 +111,8 @@ A new provider is a plugin, its provider client, and tests. No route, table, mig
    - `authorize_url`, `complete_sign_in`, `require_same_account`, `provision`, `undo_provision` and `revoke`, raising the typed failures from `base.py`.
 3. **Capabilities.** Declare only what it implements:
    - `location_picker` needs `search_locations`, `resolve_location` and a `location_noun`;
-   - `admin_approval` needs `approval_url` and `is_approval_callback`.
+   - `admin_approval` needs `approval_url` and `is_approval_callback`;
+   - `file_sync` needs `create_folder`, `get_item`, `get_item_by_path`, `move_item`, `delete_item`, `changes`, `upload_target`, `download_url` and `write_empty_file`. They act as Agent Barn under the connection's `SyncRoot`, report paths relative to the "Agent Barn" folder in `RemoteItem`, and raise `RemoteItemMissing`, `RemoteNameTaken`, `RemoteChangeRejected`, `RemoteResyncRequired`, or `ProviderThrottled` with `retry_after`. The upload and download URLs must work without any provider credential, because the Agent's pod uses them.
 
    The registry refuses a plugin that declares a capability without its methods.
 4. **Guards.** A check owned by another domain is declared as a `SyncLocationGuard` member and bound in `SyncProviderService._guard`. The plugin never imports that domain.

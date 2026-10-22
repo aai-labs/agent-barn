@@ -36,10 +36,11 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the sync rules (`api/domains/file_sync/rules.py`);
   - the file sync tables (migration `af95cf4c3a1e`);
   - the Graph file operations (`api/domains/agents/microsoft_graph_files.py`) and the app-token cache.
+  - the `file_sync` capability on the plugin seam (no provider declares it yet).
 
   Nothing calls them yet, and no file syncs yet.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. the `file_sync` capability, then OneDrive's implementation of it;
+  1. OneDrive's implementation of `file_sync`, and a test fake of it;
   2. folder reconciliation;
   3. the Sync Engine and its deployment;
   4. Ingest file-sync routes;
@@ -53,7 +54,6 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
 - Docs owed by the slice that makes them true:
   - **this README:**
     - the "Agent file sync" section, with folder reconciliation;
-    - "Adding a provider" step 3 for `file_sync`, with the capability;
     - the Organization Member visibility limit, with the helper wiring;
     - the disconnect section, with disconnect;
   - **RBAC brief:**
@@ -80,6 +80,32 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — `file_sync` capability on the plugin seam
+
+- Delivered: `SyncProviderCapability.FILE_SYNC`, and in `plugins/base.py`:
+  - **Neutral types:**
+    - `SyncRoot` (account, location, "Agent Barn" folder id and name);
+    - `RemoteItem`, with its path relative to "Agent Barn", `version` (any change), `content_version` (content only), size, content hash, folder and deleted flags, and modified time and by-app flag;
+    - `RemoteChanges`, a page with the cursor to store and `more`;
+    - `UploadTarget`, a URL and its expiry.
+  - **Nine methods**, which raise `NotImplementedError` unless a plugin declares the capability: `create_folder`, `get_item`, `get_item_by_path`, `move_item`, `delete_item`, `changes`, `upload_target`, `download_url`, `write_empty_file`.
+  - **Typed failures:** `RemoteItemMissing`, `RemoteNameTaken`, `RemoteChangeRejected` and `RemoteResyncRequired`. `ProviderThrottled` gains an optional `retry_after`.
+- Delivered: the registry refuses a plugin that declares `file_sync` without all nine methods.
+- Changed:
+  - README "Adding a provider" step 3 names the `file_sync` methods and their contract.
+  - The capability appears in `GET …/sync-providers` `capabilities` only once a plugin declares it. The UI accepts any capability string (`schemas.ts`), and `api/developer_docs/operations-v1.json` lists no capability values.
+- Changed (plan): disconnect deletes the Agent folders with the app's own access, before the grant is revoked, instead of with the administrator's fresh sign-in. No extra method is needed.
+- Verified:
+  - 15 new tests in `tests/unit/test_sync_provider_plugins.py` failed first (types missing), then passed. They cover:
+    - the exact method list;
+    - a full implementation accepted;
+    - each of the nine methods missing refused;
+    - a plugin without the capability refusing file calls;
+    - `retry_after`;
+    - the failure types.
+  - `test_sync_provider_connection.py` and `test_sync_provider_repository.py` pass (173 tests together).
+  - ruff, format and ty pass.
 
 ### 2026-10-21 — AF-384 — Graph file operations and app-token cache
 

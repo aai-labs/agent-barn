@@ -15,6 +15,7 @@ OPEN_CONNECTION_INDEX = "uq_sync_provider_connection_open"
 class SyncProviderCapability(StrEnum):
     LOCATION_PICKER = "location_picker"
     ADMIN_APPROVAL = "admin_approval"
+    FILE_SYNC = "file_sync"
 
 
 class SyncProviderStatus(StrEnum):
