@@ -38,33 +38,29 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the Graph file operations (`api/domains/agents/microsoft_graph_files.py`) and the app-token cache.
   - the `file_sync` capability on the plugin seam, implemented by OneDrive, and a test-only `file_sync` provider;
   - folder reconciliation (`FileSyncEngine.reconcile_folders`);
-  - the Sync Engine loop (`api/sync_engine_main.py`), not yet deployed or wired to a Make target.
+  - the Sync Engine (`api/sync_engine_main.py`) and its deployment: Helm `syncEngine`, `make dev-sync-engine`, and the `sync-engine` Compose service started by `run.sh`.
 
-  No file syncs yet.
+  Folders follow Agents on every connected Organization. Files are not synced yet.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. the Sync Engine deployment (Helm, Make target, compose) and its docs;
-  2. Ingest file-sync routes;
-  3. remote change processing;
-  4. the in-pod helper;
-  5. builder and `start.sh` wiring;
-  6. pinned-image contracts;
-  7. disconnect;
-  8. docs consolidation;
-  9. an end-to-end run on local k3d against the test tenant.
+  1. Ingest file-sync routes;
+  2. remote change processing;
+  3. the in-pod helper;
+  4. builder and `start.sh` wiring;
+  5. pinned-image contracts;
+  6. disconnect;
+  7. docs consolidation;
+  8. an end-to-end run on local k3d against the test tenant.
 - Docs owed by the slice that makes them true:
   - **this README:**
-    - the "Agent file sync" section, with the Sync Engine process (folder naming is written up there, once something runs it);
     - the Organization Member visibility limit, with the helper wiring;
     - the disconnect section, with disconnect;
   - **RBAC brief:**
-    - the Sync Engine as background work;
     - Ingest file-sync traffic, alongside the memory gateway paragraph;
     - the visibility limit;
   - **[Agents](../agents.md):** delete stops sync, and a restore is followed on the next start;
   - **[activity and ingest](../activity-and-ingest.md):** the new routes;
-  - **[runtime and deployment](../../architecture/runtime-and-deployment.md):** the engine and the new start step;
-  - **[operations](../../guidelines/operations.md):** the Make target and Helm values;
-  - **[INDEX](../../INDEX.md):** the new domain, engine and helper.
+  - **[runtime and deployment](../../architecture/runtime-and-deployment.md):** the new start step;
+  - **[INDEX](../../INDEX.md):** the helper.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
@@ -80,6 +76,34 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — Sync Engine deployment
+
+- Delivered: `helm/agentbarn-api/templates/sync-engine-deployment.yaml`.
+  - The Deployment runs `from api.sync_engine_main import main; main()` on the API image with the API Secret, and needs no LiteLLM, Redis or Kubernetes access.
+  - It uses a non-overlapping rolling update (`maxSurge: 0`, `maxUnavailable: 1`) like the worker.
+  - Its liveness probe fails when `/tmp/sync-engine-heartbeat` is older than `syncEngine.heartbeatMaxAgeSeconds` (120), after a 60 s initial delay.
+  - Values: `syncEngine.enabled` (true), `replicaCount` 1, requests 192Mi / 50m, limits 384Mi / 500m.
+  - API chart version 0.16.0 → 0.17.0.
+- Delivered: `make dev-sync-engine`, written like the other host-run Python targets (`cd api && uv run python -c …`), and a `sync-engine` Compose service that `run.sh` builds and starts with the others.
+- Docs:
+  - **Sync provider README:** a new "Agent file sync" section (Sync Engine, Agent Folders, naming), the role and read-when updates, OneDrive's `file_sync` capability, and the source map.
+  - **[runtime and deployment](../../architecture/runtime-and-deployment.md):** the Sync Engine Deployment.
+  - **RBAC brief:** the Sync Engine among the background-work examples.
+  - **Root `README.md`:** the dev target and `run.sh`'s services.
+  - **`docs/INDEX.md`:** routes the engine.
+- Verified:
+  - **The chart:**
+    - `helm template` of the API chart with placeholder required values renders the Deployment as above with the engine enabled, and nothing with `syncEngine.enabled=false`;
+    - the whole chart renders, and `helm lint` passes;
+    - CI has no Helm check.
+  - **The liveness command,** run in `agentfarm-api:dev`: exit 1 without a heartbeat, 0 for a fresh one, 1 for one 180 s old.
+  - **`docker compose config`** (with placeholder `WEB_APP_URL` and budget defaults) resolves the `sync-engine` service. `bash -n run.sh` passes.
+  - **`make dev-sync-engine` on the host:**
+    - it is written like `reconcile-restore-points` and the other host-run targets. On the verifying Windows machine those resolve `api` only with `PYTHONPATH=..`, a local quirk that applies to every such target, so the check below was run that way by hand;
+    - with the two budget defaults the local `.env` lacks, it logged "Sync Engine started, one pass every 30s", logged each failed pass (no database on `localhost:5433`), wrote no heartbeat, and kept running;
+    - on Windows, a signal sent through `make` and `uv` did not reach Python, so the leftover processes were stopped by hand. In the Deployment, Python is the container's command and receives SIGTERM itself; `test_sync_engine_main.py` covers stopping.
+  - Every relative link in the edited docs resolves.
 
 ### 2026-10-22 — AF-384 — Sync Engine loop
 

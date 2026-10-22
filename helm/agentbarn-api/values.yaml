@@ -244,6 +244,18 @@ worker:
       memory: 512Mi
       cpu: 1000m
 
+syncEngine:
+  enabled: true
+  replicaCount: 1
+  heartbeatMaxAgeSeconds: 120
+  resources:
+    requests:
+      memory: 192Mi
+      cpu: 50m
+    limits:
+      memory: 384Mi
+      cpu: 500m
+
 communications:
   enabled: true
   # Keep at 1 while Agent Barn Telegram is configured: the shared bot's rate limits

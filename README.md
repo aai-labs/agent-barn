@@ -140,7 +140,7 @@ the cluster is up.
 
 This validates `.env`, brings up the k3d cluster and LiteLLM, builds and loads
 the agent base images, starts `db` and `redis`, runs database migrations, then
-starts `api`, `worker`, `communications`, `memory`, and `ui` with hot reload and follows
+starts `api`, `worker`, `sync-engine`, `communications`, `memory`, and `ui` with hot reload and follows
 the logs. `Ctrl-C` detaches without stopping anything; use `./run.sh --detach`
 to skip the logs entirely.
 
@@ -313,6 +313,7 @@ make migrate       # apply migrations
 make dev-api       # API :8000, Ingest :8001, Communications :8002, Memory :8003, Credentials :8004
 make dev-ui        # UI on :3000, hot reload
 make dev-worker    # Dramatiq worker, hot reload
+make dev-sync-engine  # Sync Engine: Agent file sync, one pass every 30 s
 make dev-ingest    # Ingest only (normally started by dev-api)
 make dev-communications  # Communications only (normally started by dev-api)
 make dev-gateway   # Credential gateway only (normally started by dev-api)

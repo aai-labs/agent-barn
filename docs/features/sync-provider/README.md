@@ -2,11 +2,11 @@
 
 ## Read when
 
-Read before changing how an Organization connects a storage provider (OneDrive today), the `sync_provider` domain or a Sync Provider Plugin, the provider callback, the Sync section in Organization settings, or the platform Microsoft app settings.
+Read before changing how an Organization connects a storage provider (OneDrive today), the `sync_provider` domain or a Sync Provider Plugin, the provider callback, the Sync section in Organization settings, the platform Microsoft app settings, or Agent file sync (`file_sync` domain and the Sync Engine).
 
 ## Role in the system
 
-An Organization Owner or Admin connects a storage provider once from Organization settings. Agent Barn is given access to one location at that provider and keeps an "Agent Barn" folder there, which every Organization Member can open. This is an Organization resource, not an [Integration](../integrations.md): no Agent is given access to it.
+An Organization Owner or Admin connects a storage provider once from Organization settings. Agent Barn is given access to one location at that provider and keeps an "Agent Barn" folder there, which every Organization Member can open. This is an Organization resource, not an [Integration](../integrations.md): no Agent is given the provider's credentials. Inside it, [Agent file sync](#agent-file-sync) keeps one folder per Agent.
 
 Providers are plugins of one seam, the way messaging platforms are Platform Plugins of Communications ([ADR](../../adr/2026-10-16-sync-provider-plugin-seam.md)):
 
@@ -120,9 +120,43 @@ A new provider is a plugin, its provider client, and tests. No route, table, mig
 6. **Redirect URI.** Register `<WEB_APP_URL>/api/v1/integrations/sync-provider/<key>/callback` with the provider.
 7. **Optional brand mark.** Add ui/public/brand/<key>.svg and a case in syncProviderIcon (ui/src/components/brand-icons.tsx); until then the UI shows a letter tile.
 
+## Agent file sync
+
+Decided in the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md). Delivery is in progress, and this section describes only what runs today: each Agent's folder. Files are not synced yet ([`CHANGELOG.md`](CHANGELOG.md)).
+
+### Sync Engine
+
+The Sync Engine (`api/sync_engine_main.py`, `make dev-sync-engine`, chart value `syncEngine`) runs one pass every 30 s. A pass handles each active connection that has a root folder, whose provider declares `file_sync`, and that is not waiting out throttling.
+- **Locking:** it holds that connection's advisory lock, and skips a connection another copy holds.
+- **Throttling:** when the provider throttles, the connection waits until now plus the provider's `Retry-After` (`sync_retry_at`), or 60 s when none is given. Other connections go on.
+- **Failures:** any other failure is logged, and the other connections still sync.
+- **Heartbeat:** a completed pass refreshes the liveness heartbeat; a failed pass does not.
+
+Its reads and writes are background work under the [RBAC brief](../rbac/IMPLEMENTATION-BRIEF.md): unscoped, keyed by the connection's own Organization and id, and reachable from no router.
+
+### Agent Folders
+
+Every live Agent of the Organization gets a folder directly under "Agent Barn", recorded in `sync_agent_folder`.
+- **New Agents:** the row is reserved first, oldest Agent first, and the database's unique name index decides ties. The folder is then created at the provider. A failed create is finished on the next pass.
+- **Renamed Agents:** their folder is renamed.
+- **Deleted Agents:** their folder is marked `stopped` without calling the provider, and stays at the provider with its files.
+- **Disabled folders** are left alone. A pass with nothing to do makes no provider call.
+
+Folder names follow the Agent's name:
+- `: " * < > ? | \ /` and control characters become `-`;
+- spaces are trimmed at both ends, and dots at the end;
+- an empty name, or one the provider refuses (reserved names such as `CON`, or the `_vti_` prefix), becomes `Agent`;
+- names are at most 255 characters, cut before a number is added.
+
+Duplicate names, compared case-insensitively, get the lowest free ` (2)`, ` (3)`…
+- **Taken names:** names of stopped and disabled folders stay taken, so a new Agent named like a deleted one gets a number. So do names already used at the provider.
+- **Dropping the number:** a numbered folder drops its number once the plain name is free. Two Agents swapping names therefore settle within two passes without ever sharing a name.
+
+A person renaming or deleting an Agent's folder, or the "Agent Barn" root, at the provider is not handled yet.
+
 ## OneDrive provider
 
-`OneDriveSyncProviderPlugin` (key `onedrive`) connects OneDrive through one SharePoint site. Agent Barn's multi-tenant Microsoft app is granted `write` on the chosen site with `Sites.Selected`, and creates the "Agent Barn" folder in the site's default document library as the app. Capabilities: `location_picker` (`location_noun` "SharePoint site") and `admin_approval`. Location guard: `SHAREPOINT_AGENT_SITES`.
+`OneDriveSyncProviderPlugin` (key `onedrive`) connects OneDrive through one SharePoint site. Agent Barn's multi-tenant Microsoft app is granted `write` on the chosen site with `Sites.Selected`, and creates the "Agent Barn" folder in the site's default document library as the app. Capabilities: `location_picker` (`location_noun` "SharePoint site"), `admin_approval` and `file_sync`. Location guard: `SHAREPOINT_AGENT_SITES`. File sync acts as the platform app in the connection's tenant, with an app-only token cached per tenant (`MicrosoftAppTokens`).
 
 ### Platform app
 
@@ -182,7 +216,10 @@ When either setting is blank, OneDrive is listed as "OneDrive is not configured 
 | Folder location for other domains | `../../../api/domains/sync_provider/lookup.py`, used by `../../../api/domains/agents/sharepoint_service.py` |
 | Microsoft identity and Graph calls | `../../../api/domains/agents/microsoft_identity.py`, `microsoft_graph_sites.py` |
 | UI | `../../../ui/src/features/sync-provider/`, registered as `sync` in `../../../ui/src/features/organizations/components/organization-settings-utils.ts` and `../../../ui/src/app/dashboard/[orgId]/settings/page.tsx` |
-| Tests | `../../../api/tests/unit/test_sync_provider_plugins.py`, `../../../api/tests/integration/test_sync_provider_connection.py`, `test_sync_provider_repository.py`, `../../../api/tests/steps/sync_provider.py` (test-only second provider), `../../../ui/tests/e2e/sync-provider.spec.ts` |
+| Agent file sync: rules, models, folder pass, engine queries | `../../../api/domains/file_sync/` (`rules.py`, `models.py`, `engine.py`, `repository.py`) |
+| Sync Engine process and deployment | `../../../api/sync_engine_main.py`, `../../../helm/agentbarn-api/templates/sync-engine-deployment.yaml` |
+| Microsoft file calls and app-only tokens | `../../../api/domains/agents/microsoft_graph_files.py`, `MicrosoftAppTokens` in `microsoft_identity.py` |
+| Tests | `../../../api/tests/unit/test_sync_provider_plugins.py`, `../../../api/tests/integration/test_sync_provider_connection.py`, `test_sync_provider_repository.py`, `../../../api/tests/steps/sync_provider.py` (test-only second provider), `../../../ui/tests/e2e/sync-provider.spec.ts`; file sync: `../../../api/tests/integration/test_file_sync_*.py`, `../../../api/tests/unit/test_file_sync_rules.py`, `test_microsoft_graph_files.py`, `test_test_drive_file_sync.py`, `test_sync_engine_main.py`, `../../../api/tests/steps/file_sync_provider.py` (test-only `file_sync` provider) |
 
 ## Change impact
 

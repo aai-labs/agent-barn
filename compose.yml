@@ -225,6 +225,23 @@ services:
     volumes:
       - ./api:/app/api
 
+  sync-engine:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: aai_sync_engine
+    restart: unless-stopped
+    command: ["python", "-c", "from api.sync_engine_main import main; main()"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      <<: *api-env
+    volumes:
+      - ./api:/app/api
+
   # Helm schedules cost ingestion in production. Local k3d needs its own runner.
   cost-sync:
     profiles: [k3d]
