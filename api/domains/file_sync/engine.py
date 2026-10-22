@@ -7,13 +7,27 @@ from uuid import UUID
 
 from injector import inject, singleton
 
-from api.domains.file_sync.models import SyncActivityKind, SyncAgentFolder, SyncFolderStatus, SyncPendingAction
+from api.domains.file_sync.models import (
+    SyncActivityKind,
+    SyncAgentFolder,
+    SyncFile,
+    SyncFolderStatus,
+    SyncPendingAction,
+)
 from api.domains.file_sync.repository import FileSyncRepository
-from api.domains.file_sync.rules import FORBIDDEN_CHARACTERS, MAX_FILE_BYTES, SyncCategory, classify, name_problem
+from api.domains.file_sync.rules import (
+    FORBIDDEN_CHARACTERS,
+    MAX_FILE_BYTES,
+    NOT_SYNCED_DIR,
+    SyncCategory,
+    classify,
+    name_problem,
+)
 from api.domains.sync_provider.models import SyncProviderCapability, SyncProviderConnection
 from api.domains.sync_provider.plugins.base import (
     ProviderThrottled,
     RemoteItem,
+    RemoteItemMissing,
     RemoteNameTaken,
     SyncProviderPlugin,
     SyncRoot,
@@ -54,6 +68,32 @@ def _number_of(folder_name: str, base: str) -> int | None:
     if match and folder_name == numbered_name(base, int(match["number"])):
         return int(match["number"])
     return None
+
+
+@dataclass(frozen=True)
+class _Changes:
+    connection: SyncProviderConnection
+    plugin: SyncProviderPlugin
+    root: SyncRoot
+    by_name: dict[str, tuple[SyncAgentFolder, str]]
+    by_item: dict[str, SyncAgentFolder]
+
+
+@dataclass(frozen=True)
+class _Target:
+    folder: SyncAgentFolder
+    runtime: str
+    rel_path: str
+
+
+def _locate(changes: _Changes, path: str | None) -> _Target | None:
+    if path is None:
+        return None
+    folder_name, _, rel_path = path.partition("/")
+    entry = changes.by_name.get(folder_name.lower())
+    if entry is None or not rel_path or rel_path.split("/", 1)[0] == NOT_SYNCED_DIR:
+        return None
+    return _Target(folder=entry[0], runtime=entry[1], rel_path=rel_path)
 
 
 def sync_root(connection: SyncProviderConnection) -> SyncRoot | None:
@@ -101,46 +141,149 @@ class FileSyncEngine:
         if connection.sync_cursor is None:
             self.repository.save_cursor(connection.id, plugin.changes(root, None).cursor)
             return
-        folders = {
-            folder.folder_name.lower(): (folder, runtime)
+        active = [
+            (folder, runtime)
             for folder, runtime in self.repository.folders_with_runtime(connection.id)
             if folder.status == SyncFolderStatus.ACTIVE and folder.folder_item_id is not None
-        }
+        ]
+        changes = _Changes(
+            connection=connection,
+            plugin=plugin,
+            root=root,
+            by_name={folder.folder_name.lower(): (folder, runtime) for folder, runtime in active},
+            by_item={folder.folder_item_id: folder for folder, _ in active if folder.folder_item_id is not None},
+        )
         cursor = connection.sync_cursor
         while True:
             page = plugin.changes(root, cursor)
             for item in page.items:
-                self._remote_change(folders, item)
+                self._remote_change(changes, item)
             cursor = page.cursor
             self.repository.save_cursor(connection.id, cursor)
             if not page.more:
                 return
 
-    def _remote_change(self, folders: dict[str, tuple[SyncAgentFolder, str]], item: RemoteItem) -> None:
-        if item.is_folder or item.deleted or item.path is None:
+    def _remote_change(self, changes: _Changes, item: RemoteItem) -> None:
+        if item.modified_by_app:
             return
-        folder_name, _, rel_path = item.path.partition("/")
-        entry = folders.get(folder_name.lower())
-        if not rel_path or entry is None:
+        if item.is_folder:
+            self._folder_change(changes, item)
             return
-        folder, runtime = entry
-        row = self.repository.file_by_item(folder.id, item.id)
-        if row is None or row.path.lower() != rel_path.lower():
+        target = _locate(changes, None if item.deleted else item.path)
+        tracked = self.repository.file_by_item_in_connection(changes.connection.id, item.id)
+        if tracked is not None:
+            row, folder = tracked
+            if folder.status != SyncFolderStatus.ACTIVE:
+                return
+            in_own_folder = target is not None and target.folder.id == folder.id
+            if in_own_folder and target is not None and target.rel_path.lower() == row.path.lower():
+                self._content_edit(target, row, item)
+                return
+            if in_own_folder and self._move_back(changes, folder, row, item):
+                return
+            self.repository.restore_from_agent(row.id)
+            self.repository.record_activity(folder, SyncActivityKind.RESTORED, row.path, datetime.now(UTC))
+            if target is not None:
+                self._park(changes, target, item)
             return
-        if item.modified_by_app or row.upload_started_at is not None or item.content_version == row.ctag:
+        if item.deleted or target is None:
+            return
+        at_path = self.repository.file_at(target.folder.id, target.rel_path)
+        if at_path is None:
+            self._park(changes, target, item)
+            return
+        if at_path.upload_started_at is not None:
+            return
+        self.repository.adopt_item(at_path.id, item.id)
+        at_path.item_id = item.id
+        at_path.pending = None
+        self._content_edit(target, at_path, item)
+
+    def _content_edit(self, target: _Target, row: SyncFile, item: RemoteItem) -> None:
+        if row.upload_started_at is not None or item.content_version == row.ctag:
             return
         now = datetime.now(UTC)
         settle_at = (item.modified_at or now) + SETTLE_DELAY
         version = item.content_version or ""
-        category = classify(runtime, rel_path)
+        category = classify(target.runtime, target.rel_path)
         if category in (SyncCategory.WORK, SyncCategory.MEMORY):
             if item.size > MAX_FILE_BYTES:
-                self.repository.record_activity_once(folder, SyncActivityKind.SKIPPED_TOO_LARGE, row.path, version, now)
+                self.repository.record_activity_once(
+                    target.folder, SyncActivityKind.SKIPPED_TOO_LARGE, row.path, version, now
+                )
                 return
             self.repository.mark_remote_change(row.id, SyncPendingAction.DOWNLOAD, settle_at)
         elif category in (SyncCategory.CONFIG, SyncCategory.SKILLS):
             if self.repository.mark_remote_change(row.id, SyncPendingAction.REUPLOAD, settle_at):
-                self.repository.record_activity_once(folder, SyncActivityKind.EDIT_UNDONE, row.path, version, now)
+                self.repository.record_activity_once(
+                    target.folder, SyncActivityKind.EDIT_UNDONE, row.path, version, now
+                )
+
+    def _move_back(self, changes: _Changes, folder: SyncAgentFolder, row: SyncFile, item: RemoteItem) -> bool:
+        folder_item_id = folder.folder_item_id
+        if folder_item_id is None:
+            return False
+        original_dir, _, original_name = row.path.rpartition("/")
+        try:
+            parent_id = (
+                changes.plugin.get_item_by_path(changes.root, parent_id=folder_item_id, rel_path=original_dir).id
+                if original_dir
+                else folder_item_id
+            )
+            changes.plugin.move_item(changes.root, item_id=item.id, name=original_name, parent_id=parent_id)
+        except RemoteItemMissing, RemoteNameTaken:
+            return False
+        self.repository.record_activity(folder, SyncActivityKind.RENAMED_BACK, row.path, datetime.now(UTC))
+        return True
+
+    def _park(self, changes: _Changes, target: _Target, item: RemoteItem) -> None:
+        folder_item_id = target.folder.folder_item_id
+        if folder_item_id is None or item.name is None:
+            return
+        not_synced = self._not_synced_folder(changes, folder_item_id)
+        stem, dot, extension = item.name.rpartition(".")
+        if not stem:
+            stem, dot, extension = item.name, "", ""
+        for number in range(1, NAME_ATTEMPTS + 1):
+            name = item.name if number == 1 else f"{stem} ({number}){dot}{extension}"
+            try:
+                changes.plugin.move_item(changes.root, item_id=item.id, name=name, parent_id=not_synced)
+                break
+            except RemoteNameTaken:
+                continue
+        self.repository.record_activity(
+            target.folder, SyncActivityKind.MOVED_NOT_SYNCED, target.rel_path, datetime.now(UTC)
+        )
+
+    def _not_synced_folder(self, changes: _Changes, folder_item_id: str) -> str:
+        try:
+            return changes.plugin.get_item_by_path(changes.root, parent_id=folder_item_id, rel_path=NOT_SYNCED_DIR).id
+        except RemoteItemMissing:
+            pass
+        try:
+            return changes.plugin.create_folder(changes.root, parent_id=folder_item_id, name=NOT_SYNCED_DIR).id
+        except RemoteNameTaken:
+            return changes.plugin.get_item_by_path(changes.root, parent_id=folder_item_id, rel_path=NOT_SYNCED_DIR).id
+
+    def _folder_change(self, changes: _Changes, item: RemoteItem) -> None:
+        folder = changes.by_item.get(item.id)
+        if folder is None:
+            return
+        now = datetime.now(UTC)
+        if not item.deleted and item.path == folder.folder_name:
+            return
+        if not item.deleted and item.path is not None:
+            try:
+                changes.plugin.move_item(
+                    changes.root, item_id=item.id, name=folder.folder_name, parent_id=changes.root.folder_id
+                )
+                self.repository.record_activity(folder, SyncActivityKind.FOLDER_RESTORED, None, now)
+                return
+            except RemoteItemMissing, RemoteNameTaken:
+                pass
+        self.repository.forget_folder_item(folder.id)
+        self.repository.restore_folder_files(folder.id)
+        self.repository.record_activity(folder, SyncActivityKind.FOLDER_RESTORED, None, now)
 
     def reconcile_folders(self, connection: SyncProviderConnection) -> None:
         plugin = self.plugins.require(connection.provider_key)

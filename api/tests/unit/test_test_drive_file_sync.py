@@ -93,6 +93,7 @@ def test_changes_start_from_now_and_report_later_changes_with_deletions_pathless
     by_id = {item.id: item for item in later.items}
     assert_that(by_id[kept.id].path, equal_to("Sales Bot/kept.md"))
     assert_that((by_id[gone.id].deleted, by_id[gone.id].path), equal_to((True, None)))
+    assert_that(by_id[gone.id].modified_by_app, equal_to(False))
     assert_that(plugin.changes(root, later.cursor).items, equal_to([]))
 
 
@@ -167,6 +168,9 @@ def test_a_user_move_out_of_the_root_leaves_the_item_without_a_path():
     plugin.create_folder(root, parent_id=root.folder_id, name="Sales Bot")
     item = plugin.user_adds(root, "Sales Bot/notes.md", b"x")
 
+    cursor = plugin.changes(root, None).cursor
     moved = plugin.user_moves_outside(root, "Sales Bot/notes.md")
+    reported = {change.id: change for change in plugin.changes(root, cursor).items}
 
     assert_that((moved.id, moved.path, moved.deleted), equal_to((item.id, None, False)))
+    assert_that((reported[item.id].deleted, reported[item.id].path), equal_to((True, None)))

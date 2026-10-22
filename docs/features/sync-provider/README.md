@@ -152,26 +152,34 @@ Duplicate names, compared case-insensitively, get the lowest free ` (2)`, ` (3)`
 - **Taken names:** names of stopped and disabled folders stay taken, so a new Agent named like a deleted one gets a number. So do names already used at the provider.
 - **Dropping the number:** a numbered folder drops its number once the plain name is free. Two Agents swapping names therefore settle within two passes without ever sharing a name.
 
-A person renaming or deleting an Agent's folder, or the "Agent Barn" root, at the provider is not handled yet.
-
 ### People's edits
 
 After the folders, each pass reads the provider's changes under "Agent Barn" since the connection's `sync_cursor`. That is one provider call per page, and normally one per pass.
 - **Starting point:** a connection's first pass only records a cursor starting now, so files already there are not treated as edits.
 - **Saving progress:** the cursor is saved after each page.
 
-A changed file is matched to its Agent Folder by its first path segment, and to its `sync_file` row by the provider's item id. It is ignored when:
-- its folder is not active;
-- the item has no row, or its path differs (new, renamed and moved files are not handled yet);
-- the provider says an app changed it;
-- an upload of it is under way;
-- its content version equals the one recorded.
+A changed item is matched to its Agent Folder by its first path segment, and to its `sync_file` row by the provider's item id, across every folder of the connection.
+- **Always ignored:** changes the provider attributes to an app, which includes the engine's own moves and renames, and anything inside `<Agent>/_Not synced/`.
+- **Inactive folders:** files in a folder that is not active are ignored.
 
-Otherwise a person changed its content:
+Files a person adds, removes or moves:
+- **A file the Agent does not have:** a new file anywhere in an Agent's folder is moved to `<Agent>/_Not synced/` (created when missing), and `moved_not_synced` is recorded. A name already taken there gets ` (2)`, ` (3)` before its extension.
+- **A new file at a synced path,** such as one deleted and added again, is taken as an edit of that file, unless the Agent's own upload of that path is under way.
+- **A synced file deleted,** or moved out of "Agent Barn", into `_Not synced/` or into another Agent's folder: it is restored from the Agent (a `reupload` job, with the row's provider fields cleared), and `restored` is recorded. A file that lands in another Agent's folder is moved to that folder's `_Not synced/`.
+- **A synced file renamed or moved within its folder:** it is moved back to its path, and `renamed_back` is recorded. If the way back is blocked, it is restored instead and the moved copy is parked in `_Not synced/`.
+
+Agent folders:
+- **Renamed or moved:** an Agent's folder is put back under "Agent Barn" with its name.
+- **Deleted:** its folder id is cleared, so the next pass creates it again, and every file it held gets a `reupload` job.
+- Both record `folder_restored`.
+
+A file whose path and row match is a content edit. It is ignored when an upload of it is under way, or its content version equals the one recorded. Otherwise a person changed its content:
 - **Work and memory files:** a `download` job for the pod. An edit over 100 MB is not downloaded, and is recorded once as `skipped_too_large`.
 - **Config and skills files:** a `reupload` job, which undoes the edit with the Agent's copy, and `edit_undone` recorded once per provider version.
 - **Autosave:** a job is not handed out until 30 s after the item's last modification (`retry_at`). Each further autosave pushes that back, and the cursor never waits.
 - **One job per file:** a pending re-upload is never turned into a download.
+
+Not handled: deleting the "Agent Barn" folder itself. The change feed is anchored to that folder, and what the provider then returns is unverified.
 
 ## OneDrive provider
 

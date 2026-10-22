@@ -81,7 +81,7 @@ def activity_entries(context) -> list[tuple[SyncActivityKind, str | None]]:
 
 
 def upload_through_the_pod(context, agent: Agent, path: str, content: bytes) -> None:
-    response = report_files(context, agent, file_entry(path, size=len(content)))
+    response = report_files(context, agent, file_entry(path, size=len(content)), complete=False)
     upload = next(upload for upload in response.json()["uploads"] if upload["path"] == path)
     fake_drive(context).complete_upload(upload["url"], content)
     assert complete_upload(context, agent, path).status_code == status.HTTP_204_NO_CONTENT

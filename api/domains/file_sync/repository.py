@@ -179,11 +179,51 @@ class FileSyncRepository:
             )
             return [(folder, AgentType(agent_type).value) for folder, agent_type in rows]
 
-    def file_by_item(self, folder_id: UUID, item_id: str) -> SyncFile | None:
+    def file_by_item_in_connection(self, connection_id: UUID, item_id: str) -> tuple[SyncFile, SyncAgentFolder] | None:
         with Session(self.delegate.engine) as session:
-            return session.exec(
-                select(SyncFile).where(col(SyncFile.folder_id) == folder_id, col(SyncFile.item_id) == item_id)
+            row = session.exec(
+                select(SyncFile, SyncAgentFolder)
+                .join(SyncAgentFolder, col(SyncAgentFolder.id) == col(SyncFile.folder_id))
+                .where(col(SyncAgentFolder.connection_id) == connection_id, col(SyncFile.item_id) == item_id)
             ).first()
+            return (row[0], row[1]) if row is not None else None
+
+    def restore_from_agent(self, file_id: UUID) -> None:
+        self._update_file(file_id, **self._restore_values())
+
+    def restore_folder_files(self, folder_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(SyncFile).where(col(SyncFile.folder_id) == folder_id).values(**self._restore_values())
+            )
+            session.commit()
+
+    def adopt_item(self, file_id: UUID, item_id: str) -> None:
+        self._update_file(file_id, item_id=item_id, pending=None, lease_until=None, attempts=0, retry_at=None)
+
+    def forget_folder_item(self, folder_id: UUID) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(SyncAgentFolder)
+                .where(col(SyncAgentFolder.id) == folder_id)
+                .values(folder_item_id=None, folder_web_url=None, folder_path=None)
+            )
+            session.commit()
+
+    @staticmethod
+    def _restore_values() -> dict:
+        return {
+            "pending": SyncPendingAction.REUPLOAD,
+            "item_id": None,
+            "etag": None,
+            "ctag": None,
+            "remote_hash": None,
+            "synced_at": None,
+            "upload_started_at": None,
+            "lease_until": None,
+            "attempts": 0,
+            "retry_at": None,
+        }
 
     def mark_remote_change(self, file_id: UUID, action: SyncPendingAction, retry_at: datetime) -> bool:
         with Session(self.delegate.engine) as session:
@@ -217,7 +257,7 @@ class FileSyncRepository:
             session.exec(sa.delete(SyncFile).where(col(SyncFile.id) == file_id))
             session.commit()
 
-    def record_activity(self, folder: SyncAgentFolder, kind: SyncActivityKind, path: str, now: datetime) -> None:
+    def record_activity(self, folder: SyncAgentFolder, kind: SyncActivityKind, path: str | None, now: datetime) -> None:
         with Session(self.delegate.engine) as session:
             session.add(
                 SyncActivity(

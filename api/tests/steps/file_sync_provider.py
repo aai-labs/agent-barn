@@ -71,6 +71,7 @@ class TestDrivePlugin(SyncProviderPlugin):
     uploads: dict[str, tuple[SyncRoot, str, str]] = field(default_factory=dict)
     throttle_seconds: int | None = None
     calls: list[str] = field(default_factory=list)
+    moved_out: set[str] = field(default_factory=set)
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
     _instance: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
@@ -136,7 +137,7 @@ class TestDrivePlugin(SyncProviderPlugin):
                 for node in self.nodes.values()
                 if node.seq > since
                 and node.id != root.folder_id
-                and self._was_under(root, node)
+                and (self._was_under(root, node) or node.id in self.moved_out)
                 and not (kind == "start" and node.deleted)
             ),
             key=lambda node: node.seq,
@@ -144,7 +145,11 @@ class TestDrivePlugin(SyncProviderPlugin):
         page = changed[offset : offset + self.page_size]
         more = offset + self.page_size < len(changed)
         next_cursor = f"{kind}:{since}:{offset + self.page_size}" if more else f"after:{self.seq}:0"
-        return RemoteChanges(items=[self._item(root, node) for node in page], cursor=next_cursor, more=more)
+        return RemoteChanges(
+            items=[self._item(root, node, gone=node.id in self.moved_out) for node in page],
+            cursor=next_cursor,
+            more=more,
+        )
 
     def upload_target(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> UploadTarget:
         self._call("upload_target")
@@ -191,7 +196,9 @@ class TestDrivePlugin(SyncProviderPlugin):
             (node for node in self.nodes.values() if node.name == "Outside" and node.parent_id is None), None
         )
         outside = outside or self._add("Outside", None, is_folder=True, by_app=False)
-        return self._item(root, self._move(self._required(root, path).id, parent_id=outside.id, by_app=False))
+        node = self._move(self._required(root, path).id, parent_id=outside.id, by_app=False)
+        self.moved_out.add(node.id)
+        return self._item(root, node)
 
     def expire_cursors(self) -> None:
         self.oldest_valid_cursor = self.seq + 1
@@ -302,20 +309,21 @@ class TestDrivePlugin(SyncProviderPlugin):
             parent_id = parent.parent_id
         return "/".join(reversed(names))
 
-    def _item(self, root: SyncRoot, node: _Node) -> RemoteItem:
+    def _item(self, root: SyncRoot, node: _Node, *, gone: bool = False) -> RemoteItem:
+        deleted = node.deleted or gone
         return RemoteItem(
             id=node.id,
-            name=None if node.deleted else node.name,
+            name=None if deleted else node.name,
             parent_id=node.parent_id,
-            path=self._path(root, node),
+            path=None if deleted else self._path(root, node),
             version=f'"{{{node.id}}},{node.version}"',
             content_version=None if node.is_folder else f'"c:{{{node.id}}},{node.content_version}"',
             size=0 if node.is_folder else len(node.content),
             content_hash=None if node.is_folder else hashlib.sha256(node.content).hexdigest(),
             is_folder=node.is_folder,
-            deleted=node.deleted,
+            deleted=deleted,
             modified_at=datetime.now(UTC),
-            modified_by_app=node.modified_by_app,
+            modified_by_app=False if deleted else node.modified_by_app,
             web_url=f"https://testdrive.example.test/{node.id}",
         )
 

@@ -41,11 +41,15 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the Sync Engine (`api/sync_engine_main.py`) and its deployment: Helm `syncEngine`, `make dev-sync-engine`, and the `sync-engine` Compose service started by `run.sh`;
   - the pod's file report route (`POST …/file-sync/changes`): authentication, readiness checks and path rules; upload links, empty files, skips, and deletes for a complete report. Upload completion is at `POST …/file-sync/uploads/complete`;
   - the pod's jobs (`GET …/file-sync/operations`, `POST …/file-sync/operations/result`): downloads and re-uploads with leases, retries and the Agent-wins conflict rule;
-  - remote edits: the engine reads the change feed and turns people's content edits into downloads (work, memory) or undos (config, skills).
+  - remote changes:
+    - people's content edits become downloads (work, memory) or undos (config, skills);
+    - added files are parked in `_Not synced/`;
+    - deleted or moved-away files are restored, and renamed ones are moved back;
+    - Agent folders are put back or re-created.
 
   Folders follow Agents on every connected Organization. No pod calls these routes yet, so files are not synced.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. remote change processing: new, moved, renamed and deleted files and folders, then cursor robustness;
+  1. remote change processing: cursor robustness (expired cursor, stopped Agents);
   2. the in-pod helper;
   3. builder and `start.sh` wiring;
   4. pinned-image contracts;
@@ -76,6 +80,30 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — People adding, moving and deleting files and Agent folders
+
+- Changed: `FileSyncEngine._remote_change` now handles every non-app change. Items the provider attributes to an app are skipped first, which covers the engine's own moves and renames.
+- **Files:**
+  - **Matching:** a synced file is found by item id across the whole connection, so moves between Agent folders are seen.
+  - **Deleted, or moved out of "Agent Barn", into `_Not synced/` or into another Agent's folder:** restored by a `reupload` job (`restore_from_agent` clears the provider fields), with `restored` recorded. A file landing in another Agent's folder is parked in that folder's `_Not synced/`.
+  - **Renamed or moved within its own folder:** moved back with `move_item` to its original parent and name, with `renamed_back` recorded. When the way back is missing or taken, the original is restored and the moved copy parked instead.
+  - **New file with no row:** moved into `<Agent>/_Not synced/`, created when missing, with ` (2)`, ` (3)` before the extension on a name clash, and `moved_not_synced` recorded. Items inside `_Not synced/` are never touched.
+  - **New item at a synced path:** adopted as that row's item (`adopt_item`) and handled as a content edit, unless the Agent's own upload of that path is under way.
+- **Agent folders:** a folder found by its item id that was renamed or moved is moved back under the root with its name. A deleted folder, or one that cannot be moved back, has its item id cleared, so the next pass creates it again, and all its files get `reupload` jobs (`restore_folder_files`). Each records `folder_restored`.
+- Removed: `FileSyncRepository.file_by_item`, replaced by `file_by_item_in_connection`. Added: `restore_from_agent`, `restore_folder_files`, `adopt_item` and `forget_folder_item`. `record_activity` accepts no path.
+- **Known limit:** deleting the "Agent Barn" root is not handled; the change feed is anchored to it.
+- Fixed (tests):
+  - **Deletions:** Test Drive reported a person's deletion as made by the app. PR 0 showed deleted items carry no modifier, so the fake now reports none, and its contract test checks this; it failed before the fix.
+  - **Moves out of "Agent Barn":** Test Drive did not report a file moved out of "Agent Barn" at all; its change feed now reports it as deleted. What the provider really reports is added to the end-to-end checks.
+  - **`upload_through_the_pod`:** it reported its single file as a complete list, so a second upload in one test deleted the first at the provider. It now reports an incomplete list.
+- Verified:
+  - `tests/integration/test_file_sync_remote_moves.py` (15 tests). 12 failed first. The three "nothing happens" guards passed before and after: inside `_Not synced/`, an upload under way, and the engine's own moves.
+  - All file sync suites pass together twice (156 tests).
+  - ruff, format and ty pass.
+- Follow-up, for the end-to-end run:
+  - what the provider's change feed reports for an item moved out of the watched folder, and for a deleted folder's children;
+  - deleting the "Agent Barn" root.
 
 ### 2026-10-22 — AF-384 — People's edits become downloads or undos
 
