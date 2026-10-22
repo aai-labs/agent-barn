@@ -101,10 +101,10 @@ def _agent_end(run_id: str = "run-1", session: str = "s1", success: bool = True,
     }
 
 
-def _prompt(session: str = "s1", trigger: str = "user") -> dict:
+def _prompt(session: str = "s1", trigger: str = "user", prompt: str = "Please summarise the October invoices") -> dict:
     return {
         "hook": "before_prompt_build",
-        "event": {"prompt": "hi", "messages": []},
+        "event": {"prompt": prompt, "messages": []},
         "ctx": {"sessionKey": session, "trigger": trigger},
     }
 
@@ -153,7 +153,7 @@ def test_the_manifest_declares_the_tool_it_registers():
     [
         (
             {"action": "create", "title": "Reconcile invoices", "description": "For October"},
-            ["create", "--title", "Reconcile invoices", "--description", "For October"],
+            ["create", "--title", "Reconcile invoices", "--description", "For October", "--status", "in_progress"],
             "",
         ),
         ({"action": "status", "task_id": _TASK_ID, "status": "done"}, ["status", _TASK_ID, "done"], ""),
@@ -162,7 +162,7 @@ def test_the_manifest_declares_the_tool_it_registers():
         ({"action": "show", "task_id": _TASK_ID}, ["show", _TASK_ID], ""),
         (
             {"action": "attach", "task_id": _TASK_ID, "path": "report.csv", "name": "October.csv"},
-            ["attach", _TASK_ID, "report.csv", "--name", "October.csv"],
+            ["attach", _TASK_ID, "report.csv", "--name", "October.csv", "--replace"],
             "",
         ),
     ],
@@ -404,7 +404,10 @@ def test_files_the_run_wrote_are_attached_to_its_task_when_it_ends(tmp_path: Pat
 
     _drive(tmp_path, [wrote_states, wrote_chart, _created(), _agent_end()])
 
-    assert_that(_attaches(tmp_path), equal_to(sorted([["attach", _TASK_ID, chart], ["attach", _TASK_ID, states]])))
+    assert_that(
+        _attaches(tmp_path),
+        equal_to(sorted([["attach", _TASK_ID, chart, "--replace"], ["attach", _TASK_ID, states, "--replace"]])),
+    )
 
 
 def test_files_go_to_a_task_the_run_touched_by_id(tmp_path: Path):
@@ -412,7 +415,7 @@ def test_files_go_to_a_task_the_run_touched_by_id(tmp_path: Path):
 
     _drive(tmp_path, [wrote, _task("c2", action="status", task_id="task-9", status="done"), _agent_end()])
 
-    assert_that(_attaches(tmp_path), equal_to([["attach", "task-9", states]]))
+    assert_that(_attaches(tmp_path), equal_to([["attach", "task-9", states, "--replace"]]))
 
 
 def test_a_file_the_agent_attached_is_not_attached_again(tmp_path: Path):
@@ -483,7 +486,7 @@ def test_each_request_carries_the_task_line(tmp_path: Path, trigger: str):
     driven = _drive(tmp_path, [_prompt(trigger=trigger)])
 
     context = _context(driven["results"][0])
-    assert_that(context, contains_string("create a Task with agentbarn_task as in_progress before you start"))
+    assert_that(context, contains_string("create a Task with agentbarn_task before you start"))
     assert_that(context, contains_string("Don't mention Tasks in your reply"))
 
 
@@ -505,10 +508,10 @@ def test_create_passes_a_starting_status(tmp_path: Path):
     assert_that(_calls(tmp_path)[-1]["argv"], equal_to(["create", "--title", "Report", "--status", "in_progress"]))
 
 
-def test_the_task_line_asks_for_a_task_in_progress(tmp_path: Path):
-    driven = _drive(tmp_path, [_prompt()])
+def test_create_starts_the_task_in_progress_by_default(tmp_path: Path):
+    _drive(tmp_path, [_tool(action="create", title="Report")])
 
-    assert_that(_context(driven["results"][0]), contains_string("as in_progress before you start"))
+    assert_that(_calls(tmp_path)[-1]["argv"], equal_to(["create", "--title", "Report", "--status", "in_progress"]))
 
 
 def test_remove_file_maps_onto_the_task_command(tmp_path: Path):
@@ -523,3 +526,99 @@ def test_remove_file_needs_a_file_id(tmp_path: Path):
     driven = _drive(tmp_path, [_tool(action="remove_file", task_id=_TASK_ID)])
 
     assert_that((_tool_output(driven["results"][0]).get("error") is not None, _calls(tmp_path)), equal_to((True, [])))
+
+
+# --- closing the run's Task, notes in the same call, and small talk ---
+
+
+def _statuses(tmp_path: Path) -> list[list[str]]:
+    return [call["argv"] for call in _calls(tmp_path) if call["argv"][0] == "status"]
+
+
+def test_create_and_status_carry_a_note_in_the_same_call(tmp_path: Path):
+    _drive(
+        tmp_path,
+        [
+            _tool(action="create", title="Report", body="Started from the October export"),
+            _tool(action="status", task_id=_TASK_ID, status="failed", body="The export was empty"),
+        ],
+    )
+
+    assert_that(
+        [call["argv"] for call in _calls(tmp_path)],
+        equal_to(
+            [
+                ["create", "--title", "Report", "--status", "in_progress", "--note", "Started from the October export"],
+                ["status", _TASK_ID, "failed", "--note", "The export was empty"],
+            ]
+        ),
+    )
+
+
+def test_a_task_left_in_progress_is_marked_done_when_the_run_ends(tmp_path: Path):
+    _drive(tmp_path, [_created(), _agent_end()])
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "done"]]))
+
+
+@pytest.mark.parametrize("status", ["failed", "open", "done"])
+def test_a_status_the_agent_set_itself_is_kept(tmp_path: Path, status: str):
+    _drive(tmp_path, [_created(), _task("c3", action="status", task_id=_TASK_ID, status=status), _agent_end()])
+
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_a_task_the_run_only_noted_on_is_not_closed(tmp_path: Path):
+    _drive(tmp_path, [_task("c1", action="note", task_id=_TASK_ID, body="Waiting on Dana"), _agent_end()])
+
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_a_task_is_not_closed_when_the_run_failed(tmp_path: Path):
+    _drive(tmp_path, [_created(), _agent_end(success=False)])
+
+    assert_that(_statuses(tmp_path), equal_to([]))
+
+
+def test_every_task_left_in_progress_is_closed(tmp_path: Path):
+    _drive(tmp_path, [_created("c1", "task-1"), _created("c2", "task-2"), _agent_end()])
+
+    assert_that(sorted(_statuses(tmp_path)), equal_to([["status", "task-1", "done"], ["status", "task-2", "done"]]))
+
+
+def test_files_are_attached_before_the_task_is_closed(tmp_path: Path):
+    wrote, states = _wrote(tmp_path)
+
+    _drive(tmp_path, [wrote, _created(), _agent_end()])
+
+    assert_that(
+        [call["argv"] for call in _calls(tmp_path) if call["argv"][0] in {"attach", "status"}],
+        equal_to([["attach", _TASK_ID, states, "--replace"], ["status", _TASK_ID, "done"]]),
+    )
+
+
+def test_closing_a_task_refreshes_the_open_tasks_shown(tmp_path: Path):
+    _drive(
+        tmp_path,
+        [_prompt(), _created(), _agent_end(), _prompt()],
+        open_tasks=[{"id": _TASK_ID, "status": "in_progress", "title": "States"}],
+    )
+
+    assert_that(sum(call["argv"][0] == "list" for call in _calls(tmp_path)), equal_to(4))
+
+
+@pytest.mark.parametrize("message", ["Thanks!", "Thanks, that's great.", "That's all for now, thanks!", "Good morning"])
+def test_small_talk_does_not_carry_the_task_line(tmp_path: Path, message: str):
+    driven = _drive(tmp_path, [_prompt(prompt=message)])
+
+    assert_that("agentbarn_task before you start" in _context(driven["results"][0]), is_(False))
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Ok", "Yes please", "Please summarise the October invoices", "Thanks, now rename states.csv"],
+)
+def test_requests_and_approvals_carry_the_task_line(tmp_path: Path, message: str):
+    driven = _drive(tmp_path, [_prompt(prompt=message)])
+
+    assert_that(_context(driven["results"][0]), contains_string("agentbarn_task before you start"))

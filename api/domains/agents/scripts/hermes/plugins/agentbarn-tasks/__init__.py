@@ -6,12 +6,15 @@ Tasks. A turn that does real work without touching a Task (three or more tool ca
 any file it writes) is reminded inside the turn through the tool result the model reads
 next; a turn that wrote files is also held back once before it finishes (`pre_verify`).
 If it still ends without a Task, the next turn carries a reminder. The plugin never
-records a Task itself.
+creates a Task itself, but it does the bookkeeping that would otherwise cost the model a
+call each: when a turn ends, the files it wrote go to the Task it worked on and a Task it
+left in progress is marked done.
 """
 
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -28,36 +31,89 @@ _FILE_TOOLS = {"write_file", "patch"}
 _OPEN_TASKS_TTL_SECONDS = 60
 _OPEN_TASKS_SHOWN = 10
 _COMMAND_TIMEOUT_SECONDS = 150
+# A short message made only of these words is small talk ("Thanks!", "That's all for now"): it gets
+# no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
+_SMALL_TALK_MAX_WORDS = 8
+_SMALL_TALK_WORDS = frozenset(
+    [
+        "hi",
+        "hey",
+        "hello",
+        "thanks",
+        "thank",
+        "you",
+        "thx",
+        "ty",
+        "cheers",
+        "great",
+        "nice",
+        "cool",
+        "awesome",
+        "perfect",
+        "lovely",
+        "good",
+        "sounds",
+        "that",
+        "thats",
+        "is",
+        "was",
+        "all",
+        "for",
+        "now",
+        "bye",
+        "goodbye",
+        "see",
+        "ya",
+        "later",
+        "much",
+        "so",
+        "very",
+        "appreciate",
+        "appreciated",
+        "it",
+        "got",
+        "morning",
+        "afternoon",
+        "evening",
+        "night",
+        "have",
+        "a",
+        "day",
+        "weekend",
+        "wow",
+        "haha",
+        "lol",
+    ]
+)
 
 _IN_TURN_REMINDER = (
-    "[Agent Barn] This request has taken several steps and has no Task yet. Record it with the "
-    "agentbarn_task tool: create a Task, keep its status current and add notes as you go. The files you "
-    "produce are attached to it for you."
+    "[Agent Barn] This request has taken several steps and has no Task yet. Create one with the "
+    "agentbarn_task tool. Your files are attached and the Task is marked done when the turn ends."
 )
 _BEFORE_FINISHING_REMINDER = (
-    "Before you finish: this turn produced files but recorded no Task. Record it now with the "
-    "agentbarn_task tool (create the Task, add a note on what was done, set its status), then give your "
-    "answer. The files you produced are attached to it for you."
+    "Before you finish: this turn produced files but recorded no Task. Create one with the agentbarn_task "
+    "tool (a body says what was done), then give your answer. Your files are attached to it for you."
 )
-# Next to every request, as on OpenClaw: so the Task exists from the start of the work, not the end.
-# About 45 tokens per request.
+# Next to every request but small talk, as on OpenClaw: so the Task exists from the start of the
+# work, not the end. About 40 tokens.
 _REQUEST_LINE = (
-    "If this request needs tools or produces files, create a Task with agentbarn_task as in_progress before "
-    "you start and keep it current. Don't mention Tasks in your reply unless the user asks."
+    "If this request needs tools or produces files, create a Task with agentbarn_task before you start, "
+    "or continue an open one. Don't mention Tasks in your reply unless the user asks."
 )
 _QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping."
 _NEXT_TURN_REMINDER = (
     "Your previous turn did work without recording it as a Task. If it was more than a quick answer, "
-    "record it now with the agentbarn_task tool: create the Task, add a note on what was done, attach "
-    "any files and set its status."
+    "record it now with the agentbarn_task tool: create the Task with a body on what was done, and attach "
+    "any files it produced."
 )
 
 _SCHEMA = {
     "name": _TOOL,
     "description": (
-        "Record your own work as Tasks the people you work for can follow. Create a Task for any request "
-        "that takes more than a quick answer, keep its status current, add notes as you go and attach the "
-        "files you produce. Check `list` before creating, to continue a Task that already covers the request."
+        "Record work that uses tools or produces files as a Task the people you work for can follow. "
+        "`create` one before you start (it starts in_progress); when your turn ends, the files you wrote are "
+        "attached and a Task still in_progress is marked done. Set `failed` (with a body saying why) or "
+        "`open` (waiting on the user) yourself."
     ),
     "parameters": {
         "type": "object",
@@ -72,9 +128,9 @@ _SCHEMA = {
             "status": {
                 "type": "string",
                 "enum": _STATUSES,
-                "description": "The new status, a list filter, or the starting status for create.",
+                "description": "The new status, a list filter, or the starting status for create (in_progress).",
             },
-            "body": {"type": "string", "description": "The note, for note."},
+            "body": {"type": "string", "description": "The note, for note; or one to add with create or status."},
             "path": {"type": "string", "description": "The file to attach, absolute or relative to your workspace."},
             "name": {"type": "string", "description": "The file's name as shown on the Task, for attach."},
             "content_type": {"type": "string", "description": "A bare type/subtype, for attach."},
@@ -130,8 +186,9 @@ def _argv(args: dict) -> tuple[list[str], str] | str:
         argv = ["create", "--title", args["title"]]
         if args.get("description"):
             argv += ["--description", args["description"]]
-        if args.get("status") in _STATUSES:
-            argv += ["--status", args["status"]]
+        argv += ["--status", args["status"] if args.get("status") in _STATUSES else "in_progress"]
+        if args.get("body"):
+            argv += ["--note", args["body"]]
         return argv, ""
     if action == "list":
         return (["list", "--status", args["status"]] if args.get("status") else ["list"]), ""
@@ -146,7 +203,10 @@ def _argv(args: dict) -> tuple[list[str], str] | str:
     if action == "status":
         if args.get("status") not in _STATUSES:
             return "status needs one of: " + ", ".join(_STATUSES) + "."
-        return ["status", task_id, args["status"]], ""
+        argv = ["status", task_id, args["status"]]
+        if args.get("body"):
+            argv += ["--note", args["body"]]
+        return argv, ""
     if action == "note":
         if not args.get("body"):
             return "note needs a body."
@@ -159,7 +219,7 @@ def _argv(args: dict) -> tuple[list[str], str] | str:
             argv += ["--name", args["name"]]
         if args.get("content_type"):
             argv += ["--content-type", args["content_type"]]
-        return argv, ""
+        return [*argv, "--replace"], ""
     return "action must be one of: create, status, note, attach, remove_file, list, show."
 
 
@@ -216,6 +276,17 @@ def _task_id(tool_name: str, args, result) -> str | None:
     return None
 
 
+def _status_set(tool_name: str, args) -> str | None:
+    """The status a call of the Task tool left its Task in, if it set one."""
+    if tool_name != _TOOL or not isinstance(args, dict):
+        return None
+    if args.get("action") == "create":
+        return args["status"] if args.get("status") in _STATUSES else "in_progress"
+    if args.get("action") == "status" and args.get("status") in _STATUSES:
+        return args["status"]
+    return None
+
+
 def _track(
     tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", tool_call_id: str = "", result=None
 ) -> dict:
@@ -229,6 +300,8 @@ def _track(
             "written": {},
             "recorded": False,
             "task_ids": set(),
+            # task_id -> the last status the Agent set this turn
+            "statuses": {},
             "attached": set(),
             "reminded": False,
             "held": False,
@@ -240,6 +313,9 @@ def _track(
         task_id = _task_id(tool_name, args, result)
         if task_id:
             turn["task_ids"].add(task_id)
+            status = _status_set(tool_name, args)
+            if status:
+                turn["statuses"][task_id] = status
     else:
         if tool_call_id:
             turn["work"].add(tool_call_id)
@@ -280,10 +356,22 @@ def _attach_automatically(turn: dict) -> list[str]:
             continue
         if limit.isdigit() and os.path.getsize(path) > int(limit):
             continue
-        ok, _ = _run(["attach", task_id, path])
+        ok, _ = _run(["attach", task_id, path, "--replace"])
         if not ok:
             failed.append(name)
     return failed
+
+
+def _close_in_progress(turn: dict) -> None:
+    """Mark done each Task the Agent left in_progress this turn; a status it chose itself stays."""
+    closed = False
+    for task_id, status in sorted(turn["statuses"].items()):
+        if status == "in_progress":
+            _run(["status", task_id, "done"])
+            closed = True
+    if closed:
+        with _lock:
+            _open_tasks_cache["lines"] = None
 
 
 def _on_post_tool_call(tool_name="", args=None, result=None, session_id="", turn_id="", tool_call_id="", **_):
@@ -321,6 +409,7 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
         reminder = _NEXT_TURN_REMINDER
     else:
         failed = _attach_automatically(turn) if turn["recorded"] else []
+        _close_in_progress(turn)
         if not failed:
             return
         reminder = _attach_reminder(failed)
@@ -363,17 +452,21 @@ def _open_task_lines() -> list[str] | None:
     return lines
 
 
-def _on_pre_llm_call(session_id="", **_):
+def _small_talk(message) -> bool:
+    words = re.findall(r"[a-z]+", message.lower().replace("'", "")) if isinstance(message, str) else []
+    return 0 < len(words) <= _SMALL_TALK_MAX_WORDS and all(word in _SMALL_TALK_WORDS for word in words)
+
+
+def _on_pre_llm_call(session_id="", user_message="", **_):
     if session_id == _BOOT_SESSION_ID:
         return None
-    parts = ["[Agent Barn] " + _REQUEST_LINE]
+    parts = [] if _small_talk(user_message) else ["[Agent Barn] " + _REQUEST_LINE]
     lines = _open_task_lines()
     if lines:
         parts.append(
             "[Agent Barn] Your open Tasks:\n"
             + "\n".join(lines)
-            + "\nKeep their status current with the agentbarn_task tool, and mark a Task done or failed when "
-            "its work ends."
+            + "\nContinue one of these with the agentbarn_task tool rather than creating another."
         )
     with _lock:
         reminder = _next_turn_reminders.pop(session_id, None)

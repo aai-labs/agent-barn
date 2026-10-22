@@ -101,12 +101,12 @@ class _Plugin:
                 session_id=session_id, turn_id=turn_id, completed=completed, failed=False, interrupted=False
             )
 
-    def start_turn(self, session_id: str = "s1"):
+    def start_turn(self, session_id: str = "s1", user_message: str = "Please summarise the October invoices"):
         with patch.dict(os.environ, self.env, clear=True):
             return self.hooks["pre_llm_call"](
                 session_id=session_id,
                 turn_id="next",
-                user_message="hi",
+                user_message=user_message,
                 conversation_history=[],
                 is_first_turn=False,
                 platform="slack",
@@ -160,7 +160,9 @@ def test_create_runs_the_task_command(tmp_path: Path):
     assert_that(result, has_entries(id=_TASK_ID))
     assert_that(
         plugin.calls()[-1]["argv"],
-        equal_to(["create", "--title", "Reconcile invoices", "--description", "For October"]),
+        equal_to(
+            ["create", "--title", "Reconcile invoices", "--description", "For October", "--status", "in_progress"]
+        ),
     )
 
 
@@ -179,7 +181,7 @@ def test_create_runs_the_task_command(tmp_path: Path):
                 "name": "October.csv",
                 "content_type": "text/csv",
             },
-            ["attach", _TASK_ID, "out/report.csv", "--name", "October.csv", "--content-type", "text/csv"],
+            ["attach", _TASK_ID, "out/report.csv", "--name", "October.csv", "--content-type", "text/csv", "--replace"],
             "",
         ),
     ],
@@ -405,7 +407,10 @@ def test_files_the_turn_wrote_are_attached_to_its_task_when_it_ends(tmp_path: Pa
 
     plugin.end_turn()
 
-    assert_that(_attaches(plugin), equal_to(sorted([["attach", _TASK_ID, chart], ["attach", _TASK_ID, states]])))
+    assert_that(
+        _attaches(plugin),
+        equal_to(sorted([["attach", _TASK_ID, chart, "--replace"], ["attach", _TASK_ID, states, "--replace"]])),
+    )
 
 
 def test_files_go_to_a_task_the_turn_touched_by_id(tmp_path: Path):
@@ -417,7 +422,7 @@ def test_files_go_to_a_task_the_turn_touched_by_id(tmp_path: Path):
 
     plugin.end_turn()
 
-    assert_that(_attaches(plugin), equal_to([["attach", "task-9", states]]))
+    assert_that(_attaches(plugin), equal_to([["attach", "task-9", states, "--replace"]]))
 
 
 def test_a_file_the_agent_attached_is_not_attached_again(tmp_path: Path):
@@ -530,7 +535,7 @@ def test_each_request_carries_the_task_line(tmp_path: Path):
 
     context = _context(plugin.start_turn())
 
-    assert_that(context, contains_string("create a Task with agentbarn_task as in_progress before you start"))
+    assert_that(context, contains_string("create a Task with agentbarn_task before you start"))
     assert_that(context, contains_string("Don't mention Tasks in your reply"))
 
 
@@ -548,3 +553,119 @@ def test_remove_file_needs_a_file_id(tmp_path: Path):
     result = plugin.tool(action="remove_file", task_id=_TASK_ID)
 
     assert_that((result.get("error") is not None, plugin.calls()), equal_to((True, [])))
+
+
+# --- closing the turn's Task, notes in the same call, and small talk ---
+
+
+def _statuses(plugin: _Plugin) -> list[list[str]]:
+    return [call["argv"] for call in plugin.calls() if call["argv"][0] == "status"]
+
+
+def test_create_and_status_carry_a_note_in_the_same_call(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    plugin.tool(action="create", title="Report", body="Started from the October export")
+    created = plugin.calls()[-1]["argv"]
+    plugin.tool(action="status", task_id=_TASK_ID, status="failed", body="The export was empty")
+
+    assert_that(
+        created,
+        equal_to(
+            ["create", "--title", "Report", "--status", "in_progress", "--note", "Started from the October export"]
+        ),
+    )
+    assert_that(plugin.calls()[-1]["argv"], equal_to(["status", _TASK_ID, "failed", "--note", "The export was empty"]))
+
+
+def test_a_task_left_in_progress_is_marked_done_when_the_turn_ends(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "done"]]))
+
+
+@pytest.mark.parametrize("status", ["failed", "open", "done"])
+def test_a_status_the_agent_set_itself_is_kept(tmp_path: Path, status: str):
+    plugin = _Plugin(tmp_path)
+    _created_task(plugin)
+    plugin.tool_call(
+        "call-3", tool_name="agentbarn_task", args={"action": "status", "task_id": _TASK_ID, "status": status}
+    )
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([]))
+
+
+def test_a_task_the_turn_only_noted_on_is_not_closed(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.tool_call(
+        "call-1", tool_name="agentbarn_task", args={"action": "note", "task_id": _TASK_ID, "body": "Waiting on Dana"}
+    )
+
+    plugin.end_turn()
+
+    assert_that(_statuses(plugin), equal_to([]))
+
+
+def test_a_task_is_not_closed_when_the_turn_did_not_complete(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _created_task(plugin)
+
+    plugin.end_turn(completed=False)
+
+    assert_that(_statuses(plugin), equal_to([]))
+
+
+def test_every_task_left_in_progress_is_closed(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    _created_task(plugin, "call-1", "task-1")
+    _created_task(plugin, "call-2", "task-2")
+
+    plugin.end_turn()
+
+    assert_that(sorted(_statuses(plugin)), equal_to([["status", "task-1", "done"], ["status", "task-2", "done"]]))
+
+
+def test_files_are_attached_before_the_task_is_closed(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    states = _wrote(plugin)
+    _created_task(plugin)
+
+    plugin.end_turn()
+
+    assert_that(
+        [call["argv"] for call in plugin.calls() if call["argv"][0] in {"attach", "status"}],
+        equal_to([["attach", _TASK_ID, states, "--replace"], ["status", _TASK_ID, "done"]]),
+    )
+
+
+def test_closing_a_task_refreshes_the_open_tasks_shown(tmp_path: Path):
+    plugin = _Plugin(tmp_path, open_tasks=[{"id": _TASK_ID, "status": "in_progress", "title": "States"}])
+    plugin.start_turn()
+    _created_task(plugin)
+
+    plugin.end_turn()
+    plugin.start_turn()
+
+    assert_that(len([call for call in plugin.calls() if call["argv"][0] == "list"]), equal_to(4))
+
+
+@pytest.mark.parametrize("message", ["Thanks!", "Thanks, that's great.", "That's all for now, thanks!", "Good morning"])
+def test_small_talk_does_not_carry_the_task_line(tmp_path: Path, message: str):
+    plugin = _Plugin(tmp_path)
+
+    assert_that("agentbarn_task before you start" in _context(plugin.start_turn(user_message=message)), is_(False))
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Ok", "Yes please", "Please summarise the October invoices", "Thanks, now rename states.csv"],
+)
+def test_requests_and_approvals_carry_the_task_line(tmp_path: Path, message: str):
+    plugin = _Plugin(tmp_path)
+
+    assert_that(_context(plugin.start_turn(user_message=message)), contains_string("agentbarn_task before you start"))

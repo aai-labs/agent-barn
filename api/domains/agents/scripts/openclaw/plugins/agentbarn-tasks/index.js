@@ -6,8 +6,10 @@
 // any file it writes), or that recorded one without attaching the files it wrote, is
 // reminded in the tool result the model reads next (tool_result_persist) and asked to
 // revise before finishing; OpenClaw refuses that revise once a run has side effects, so
-// the next turn of the session carries the reminder too. The plugin never records a Task
-// itself.
+// the next turn of the session carries the reminder too. The plugin never creates a Task
+// itself, but it does the bookkeeping that would otherwise cost the model a call each: when
+// a run ends, the files it wrote go to the Task it worked on and a Task it left in progress
+// is marked done.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { resolve as resolvePath } from "node:path";
@@ -20,22 +22,30 @@ const FILE_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const OPEN_TASKS_TTL_MS = 60_000;
 const OPEN_TASKS_SHOWN = 10;
 const COMMAND_TIMEOUT_MS = 150_000;
+// A short message made only of these words is small talk ("Thanks!", "That's all for now"): it
+// gets no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
+const SMALL_TALK_MAX_WORDS = 8;
+const SMALL_TALK_WORDS = new Set(
+  ("hi hey hello thanks thank you thx ty cheers great nice cool awesome perfect lovely good sounds that thats " +
+    "is was all for now bye goodbye see ya later much so very appreciate appreciated it got morning afternoon " +
+    "evening night have a day weekend wow haha lol").split(" "),
+);
 
 const IN_TURN_REMINDER =
-  "This request has taken several steps and has no Task yet. Before you finish, record it with the " +
-  "agentbarn_task tool: create a Task, add a note on what was done and set its status. The files you " +
-  "produced are attached to it for you.";
-// Next to every request, as on Hermes: in end-to-end runs OpenClaw's model did not use the tool
-// within the turn from the instructions alone, and it cannot be held back once a run has side
-// effects. About 45 tokens per request.
+  "This request has taken several steps and has no Task yet. Before you finish, create one with the " +
+  "agentbarn_task tool (a body says what was done). Your files are attached and the Task is marked done " +
+  "when the run ends.";
+// Next to every request but small talk, as on Hermes: in end-to-end runs OpenClaw's model did not
+// use the tool within the turn from the instructions alone, and it cannot be held back once a run
+// has side effects. About 40 tokens.
 const REQUEST_LINE =
-  "If this request needs tools or produces files, create a Task with agentbarn_task as in_progress before you start, " +
-  "and keep it current. Don't mention Tasks in your reply unless the user asks.";
+  "If this request needs tools or produces files, create a Task with agentbarn_task before you start, " +
+  "or continue an open one. Don't mention Tasks in your reply unless the user asks.";
 const QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping.";
 const NEXT_TURN_REMINDER =
   "Your previous turn did work without recording it as a Task. If it was more than a quick answer, " +
-  "record it now with the agentbarn_task tool: create the Task, add a note on what was done, attach any " +
-  "files and set its status.";
+  "record it now with the agentbarn_task tool: create the Task with a body on what was done, and attach " +
+  "any files it produced.";
 
 const PARAMETERS = {
   type: "object",
@@ -44,8 +54,12 @@ const PARAMETERS = {
     task_id: { type: "string", description: "The Task's id, for status, note, attach and show." },
     title: { type: "string", description: "A short title, for create." },
     description: { type: "string", description: "What was asked, for create." },
-    status: { type: "string", enum: STATUSES, description: "The new status, a list filter, or the starting status for create." },
-    body: { type: "string", description: "The note, for note." },
+    status: {
+      type: "string",
+      enum: STATUSES,
+      description: "The new status, a list filter, or the starting status for create (in_progress).",
+    },
+    body: { type: "string", description: "The note, for note; or one to add with create or status." },
     path: { type: "string", description: "The file to attach, absolute or relative to your workspace." },
     name: { type: "string", description: "The file's name as shown on the Task, for attach." },
     content_type: { type: "string", description: "A bare type/subtype, for attach." },
@@ -108,7 +122,8 @@ function argvFor(params) {
       [
         "create", "--title", params.title,
         ...(params.description ? ["--description", params.description] : []),
-        ...(STATUSES.includes(params.status) ? ["--status", params.status] : []),
+        "--status", STATUSES.includes(params.status) ? params.status : "in_progress",
+        ...(params.body ? ["--note", params.body] : []),
       ],
       "",
     ];
@@ -125,7 +140,7 @@ function argvFor(params) {
   }
   if (action === "status") {
     if (!STATUSES.includes(params.status)) return `status needs one of: ${STATUSES.join(", ")}.`;
-    return [["status", taskId, params.status], ""];
+    return [["status", taskId, params.status, ...(params.body ? ["--note", params.body] : [])], ""];
   }
   if (action === "note") {
     if (!params.body) return "note needs a body.";
@@ -137,6 +152,7 @@ function argvFor(params) {
       "attach", taskId, params.path,
       ...(params.name ? ["--name", params.name] : []),
       ...(params.content_type ? ["--content-type", params.content_type] : []),
+      "--replace",
     ],
     "",
   ];
@@ -182,6 +198,14 @@ function taskIdOf(toolName, params, result) {
   return params?.action === "create" && typeof created?.id === "string" ? created.id : null;
 }
 
+// The status a call of the Task tool left its Task in, if it set one.
+function statusSet(toolName, params) {
+  if (toolName !== TOOL) return null;
+  if (params?.action === "create") return STATUSES.includes(params.status) ? params.status : "in_progress";
+  if (params?.action === "status" && STATUSES.includes(params.status)) return params.status;
+  return null;
+}
+
 function track(event, ctx) {
   const runId = event.runId ?? ctx.runId ?? "";
   if (ctx.sessionKey) currentRun.set(ctx.sessionKey, runId);
@@ -189,6 +213,8 @@ function track(event, ctx) {
   if (!state) {
     state = {
       work: new Set(), wroteFiles: false, written: new Map(), recorded: false, taskIds: new Set(),
+      // taskId -> the last status the Agent set this run
+      statuses: new Map(),
       attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "",
     };
     runs.set(runId, state);
@@ -218,10 +244,22 @@ async function attachAutomatically(state) {
       continue;
     }
     if (size > limit) continue;
-    const { ok } = await run(["attach", taskId, path]);
+    const { ok } = await run(["attach", taskId, path, "--replace"]);
     if (!ok) failed.push(name);
   }
   return failed;
+}
+
+// Mark done each Task the Agent left in_progress this run; a status it chose itself stays.
+async function closeInProgress(state) {
+  const inProgress = [...state.statuses].filter(([, status]) => status === "in_progress").map(([id]) => id).sort();
+  for (const taskId of inProgress) await run(["status", taskId, "done"]);
+  if (inProgress.length) openTasksCache = { at: 0, lines: null };
+}
+
+function smallTalk(message) {
+  const words = typeof message === "string" ? message.toLowerCase().replaceAll("'", "").match(/[a-z]+/g) ?? [] : [];
+  return words.length > 0 && words.length <= SMALL_TALK_MAX_WORDS && words.every((word) => SMALL_TALK_WORDS.has(word));
 }
 
 async function openTaskLines() {
@@ -255,9 +293,10 @@ export default {
       name: TOOL,
       label: "Agent Barn Task",
       description:
-        "Record your own work as Tasks the people you work for can follow. Create a Task for any request that " +
-        "takes more than a quick answer, keep its status current, add notes as you go and attach the files you " +
-        "produce. Check `list` before creating, to continue a Task that already covers the request.",
+        "Record work that uses tools or produces files as a Task the people you work for can follow. `create` " +
+        "one before you start (it starts in_progress); when your run ends, the files you wrote are attached and " +
+        "a Task still in_progress is marked done. Set `failed` (with a body saying why) or `open` (waiting on " +
+        "the user) yourself.",
       parameters: PARAMETERS,
       execute: executeTool,
     });
@@ -269,7 +308,11 @@ export default {
         state.recorded = true;
         for (const name of attachedNames(event.toolName, event.params)) state.attached.add(name);
         const taskId = taskIdOf(event.toolName, event.params, event.result);
-        if (taskId) state.taskIds.add(taskId);
+        if (taskId) {
+          state.taskIds.add(taskId);
+          const status = statusSet(event.toolName, event.params);
+          if (status) state.statuses.set(taskId, status);
+        }
       } else {
         if (event.toolCallId) state.work.add(event.toolCallId);
         if (FILE_TOOLS.has(event.toolName)) {
@@ -323,18 +366,19 @@ export default {
         return;
       }
       const failed = state.recorded ? await attachAutomatically(state) : [];
+      await closeInProgress(state);
       if (failed.length) nextTurnReminders.set(sessionKey, attachReminder(failed) + QUIET);
     });
 
-    api.on("before_prompt_build", async (_event, ctx) => {
+    api.on("before_prompt_build", async (event, ctx) => {
       if (ctx.trigger === "heartbeat") return;
       const parts = [];
-      if (ctx.trigger === "user" || ctx.trigger === "cron") parts.push(REQUEST_LINE);
+      if ((ctx.trigger === "user" || ctx.trigger === "cron") && !smallTalk(event.prompt)) parts.push(REQUEST_LINE);
       const lines = await openTaskLines();
       if (lines?.length) {
         parts.push(
-          `Your open Tasks:\n${lines.join("\n")}\nKeep their status current with the agentbarn_task tool, ` +
-            "and mark a Task done or failed when its work ends.",
+          `Your open Tasks:\n${lines.join("\n")}\nContinue one of these with the agentbarn_task tool rather ` +
+            "than creating another.",
         );
       }
       const reminder = nextTurnReminders.get(ctx.sessionKey ?? "");

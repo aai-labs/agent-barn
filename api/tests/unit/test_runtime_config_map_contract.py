@@ -177,3 +177,9 @@ def test_hermes_offers_plugin_tools_directly_rather_than_behind_tool_search():
 
 def test_the_instructions_keep_task_bookkeeping_out_of_replies():
     assert "Do not mention Tasks in your replies unless the user asks" in TASK_TOOL_INSTRUCTIONS
+
+
+def test_the_instructions_leave_closing_and_attaching_to_the_plugin():
+    instructions = " ".join(TASK_TOOL_INSTRUCTIONS.split())
+    assert "is marked `done` when your turn ends" in instructions
+    assert "the files you wrote are attached to it" in instructions

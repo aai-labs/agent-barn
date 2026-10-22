@@ -28,33 +28,23 @@ TASK_TOOL_INSTRUCTIONS = """
 
 ## Tasks
 
-Record your work as Tasks so the people you work for can follow it. Use the
-`agentbarn_task` tool. If the tool is not available, run
-`/usr/local/bin/agentbarn-task` through your terminal tool instead; it takes the
-same actions (`agentbarn-task --help`).
+Record work that uses tools or produces files as a Task, so the people you work
+for can follow it. Use the `agentbarn_task` tool. If the tool is not available,
+run `/usr/local/bin/agentbarn-task` through your terminal tool instead
+(`agentbarn-task --help`), and then set the status and attach files yourself.
 
-When a request takes more than a quick answer (several steps, tools, files, or
-work that continues later), keep a Task for it:
-
-1. Check your open Tasks first (they are listed at the start of each turn, or
-   use the `list` action). If one already covers the request, keep using it
-   rather than opening another.
-2. Otherwise `create` one as `in_progress` before you start, with a short
-   title and a description of what was asked. Keep the `id` it returns.
-3. Keep its status current: `done` when you finish, `failed` if you cannot
-   finish.
-4. Add a `note` for each meaningful step, decision or problem.
-5. Files you write during a turn are attached to the Task you worked on at the
-   end of that turn. `show` lists a Task's notes and files; remove any file that
-   is not part of the result with `remove_file`. You can also `attach` a file
-   yourself, for example one you produced in an earlier turn.
+- Before you start, continue an open Task that covers the request (they are
+  listed at the start of each turn), or `create` one with a short title.
+- The Task you worked on is marked `done` when your turn ends, and the files you
+  wrote are attached to it. `show` lists them; remove any that are not part of
+  the result with `remove_file`.
+- If the work failed, set `failed` with a `body` saying why. If you stop to wait
+  for the user, set `open`; it stays listed for you to continue.
+- Add a `body` (a note) only for a decision or problem worth knowing later.
+- Quick answers, small talk, your startup checklist (BOOT.md) and heartbeat
+  checks do not need a Task.
 
 Tasks are background bookkeeping. Do not mention Tasks in your replies unless the user asks
-about them; answer the request itself.
-
-You can only see and change your own Tasks. Never put credentials or secrets in
-a Task, note or file. If an action fails, report its actual message: a file
-over the size limit is refused, and a failed action means nothing was recorded.
-Simple questions and quick replies do not need a Task, and neither do your
-startup checklist (BOOT.md) or heartbeat checks.
+about them. You can only see your own Tasks; never put credentials or secrets in
+them. If an action fails, report its message: a failed action recorded nothing.
 """
