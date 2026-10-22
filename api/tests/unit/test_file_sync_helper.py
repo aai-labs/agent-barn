@@ -7,13 +7,19 @@ import sys
 import threading
 import time
 import unicodedata
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 from hamcrest import assert_that, equal_to, greater_than_or_equal_to, has_length, less_than
 
-from api.domains.file_sync.models import FileSyncChangesCreate, FileSyncUploadCompleteCreate
+from api.domains.file_sync.models import (
+    FileSyncChangesCreate,
+    FileSyncOperationResultCreate,
+    FileSyncOperationsRead,
+    FileSyncUploadCompleteCreate,
+)
 from api.domains.file_sync.rules import SyncCategory, classify, rules_manifest
 
 _SCRIPT = Path(__file__).parents[2] / "domains/agents/scripts/file-sync.py"
@@ -31,6 +37,10 @@ class _Ingest:
         self.report_status: list[tuple[int, dict]] = []
         self.hang = False
         self.request_times: list[float] = []
+        self.operations: list[dict] = []
+        self.results: list[FileSyncOperationResultCreate] = []
+        self.downloads: dict[str, tuple[int, bytes]] = {}
+        self.on_download: Callable[[], None] | None = None
         self._uploads: dict[str, str] = {}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -38,6 +48,35 @@ class _Ingest:
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def upload_url(self, path: str) -> str:
+        token = f"u{len(self._uploads) + 1}"
+        self._uploads[token] = path
+        return f"{self.url}/upload/{token}"
+
+    def download(self, path: str, content: bytes, version: str = "v2", status: int = 200) -> None:
+        name = f"d{len(self.downloads) + 1}"
+        self.downloads[name] = (status, content)
+        self.operations.append(
+            {
+                "path": path,
+                "action": "download",
+                "url": f"{self.url}/download/{name}",
+                "expires_at": None,
+                "version": version,
+            }
+        )
+
+    def reupload(self, path: str) -> None:
+        self.operations.append(
+            {
+                "path": path,
+                "action": "reupload",
+                "url": self.upload_url(path),
+                "expires_at": "2099-01-01T00:00:00Z",
+                "version": None,
+            }
+        )
 
     def _handler(self):
         ingest = self
@@ -72,23 +111,42 @@ class _Ingest:
                         status, headers = ingest.report_status.pop(0)
                         self._send(status, {"detail": "x"}, headers)
                         return
-                    uploads = []
-                    for entry in report.entries:
-                        if ingest.known.get(entry.path) != entry.sha256:
-                            token = f"u{len(ingest._uploads) + 1}"
-                            ingest._uploads[token] = entry.path
-                            uploads.append(
-                                {
-                                    "path": entry.path,
-                                    "url": f"{ingest.url}/upload/{token}",
-                                    "expires_at": "2099-01-01T00:00:00Z",
-                                }
-                            )
+                    uploads = [
+                        {"path": entry.path, "url": ingest.upload_url(entry.path), "expires_at": "2099-01-01T00:00:00Z"}
+                        for entry in report.entries
+                        if ingest.known.get(entry.path) != entry.sha256
+                    ]
                     self._send(200, {"uploads": uploads})
                 elif self.path == f"{_BASE_PATH}/uploads/complete":
                     done = FileSyncUploadCompleteCreate.model_validate_json(self._body())
                     ingest.completed.append(done.path)
                     self._send(204)
+                elif self.path == f"{_BASE_PATH}/operations/result":
+                    ingest.results.append(FileSyncOperationResultCreate.model_validate_json(self._body()))
+                    self._send(204)
+                else:
+                    self._send(404)
+
+            def do_GET(self):
+                if self.path.startswith("/download/"):
+                    if self.headers.get("Authorization") is not None:
+                        self._send(400)
+                        return
+                    if ingest.on_download is not None:
+                        ingest.on_download()
+                    status, content = ingest.downloads[self.path.rsplit("/", 1)[-1]]
+                    self.send_response(status)
+                    self.send_header("Content-Length", str(len(content)))
+                    self.end_headers()
+                    self.wfile.write(content)
+                    return
+                if self.headers.get("Authorization") != f"Bearer {_KEY}":
+                    self._send(401)
+                    return
+                if self.path == f"{_BASE_PATH}/operations":
+                    handed_out = FileSyncOperationsRead.model_validate({"operations": ingest.operations})
+                    ingest.operations = []
+                    self._send(200, handed_out.model_dump(mode="json"))
                 else:
                     self._send(404)
 
@@ -364,6 +422,150 @@ def test_a_file_changed_after_the_report_is_not_uploaded(tmp_path):
 
 def test_the_default_chunk_size_is_a_multiple_of_320_kib():
     assert_that(_load().CHUNK_BYTES % 327_680, equal_to(0))
+
+
+def _sha(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _results(ingest: _Ingest) -> list[tuple]:
+    return [(result.path, result.outcome, result.version, result.sha256, result.size) for result in ingest.results]
+
+
+def test_a_download_replaces_the_reported_file_and_names_what_it_wrote(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/notes.md", b"agent text")
+    with _Ingest() as ingest:
+        ingest.known["workspace/notes.md"] = _sha(b"agent text")
+        ingest.download("workspace/notes.md", b"person's edit", version="c2")
+        result, _ = _run(tmp_path, ingest.url)
+
+    assert_that(result.returncode, equal_to(0))
+    assert_that((volume / "workspace/notes.md").read_bytes(), equal_to(b"person's edit"))
+    assert_that(_results(ingest), equal_to([("workspace/notes.md", "done", "c2", _sha(b"person's edit"), 13)]))
+    assert_that(sorted(_snapshot(volume)), equal_to(["workspace/notes.md"]))
+
+
+def test_the_next_report_carries_the_downloaded_content_at_once(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/notes.md", b"agent text")
+    with _Ingest() as ingest:
+        ingest.known["workspace/notes.md"] = _sha(b"agent text")
+        ingest.download("workspace/notes.md", b"person's edit")
+        _run(tmp_path, ingest.url)
+        ingest.known["workspace/notes.md"] = _sha(b"person's edit")
+        _run(tmp_path, ingest.url)
+
+    assert_that(
+        [(entry.path, entry.sha256) for entry in ingest.reports[1].entries],
+        equal_to([("workspace/notes.md", _sha(b"person's edit"))]),
+    )
+    assert_that(ingest.chunks, equal_to({}))
+
+
+def test_a_file_the_agent_changes_during_a_download_is_kept(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/notes.md", b"agent text")
+    with _Ingest() as ingest:
+        ingest.known["workspace/notes.md"] = _sha(b"agent text")
+        ingest.download("workspace/notes.md", b"person's edit")
+        ingest.on_download = lambda: (volume / "workspace/notes.md").write_bytes(b"agent's newer text")
+        _run(tmp_path, ingest.url)
+
+    assert_that((volume / "workspace/notes.md").read_bytes(), equal_to(b"agent's newer text"))
+    assert_that(_results(ingest), equal_to([("workspace/notes.md", "local_changed", None, None, None)]))
+    assert_that(sorted(_snapshot(volume)), equal_to(["workspace/notes.md"]))
+
+
+def test_a_download_for_a_file_the_pod_did_not_report_is_refused(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/other.md", b"x")
+    with _Ingest() as ingest:
+        ingest.known["workspace/other.md"] = _sha(b"x")
+        ingest.download("workspace/gone.md", b"person's edit")
+        _run(tmp_path, ingest.url)
+
+    assert_that(_results(ingest), equal_to([("workspace/gone.md", "local_changed", None, None, None)]))
+    assert_that(sorted(_snapshot(volume)), equal_to(["workspace/other.md"]))
+
+
+def test_a_failed_download_leaves_the_file_alone(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/notes.md", b"agent text")
+    with _Ingest() as ingest:
+        ingest.known["workspace/notes.md"] = _sha(b"agent text")
+        ingest.download("workspace/notes.md", b"provider error", status=500)
+        _run(tmp_path, ingest.url)
+
+    assert_that(_results(ingest), equal_to([("workspace/notes.md", "failed", None, None, None)]))
+    assert_that(_snapshot(volume), equal_to({"workspace/notes.md": b"agent text"}))
+
+
+def test_a_download_without_room_on_the_volume_is_skipped(tmp_path):
+    helper = _load()
+    helper._free_bytes = lambda directory: 10
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/notes.md", b"agent text")
+    with _Ingest() as ingest:
+        ingest.download("workspace/notes.md", b"a person's much longer edit")
+        outcome = helper.download_file(
+            str(volume / "workspace/notes.md"), ingest.operations[0]["url"], _sha(b"agent text")
+        )
+
+    assert_that(outcome, equal_to(("skipped_no_space", None, None)))
+    assert_that(_snapshot(volume), equal_to({"workspace/notes.md": b"agent text"}))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_a_download_keeps_the_file_permissions(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/run.sh", b"echo agent")
+    (volume / "workspace/run.sh").chmod(0o750)
+    with _Ingest() as ingest:
+        ingest.known["workspace/run.sh"] = _sha(b"echo agent")
+        ingest.download("workspace/run.sh", b"echo person")
+        _run(tmp_path, ingest.url)
+
+    assert_that((volume / "workspace/run.sh").stat().st_mode & 0o777, equal_to(0o750))
+
+
+def test_a_reupload_sends_the_agents_copy_and_confirms_it(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/AGENTS.md", b"template")
+    with _Ingest() as ingest:
+        ingest.known["workspace/AGENTS.md"] = _sha(b"template")
+        ingest.reupload("workspace/AGENTS.md")
+        _run(tmp_path, ingest.url)
+
+    assert_that(ingest.chunks, equal_to({"workspace/AGENTS.md": [("bytes 0-7/8", b"template")]}))
+    assert_that((ingest.completed, ingest.results), equal_to((["workspace/AGENTS.md"], [])))
+
+
+def test_a_reupload_of_a_file_the_agent_no_longer_has_is_reported_failed(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "workspace/notes.md", b"x")
+    with _Ingest() as ingest:
+        ingest.known["workspace/notes.md"] = _sha(b"x")
+        ingest.reupload("workspace/AGENTS.md")
+        _run(tmp_path, ingest.url)
+
+    assert_that(_results(ingest), equal_to([("workspace/AGENTS.md", "failed", None, None, None)]))
+    assert_that((ingest.chunks, ingest.completed), equal_to(({}, [])))
+
+
+def test_jobs_never_remove_or_change_another_file_on_the_volume(tmp_path):
+    volume = tmp_path / "volume"
+    for rel in ("workspace/a.md", "workspace/b/c.md", "workspace/USER.md", "openclaw.json"):
+        _write(volume, rel, rel.encode())
+    before = _snapshot(volume)
+    with _Ingest() as ingest:
+        ingest.known.update({rel: _sha(rel.encode()) for rel in before})
+        ingest.download("workspace/missing.md", b"edit")
+        ingest.download("workspace/a.md", b"error", status=500)
+        ingest.reupload("workspace/gone.md")
+        _run(tmp_path, ingest.url)
+
+    assert_that(_snapshot(volume), equal_to(before))
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])

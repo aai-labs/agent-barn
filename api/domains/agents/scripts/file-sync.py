@@ -1,7 +1,10 @@
 import argparse
+import errno
 import hashlib
 import json
 import os
+import shutil
+import tempfile
 import threading
 import time
 import unicodedata
@@ -20,6 +23,10 @@ INGEST_TIMEOUT_SECONDS = 30
 TRANSFER_TIMEOUT_SECONDS = 120
 DEFAULT_INTERVAL_SECONDS = 15
 DEFAULT_ONCE_TIMEOUT_SECONDS = 60
+DONE = "done"
+SKIPPED_NO_SPACE = "skipped_no_space"
+FAILED = "failed"
+LOCAL_CHANGED = "local_changed"
 
 
 class Unauthorized(Exception):
@@ -186,6 +193,58 @@ def upload_file(path, url, sha256):
     return digest.hexdigest() == sha256
 
 
+def _free_bytes(directory):
+    return shutil.disk_usage(directory).free
+
+
+def _matches(path, sha256):
+    try:
+        return sha256 is not None and sha256_of(path) == sha256
+    except OSError:
+        return False
+
+
+def download_file(local, url, reported_sha256):
+    if not _matches(local, reported_sha256):
+        return LOCAL_CHANGED, None, None
+    directory = os.path.dirname(local)
+    temp = None
+    try:
+        with urllib.request.urlopen(url, timeout=TRANSFER_TIMEOUT_SECONDS) as response:
+            if _free_bytes(directory) <= int(response.headers.get("Content-Length") or 0):
+                return SKIPPED_NO_SPACE, None, None
+            descriptor, temp = tempfile.mkstemp(prefix=TEMP_PREFIX, suffix=".tmp", dir=directory)
+            digest = hashlib.sha256()
+            size = 0
+            with os.fdopen(descriptor, "wb") as handle:
+                while block := response.read(HASH_BLOCK_BYTES):
+                    handle.write(block)
+                    digest.update(block)
+                    size += len(block)
+                handle.flush()
+                os.fsync(handle.fileno())
+        if not _matches(local, reported_sha256):
+            return LOCAL_CHANGED, None, None
+        shutil.copymode(local, temp)
+        os.replace(temp, local)
+        temp = None
+        return DONE, digest.hexdigest(), size
+    except OSError as error:
+        if error.errno == errno.ENOSPC:
+            return SKIPPED_NO_SPACE, None, None
+        log(f"download failed: {type(error).__name__}")
+        return FAILED, None, None
+    except ValueError as error:
+        log(f"download failed: {type(error).__name__}")
+        return FAILED, None, None
+    finally:
+        if temp is not None:
+            try:
+                os.remove(temp)
+            except OSError:
+                pass
+
+
 def _retry_after(raw):
     try:
         seconds = int(raw)
@@ -201,12 +260,16 @@ class Ingest:
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def post(self, path, payload):
-        request = urllib.request.Request(
-            f"{self.base_url}/{path}",
-            data=json.dumps(payload).encode(),
-            method="POST",
-            headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"},
-        )
+        return self._send("POST", path, json.dumps(payload).encode())
+
+    def get(self, path):
+        return self._send("GET", path, None)
+
+    def _send(self, method, path, data):
+        headers = {"Authorization": f"Bearer {self.key}"}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(f"{self.base_url}/{path}", data=data, method=method, headers=headers)
         try:
             with self.opener.open(request, timeout=INGEST_TIMEOUT_SECONDS) as response:
                 body = response.read()
@@ -215,6 +278,41 @@ class Ingest:
                 raise Unauthorized from None
             raise IngestRefused(error.code, _retry_after(error.headers.get("Retry-After"))) from None
         return json.loads(body) if body else None
+
+
+def _local_path(rules, rel_path):
+    return os.path.join(rules["root"], *rel_path.split("/"))
+
+
+def _apply(ingest, rules, reported, operation, cache):
+    rel_path = operation.get("path")
+    if not isinstance(rel_path, str) or not synced(rel_path, rules):
+        log("ignored a job outside the sync rules")
+        return
+    local = _local_path(rules, rel_path)
+    entry = reported.get(rel_path)
+    if operation.get("action") == "reupload":
+        if entry is not None and upload_file(local, operation["url"], entry["sha256"]):
+            ingest.post("uploads/complete", {"path": rel_path})
+        else:
+            ingest.post("operations/result", {"path": rel_path, "outcome": FAILED})
+        return
+    if operation.get("action") != "download":
+        return
+    version = operation.get("version")
+    if version is None:
+        ingest.post("operations/result", {"path": rel_path, "outcome": FAILED})
+        return
+    outcome, sha256, size = download_file(local, operation["url"], entry["sha256"] if entry else None)
+    result = {"path": rel_path, "outcome": outcome}
+    if outcome == DONE:
+        result.update(version=version, sha256=sha256, size=size)
+        try:
+            written = os.stat(local, follow_symlinks=False)
+            cache[rel_path] = [written.st_size, written.st_mtime_ns, sha256]
+        except OSError:
+            cache.pop(rel_path, None)
+    ingest.post("operations/result", result)
 
 
 def run_cycle(ingest, rules, state_path):
@@ -226,9 +324,13 @@ def run_cycle(ingest, rules, state_path):
         entry = reported.get(upload.get("path"))
         if entry is None:
             continue
-        local = os.path.join(rules["root"], *entry["path"].split("/"))
-        if upload_file(local, upload["url"], entry["sha256"]):
+        if upload_file(_local_path(rules, entry["path"]), upload["url"], entry["sha256"]):
             ingest.post("uploads/complete", {"path": entry["path"]})
+    try:
+        for operation in (ingest.get("operations") or {}).get("operations", []):
+            _apply(ingest, rules, reported, operation, cache)
+    finally:
+        save_state(state_path, cache)
 
 
 def _settings():

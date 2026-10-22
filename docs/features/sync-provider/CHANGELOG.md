@@ -81,6 +81,23 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 ## Changes
 
+### 2026-10-22 — AF-384 — Pod helper: downloads and re-uploads
+
+- **Delivered:** after each report and its uploads, `file-sync.py` claims its jobs (`GET …/file-sync/operations`) and applies them.
+  - **Downloads:**
+    - A download is applied only over the exact content the pod reported in the same round. A file that is missing, still being written, or changed at any point before `os.replace` is answered `local_changed`, so the Agent wins.
+    - Free space is checked against the download's `Content-Length`. If there isn't enough room, or the disk fills while writing, the answer is `skipped_no_space`.
+    - The file is written to a `.file-sync-` temp file in the same directory, flushed to disk, given the old file's permissions, then swapped in with `os.replace`. The temp file is always removed when the download doesn't finish.
+    - `done` reports the job's version and the written hash and size, and updates the scan cache, so the next report carries the new content even inside the 5-second settle window. Without that, the old content would be uploaded back.
+    - A provider error, or a job without a version, is answered `failed`.
+  - **Re-uploads:** the Agent's copy is sent through the job's upload link and finished with `uploads/complete`. A file the pod didn't report, or that changed since, is answered `failed`.
+  - A job for a path outside the sync rules is ignored. The pod never deletes a file.
+- **Verified:**
+  - `tests/unit/test_file_sync_helper.py` now has 26 tests. The fake ingest checks handed-out jobs with `FileSyncOperationsRead` and results with `FileSyncOperationResultCreate`, and refuses an `Authorization` header on download links.
+  - The 8 new job tests failed first. The guard that jobs never remove or change another file passed before and after. The permission test is skipped on Windows and runs on Linux.
+  - `test_agent_runtime_digest.py` passes.
+  - ruff, format and ty pass.
+
 ### 2026-10-22 — AF-384 — Pod helper: scan, report and upload
 
 - **Delivered:** `api/domains/agents/scripts/file-sync.py`, stdlib only and pinned to Python 3.12 for ruff in `pyproject.toml`. Nothing starts it yet; the builders and `start.sh` come in a later slice.
