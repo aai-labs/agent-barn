@@ -428,6 +428,44 @@ def test_the_command_records_a_task_end_to_end(tmp_path: Path):
             context.stop_server()
 
 
+def test_the_command_notes_in_the_same_call_and_replaces_a_file_of_the_same_name(tmp_path: Path):
+    with given([*_given(), _an_agent_with_an_ingest_key(), _the_ingest_app_is_served_over_a_socket()]) as context:
+        try:
+            plan = tmp_path / "offsite.md"
+
+            with when("the Agent opens a Task with a note and attaches a file twice, replacing it"):
+                created = _task_command(
+                    context,
+                    "create",
+                    "--title",
+                    "Plan the offsite",
+                    "--status",
+                    "in_progress",
+                    "--note",
+                    "Venues first",
+                )
+                task_id = json.loads(created.stdout)["id"]
+                plan.write_text("# Venues")
+                _task_command(context, "attach", task_id, str(plan), "--replace")
+                plan.write_text("# Venues\n\n## Agenda")
+                replaced = _task_command(context, "attach", task_id, str(plan), "--replace")
+                _task_command(context, "status", task_id, "done", "--note", "Agenda added")
+                shown = json.loads(_task_command(context, "show", task_id).stdout)
+
+                with then("the Task holds both notes and only the latest copy of the file"):
+                    assert_that(replaced.returncode, equal_to(0), replaced.stderr)
+                    assert_that(shown["status"], equal_to("done"))
+                    assert_that(
+                        sorted(note["body"] for note in shown["notes"]), equal_to(["Agenda added", "Venues first"])
+                    )
+                    assert_that(
+                        [(f["filename"], f["size_bytes"]) for f in shown["files"]],
+                        contains_exactly(("offsite.md", len("# Venues\n\n## Agenda"))),
+                    )
+        finally:
+            context.stop_server()
+
+
 # --- removing files ---
 
 

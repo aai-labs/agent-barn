@@ -15,9 +15,9 @@ TASK_ID = "0199f1d2-0000-7000-8000-0000000000aa"
 
 
 class _IngestStub:
-    """Records each request and answers with a fixed status and JSON body."""
+    """Records each request and answers with a fixed status and JSON body, or one per method."""
 
-    def __init__(self, status: int = 200, body: object = None):
+    def __init__(self, status: int = 200, body: object = None, by_method: dict[str, tuple[int, object]] | None = None):
         self.requests: list[dict] = []
         stub = self
 
@@ -33,8 +33,9 @@ class _IngestStub:
                         "body": self.rfile.read(length),
                     }
                 )
-                payload = json.dumps(body if body is not None else {"id": TASK_ID}).encode()
-                self.send_response(status)
+                answer_status, answer = (by_method or {}).get(self.command, (status, body))
+                payload = json.dumps(answer if answer is not None else {"id": TASK_ID}).encode()
+                self.send_response(answer_status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
@@ -275,3 +276,79 @@ def test_remove_file_deletes_it_from_the_task():
         equal_to(("DELETE", _tasks_path(f"/{TASK_ID}/files/0199f1d2-0000-7000-8000-0000000000ff"))),
     )
     assert_that(json.loads(result.stdout), has_entries(removed="0199f1d2-0000-7000-8000-0000000000ff"))
+
+
+def test_create_can_add_a_note_in_the_same_call():
+    with _IngestStub(status=201, body={"id": TASK_ID, "status": "in_progress"}) as stub:
+        result = _run(stub, "create", "--title", "Reconcile invoices", "--status", "in_progress", "--note", "Started")
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(
+        [(request["method"], request["path"]) for request in stub.requests],
+        equal_to(
+            [("POST", _tasks_path()), ("PATCH", _tasks_path(f"/{TASK_ID}")), ("POST", _tasks_path(f"/{TASK_ID}/notes"))]
+        ),
+    )
+    assert_that(json.loads(stub.requests[2]["body"]), equal_to({"body": "Started"}))
+    assert_that(json.loads(result.stdout), has_entries(id=TASK_ID, status="in_progress"))
+
+
+def test_status_can_add_a_note_in_the_same_call():
+    with _IngestStub(status=200, body={"id": TASK_ID, "status": "failed"}) as stub:
+        result = _run(stub, "status", TASK_ID, "failed", "--note", "The booking site needs a login")
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(
+        [(request["method"], request["path"]) for request in stub.requests],
+        equal_to([("PATCH", _tasks_path(f"/{TASK_ID}")), ("POST", _tasks_path(f"/{TASK_ID}/notes"))]),
+    )
+    assert_that(json.loads(stub.requests[1]["body"]), equal_to({"body": "The booking site needs a login"}))
+    assert_that(json.loads(result.stdout), has_entries(status="failed"))
+
+
+def test_a_note_that_was_not_recorded_is_reported_after_the_status_change():
+    with _IngestStub(by_method={"PATCH": (200, {"id": TASK_ID, "status": "done"}), "POST": (503, {})}) as stub:
+        result = _run(stub, "status", TASK_ID, "done", "--note", "Finished")
+
+    assert_that(result.returncode, equal_to(1))
+    assert_that(result.stderr, contains_string("status was set to done but the note was not recorded"))
+
+
+def test_attach_replace_removes_earlier_files_of_the_same_name(tmp_path: Path):
+    upload = tmp_path / "offsite.md"
+    upload.write_text("# Offsite")
+    task = {
+        "id": TASK_ID,
+        "files": [
+            {"id": "file-old", "filename": "offsite.md"},
+            {"id": "file-other", "filename": "venues.csv"},
+        ],
+    }
+    with _IngestStub(
+        by_method={"GET": (200, task), "POST": (201, {"id": "file-new", "filename": "offsite.md"}), "DELETE": (204, "")}
+    ) as stub:
+        result = _run(stub, "attach", TASK_ID, str(upload), "--replace")
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(
+        [(request["method"], request["path"]) for request in stub.requests],
+        equal_to(
+            [
+                ("GET", _tasks_path(f"/{TASK_ID}")),
+                ("POST", _tasks_path(f"/{TASK_ID}/files?filename=offsite.md")),
+                ("DELETE", _tasks_path(f"/{TASK_ID}/files/file-old")),
+            ]
+        ),
+    )
+    assert_that(json.loads(result.stdout), has_entries(id="file-new"))
+
+
+def test_attach_replace_keeps_the_earlier_file_when_the_upload_is_refused(tmp_path: Path):
+    upload = tmp_path / "offsite.md"
+    upload.write_text("# Offsite")
+    task = {"id": TASK_ID, "files": [{"id": "file-old", "filename": "offsite.md"}]}
+    with _IngestStub(by_method={"GET": (200, task), "POST": (400, {"detail": "Storage is full"})}) as stub:
+        result = _run(stub, "attach", TASK_ID, str(upload), "--replace")
+
+    assert_that((result.returncode, result.stderr.strip()), equal_to((1, "Storage is full")))
+    assert_that([request["method"] for request in stub.requests], equal_to(["GET", "POST"]))
