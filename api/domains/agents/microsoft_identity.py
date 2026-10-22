@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import httpx
 import jwt
-from injector import inject, singleton
+from injector import NoInject, inject, singleton
 from jwt.exceptions import InvalidTokenError
 
 from api.domains.agents.microsoft_graph_scopes import APP_ONLY_SCOPE, GRAPH_SCOPE_PREFIX, sharepoint_permission
@@ -207,7 +207,7 @@ class MicrosoftAppTokens:
     """
 
     @inject
-    def __init__(self, identity: MicrosoftIdentityClient, clock: Callable[[], float] | None = None) -> None:
+    def __init__(self, identity: MicrosoftIdentityClient, clock: NoInject[Callable[[], float] | None] = None) -> None:
         self._identity = identity
         self._clock = clock or time.monotonic
         self._lock = threading.Lock()

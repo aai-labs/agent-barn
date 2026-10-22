@@ -3,8 +3,9 @@ from injector import Module, provider, singleton
 from api.core.config import Config, get_config
 from api.domains.agent_memory.key_repository import MemoryKeyRepository
 from api.domains.agents.event_handlers import AgentBudgetEmailHandler, AgentLifecycleEmailHandler
+from api.domains.agents.microsoft_graph_files import MicrosoftGraphFiles
 from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
-from api.domains.agents.microsoft_identity import MicrosoftIdentityClient
+from api.domains.agents.microsoft_identity import MicrosoftAppTokens, MicrosoftIdentityClient
 from api.domains.agents.repository import AgentRepository
 from api.domains.analytics.event_handlers import ProductAnalyticsHandler
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
@@ -86,8 +87,10 @@ class AppModule(Module):
         config: Config,
         identity: MicrosoftIdentityClient,
         graph_sites: MicrosoftGraphSites,
+        graph_files: MicrosoftGraphFiles,
+        app_tokens: MicrosoftAppTokens,
     ) -> SyncProviderPluginRegistry:
-        return SyncProviderPluginRegistry(shipped_plugins(config, identity, graph_sites))
+        return SyncProviderPluginRegistry(shipped_plugins(config, identity, graph_sites, graph_files, app_tokens))
 
     @provider
     @singleton

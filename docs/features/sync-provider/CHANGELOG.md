@@ -36,11 +36,11 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the sync rules (`api/domains/file_sync/rules.py`);
   - the file sync tables (migration `af95cf4c3a1e`);
   - the Graph file operations (`api/domains/agents/microsoft_graph_files.py`) and the app-token cache.
-  - the `file_sync` capability on the plugin seam (no provider declares it yet).
+  - the `file_sync` capability on the plugin seam, implemented by OneDrive.
 
   Nothing calls them yet, and no file syncs yet.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. OneDrive's implementation of `file_sync`, and a test fake of it;
+  1. a test fake of a `file_sync` provider;
   2. folder reconciliation;
   3. the Sync Engine and its deployment;
   4. Ingest file-sync routes;
@@ -80,6 +80,43 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — OneDrive implements `file_sync`
+
+- Delivered: `OneDriveSyncProviderPlugin` declares `file_sync` and implements its nine methods on `MicrosoftGraphFiles`.
+  - **Who it acts as:** the platform app in the connection's tenant, with a token from `MicrosoftAppTokens`.
+  - **Paths:** Microsoft's `parentReference.path` (`/drives/…/root:/Agent Barn/Sales Bot/workspace`) becomes a path relative to the root folder (`Sales Bot/workspace/notes.md`), matching the root case-insensitively. The root itself, anything outside it, a sibling such as "Agent Barnyard", and deleted items have no path.
+  - **Change feed:** with no cursor it starts from now (`token=latest`), or from the beginning when asked. A page's `nextLink` or `deltaLink` becomes the cursor to store, with `more` set when a `nextLink` is waiting. A page with neither is `ProviderUnavailable`.
+  - **Failures:**
+
+    | Graph | Neutral failure |
+    |---|---|
+    | 404 | `RemoteItemMissing` |
+    | 409 | `RemoteNameTaken` |
+    | 400, 412 | `RemoteChangeRejected` |
+    | 410 | `RemoteResyncRequired` |
+    | 401, 403, or a refused app token | `LocationAccessRefused` ("Agent Barn no longer has access to the SharePoint site. Connect OneDrive again.") |
+    | 429 | `ProviderThrottled`, with Microsoft's `Retry-After` |
+    | anything else, including an unreachable Microsoft | `ProviderUnavailable` |
+
+    A root without a site is `LocationNotFound` before anything is called.
+- Changed:
+  - `shipped_plugins` takes `MicrosoftGraphFiles` and `MicrosoftAppTokens`, wired in `AppModule` and `tests/steps/sync_provider.py`.
+  - `MicrosoftAppTokens` marks its test clock `NoInject`, because the injector otherwise refuses to build it.
+  - Connect-time provisioning still mints its app token directly, unchanged.
+  - `GET …/sync-providers` now lists `file_sync` among OneDrive's capabilities.
+- Not changed: the Playwright data support (`sync-provider-data-support.po.ts`) still mocks OneDrive's capabilities without `file_sync`. The UI only looks for `location_picker`.
+- Verified:
+  - 28 new OneDrive tests in `tests/unit/test_sync_provider_plugins.py` failed first (`shipped_plugins` refused the new arguments), then passed. They cover:
+    - the app token per tenant, fetched once and reused;
+    - item mapping and relative paths, including the edge cases;
+    - deleted items;
+    - the change feed start, cursor and `more`;
+    - every write's request;
+    - each failure mapping, `Retry-After`, a refused or unreachable token, and a root without a site.
+  - The first integration run had 123 failures: the injector could not build `MicrosoftAppTokens`. After `NoInject`, the only failure left was the provider list's expected capabilities, which were updated.
+  - Plugin, connection, repository and SharePoint (selected sites, sign-in, token endpoint) suites pass (276 tests together).
+  - ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — `file_sync` capability on the plugin seam
 

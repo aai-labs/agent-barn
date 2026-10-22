@@ -1,7 +1,21 @@
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 
 from api.core.config import Config
+from api.domains.agents.microsoft_graph_files import (
+    DriveItem,
+    GraphAccessRefused,
+    GraphItemNotFound,
+    GraphNameConflict,
+    GraphPreconditionFailed,
+    GraphRequestRejected,
+    GraphResyncRequired,
+    GraphThrottled,
+    GraphUnavailable,
+    MicrosoftGraphFiles,
+    delta_start_url,
+)
 from api.domains.agents.microsoft_graph_scopes import (
     GRAPH_SCOPE_PREFIX,
     READ_PERMISSION,
@@ -16,6 +30,7 @@ from api.domains.agents.microsoft_graph_sites import (
     SitesUnavailable,
 )
 from api.domains.agents.microsoft_identity import (
+    MicrosoftAppTokens,
     MicrosoftIdentityClient,
     MicrosoftIdentityError,
     MicrosoftIdentityUnavailable,
@@ -31,6 +46,12 @@ from api.domains.sync_provider.plugins.base import (
     ProviderUnavailable,
     Provisioned,
     ProvisioningFailed,
+    RemoteChangeRejected,
+    RemoteChanges,
+    RemoteItem,
+    RemoteItemMissing,
+    RemoteNameTaken,
+    RemoteResyncRequired,
     SignedIn,
     SignInIncomplete,
     SignInRefused,
@@ -38,6 +59,8 @@ from api.domains.sync_provider.plugins.base import (
     SyncLocation,
     SyncLocationGuard,
     SyncProviderPlugin,
+    SyncRoot,
+    UploadTarget,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,6 +98,8 @@ _THROTTLED = "Microsoft is limiting requests right now. Wait a few minutes, then
 _FOLDER_FAILED = "Agent Barn couldn't create its folder on that site, so it was not connected. Please try again."
 _ANOTHER_TENANT = "Sign in with an account from the Microsoft organization that connected OneDrive."
 _NO_RECORDED_GRANT = "This OneDrive connection has no site grant on record."
+_APP_ACCESS_LOST = "Agent Barn no longer has access to the SharePoint site. Connect OneDrive again."
+_DRIVE_ROOT_MARKER = "root:"
 
 
 class OneDriveSyncProviderPlugin(SyncProviderPlugin):
@@ -90,13 +115,28 @@ class OneDriveSyncProviderPlugin(SyncProviderPlugin):
         "connecting must be a SharePoint Administrator and a member of the site they pick."
     )
     location_noun = "SharePoint site"
-    capabilities = frozenset({SyncProviderCapability.LOCATION_PICKER, SyncProviderCapability.ADMIN_APPROVAL})
+    capabilities = frozenset(
+        {
+            SyncProviderCapability.LOCATION_PICKER,
+            SyncProviderCapability.ADMIN_APPROVAL,
+            SyncProviderCapability.FILE_SYNC,
+        }
+    )
     location_guard = SyncLocationGuard.SHAREPOINT_AGENT_SITES
 
-    def __init__(self, config: Config, identity: MicrosoftIdentityClient, graph_sites: MicrosoftGraphSites) -> None:
+    def __init__(
+        self,
+        config: Config,
+        identity: MicrosoftIdentityClient,
+        graph_sites: MicrosoftGraphSites,
+        graph_files: MicrosoftGraphFiles,
+        app_tokens: MicrosoftAppTokens,
+    ) -> None:
         self.config = config
         self.identity = identity
         self.graph_sites = graph_sites
+        self.graph_files = graph_files
+        self.app_tokens = app_tokens
 
     def is_offered(self) -> bool:
         return self.config.is_onedrive_sync_enabled
@@ -242,3 +282,136 @@ class OneDriveSyncProviderPlugin(SyncProviderPlugin):
             raise ProviderThrottled(_THROTTLED) from exc
         except SitesUnavailable as exc:
             raise ProviderUnavailable(_UNREACHABLE) from exc
+
+    def create_folder(self, root: SyncRoot, *, parent_id: str, name: str) -> RemoteItem:
+        token, site_id = self._app_access(root)
+        with _file_failures():
+            item = self.graph_files.create_folder(token, site_id=site_id, parent_id=parent_id, name=name)
+        return _remote_item(root, item)
+
+    def get_item(self, root: SyncRoot, *, item_id: str) -> RemoteItem:
+        token, site_id = self._app_access(root)
+        with _file_failures():
+            item = self.graph_files.get_item(token, site_id=site_id, item_id=item_id)
+        return _remote_item(root, item)
+
+    def get_item_by_path(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> RemoteItem:
+        token, site_id = self._app_access(root)
+        with _file_failures():
+            item = self.graph_files.get_item_by_path(token, site_id=site_id, parent_id=parent_id, rel_path=rel_path)
+        return _remote_item(root, item)
+
+    def move_item(
+        self, root: SyncRoot, *, item_id: str, name: str | None = None, parent_id: str | None = None
+    ) -> RemoteItem:
+        token, site_id = self._app_access(root)
+        with _file_failures():
+            item = self.graph_files.move_item(token, site_id=site_id, item_id=item_id, name=name, parent_id=parent_id)
+        return _remote_item(root, item)
+
+    def delete_item(self, root: SyncRoot, *, item_id: str) -> None:
+        token, site_id = self._app_access(root)
+        with _file_failures():
+            self.graph_files.delete_item(token, site_id=site_id, item_id=item_id)
+
+    def changes(self, root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
+        token, site_id = self._app_access(root)
+        url = cursor or delta_start_url(site_id=site_id, folder_id=root.folder_id, from_now=not from_start)
+        with _file_failures():
+            page = self.graph_files.delta_page(token, url)
+        next_cursor = page.next_link or page.delta_link
+        if next_cursor is None:
+            raise ProviderUnavailable(_UNREACHABLE)
+        return RemoteChanges(
+            items=[_remote_item(root, item) for item in page.items],
+            cursor=next_cursor,
+            more=page.next_link is not None,
+        )
+
+    def upload_target(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> UploadTarget:
+        token, site_id = self._app_access(root)
+        with _file_failures():
+            session = self.graph_files.create_upload_session(
+                token, site_id=site_id, parent_id=parent_id, rel_path=rel_path
+            )
+        return UploadTarget(url=session.upload_url, expires_at=session.expires_at)
+
+    def download_url(self, root: SyncRoot, *, item_id: str) -> str:
+        token, site_id = self._app_access(root)
+        with _file_failures():
+            return self.graph_files.download_url(token, site_id=site_id, item_id=item_id)
+
+    def write_empty_file(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> RemoteItem:
+        token, site_id = self._app_access(root)
+        with _file_failures():
+            item = self.graph_files.put_empty_file(token, site_id=site_id, parent_id=parent_id, rel_path=rel_path)
+        return _remote_item(root, item)
+
+    def _app_access(self, root: SyncRoot) -> tuple[str, str]:
+        """The platform app's token in the connection's tenant, and the connected site."""
+        if root.location_id is None:
+            raise LocationNotFound(_SITE_NOT_FOUND)
+        try:
+            token = self.app_tokens.get(
+                tenant_id=root.account_id,
+                client_id=self.config.onedrive_sync_client_id,
+                client_secret=self.config.onedrive_sync_client_secret,
+            )
+        except MicrosoftIdentityError as exc:
+            logger.warning("OneDrive app token refused for tenant %s: %s", root.account_id, exc.error)
+            raise LocationAccessRefused(_APP_ACCESS_LOST) from exc
+        except MicrosoftIdentityUnavailable as exc:
+            raise ProviderUnavailable(_UNREACHABLE) from exc
+        return token, root.location_id
+
+
+@contextmanager
+def _file_failures() -> Iterator[None]:
+    try:
+        yield
+    except GraphItemNotFound as exc:
+        raise RemoteItemMissing(str(exc)) from exc
+    except GraphAccessRefused as exc:
+        raise LocationAccessRefused(_APP_ACCESS_LOST) from exc
+    except GraphThrottled as exc:
+        raise ProviderThrottled(_THROTTLED, retry_after=exc.retry_after) from exc
+    except GraphNameConflict as exc:
+        raise RemoteNameTaken(str(exc)) from exc
+    except (GraphRequestRejected, GraphPreconditionFailed) as exc:
+        raise RemoteChangeRejected(str(exc)) from exc
+    except GraphResyncRequired as exc:
+        raise RemoteResyncRequired(str(exc)) from exc
+    except GraphUnavailable as exc:
+        raise ProviderUnavailable(_UNREACHABLE) from exc
+
+
+def _relative_path(root: SyncRoot, item: DriveItem) -> str | None:
+    if item.deleted or item.name is None or item.parent_path is None:
+        return None
+    _, marker, below_drive_root = item.parent_path.partition(_DRIVE_ROOT_MARKER)
+    if not marker:
+        return None
+    prefix = f"/{root.folder_name}"
+    if below_drive_root.lower() == prefix.lower():
+        return item.name
+    if below_drive_root.lower().startswith(f"{prefix}/".lower()):
+        return f"{below_drive_root[len(prefix) + 1 :]}/{item.name}"
+    return None
+
+
+def _remote_item(root: SyncRoot, item: DriveItem) -> RemoteItem:
+    return RemoteItem(
+        id=item.id,
+        name=item.name,
+        parent_id=item.parent_id,
+        path=_relative_path(root, item),
+        version=item.etag,
+        content_version=item.ctag,
+        size=item.size,
+        content_hash=item.quick_xor_hash,
+        is_folder=item.is_folder,
+        deleted=item.deleted,
+        modified_at=item.modified_at,
+        modified_by_app=item.modified_by_app,
+        web_url=item.web_url,
+    )
