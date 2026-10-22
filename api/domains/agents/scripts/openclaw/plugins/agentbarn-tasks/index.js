@@ -23,6 +23,13 @@ const IN_TURN_REMINDER =
   "This request has taken several steps and has no Task yet. Before you finish, record it with the " +
   "agentbarn_task tool: create a Task, add a note on what was done, attach the files you produced and " +
   "set its status.";
+// Next to every request: OpenClaw's model has the tool and the instructions but, unlike Hermes's,
+// did not use them within the turn in end-to-end runs, and it cannot be held back once a run has
+// side effects. About 45 tokens per request. Hermes records within the turn and does not need it.
+const REQUEST_LINE =
+  "If this request needs tools or produces files, create a Task with agentbarn_task before you start, " +
+  "and keep it current. Don't mention Tasks in your reply unless the user asks.";
+const QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping.";
 const NEXT_TURN_REMINDER =
   "Your previous turn did work without recording it as a Task. If it was more than a quick answer, " +
   "record it now with the agentbarn_task tool: create the Task, add a note on what was done, attach any " +
@@ -182,7 +189,7 @@ const attachReminder = (names) =>
   "with the agentbarn_task tool (action attach) so the Task shows the result.";
 
 const inTurnReminder = (gap) => (gap.kind === "record" ? IN_TURN_REMINDER : attachReminder(gap.names));
-const nextTurnReminder = (gap) => (gap.kind === "record" ? NEXT_TURN_REMINDER : attachReminder(gap.names));
+const nextTurnReminder = (gap) => (gap.kind === "record" ? NEXT_TURN_REMINDER : attachReminder(gap.names)) + QUIET;
 
 async function openTaskLines() {
   if (openTasksCache.lines && Date.now() - openTasksCache.at < OPEN_TASKS_TTL_MS) return openTasksCache.lines;
@@ -283,6 +290,7 @@ export default {
     api.on("before_prompt_build", async (_event, ctx) => {
       if (ctx.trigger === "heartbeat") return;
       const parts = [];
+      if (ctx.trigger === "user" || ctx.trigger === "cron") parts.push(REQUEST_LINE);
       const lines = await openTaskLines();
       if (lines?.length) {
         parts.push(

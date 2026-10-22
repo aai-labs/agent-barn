@@ -173,3 +173,7 @@ def test_start_script_installs_the_tasks_plugin(runtime, installed):
 def test_hermes_offers_plugin_tools_directly_rather_than_behind_tool_search():
     config = build_hermes_gateway_config("litellm/gpt-5", "http://litellm:4000")
     assert config["tools"]["tool_search"] == {"enabled": "off"}
+
+
+def test_the_instructions_keep_task_bookkeeping_out_of_replies():
+    assert "Do not mention Tasks in your replies unless the user asks" in TASK_TOOL_INSTRUCTIONS

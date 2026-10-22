@@ -448,3 +448,11 @@ def test_the_boot_run_is_never_reminded(tmp_path: Path):
 
     assert_that((results, _wrote_in_boot, held), equal_to(([None] * 4, None, None)))
     assert_that(plugin.start_turn("agentbarn-boot"), equal_to(None))
+
+
+def test_the_catch_up_reminder_asks_for_quiet_bookkeeping(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.tool_call("call-1", tool_name="write_file", args={"path": "/workspace/a.csv"})
+    plugin.end_turn()
+
+    assert_that(_context(plugin.start_turn()), contains_string("answer the user's message as normal"))

@@ -39,6 +39,7 @@ _BEFORE_FINISHING_REMINDER = (
     "agentbarn_task tool (create the Task, add a note on what was done, attach the files you produced, "
     "set its status), then give your answer."
 )
+_QUIET = " Record it quietly and answer the user's message as normal; do not report the bookkeeping."
 _NEXT_TURN_REMINDER = (
     "Your previous turn did work without recording it as a Task. If it was more than a quick answer, "
     "record it now with the agentbarn_task tool: create the Task, add a note on what was done, attach "
@@ -255,7 +256,7 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
         if missing is not None:
             _next_turn_reminders[session_id] = (
                 _NEXT_TURN_REMINDER if missing[0] == "record" else _attach_reminder(missing[1])
-            )
+            ) + _QUIET
 
 
 def _on_pre_verify(session_id="", **_):

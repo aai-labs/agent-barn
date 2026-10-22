@@ -47,6 +47,9 @@ work that continues later), keep a Task for it:
 5. `attach` every file you produce for the request. `show` gives a Task with its
    notes and files.
 
+Tasks are background bookkeeping. Do not mention Tasks in your replies unless the user asks
+about them; answer the request itself.
+
 You can only see and change your own Tasks. Never put credentials or secrets in
 a Task, note or file. If an action fails, report its actual message: a file
 over the size limit is refused, and a failed action means nothing was recorded.

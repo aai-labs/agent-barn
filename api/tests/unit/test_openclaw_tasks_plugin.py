@@ -242,14 +242,15 @@ def test_using_the_task_command_from_exec_counts_as_recording(tmp_path: Path):
 def test_a_short_run_is_not_reminded(tmp_path: Path):
     driven = _drive(tmp_path, [_after_tool("c1"), _after_tool("c2"), _finalize(), _agent_end(), _prompt()])
 
-    assert_that((driven["results"][2], _context(driven["results"][4])), equal_to((None, "")))
+    assert_that(driven["results"][2], is_(None))
+    assert_that("did work without recording" in _context(driven["results"][4]), is_(False))
 
 
 def test_heartbeat_runs_are_not_reminded(tmp_path: Path):
     steps = [_after_tool(f"c{n}", trigger="heartbeat") for n in range(1, 4)]
     driven = _drive(tmp_path, [*steps, _agent_end(trigger="heartbeat"), _prompt()])
 
-    assert_that(_context(driven["results"][-1]), equal_to(""))
+    assert_that("did work without recording" in _context(driven["results"][-1]), is_(False))
 
 
 def test_a_run_that_ends_without_a_task_is_reminded_on_the_next_turn_of_that_session(tmp_path: Path):
@@ -267,7 +268,7 @@ def test_a_run_that_ends_without_a_task_is_reminded_on_the_next_turn_of_that_ses
     )
 
     other, reminded, after = (_context(result) for result in driven["results"][4:])
-    assert_that((other, after), equal_to(("", "")))
+    assert_that(["did work without recording" in context for context in (other, after)], equal_to([False, False]))
     assert_that(reminded, contains_string("did work without recording it as a Task"))
 
 
@@ -304,7 +305,8 @@ def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path
 def test_an_unavailable_task_service_does_not_break_the_turn(tmp_path: Path):
     driven = _drive(tmp_path, [_prompt()], AGENTBARN_TASK_COMMAND="/nonexistent/agentbarn-task")
 
-    assert_that(driven["results"][0], is_(None))
+    context = _context(driven["results"][0])
+    assert_that(("Your open Tasks" in context, "agentbarn_task" in context), equal_to((False, True)))
 
 
 # --- runs that produce files ---
@@ -425,3 +427,27 @@ def test_unattached_files_are_named_on_the_next_turn(tmp_path: Path):
     driven = _drive(tmp_path, [_wrote(), _task("c2", action="create", title="States"), _agent_end(), _prompt()])
 
     assert_that(_context(driven["results"][-1]), contains_string("states.csv"))
+
+
+# --- the request-time line ---
+
+
+@pytest.mark.parametrize("trigger", ["user", "cron"])
+def test_each_request_carries_the_task_line(tmp_path: Path, trigger: str):
+    driven = _drive(tmp_path, [_prompt(trigger=trigger)])
+
+    context = _context(driven["results"][0])
+    assert_that(context, contains_string("create a Task with agentbarn_task before you start"))
+    assert_that(context, contains_string("Don't mention Tasks in your reply"))
+
+
+def test_heartbeats_do_not_carry_the_task_line(tmp_path: Path):
+    driven = _drive(tmp_path, [_prompt(trigger="heartbeat")])
+
+    assert_that(driven["results"][0], is_(None))
+
+
+def test_the_catch_up_reminder_asks_for_quiet_bookkeeping(tmp_path: Path):
+    driven = _drive(tmp_path, [_after_tool("c1", tool="write", params={"path": "a.csv"}), _agent_end(), _prompt()])
+
+    assert_that(_context(driven["results"][-1]), contains_string("answer the user's message as normal"))
