@@ -18,3 +18,5 @@ export const createQueryKeyStructure = (baseKey: string) => ({
 });
 
 export const apiKeysKey = createQueryKeyStructure("personal-api-keys");
+
+export const artifactsKey = createQueryKeyStructure("artifacts");

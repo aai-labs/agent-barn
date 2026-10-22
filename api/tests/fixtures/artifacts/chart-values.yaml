@@ -1,0 +1,15 @@
+dbConnectionUrl: postgresql://fixture:fixture@db/fixture
+secretSigningKey: fixture
+platformAdminCredentials: admin@example.com:Fixture1234
+agentTokenEncryptionKey: fixture
+environment: test
+webAppUrl: http://ui.test
+ingestBaseUrl: http://ingest.test
+organizationLlmBudgets:
+  defaultOrganizationUsd: 100
+  defaultAgentUsd: 25
+registry:
+  server: registry.test
+  username: fixture
+  password: fixture
+kubeconfigB64: Zml4dHVyZQ==

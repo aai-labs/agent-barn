@@ -16,6 +16,11 @@
   ],
   [
     "DELETE",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}",
+    "delete_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__delete"
+  ],
+  [
+    "DELETE",
     "/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}",
     "retire_communication_connection_organizations__organization_id__agents__agent_id__connections__connection_id__delete"
   ],
@@ -278,6 +283,21 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/activity/wakes",
     "list_agent_wakes_organizations__organization_id__agents__agent_id__activity_wakes_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts",
+    "list_artifacts_organizations__organization_id__agents__agent_id__artifacts_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}",
+    "get_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/download-link",
+    "artifact_download_link_organizations__organization_id__agents__agent_id__artifacts__artifact_id__download_link_get"
   ],
   [
     "GET",
@@ -1086,6 +1106,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts",
+    "create_artifact_organizations__organization_id__agents__agent_id__artifacts_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/configuration/draft",
     "start_agent_override_draft_organizations__organization_id__agents__agent_id__configuration_draft_post"
   ],
@@ -1438,6 +1463,11 @@
     "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/agent-size",
     "set_agent_size_organizations__organization_id__agents__agent_id__agent_size_put"
+  ],
+  [
+    "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}/content",
+    "publish_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__content_put"
   ],
   [
     "PUT",

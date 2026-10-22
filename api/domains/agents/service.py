@@ -138,6 +138,7 @@ from api.domains.agents.selection import (
     is_model_allowed,
 )
 from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
+from api.domains.artifacts.credentials import runtime_token as artifact_runtime_token
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
 from api.domains.communications.models import ConversationLocation, OutboundTargetRequest
@@ -2643,6 +2644,12 @@ class AgentService:
                 "AGENT_ID": str(agent.id),
                 "INGEST_URL": self.config.ingest_base_url,
                 "INGEST_API_KEY": ingest_key,
+                "ARTIFACT_URL": self.config.artifact_runtime_base_url,
+                "ARTIFACT_API_KEY": artifact_runtime_token(agent.id, ingest_key),
+                "ARTIFACT_MAX_BYTES": str(self.config.artifact_max_bytes),
+                "ARTIFACT_UPLOAD_ROOTS": "/workspace"
+                if agent.agent_type == AgentType.HERMES
+                else "/home/node/.openclaw/workspace",
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
                 "COMMUNICATIONS_PROTOCOL_VERSION": "2",

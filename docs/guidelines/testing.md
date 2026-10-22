@@ -425,3 +425,26 @@ This prerequisite-bearing subprocess contract is outside ordinary `make test-api
 The pinned-image
 `runtime_tests/test_{hermes,openclaw}_custom_api.py` contracts require images built
 with that CLI feature and exercise the installed binary as the runtime user.
+
+## Agent artifact storage and runtime contracts
+
+`api/tests/integration/test_artifacts.py` uses disposable Garage 2.4.1 and the
+migrated PostgreSQL test database. It exercises actual bytes, signed-link download
+and expiry, publication/checksum fences, current access, pinned retention and
+retryable purge; injected failures isolate recovery while keeping real storage.
+The migration contract verifies upgrade and refusal to drop cleanup evidence.
+These tests require Docker, never installation storage credentials.
+
+`make test-artifact-runtime` is an explicit additional contract; set both
+`HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE` to already-built images. It executes
+the generated ConfigMap command as each image's normal user against real API,
+PostgreSQL and Garage, including verified retrieval. It uses Linux Docker host
+networking for its disposable HTTP listener. It proves executable/byte behavior,
+not a live model's tool selection, provider messaging or workflow stop semantics.
+The regular `make test-api-runtime RUNTIME=...` pattern remains runtime-specific;
+this cross-runtime contract runs through the dedicated target.
+
+`make check-artifacts` uses Helm 3.19.0 to render disabled/enabled purge and
+verify storage credentials reach only the API/purge containers, retention
+configuration is shared with workers, and no storage credentials appear in
+the chart-owned common Secret. It creates no Kubernetes resources.

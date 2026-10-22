@@ -17,6 +17,7 @@ x-api-env: &api-env
   HINDSIGHT_DB_PASSWORD: ""
   HINDSIGHT_LITELLM_API_KEY: ""
   # Agent pods in k3d report workflow step outcomes to the API through the host.
+  ARTIFACT_RUNTIME_BASE_URL: ${ARTIFACT_RUNTIME_BASE_URL:-http://host.docker.internal:${API_PORT:?API_PORT is required}/artifact-runtime/v1}
   WORKFLOW_RUNTIME_BASE_URL: ${WORKFLOW_RUNTIME_BASE_URL:-http://host.docker.internal:${API_PORT:?API_PORT is required}/workflow-runtime/v1}
 
 services:

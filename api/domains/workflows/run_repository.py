@@ -14,6 +14,7 @@ from sqlmodel.sql.expression import SelectOfScalar
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.artifacts.references import attempt_files, release
 from api.domains.events.catalog import EVENT_REGISTRY, WORKFLOW_RUN_CHANGED
 from api.domains.events.models import ActorIdentity, ActorIdentityType, SubjectIdentity, SubjectIdentityType
 from api.domains.events.repository import OutboxMessageRepository
@@ -342,7 +343,11 @@ class WorkflowRunRepository:
             run, attempt = self._bound(session, attempt_id, token)
             version = session.get_one(WorkflowVersion, run.version_id)
             step = version.snapshot["steps"][attempt.step_index]
-            checkpoint = {"summary": result.summary, "step_id": step["id"]}
+            checkpoint = {
+                "summary": result.summary,
+                "step_id": step["id"],
+                "artifacts": attempt_files(session, attempt.id),
+            }
             session.add(
                 WorkflowCheckpoint(
                     run_id=run.id, attempt_id=attempt.id, step_index=attempt.step_index, result=checkpoint
@@ -388,6 +393,7 @@ class WorkflowRunRepository:
                 session.commit()
 
     def _settle(self, session: Session, run: WorkflowRun) -> None:
+        release(session, "run", run.id, self.config.artifact_retention_days)
         run.settled_at = datetime.now(UTC)
 
     def active_ids(self, limit: int = 100) -> list[UUID]:
