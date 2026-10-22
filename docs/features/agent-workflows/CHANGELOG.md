@@ -14,6 +14,11 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-22 — AF-389 — update from latest staging
+
+- Updated: Merged `origin/staging` at `d2cfca47` without text conflicts. Added no-op merge revision `b9e32d74a610` to join workflow head `f8740a67b788` with staging head `3bbf2465b9cb`; no data or schema operations are introduced.
+- Verification: All 102 workflow run/authoring and trigger-server tests pass after repairing the migration graph. `make check-api`, `make check-migrations`, `make check-workflows` (Helm 3.19.0), and `git diff --check` pass. No new live Agent or browser run is claimed.
+
 ### 2026-10-22 — AF-389 — remove the workflow concurrency cap
 
 - Changed: Removed the separate two-active-runs admission cap and its policy constant. Multiple runs of one or several workflows can start as sessions in the owning Agent; transactional start serialization and authorization remain in place.

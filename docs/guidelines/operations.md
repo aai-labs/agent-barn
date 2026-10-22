@@ -880,8 +880,9 @@ history retention period; run metadata/status remains.
 
 The unreleased migration `a38901e8a003` follows `c32e42bb0396`, adding run, attempt,
 checkpoint and history records with scope/pin constraints. No-op merge revision
-`f8740a67b788` joins it with staging head `a4e9c2d7b615` to preserve one head. No live schema change
-is performed by this work. Do not downgrade a populated execution schema: it
+`f8740a67b788` joins it with staging head `a4e9c2d7b615`. No-op merge
+`b9e32d74a610` joins that lineage with the later staging head `3bbf2465b9cb`
+to preserve one head. No live schema change is performed by this work. Do not downgrade a populated execution schema: it
 drops the ledger. Existing aggregate deletion cascades workflow-owned records.
 File artifacts and shared object storage are deferred to a separate slice; WF02
 has no storage environment variables, buckets, artifact tables or file endpoints.
