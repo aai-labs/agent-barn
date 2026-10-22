@@ -61,6 +61,30 @@ class FileSyncRepository:
                 if acquired:
                     session.scalar(text("SELECT pg_advisory_unlock(hashtext(:lock_key))"), {"lock_key": lock_key})
 
+    def agent_including_deleted(self, agent_id: UUID) -> Agent | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(select(Agent).where(col(Agent.id) == agent_id)).first()
+
+    def agent_sync_target(
+        self, organization_id: UUID, agent_id: UUID
+    ) -> tuple[SyncProviderConnection | None, SyncAgentFolder | None]:
+        with Session(self.delegate.engine) as session:
+            connection = session.exec(
+                select(SyncProviderConnection).where(
+                    col(SyncProviderConnection.organization_id) == organization_id,
+                    col(SyncProviderConnection.status) == SyncProviderStatus.ACTIVE,
+                )
+            ).first()
+            if connection is None:
+                return None, None
+            folder = session.exec(
+                select(SyncAgentFolder).where(
+                    col(SyncAgentFolder.connection_id) == connection.id,
+                    col(SyncAgentFolder.agent_id) == agent_id,
+                )
+            ).first()
+            return connection, folder
+
     def live_agent_names(self, organization_id: UUID) -> list[tuple[UUID, str]]:
         with Session(self.delegate.engine) as session:
             rows = session.exec(

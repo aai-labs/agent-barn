@@ -38,11 +38,12 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - the Graph file operations (`api/domains/agents/microsoft_graph_files.py`) and the app-token cache.
   - the `file_sync` capability on the plugin seam, implemented by OneDrive, and a test-only `file_sync` provider;
   - folder reconciliation (`FileSyncEngine.reconcile_folders`);
-  - the Sync Engine (`api/sync_engine_main.py`) and its deployment: Helm `syncEngine`, `make dev-sync-engine`, and the `sync-engine` Compose service started by `run.sh`.
+  - the Sync Engine (`api/sync_engine_main.py`) and its deployment: Helm `syncEngine`, `make dev-sync-engine`, and the `sync-engine` Compose service started by `run.sh`;
+  - the pod's file report route (`POST …/file-sync/changes`): authentication, readiness checks and path rules, answering 204 without acting on the report.
 
   Folders follow Agents on every connected Organization. Files are not synced yet.
 - Next, in this order, each as its own slice. Each slice adds the repository queries it uses.
-  1. Ingest file-sync routes;
+  1. Ingest file-sync routes: upload targets, deletes and skips for the report, then pending work and conflicts;
   2. remote change processing;
   3. the in-pod helper;
   4. builder and `start.sh` wiring;
@@ -54,11 +55,9 @@ Scope change (maintainer, 2026-10-16): OneDrive became the first provider of a g
   - **this README:**
     - the Organization Member visibility limit, with the helper wiring;
     - the disconnect section, with disconnect;
-  - **RBAC brief:**
-    - Ingest file-sync traffic, alongside the memory gateway paragraph;
-    - the visibility limit;
+  - **RBAC brief:** the visibility limit;
   - **[Agents](../agents.md):** delete stops sync, and a restore is followed on the next start;
-  - **[activity and ingest](../activity-and-ingest.md):** the new routes;
+  - **[activity and ingest](../activity-and-ingest.md):** each new route as it lands;
   - **[runtime and deployment](../../architecture/runtime-and-deployment.md):** the new start step;
   - **[INDEX](../../INDEX.md):** the helper.
 - Blockers: none.
@@ -76,6 +75,38 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
 ## Changes
+
+### 2026-10-22 — AF-384 — Pod file report route: authentication and refusals
+
+- Delivered: `POST /ingest/v1/agents/{agent_id}/file-sync/changes` (`api/domains/file_sync/routes.py`, `FileSyncIngestService` in `service.py`), registered in the Ingest app.
+  - **Body** (`FileSyncChangesCreate`): `complete` and up to 10,000 `entries`, each a `path` (1–1,024 characters), a `size` (≥ 0) and a lowercase hex `sha256`. A larger or malformed body is 422.
+  - **Answer:** 204, without acting on the report yet.
+- Refusals, in order:
+  - **401:** a missing or wrong key, an Agent without a key, or an Agent that does not exist. All four answer alike.
+  - **404:** a deleted Agent, even with its last valid key (deleting an Agent keeps its ingest key; only a start replaces it).
+  - **409:** no active connection in the Agent's own Organization, or a provider without `file_sync`.
+  - **404:** no folder yet, because the Sync Engine has not reached the Agent.
+  - **409:** a folder that is not `active` (sync turned off), or not yet created at the provider.
+  - **400:** a path not in NFC form, or `never` under the Agent's runtime's sync rules (malformed, outside the allowlist, credentials, `node_modules`, `_Not synced/`, …), naming the path.
+- Delivered: `FileSyncRepository.agent_including_deleted` and `agent_sync_target`, which return the Organization's active connection and that Agent's folder on it.
+- Changed: `api/ingest_app.py` imports the file sync and sync provider models and includes the router.
+- Docs:
+  - **[activity and ingest](../activity-and-ingest.md):** the route, its contract and refusals, and the source map.
+  - **RBAC brief:** file sync pod traffic is Agent-authenticated machine traffic, with its tenant taken only from persisted rows. It is reachable from a router, so it is not background work.
+- Verified:
+  - `tests/integration/test_file_sync_ingest_auth.py` (30 tests). Before the route existed, 28 failed. The two expecting 404 passed only because every request was 404 then; they now pass against the route.
+  - They cover:
+    - Hermes and OpenClaw reports accepted;
+    - each 401 case;
+    - a deleted Agent;
+    - not connected, a provider without `file_sync`, disconnected;
+    - no folder yet, a folder not yet created, sync turned off;
+    - nine refused paths and Hermes-specific rules;
+    - five oversized or malformed bodies;
+    - one Agent's key never opening another's;
+    - an Agent judged only by its own Organization's connection.
+  - The existing Ingest (`test_ingest.py`), SharePoint token endpoint, folder and engine pass suites pass (123 tests together).
+  - ruff, format and ty pass.
 
 ### 2026-10-22 — AF-384 — Sync Engine deployment
 

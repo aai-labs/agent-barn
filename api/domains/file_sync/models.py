@@ -3,11 +3,15 @@ from enum import StrEnum
 from uuid import UUID
 
 import sqlalchemy as sa
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import Field
 from sqlalchemy import Column
 from sqlmodel import Field as SqlField
 
 from api.infrastructure.postgres.models import BaseModel
 
+MAX_MANIFEST_ENTRIES = 10_000
+MAX_PATH_LENGTH = 1024
 FOLDER_NAME_INDEX = "uq_sync_agent_folder_connection_name"
 FOLDER_AGENT_INDEX = "uq_sync_agent_folder_connection_agent"
 FILE_PATH_INDEX = "uq_sync_file_folder_path"
@@ -114,3 +118,14 @@ class SyncActivity(BaseModel, table=True):
     path: str | None = SqlField(default=None, nullable=True, sa_type=sa.Text)
     detail: str | None = SqlField(default=None, nullable=True, sa_type=sa.Text)
     occurred_at: datetime = SqlField(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+
+
+class FileSyncEntryCreate(PydanticBaseModel):
+    path: str = Field(min_length=1, max_length=MAX_PATH_LENGTH)
+    size: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class FileSyncChangesCreate(PydanticBaseModel):
+    complete: bool
+    entries: list[FileSyncEntryCreate] = Field(max_length=MAX_MANIFEST_ENTRIES)
