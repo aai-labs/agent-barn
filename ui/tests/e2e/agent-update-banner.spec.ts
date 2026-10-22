@@ -177,6 +177,72 @@ test.describe("Agent update banner", () => {
     await expect(agentDetailPage.updateOutcome()).toHaveCount(0);
   });
 
+  test("when the backup fails, offers to update without it and sends skip_backup", async ({ page }) => {
+    let current: Record<string, unknown> = { ...mockAgent, status: "RUNNING", update_available: true };
+    await page.route(`**/api/v1/organizations/*/agents/${MOCK_AGENT_ID}`, async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(current) });
+    });
+    const posts: unknown[] = [];
+    await page.route(`**/agents/${MOCK_AGENT_ID}/managed-update`, async (route) => {
+      posts.push(route.request().postDataJSON());
+      current = { ...mockAgent, status: "STOPPED", running_model: "", update_in_progress: true };
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ ...mockAgent, status: "RUNNING", update_available: true, update_in_progress: true }),
+      });
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+    await agentDetailPage.updateButton().click();
+
+    current = {
+      ...mockAgent,
+      status: "STOPPED",
+      running_model: "",
+      update_available: false,
+      update_in_progress: false,
+      last_managed_update: {
+        outcome: "BACKUP_FAILED",
+        restore_point_id: null,
+        failure_reason: "pre-restore capture failed: disk full",
+      },
+    };
+
+    // A stopped Agent reports no update, so only the failure keeps the banner up.
+    await expect(agentDetailPage.updateButton()).toHaveText(/update without backup snapshot/i, {
+      timeout: 15_000,
+    });
+    await expect(agentDetailPage.updateBanner()).toContainText(/backup snapshot failed/i);
+    await expect(agentDetailPage.updateOutcome()).toContainText(/disk full/i);
+
+    await agentDetailPage.updateButton().click();
+    await expect.poll(() => posts.length).toBe(2);
+    expect(posts[0]).toBeNull();
+    expect(posts[1]).toEqual({ skip_backup: true });
+  });
+
+  test("after a reload, the failed backup is forgotten and no skip is offered", async () => {
+    await dataSupport.agents.interceptGetAgentRequest({
+      body: {
+        ...mockAgent,
+        status: "STOPPED",
+        running_model: "",
+        update_available: false,
+        last_managed_update: { outcome: "BACKUP_FAILED", restore_point_id: null, failure_reason: "disk full" },
+      },
+    });
+
+    await agentDetailPage.goto(MOCK_AGENT_ID);
+
+    await expect(agentDetailPage.updateOutcome()).toBeVisible();
+    await expect(agentDetailPage.updateButton()).toHaveCount(0);
+  });
+
   test("after a rollback, offers the update again and says why", async () => {
     await dataSupport.agents.interceptGetAgentRequest({
       body: {

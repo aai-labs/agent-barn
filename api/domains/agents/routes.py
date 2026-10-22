@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
@@ -20,6 +20,7 @@ from api.domains.agents.models import (
     AgentLlmBudgetUpdate,
     AgentLogHistoryRead,
     AgentLogsRead,
+    AgentManagedUpdateRequest,
     AgentNameSuggestionRead,
     AgentRead,
     AgentRuntimeDiagnosticsRead,
@@ -324,13 +325,16 @@ def managed_update(
     background_tasks: BackgroundTasks,
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
+    # Optional: a bare POST still means "take the backup, and stop if it fails".
+    payload: Annotated[AgentManagedUpdateRequest | None, Body()] = None,
 ):
     """Stop, capture, start on the new image, roll back if it never comes up.
 
     The orchestration is scheduled, not awaited: the 202 means "accepted",
     and the Agent's own status plus its restore points tell the story.
     """
-    return service.managed_update(agent_id, context, background_tasks.add_task)
+    skip_backup = payload.skip_backup if payload else False
+    return service.managed_update(agent_id, context, background_tasks.add_task, skip_backup=skip_backup)
 
 
 @agents_router.get("/{agent_id}/diagnostics", response_model=AgentRuntimeDiagnosticsRead)

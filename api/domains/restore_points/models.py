@@ -76,6 +76,7 @@ class AgentRestorePointRestore(PydanticBaseModel):
     # back. Refusing up front is the point: a configuration that cannot be applied
     # must not cost the Agent its files first.
     reapply_configuration: bool = False
+    skip_backup: bool = False
 
 
 def selection_from_manifest(

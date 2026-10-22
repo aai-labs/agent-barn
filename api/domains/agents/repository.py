@@ -45,6 +45,7 @@ from api.domains.events.catalog import (
     AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
     AGENT_LLM_BUDGET_CHANGED,
+    AGENT_MANAGED_UPDATE_BACKUP_SKIPPED,
     AGENT_SECRET_ADDED,
     AGENT_SECRET_REMOVED,
     AGENT_UPDATED,
@@ -1039,6 +1040,35 @@ class AgentRepository:
 
     # The writes below are targeted UPDATEs, not save(): the orchestrator holds no
     # fresh copy of the row and must not write back columns other requests changed.
+
+    def record_managed_update_backup_skipped(
+        self, agent: Agent, *, actor: ActorIdentity, actor_display: str
+    ) -> list[UUID]:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_MANAGED_UPDATE_BACKUP_SKIPPED,
+                schema_version=1,
+                occurred_at=datetime.now(UTC),
+                organization_id=agent.organization_id,
+                actor=actor,
+                subject=SubjectIdentity(
+                    type=SubjectIdentityType.AGENT,
+                    id=agent.id,
+                    organization_id=agent.organization_id,
+                ),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": agent.organization_id,
+                    "agent_id": agent.id,
+                    "agent_name": agent.name,
+                    "actor_display": actor_display,
+                    "subject_display": agent.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return delivery_ids
 
     def beat_managed_update(self, agent_id: UUID) -> None:
         """Refresh a running update's heartbeat. Never starts one: that is a claim."""

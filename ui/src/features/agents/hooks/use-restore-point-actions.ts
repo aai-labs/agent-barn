@@ -43,15 +43,38 @@ export function useRestoreRestorePoint(agentId: string) {
     mutationFn: async ({
       restorePointId,
       reapplyConfiguration = false,
+      skipBackup = false,
     }: {
       restorePointId: string;
       reapplyConfiguration?: boolean;
+      skipBackup?: boolean;
     }) => {
       const response = await api.post<RestorePoint>(
         `${orgApiBase}/agents/${agentId}/restore-points/${restorePointId}/restore`,
         // The server checks the recorded configuration before it starts the Job, so
         // a configuration that cannot be applied never costs the Agent its files.
-        { reapplyConfiguration },
+        { reapplyConfiguration, skipBackup },
+        { schema: RestorePointSchema },
+      );
+      return response.data;
+    },
+    onSuccess: () => invalidateRestorePoints(queryClient, agentId),
+  });
+}
+
+/**
+ * Backs the Agent's volume up, then empties it. Resolves with the backup the reset
+ * took, which is the row to watch: the Job finishes in the background.
+ */
+export function useResetAgent(agentId: string) {
+  const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
+
+  return useMutation({
+    mutationFn: async () => {
+      const response = await api.post<RestorePoint>(
+        `${orgApiBase}/agents/${agentId}/reset`,
+        undefined,
         { schema: RestorePointSchema },
       );
       return response.data;

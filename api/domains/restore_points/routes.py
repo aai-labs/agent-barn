@@ -60,6 +60,20 @@ def restore_restore_point(
 
 
 @restore_points_router.post(
+    "/{agent_id}/reset",
+    response_model=AgentRestorePointRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def reset_agent(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[RestorePointService, Injected(RestorePointService)],
+):
+    """Responds with the backup the reset takes first, which is what to poll."""
+    return service.reset_agent(agent_id, context)
+
+
+@restore_points_router.post(
     "/{agent_id}/restore-points/{restore_point_id}/configuration",
     status_code=status.HTTP_204_NO_CONTENT,
 )

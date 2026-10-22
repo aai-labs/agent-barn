@@ -19,8 +19,11 @@ from api.domains.agents.repository import AgentRepository
 from api.domains.agents.restore_point_job import EXIT_RESTORE_FAILED
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
+from api.domains.events.catalog import AGENT_MANAGED_UPDATE_BACKUP_SKIPPED
+from api.domains.events.models import OutboxMessage
 from api.domains.restore_points.repository import RestorePointRepository
 from api.infrastructure.kubernetes import KubernetesClient
+from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import (
     create_test_client,
@@ -751,6 +754,119 @@ def test_managed_update_is_accepted_and_runs_through_the_background_task():
             body = _read_agent(context)
             assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
             assert_that(body["update_in_progress"], equal_to(False))
+
+
+def _backup_failed(context) -> None:
+    context.injector.get(AgentRepository).record_managed_update_outcome(
+        context.agent.id, ManagedUpdateOutcome.BACKUP_FAILED, restore_point_id=None, failure_reason="disk full"
+    )
+
+
+def _skip_backup(context):
+    return context.client.post(_managed_url(context), json={"skip_backup": True}, headers=_auth(context))
+
+
+def test_an_update_without_a_backup_runs_on_the_stopped_agent_a_failed_backup_left():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _backup_failed(context)
+        k8s = _k8s(context)
+        k8s.get_pod_readiness.return_value = _READY
+
+        with when("I update without a backup"):
+            response = _skip_backup(context)
+
+        with then("the Agent runs the new version, with no capture and no restore point"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            body = _read_agent(context)
+            assert_that(body["status"], equal_to(AgentStatus.RUNNING.value))
+            assert_that(k8s.create_job.called, equal_to(False))
+            assert_that(_restore_points(context), has_length(0))
+            assert_that(body["last_managed_update"]["outcome"], equal_to(ManagedUpdateOutcome.SUCCEEDED.value))
+            assert_that(body["last_managed_update"]["restore_point_id"], none())
+
+        with then("the skipped backup is audited"):
+            messages = context.injector.get(PostgresRepositoryDelegate).find_all(OutboxMessage)
+            skipped = [m for m in messages if m.event_name == AGENT_MANAGED_UPDATE_BACKUP_SKIPPED]
+            assert_that(skipped, has_length(1))
+
+
+def test_an_update_without_a_backup_that_never_comes_up_leaves_the_agent_stopped_on_its_old_pin():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        # An earlier update rolled back, so the Agent is pinned to the image that worked.
+        _pin(context, _OLD_IMAGE)
+        _backup_failed(context)
+        k8s = _k8s(context)
+        k8s.get_pod_readiness.return_value = _CRASH_LOOP
+        _new_version_crash_loops(context)
+
+        with when("the new version crash-loops and there is no backup to roll back to"):
+            _skip_backup(context)
+
+        with then("nothing is restarted: the Agent is stopped and the outcome says the update failed"):
+            body = _read_agent(context)
+            assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
+            assert_that(body["last_managed_update"]["outcome"], equal_to(ManagedUpdateOutcome.UPDATE_FAILED.value))
+            assert_that(k8s.create_deployment.call_count, equal_to(1))
+            assert_that(k8s.create_job.called, equal_to(False))
+
+        with then("the pin is back, so a start runs the image that worked"):
+            assert_that(_stored_agent(context).pinned_runtime_image, equal_to(_OLD_IMAGE))
+
+
+def test_skipping_the_backup_is_refused_unless_a_backup_just_failed():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        with when("I skip the backup on a running Agent"):
+            running = _skip_backup(context)
+
+        with then("it is refused"):
+            assert_that(running.status_code, equal_to(status.HTTP_409_CONFLICT))
+
+        with when("I skip the backup on a stopped Agent whose last update did not fail its backup"):
+            repository = context.injector.get(AgentRepository)
+            agent = repository.get_by_id(context.agent.id)
+            agent.status = AgentStatus.STOPPED
+            repository.save(agent)
+            stopped = _skip_backup(context)
+
+        with then("it is refused and no update was claimed"):
+            assert_that(stopped.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(_read_agent(context)["update_in_progress"], equal_to(False))
+
+
+def test_an_update_without_a_backup_that_cannot_get_the_volume_keeps_the_offer():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _backup_failed(context)
+        _k8s(context).has_pods_for_deployment.return_value = True
+
+        with when("the old pod never lets go of the volume"):
+            with (
+                patch("api.domains.agents.service.MANAGED_UPDATE_VOLUME_RELEASE_TIMEOUT_SECONDS", 0),
+                patch("api.domains.agents.service.RESTORE_POINT_POD_TERMINATION_POLL_SECONDS", 0),
+            ):
+                _skip_backup(context)
+
+        with then("the Agent is untouched and still reports a failed backup, not a failed update"):
+            body = _read_agent(context)
+            assert_that(body["status"], equal_to(AgentStatus.STOPPED.value))
+            assert_that(body["last_managed_update"]["outcome"], equal_to(ManagedUpdateOutcome.BACKUP_FAILED.value))
+            assert_that(_k8s(context).create_deployment.called, equal_to(False))
+
+
+def test_a_failed_audit_write_releases_the_update_claim():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _backup_failed(context)
+
+        with when("the audit write fails after the claim"):
+            with patch.object(AgentRepository, "record_managed_update_backup_skipped", side_effect=RuntimeError):
+                try:
+                    context.injector.get(AgentService).managed_update(
+                        context.agent.id, _user_context(context), lambda *args: None, skip_backup=True
+                    )
+                except RuntimeError:
+                    pass
+
+        with then("the Agent is not left marked as updating"):
+            assert_that(_read_agent(context)["update_in_progress"], equal_to(False))
 
 
 def test_managed_update_on_a_stopped_agent_returns_409():

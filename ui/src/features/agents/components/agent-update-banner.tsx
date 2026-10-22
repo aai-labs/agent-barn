@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { RotateCcw, Sparkles } from "lucide-react";
 
@@ -27,12 +28,26 @@ export function AgentUpdateBanner({ agent, className }: { agent: Agent; classNam
   // The server's flag covers the whole run, including the minutes after the
   // 202, so the button cannot start a second update meanwhile.
   const updating = agent.updateInProgress || managedUpdate.isPending;
+  const [startedHere, setStartedHere] = useState(false);
+  if (startedHere && !updating && agent.status !== "STOPPED") {
+    setStartedHere(false);
+  }
+  // A failed backup leaves the Agent stopped, and a stopped Agent never reports an update as
+  // available, so the failure is what keeps the banner on screen.
+  const backupFailed =
+    startedHere &&
+    !updating &&
+    agent.status === "STOPPED" &&
+    agent.lastManagedUpdate?.outcome === "BACKUP_FAILED";
 
-  if (!agent.updateAvailable && !updating) {
+  if (!agent.updateAvailable && !updating && !backupFailed) {
     return null;
   }
 
-  const update = () => void managedUpdate.mutateAsync(agent.id).catch(toastError);
+  const update = () => {
+    setStartedHere(true);
+    void managedUpdate.mutateAsync({ agentId: agent.id, skipBackup: backupFailed }).catch(toastError);
+  };
 
   return (
     <div
@@ -54,7 +69,16 @@ export function AgentUpdateBanner({ agent, className }: { agent: Agent; classNam
           <Sparkles size={16} />
         </span>
         <p className="m-0 text-[0.844rem] leading-relaxed" style={{ color: "var(--accent-ink)" }}>
-          <UpdateExplanation agentName={agent.name} />{" "}
+          {backupFailed ? (
+            <>
+              The backup snapshot failed. You can update without it, but if the new version does
+              not come up healthy there is nothing to roll back to, and {agent.name} stays stopped.{" "}
+            </>
+          ) : (
+            <>
+              <UpdateExplanation agentName={agent.name} />{" "}
+            </>
+          )}
           <a
             href={RELEASES_URL}
             target="_blank"
@@ -72,7 +96,8 @@ export function AgentUpdateBanner({ agent, className }: { agent: Agent; classNam
         disabled={updating}
         onClick={update}
       >
-        <RotateCcw size={14} /> {updating ? "Updating…" : "Update"}
+        <RotateCcw size={14} />{" "}
+        {updating ? "Updating…" : backupFailed ? "Update without backup snapshot" : "Update"}
       </button>
     </div>
   );
@@ -90,7 +115,7 @@ export function AgentUpdateNotice({ agent }: { agent: Agent }) {
     return null;
   }
 
-  const update = () => void managedUpdate.mutateAsync(agent.id).catch(toastError);
+  const update = () => void managedUpdate.mutateAsync({ agentId: agent.id }).catch(toastError);
 
   if (updating) {
     return (
@@ -174,6 +199,13 @@ export function AgentUpdateOutcomeNote({
         {last.failureReason ? `: ${last.failureReason}` : "."}{" "}
         {agent.status === "STOPPED" &&
           `${agent.name} was stopped but not changed. Start it to keep using the current version.`}
+      </>
+    );
+  } else if (last.outcome === "UPDATE_FAILED" && agent.status === "STOPPED") {
+    message = (
+      <>
+        The update, run without a backup, did not come up healthy. There was nothing to roll back
+        to, so {agent.name} was stopped. Start it to try again.
       </>
     );
   } else if (last.outcome === "ROLLBACK_FAILED" && agent.status !== "RUNNING") {

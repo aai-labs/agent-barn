@@ -113,7 +113,7 @@ export const AgentProvisioningErrorSchema = z.object({
 });
 
 export const AgentManagedUpdateSchema = z.object({
-  outcome: z.enum(["SUCCEEDED", "BACKUP_FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"]),
+  outcome: z.enum(["SUCCEEDED", "BACKUP_FAILED", "UPDATE_FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"]),
   restorePointId: z.string().uuid().nullish(),
   failureReason: z.string().nullish(),
 });
