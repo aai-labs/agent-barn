@@ -11,7 +11,7 @@ An Organization Owner or Admin connects a storage provider once from Organizatio
 Providers are plugins of one seam, the way messaging platforms are Platform Plugins of Communications ([ADR](../../adr/2026-10-16-sync-provider-plugin-seam.md)):
 
 - The generic `SyncProviderService` (`api/domains/sync_provider/`) owns permissions, the signed state, the callback page, the connection lifecycle, and one connection at a time.
-- Each `SyncProviderPlugin` (`api/domains/sync_provider/plugins/`) talks only to its provider: sign-in, location search, provisioning and its rollback, and revoking. It depends only on its provider's HTTP clients, never on another domain's services or repositories, and never touches the database. OneDrive reuses the Microsoft identity and Graph clients in `api/domains/agents/` (`microsoft_identity.py`, `microsoft_graph_sites.py`), which it shares with the SharePoint integration.
+- Each `SyncProviderPlugin` (`api/domains/sync_provider/plugins/`) talks only to its provider: sign-in, location search, provisioning and its rollback, and revoking. It depends only on its provider's HTTP clients, never on another domain's services or repositories, and never touches the database. OneDrive reuses the Microsoft identity and Graph clients in `api/domains/agents/` (`microsoft_identity.py`, `microsoft_graph_sites.py`, and `microsoft_graph_files.py` for file sync), the first two shared with the SharePoint integration.
 
 Delivery state is tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -127,7 +127,43 @@ A new provider is a plugin, its provider client, and tests. No route, table, mig
 
 ## Agent file sync
 
-Decided in the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md). Delivery is in progress, and this section describes only what runs today: each Agent's folder, the jobs people's edits create, and the pod helper that syncs an Agent's files through the [Ingest file sync routes](../activity-and-ingest.md) ([`CHANGELOG.md`](CHANGELOG.md)).
+Decided in the [Agent file sync ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md). Every Agent gets its own folder inside "Agent Barn", and the Agent's files are kept in sync with it both ways. The Agent's version is the source of truth: people may edit the Agent's work and memory there, and every other change a person makes is undone.
+
+There are three parts:
+- the Sync Engine, which follows the provider;
+- the pod helper, which follows the Agent's volume;
+- the [Ingest file sync routes](../activity-and-ingest.md) between them, which own the pod-facing contract.
+
+The provider's credentials never enter a pod; the pod only ever holds per-file upload and download links. The end-to-end run against a real tenant is tracked in [`CHANGELOG.md`](CHANGELOG.md).
+
+### What syncs
+
+Paths are relative to the runtime's root: `/opt/data` for Hermes, whose `workspace/` is the Agent's `/workspace`, and `/home/node/.openclaw` for OpenClaw. `api/domains/file_sync/rules.py` is the one source. It ships to pods as `file-sync-rules.json`, and Ingest checks every path against it again.
+
+| Category | Hermes | OpenClaw | A person's edit at the provider |
+|---|---|---|---|
+| `config` | `SOUL.md`, `workspace/IDENTITY.md`, `AGENTS.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md` | `workspace/SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `TOOLS.md`, `BOOT.md`, `BOOTSTRAP.md`, `HEARTBEAT.md` | Undone |
+| `skills` | `workspace/skills/**` | `workspace/skills/**` | Undone |
+| `memory` | `memories/USER.md`, `memories/MEMORY.md` | `workspace/USER.md`, `workspace/MEMORY.md` | Applied to the Agent |
+| `work` | Everything else under `workspace/` | Everything else under `workspace/` | Applied to the Agent |
+| `never` | Everything else | Everything else | — |
+
+`never` covers credentials and runtime machinery (`config.yaml`, `openclaw.json`, `.env`, `aai-cli/`, sessions), and also, anywhere:
+- `.git/`, `node_modules/` and `__pycache__/`;
+- `_Not synced/`;
+- symlinks and anything behind them;
+- the helper's own `.file-sync-` temporary files.
+
+`config` files are rebuilt from the Template at every start, and `skills` from the Agent's skills, so they are mirrored read-only.
+
+### How fast changes travel
+
+- **An Agent's change reaches the provider** on the helper's next round. Rounds run every 15 s, and a file still being written waits 5 s. Then the file uploads.
+- **A person's change reaches the Agent, or is undone,** in at most about 75 s plus the transfer:
+  1. the Sync Engine sees it on its next pass (every 30 s);
+  2. the job waits until 30 s after the item's last change, so autosave settles;
+  3. the helper picks it up on its next round (every 15 s).
+- **A stopped Agent** gets its waiting jobs in the helper's run before the runtime starts.
 
 ### The Agent's pod
 
@@ -197,7 +233,47 @@ A file whose path and row match is a content edit. It is ignored when an upload 
 - **Autosave:** a job is not handed out until 30 s after the item's last modification (`retry_at`). Each further autosave pushes that back, and the cursor never waits.
 - **One job per file:** a pending re-upload is never turned into a download.
 
-Not handled: deleting the "Agent Barn" folder itself. The change feed is anchored to that folder, and what the provider then returns is unverified.
+### The Agent's own changes
+
+The pod reports its full file list, and Ingest answers with upload links. The [Ingest contract](../activity-and-ingest.md) owns the details:
+- **New and changed files** are uploaded and then confirmed; the server checks each confirmation at the provider.
+- **Empty files** are written by the server.
+- **Deletes:** a file missing from a complete report is deleted at the provider (its recycle bin).
+- **Conflicts:** when the Agent changed a file a person also edited, the Agent wins. Its version is uploaded over the person's, which stays in the provider's version history, and `conflict_agent_won` is recorded.
+
+The helper never deletes a file on the volume.
+
+### Activity
+
+Everything File Sync does that a person should be able to see is stored in `sync_activity`: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever. No route or UI reads them yet; the agent page card is the next ticket.
+
+| Kind | Meaning |
+|---|---|
+| `edit_undone` | A person edited a `config` or `skills` file; the Agent's copy was put back. |
+| `restored` | A person deleted or moved away a synced file; the Agent's copy was put back. |
+| `renamed_back` | A person renamed or moved a synced file within its folder; it was moved back. |
+| `moved_not_synced` | A person added a file the Agent does not have; it was moved to `_Not synced/`. |
+| `folder_restored` | A person renamed, moved or deleted an Agent's folder; it was put back or rebuilt. |
+| `conflict_agent_won` | The Agent changed a file a person had also edited; the Agent's version was kept. |
+| `deleted_by_agent` | The Agent deleted a file; it was deleted at the provider. |
+| `skipped_too_large` | A file over 100 MB, on either side, was not synced. |
+| `skipped_name` | A name the provider refuses, a path over its 400-character limit, or a path differing only in case from another was not synced. |
+| `skipped_no_space` | The Agent's volume had no room for a person's edit; it is retried. |
+
+### Limits
+
+- **Size and names:** files over 100 MB are not synced. Neither are names the provider refuses, paths whose full provider path exceeds 400 characters, or a second path differing from another only in case. Each is recorded once as a skip.
+- **What the helper skips:** names not in Unicode NFC form, and paths over 1,024 characters.
+- **Large file lists:** the helper reports at most 10,000 files. Beyond that, the report is incomplete, so files the Agent deleted are not deleted at the provider.
+
+### Known limits of file sync
+
+- **Every Organization Member can open the Agent Folders,** and can edit work and memory files there, including Members without Agent Access to that Agent. This is accepted in the ADR and recorded in the [RBAC brief](../rbac/IMPLEMENTATION-BRIEF.md).
+- **Deleting the "Agent Barn" folder itself is not handled.** The change feed is anchored to that folder, and what the provider then returns is unverified.
+- **Stopped Agents:** undos, restores and people's edits wait for the Agent's next start.
+- **Conflicts keep the Agent's version.** The person's edit survives only in the provider's version history.
+- **Running Agents** start syncing after their next restart or managed update.
+- **Pods ask Ingest every 15 s** even when their Organization has no connection, so that sync starts as soon as one is made.
 
 ## OneDrive provider
 
@@ -261,10 +337,11 @@ When either setting is blank, OneDrive is listed as "OneDrive is not configured 
 | Folder location for other domains | `../../../api/domains/sync_provider/lookup.py`, used by `../../../api/domains/agents/sharepoint_service.py` |
 | Microsoft identity and Graph calls | `../../../api/domains/agents/microsoft_identity.py`, `microsoft_graph_sites.py` |
 | UI | `../../../ui/src/features/sync-provider/`, registered as `sync` in `../../../ui/src/features/organizations/components/organization-settings-utils.ts` and `../../../ui/src/app/dashboard/[orgId]/settings/page.tsx` |
-| Agent file sync: rules, models, folder pass, engine queries | `../../../api/domains/file_sync/` (`rules.py`, `models.py`, `engine.py`, `repository.py`) |
+| Agent file sync: rules, models, engine pass, Ingest service and routes, folder removal on disconnect | `../../../api/domains/file_sync/` (`rules.py`, `models.py`, `engine.py`, `repository.py`, `service.py`, `routes.py`); Ingest routes registered in `../../../api/ingest_app.py` |
+| Pod helper and its start | `../../../api/domains/agents/scripts/file-sync.py`, shipped by `../../../api/domains/agents/builders/hermes.py` and `openclaw.py`, started by both runtimes' `start.sh` |
 | Sync Engine process and deployment | `../../../api/sync_engine_main.py`, `../../../helm/agentbarn-api/templates/sync-engine-deployment.yaml` |
 | Microsoft file calls and app-only tokens | `../../../api/domains/agents/microsoft_graph_files.py`, `MicrosoftAppTokens` in `microsoft_identity.py` |
-| Tests | `../../../api/tests/unit/test_sync_provider_plugins.py`, `../../../api/tests/integration/test_sync_provider_connection.py`, `test_sync_provider_repository.py`, `../../../api/tests/steps/sync_provider.py` (test-only second provider), `../../../ui/tests/e2e/sync-provider.spec.ts`; file sync: `../../../api/tests/integration/test_file_sync_*.py`, `../../../api/tests/unit/test_file_sync_rules.py`, `test_microsoft_graph_files.py`, `test_test_drive_file_sync.py`, `test_sync_engine_main.py`, `../../../api/tests/steps/file_sync_provider.py` (test-only `file_sync` provider) |
+| Tests | `../../../api/tests/unit/test_sync_provider_plugins.py`, `../../../api/tests/integration/test_sync_provider_connection.py`, `test_sync_provider_repository.py`, `../../../api/tests/steps/sync_provider.py` (test-only second provider), `../../../ui/tests/e2e/sync-provider.spec.ts`; file sync: `../../../api/tests/integration/test_file_sync_*.py`, `../../../api/tests/unit/test_file_sync_rules.py`, `test_file_sync_helper.py`, `test_microsoft_graph_files.py`, `test_test_drive_file_sync.py`, `test_sync_engine_main.py`, `../../../api/tests/steps/file_sync_provider.py` (test-only `file_sync` provider), `../../../api/runtime_tests/test_hermes_file_sync.py` and `test_openclaw_file_sync.py` (pinned images) |
 
 ## Change impact
 

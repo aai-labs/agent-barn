@@ -98,6 +98,7 @@ Agent file sync traffic from the pod has no user Membership either.
 - **Tenant:** the Organization, connection and Agent Folder come only from that Agent's persisted rows. No request value can name another Agent, folder or Organization.
 - **Paths:** they are checked against the Agent's own runtime's sync rules.
 - **Not background work:** these methods are reachable from an Ingest router, so the background-work exception below does not cover them. See [Activity and Ingest](../activity-and-ingest.md).
+- **Accepted gap at the provider:** the "Agent Barn" folder is open to every Organization Member, so Members without Agent Access to an Agent can read its synced files and edit its work and memory files there. Agent Access is not mirrored into provider permissions ([ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Agent file sync](../sync-provider/README.md#known-limits-of-file-sync)).
 
 Playbook Extractions read one Agent's transcripts and write an Organization Skill, so they need Agent `activity.read` on the source Agent and Organization `skill.manage`; in practice Owners and Admins. Publishing the resulting Skill makes content derived from that Agent visible to every Member through `skill.read`; the reviewing Owner or Admin is the control. The worker runs a person's request, not background work: when a run starts it re-checks that the requesting Membership still holds both Permissions on the undeleted source Agent. See [`Playbooks`](../playbooks.md#authorization).
 

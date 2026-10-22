@@ -81,6 +81,25 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 ## Changes
 
+### 2026-10-22 — AF-384 — Docs consolidation
+
+- **README "Agent file sync":**
+  - **Intro:** describes the delivered design instead of "delivery is in progress".
+  - **New sections:**
+    - "What syncs": the categories per runtime, from `rules.py`;
+    - "How fast changes travel": 15 s helper rounds with a 5 s settle; at most about 75 s for a person's change (30 s engine pass, 30 s autosave wait, 15 s helper round); a stopped Agent's jobs applied before its runtime starts;
+    - "The Agent's own changes", which links to the Ingest contract instead of repeating it;
+    - "Activity": the ten kinds;
+    - "Limits";
+    - "Known limits of file sync". The "Agent Barn" root deletion moved here from "People's edits", next to the Member visibility limit, stopped Agents, conflicts, running Agents and pods polling without a connection.
+  - **Source map:** now has the Ingest service and routes, the pod helper with its builders and `start.sh`, the helper unit tests and the pinned-image contracts. The Role section names `microsoft_graph_files.py`.
+- **RBAC brief:** now records the accepted Member visibility gap at the provider. It was planned for the first slice and had been recorded only in the ADR.
+- **`CONTEXT.md`:** Agent Folder says disconnecting deletes every Agent Folder.
+- **INDEX:** the sync provider row's label names Agent file sync's topics.
+- **Verified:**
+  - a link check over every Markdown file AF-384 touched: each relative link's file, each `#anchor` (GitHub slugs) and each backticked `../` path in tables resolves. The checker was proven against a sample with a broken file, anchor and path;
+  - the README's claims were checked against the code: OpenClaw keeps only `USER.md` (memory) across starts, so `config` files are rebuilt every start, and both the engine and Ingest record `skipped_too_large`.
+
 ### 2026-10-22 — AF-384 — Disconnect removes the Agent folders
 
 - **Delivered:** after the sign-in and same-account checks, `SyncProviderService.disconnect` holds the connection's Sync Engine lock through `FileSyncFolderRemoval.holding`.
