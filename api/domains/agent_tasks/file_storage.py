@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, delete, select
 
 from api.domains.agent_tasks.models import AgentTaskFileChunk
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -17,12 +17,15 @@ class TaskFileStorage(Protocol):
     Tasks only know File metadata, so moving bytes to object storage replaces this
     store and its binding, nothing else. `write` streams the upload and returns how
     many bytes it stored; it takes the transaction that records the File, and a store
-    outside Postgres would upload before that commit.
+    outside Postgres would upload before that commit. `delete` takes the transaction
+    that removes the File.
     """
 
     def write(self, session: Session, file_id: UUID, data: Iterable[bytes]) -> int: ...
 
     def read(self, file_id: UUID) -> Iterator[bytes]: ...
+
+    def delete(self, session: Session, file_id: UUID) -> None: ...
 
 
 @dataclass
@@ -64,3 +67,6 @@ class PostgresTaskFileStorage:
                 .execution_options(yield_per=1)
             )
             yield from session.exec(query)
+
+    def delete(self, session: Session, file_id: UUID) -> None:
+        session.exec(delete(AgentTaskFileChunk).where(col(AgentTaskFileChunk.file_id) == file_id))

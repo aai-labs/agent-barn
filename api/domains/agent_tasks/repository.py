@@ -163,7 +163,7 @@ class AgentTaskRepository:
             return stored
 
     def remove_file(self, organization_id: UUID, agent_id: UUID, task_id: UUID, file_id: UUID) -> bool:
-        """Delete one of the Agent's own Files. Its chunks go with it by cascade, freeing the space."""
+        """Delete one of the Agent's own Files and its bytes, freeing the space."""
         with Session(self.delegate.engine) as session:
             if not _lock_live_agent(session, organization_id, agent_id):
                 return False
@@ -178,6 +178,7 @@ class AgentTaskRepository:
             ).first()
             if stored is None:
                 return False
+            self.file_storage.delete(session, stored.id)
             session.delete(stored)
             session.commit()
             return True
@@ -243,7 +244,10 @@ class AgentTaskRepository:
         task_filter: AgentTaskFilter,
         pagination: Pagination,
         authorization_scope: AuthorizationScope,
+        recently_changed_first: bool = False,
     ) -> PaginatedItems[AgentTaskRead]:
+        """Tasks newest first, or most recently changed first."""
+        order = col(AgentTask.updated_at) if recently_changed_first else col(AgentTask.created_at)
         where = [
             col(AgentTask.organization_id) == authorization_scope.organization_id,
             *agent_scope_predicates(authorization_scope),
@@ -267,7 +271,7 @@ class AgentTaskRepository:
                 select(AgentTask)
                 .join(Agent, col(Agent.id) == col(AgentTask.agent_id))
                 .where(*where)
-                .order_by(col(AgentTask.created_at).desc(), col(AgentTask.id).desc())
+                .order_by(order.desc(), col(AgentTask.id).desc())
                 .offset((pagination.page - 1) * pagination.size)
                 .limit(pagination.size)
             ).all()

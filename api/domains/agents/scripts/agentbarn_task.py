@@ -94,8 +94,9 @@ def main() -> int:
     attach.add_argument(
         "--replace", action="store_true", help="Remove the Task's earlier files of the same name once this one is in."
     )
-    listing = commands.add_parser("list", help="List this Agent's Tasks, newest first.")
+    listing = commands.add_parser("list", help="List this Agent's Tasks, most recently changed first.")
     listing.add_argument("--status", choices=STATUSES)
+    listing.add_argument("--page-size", type=int, choices=range(1, 101), metavar="1-100")
     show = commands.add_parser("show", help="Show one Task with its notes and files.")
     show.add_argument("task_id")
     remove = commands.add_parser("remove-file", help="Remove a file from a Task, by the file id `show` lists.")
@@ -143,7 +144,9 @@ def main() -> int:
             payload["description"] = args.description
         if args.origin:
             payload["origin"] = args.origin
-        if (not args.status or args.status == "open") and not note_text:
+        if args.status:
+            payload["status"] = args.status
+        if not note_text:
             return send(json_request(tasks_url, "POST", payload))
         ok, task = fetch(json_request(tasks_url, "POST", payload))
         if not ok:
@@ -151,12 +154,7 @@ def main() -> int:
         task_id = task.get("id") if isinstance(task, dict) else None
         if not isinstance(task_id, str):
             return fail(UNCONFIRMED)
-        created_url = f"{tasks_url}/{quote(task_id, safe='')}"
-        if args.status and args.status != "open":
-            ok, task = fetch(json_request(created_url, "PATCH", {"status": args.status}))
-            if not ok:
-                return fail(f"The Task {task_id} was created but its status was not set: {task}")
-        refused = add_note(created_url)
+        refused = add_note(f"{tasks_url}/{quote(task_id, safe='')}")
         if refused:
             return fail(f"The Task {task_id} was created but the note was not recorded: {refused}")
         print(json.dumps(task))
@@ -177,8 +175,9 @@ def main() -> int:
             return fail(f"Provide the note, between 1 and {NOTE_LIMIT} characters, on standard input.")
         return send(json_request(f"{task_url}/notes", "POST", {"body": body}))
     if args.command == "list":
-        query = f"?{urlencode({'status': args.status})}" if args.status else ""
-        return send(json_request(tasks_url + query, "GET"))
+        filters = {"status": args.status, "page_size": args.page_size}
+        query = urlencode({name: value for name, value in filters.items() if value is not None})
+        return send(json_request(f"{tasks_url}?{query}" if query else tasks_url, "GET"))
     if args.command == "show":
         return send(json_request(task_url, "GET"))
     if args.command == "remove-file":

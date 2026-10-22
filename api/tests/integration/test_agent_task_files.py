@@ -228,6 +228,43 @@ class _SlowStorage:
     def read(self, file_id: UUID) -> Iterator[bytes]:
         return self.inner.read(file_id)
 
+    def delete(self, session: Session, file_id: UUID) -> None:
+        self.inner.delete(session, file_id)
+
+
+@dataclass
+class _RecordingStorage:
+    """Records which Files' bytes were deleted, then deletes them."""
+
+    inner: TaskFileStorage
+    deleted: list[UUID]
+
+    def write(self, session: Session, file_id: UUID, data: Iterable[bytes]) -> int:
+        return self.inner.write(session, file_id, data)
+
+    def read(self, file_id: UUID) -> Iterator[bytes]:
+        return self.inner.read(file_id)
+
+    def delete(self, session: Session, file_id: UUID) -> None:
+        self.deleted.append(file_id)
+        self.inner.delete(session, file_id)
+
+
+def test_removing_a_file_deletes_its_bytes_through_the_store():
+    with given([*_given(), there_is_an_agent()]) as context:
+        task = _task(context)
+        stored = _attach(context, task, b"a,b\n")
+        repository = context.injector.get(AgentTaskRepository)
+        recording = _RecordingStorage(repository.file_storage, [])
+        repository.file_storage = recording
+
+        with when("the Agent removes the file"):
+            _service(context).remove_file(context.agent.organization_id, context.agent.id, task.id, stored.id)
+
+            with then("the store is asked to delete its bytes, and they are gone"):
+                assert_that(recording.deleted, equal_to([stored.id]))
+                assert_that(list(recording.inner.read(stored.id)), equal_to([]))
+
 
 def test_two_uploads_at_once_cannot_together_exceed_the_organization_limit():
     with given([*_given(TASK_ORGANIZATION_STORAGE_MAX_BYTES="10"), there_is_an_agent()]) as context:

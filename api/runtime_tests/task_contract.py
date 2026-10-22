@@ -190,18 +190,17 @@ def tasks_should_be_recorded_from_the_agents_shell(runtime: str, image: str, roo
                         ("POST", f"{tasks}/{TASK_ID}/files?filename=too-big.csv"),
                         ("GET", f"{tasks}?status=open"),
                         ("GET", f"{tasks}/{TASK_ID}"),
-                        # The plugin's tool starts a Task in progress: a create, then a status change.
+                        # The plugin's tool starts a Task in progress, in the create itself.
                         ("POST", tasks),
-                        ("PATCH", f"{tasks}/{TASK_ID}"),
                     ]
                 ),
             )
             note, upload = task_requests[2], task_requests[3]
-            from_plugin, started = task_requests[-2], task_requests[-1]
             assert_that(json.loads(note["body"]), has_entries(body="Matched 40 of 42 invoices"))
             assert_that((upload["content_type"], upload["body"]), equal_to(("text/csv", "invoice,amount\n1,10\n")))
-            assert_that(json.loads(from_plugin["body"]), equal_to({"title": "From the plugin"}))
-            assert_that(json.loads(started["body"]), equal_to({"status": "in_progress"}))
+            assert_that(
+                json.loads(task_requests[-1]["body"]), equal_to({"title": "From the plugin", "status": "in_progress"})
+            )
 
         with then("the agentbarn-tasks plugin loads through the runtime's own loader and offers its tool"):
             plugin = context.result["plugin"]

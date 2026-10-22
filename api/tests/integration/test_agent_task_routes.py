@@ -145,6 +145,16 @@ def test_a_task_recorded_automatically_says_so():
                 assert_that(shown.json(), has_entries(origin="automatic"))
 
 
+def test_an_agent_creates_a_task_already_in_progress():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        with when("the Agent creates a Task it is starting on"):
+            response = _create(context, status="in_progress")
+
+            with then("it is in progress from the one request"):
+                assert_that(response.status_code, equal_to(status.HTTP_201_CREATED))
+                assert_that(response.json(), has_entries(status="in_progress"))
+
+
 def test_an_unknown_origin_is_rejected():
     with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
         with when("a Task is created with an origin that does not exist"):
@@ -243,6 +253,23 @@ def test_an_agent_lists_its_own_tasks_newest_first():
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
         assert_that([task["title"] for task in response.json()["items"]], contains_exactly("Newer", "Older"))
+
+
+def test_an_agent_lists_its_tasks_most_recently_changed_first():
+    with given([*_given(), _an_agent_with_an_ingest_key()]) as context:
+        reopened_id = _create(context, title="Reopened").json()["id"]
+        _create(context, title="Created later")
+        context.ingest_client.patch(
+            f"{_tasks_url(context.agent)}/{reopened_id}", json={"status": "done"}, headers=_headers(context.ingest_key)
+        )
+
+        with when("the Agent lists its Tasks"):
+            response = context.ingest_client.get(_tasks_url(context.agent), headers=_headers(context.ingest_key))
+
+            with then("the Task it finished last comes first, so it is shown among its latest work"):
+                assert_that(
+                    [task["title"] for task in response.json()["items"]], contains_exactly("Reopened", "Created later")
+                )
 
 
 def test_an_agent_filters_its_tasks_by_status():

@@ -151,6 +151,8 @@ class AgentTaskCreate(PydanticBaseModel):
 
     title: Title
     description: LongText | None = None
+    # Set on create so a Task the Agent is starting on is in progress from the one request.
+    status: AgentTaskStatus = AgentTaskStatus.OPEN
     origin: AgentTaskOrigin = AgentTaskOrigin.AGENT
 
 

@@ -258,11 +258,11 @@ def test_create_can_start_the_task_in_progress():
         result = _run(stub, "create", "--title", "Reconcile invoices", "--status", "in_progress")
 
     assert_that(result.returncode, equal_to(0), result.stderr)
+    [request] = stub.requests
     assert_that(
-        [(request["method"], request["path"]) for request in stub.requests],
-        equal_to([("POST", _tasks_path()), ("PATCH", _tasks_path(f"/{TASK_ID}"))]),
+        (request["method"], request["path"], json.loads(request["body"])),
+        equal_to(("POST", _tasks_path(), {"title": "Reconcile invoices", "status": "in_progress"})),
     )
-    assert_that(json.loads(stub.requests[1]["body"]), equal_to({"status": "in_progress"}))
     assert_that(json.loads(result.stdout), has_entries(status="in_progress"))
 
 
@@ -285,11 +285,9 @@ def test_create_can_add_a_note_in_the_same_call():
     assert_that(result.returncode, equal_to(0), result.stderr)
     assert_that(
         [(request["method"], request["path"]) for request in stub.requests],
-        equal_to(
-            [("POST", _tasks_path()), ("PATCH", _tasks_path(f"/{TASK_ID}")), ("POST", _tasks_path(f"/{TASK_ID}/notes"))]
-        ),
+        equal_to([("POST", _tasks_path()), ("POST", _tasks_path(f"/{TASK_ID}/notes"))]),
     )
-    assert_that(json.loads(stub.requests[2]["body"]), equal_to({"body": "Started"}))
+    assert_that(json.loads(stub.requests[1]["body"]), equal_to({"body": "Started"}))
     assert_that(json.loads(result.stdout), has_entries(id=TASK_ID, status="in_progress"))
 
 
@@ -360,3 +358,19 @@ def test_create_can_say_the_task_was_recorded_automatically():
 
     assert_that(result.returncode, equal_to(0), result.stderr)
     assert_that(json.loads(stub.requests[0]["body"]), equal_to({"title": "Reconcile invoices", "origin": "automatic"}))
+
+
+def test_list_can_ask_for_a_larger_page():
+    with _IngestStub(body={"items": [], "total": 0}) as stub:
+        result = _run(stub, "list", "--page-size=100")
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(stub.requests[0]["path"], equal_to(_tasks_path("?page_size=100")))
+
+
+def test_a_value_that_looks_like_an_option_is_taken_as_written():
+    with _IngestStub(status=201) as stub:
+        result = _run(stub, "create", "--title=-v", "--description=--help")
+
+    assert_that(result.returncode, equal_to(0), result.stderr)
+    assert_that(json.loads(stub.requests[0]["body"]), equal_to({"title": "-v", "description": "--help"}))
