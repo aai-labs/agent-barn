@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,7 @@ _ENV = {
     "INGEST_API_KEY": "test-key-123",
 }
 _TASK_ID = "0199f1d2-0000-7000-8000-0000000000aa"
+_SESSIONS_KEPT = 500
 
 
 class _Plugin:
@@ -167,9 +169,7 @@ def test_create_runs_the_task_command(tmp_path: Path):
     assert_that(result, has_entries(id=_TASK_ID))
     assert_that(
         plugin.calls()[-1]["argv"],
-        equal_to(
-            ["create", "--title", "Reconcile invoices", "--description", "For October", "--status", "in_progress"]
-        ),
+        equal_to(["create", "--title=Reconcile invoices", "--description=For October", "--status=in_progress"]),
     )
 
 
@@ -178,7 +178,7 @@ def test_create_runs_the_task_command(tmp_path: Path):
     [
         ({"action": "status", "task_id": _TASK_ID, "status": "done"}, ["status", _TASK_ID, "done"], ""),
         ({"action": "note", "task_id": _TASK_ID, "body": "Matched 40 of 42"}, ["note", _TASK_ID], "Matched 40 of 42"),
-        ({"action": "list", "status": "open"}, ["list", "--status", "open"], ""),
+        ({"action": "list", "status": "open"}, ["list", "--status=open"], ""),
         ({"action": "show", "task_id": _TASK_ID}, ["show", _TASK_ID], ""),
         (
             {
@@ -188,7 +188,7 @@ def test_create_runs_the_task_command(tmp_path: Path):
                 "name": "October.csv",
                 "content_type": "text/csv",
             },
-            ["attach", _TASK_ID, "out/report.csv", "--name", "October.csv", "--content-type", "text/csv", "--replace"],
+            ["attach", _TASK_ID, "out/report.csv", "--name=October.csv", "--content-type=text/csv", "--replace"],
             "",
         ),
     ],
@@ -242,7 +242,7 @@ def test_a_turn_doing_real_work_without_a_task_is_reminded_once(tmp_path: Path):
 def test_a_turn_that_records_a_task_is_not_reminded(tmp_path: Path):
     plugin = _Plugin(tmp_path)
 
-    plugin.tool_call("call-1", tool_name="agentbarn_task")
+    _created_task(plugin, "call-1")
     results = [plugin.tool_call(f"call-{n}") for n in range(2, 6)]
 
     assert_that(results, equal_to([None] * 4))
@@ -307,7 +307,7 @@ def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path
     plugin.start_turn()
     lists_after = sum(call["argv"][0] == "list" for call in plugin.calls())
 
-    assert_that((lists_before, lists_after), equal_to((3, 6)))
+    assert_that((lists_before, lists_after), equal_to((1, 2)))
 
 
 def test_an_unavailable_task_service_does_not_break_the_turn(tmp_path: Path):
@@ -350,7 +350,7 @@ def test_a_turn_that_wrote_files_without_a_task_must_continue_once_before_finish
 def test_a_turn_that_wrote_files_and_recorded_a_task_may_finish(tmp_path: Path):
     plugin = _Plugin(tmp_path)
     plugin.tool_call("call-1", tool_name="write_file")
-    plugin.tool_call("call-2", tool_name="agentbarn_task")
+    _created_task(plugin)
 
     assert_that(plugin.finish(), equal_to(None))
 
@@ -505,7 +505,7 @@ def test_create_passes_a_starting_status(tmp_path: Path):
 
     plugin.tool(action="create", title="Report", status="in_progress")
 
-    assert_that(plugin.calls()[-1]["argv"], equal_to(["create", "--title", "Report", "--status", "in_progress"]))
+    assert_that(plugin.calls()[-1]["argv"], equal_to(["create", "--title=Report", "--status=in_progress"]))
 
 
 def test_each_request_carries_the_task_line(tmp_path: Path):
@@ -549,11 +549,9 @@ def test_create_and_status_carry_a_note_in_the_same_call(tmp_path: Path):
 
     assert_that(
         created,
-        equal_to(
-            ["create", "--title", "Report", "--status", "in_progress", "--note", "Started from the October export"]
-        ),
+        equal_to(["create", "--title=Report", "--status=in_progress", "--note=Started from the October export"]),
     )
-    assert_that(plugin.calls()[-1]["argv"], equal_to(["status", _TASK_ID, "failed", "--note", "The export was empty"]))
+    assert_that(plugin.calls()[-1]["argv"], equal_to(["status", _TASK_ID, "failed", "--note=The export was empty"]))
 
 
 def test_a_task_left_in_progress_is_marked_done_when_the_turn_ends(tmp_path: Path):
@@ -589,13 +587,15 @@ def test_a_task_the_turn_only_noted_on_is_not_closed(tmp_path: Path):
     assert_that(_statuses(plugin), equal_to([]))
 
 
-def test_a_task_is_not_closed_when_the_turn_did_not_complete(tmp_path: Path):
+def test_a_task_left_in_progress_is_reopened_when_the_turn_did_not_complete(tmp_path: Path):
     plugin = _Plugin(tmp_path)
+    states = _wrote(plugin)
     _created_task(plugin)
 
     plugin.end_turn(completed=False)
 
-    assert_that(_statuses(plugin), equal_to([]))
+    assert_that(_statuses(plugin), equal_to([["status", _TASK_ID, "open"]]))
+    assert_that(_attaches(plugin), equal_to([["attach", _TASK_ID, states, "--replace"]]))
 
 
 def test_every_task_left_in_progress_is_closed(tmp_path: Path):
@@ -629,7 +629,7 @@ def test_closing_a_task_refreshes_the_open_tasks_shown(tmp_path: Path):
     plugin.end_turn()
     plugin.start_turn()
 
-    assert_that(len([call for call in plugin.calls() if call["argv"][0] == "list"]), equal_to(6))
+    assert_that(len([call for call in plugin.calls() if call["argv"][0] == "list"]), equal_to(2))
 
 
 @pytest.mark.parametrize("message", ["Thanks!", "Thanks, that's great.", "That's all for now, thanks!", "Good morning"])
@@ -668,6 +668,10 @@ def _creates(plugin: _Plugin) -> list[list[str]]:
     return [call["argv"] for call in plugin.calls() if call["argv"][0] == "create"]
 
 
+def _option(argv: list[str], name: str) -> str:
+    return next(arg.split("=", 1)[1] for arg in argv if arg.startswith(f"--{name}="))
+
+
 def test_work_left_unrecorded_is_recorded_automatically_when_the_turn_ends(tmp_path: Path):
     plugin = _Plugin(tmp_path)
     plugin.start_turn(user_message="Please summarise the October invoices")
@@ -682,14 +686,10 @@ def test_work_left_unrecorded_is_recorded_automatically_when_the_turn_ends(tmp_p
             [
                 [
                     "create",
-                    "--title",
-                    "Please summarise the October invoices",
-                    "--status",
-                    "done",
-                    "--origin",
-                    "automatic",
-                    "--description",
-                    "Please summarise the October invoices",
+                    "--title=Please summarise the October invoices",
+                    "--status=done",
+                    "--origin=automatic",
+                    "--description=Please summarise the October invoices",
                 ]
             ]
         ),
@@ -714,8 +714,7 @@ def test_a_long_request_is_shortened_for_the_automatic_title(tmp_path: Path):
 
     plugin.end_turn()
 
-    [create] = _creates(plugin)
-    title = create[create.index("--title") + 1]
+    title = _option(_creates(plugin)[0], "title")
     assert_that((len(title), title.endswith("…")), equal_to((120, True)))
 
 
@@ -763,3 +762,133 @@ def test_review_and_subagent_runs_are_left_alone(tmp_path: Path):
     plugin.end_turn(turn_id="review-1")
 
     assert_that((context, reminders, _creates(plugin)), equal_to((None, [None] * 4, [])))
+
+
+# --- only a Task the turn actually wrote counts as recording it ---
+
+
+def test_reading_tasks_does_not_count_as_recording(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.start_turn()
+    plugin.tool_call("call-0", tool_name="agentbarn_task", args={"action": "list"}, result='{"items": []}')
+
+    reminders = [plugin.tool_call(f"call-{n}") for n in range(1, 4)]
+    plugin.end_turn()
+
+    assert_that(reminders[2], contains_string("agentbarn_task"))
+    assert_that(len(_creates(plugin)), equal_to(1))
+
+
+def test_a_task_call_that_failed_does_not_count_as_recording(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.start_turn(user_message="Write the states CSV")
+    states = _wrote(plugin)
+    plugin.tool_call(
+        "call-2",
+        tool_name="agentbarn_task",
+        args={"action": "status", "task_id": "task-gone", "status": "in_progress"},
+        result=json.dumps({"error": "Task not found."}),
+    )
+
+    plugin.end_turn()
+
+    assert_that(len(_creates(plugin)), equal_to(1))
+    assert_that(_attaches(plugin), equal_to([["attach", _TASK_ID, states, "--replace"]]))
+    assert_that([argv for argv in _statuses(plugin) if "task-gone" in argv], equal_to([]))
+
+
+@pytest.mark.parametrize("command", ["agentbarn-task --help", "agentbarn-task list", "agentbarn-task show abc"])
+def test_reading_tasks_from_the_terminal_does_not_count_as_recording(tmp_path: Path, command: str):
+    plugin = _Plugin(tmp_path)
+
+    plugin.tool_call("call-0", command=command)
+    reminders = [plugin.tool_call(f"call-{n}") for n in range(1, 4)]
+
+    assert_that(any(reminders), is_(True))
+
+
+# --- listing Tasks each turn stays cheap and bounded ---
+
+
+def test_open_and_finished_tasks_come_from_one_list_call(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+
+    plugin.start_turn()
+
+    assert_that([call["argv"] for call in plugin.calls()], equal_to([["list", "--page-size=100"]]))
+
+
+def test_a_failed_listing_is_not_retried_on_every_turn(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.env["FAKE_TASK_LIST_FAIL"] = "1"
+
+    plugin.start_turn()
+    plugin.start_turn()
+
+    assert_that(len(plugin.calls()), equal_to(1))
+
+
+def test_a_slow_listing_does_not_hold_up_the_turn(tmp_path: Path):
+    plugin = _Plugin(tmp_path, open_tasks=[{"id": "task-1", "title": "Report", "status": "open"}])
+    plugin.env["FAKE_TASK_LIST_SLEEP"] = "60"
+
+    started = time.monotonic()
+    context = _context(plugin.start_turn())
+
+    assert_that((time.monotonic() - started < 25, "task-1" in context), equal_to((True, False)))
+
+
+# --- the automatic Task does not keep secrets from the request ---
+
+
+_SECRET_REQUESTS = [
+    ("Deploy it with ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8 tonight", "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"),
+    ("Call the API using sk-ant-api03-abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"),
+    ("Log in, the password: hunter2! is on the wiki", "hunter2!"),
+    ("Back up postgres://admin:s3cretpw@db.internal/app tonight", "s3cretpw"),
+    ("Rotate AKIAIOSFODNN7EXAMPLE this week", "AKIAIOSFODNN7EXAMPLE"),
+    (
+        "Check Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+        "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    ),
+    ("Use token=Zx8kQ2mN7pL4vR9tY3wB6cD1fG5hJ0sA to fetch", "Zx8kQ2mN7pL4vR9tY3wB6cD1fG5hJ0sA"),
+]
+
+
+@pytest.mark.parametrize(("request_text", "secret"), _SECRET_REQUESTS)
+def test_secrets_in_the_request_are_redacted_from_the_automatic_task(tmp_path: Path, request_text: str, secret: str):
+    plugin = _Plugin(tmp_path)
+    plugin.start_turn(user_message=request_text)
+    _wrote(plugin)
+
+    plugin.end_turn()
+
+    [create] = _creates(plugin)
+    title, description = _option(create, "title"), _option(create, "description")
+    assert_that((secret in title, secret in description), equal_to((False, False)))
+    assert_that(description, contains_string("[redacted]"))
+
+
+def test_a_request_that_looks_like_an_option_is_still_recorded(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.start_turn(user_message="-v")
+    _wrote(plugin)
+
+    plugin.end_turn()
+
+    assert_that(_option(_creates(plugin)[0], "title"), equal_to("-v"))
+
+
+# --- what the plugin remembers stays bounded ---
+
+
+def test_only_the_latest_sessions_requests_are_kept(tmp_path: Path):
+    plugin = _Plugin(tmp_path)
+    plugin.start_turn(session_id="first", user_message="Write the states CSV")
+    for n in range(_SESSIONS_KEPT):
+        plugin.start_turn(session_id=f"later-{n}", user_message="Hello there, do something")
+    plugin.tool_call("call-9", session_id="first", tool_name="write_file", args={"path": "states.csv"})
+
+    plugin.end_turn(session_id="first", turn_id="turn-1")
+
+    assert_that(_option(_creates(plugin)[0], "title"), equal_to("Work recorded automatically"))

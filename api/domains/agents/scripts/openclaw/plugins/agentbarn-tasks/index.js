@@ -9,7 +9,10 @@
 // the run still ends without a Task, the plugin records one itself, named after the
 // request, with origin `automatic`. It also does the bookkeeping that would otherwise cost
 // the model a call each: when a run ends, the files it wrote go to the Task it worked on
-// and a Task it left in progress is marked done.
+// and a Task it left in progress is marked done, or reopened if the run failed. Only a Task
+// call that changed something counts as recording the work: reading the Tasks does not.
+// The startup checklist (BOOT.md) and subagent runs are left alone: they are not the
+// user's request.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { resolve as resolvePath } from "node:path";
@@ -20,12 +23,39 @@ const WORK_THRESHOLD = 3;
 // OpenClaw's file-writing tools. A run that produces a file is worth a Task however short it is.
 const FILE_TOOLS = new Set(["write", "edit", "apply_patch"]);
 const OPEN_TASKS_TTL_MS = 60_000;
+// The Task list is read before every turn, so it gets one short call; a slow or failed
+// read leaves the list out until the cache expires rather than holding up each turn.
+const LIST_TIMEOUT_MS = 10_000;
+const LIST_PAGE_SIZE = 100;
 const OPEN_TASKS_SHOWN = 10;
 // Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 const DONE_TASKS_SHOWN = 3;
 const AUTOMATIC_TITLE_CHARS = 120;
 const AUTOMATIC_DESCRIPTION_CHARS = 2000;
 const COMMAND_TIMEOUT_MS = 150_000;
+// Sessions remembered at once (requests, reminders, runs); the oldest are forgotten first.
+const SESSIONS_KEPT = 500;
+// Task tool actions and command subcommands that change a Task; reading one is not recording work.
+const WRITE_ACTIONS = new Set(["create", "status", "note", "attach", "remove_file"]);
+const COMMAND_WRITE = /agentbarn-task\s+(?:create|status|note|attach|remove-file)\b/;
+const REDACTED = "[redacted]";
+// Credentials a user may paste into a request. The automatic Task's title and description
+// come from the request, and people across the Organization can read them.
+const SECRET_PATTERNS = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, REDACTED],
+  [/(:\/\/[^/\s:@]+:)[^/\s@]+@/g, `$1${REDACTED}@`],
+  [/(\bbearer\s+)\S+/gi, `$1${REDACTED}`],
+  [
+    /(\b(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\b\s*(?:[:=]|\bis\b)\s*)\S+/gi,
+    `$1${REDACTED}`,
+  ],
+  [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g, REDACTED],
+  [/\b(?:gh[pousr]_|github_pat_|glpat-|xox[abposr]-)[A-Za-z0-9_-]{10,}/g, REDACTED],
+  [/\bAKIA[0-9A-Z]{16}\b/g, REDACTED],
+  [/\bAIza[0-9A-Za-z_-]{35}\b/g, REDACTED],
+  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, REDACTED],
+];
+const OPAQUE_WORD = /\b[A-Za-z0-9_-]{32,}\b/g;
 // A short message made only of these words is small talk ("Thanks!", "That's all for now"): it
 // gets no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
 const SMALL_TALK_MAX_WORDS = 8;
@@ -70,20 +100,46 @@ const PARAMETERS = {
 
 // runId -> what the run did: tool call ids, files written and attached, reminders sent
 const runs = new Map();
+// The Task lines shown each turn, and when they were read (null: read again)
+let taskListCache = { at: null, lines: [] };
 // sessionKey -> its current runId; tool_result_persist is not told which run a result belongs to.
 const currentRun = new Map();
 // sessionKey -> the reminder its next turn starts with
 const nextTurnReminders = new Map();
 // sessionKey -> the user's latest request, the title of a Task recorded automatically
 const requests = new Map();
-let openTasksCache = { at: 0, lines: null };
+
+// Store a value as the newest entry, forgetting the oldest past SESSIONS_KEPT.
+function remember(map, key, value) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > SESSIONS_KEPT) map.delete(map.keys().next().value);
+}
+
+const forgetTaskList = () => {
+  taskListCache = { at: null, lines: [] };
+};
+
+// A long word that reads like a key: mixed case with digits, or a long hex string (not a UUID).
+const opaque = (word) =>
+  (/[a-z]/.test(word) && /[A-Z]/.test(word) && /\d/.test(word)) || /^[0-9a-fA-F]{32,}$/.test(word) ? REDACTED : word;
+
+function redacted(text) {
+  const masked = SECRET_PATTERNS.reduce((current, [pattern, replacement]) => current.replace(pattern, replacement), text);
+  return masked.replace(OPAQUE_WORD, opaque);
+}
+
+// The startup checklist runs in the session `agent:<id>:boot`; subagents in `...subagent:...` sessions.
+const sideRun = (sessionKey) =>
+  typeof sessionKey === "string" &&
+  (sessionKey.endsWith(":boot") || sessionKey.startsWith("subagent:") || sessionKey.includes(":subagent:"));
 
 const command = () => process.env.AGENTBARN_TASK_COMMAND || "/usr/local/bin/agentbarn-task";
 const workspace = () => `${process.env.HOME}/.openclaw/workspace`;
 
 const UNAVAILABLE = "Agent Barn Tasks are unavailable right now, so the change was not confirmed.";
 
-function run(argv, stdin = "") {
+function run(argv, stdin = "", timeoutMs = COMMAND_TIMEOUT_MS) {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -95,7 +151,7 @@ function run(argv, stdin = "") {
       return;
     }
     // Our own timer rather than spawn's, which is left running when the command never starts.
-    const timer = setTimeout(() => child.kill(), COMMAND_TIMEOUT_MS);
+    const timer = setTimeout(() => child.kill(), timeoutMs);
     const settle = (result) => {
       clearTimeout(timer);
       resolve(result);
@@ -115,22 +171,23 @@ function run(argv, stdin = "") {
   });
 }
 
-// The command line for one tool call, or what is missing from it.
+// The command line for one tool call, or what is missing from it. Option values are joined
+// to their option (`--title=-v`) so a value starting with a dash is not read as another option.
 function argvFor(params) {
   const { action, task_id: taskId } = params;
   if (action === "create") {
     if (!params.title) return "create needs a title.";
     return [
       [
-        "create", "--title", params.title,
-        ...(params.description ? ["--description", params.description] : []),
-        "--status", STATUSES.includes(params.status) ? params.status : "in_progress",
-        ...(params.body ? ["--note", params.body] : []),
+        "create", `--title=${params.title}`,
+        ...(params.description ? [`--description=${params.description}`] : []),
+        `--status=${STATUSES.includes(params.status) ? params.status : "in_progress"}`,
+        ...(params.body ? [`--note=${params.body}`] : []),
       ],
       "",
     ];
   }
-  if (action === "list") return [params.status ? ["list", "--status", params.status] : ["list"], ""];
+  if (action === "list") return [params.status ? ["list", `--status=${params.status}`] : ["list"], ""];
   if (!["status", "note", "attach", "remove_file", "show"].includes(action)) {
     return "action must be one of: create, status, note, attach, remove_file, list, show.";
   }
@@ -142,7 +199,7 @@ function argvFor(params) {
   }
   if (action === "status") {
     if (!STATUSES.includes(params.status)) return `status needs one of: ${STATUSES.join(", ")}.`;
-    return [["status", taskId, params.status, ...(params.body ? ["--note", params.body] : [])], ""];
+    return [["status", taskId, params.status, ...(params.body ? [`--note=${params.body}`] : [])], ""];
   }
   if (action === "note") {
     if (!params.body) return "note needs a body.";
@@ -152,8 +209,8 @@ function argvFor(params) {
   return [
     [
       "attach", taskId, params.path,
-      ...(params.name ? ["--name", params.name] : []),
-      ...(params.content_type ? ["--content-type", params.content_type] : []),
+      ...(params.name ? [`--name=${params.name}`] : []),
+      ...(params.content_type ? [`--content-type=${params.content_type}`] : []),
       "--replace",
     ],
     "",
@@ -167,7 +224,7 @@ async function executeTool(_toolCallId, params) {
   if (typeof built === "string") return textResult({ error: built });
   const [argv, stdin] = built;
   const { ok, output } = await run(argv, stdin);
-  if (!["list", "show"].includes(argv[0])) openTasksCache = { at: 0, lines: null };
+  if (!["list", "show"].includes(argv[0])) forgetTaskList();
   if (!ok) return textResult({ error: output });
   try {
     return textResult(JSON.parse(output));
@@ -178,6 +235,13 @@ async function executeTool(_toolCallId, params) {
 
 const touchesTasks = (toolName, params) =>
   toolName === TOOL || (typeof params?.command === "string" && params.command.includes("agentbarn-task"));
+
+// Whether a Task call changed a Task: a write that did not fail. Reading Tasks is not recording work.
+function recordsTask(toolName, params, result) {
+  if (toolName !== TOOL) return typeof params?.command === "string" && COMMAND_WRITE.test(params.command);
+  if (!WRITE_ACTIONS.has(params?.action)) return false;
+  return !(result?.details && typeof result.details === "object" && "error" in result.details);
+}
 
 const basename = (path) => path.split("/").filter(Boolean).pop() ?? "";
 
@@ -210,7 +274,7 @@ function statusSet(toolName, params) {
 
 function track(event, ctx) {
   const runId = event.runId ?? ctx.runId ?? "";
-  if (ctx.sessionKey) currentRun.set(ctx.sessionKey, runId);
+  if (ctx.sessionKey) remember(currentRun, ctx.sessionKey, runId);
   let state = runs.get(runId);
   if (!state) {
     state = {
@@ -219,7 +283,7 @@ function track(event, ctx) {
       statuses: new Map(),
       attached: new Set(), reminded: false, revised: false, sessionKey: ctx.sessionKey ?? "",
     };
-    runs.set(runId, state);
+    remember(runs, runId, state);
   }
   return state;
 }
@@ -252,22 +316,22 @@ async function attachAutomatically(state) {
   return failed;
 }
 
-// Mark done each Task the Agent left in_progress this run; a status it chose itself stays.
-async function closeInProgress(state) {
-  const inProgress = [...state.statuses].filter(([, status]) => status === "in_progress").map(([id]) => id).sort();
-  for (const taskId of inProgress) await run(["status", taskId, "done"]);
-  if (inProgress.length) openTasksCache = { at: 0, lines: null };
+// Move each Task the Agent left in_progress this run to `status`; a status it chose itself stays.
+async function settleInProgress(state, status) {
+  const inProgress = [...state.statuses].filter(([, current]) => current === "in_progress").map(([id]) => id).sort();
+  for (const taskId of inProgress) await run(["status", taskId, status]);
+  if (inProgress.length) forgetTaskList();
 }
 
 // Record a Task for work the Agent left unrecorded. Returns the files it could not attach.
 async function recordAutomatically(sessionKey, state) {
-  const request = (requests.get(sessionKey) ?? "").split(/\s+/).filter(Boolean).join(" ");
+  const request = redacted(requests.get(sessionKey) ?? "").split(/\s+/).filter(Boolean).join(" ");
   let title = request || "Work recorded automatically";
   if (title.length > AUTOMATIC_TITLE_CHARS) title = `${title.slice(0, AUTOMATIC_TITLE_CHARS - 1).trimEnd()}…`;
-  const argv = ["create", "--title", title, "--status", "done", "--origin", "automatic"];
-  if (request) argv.push("--description", request.slice(0, AUTOMATIC_DESCRIPTION_CHARS));
+  const argv = ["create", `--title=${title}`, "--status=done", "--origin=automatic"];
+  if (request) argv.push(`--description=${request.slice(0, AUTOMATIC_DESCRIPTION_CHARS)}`);
   const { ok, output } = await run(argv);
-  openTasksCache = { at: 0, lines: null };
+  forgetTaskList();
   let taskId;
   try {
     taskId = ok ? JSON.parse(output).id : undefined;
@@ -286,25 +350,30 @@ function smallTalk(message) {
   return words.length > 0 && words.length <= SMALL_TALK_MAX_WORDS && words.every((word) => SMALL_TALK_WORDS.has(word));
 }
 
-async function openTaskLines() {
-  if (openTasksCache.lines && Date.now() - openTasksCache.at < OPEN_TASKS_TTL_MS) return openTasksCache.lines;
+// The open Tasks, then the latest finished ones, from one listing (most recently changed first).
+function taskLines(output) {
+  let items;
+  try {
+    items = JSON.parse(output).items;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(items)) return [];
   const lines = [];
   for (const status of ["in_progress", "open", "done"]) {
-    const { ok, output } = await run(["list", "--status", status]);
-    if (!ok) return null;
-    let items;
-    try {
-      items = JSON.parse(output).items;
-    } catch {
-      return null;
-    }
-    if (!Array.isArray(items)) return null;
-    for (const task of items.slice(0, status === "done" ? DONE_TASKS_SHOWN : OPEN_TASKS_SHOWN)) {
-      lines.push(`- ${task.id} [${task.status}] ${String(task.title ?? "").slice(0, 120)}`);
+    const shown = items.filter((task) => task?.status === status);
+    for (const task of shown.slice(0, status === "done" ? DONE_TASKS_SHOWN : OPEN_TASKS_SHOWN)) {
+      lines.push(`- ${task.id} [${status}] ${String(task.title ?? "").slice(0, 120)}`);
     }
   }
-  openTasksCache = { at: Date.now(), lines };
-  return openTasksCache.lines;
+  return lines;
+}
+
+async function openTaskLines() {
+  if (taskListCache.at !== null && Date.now() - taskListCache.at < OPEN_TASKS_TTL_MS) return taskListCache.lines;
+  const { ok, output } = await run(["list", `--page-size=${LIST_PAGE_SIZE}`], "", LIST_TIMEOUT_MS);
+  taskListCache = { at: Date.now(), lines: ok ? taskLines(output) : [] };
+  return taskListCache.lines;
 }
 
 export default {
@@ -328,9 +397,10 @@ export default {
     });
 
     api.on("after_tool_call", (event, ctx) => {
-      if (ctx.trigger === "heartbeat") return;
+      if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
       const state = track(event, ctx);
       if (touchesTasks(event.toolName, event.params)) {
+        if (!recordsTask(event.toolName, event.params, event.result)) return;
         state.recorded = true;
         for (const name of attachedNames(event.toolName, event.params)) state.attached.add(name);
         const taskId = taskIdOf(event.toolName, event.params, event.result);
@@ -354,7 +424,7 @@ export default {
 
     // Synchronous: OpenClaw ignores a returned promise here.
     api.on("tool_result_persist", (event, ctx) => {
-      if (event.isSynthetic) return;
+      if (event.isSynthetic || sideRun(ctx.sessionKey)) return;
       const state = runs.get(currentRun.get(ctx.sessionKey ?? "") ?? "");
       if (!unrecordedWork(state) || state.reminded) return;
       state.reminded = true;
@@ -367,6 +437,7 @@ export default {
     });
 
     api.on("before_agent_finalize", (event, ctx) => {
+      if (sideRun(ctx.sessionKey)) return;
       const state = runs.get(event.runId ?? ctx.runId ?? "");
       if (!unrecordedWork(state) || state.revised) return;
       state.revised = true;
@@ -386,28 +457,32 @@ export default {
       runs.delete(runId);
       const sessionKey = ctx.sessionKey ?? state?.sessionKey ?? "";
       if (currentRun.get(sessionKey) === runId) currentRun.delete(sessionKey);
-      if (!state || ctx.trigger === "heartbeat" || event.success === false) return;
+      if (!state || ctx.trigger === "heartbeat" || sideRun(sessionKey)) return;
+      const succeeded = event.success !== false;
       let failed;
-      if (unrecordedWork(state)) {
+      if (succeeded && unrecordedWork(state)) {
         failed = await recordAutomatically(sessionKey, state);
       } else if (state.recorded) {
+        // A run that failed leaves its Task open to pick up again, not in progress.
         failed = await attachAutomatically(state);
-        await closeInProgress(state);
+        await settleInProgress(state, succeeded ? "done" : "open");
       } else {
         return;
       }
-      if (failed.length) nextTurnReminders.set(sessionKey, attachReminder(failed) + QUIET);
+      if (failed.length) remember(nextTurnReminders, sessionKey, attachReminder(failed) + QUIET);
     });
 
     api.on("before_prompt_build", async (event, ctx) => {
-      if (ctx.trigger === "heartbeat") return;
+      if (ctx.trigger === "heartbeat" || sideRun(ctx.sessionKey)) return;
       const parts = [];
       if (ctx.trigger === "user" || ctx.trigger === "cron") {
-        if (typeof event.prompt === "string") requests.set(ctx.sessionKey ?? "", event.prompt);
+        if (typeof event.prompt === "string") {
+          remember(requests, ctx.sessionKey ?? "", event.prompt.slice(0, AUTOMATIC_DESCRIPTION_CHARS));
+        }
         if (!smallTalk(event.prompt)) parts.push(REQUEST_LINE);
       }
       const lines = await openTaskLines();
-      if (lines?.length) {
+      if (lines.length) {
         parts.push(
           `Your open and latest finished Tasks:\n${lines.join("\n")}\nIf the request continues one of these, ` +
             "keep using it with the agentbarn_task tool (set a done one back to in_progress) rather than creating another.",

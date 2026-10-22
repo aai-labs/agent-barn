@@ -8,8 +8,10 @@ next; a turn that wrote files is also held back once before it finishes (`pre_ve
 If it still ends without a Task, the plugin records one itself, named after the request,
 with origin `automatic`. It also does the bookkeeping that would otherwise cost the model
 a call each: when a turn ends, the files it wrote go to the Task it worked on and a Task
-it left in progress is marked done. Runs with a parent session (Hermes's background
-review, subagents) are left alone: they are not the user's request.
+it left in progress is marked done, or reopened if the turn did not finish. Only a Task
+call that changed something counts as recording the work: reading the Tasks does not.
+Runs with a parent session (Hermes's background review, subagents) are left alone: they
+are not the user's request.
 """
 
 import json
@@ -30,12 +32,42 @@ _BOOT_SESSION_ID = "agentbarn-boot"
 # Hermes's own file-writing tools. A turn that produces a file is worth a Task however short it is.
 _FILE_TOOLS = {"write_file", "patch"}
 _OPEN_TASKS_TTL_SECONDS = 60
+# The Task list is read before every turn, so it gets one short call; a slow or failed
+# read leaves the list out until the cache expires rather than holding up each turn.
+_LIST_TIMEOUT_SECONDS = 10
+_LIST_PAGE_SIZE = 100
 _OPEN_TASKS_SHOWN = 10
 # Recently finished Tasks are listed too, so a follow-up reopens its Task rather than starting another.
 _DONE_TASKS_SHOWN = 3
 _AUTOMATIC_TITLE_CHARS = 120
 _AUTOMATIC_DESCRIPTION_CHARS = 2000
 _COMMAND_TIMEOUT_SECONDS = 150
+# Sessions remembered at once (requests, reminders, turns); the oldest are forgotten first.
+_SESSIONS_KEPT = 500
+# Task tool actions and command subcommands that change a Task; reading one is not recording work.
+_WRITE_ACTIONS = {"create", "status", "note", "attach", "remove_file"}
+_COMMAND_WRITE = re.compile(r"agentbarn-task\s+(?:create|status|note|attach|remove-file)\b")
+_REDACTED = "[redacted]"
+# Credentials a user may paste into a request. The automatic Task's title and description
+# come from the request, and people across the Organization can read them.
+_SECRET_PATTERNS = [
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.DOTALL), _REDACTED),
+    (re.compile(r"(://[^/\s:@]+:)[^/\s@]+@"), rf"\1{_REDACTED}@"),
+    (re.compile(r"(?i)(\bbearer\s+)\S+"), rf"\1{_REDACTED}"),
+    (
+        re.compile(
+            r"(?i)(\b(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)"
+            r"\b\s*(?:[:=]|\bis\b)\s*)\S+"
+        ),
+        rf"\1{_REDACTED}",
+    ),
+    (re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}"), _REDACTED),
+    (re.compile(r"\b(?:gh[pousr]_|github_pat_|glpat-|xox[abposr]-)[A-Za-z0-9_-]{10,}"), _REDACTED),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), _REDACTED),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), _REDACTED),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), _REDACTED),
+]
+_OPAQUE_WORD = re.compile(r"\b[A-Za-z0-9_-]{32,}\b")
 # A short message made only of these words is small talk ("Thanks!", "That's all for now"): it gets
 # no request line. Approvals ("ok", "yes", "go ahead") are left out on purpose: they can start work.
 _SMALL_TALK_MAX_WORDS = 8
@@ -147,11 +179,38 @@ _turns: dict[tuple[str, str], dict] = {}
 _current_turn: dict[str, str] = {}
 # session_id -> the reminder its next turn starts with
 _next_turn_reminders: dict[str, str] = {}
-_open_tasks_cache: dict = {"at": 0.0, "lines": None}
+# The Task lines shown each turn, and when they were read (None: read again)
+_task_list_cache: dict = {"at": None, "lines": []}
 # session_id -> the user's latest request, the title of a Task recorded automatically
 _requests: dict[str, str] = {}
 # (session_id, turn_id) of runs with a parent session: the background review and subagents
-_side_runs: set[tuple[str, str]] = set()
+_side_runs: dict[tuple[str, str], bool] = {}
+
+
+def _remember(mapping: dict, key, value) -> None:
+    """Store a value as the newest entry, forgetting the oldest past _SESSIONS_KEPT. Hold _lock."""
+    mapping.pop(key, None)
+    mapping[key] = value
+    while len(mapping) > _SESSIONS_KEPT:
+        del mapping[next(iter(mapping))]
+
+
+def _forget_task_list() -> None:
+    with _lock:
+        _task_list_cache["at"] = None
+
+
+def _redacted(text: str) -> str:
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return _OPAQUE_WORD.sub(_opaque, text)
+
+
+def _opaque(match: re.Match) -> str:
+    """A long word that reads like a key: mixed case with digits, or a long hex string (not a UUID)."""
+    word = match.group(0)
+    mixed = re.search(r"[a-z]", word) and re.search(r"[A-Z]", word) and re.search(r"\d", word)
+    return _REDACTED if mixed or re.fullmatch(r"[0-9a-fA-F]{32,}", word) else word
 
 
 def _command() -> str:
@@ -162,14 +221,14 @@ def _workspace() -> str:
     return os.environ.get("TERMINAL_CWD") or os.getcwd()
 
 
-def _run(argv: list[str], stdin: str = "") -> tuple[bool, str]:
+def _run(argv: list[str], stdin: str = "", timeout: float = _COMMAND_TIMEOUT_SECONDS) -> tuple[bool, str]:
     try:
         completed = subprocess.run(
             [_command(), *argv],
             input=stdin,
             capture_output=True,
             text=True,
-            timeout=_COMMAND_TIMEOUT_SECONDS,
+            timeout=timeout,
             cwd=_workspace(),
             check=False,
         )
@@ -181,21 +240,25 @@ def _run(argv: list[str], stdin: str = "") -> tuple[bool, str]:
 
 
 def _argv(args: dict) -> tuple[list[str], str] | str:
-    """The command line for one tool call, or what is missing from it."""
+    """The command line for one tool call, or what is missing from it.
+
+    Option values are joined to their option (`--title=-v`) so a value starting with a
+    dash is not read as another option.
+    """
     action = args.get("action")
     task_id = args.get("task_id") or ""
     if action == "create":
         if not args.get("title"):
             return "create needs a title."
-        argv = ["create", "--title", args["title"]]
+        argv = ["create", f"--title={args['title']}"]
         if args.get("description"):
-            argv += ["--description", args["description"]]
-        argv += ["--status", args["status"] if args.get("status") in _STATUSES else "in_progress"]
+            argv.append(f"--description={args['description']}")
+        argv.append(f"--status={args['status'] if args.get('status') in _STATUSES else 'in_progress'}")
         if args.get("body"):
-            argv += ["--note", args["body"]]
+            argv.append(f"--note={args['body']}")
         return argv, ""
     if action == "list":
-        return (["list", "--status", args["status"]] if args.get("status") else ["list"]), ""
+        return (["list", f"--status={args['status']}"] if args.get("status") else ["list"]), ""
     if not task_id:
         return f"{action} needs a task_id."
     if action == "show":
@@ -209,7 +272,7 @@ def _argv(args: dict) -> tuple[list[str], str] | str:
             return "status needs one of: " + ", ".join(_STATUSES) + "."
         argv = ["status", task_id, args["status"]]
         if args.get("body"):
-            argv += ["--note", args["body"]]
+            argv.append(f"--note={args['body']}")
         return argv, ""
     if action == "note":
         if not args.get("body"):
@@ -220,9 +283,9 @@ def _argv(args: dict) -> tuple[list[str], str] | str:
             return "attach needs a path."
         argv = ["attach", task_id, args["path"]]
         if args.get("name"):
-            argv += ["--name", args["name"]]
+            argv.append(f"--name={args['name']}")
         if args.get("content_type"):
-            argv += ["--content-type", args["content_type"]]
+            argv.append(f"--content-type={args['content_type']}")
         return [*argv, "--replace"], ""
     return "action must be one of: create, status, note, attach, remove_file, list, show."
 
@@ -234,8 +297,7 @@ def _handle_tool(args: dict, **_) -> str:
     argv, stdin = built
     ok, output = _run(argv, stdin)
     if argv[0] not in {"list", "show"}:
-        with _lock:
-            _open_tasks_cache["lines"] = None
+        _forget_task_list()
     if not ok:
         return json.dumps({"error": output})
     try:
@@ -249,6 +311,21 @@ def _touches_tasks(tool_name: str, args) -> bool:
         return True
     command = args.get("command") if isinstance(args, dict) else None
     return isinstance(command, str) and "agentbarn-task" in command
+
+
+def _records_task(tool_name: str, args, result) -> bool:
+    """Whether a Task call changed a Task: a write that did not fail. Reading Tasks is not recording work."""
+    if not isinstance(args, dict):
+        return False
+    if tool_name != _TOOL:
+        return isinstance(args.get("command"), str) and bool(_COMMAND_WRITE.search(args["command"]))
+    if args.get("action") not in _WRITE_ACTIONS:
+        return False
+    try:
+        answer = json.loads(result) if isinstance(result, str) else result
+    except ValueError:
+        return True
+    return not (isinstance(answer, dict) and "error" in answer)
 
 
 def _attached_names(tool_name: str, args) -> set[str]:
@@ -295,31 +372,20 @@ def _track(
     tool_name: str = "", args=None, session_id: str = "", turn_id: str = "", tool_call_id: str = "", result=None
 ) -> dict:
     """Count one tool call in its turn. Safe to call twice for the same call."""
-    _current_turn[session_id] = turn_id
-    turn = _turns.setdefault(
-        (session_id, turn_id),
-        {
-            "work": set(),
-            "wrote_files": False,
-            "written": {},
-            "recorded": False,
-            "task_ids": set(),
-            # task_id -> the last status the Agent set this turn
-            "statuses": {},
-            "attached": set(),
-            "reminded": False,
-            "held": False,
-        },
-    )
+    _remember(_current_turn, session_id, turn_id)
+    if (session_id, turn_id) not in _turns:
+        _remember(_turns, (session_id, turn_id), _new_turn())
+    turn = _turns[(session_id, turn_id)]
     if _touches_tasks(tool_name, args):
-        turn["recorded"] = True
-        turn["attached"] |= _attached_names(tool_name, args)
-        task_id = _task_id(tool_name, args, result)
-        if task_id:
-            turn["task_ids"].add(task_id)
-            status = _status_set(tool_name, args)
-            if status:
-                turn["statuses"][task_id] = status
+        if _records_task(tool_name, args, result):
+            turn["recorded"] = True
+            turn["attached"] |= _attached_names(tool_name, args)
+            task_id = _task_id(tool_name, args, result)
+            if task_id:
+                turn["task_ids"].add(task_id)
+                status = _status_set(tool_name, args)
+                if status:
+                    turn["statuses"][task_id] = status
     else:
         if tool_call_id:
             turn["work"].add(tool_call_id)
@@ -330,6 +396,21 @@ def _track(
                 full = os.path.normpath(os.path.join(_workspace(), path))
                 turn["written"][os.path.basename(full)] = full
     return turn
+
+
+def _new_turn() -> dict:
+    return {
+        "work": set(),
+        "wrote_files": False,
+        "written": {},
+        "recorded": False,
+        "task_ids": set(),
+        # task_id -> the last status the Agent set this turn
+        "statuses": {},
+        "attached": set(),
+        "reminded": False,
+        "held": False,
+    }
 
 
 def _unrecorded_work(turn: dict | None) -> bool:
@@ -366,31 +447,29 @@ def _attach_automatically(turn: dict) -> list[str]:
     return failed
 
 
-def _close_in_progress(turn: dict) -> None:
-    """Mark done each Task the Agent left in_progress this turn; a status it chose itself stays."""
-    closed = False
-    for task_id, status in sorted(turn["statuses"].items()):
-        if status == "in_progress":
-            _run(["status", task_id, "done"])
-            closed = True
-    if closed:
-        with _lock:
-            _open_tasks_cache["lines"] = None
+def _settle_in_progress(turn: dict, status: str) -> None:
+    """Move each Task the Agent left in_progress this turn to `status`; a status it chose itself stays."""
+    settled = False
+    for task_id, current in sorted(turn["statuses"].items()):
+        if current == "in_progress":
+            _run(["status", task_id, status])
+            settled = True
+    if settled:
+        _forget_task_list()
 
 
 def _record_automatically(session_id: str, turn: dict) -> list[str]:
     """Record a Task for work the Agent left unrecorded. Returns the files it could not attach."""
     with _lock:
-        request = " ".join(_requests.get(session_id, "").split())
+        request = " ".join(_redacted(_requests.get(session_id, "")).split())
     title = request or "Work recorded automatically"
     if len(title) > _AUTOMATIC_TITLE_CHARS:
         title = title[: _AUTOMATIC_TITLE_CHARS - 1].rstrip() + "…"
-    argv = ["create", "--title", title, "--status", "done", "--origin", "automatic"]
+    argv = ["create", f"--title={title}", "--status=done", "--origin=automatic"]
     if request:
-        argv += ["--description", request[:_AUTOMATIC_DESCRIPTION_CHARS]]
+        argv.append(f"--description={request[:_AUTOMATIC_DESCRIPTION_CHARS]}")
     ok, output = _run(argv)
-    with _lock:
-        _open_tasks_cache["lines"] = None
+    _forget_task_list()
     try:
         task_id = json.loads(output).get("id") if ok else None
     except (ValueError, AttributeError):
@@ -432,22 +511,23 @@ def _on_session_end(session_id="", turn_id="", completed=False, **_):
     recorded automatically. Only what could not be attached is named on the next turn.
     """
     with _lock:
-        _side_runs.discard((session_id, turn_id))
+        _side_runs.pop((session_id, turn_id), None)
         turn = _turns.pop((session_id, turn_id), None)
         if _current_turn.get(session_id) == turn_id:
             del _current_turn[session_id]
-    if turn is None or not completed:
+    if turn is None:
         return
-    if _unrecorded_work(turn):
+    if completed and _unrecorded_work(turn):
         failed = _record_automatically(session_id, turn)
     elif turn["recorded"]:
+        # A turn that failed or was interrupted leaves its Task open to pick up again, not in progress.
         failed = _attach_automatically(turn)
-        _close_in_progress(turn)
+        _settle_in_progress(turn, "done" if completed else "open")
     else:
         return
     if failed:
         with _lock:
-            _next_turn_reminders[session_id] = _attach_reminder(failed) + _QUIET
+            _remember(_next_turn_reminders, session_id, _attach_reminder(failed) + _QUIET)
 
 
 def _on_pre_verify(session_id="", **_):
@@ -462,25 +542,32 @@ def _on_pre_verify(session_id="", **_):
     return {"action": "continue", "message": _BEFORE_FINISHING_REMINDER}
 
 
-def _open_task_lines() -> list[str] | None:
-    with _lock:
-        cached = _open_tasks_cache["lines"]
-        if cached is not None and time.monotonic() - _open_tasks_cache["at"] < _OPEN_TASKS_TTL_SECONDS:
-            return cached
+def _task_lines(output: str) -> list[str]:
+    """The open Tasks, then the latest finished ones, from one listing (most recently changed first)."""
+    try:
+        items = json.loads(output)["items"]
+    except (ValueError, KeyError, TypeError):
+        return []
+    if not isinstance(items, list):
+        return []
     lines = []
     for task_status in ("in_progress", "open", "done"):
-        ok, output = _run(["list", "--status", task_status])
-        if not ok:
-            return None
-        try:
-            items = json.loads(output)["items"]
-        except (ValueError, KeyError, TypeError):
-            return None
-        for task in items[: _DONE_TASKS_SHOWN if task_status == "done" else _OPEN_TASKS_SHOWN]:
+        shown = [task for task in items if isinstance(task, dict) and task.get("status") == task_status]
+        for task in shown[: _DONE_TASKS_SHOWN if task_status == "done" else _OPEN_TASKS_SHOWN]:
             title = str(task.get("title", ""))[:120]
-            lines.append(f"- {task.get('id')} [{task.get('status')}] {title}")
+            lines.append(f"- {task.get('id')} [{task_status}] {title}")
+    return lines
+
+
+def _open_task_lines() -> list[str]:
     with _lock:
-        _open_tasks_cache.update({"at": time.monotonic(), "lines": lines})
+        read_at = _task_list_cache["at"]
+        if read_at is not None and time.monotonic() - read_at < _OPEN_TASKS_TTL_SECONDS:
+            return _task_list_cache["lines"]
+    ok, output = _run(["list", f"--page-size={_LIST_PAGE_SIZE}"], timeout=_LIST_TIMEOUT_SECONDS)
+    lines = _task_lines(output) if ok else []
+    with _lock:
+        _task_list_cache.update({"at": time.monotonic(), "lines": lines})
     return lines
 
 
@@ -494,11 +581,11 @@ def _on_pre_llm_call(session_id="", turn_id="", user_message="", parent_session_
         return None
     if parent_session_id:
         with _lock:
-            _side_runs.add((session_id, turn_id))
+            _remember(_side_runs, (session_id, turn_id), True)
         return None
     if isinstance(user_message, str):
         with _lock:
-            _requests[session_id] = user_message
+            _remember(_requests, session_id, user_message[:_AUTOMATIC_DESCRIPTION_CHARS])
     parts = [] if _small_talk(user_message) else ["[Agent Barn] " + _REQUEST_LINE]
     lines = _open_task_lines()
     if lines:

@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ _PLUGIN_DIR = Path(__file__).parents[2] / "domains/agents/scripts/openclaw/plugi
 _DRIVER = Path(__file__).parents[1] / "fixtures/agent_tasks/openclaw_tasks_plugin_driver.mjs"
 _FAKE_COMMAND = Path(__file__).parents[1] / "fixtures/agent_tasks/fake_task_command.py"
 _TASK_ID = "0199f1d2-0000-7000-8000-0000000000aa"
+_SESSIONS_KEPT = 500
 
 
 def _drive(tmp_path: Path, steps: list[dict], open_tasks: list[dict] | None = None, **env: str) -> dict:
@@ -153,16 +155,16 @@ def test_the_manifest_declares_the_tool_it_registers():
     [
         (
             {"action": "create", "title": "Reconcile invoices", "description": "For October"},
-            ["create", "--title", "Reconcile invoices", "--description", "For October", "--status", "in_progress"],
+            ["create", "--title=Reconcile invoices", "--description=For October", "--status=in_progress"],
             "",
         ),
         ({"action": "status", "task_id": _TASK_ID, "status": "done"}, ["status", _TASK_ID, "done"], ""),
         ({"action": "note", "task_id": _TASK_ID, "body": "Matched 40 of 42"}, ["note", _TASK_ID], "Matched 40 of 42"),
-        ({"action": "list", "status": "open"}, ["list", "--status", "open"], ""),
+        ({"action": "list", "status": "open"}, ["list", "--status=open"], ""),
         ({"action": "show", "task_id": _TASK_ID}, ["show", _TASK_ID], ""),
         (
             {"action": "attach", "task_id": _TASK_ID, "path": "report.csv", "name": "October.csv"},
-            ["attach", _TASK_ID, "report.csv", "--name", "October.csv", "--replace"],
+            ["attach", _TASK_ID, "report.csv", "--name=October.csv", "--replace"],
             "",
         ),
     ],
@@ -215,7 +217,7 @@ def test_a_run_that_records_a_task_is_not_asked_to_revise(tmp_path: Path):
     driven = _drive(
         tmp_path,
         [
-            _after_tool("c0", tool="agentbarn_task"),
+            _created("c0"),
             _after_tool("c1"),
             _after_tool("c2"),
             _after_tool("c3"),
@@ -282,7 +284,7 @@ def test_open_tasks_are_cached_between_turns_until_a_task_changes(tmp_path: Path
         open_tasks=[{"id": "task-1", "title": "Report", "status": "open"}],
     )
 
-    assert_that(sum(call["argv"][0] == "list" for call in _calls(tmp_path)), equal_to(6))
+    assert_that(sum(call["argv"][0] == "list" for call in _calls(tmp_path)), equal_to(2))
 
 
 def test_an_unavailable_task_service_does_not_break_the_turn(tmp_path: Path):
@@ -474,13 +476,13 @@ def test_heartbeats_do_not_carry_the_task_line(tmp_path: Path):
 def test_create_passes_a_starting_status(tmp_path: Path):
     _drive(tmp_path, [_tool(action="create", title="Report", status="in_progress")])
 
-    assert_that(_calls(tmp_path)[-1]["argv"], equal_to(["create", "--title", "Report", "--status", "in_progress"]))
+    assert_that(_calls(tmp_path)[-1]["argv"], equal_to(["create", "--title=Report", "--status=in_progress"]))
 
 
 def test_create_starts_the_task_in_progress_by_default(tmp_path: Path):
     _drive(tmp_path, [_tool(action="create", title="Report")])
 
-    assert_that(_calls(tmp_path)[-1]["argv"], equal_to(["create", "--title", "Report", "--status", "in_progress"]))
+    assert_that(_calls(tmp_path)[-1]["argv"], equal_to(["create", "--title=Report", "--status=in_progress"]))
 
 
 def test_remove_file_maps_onto_the_task_command(tmp_path: Path):
@@ -517,8 +519,8 @@ def test_create_and_status_carry_a_note_in_the_same_call(tmp_path: Path):
         [call["argv"] for call in _calls(tmp_path)],
         equal_to(
             [
-                ["create", "--title", "Report", "--status", "in_progress", "--note", "Started from the October export"],
-                ["status", _TASK_ID, "failed", "--note", "The export was empty"],
+                ["create", "--title=Report", "--status=in_progress", "--note=Started from the October export"],
+                ["status", _TASK_ID, "failed", "--note=The export was empty"],
             ]
         ),
     )
@@ -543,10 +545,13 @@ def test_a_task_the_run_only_noted_on_is_not_closed(tmp_path: Path):
     assert_that(_statuses(tmp_path), equal_to([]))
 
 
-def test_a_task_is_not_closed_when_the_run_failed(tmp_path: Path):
-    _drive(tmp_path, [_created(), _agent_end(success=False)])
+def test_a_task_left_in_progress_is_reopened_when_the_run_failed(tmp_path: Path):
+    wrote, states = _wrote(tmp_path)
 
-    assert_that(_statuses(tmp_path), equal_to([]))
+    _drive(tmp_path, [wrote, _created(), _agent_end(success=False)])
+
+    assert_that(_statuses(tmp_path), equal_to([["status", _TASK_ID, "open"]]))
+    assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, states, "--replace"]]))
 
 
 def test_every_task_left_in_progress_is_closed(tmp_path: Path):
@@ -573,7 +578,7 @@ def test_closing_a_task_refreshes_the_open_tasks_shown(tmp_path: Path):
         open_tasks=[{"id": _TASK_ID, "status": "in_progress", "title": "States"}],
     )
 
-    assert_that(sum(call["argv"][0] == "list" for call in _calls(tmp_path)), equal_to(6))
+    assert_that(sum(call["argv"][0] == "list" for call in _calls(tmp_path)), equal_to(2))
 
 
 @pytest.mark.parametrize("message", ["Thanks!", "Thanks, that's great.", "That's all for now, thanks!", "Good morning"])
@@ -623,6 +628,10 @@ def _creates(tmp_path: Path) -> list[list[str]]:
     return [call["argv"] for call in _calls(tmp_path) if call["argv"][0] == "create"]
 
 
+def _option(argv: list[str], name: str) -> str:
+    return next(arg.split("=", 1)[1] for arg in argv if arg.startswith(f"--{name}="))
+
+
 def test_work_left_unrecorded_is_recorded_automatically_when_the_run_ends(tmp_path: Path):
     _drive(
         tmp_path,
@@ -639,14 +648,10 @@ def test_work_left_unrecorded_is_recorded_automatically_when_the_run_ends(tmp_pa
             [
                 [
                     "create",
-                    "--title",
-                    "Please summarise the October invoices",
-                    "--status",
-                    "done",
-                    "--origin",
-                    "automatic",
-                    "--description",
-                    "Please summarise the October invoices",
+                    "--title=Please summarise the October invoices",
+                    "--status=done",
+                    "--origin=automatic",
+                    "--description=Please summarise the October invoices",
                 ]
             ]
         ),
@@ -666,8 +671,7 @@ def test_a_long_request_is_shortened_for_the_automatic_title(tmp_path: Path):
 
     _drive(tmp_path, [_prompt(prompt="Please " + "compare these regional sales figures " * 10), wrote, _agent_end()])
 
-    [create] = _creates(tmp_path)
-    title = create[create.index("--title") + 1]
+    title = _option(_creates(tmp_path)[0], "title")
     assert_that((len(title), title.endswith("…")), equal_to((120, True)))
 
 
@@ -704,3 +708,162 @@ def test_heartbeat_work_is_not_recorded_automatically(tmp_path: Path):
     )
 
     assert_that(_creates(tmp_path), equal_to([]))
+
+
+# --- only a Task the run actually wrote counts as recording it ---
+
+
+def test_reading_tasks_does_not_count_as_recording(tmp_path: Path):
+    listed = {"items": []}
+    driven = _drive(
+        tmp_path,
+        [
+            _prompt(),
+            _task(
+                "c0",
+                result={"content": [{"type": "text", "text": json.dumps(listed)}], "details": listed},
+                action="list",
+            ),
+            *[_after_tool(f"c{n}") for n in range(1, 4)],
+            _finalize(),
+            _agent_end(),
+        ],
+    )
+
+    assert_that(driven["results"][-2], has_entries(action="revise"))
+    assert_that(len(_creates(tmp_path)), equal_to(1))
+
+
+def test_a_task_call_that_failed_does_not_count_as_recording(tmp_path: Path):
+    wrote, states = _wrote(tmp_path)
+    refused = {"error": "Task not found."}
+
+    _drive(
+        tmp_path,
+        [
+            _prompt(prompt="Write the states CSV"),
+            wrote,
+            _task(
+                "c2",
+                result={"content": [{"type": "text", "text": json.dumps(refused)}], "details": refused},
+                action="status",
+                task_id="task-gone",
+                status="in_progress",
+            ),
+            _agent_end(),
+        ],
+    )
+
+    assert_that(len(_creates(tmp_path)), equal_to(1))
+    assert_that(_attaches(tmp_path), equal_to([["attach", _TASK_ID, states, "--replace"]]))
+    assert_that([argv for argv in _statuses(tmp_path) if "task-gone" in argv], equal_to([]))
+
+
+@pytest.mark.parametrize("command", ["agentbarn-task --help", "agentbarn-task list", "agentbarn-task show abc"])
+def test_reading_tasks_from_exec_does_not_count_as_recording(tmp_path: Path, command: str):
+    driven = _drive(
+        tmp_path, [_after_tool("c0", command=command), *[_after_tool(f"c{n}") for n in range(1, 4)], _finalize()]
+    )
+
+    assert_that(driven["results"][-1], has_entries(action="revise"))
+
+
+# --- listing Tasks each turn stays cheap and bounded ---
+
+
+def test_open_and_finished_tasks_come_from_one_list_call(tmp_path: Path):
+    _drive(tmp_path, [_prompt()])
+
+    assert_that([call["argv"] for call in _calls(tmp_path)], equal_to([["list", "--page-size=100"]]))
+
+
+def test_a_failed_listing_is_not_retried_on_every_turn(tmp_path: Path):
+    _drive(tmp_path, [_prompt(), _prompt()], FAKE_TASK_LIST_FAIL="1")
+
+    assert_that(len(_calls(tmp_path)), equal_to(1))
+
+
+def test_a_slow_listing_does_not_hold_up_the_turn(tmp_path: Path):
+    started = time.monotonic()
+    driven = _drive(
+        tmp_path,
+        [_prompt()],
+        open_tasks=[{"id": "task-1", "title": "Report", "status": "open"}],
+        FAKE_TASK_LIST_SLEEP="60",
+    )
+
+    assert_that((time.monotonic() - started < 25, "task-1" in _context(driven["results"][0])), equal_to((True, False)))
+
+
+# --- the automatic Task does not keep secrets from the request ---
+
+
+_SECRET_REQUESTS = [
+    ("Deploy it with ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8 tonight", "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"),
+    ("Call the API using sk-ant-api03-abcdefghijklmnop1234567890", "abcdefghijklmnop1234567890"),
+    ("Log in, the password: hunter2! is on the wiki", "hunter2!"),
+    ("Back up postgres://admin:s3cretpw@db.internal/app tonight", "s3cretpw"),
+    ("Rotate AKIAIOSFODNN7EXAMPLE this week", "AKIAIOSFODNN7EXAMPLE"),
+    (
+        "Check Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+        "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    ),
+    ("Use token=Zx8kQ2mN7pL4vR9tY3wB6cD1fG5hJ0sA to fetch", "Zx8kQ2mN7pL4vR9tY3wB6cD1fG5hJ0sA"),
+]
+
+
+@pytest.mark.parametrize(("request_text", "secret"), _SECRET_REQUESTS)
+def test_secrets_in_the_request_are_redacted_from_the_automatic_task(tmp_path: Path, request_text: str, secret: str):
+    wrote, _ = _wrote(tmp_path)
+
+    _drive(tmp_path, [_prompt(prompt=request_text), wrote, _agent_end()])
+
+    [create] = _creates(tmp_path)
+    title, description = _option(create, "title"), _option(create, "description")
+    assert_that((secret in title, secret in description), equal_to((False, False)))
+    assert_that(description, contains_string("[redacted]"))
+
+
+def test_a_request_that_looks_like_an_option_is_still_recorded(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+
+    _drive(tmp_path, [_prompt(prompt="-v"), wrote, _agent_end()])
+
+    assert_that(_option(_creates(tmp_path)[0], "title"), equal_to("-v"))
+
+
+# --- the startup checklist and subagent runs are not the user's request ---
+
+
+@pytest.mark.parametrize("session", ["agent:main:boot", "agent:main:subagent:4f2a", "subagent:4f2a"])
+def test_boot_and_subagent_runs_are_left_alone(tmp_path: Path, session: str):
+    wrote, _ = _wrote(tmp_path)
+    work = [_after_tool(f"c{n}", session=session) for n in range(2, 5)]
+
+    driven = _drive(
+        tmp_path,
+        [
+            _prompt(session=session),
+            {**wrote, "ctx": {**wrote["ctx"], "sessionKey": session}},
+            *work,
+            _persist("c4", session=session),
+            _finalize(session=session),
+            _agent_end(session=session),
+        ],
+    )
+
+    assert_that(driven["results"][0], is_(None))
+    assert_that(driven["results"][-3:], equal_to([None, None, None]))
+    assert_that(_calls(tmp_path), equal_to([]))
+
+
+# --- what the plugin remembers stays bounded ---
+
+
+def test_only_the_latest_sessions_requests_are_kept(tmp_path: Path):
+    wrote, _ = _wrote(tmp_path)
+    later = [_prompt(session=f"later-{n}", prompt="Hello there, do something") for n in range(_SESSIONS_KEPT)]
+
+    _drive(tmp_path, [_prompt(session="s1", prompt="Write the states CSV"), *later, wrote, _agent_end()])
+
+    assert_that(_option(_creates(tmp_path)[0], "title"), equal_to("Work recorded automatically"))
