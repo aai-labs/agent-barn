@@ -3,6 +3,12 @@
 # ./run.sh (which drives this file) gives you the same hot reload as
 # `make dev-api`/`dev-ui`/`dev-worker`, just fully containerized.
 
+# Garage is part of this project, with the same service definition used by the
+# operator's isolated backup/restore commands. ./run.sh prepares its private files.
+include:
+  - path: docker/garage/compose.yml
+    env_file: .garage/compose.env
+
 x-api-env: &api-env
   # Container-network hostnames override the localhost defaults in .env.
   DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
@@ -114,6 +120,8 @@ services:
         uvicorn api.memory_runtime_main:app --host 0.0.0.0 --port 8004 --reload --no-access-log &
         exec fastapi dev api/main.py --host 0.0.0.0 --port 8000"
     depends_on:
+      garage:
+        condition: service_healthy
       db:
         condition: service_healthy
       redis:
@@ -334,7 +342,6 @@ services:
       - "${GATEWAY_PORT:-8004}:8003"
 
   artifact-purge:
-    profiles: [local-garage]
     build:
       context: .
       dockerfile: api/Dockerfile
@@ -351,6 +358,8 @@ services:
     volumes:
       - ./api:/app/api
     depends_on:
+      garage:
+        condition: service_healthy
       db:
         condition: service_healthy
 

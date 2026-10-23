@@ -31,6 +31,13 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Limits: Documented that failed/expired unfinished steps can currently retry automatically, dispatch deduplication does not guarantee exactly-once external effects, and the agreed uncertain-effect handling remains unimplemented. This documentation change does not change runtime behavior.
 - Verification: Compared the guide with the start/read/cancel services, runtime dispatch, DTOs and controller; checked Markdown structure and whitespace. No application tests were rerun for this prose-only correction.
 
+### 2026-10-23 — AF-415 — required main-stack storage (local, not pushed)
+
+- Changed: Garage and artifact-purge run in the main Compose project without a profile. Normal startup prepares private credentials and bootstraps Garage before API startup; API/purge depend on storage health.
+- Compatibility: adopting the earlier standalone local store preserves its exact volumes, keys, node identity and endpoint. Storage-only stop/failed-initialization cleanup targets Garage without stopping the application database.
+- Verification: nine focused configuration/persistence/recovery cases pass, including actual S3-byte adoption through root Compose; disabling adoption fails its project assertion. Python types/lint, shell syntax and artifact/workflow chart checks pass. The new Opus review attempt was rate-limited; earlier approvals cover their reviewed revisions.
+- Delivery: local verification is recorded in the artifact evidence. No push, merge or external deployment.
+
 ### 2026-10-23 — AF-415 — persistent storage infrastructure (local, not pushed)
 
 - Added: persistent worktree-isolated Garage Compose service, private one-time bootstrap, API/native-development wiring, scheduled local purge, consistent backup and fresh-volume restore.

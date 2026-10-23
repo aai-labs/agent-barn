@@ -473,8 +473,11 @@ the shipped Compose/bootstrap files, private bucket grants, container replacemen
 consistent stopped backups, fresh-volume restore, application links and purge.
 It also covers failed setup/restore recovery, lost-volume refusal, conflicting
 shell defaults and exclusion of the application secret from actual Docker exec
-events. Configuration tests cover private backup paths, `.env` parsing and service
-credential isolation.
+events. A real adoption case publishes bytes in the former standalone store,
+then starts the root Compose service and verifies unchanged bytes, keys, node ID,
+endpoint, volume names and container identity. Configuration tests render the main
+stack without profiles and assert Garage/purge presence, storage health
+dependencies, private backup paths, `.env` parsing and service credential isolation.
 It deletes only its own generated Compose project/volumes; developer storage is
 untouched. The local cleanup process supports one bounded pass or `--interval 600`
 with graceful shutdown. `make check-artifacts` also checks the three-node Garage

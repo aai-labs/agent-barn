@@ -33,8 +33,10 @@ fi
 COMPOSE="docker compose -f compose.yml"
 CLUSTER="${K3D_CLUSTER:-agentfarm-dev}"
 
+# Also handles a pre-adoption standalone store and refreshes older private config.
+# The helper stops only Garage, even when it belongs to the main project.
 if [[ -f .garage/state.json ]]; then
-  step "Stopping local Garage (data and keys preserved)"
+  step "Stopping Garage (data and keys preserved)"
   (cd api && uv run python scripts/provision_garage.py down)
 fi
 

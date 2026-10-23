@@ -18,13 +18,17 @@ def test_compose_storage_key_is_only_available_to_api_and_purge(tmp_path):
     settings.update({name: str(18000 + index) for index, name in enumerate(sorted(required)) if name.endswith("_PORT")})
     settings.update(
         {
-            "COMPOSE_PROFILES": "local-garage",
             "ARTIFACT_S3_ACCESS_KEY": "fixture-root-key",
             "ARTIFACT_S3_SECRET_KEY": "fixture-root-secret",
         }
     )
     (tmp_path / ".env").write_text("".join(f"{key}={value}\n" for key, value in settings.items()))
     (tmp_path / ".garage").mkdir()
+    shutil.copytree(ROOT / "docker/garage", tmp_path / "docker/garage")
+    (tmp_path / ".garage/compose.env").write_text(
+        f"GARAGE_SAVED_STATE_DIR={tmp_path / '.garage'}\nGARAGE_SAVED_VOLUME_PREFIX=fixture\nGARAGE_SAVED_S3_PORT=3900\n"
+    )
+    (tmp_path / ".garage/server.env").write_text("GARAGE_DEFAULT_ACCESS_KEY=fixture-bootstrap\n")
     (tmp_path / ".garage/application.env").write_text(
         "ARTIFACT_S3_BUCKET=fixture-files\nARTIFACT_S3_ACCESS_KEY=fixture-private-key\nARTIFACT_S3_SECRET_KEY=fixture-private-secret\n"
     )
@@ -46,6 +50,10 @@ def test_compose_storage_key_is_only_available_to_api_and_purge(tmp_path):
     )
     assert_that(result.returncode, equal_to(0), "Compose configuration did not render")
     services = json.loads(result.stdout)["services"]
+    assert_that("garage" in services, is_(True), "Garage must run without a profile")
+    assert_that("artifact-purge" in services, is_(True), "Purge must run without a profile")
+    assert_that(services["api"]["depends_on"]["garage"]["condition"], equal_to("service_healthy"))
+    assert_that(services["artifact-purge"]["depends_on"]["garage"]["condition"], equal_to("service_healthy"))
     for name, service in services.items():
         environment = service.get("environment", {})
         if name in {"api", "artifact-purge"}:
@@ -65,7 +73,7 @@ def test_backup_refuses_relative_and_repository_destinations(tmp_path):
 
     directory = tmp_path / "state"
     directory.mkdir()
-    (directory / "state.json").write_text(json.dumps({"project": "fixture-not-a-store"}))
+    (directory / "state.json").write_text(json.dumps({"project": "fixture-not-a-store", "port": 3900}))
     for destination in (Path("backup"), ROOT / "backup"):
         args = argparse.Namespace(state_dir=directory, action="backup", backup_dir=destination)
         with pytest.raises(ValueError, match="absolute and outside the repository"):

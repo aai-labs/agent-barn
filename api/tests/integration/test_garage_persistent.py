@@ -264,3 +264,97 @@ def test_failed_first_start_can_retry_with_another_port(tmp_path, explicit_endpo
     finally:
         if compose is not None:
             subprocess.run([*compose, "down", "--volumes"], capture_output=True, check=False)
+
+
+@pytest.mark.xdist_group("heavy_containers")
+def test_main_compose_adopts_standalone_storage_without_changing_bytes(tmp_path):
+    import re
+
+    project = tmp_path / "main-stack"
+    directory = project / ".garage"
+    scripts = project / "api/scripts"
+    scripts.mkdir(parents=True)
+    shutil.copytree(ROOT / "docker/garage", project / "docker/garage")
+    shutil.copyfile(ROOT / "api/scripts/provision_garage.py", scripts / "provision_garage.py")
+    source = (ROOT / "compose.yml").read_text()
+    (project / "compose.yml").write_text(source)
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):?\?", source))
+    settings = {name: "fixture" for name in required}
+    settings.update({name: str(18000 + index) for index, name in enumerate(sorted(required)) if name.endswith("_PORT")})
+    # Saved storage settings must win over changed defaults in the application env.
+    settings["GARAGE_S3_PORT"] = "1"
+    (project / ".env").write_text("".join(f"{key}={value}\n" for key, value in settings.items()))
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    environment = {key: value for key, value in os.environ.items() if key != "COMPOSE_PROJECT_NAME"}
+    # Use the real helper from outside this root to create its former standalone store.
+    first = [sys.executable, str(ROOT / "api/scripts/provision_garage.py"), "up", "--state-dir", str(directory)]
+    main = ["docker", "compose", "-f", str(project / "compose.yml")]
+    old_compose = None
+    adopted_compose = None
+    try:
+        result = subprocess.run(
+            [*first, "--port", str(port), "--endpoint", f"http://127.0.0.1:{port}"],
+            capture_output=True,
+            env=environment,
+            check=False,
+        )
+        assert_that(result.returncode, equal_to(0), "Standalone setup must succeed before adoption")
+        before = json.loads((directory / "state.json").read_text())
+        old_compose = local_compose(directory, before)
+        credentials = read_env(directory / "application.env")
+        client = boto3.client(
+            "s3",
+            endpoint_url=credentials["ARTIFACT_S3_ENDPOINT_URL"],
+            region_name="garage",
+            aws_access_key_id=credentials["ARTIFACT_S3_ACCESS_KEY"],
+            aws_secret_access_key=credentials["ARTIFACT_S3_SECRET_KEY"],
+            config=S3Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
+        client.put_object(Bucket=before["bucket"], Key="artifacts/adoption-proof", Body=CONTENT)
+        # Older private interpolation files are upgraded even for storage-only commands.
+        (directory / "compose.env").write_text(f"GARAGE_STATE_DIR={directory}\nGARAGE_S3_PORT={port}\n")
+        status = subprocess.run(
+            [sys.executable, str(scripts / "provision_garage.py"), "status"],
+            capture_output=True,
+            env=environment,
+            check=False,
+        )
+        assert_that(status.returncode, equal_to(0), "Status must work before adopting an old store")
+        result = subprocess.run(
+            [sys.executable, str(scripts / "provision_garage.py"), "up"],
+            capture_output=True,
+            env=environment,
+            check=False,
+        )
+        assert_that(result.returncode, equal_to(0), "Main-project adoption must succeed")
+        after = json.loads((directory / "state.json").read_text())
+        adopted_compose = local_compose(directory, after)
+        assert_that(after["project"], equal_to("main-stack"))
+        assert_that(after["volume_project"], equal_to(before["project"]))
+        for field in ("node_id", "access_key", "secret_key", "endpoint", "port"):
+            assert_that(after[field], equal_to(before[field]), field)
+        rendered = subprocess.run(
+            [*main, "config", "--format", "json"], capture_output=True, env=environment, check=True
+        )
+        model = json.loads(rendered.stdout)
+        assert_that("garage" in model["services"], equal_to(True))
+        assert_that("artifact-purge" in model["services"], equal_to(True))
+        for suffix in ("metadata", "data"):
+            assert_that(model["volumes"][suffix]["name"], equal_to(before["project"] + "_" + suffix))
+        identifier = subprocess.run([*adopted_compose, "ps", "-q", "garage"], capture_output=True, check=True).stdout
+        # Exercise the root Compose file itself, selecting only storage to avoid unrelated services.
+        subprocess.run([*main, "up", "-d", "--wait", "garage"], capture_output=True, env=environment, check=True)
+        main_identifier = subprocess.run(
+            [*main, "ps", "-q", "garage"], capture_output=True, env=environment, check=True
+        ).stdout
+        assert_that(main_identifier, equal_to(identifier), "Root Compose must reuse the adopted service")
+        assert_that(
+            client.get_object(Bucket=before["bucket"], Key="artifacts/adoption-proof")["Body"].read(), equal_to(CONTENT)
+        )
+    finally:
+        if adopted_compose:
+            subprocess.run([*adopted_compose, "down", "--volumes"], capture_output=True, check=False)
+        elif old_compose:
+            subprocess.run([*old_compose, "down", "--volumes"], capture_output=True, check=False)

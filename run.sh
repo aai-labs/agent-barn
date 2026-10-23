@@ -73,12 +73,11 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 green "  all required values set"
 
-# Storage is independently usable via make garage-up, without k3d or model keys.
-if [[ ",${COMPOSE_PROFILES:-}," == *",local-garage,"* ]]; then
-  step "Starting persistent local Garage"
-  command -v uv >/dev/null 2>&1 || red "uv is required for local Garage bootstrap"
-  (cd api && uv run python scripts/provision_garage.py up)
-fi
+# Required storage: prepare private credentials and start the main project's Garage
+# before API containers load their environment. No profile is needed.
+step "Starting persistent Garage"
+command -v uv >/dev/null 2>&1 || red "uv is required for Garage bootstrap"
+(cd api && uv run python scripts/provision_garage.py up)
 
 # ── k3d cluster + litellm ─────────────────────────────────────────────────────
 
@@ -108,15 +107,12 @@ step "Running database migrations"
 ${COMPOSE} build api
 ${COMPOSE} run --rm --no-deps --workdir /app/api api python -m alembic upgrade head
 
-step "Building and starting api, worker, cost-sync, budget-snapshots, communications, memory, credential-gateway, ui"
+step "Building and starting api, worker, cost-sync, budget-snapshots, communications, memory, credential-gateway, ui, artifact-purge"
 if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
   step "Starting local Hindsight database and backend"
   ${COMPOSE} up -d hindsight-db hindsight
 fi
-${COMPOSE} up -d --build api worker cost-sync budget-snapshots communications memory credential-gateway ui
-if [[ ",${COMPOSE_PROFILES:-}," == *",local-garage,"* ]]; then
-  ${COMPOSE} up -d --build artifact-purge
-fi
+${COMPOSE} up -d --build api worker cost-sync budget-snapshots communications memory credential-gateway ui artifact-purge
 
 # Prints a boxed row padded to the border width, measuring visible width only
 # (ANSI color/bold codes stripped before computing the pad) so values of any
