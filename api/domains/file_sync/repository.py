@@ -382,13 +382,13 @@ class FileSyncRepository:
             session.exec(sa.delete(SyncAgentFolder).where(col(SyncAgentFolder.id) == folder_id))
             session.commit()
 
-    def stop_folders(self, folder_ids: list[UUID]) -> None:
+    def retire_folders(self, folder_ids: list[UUID]) -> None:
         if not folder_ids:
             return
         with Session(self.delegate.engine) as session:
             session.exec(
                 sa.update(SyncAgentFolder)
                 .where(col(SyncAgentFolder.id).in_(folder_ids))
-                .values(status=SyncFolderStatus.STOPPED)
+                .values(status=SyncFolderStatus.RETIRED)
             )
             session.commit()

@@ -10,7 +10,7 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentType
-from api.domains.file_sync.engine import sync_root
+from api.domains.file_sync.engine import delete_agent_folder, sync_root
 from api.domains.file_sync.models import (
     FileSyncChangesCreate,
     FileSyncChangesRead,
@@ -328,9 +328,4 @@ class FileSyncFolderRemoval:
     def remove_agent_folders(self, connection: SyncProviderConnection, plugin: SyncProviderPlugin) -> None:
         root = sync_root(connection)
         for folder in self.repository.folders(connection.id):
-            if root is not None and folder.folder_item_id is not None:
-                try:
-                    plugin.delete_item(root, item_id=folder.folder_item_id)
-                except RemoteItemMissing:
-                    pass
-            self.repository.remove_folder(folder.id)
+            delete_agent_folder(plugin, root, self.repository, folder)

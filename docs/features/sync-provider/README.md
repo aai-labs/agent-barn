@@ -56,7 +56,7 @@ Paths below are relative to `/organizations/{organization_id}/sync-providers/{pr
    2. `POST …/connection/disconnect {code, state}` requires a disconnect state for this caller, Organization and provider (400), and an active connection (409).
    3. The plugin redeems the code and requires the same account that connected.
    4. Holding the connection's Sync Engine lock (`FileSyncFolderRemoval`), it waits up to 15 s for a running engine pass. If the lock isn't free by then, the answer is 409 "File sync is busy with this connection. Try again in a moment." and nothing changes.
-   5. Every Agent Folder, including stopped and disabled ones, is deleted at the provider with Agent Barn's own access, and its row is removed, together with its `sync_file` rows. A folder already gone at the provider is skipped. `sync_activity` keeps its history, with `folder_id` cleared.
+   5. Every Agent Folder, including disabled ones and retired ones still waiting to be deleted, is deleted at the provider with Agent Barn's own access, and its row is removed, together with its `sync_file` rows. A folder already gone at the provider is skipped. `sync_activity` keeps its history, with `folder_id` cleared.
    6. The plugin revokes Agent Barn's access with the fresh sign-in.
    7. The connection is marked disconnected. The "Agent Barn" root folder is left in place, and the Organization may connect again. Agents' volumes and pods are not touched.
 
@@ -188,7 +188,12 @@ Its reads and writes are background work under the [RBAC brief](../rbac/IMPLEMEN
 Every live Agent of the Organization gets a folder directly under "Agent Barn", recorded in `sync_agent_folder`.
 - **New Agents:** the row is reserved first, oldest Agent first, and the database's unique name index decides ties. The folder is then created at the provider. A failed create is finished on the next pass.
 - **Renamed Agents:** their folder is renamed.
-- **Deleted Agents:** their folder is marked `stopped` without calling the provider, and stays at the provider with its files.
+- **Retired (deleted) Agents:** their folder is marked `retired` and deleted at the provider (to its recycle bin), then its row is removed. Its `sync_file` rows go with it, and `sync_activity` keeps its history with `folder_id` cleared. Retiring has no undo in Agent Barn, so the provider's recycle bin is the only way back.
+  - **Already gone:** a folder already gone at the provider just loses its row.
+  - **Throttled:** the connection waits out `Retry-After`, the folder stays `retired`, and the next pass tries again.
+  - **Other failures:** any other provider failure is logged, and the next pass tries again. Other Agents' folders are not held up.
+  - **The change feed** later reports the deletion, which matches no row, so nothing is rebuilt.
+- **Stopped Agents** (Stop, not Retire) keep their folder `active` and its files. Their jobs wait for the next start.
 - **Disabled folders** are left alone. When no folder needs changing, this part of the pass makes no provider call.
 
 Folder names follow the Agent's name:
@@ -198,7 +203,7 @@ Folder names follow the Agent's name:
 - names are at most 255 characters, cut before a number is added.
 
 Duplicate names, compared case-insensitively, get the lowest free ` (2)`, ` (3)`…
-- **Taken names:** names of stopped and disabled folders stay taken, so a new Agent named like a deleted one gets a number. So do names already used at the provider.
+- **Taken names:** names of disabled folders stay taken, and so do names already used at the provider. Retired folders are deleted before names are given out, so a new Agent named like a retired one gets the plain name, or a number while the old folder's deletion is still pending.
 - **Dropping the number:** a numbered folder drops its number once the plain name is free. Two Agents swapping names therefore settle within two passes without ever sharing a name.
 
 ### People's edits

@@ -30,6 +30,7 @@ from api.domains.sync_provider.plugins.base import (
     RemoteItemMissing,
     RemoteNameTaken,
     RemoteResyncRequired,
+    SyncProviderError,
     SyncProviderPlugin,
     SyncRoot,
 )
@@ -94,6 +95,17 @@ def _locate(changes: _Changes, path: str | None) -> _Target | None:
     if entry is None or not rel_path or rel_path.split("/", 1)[0] == NOT_SYNCED_DIR:
         return None
     return _Target(folder=entry[0], runtime=entry[1], rel_path=rel_path)
+
+
+def delete_agent_folder(
+    plugin: SyncProviderPlugin, root: SyncRoot | None, repository: FileSyncRepository, folder: SyncAgentFolder
+) -> None:
+    if root is not None and folder.folder_item_id is not None:
+        try:
+            plugin.delete_item(root, item_id=folder.folder_item_id)
+        except RemoteItemMissing:
+            pass
+    repository.remove_folder(folder.id)
 
 
 def sync_root(connection: SyncProviderConnection) -> SyncRoot | None:
@@ -323,13 +335,19 @@ class FileSyncEngine:
         agents = self.repository.live_agent_names(connection.organization_id)
         live = {agent_id for agent_id, _ in agents}
         folders = self.repository.folders(connection.id)
-        self.repository.stop_folders(
-            [
-                folder.id
-                for folder in folders
-                if folder.agent_id not in live and folder.status != SyncFolderStatus.STOPPED
-            ]
-        )
+        retired = [folder for folder in folders if folder.agent_id not in live]
+        self.repository.retire_folders([folder.id for folder in retired if folder.status != SyncFolderStatus.RETIRED])
+        gone = set()
+        for folder in retired:
+            try:
+                delete_agent_folder(plugin, root, self.repository, folder)
+            except ProviderThrottled:
+                raise
+            except SyncProviderError:
+                logger.exception("Could not delete a retired Agent's folder; retrying on the next pass")
+                continue
+            gone.add(folder.id)
+        folders = [folder for folder in folders if folder.id not in gone]
         by_agent = {folder.agent_id: folder for folder in folders}
         taken = {folder.folder_name.lower() for folder in folders}
         for agent_id, agent_name in agents:

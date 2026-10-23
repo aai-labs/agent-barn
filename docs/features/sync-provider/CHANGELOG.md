@@ -81,6 +81,25 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 ## Changes
 
+### 2026-10-23 — AF-384 — Retiring an Agent deletes its folder
+
+- **Decision (maintainer, 2026-10-22, during the end-to-end run):** retiring an Agent deletes its Agent Folder at the provider. It used to be marked `stopped` and kept. Stopping an Agent never touches its folder.
+- **Delivered:**
+  - **Rename:** the folder state set on retire is renamed from `stopped` to `retired` (`SyncFolderStatus.RETIRED`, `FileSyncRepository.retire_folders`), so it no longer reads like a stopped, restartable Agent. No migration changes: the column is plain `String(16)` with no allowed-value list.
+  - **`reconcile_folders`:** marks each folder of a retired Agent `retired`, then deletes it through the new `delete_agent_folder` (provider `delete_item`, `RemoteItemMissing` ignored, then `remove_folder`). This runs before names are given out.
+  - **Failures:** throttling propagates, so `run_pass` postpones the connection by `Retry-After`. Any other provider failure is logged, and that folder is retried on the next pass.
+  - **Disconnect:** `FileSyncFolderRemoval.remove_agent_folders` uses the same function.
+  - **UI:** the retire dialog adds "Its folder in {provider} is deleted too." when the Organization has an active provider with `file_sync` (`useSyncProvidersQuery`).
+- **Verified:**
+  - **`test_file_sync_folders.py` (30 tests):**
+    - 2 rewritten (retiring deletes the folder; a new Agent named like a retired one gets the plain name) and 5 added (already gone, throttled then retried, another failure not holding up other Agents, a disabled folder, the change feed reporting the deletion rebuilding nothing), all 7 failing first;
+    - 1 guard added: stopping an Agent keeps its folder `active`.
+  - **Disconnect test:** `test_file_sync_disconnect.py`'s first test relied on a retired folder outliving the engine pass. It now marks the folder `retired` directly, so it still proves disconnect removes a folder whose deletion is pending.
+  - **Suites:** the sync provider and file sync suites pass together (384 tests, run with `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1`).
+  - **UI:** `agent-configuration-page.spec.ts` and `sync-provider.spec.ts` pass (66). The provider sentence test failed first; the no-provider test is a guard.
+  - **Checks:** `pnpm lint`, `tsc --noEmit`, ruff, format and ty pass.
+- **End-to-end on local k3d:** pending the maintainer's deploy.
+
 ### 2026-10-22 — AF-384 — Docs consolidation
 
 - **README "Agent file sync":**

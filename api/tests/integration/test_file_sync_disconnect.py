@@ -99,14 +99,8 @@ def _record_revokes(context, monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_disconnecting_deletes_every_agent_folder_first_and_keeps_the_root(monkeypatch: pytest.MonkeyPatch):
     with given(_GIVEN) as context:
         sales, _ = _synced_agents(context)
-        with Session(context.postgres_delegate.engine) as session:
-            row = session.get(Agent, sales.id)
-            assert row is not None
-            row.deleted_at = datetime.now(UTC)
-            session.add(row)
-            session.commit()
-        context.injector.get(FileSyncEngine).reconcile_folders(context.connection)
         repository = context.injector.get(FileSyncRepository)
+        repository.retire_folders([folder.id for folder in _folders(context) if folder.agent_id == sales.id])
         folder = next(folder for folder in _folders(context) if folder.agent_id != sales.id)
         repository.start_upload(folder.id, "workspace/notes.md", sha256=SHA_A, size=5, now=datetime.now(UTC))
         repository.record_activity(folder, SyncActivityKind.RESTORED, "workspace/notes.md", datetime.now(UTC))
@@ -116,7 +110,7 @@ def test_disconnecting_deletes_every_agent_folder_first_and_keeps_the_root(monke
         with when("an Owner signs in again and disconnects"):
             response = _disconnect(context)
 
-        with then("every Agent folder, a deleted Agent's too, is deleted at the provider before the revoke"):
+        with then("every Agent folder, a retired one still waiting to be deleted too, goes before the revoke"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
             assert_that(_live_children(context), equal_to([]))
             assert_that(fake_drive(context).calls, equal_to(["delete_item", "delete_item", "revoke"]))

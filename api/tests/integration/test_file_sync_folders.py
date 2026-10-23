@@ -4,14 +4,23 @@ import pytest
 from hamcrest import assert_that, contains_inanyorder, equal_to, has_length, not_none
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent
+from api.domains.agents.models import Agent, AgentStatus
 from api.domains.file_sync.engine import FileSyncEngine
-from api.domains.file_sync.models import SyncAgentFolder, SyncFolderStatus
-from api.domains.sync_provider.plugins.base import ProviderThrottled
+from api.domains.file_sync.models import (
+    SyncActivity,
+    SyncActivityKind,
+    SyncAgentFolder,
+    SyncFile,
+    SyncFolderStatus,
+)
+from api.domains.file_sync.repository import FileSyncRepository
+from api.domains.sync_provider.models import SyncProviderConnection
+from api.domains.sync_provider.plugins.base import ProviderThrottled, ProviderUnavailable
 from api.tests.core.givenpy import given
 from api.tests.core.modules import prepare_injector
 from api.tests.steps.agent import there_is_an_agent
 from api.tests.steps.database import database_repo_is_ready
+from api.tests.steps.file_sync_ingest import SHA_A
 from api.tests.steps.file_sync_provider import TestDriveModule, fake_drive, there_is_a_sync_connection
 from api.tests.steps.organization import there_is_an_organization
 from api.tests.steps.sync_provider import OTHER_DRIVE
@@ -210,33 +219,164 @@ def test_a_numbered_name_drops_its_number_once_the_plain_name_is_free():
         assert_that(_provider_folders(context), contains_inanyorder("Sales Bot", "Support"))
 
 
-def test_deleting_an_agent_stops_its_folder_and_leaves_it_at_the_provider():
+def test_retiring_an_agent_deletes_its_folder_at_the_provider_and_keeps_its_activity():
+    with given(_BASE) as context:
+        agent = _agent(context, "Sales Bot")
+        there_is_a_sync_connection()(context)
+        _reconcile(context)
+        folder = _folder(context, agent)
+        repository = context.injector.get(FileSyncRepository)
+        repository.start_upload(folder.id, "workspace/notes.md", sha256=SHA_A, size=5, now=datetime.now(UTC))
+        repository.record_activity(folder, SyncActivityKind.RESTORED, "workspace/notes.md", datetime.now(UTC))
+        calls_before = len(fake_drive(context).calls)
+
+        _update_agent(context, agent, deleted_at=datetime.now(UTC))
+        _reconcile(context)
+
+        assert_that(_provider_folders(context), equal_to([]))
+        assert_that(fake_drive(context).calls[calls_before:], equal_to(["delete_item"]))
+        assert_that(_folders(context), equal_to([]))
+        with Session(context.postgres_delegate.engine) as session:
+            assert_that(list(session.exec(select(SyncFile))), equal_to([]))
+            activity = list(session.exec(select(SyncActivity)))
+        assert_that([(entry.kind, entry.folder_id) for entry in activity], equal_to([("restored", None)]))
+
+
+def test_stopping_an_agent_keeps_its_folder_active():
     with given(_BASE) as context:
         agent = _agent(context, "Sales Bot")
         there_is_a_sync_connection()(context)
         _reconcile(context)
         calls_before = len(fake_drive(context).calls)
 
-        _update_agent(context, agent, deleted_at=datetime.now(UTC))
+        _update_agent(context, agent, status=AgentStatus.STOPPED)
         _reconcile(context)
 
-        assert_that(_folder(context, agent).status, equal_to(SyncFolderStatus.STOPPED))
+        assert_that(_folder(context, agent).status, equal_to(SyncFolderStatus.ACTIVE))
         assert_that(_provider_folders(context), equal_to(["Sales Bot"]))
         assert_that(fake_drive(context).calls[calls_before:], equal_to([]))
 
 
-def test_a_new_agent_named_like_a_deleted_one_gets_a_number():
+def test_a_new_agent_named_like_a_retired_one_gets_the_plain_name_once_the_old_folder_is_gone():
     with given(_BASE) as context:
         old = _agent(context, "Sales Bot")
         there_is_a_sync_connection()(context)
         _reconcile(context)
         _update_agent(context, old, deleted_at=datetime.now(UTC))
-        _reconcile(context)
 
         new = _agent(context, "Sales Bot")
         _reconcile(context)
 
-        assert_that(_folder(context, new).folder_name, equal_to("Sales Bot (2)"))
+        assert_that(_folder(context, new).folder_name, equal_to("Sales Bot"))
+        assert_that(_provider_folders(context), equal_to(["Sales Bot"]))
+
+
+def test_a_retired_agents_folder_already_gone_at_the_provider_still_loses_its_row():
+    with given(_BASE) as context:
+        agent = _agent(context, "Sales Bot")
+        there_is_a_sync_connection()(context)
+        _reconcile(context)
+        fake_drive(context).user_deletes(context.sync_root, "Sales Bot")
+
+        _update_agent(context, agent, deleted_at=datetime.now(UTC))
+        _reconcile(context)
+
+        assert_that(_folders(context), equal_to([]))
+
+
+def test_a_throttled_folder_delete_waits_for_the_next_pass():
+    with given(_BASE) as context:
+        agent = _agent(context, "Sales Bot")
+        there_is_a_sync_connection()(context)
+        _reconcile(context)
+        _update_agent(context, agent, deleted_at=datetime.now(UTC))
+        fake_drive(context).throttle_call("delete_item", 120)
+
+        context.injector.get(FileSyncEngine).run_pass(datetime.now(UTC))
+
+        assert_that(_folder(context, agent).status, equal_to(SyncFolderStatus.RETIRED))
+        assert_that(_provider_folders(context), equal_to(["Sales Bot"]))
+        with Session(context.postgres_delegate.engine) as session:
+            connection = session.get(SyncProviderConnection, context.connection.id)
+            assert connection is not None
+            assert_that(connection.sync_retry_at, not_none())
+            connection.sync_retry_at = None
+            session.add(connection)
+            session.commit()
+
+        context.injector.get(FileSyncEngine).run_pass(datetime.now(UTC))
+
+        assert_that(_folders(context), equal_to([]))
+        assert_that(_provider_folders(context), equal_to([]))
+
+
+def test_a_failed_folder_delete_does_not_hold_up_other_agents(monkeypatch: pytest.MonkeyPatch):
+    with given(_BASE) as context:
+        retired = _agent(context, "Sales Bot")
+        there_is_a_sync_connection()(context)
+        _reconcile(context)
+        _update_agent(context, retired, deleted_at=datetime.now(UTC))
+        newcomer = _agent(context, "Support")
+        plugin = fake_drive(context)
+        delete = plugin.delete_item
+        failures = [ProviderUnavailable("Test Drive is down.")]
+
+        def delete_item(root, *, item_id: str) -> None:
+            if failures:
+                raise failures.pop()
+            delete(root, item_id=item_id)
+
+        monkeypatch.setattr(plugin, "delete_item", delete_item)
+
+        _reconcile(context)
+
+        assert_that(_folder(context, retired).status, equal_to(SyncFolderStatus.RETIRED))
+        assert_that(_folder(context, newcomer).folder_item_id, not_none())
+        assert_that(_provider_folders(context), contains_inanyorder("Sales Bot", "Support"))
+
+        _reconcile(context)
+
+        assert_that(_provider_folders(context), equal_to(["Support"]))
+        assert_that([folder.agent_id for folder in _folders(context)], equal_to([newcomer.id]))
+
+
+def test_a_retired_agents_disabled_folder_is_deleted_too():
+    with given(_BASE) as context:
+        agent = _agent(context, "Sales Bot")
+        there_is_a_sync_connection()(context)
+        _reconcile(context)
+        with Session(context.postgres_delegate.engine) as session:
+            row = session.get(SyncAgentFolder, _folder(context, agent).id)
+            assert row is not None
+            row.status = SyncFolderStatus.DISABLED
+            session.add(row)
+            session.commit()
+
+        _update_agent(context, agent, deleted_at=datetime.now(UTC))
+        _reconcile(context)
+
+        assert_that(_folders(context), equal_to([]))
+        assert_that(_provider_folders(context), equal_to([]))
+
+
+def test_the_change_feed_reporting_the_deletion_later_rebuilds_nothing():
+    with given(_BASE) as context:
+        agent = _agent(context, "Sales Bot")
+        there_is_a_sync_connection()(context)
+        engine = context.injector.get(FileSyncEngine)
+        engine.run_pass(datetime.now(UTC))
+        fake_drive(context).user_adds(context.sync_root, "Sales Bot/workspace/notes.md", b"hello")
+        engine.run_pass(datetime.now(UTC))
+        calls_before = len(fake_drive(context).calls)
+
+        _update_agent(context, agent, deleted_at=datetime.now(UTC))
+        engine.run_pass(datetime.now(UTC))
+        engine.run_pass(datetime.now(UTC))
+
+        assert_that(_folders(context), equal_to([]))
+        assert_that(_provider_folders(context), equal_to([]))
+        assert_that("create_folder" in fake_drive(context).calls[calls_before:], equal_to(False))
+        assert_that("move_item" in fake_drive(context).calls[calls_before:], equal_to(False))
 
 
 def test_a_folder_with_sync_turned_off_is_left_alone():

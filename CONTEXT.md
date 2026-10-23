@@ -333,7 +333,7 @@ An Organization's connection to one Sync Provider: for OneDrive, one SharePoint 
 _Avoid_: OneDrive integration, SharePoint integration, OneDrive Sync Connection
 
 **Agent Folder**:
-An Agent's own folder inside the Organization's "Agent Barn" folder at its Sync Provider. It is named after the Agent and kept in step with the Agent's files by File Sync. Deleting the Agent stops its sync and leaves the folder in place. Disconnecting the Sync Provider deletes every Agent Folder.
+An Agent's own folder inside the Organization's "Agent Barn" folder at its Sync Provider. It is named after the Agent and kept in step with the Agent's files by File Sync. Retiring (deleting) the Agent deletes its folder at the provider; stopping the Agent leaves it in place. Disconnecting the Sync Provider deletes every Agent Folder.
 _Avoid_: OneDrive folder, agent drive, agent share
 
 **File Sync**:

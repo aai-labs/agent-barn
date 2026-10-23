@@ -20,7 +20,7 @@ FILE_ITEM_INDEX = "uq_sync_file_folder_item"
 
 class SyncFolderStatus(StrEnum):
     ACTIVE = "active"
-    STOPPED = "stopped"
+    RETIRED = "retired"
     DISABLED = "disabled"
 
 
@@ -45,8 +45,9 @@ class SyncActivityKind(StrEnum):
 class SyncAgentFolder(BaseModel, table=True):
     """One Agent's folder inside the connection's "Agent Barn" folder.
 
-    `folder_item_id` is empty until the folder exists at the provider. A deleted Agent's folder is
-    `stopped` and stays at the provider; `disabled` is sync turned off for a live Agent.
+    `folder_item_id` is empty until the folder exists at the provider. A retired Agent's folder is
+    `retired` until the Sync Engine has deleted it at the provider and removed this row; `disabled` is
+    sync turned off for a live Agent.
     """
 
     __tablename__: str = "sync_agent_folder"
