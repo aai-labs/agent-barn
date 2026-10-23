@@ -31,6 +31,13 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Limits: Documented that failed/expired unfinished steps can currently retry automatically, dispatch deduplication does not guarantee exactly-once external effects, and the agreed uncertain-effect handling remains unimplemented. This documentation change does not change runtime behavior.
 - Verification: Compared the guide with the start/read/cancel services, runtime dispatch, DTOs and controller; checked Markdown structure and whitespace. No application tests were rerun for this prose-only correction.
 
+### 2026-10-23 — AF-415 — main-stack review corrections (local, not pushed)
+
+- Fixed: root Compose parses before private Garage setup, restoring native db/redis commands and shutdown for existing users. Required Garage bind sources still fail when unconfigured; bootstrap refreshes only public saved settings in the application `.env`.
+- Fixed: unconfigured Compose uses separate sentinel paths/volume names, so a failed bare start cannot allocate volumes that block first-time bootstrap. Operators may remove leftover empty sentinel volumes after setup.
+- Fixed: backup/status queries select Garage alone, so another running app service cannot trigger a backup or restart an intentionally stopped Garage. The adoption fixture uses a unique project name.
+- Verification: review regressions reproduced and isolated mutations caught; the final 13-case configuration/storage/recovery suite passes, including missing/stopped containers and actual failed-pre-bootstrap recovery. Opus round 11 independently approved with no Required findings and passed its nine-case subset; exact evidence and limits are recorded in the artifact evidence. No push, merge or deployment.
+
 ### 2026-10-23 — AF-415 — required main-stack storage (local, not pushed)
 
 - Changed: Garage and artifact-purge run in the main Compose project without a profile. Normal startup prepares private credentials and bootstraps Garage before API startup; API/purge depend on storage health.

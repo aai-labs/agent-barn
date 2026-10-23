@@ -28,6 +28,8 @@ def test_compose_storage_key_is_only_available_to_api_and_purge(tmp_path):
     (tmp_path / ".garage/compose.env").write_text(
         f"GARAGE_SAVED_STATE_DIR={tmp_path / '.garage'}\nGARAGE_SAVED_VOLUME_PREFIX=fixture\nGARAGE_SAVED_S3_PORT=3900\n"
     )
+    with (tmp_path / ".env").open("a") as target:
+        target.write((tmp_path / ".garage/compose.env").read_text())
     (tmp_path / ".garage/server.env").write_text("GARAGE_DEFAULT_ACCESS_KEY=fixture-bootstrap\n")
     (tmp_path / ".garage/application.env").write_text(
         "ARTIFACT_S3_BUCKET=fixture-files\nARTIFACT_S3_ACCESS_KEY=fixture-private-key\nARTIFACT_S3_SECRET_KEY=fixture-private-secret\n"
@@ -187,3 +189,18 @@ def test_bootstrap_checks_live_rpc_address_instead_of_configured_hostname(tmp_pa
         provision_garage.cluster_init(args)
         generated = json.loads((tmp_path / "application-secret.json").read_text())
         assert_that(generated["stringData"]["ARTIFACT_S3_BUCKET"], equal_to("fixture"))
+
+
+def test_main_compose_works_before_garage_setup(tmp_path):
+    source = (ROOT / "compose.yml").read_text()
+    (tmp_path / "compose.yml").write_text(source)
+    shutil.copytree(ROOT / "docker/garage", tmp_path / "docker/garage")
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):?\?", source))
+    values = {name: "fixture" for name in required}
+    values.update({name: str(18000 + i) for i, name in enumerate(sorted(required)) if name.endswith("_PORT")})
+    (tmp_path / ".env").write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+    command = ["docker", "compose", "-f", str(tmp_path / "compose.yml")]
+    for args in (["config", "--quiet"], ["--dry-run", "up", "-d", "db"], ["--dry-run", "down"]):
+        result = subprocess.run([*command, *args], capture_output=True, text=True, check=False)
+        assert_that(result.returncode, equal_to(0), "Root Compose must work before private Garage setup: " + str(args))
+    assert_that((tmp_path / ".garage").exists(), is_(False))

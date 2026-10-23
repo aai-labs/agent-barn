@@ -43,7 +43,10 @@ audit metadata, process listings and Docker exec events.
 The root `compose.yml` includes `docker/garage/compose.yml`: Garage is a required
 service in the main application project, alongside the API and purge worker.
 The helper prepares private configuration, starts that same service and provisions
-a bucket-scoped application key. The included file also lets storage-only recovery
+a bucket-scoped application key. It also refreshes the non-secret saved path,
+port and volume prefix (`GARAGE_SAVED_*`) in the existing ignored application
+`.env`; keys remain only in private files. These generated values must not be edited.
+The standalone helper still uses its private `compose.env`. The included file also lets storage-only recovery
 commands run without application/provider configuration. Named metadata and data
 volumes retain their exact names when adopting an older standalone local store;
 the helper stops/removes only its old Garage container before starting the main
@@ -73,8 +76,17 @@ Run `./run.sh` for normal startup. Garage and the ten-minute bounded purge worke
 are required, with no profile opt-in. The launcher prepares configuration and
 bootstraps Garage before API/purge containers load their credentials; those services
 also depend on Garage health in Compose. On first setup, use the launcher or
-`make garage-up` before invoking bare `docker compose up`, because Compose needs
-the generated private files. Subsequent `docker compose up` includes Garage and
+`make garage-up` after application `.env` setup and before invoking bare
+`docker compose up`: starting Garage needs the generated private files. Root
+Compose parsing, db/redis-only Make targets and `./stop.sh` work without `.garage/`.
+Optional parse-time env files do not allow an unconfigured Garage to start: missing
+config/secret bind sources fail without auto-creating them. Before bootstrap,
+Compose uses a separate `.garage-unconfigured` path and
+`<project>-garage-unconfigured_metadata` / `_data` sentinel volume names. A failed
+bare Compose attempt can leave these empty sentinel volumes, but they never match
+the real store's initialization guard. Normal `make garage-up` remains recoverable.
+After successful bootstrap, operators may remove those two explicitly named sentinel
+volumes if unused; never remove the configured store volumes. Subsequent `docker compose up` includes Garage and
 purge automatically; `./stop.sh` stops them with the rest of the stack. Failed cleanup passes retry on the next interval,
 including when an initial pass precedes completion of API migrations. The API and purge alone read `.garage/application.env`.
 The other shared application containers explicitly blank S3 credentials. The local
@@ -114,6 +126,9 @@ existing artifact configuration, not Garage bucket-wide age rules.
 
 ## Consistent local backup and restore
 
+Backup/status queries explicitly select the Garage service, excluding other
+containers in the main project. A backup refuses when Garage is not running and
+does not start an intentionally stopped Garage because another service is up.
 A local backup briefly stops Garage, copies metadata and data plus private bootstrap
 configuration, marks completion, then restarts it if it was running. Backups include
 credentials and must remain private. Destinations must be absolute, outside the

@@ -478,6 +478,11 @@ then starts the root Compose service and verifies unchanged bytes, keys, node ID
 endpoint, volume names and container identity. Configuration tests render the main
 stack without profiles and assert Garage/purge presence, storage health
 dependencies, private backup paths, `.env` parsing and service credential isolation.
+A no-`.garage` case renders config and dry-runs db startup/shutdown. A real Docker
+case keeps another project service running and verifies Garage backup refuses and
+status excludes it for missing and stopped Garage containers. A real pre-bootstrap
+Garage start must fail on absent bind sources without creating real store volumes;
+the same test then bootstraps successfully and removes its sentinel volumes.
 It deletes only its own generated Compose project/volumes; developer storage is
 untouched. The local cleanup process supports one bounded pass or `--interval 600`
 with graceful shutdown. `make check-artifacts` also checks the three-node Garage

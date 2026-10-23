@@ -255,6 +255,7 @@ ARTIFACT_RETENTION_DAYS=30
 # ./run.sh prepares private storage automatically; no profile is needed.
 # make garage-up works independently of k3d/model providers. Generated keys stay
 # in ignored .garage/application.env; do not paste them into shared .env.
+# Bootstrap appends non-secret GARAGE_SAVED_* settings to .env; do not edit those.
 # Set these only on first initialization; otherwise stored values are reused.
 GARAGE_S3_PORT=
 GARAGE_PUBLIC_ENDPOINT=

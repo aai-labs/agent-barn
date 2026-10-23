@@ -335,6 +335,47 @@ application in this checkout because required application `.env` values are abse
 the complete root-Compose storage path was verified by the disposable adoption test
 with explicit fixture settings, separately from this retained local store.
 
+### Opus main-stack review corrections
+
+Opus round 9 found two Required regressions: mandatory private interpolation files
+blocked pre-bootstrap root Compose commands, and unscoped `compose ps` treated
+other main-project containers as Garage during backup/status. Both were reproduced
+before fixes: config failed with no `.garage`, and a real disposable project with
+another running service entered backup instead of returning the expected refusal.
+
+Root Compose now parses without private Garage files. Optional env-file defaults
+retain `create_host_path: false` on required config/secret binds, so an unconfigured
+Garage cannot start. Default-store bootstrap mirrors only non-secret saved path,
+port and volume names into an existing application `.env`; credentials remain in
+private files. Launch/stop discard inherited saved values after refresh. Backup
+and status select only Garage. README/native setup and operations guidance move
+with the changes; the adoption fixture also uses a unique project name.
+
+The focused combined suite passed **11 tests in 108.49 seconds**, including real
+Garage/PostgreSQL storage/recovery and the new no-private-config/other-service
+regressions. The expanded other-service regression then passed **2 cases in
+25.78 seconds**, covering missing and stopped Garage containers. In an isolated
+copy, making `server.env` mandatory again failed the pre-bootstrap config test at
+its intended assertion; the real tree was untouched. `make check-api`, shell syntax and whitespace checks
+passed. Round 10 confirmed both fixes and found that fallback volume creation
+could still poison first-time setup. Unconfigured defaults now use distinct sentinel
+paths/volume names, and a real Docker regression attempts the failed bare start
+before proving normal first bootstrap succeeds (**1 passed in 11.58 seconds**).
+An isolated mutation restoring the unsafe real-name defaults failed at the intended
+real-volume-allocation assertion; the worktree was untouched. This preserves the guard against
+reinitializing retained real storage. Empty sentinel volumes are documented and
+cleaned explicitly by that test. The symlink advisory was also addressed by resolving
+the application `.env` before updating its public settings. The complete final
+focused suite passed **13 tests in 125.56 seconds**, including no-private-config,
+missing/stopped-container inventory, actual pre-bootstrap failure/recovery, storage
+publication/restart, backup/restore, purge and adoption. Opus round 11 independently
+approved the final correction with no Required findings and confirmed R1/R2 remain
+resolved. Its six unit/configuration cases, pre-bootstrap regression and two
+backup/status cases passed **9 tests in 33.63 seconds**; API quality, shell syntax
+and whitespace checks also passed. It did not rerun the complete storage suite or
+launch/stop the full application end to end. The 13-case result above is the parent
+verification, distinct from that independent subset.
+
 No push, merge, production access or external deployment was performed.
 
 ## Limits and deployment acceptance

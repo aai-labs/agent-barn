@@ -38,6 +38,7 @@ CLUSTER="${K3D_CLUSTER:-agentfarm-dev}"
 if [[ -f .garage/state.json ]]; then
   step "Stopping Garage (data and keys preserved)"
   (cd api && uv run python scripts/provision_garage.py down)
+  unset GARAGE_SAVED_STATE_DIR GARAGE_SAVED_S3_PORT GARAGE_SAVED_VOLUME_PREFIX
 fi
 
 if [[ "$CLEAN" == true ]]; then
