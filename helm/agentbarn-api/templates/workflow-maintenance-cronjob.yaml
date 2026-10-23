@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-workflow-maintenance
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workflow-maintenance
+spec:
+  schedule: "* * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "agentbarn-api.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: workflow-maintenance
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: {{ .Release.Name }}
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: workflow-maintenance
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - python
+                - -c
+                - "from api.domains.workflows.maintenance import main; main()"
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.secretName }}
+              env:
+                - name: K8S_NAMESPACE
+                  value: {{ .Release.Namespace }}
+                - name: K8S_KUBECONFIG_PATH
+                  value: /etc/kubeconfig/kubeconfig
+              volumeMounts:
+                - name: kubeconfig
+                  mountPath: /etc/kubeconfig
+                  readOnly: true
+              resources:
+                {{- toYaml .Values.worker.resources | nindent 16 }}
+          volumes:
+            - name: kubeconfig
+              secret:
+                secretName: {{ .Values.kubeconfigSecretName | default (printf "%s-kubeconfig" .Release.Name) }}

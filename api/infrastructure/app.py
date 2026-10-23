@@ -25,12 +25,14 @@ from api.domains.events.reconciliation import EventDeliveryReconciler
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.events.security_audit import SecurityAuditProjection
 from api.domains.events.transport import EventDeliveryTransport
-from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
+from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler, OrganizationTrialExpiryHandler
+from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
 from api.domains.restore_points.reconciliation import RestorePointReconciler
 from api.domains.restore_points.repository import RestorePointRepository
 from api.domains.restore_points.service import RestorePointService
 from api.domains.sync_provider.plugins.providers import shipped_plugins
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
+from api.domains.workflows.controller import WorkflowControllerHandler
 from api.infrastructure.clock import Clock
 from api.infrastructure.communication_signals import CommunicationSignalBus
 from api.infrastructure.email.client import EmailClient
@@ -98,17 +100,21 @@ class AppModule(Module):
         self,
         agent_lifecycle_email_handler: AgentLifecycleEmailHandler,
         organization_budget_email_handler: OrganizationBudgetEmailHandler,
+        organization_trial_expiry_handler: OrganizationTrialExpiryHandler,
         agent_budget_email_handler: AgentBudgetEmailHandler,
         security_audit_projection: SecurityAuditProjection,
         product_analytics_handler: ProductAnalyticsHandler,
+        workflow_controller_handler: WorkflowControllerHandler,
     ) -> EventHandlerRegistry:
         return EventHandlerRegistry(
             [
                 agent_lifecycle_email_handler,
                 organization_budget_email_handler,
+                organization_trial_expiry_handler,
                 agent_budget_email_handler,
                 security_audit_projection,
                 product_analytics_handler,
+                workflow_controller_handler,
             ]
         )
 
@@ -149,6 +155,7 @@ class AppModule(Module):
         litellm: LiteLLMClient,
         openrouter: OpenRouterClient,
         memory_keys: MemoryKeyRepository,
+        llm_budgets: OrganizationLlmBudgetService,
     ) -> CostSynchronizer:
         return CostSynchronizer(
             repository=repository,
@@ -158,6 +165,7 @@ class AppModule(Module):
             encryption_key=config.agent_token_encryption_key,
             memory_key_hashes=config.memory_cost_key_hashes,
             memory_key_source=memory_keys.hashes,
+            on_healed=llm_budgets.apply_healed_spend,
         )
 
     @provider

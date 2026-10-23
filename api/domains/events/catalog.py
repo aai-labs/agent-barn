@@ -49,6 +49,9 @@ PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
 PLATFORM_TRIAL_SETTINGS_CHANGED = "platform.trial_settings.changed"
+PLATFORM_BILLING_SETTINGS_CHANGED = "platform.billing_settings.changed"
+PLATFORM_CREDIT_PURCHASE_UNAPPLIED = "platform.credit_purchase.unapplied"
+PLATFORM_ORGANIZATION_SETTINGS_CHANGED = "platform.organization_settings.changed"
 API_KEY_CREATED = "api_key.created"
 API_KEY_REVOKED = "api_key.revoked"
 USER_LOGGED_IN = "user.logged_in"
@@ -66,6 +69,8 @@ ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED = "organization.llm_budget.threshold_r
 ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
 ORGANIZATION_LLM_BUDGET_CHANGED = "organization.llm_budget.changed"
 ORGANIZATION_TRIAL_ENDED = "organization.trial.ended"
+ORGANIZATION_TRIAL_EXPIRED = "organization.trial.expired"
+ORGANIZATION_AGENT_LIMIT_CHANGED = "organization.agent_limit.changed"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
 AGENT_LLM_BUDGET_THRESHOLD_REACHED = "agent.llm_budget.threshold_reached"
 AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
@@ -73,8 +78,18 @@ AGENT_LLM_BUDGET_EXHAUSTED = "agent.llm_budget.exhausted"
 SECURITY_AUDIT_HANDLER = "security_audit.projection"
 AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
+ORGANIZATION_TRIAL_EXPIRY_HANDLER = "organization.trial_expiry.projection"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
+WORKFLOW_RUN_CHANGED = "workflow.run.changed"
+WORKFLOW_CONTROLLER_HANDLER = "workflow.controller"
+
+
+class WorkflowRunChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: UUID
+    revision: int
+    state: str
 
 
 class PlatformWorkflowAuthoringChangedPayload(BaseModel):
@@ -402,6 +417,18 @@ class OrganizationLlmBudgetChangedPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationAgentLimitChangedPayload(BaseModel):
+    """How many Agents an Organization may run, before and after; None follows the default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_limit: int | None
+    previous_agent_limit: int | None
+    actor_display: str
+    subject_display: str
+
+
 class AgentLlmBudgetChangedPayload(BaseModel):
     """An Agent's own limit before and after; None follows the Organization default.
 
@@ -535,7 +562,18 @@ class PlatformUserPrivilegeChangedPayload(BaseModel):
 
 
 class OrganizationTrialEndedPayload(BaseModel):
-    """A Platform Administrator made a trial an ordinary Organization."""
+    """A trial became an ordinary Organization: a Platform Administrator ended it, or
+    it bought credit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    actor_display: str
+    subject_display: str
+
+
+class OrganizationTrialExpiredPayload(BaseModel):
+    """A trial ran out of credit and no longer counts toward the cap on active trials."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -556,6 +594,22 @@ class PlatformTrialSettingsChangedPayload(BaseModel):
     setting: str
     previous: bool | float | None
     current: bool | float | None
+
+
+class PlatformCreditPurchaseUnappliedPayload(BaseModel):
+    """A payment for credit arrived for an Organization that no longer runs on credit, so
+    no credit was granted. Someone has to refund it or adjust the Organization by hand.
+    Platform-scoped, so the Organization is named (`subject_display`), not referenced."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    payment_reference: str
+    credit_usd: float
+    amount_paid_usd: float
+    # Why nothing was granted.
+    reason: str
+    actor_display: str
+    subject_display: str
 
 
 class PlatformResourceLimitsChangedPayload(BaseModel):
@@ -701,6 +755,14 @@ class CommunicationDeliveryRecoveredPayload(BaseModel):
 
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
+    registry.register(
+        DomainEventDefinition(
+            event_name=WORKFLOW_RUN_CHANGED,
+            schema_version=1,
+            payload_model=WorkflowRunChangedPayload,
+            handler_names=(WORKFLOW_CONTROLLER_HANDLER,),
+        )
+    )
     for event_name, payload_model in (
         (AGENT_ACCESS_GRANTED, AgentAccessGrantedPayload),
         (AGENT_ACCESS_REVOKED, AgentAccessRevokedPayload),
@@ -714,6 +776,8 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
         (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
         (ORGANIZATION_TRIAL_ENDED, OrganizationTrialEndedPayload),
+        (ORGANIZATION_AGENT_LIMIT_CHANGED, OrganizationAgentLimitChangedPayload),
+        (ORGANIZATION_TRIAL_EXPIRED, OrganizationTrialExpiredPayload),
     ):
         registry.register(
             DomainEventDefinition(
@@ -821,7 +885,11 @@ def build_default_event_registry() -> DomainEventRegistry:
     )
     for event_name, handler_names in (
         (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER,)),
-        (ORGANIZATION_LLM_BUDGET_EXHAUSTED, (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER)),
+        # Running out is also what expires a trial.
+        (
+            ORGANIZATION_LLM_BUDGET_EXHAUSTED,
+            (ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, ORGANIZATION_TRIAL_EXPIRY_HANDLER, PRODUCT_ANALYTICS_HANDLER),
+        ),
     ):
         registry.register(
             DomainEventDefinition(
@@ -938,6 +1006,26 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_TRIAL_SETTINGS_CHANGED,
             schema_version=1,
             payload_model=PlatformTrialSettingsChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    # Same shape: one changed setting, before and after.
+    for event_name in (PLATFORM_BILLING_SETTINGS_CHANGED, PLATFORM_ORGANIZATION_SETTINGS_CHANGED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=PlatformTrialSettingsChangedPayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.PLATFORM,
+            )
+        )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_CREDIT_PURCHASE_UNAPPLIED,
+            schema_version=1,
+            payload_model=PlatformCreditPurchaseUnappliedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )

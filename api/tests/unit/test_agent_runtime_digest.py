@@ -29,6 +29,7 @@ _ASSEMBLY_METHODS = {
     "_native_connection_configuration",
     "_agentbarn_telegram_runtime",
     "_backfill_google_client_credentials",
+    "_spend_limit_kind",
 }
 
 

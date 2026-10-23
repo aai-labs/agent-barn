@@ -569,6 +569,16 @@ Agent Barn's own Telegram bot lets Organizations use Telegram without bringing a
 - Optional tunables, normally left unset: `AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL` (where linked users' messages are delivered to an Agent; defaults to its in-cluster Service on port 8443) and `AGENTBARN_TELEGRAM_BOT_RATE_PER_SECOND` / `AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND` (defaults 25 and 5).
 - Polling and proxying run on one Communications replica at a time (a database lease decides which). Rate limits are per process, which holds while `communications.replicaCount` is 1.
 
+## Payments (Stripe)
+
+Organizations on Credit buy more through Stripe Checkout (see `../features/credit.md`). Off until a Platform Administrator turns payments on.
+
+- **Turning payments on** is a platform setting: **Take payments** under Billing on the platform settings page, off by default, and refused until the deployment has both Stripe secrets below. Off stops new purchases (checkout answers 404, and the Billing page offers no Buy credit); balances and history stay readable. The webhook is served whenever `STRIPE_WEBHOOK_SECRET` is set, so payments already made, refunds and disputes still land after payments are turned off. A webhook secret requires the secret key whether payments are on or off (the webhook reads refunds from Stripe): the API refuses to boot otherwise.
+- **`STRIPE_SECRET_KEY`** and **`STRIPE_WEBHOOK_SECRET`** are GitHub secrets with the same prefixes, flowing through `helmfile.yaml.gotmpl` into the API chart's shared Secret. Give each environment its own: staging a Stripe sandbox, production the live account. The secret key may be a restricted key with write access to Customers and Checkout Sessions and read access to Refunds and PaymentIntents (the webhook reads a refund's current status, and whether a payment is a credit purchase, because Stripe doesn't deliver events in order).
+- **Webhook endpoint:** in the Stripe Dashboard, point an endpoint at `https://<API host>/api/v1/billing/stripe/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `refund.created`, `refund.updated`, `refund.failed`, `charge.dispute.funds_withdrawn` and `charge.dispute.funds_reinstated`, and store its signing secret as `STRIPE_WEBHOOK_SECRET`. Locally, `stripe listen --print-secret` prints a `whsec_` to use instead, and `stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded,refund.created,refund.updated,refund.failed,charge.dispute.funds_withdrawn,charge.dispute.funds_reinstated --forward-to localhost:<API port>/api/v1/billing/stripe/webhook` relays them (recent Stripe CLIs refuse to listen without `--events`).
+- Minimum and maximum purchase and the purchase fee are platform settings, edited on the platform settings page. $1 of credit is always $1 of model spend; the purchase fee (0% by default, so the platform absorbs Stripe's fee) is the only markup. The minimum can't go below $0.50, Stripe's smallest card payment.
+- A payment for an Organization that has left credit meanwhile grants nothing: it is recorded on the platform audit log as `platform.credit_purchase.unapplied` (and logged as an error) for someone to refund in Stripe.
+
 ## Staging environment
 
 Staging is a fully separate stack in its own namespace (`agent-farm-staging`),
@@ -635,6 +645,7 @@ git push origin "$RELEASE_TAG"
 | `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
 | `PUBLIC_AGENT_EMAIL_DOMAIN` | `agents.agentbarn.dev`. Unset leaves agent email inert and skips the Worker publish |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME` | The public deployment's own bot, without `@`. Unset hides Agent Barn Telegram |
+| `PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT` | How many Agents a non-trial Organization may run until a Platform Administrator saves a default on the platform settings page. Unset is 10 |
 | `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
 
 ### Public GitHub secrets
@@ -662,6 +673,7 @@ kubeconfig portably with
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 | `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
+| `PUBLIC_STRIPE_SECRET_KEY` / `PUBLIC_STRIPE_WEBHOOK_SECRET` | Needed before payments can be turned on in the platform Billing settings. The live account's key and this deployment's webhook endpoint secret |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`,
@@ -827,27 +839,71 @@ runs it.
   ordinals. The backfill then deletes and re-inserts those Tool Calls' rows with new ids
   instead of updating them.
 
+## Workflow execution (WF02)
+
+Execution has no environment feature flag and does not require object storage.
+The Platform Admin authoring setting controls definition changes only. Before
+running saved workflows, apply the migration. The owning Agent must be running,
+and Agents started before this release must be restarted once so their trigger
+server can accept workflow steps. Each step runs as a session in that Agent, under
+its tools, Integrations, approval mode and spend limits. No runtime image pinning,
+extra Jobs or network policy are involved.
+
+The event worker sends each step to the Agent's trigger server (port 8082) through
+the Kubernetes client, so it needs the same cluster access as the API. Helm mounts
+the operator kubeconfig Secret read-only at `/etc/kubeconfig` into both workloads
+and sets `K8S_NAMESPACE` to the release namespace and `K8S_KUBECONFIG_PATH` to
+`/etc/kubeconfig/kubeconfig`. `kubeconfigSecretName` selects the Secret, defaulting
+to `<release>-kubeconfig`. Compose mounts the local k3d kubeconfig. Run
+`make check-workflows` to verify the rendered cluster-access wiring.
+`WORKFLOW_RUNTIME_BASE_URL` is the callback endpoint Agent pods use for step
+handoff and outcome reports. Helm defaults it to the release's API Service on port
+8000; `workflows.runtimeBaseUrl` can override it and Helmfile maps the environment
+value. Local Compose derives it from `API_PORT` through `host.docker.internal`.
+
+Workflow limits and text retention are hard coded in
+`api/domains/workflows/config.py`; they are not environment or Helm options.
+Workflow admission has no active-run concurrency cap. Runs execute as sessions
+in the owning Agent and share its resources. Waiting for an unreachable Agent consumes
+the attempt deadline. Non-successful Agent dispatch responses are logged with
+the run identity and HTTP status. A 404 on the workflow step route indicates an
+older trigger server; pause and start that Agent to load the current configuration.
+
+`workflow-maintenance-cronjob.yaml` runs once per minute. It uses the existing
+operator kubeconfig seam, reconciles up to 100 active runs, asks Agents to stop
+fenced sessions and expires text content from up to 100 settled runs per pass.
+Event workers dispatch immediately after committed workflow transitions; the
+scheduled pass recovers missed wakeups and unreachable Agents. Run `make reconcile-workflows`
+for the same bounded pass against an explicitly selected cluster. Inputs,
+checkpoint summaries and content-bearing history expire under the module-owned
+history retention period; run metadata/status remains.
+
+The unreleased migration `a38901e8a003` follows `c32e42bb0396`, adding run, attempt,
+checkpoint and history records with scope/pin constraints. No-op merge revision
+`f8740a67b788` joins it with staging head `a4e9c2d7b615`. No-op merge
+`b9e32d74a610` joins that lineage with the later staging head `3bbf2465b9cb`
+to preserve one head. No live schema change is performed by this work. Do not downgrade a populated execution schema: it
+drops the ledger. Existing aggregate deletion cascades workflow-owned records.
+File artifacts and shared object storage are deferred to a separate slice; WF02
+has no storage environment variables, buckets, artifact tables or file endpoints.
+
 ## Workflow authoring (WF01)
 
 After migrating and verifying WF01, Platform Administrators can enable authoring
 at **Platform Settings → Workflows** and save the choice. It takes effect on
 subsequent API requests without a redeploy and allows manual definition creation,
 version saving and archive across all Organizations. Definition/version reads
-remain available when disabled. `WORKFLOW_AUTHORING_ENABLED` defaults to `false`
-and supplies the initial deployment default only until a Platform Admin saves a
-choice; the persisted choice then overrides the environment value in either
-direction, including after restarts. Changing the environment alone cannot
-override a saved choice. Disable authoring through Platform Settings for rollback
-of admission; requests already admitted may finish.
-This gate never enables execution; WF01 has no run endpoint. Natural-language
+remain available when disabled. Authoring defaults to `false` until a Platform
+Admin saves a choice. The persisted choice survives restarts, with no environment
+or Helm override. Disable authoring through Platform Settings to stop new
+definition mutations; requests already admitted may finish. Execution of saved
+versions remains independent of this authoring setting. Natural-language
 draft generation is deferred to a separate PR, with no model setting or provider
 credential required for manual building. The [feature specification](../features/agent-workflows.md)
 owns the product contract.
 
-Local Compose passes `.env` through; `.env.spec` documents the authoring gate.
-Helm exposes `workflows.authoringEnabled`; Helmfile passes the corresponding
-environment variable. No runtime image, worker, storage service or cluster
-permission is added for workflow authoring.
+No runtime image, worker, storage service or cluster permission is added for
+workflow authoring.
 
 Migration `a38801c6e001` adds the authoring tables and immutable-version trigger
 after `c42e91b7a603`, preserving existing Agent data. Use `make check-migrations`

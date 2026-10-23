@@ -14,6 +14,7 @@ import api.domains.agents.models
 import api.domains.analytics.models
 import api.domains.api_keys.models
 import api.domains.auth.models
+import api.domains.billing.models
 import api.domains.business_value.models
 import api.domains.communications.models
 import api.domains.conversations.models
@@ -36,7 +37,8 @@ import api.domains.tool_calls.models
 import api.domains.users.models
 import api.domains.users.organization_users.models
 import api.domains.workflows.models
-import api.domains.workflows.platform_models  # noqa: F401
+import api.domains.workflows.platform_models
+import api.domains.workflows.run_models  # noqa: F401
 from api.core.config import get_config
 from api.migrations.autogenerate import include_object
 

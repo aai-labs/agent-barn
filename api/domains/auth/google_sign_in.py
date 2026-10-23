@@ -18,6 +18,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID, uuid7
 
@@ -273,6 +274,7 @@ class GoogleSignInService:
             llm_budget_duration=ONE_OFF_BUDGET_WINDOW,
         )
         self.organization_repository.save_with_session(organization, session)
+        self.llm_budgets.open_trial_credit(session, organization.id, Decimal(str(credit)))
         # The deployment's default Agent limit may be below the credit; the trial's
         # Agents may each use all of it, and the Organization's limit still binds.
         session.add(OrganizationAgentSettings(organization_id=organization.id, default_agent_llm_budget_usd=credit))

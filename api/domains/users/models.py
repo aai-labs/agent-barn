@@ -40,6 +40,12 @@ class User(BaseModel, table=True):
     # When a Platform Administrator ended this user's trial. Until then a self-signed-up
     # user creates no Organizations, even after deleting the trial.
     trial_ended_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    # When a Platform Administrator set this account up (or it became one). Only such
+    # accounts create Organizations on the platform's renewing limit; everyone else's,
+    # self-signed-up or invited by an Organization, run on credit.
+    platform_provisioned_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     # When the user finished trial onboarding. NULL for everyone who never went through it.
     onboarding_completed_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)

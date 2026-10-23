@@ -190,6 +190,26 @@ class CostRepository:
             ).one()
             return Decimal(str(value))
 
+    def healed_spend(
+        self, organization_id: UUID, since: datetime, *, exclude_memory_key_hashes: frozenset[str]
+    ) -> Decimal:
+        """What healing found for the Organization's calls since `since`: spend the proxy
+        recorded as free, so its team never counted. Memory charges on the legacy shared
+        keys are left out; those are counted on their own, healed or not."""
+        with Session(self.delegate.engine) as session:
+            legacy_memory = sa.and_(
+                col(CostRecord.is_memory).is_(True), col(CostRecord.litellm_key_hash).in_(exclude_memory_key_hashes)
+            )
+            value = session.exec(
+                select(sa.func.coalesce(sa.func.sum(col(CostRecord.spend)), 0)).where(
+                    col(CostRecord.organization_id) == organization_id,
+                    col(CostRecord.healed_at).is_not(None),
+                    col(CostRecord.occurred_at) >= since,
+                    sa.not_(legacy_memory) if exclude_memory_key_hashes else sa.true(),
+                )
+            ).one()
+            return Decimal(str(value))
+
     def find_heal_candidates(self, limit: int) -> list[CostRecord]:
         """Rows that recorded no money for a call that plainly consumed tokens.
 

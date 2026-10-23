@@ -13,6 +13,7 @@ import {
 } from "../pages/data-support/skill-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
+import { ORG_A_ID } from "../pages/data-support/organization-data-support.po";
 
 async function chooseTemplate(page: Page) {
   await page.getByRole("combobox", { name: "Template", exact: true }).click();
@@ -529,4 +530,38 @@ test.describe("Hire Dialog", () => {
       await expect(page.getByText("Aria was created and is waiting on your team page.")).toBeVisible();
     });
   }
+});
+
+test.describe("An organization at its Agent limit", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("is told before the form", async ({ page }) => {
+    const dashboardPage = new DashboardPage(page);
+    const dataSupport = new DataSupport(page);
+    await dataSupport.auth.interceptRefreshRequest();
+    await dataSupport.users.interceptGetUserContextRequest();
+    await dataSupport.users.interceptGetOrganizationsRequest();
+    await dataSupport.organizations.interceptGetOrganization({
+      organization: {
+        id: ORG_A_ID,
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        name: "AAI Labs",
+        allowed_models: ["*"],
+        is_trial: false,
+        agent_limit: 1,
+        agent_limit_reached: true,
+      },
+    });
+    // One Agent already: the default list.
+    await dataSupport.agents.interceptGetAgentsRequest();
+    await dataSupport.agents.interceptGetAgentHealthRequest();
+
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+
+    await expect(page.getByRole("heading", { name: "Your organization has all its agents" })).toBeVisible();
+    await expect(page.getByText("This organization can have 1 agent.")).toBeVisible();
+    await expect(dashboardPage.agentNameInput()).toHaveCount(0);
+  });
 });

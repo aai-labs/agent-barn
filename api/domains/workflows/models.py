@@ -133,7 +133,7 @@ class WorkflowSummaryRead(DTO):
     archived_at: datetime | None
     version: WorkflowVersionSummaryRead
     allowed_actions: list[Literal["save_version", "archive"]]
-    execution_available: Literal[False] = False
+    execution_available: bool = False
 
 
 class WorkflowRead(DTO):
@@ -143,10 +143,10 @@ class WorkflowRead(DTO):
     archived_at: datetime | None
     version: WorkflowVersionRead
     allowed_actions: list[Literal["save_version", "archive"]]
-    execution_available: Literal[False] = False
+    execution_available: bool = False
 
 
 class WorkflowCapabilitiesRead(DTO):
     authoring: bool
-    execution: Literal[False] = False
+    execution: bool = False
     review_destinations: list[Literal["web"]] = Field(default_factory=default_destinations)

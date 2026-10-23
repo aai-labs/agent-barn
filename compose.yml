@@ -16,6 +16,8 @@ x-api-env: &api-env
   MEMORY_RUNTIME_SERVICE_KEY: ""
   HINDSIGHT_DB_PASSWORD: ""
   HINDSIGHT_LITELLM_API_KEY: ""
+  # Agent pods in k3d report workflow step outcomes to the API through the host.
+  WORKFLOW_RUNTIME_BASE_URL: ${WORKFLOW_RUNTIME_BASE_URL:-http://host.docker.internal:${API_PORT:?API_PORT is required}/workflow-runtime/v1}
 
 services:
   # Opt in with COMPOSE_PROFILES=local-hindsight. The backend has no published
@@ -222,8 +224,13 @@ services:
       LITELLM_BASE_URL: ${API_LITELLM_BASE_URL:-http://litellm:4000}
       # They also read the source Agent's long-term memories through the viewer.
       MEMORY_VIEW_BASE_URL: ${MEMORY_VIEW_BASE_URL:-http://memory:8003/memory/view/v1}
+      # Workflow step events send each step to its Agent pod in k3d.
+      K8S_KUBECONFIG_PATH: ${API_K8S_KUBECONFIG_PATH:-${K8S_KUBECONFIG_PATH-}}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./api:/app/api
+      - ./.k3d:/app/.k3d:ro
 
   sync-engine:
     build:
