@@ -73,6 +73,13 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 green "  all required values set"
 
+# Storage is independently usable via make garage-up, without k3d or model keys.
+if [[ ",${COMPOSE_PROFILES:-}," == *",local-garage,"* ]]; then
+  step "Starting persistent local Garage"
+  command -v uv >/dev/null 2>&1 || red "uv is required for local Garage bootstrap"
+  (cd api && uv run python scripts/provision_garage.py up)
+fi
+
 # ── k3d cluster + litellm ─────────────────────────────────────────────────────
 
 step "Starting k3d cluster + LiteLLM"
@@ -107,6 +114,9 @@ if [[ ",${COMPOSE_PROFILES:-}," == *",local-hindsight,"* ]]; then
   ${COMPOSE} up -d hindsight-db hindsight
 fi
 ${COMPOSE} up -d --build api worker cost-sync budget-snapshots communications memory credential-gateway ui
+if [[ ",${COMPOSE_PROFILES:-}," == *",local-garage,"* ]]; then
+  ${COMPOSE} up -d --build artifact-purge
+fi
 
 # Prints a boxed row padded to the border width, measuring visible width only
 # (ANSI color/bold codes stripped before computing the pad) so values of any

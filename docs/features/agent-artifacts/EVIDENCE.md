@@ -189,12 +189,121 @@ timestamps from the current uv resolver. The SDK's optional request/response
 checksums are configured `when_required` for Garage compatibility; explicit
 application SHA-256 readback remains mandatory.
 
+## Persistent infrastructure follow-up (2026-10-23, local and unpushed)
+
+The original disposable boundary left no repeatable normal Garage installation.
+This follow-up adds the shipped persistent Compose service/private bootstrap,
+API/native launch wiring, local scheduled purge, consistent backup and non-overwriting
+restore, plus the namespace-scoped three-node chart and explicit operator bootstrap.
+[Garage operations](../../guidelines/garage.md) owns repeatable setup and recovery.
+
+- `tests/integration/test_garage_persistent.py` plus
+  `tests/unit/test_garage_configuration.py`: **8 passed in 62.90 seconds** (three
+  persistent-storage cases and five configuration tests). Uses the shipped
+  Compose/bootstrap configuration, bucket read/write-only key, real product API,
+  private signed bytes, container/network replacement, stopped consistent backup,
+  restore into fresh volumes with preserved keys and existing links, deletion,
+  purge and abandoned-upload cleanup. Additional regressions cover occupied-port
+  first-start retry, partial-restore cleanup/retry, refusal to replace lost volumes,
+  outside-repository backup paths, `.env` validation and conflicting defaults on
+  restored startup. Real Docker exec events contain the stdin key-import command
+  and exclude the application secret.
+- `make test-artifact-deployment`: **1 passed in 49.80 seconds**. Both actual runtime
+  images run the mounted CLI and publish through the API into persistent Garage.
+  After container replacement, Chromium performs real sign-in, opens Agent Files,
+  sees both filenames and downloads/checks exact bytes three times. No route or
+  download interception. The API uses disposable migrated PostgreSQL and fixture
+  identities/MockK8s/MockLiteLLM adapters; no actual LLM turn or provider send.
+- `make test-garage-cluster`: the final DNS-gated, bounded-RPC configuration
+  passed **2 of 2 fresh-cluster samples**, in **165.26 seconds** and **141.91 seconds**,
+  including stdin-based key import through real `kubectl exec -i`. The rendered chart is applied once and bootstrap
+  repeated without layout/key changes. All three non-root pods run on distinct
+  Kubernetes nodes with separate PVCs and private RPC credentials. With one node
+  cordoned and its Garage pod absent, two ready S3 Service endpoints remain and
+  actual S3 reads/writes succeed. Replacement recovers the same node ID and exact
+  bytes, with a required change of pod IP and live daemon address matching the
+  stable RPC Service IP. The test removes only its own cluster. All nodes share one Docker host;
+  physical HA is unproven. Port forwarding to a surviving pod exercises bytes;
+  endpoint assertions check Service availability, not external ingress/TLS.
+- Earlier fresh-cluster probes exposed an insufficient initial pod/PVC startup
+  allowance and failure to reconnect after a pod IP changed. Bootstrap now allows
+  three minutes per pod; stable per-replica RPC ClusterIP Services preserve peer
+  addresses across replacement. The complete fresh-cluster test above passes with
+  those fixes. Earlier manual-cluster evidence alone did not establish this.
+- An isolated copied-script mutation removed the pre-start lost-volume guard.
+  Its real Docker regression failed at the intended assertion: empty replacement
+  volumes were created. The worktree was never mutated; the probe cleaned up its
+  own containers/volumes.
+- `make check-artifacts check-workflows`: passed, including Traefik TLS/controller
+  NetworkPolicy shape, stable RPC Services, null annotations with cert-manager,
+  and omission of a one-replica disruption budget. API lint/format/types passed.
+  The complete affected API set passed **237 tests in 121.39 seconds**: artifacts,
+  publication review regressions/migration, workflow definitions/runs, runtime
+  trigger/builders, persistent storage and configuration isolation. This is an
+  affected-area pass, not the entire repository suite. The final live-address
+  parser correction and null-address refusal are separately covered by the eight
+  final focused storage/configuration cases and the real cluster samples above.
+
+Independent infrastructure review found seven Required items: ingress compatibility,
+first-start/restore failure recovery, lost-volume refusal, safe operator errors,
+standalone `.env` handling, credential-bearing backup destinations and missing
+operational guidance. All were corrected; the second review confirmed those fixes.
+That review additionally found secret exposure through key-import argv and defaults
+incorrectly overriding saved stores. Imports now use JSON on stdin, including
+`kubectl exec -i`; stored Compose settings also resist inherited shell overrides.
+The third review confirmed both fixes and identified a stale derived endpoint
+when retrying a failed first start on a new port. State now records whether its
+origin was derived; an unpublished retry rebuilds that origin for the new port,
+while operator-supplied origins remain intact. The regression covers both paths,
+with developer configuration isolated. A copied-script mutation that retained
+the original endpoint failed at the intended endpoint-port assertion and cleaned
+up only its own volumes.
+
+Bootstrap additionally verifies every advertised node address against the stable
+RPC Service ClusterIP using live `GetClusterStatus` data; the cluster DNS suffix is
+configurable. A stricter check initially compared `node id` text and failed the
+test: upstream 2.4.1 source confirms that command prints the configured hostname,
+not the daemon's resolved address. Both bootstrap and recovery now inspect the
+actual daemon response instead. That corrected bootstrap passed, but its outage
+read exceeded the bounded client timeout (the run failed in 255.43 seconds).
+Garage's pinned source defaults RPC attempts to five minutes; this establishes a
+deadline mismatch, but no RPC trace was captured to prove the particular failed
+request waited on that timeout. The chart now explicitly configures 20-second RPC and
+3-second ping timeouts; the real outage check is repeated without increasing the
+client timeout. One cached-image sample then passed; a second refused an invalid
+live address at startup before creating application credentials. The chart now
+waits for the RPC Service DNS name in a non-root init container and retains the
+live-address fence; the final repeated samples are recorded above. The test also
+verifies platform-scoped containerd image imports because k3d had returned success
+after missing-digest failures, leaving registry-dependent pod pulls. Recovery asserts
+that the replacement pod IP differs while its node ID and Service address remain
+unchanged. Recreating Services requires repeated bootstrap, as documented.
+Secret application uses server-side apply, and restore refuses a changed port
+without a supplied endpoint.
+
+Old state without an explicit unpublished marker is treated conservatively as an
+initialized store. Private state paths are restricted to ignored `.garage` or
+outside the repository. Opus 5.5's fourth infrastructure review approved the fixes
+with no Required findings. Its fifth, focused review approved the corrected live
+RPC address measurement against pinned upstream source and passed the five config
+unit tests. That review did not run the parent cluster or affected API matrix.
+The sixth review approved the RPC timeout defaults against pinned upstream source;
+the seventh approved the DNS init container, platform-specific cache helper and
+schema validation. Its required staging note was addressed by including the Helm
+schema. All final local samples and earlier failed probes are distinguished here;
+two passing samples do not prove general failover reliability, production HA or
+an outage-free request guarantee. The infrastructure remains local with no push.
+
+No external deployment or production resources were accessed.
+
 ## Limits and deployment acceptance
 
 These are local integration and runtime-image contracts. The runtime tests use
 an HTTP bridge into the real API; they do not ask an LLM to select the tool,
 create a new Kubernetes Agent session, or send a file through an external chat
-provider. Browser tests use synthetic metadata and download responses. No full
+provider. The original 25-browser-test suite uses synthetic metadata/download
+responses; the additional persistent deployment check above uses real authenticated
+API/storage downloads. No full
 repository test-suite pass, external deployment, live messaging delivery or
 production Garage validation is claimed.
 
@@ -204,8 +313,8 @@ Artifact READY proves stored bytes, not external provider effects, safe replay
 or tool quiescence. AF-390 remains the approval integration follow-up; file-backed
 reviews must pin exact IDs/checksums and release their references explicitly.
 
-Deployment still requires authorized private Garage provisioning, TLS endpoint
-configuration reachable by download clients, a service-only bucket key in the
+External deployment still requires authorized execution of the provided Garage installation/bootstrap, TLS endpoint
+configuration reachable by download clients, the generated service-only bucket key in the
 existing storage Secret, schema migration, and an opted-in purge schedule. Verify
 fresh links and native messaging delivery in the deployed Hermes/OpenClaw sessions
 before claiming that live acceptance. No merge or deployment was performed here.

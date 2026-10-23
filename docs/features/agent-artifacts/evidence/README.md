@@ -11,3 +11,13 @@ screenshots do not demonstrate a live Agent, Garage deployment or provider send.
 
 Temporary screenshot capture instrumentation was removed after capture; production
 code and the browser assertions are unchanged.
+
+## Persistent deployment path (2026-10-23)
+
+[persistent-files-live.png](persistent-files-live.png) comes from real local sign-in
+and Agent Files without route/download interception. Both runtime images uploaded
+actual bytes through the API, persistent Compose Garage was recreated, and the
+browser downloaded the exact bytes three times. Identity/database and external
+integration adapters are isolated test fixtures; no live model/provider send or
+installation deployment is shown. The source probe is
+`api/runtime_tests/test_artifact_deployment.py`.

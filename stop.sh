@@ -33,6 +33,11 @@ fi
 COMPOSE="docker compose -f compose.yml"
 CLUSTER="${K3D_CLUSTER:-agentfarm-dev}"
 
+if [[ -f .garage/state.json ]]; then
+  step "Stopping local Garage (data and keys preserved)"
+  (cd api && uv run python scripts/provision_garage.py down)
+fi
+
 if [[ "$CLEAN" == true ]]; then
   step "Stopping and removing containers (volumes preserved)"
   ${COMPOSE} --profile k3d down --remove-orphans

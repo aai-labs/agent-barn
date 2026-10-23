@@ -31,6 +31,14 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Limits: Documented that failed/expired unfinished steps can currently retry automatically, dispatch deduplication does not guarantee exactly-once external effects, and the agreed uncertain-effect handling remains unimplemented. This documentation change does not change runtime behavior.
 - Verification: Compared the guide with the start/read/cancel services, runtime dispatch, DTOs and controller; checked Markdown structure and whitespace. No application tests were rerun for this prose-only correction.
 
+### 2026-10-23 — AF-415 — persistent storage infrastructure (local, not pushed)
+
+- Added: persistent worktree-isolated Garage Compose service, private one-time bootstrap, API/native-development wiring, scheduled local purge, consistent backup and fresh-volume restore.
+- Deployment: namespace-scoped three-node Garage chart, separate RPC/application Secrets, non-root pods, PVCs, distinct-node scheduling, private networking and optional TLS; explicit idempotent layout/bucket bootstrap plus opt-in Helmfile/CI variables. No external installation deployment.
+- Verification: eight focused storage/configuration cases; both runtime-image CLIs and real authenticated Agent Files downloads after Garage replacement; two final fresh three-node samples pass quorum reads/writes, changed-pod-IP recovery and live RPC-address checks. Earlier failures and exact evidence remain in the artifact evidence, without a production HA claim.
+- Hardened after review: Traefik defaults/private networking, recoverable initial setup/restore, lost-volume and node-identity guards, stdin-only key import, saved settings protected from shell defaults, private state/backup paths and restored deployment/rollback guidance. Stable per-replica RPC Services preserve recovery across pod IP changes.
+- Delivery: infrastructure changes remain local for agreement before any push. AF-389 retry/stop/runtime acceptance and AF-390 approval integration remain separate dependencies.
+
 ### 2026-10-23 — AF-415 — local independent-review corrections (not pushed)
 
 - Fixed: completion credentials stay out of prompts/CLI arguments; runtime identity plus an owning-Agent attempt fence authorizes file publication. S3 I/O holds only the file lock; finalization reacquires run then file locks and fences intervening cancellation/deletion.
