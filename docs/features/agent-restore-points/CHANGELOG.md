@@ -30,10 +30,13 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
   the volume's contents. The Agent must be stopped (or in `ERROR`) and stays stopped afterwards.
   Permission is `agent.lifecycle.manage`, as for restore. The `PRE_RESET` origin already existed in the
   enum, the database, and the UI labels; no migration was needed.
-- Delivered: the Job removes nothing if the backup could not hold every file. A link outside the volume,
-  a special file, or a socket is in no archive, and a reset would delete it for good. It fails the backup
-  step and names the files. A socket also crashed the capture (`gettarinfo` returns `None`); it is now
-  counted as skipped.
+- Delivered: the Job removes nothing if the backup could not hold a file that has content to lose. The
+  archive filter refuses a device file or a pipe, and a reset would delete it for good, so it fails the
+  backup step and names the files. A link that points outside the volume, or a socket, holds no data and
+  does not block a reset. Every booted OpenClaw Agent has such a link (the npm peer link `start.sh`
+  recreates on boot), and so does a venv on a Hermes volume. They are written down in
+  `skipped-links.json` next to the archive and named in the Job log. A socket also crashed the capture
+  (`gettarinfo` returns `None`); it is now counted as skipped.
 - Fixed: a link to a directory was left out of every archive and not counted, so a wipe removed it
   silently. It is now archived as the link. This also changes capture and the restore safety copy.
 - Delivered: the reset is reconciled like a restore's safety copy. A failed backup fails the row and
