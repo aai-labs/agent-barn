@@ -31,6 +31,7 @@ from api.domains.agents.restore_point_job import EXIT_BACKUP_FAILED, EXIT_RESTOR
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events.catalog import (
+    AGENT_RESET,
     AGENT_RESTORE_POINT_CREATED,
     AGENT_RESTORE_POINT_DELETED,
     AGENT_RESTORE_POINT_RESTORED,
@@ -1830,3 +1831,147 @@ def test_a_failed_restore_target_can_be_reopened_with_its_archive_kept():
             row = _rows_by_origin(context)[RestorePointOrigin.MANUAL.value]
             assert_that(row["status"], equal_to(RestorePointStatus.READY.value))
             assert_that(k8s.delete_pvc.called, equal_to(False))
+
+
+def _reset_url(context) -> str:
+    return f"{_BASE}/{context.agent.id}/reset"
+
+
+def _reset(context):
+    return context.client.post(_reset_url(context), headers=_auth(context))
+
+
+def test_reset_backs_up_the_volume_in_one_job_and_leaves_the_agent_stopped():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        _seed(context)
+
+        with when("I reset the Agent"):
+            response = _reset(context)
+
+        with then("a Before-reset backup is returned, and one Job backs the volume up and then empties it"):
+            assert_that(response.status_code, equal_to(status.HTTP_202_ACCEPTED))
+            body = response.json()
+            assert_that(body["origin"], equal_to(RestorePointOrigin.PRE_RESET.value))
+            assert_that(body["status"], equal_to(RestorePointStatus.PENDING.value))
+            k8s = context.injector.get(KubernetesClient)
+            assert_that(k8s.create_job.call_count, equal_to(1))
+            job = k8s.create_job.call_args.args[1]
+            env = {e.name: e.value for e in job.spec.template.spec.containers[0].env}
+            assert_that(env["RESTORE_POINT_MODE"], equal_to("reset"))
+            # A second attempt would back up the volume the first one emptied.
+            assert_that(job.spec.backoff_limit, equal_to(0))
+            claims = {v.persistent_volume_claim.claim_name for v in job.spec.template.spec.volumes}
+            assert_that(claims, equal_to({f"agent-{context.agent.id}", f"restore-point-{body['id']}"}))
+
+        with then("it is audited once, the Agent stays stopped, and manual captures are not counted with it"):
+            assert_that(_outbox(context, AGENT_RESET), has_length(1))
+            assert_that(_outbox(context, AGENT_RESTORE_POINT_CREATED), equal_to([]))
+            assert_that(EVENT_REGISTRY.get(AGENT_RESET, 1).handler_names, has_item(SECURITY_AUDIT_HANDLER))
+            assert_that(
+                context.injector.get(AgentRepository).get_by_id(context.agent.id).status, equal_to(AgentStatus.STOPPED)
+            )
+            listing = context.client.get(_url(context), headers=_auth(context)).json()
+            assert_that(listing["manual_count"], equal_to(1))
+
+
+def _in_flight(context) -> None:
+    _seed(context, status_value=RestorePointStatus.CAPTURING)
+
+
+def _updating(context) -> None:
+    context.injector.get(AgentRepository).claim_managed_update(context.agent.id)
+
+
+def _never_started(context) -> None:
+    context.injector.get(KubernetesClient).get_pvc.return_value = None
+
+
+def _backups_at_the_cap(context) -> None:
+    # The cap in these tests is 2.
+    for _ in range(2):
+        _seed(context, origin=RestorePointOrigin.PRE_RESET)
+
+
+@pytest.mark.parametrize(
+    ("agent_status", "arrange", "detail"),
+    [
+        pytest.param(AgentStatus.RUNNING, lambda context: None, "Stop the Agent", id="the agent is running"),
+        pytest.param(AgentStatus.STOPPED, _in_flight, "already in progress", id="a capture is in flight"),
+        pytest.param(AgentStatus.STOPPED, _updating, "managed update", id="a managed update is running"),
+        pytest.param(AgentStatus.STOPPED, _never_started, "nothing to reset", id="the agent has never started"),
+        # Every reset keeps a full-size volume, so repeated resets would fill the namespace's quota.
+        pytest.param(AgentStatus.STOPPED, _backups_at_the_cap, "Delete one first", id="its backups are at the cap"),
+    ],
+)
+def test_reset_is_refused_when_it_would_not_be_safe(agent_status, arrange, detail):
+    with given([*_GIVEN, there_is_an_agent(status=agent_status)]) as context:
+        arrange(context)
+
+        with when("I reset the Agent"):
+            response = _reset(context)
+
+        with then("it is refused before anything is created"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            assert_that(response.json()["detail"], contains_string(detail))
+            assert_that(context.injector.get(KubernetesClient).create_job.called, equal_to(False))
+
+
+def _end_reset(context, how: str):
+    """Start a reset, then give its Job the ending `how` describes."""
+    body = _reset(context).json()
+    k8s = context.injector.get(KubernetesClient)
+    # The Job the service built, so the reconciler sees it ran a backup first.
+    created = k8s.create_job.call_args.args[1]
+    k8s.delete_pvc.reset_mock()
+    if how == "job reaped":
+        # Finished and deleted before anything read it: nothing says how far it got.
+        _backdate(context, body["id"])
+        k8s.get_job.return_value = None
+    elif how == "succeeded":
+        k8s.get_job.return_value = _job_with({"succeeded": 1})
+        k8s.read_job_logs.return_value = '{"bytes": 4096, "file_count": 12}\n'
+    else:
+        k8s.get_job.return_value = V1Job(spec=created.spec, status=V1JobStatus(failed=1))
+        k8s.get_pod_name_for_job.return_value = None if how == "phase unknown" else "rp-reset-pod"
+        k8s.get_job_exit_code.return_value = {
+            "backup failed": EXIT_BACKUP_FAILED,
+            "wipe failed": EXIT_RESTORE_FAILED,
+        }.get(how)
+        k8s.read_job_logs.return_value = {
+            "backup failed": "pre-reset capture failed: disk full",
+            "wipe failed": '{"bytes": 800, "file_count": 5}\nreset failed: busy\n',
+        }.get(how)
+    return body, k8s
+
+
+@pytest.mark.parametrize(
+    ("how", "expected", "reason", "volume_released"),
+    [
+        pytest.param("succeeded", RestorePointStatus.READY, None, False, id="it finished"),
+        pytest.param(
+            "backup failed", RestorePointStatus.FAILED, "pre-reset capture failed", True, id="the backup failed"
+        ),
+        pytest.param("wipe failed", RestorePointStatus.READY, "did not finish", False, id="the wipe failed"),
+        pytest.param("phase unknown", RestorePointStatus.READY, "lost track", False, id="its phase is unknown"),
+        pytest.param("job reaped", RestorePointStatus.READY, "lost track", False, id="its Job was deleted unread"),
+    ],
+)
+def test_a_reset_never_leaves_the_only_copy_of_the_files_unrestorable(how, expected, reason, volume_released):
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        body, k8s = _end_reset(context, how)
+
+        with when("I read the backup after the Job ended"):
+            row = context.client.get(f"{_url(context)}/{body['id']}", headers=_auth(context)).json()
+
+        with then("it is failed only if the Agent's files were never touched, and its volume is released only then"):
+            assert_that(row["status"], equal_to(expected.value))
+            if reason is None:
+                assert_that(row["failure_reason"], none())
+            else:
+                assert_that(row["failure_reason"], contains_string(reason))
+            assert_that(k8s.delete_pvc.called, equal_to(volume_released))
+
+        if expected == RestorePointStatus.READY:
+            with then("and a restore, which needs a ready row, is accepted"):
+                restore = context.client.post(f"{_url(context)}/{body['id']}/restore", headers=_auth(context))
+                assert_that(restore.status_code, equal_to(status.HTTP_202_ACCEPTED))

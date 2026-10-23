@@ -60,6 +60,27 @@ export function useRestoreRestorePoint(agentId: string) {
   });
 }
 
+/**
+ * Backs the Agent's volume up, then empties it. Resolves with the backup the reset
+ * took, which is the row to watch: the Job finishes in the background.
+ */
+export function useResetAgent(agentId: string) {
+  const queryClient = useQueryClient();
+  const orgApiBase = useOrganizationApiBase();
+
+  return useMutation({
+    mutationFn: async () => {
+      const response = await api.post<RestorePoint>(
+        `${orgApiBase}/agents/${agentId}/reset`,
+        undefined,
+        { schema: RestorePointSchema },
+      );
+      return response.data;
+    },
+    onSuccess: () => invalidateRestorePoints(queryClient, agentId),
+  });
+}
+
 export function useDeleteRestorePoint(agentId: string) {
   const queryClient = useQueryClient();
   const orgApiBase = useOrganizationApiBase();

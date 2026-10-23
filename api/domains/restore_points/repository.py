@@ -97,10 +97,14 @@ class RestorePointRepository:
             return session.exec(query).first()
 
     def count_manual_for_agent(self, agent_id: UUID) -> int:
-        """Manual restore points that still hold a volume.
+        """Manual restore points that still hold a volume."""
+        return self.count_holding_a_volume(agent_id, RestorePointOrigin.MANUAL)
 
-        FAILED captures release their volume when they fail, so counting them
-        would let a run of failures block an Agent from ever capturing again.
+    def count_holding_a_volume(self, agent_id: UUID, origin: RestorePointOrigin) -> int:
+        """Restore points of one origin that still hold a volume.
+
+        FAILED ones released theirs when they failed, so counting them would let a run
+        of failures block an Agent from ever taking another.
         """
         with Session(self.delegate.engine) as session:
             query = (
@@ -108,7 +112,7 @@ class RestorePointRepository:
                 .select_from(AgentRestorePoint)
                 .where(
                     col(AgentRestorePoint.agent_id) == agent_id,
-                    col(AgentRestorePoint.origin) == RestorePointOrigin.MANUAL,
+                    col(AgentRestorePoint.origin) == origin,
                     col(AgentRestorePoint.status) != RestorePointStatus.FAILED,
                 )
             )
@@ -224,7 +228,11 @@ class RestorePointRepository:
         *,
         archive_bytes: int | None,
         file_count: int | None,
+        failure_reason: str | None = None,
     ) -> bool:
+        """Mark an archive usable. `failure_reason` is for the one case where it is
+        usable but the operation around it was not: a reset that took its backup and
+        then did not finish emptying the volume."""
         return self._conditional_update(
             restore_point_id,
             NON_TERMINAL_STATUSES,
@@ -233,7 +241,7 @@ class RestorePointRepository:
                 "archive_bytes": archive_bytes,
                 "file_count": file_count,
                 "captured_at": datetime.now(UTC),
-                "failure_reason": None,
+                "failure_reason": failure_reason,
                 "job_name": None,
             },
         )

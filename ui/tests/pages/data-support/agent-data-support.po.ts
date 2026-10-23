@@ -246,6 +246,7 @@ export const mockAgentActivityCall = {
 
 export const MOCK_RESTORE_POINT_ID = "55555555-5555-4555-8555-555555555555";
 export const MOCK_PRE_RESTORE_POINT_ID = "66666666-6666-4666-8666-666666666666";
+export const MOCK_PRE_RESET_POINT_ID = "77777777-7777-4777-8777-777777777777";
 
 export const mockRestorePointManifest = {
   version: 2,
@@ -291,6 +292,26 @@ export const mockPreRestorePoint = {
   id: MOCK_PRE_RESTORE_POINT_ID,
   label: "Automatic backup before restore",
   origin: "PRE_RESTORE",
+};
+
+/** The backup a reset takes first; its Job is what the page follows. */
+export const mockPreResetPoint = {
+  ...mockRestorePoint,
+  id: MOCK_PRE_RESET_POINT_ID,
+  label: "Automatic backup before reset",
+  origin: "PRE_RESET",
+  status: "PENDING",
+  archive_bytes: null,
+  file_count: null,
+  captured_at: null,
+};
+
+export const mockReadyPreResetPoint = {
+  ...mockPreResetPoint,
+  status: "READY",
+  archive_bytes: 1_048_576,
+  file_count: 18,
+  captured_at: "2026-05-14T10:01:00Z",
 };
 
 export function mockRestorePointsPage({
@@ -1581,6 +1602,33 @@ export class AgentDataSupport {
           body: JSON.stringify(
             status >= 400 ? { detail } : (body ?? mockCapturingRestorePoint),
           ),
+        });
+      },
+    );
+  }
+
+  async interceptResetAgentRequest({
+    agentId = MOCK_AGENT_ID,
+    status = 202,
+    detail = "Unable to reset",
+    body,
+  }: {
+    agentId?: string;
+    status?: number;
+    detail?: string;
+    body?: unknown;
+  } = {}) {
+    await this.page.route(
+      `**/api/v1/organizations/*/agents/${agentId}/reset`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await route.fulfill({
+          status,
+          contentType: "application/json",
+          body: JSON.stringify(status >= 400 ? { detail } : (body ?? mockPreResetPoint)),
         });
       },
     );

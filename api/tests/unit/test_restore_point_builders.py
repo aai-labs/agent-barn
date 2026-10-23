@@ -13,6 +13,7 @@ from api.domains.agents.builders.restore_point import (
     build_restore_job,
     build_restore_point_pvc,
     capture_job_name,
+    reset_job_name,
     restore_job_name,
     restore_point_id_from_name,
     restore_point_resource_name,
@@ -273,6 +274,7 @@ def test_every_generated_resource_name_round_trips_back_to_its_restore_point():
         restore_point_resource_name(_RESTORE_POINT_ID),
         capture_job_name(_RESTORE_POINT_ID),
         restore_job_name(_RESTORE_POINT_ID),
+        reset_job_name(_RESTORE_POINT_ID),
     ]
 
     for name in names:

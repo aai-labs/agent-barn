@@ -1,4 +1,5 @@
 import secrets
+from typing import Any
 from uuid import UUID
 
 from kubernetes import client
@@ -12,6 +13,7 @@ from api.domains.agents.restore_point_job import (
     ENV_SOURCE,
     ENV_TARGET,
     MODE_CAPTURE,
+    MODE_RESET,
     MODE_RESTORE,
 )
 
@@ -23,6 +25,7 @@ RESTORE_POINT_ID_LABEL_KEY = "agentbarn.io/restore-point-id"
 PVC_NAME_PREFIX = "restore-point-"
 CAPTURE_JOB_NAME_PREFIX = "rp-cap-"
 RESTORE_JOB_NAME_PREFIX = "rp-res-"
+RESET_JOB_NAME_PREFIX = "rp-reset-"
 _UUID_LENGTH = 36
 
 SOURCE_MOUNT_PATH = "/source"
@@ -55,6 +58,10 @@ def restore_job_name(restore_point_id: UUID) -> str:
     return f"{RESTORE_JOB_NAME_PREFIX}{restore_point_id}-{secrets.token_hex(3)}"
 
 
+def reset_job_name(restore_point_id: UUID) -> str:
+    return f"{RESET_JOB_NAME_PREFIX}{restore_point_id}-{secrets.token_hex(3)}"
+
+
 def restore_point_id_from_name(name: str) -> UUID | None:
     """The restore point a resource belongs to, read back out of its own name.
 
@@ -63,7 +70,7 @@ def restore_point_id_from_name(name: str) -> UUID | None:
     a second exact identifier rather than a guess; anything that does not match
     a prefix this module produces still resolves to None and is left alone.
     """
-    for prefix in (PVC_NAME_PREFIX, CAPTURE_JOB_NAME_PREFIX, RESTORE_JOB_NAME_PREFIX):
+    for prefix in (PVC_NAME_PREFIX, CAPTURE_JOB_NAME_PREFIX, RESTORE_JOB_NAME_PREFIX, RESET_JOB_NAME_PREFIX):
         if not name.startswith(prefix):
             continue
         try:
@@ -197,6 +204,28 @@ def build_capture_job(
     )
 
 
+def _build_volume_changing_job(
+    *,
+    mode: str,
+    runtime: str,
+    agent_pvc: str,
+    extra_env: dict[str, str],
+    extra_volumes: list[tuple[str, str, str, bool]],
+    **job: Any,
+) -> client.V1Job:
+    """A Job that changes the Agent volume: the part a restore and a reset share.
+
+    Never retried: a second attempt would back up the volume the first one changed, over the
+    backup that was good. Keeping the rule here means it cannot be applied to one and missed in the other.
+    """
+    return _build_job(
+        env={ENV_MODE: mode, ENV_RUNTIME: runtime, ENV_TARGET: TARGET_MOUNT_PATH, **extra_env},
+        volumes=[("target", agent_pvc, TARGET_MOUNT_PATH, False), *extra_volumes],
+        backoff_limit=_RESTORE_BACKOFF_LIMIT,
+        **job,
+    )
+
+
 def build_restore_job(
     *,
     job_name: str,
@@ -212,29 +241,58 @@ def build_restore_job(
     timeout_seconds: int,
     image_pull_secret: str | None = None,
 ) -> client.V1Job:
-    env = {
-        ENV_MODE: MODE_RESTORE,
-        ENV_RUNTIME: runtime,
-        ENV_TARGET: TARGET_MOUNT_PATH,
-        ENV_ARCHIVE: ARCHIVE_MOUNT_PATH,
-    }
-    volumes = [("target", agent_pvc, TARGET_MOUNT_PATH, False), ("archive", archive_pvc, ARCHIVE_MOUNT_PATH, True)]
+    extra_env = {ENV_ARCHIVE: ARCHIVE_MOUNT_PATH}
+    extra_volumes = [("archive", archive_pvc, ARCHIVE_MOUNT_PATH, True)]
     # No backup volume means the Job skips the pre-restore capture entirely —
     # the archive is trusted to be the state the caller wants (managed-update
     # rollback), so there is nothing to keep safe.
     if backup_pvc is not None:
-        env[ENV_BACKUP] = BACKUP_MOUNT_PATH
-        volumes.insert(1, ("backup", backup_pvc, BACKUP_MOUNT_PATH, False))
-    return _build_job(
+        extra_env[ENV_BACKUP] = BACKUP_MOUNT_PATH
+        extra_volumes.insert(0, ("backup", backup_pvc, BACKUP_MOUNT_PATH, False))
+    return _build_volume_changing_job(
+        mode=MODE_RESTORE,
+        runtime=runtime,
+        agent_pvc=agent_pvc,
+        extra_env=extra_env,
+        extra_volumes=extra_volumes,
         job_name=job_name,
         restore_point_id=restore_point_id,
         agent_id=agent_id,
         org_id=org_id,
         namespace=namespace,
         image=image,
-        env=env,
-        volumes=volumes,
         timeout_seconds=timeout_seconds,
-        backoff_limit=_RESTORE_BACKOFF_LIMIT,
+        image_pull_secret=image_pull_secret,
+    )
+
+
+def build_reset_job(
+    *,
+    job_name: str,
+    restore_point_id: UUID,
+    agent_id: UUID,
+    org_id: UUID,
+    namespace: str,
+    image: str,
+    runtime: str,
+    agent_pvc: str,
+    backup_pvc: str,
+    timeout_seconds: int,
+    image_pull_secret: str | None = None,
+) -> client.V1Job:
+    """Back the Agent volume up into `backup_pvc`, then empty it."""
+    return _build_volume_changing_job(
+        mode=MODE_RESET,
+        runtime=runtime,
+        agent_pvc=agent_pvc,
+        extra_env={ENV_BACKUP: BACKUP_MOUNT_PATH},
+        extra_volumes=[("backup", backup_pvc, BACKUP_MOUNT_PATH, False)],
+        job_name=job_name,
+        restore_point_id=restore_point_id,
+        agent_id=agent_id,
+        org_id=org_id,
+        namespace=namespace,
+        image=image,
+        timeout_seconds=timeout_seconds,
         image_pull_secret=image_pull_secret,
     )

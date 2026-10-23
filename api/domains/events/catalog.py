@@ -22,6 +22,7 @@ AGENT_DELETED = "agent.deleted"
 AGENT_RESTORE_POINT_CREATED = "agent.restore_point.created"
 AGENT_RESTORE_POINT_RESTORED = "agent.restore_point.restored"
 AGENT_RESTORE_POINT_DELETED = "agent.restore_point.deleted"
+AGENT_RESET = "agent.reset"
 AGENT_SECRET_ADDED = "agent.secret.added"
 AGENT_SECRET_UPDATED = "agent.secret.updated"
 AGENT_SECRET_REMOVED = "agent.secret.removed"
@@ -236,6 +237,8 @@ class AgentDeletedPayload(BaseModel):
 
 class AgentRestorePointChangedPayload(BaseModel):
     """Identifiers only: the captured configuration manifest stays on the row.
+
+    Also carries `agent.reset`, whose restore point is the backup the reset took.
 
     Putting it here would risk the registry's 16KB payload cap and its
     sensitive-key filter, and the manifest is display data rather than an
@@ -922,6 +925,15 @@ def build_default_event_registry() -> DomainEventRegistry:
     registry.register(
         DomainEventDefinition(
             event_name=AGENT_RESTORE_POINT_RESTORED,
+            schema_version=1,
+            payload_model=AgentRestorePointChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.ORGANIZATION,
+        )
+    )
+    registry.register(
+        DomainEventDefinition(
+            event_name=AGENT_RESET,
             schema_version=1,
             payload_model=AgentRestorePointChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
