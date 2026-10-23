@@ -8,6 +8,7 @@ from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupServ
 from api.domains.agent_sizes.models import size_is_pending
 from api.domains.agents.models import PlatformAgentRead, PlatformAgentRow
 from api.domains.agents.repository import AgentRepository, AgentSizeVanished
+from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -31,15 +32,16 @@ class PlatformAgentService:
     """Every Agent on the platform, and a Platform Administrator's override of one's size.
 
     Authorization is the routes' `require_platform_admin`; no Membership is checked. Reads
-    are Platform Oversight Data (identity, lifecycle, size). The size override is the one
-    write a Platform Administrator makes on an Organization's Agent, and it is deliberately
-    narrow: it never starts, stops or reconfigures the Agent, which picks the size up at its
-    next start. See docs/adr/2026-10-22-platform-administrators-set-an-agents-size.md.
+    are Platform Oversight Data (identity, lifecycle, size). A Platform Administrator makes
+    two writes on an Organization's Agent: the size override, which never starts or stops
+    it, and a restart, which applies that size (or recovers the Agent) on any Agent. See
+    docs/adr/2026-10-22-platform-administrators-set-an-agents-size.md.
     """
 
     repository: AgentRepository
     agent_sizes: AgentSizeLookupService
     event_delivery_dispatcher: EventDeliveryDispatcher
+    agents: AgentService
 
     def list_agents(
         self,
@@ -111,6 +113,14 @@ class PlatformAgentService:
         if updated is None:
             raise _not_found(agent_id)
         return _to_read(updated, self.agent_sizes.catalog())
+
+    def restart_agent(self, agent_id: UUID, context: CurrentUserContext) -> PlatformAgentRead:
+        """Restart any Agent, or start one that is not running; see AgentService."""
+        self.agents.restart_agent_for_platform(agent_id, context)
+        row = self.repository.get_platform_agent(agent_id)
+        if row is None:
+            raise _not_found(agent_id)
+        return _to_read(row, self.agent_sizes.catalog())
 
 
 def _to_read(row: PlatformAgentRow, catalog: AgentSizeCatalog) -> PlatformAgentRead:

@@ -50,7 +50,7 @@ export function mockPlatformAgent(overrides: Partial<PlatformAgent> = {}): Platf
 /**
  * The Platform Agents list and the size override, kept in memory the way the API keeps them:
  * the list filters by `search` and `organization_id`, and an override answers with the Agent
- * as saved. Returns what each request sent.
+ * as saved, and a restart answers with it running. Returns what each request sent.
  */
 export class PlatformAgentDataSupport {
   constructor(private page: Page) {}
@@ -59,6 +59,7 @@ export class PlatformAgentDataSupport {
     const stored = agents.map((agent) => ({ ...agent }));
     const listQueries: URLSearchParams[] = [];
     const writes: { agentId: string; body: { agent_size_id: string | null } }[] = [];
+    const restarts: string[] = [];
 
     const reply = (route: Route, status: number, body: unknown) =>
       route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
@@ -97,6 +98,16 @@ export class PlatformAgentDataSupport {
       return reply(route, 200, agent);
     });
 
-    return { listQueries, writes };
+    // A restart starts the Agent on its size, so nothing is left pending.
+    await this.page.route("**/api/v1/platform/agents/*/restart", async (route) => {
+      const agentId = route.request().url().split("/").at(-2) ?? "";
+      restarts.push(agentId);
+      const agent = stored.find((candidate) => candidate.id === agentId);
+      if (!agent) return reply(route, 404, { detail: "Agent not found" });
+      Object.assign(agent, { status: "RUNNING", pending_size: false });
+      return reply(route, 200, agent);
+    });
+
+    return { listQueries, writes, restarts };
   }
 }

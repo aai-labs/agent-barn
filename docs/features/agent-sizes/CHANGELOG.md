@@ -8,7 +8,7 @@ Platform Administrators keep a catalog of CPU and memory sizes. Organizations th
 
 ## Current state
 
-- Delivered: the size catalog with platform CRUD and audit Events, the Platform Settings section, and builders reading the resolved size (PR 1). Organizations the platform allows choose a size on hire or on the Agent's profile, Owners and Admins only, with a `pending_size` restart-needed signal (PR 2). A Platform Administrator lists every Agent on Platform → Agents, grouped by Organization, and overrides one Agent's size, which locks it for the Organization until cleared (PR 3). Agents that never chose run on the default, seeded as Standard with the values Agents always had.
+- Delivered: the size catalog with platform CRUD and audit Events, the Platform Settings section, and builders reading the resolved size (PR 1). Organizations the platform allows choose a size on hire or on the Agent's profile, Owners and Admins only, with a `pending_size` restart-needed signal (PR 2). A Platform Administrator lists every Agent on Platform → Agents, grouped by Organization, overrides one Agent's size, which locks it for the Organization until cleared, and restarts any Agent to apply it (PR 3). Agents that never chose run on the default, seeded as Standard with the values Agents always had.
 - In transition: nothing.
 - Next: close the epic once PR 3 merges: the durable facts already live in [`../agent-sizes.md`](../agent-sizes.md) and the ADR.
 - Blockers: open questions with Kalkidan (none blocks a PR): the name "Agent Size"; separate requests and limits (assumed yes); whether a size choice warns or blocks above the remaining Capacity Limit headroom (neither; the quota error at start covers it); whether Agent Owners should choose too (Organization Owners and Admins only); a 1Gi PVC for every size; whether an override should be able to pick a disabled size (no) and whether the Organization should see who set it (it sees "Set by platform").
@@ -17,14 +17,14 @@ Platform Administrators keep a catalog of CPU and memory sizes. Organizations th
 
 ### 2026-10-22 — Agent Sizes PR 3 — Platform per-Agent override
 
-- Delivered: Platform → Agents lists every live Agent, one group per Organization, with its runtime, status and size, searchable and filterable by Organization. A Platform Administrator gives one Agent any enabled size, even one its Organization can't choose; the Organization then sees it as "Set by platform" and can't change it until the override is cleared, which puts the Agent back on the default. The Agent is never restarted: the size applies at its next start, pending meanwhile.
+- Delivered: Platform → Agents lists every live Agent, one group per Organization, with its runtime, status and size, searchable and filterable by Organization. A Platform Administrator gives one Agent any enabled size, even one its Organization can't choose; the Organization then sees it as "Set by platform" and can't change it until the override is cleared, which puts the Agent back on the default. Overriding never restarts the Agent: the size applies at its next start, pending meanwhile. A Platform Administrator can restart any Agent from the same page, or start one that is not running, as the epic's acceptance criteria require.
 - Changed:
   - Schema (migration `8b2e4f61c9d3`): `agent.agent_size_set_by_platform`, false for every existing Agent.
-  - API: `GET /platform/agents`, `PUT /platform/agents/{agent_id}/agent-size`; `AgentRead.agent_size_set_by_platform`; the Organization's size route answers `409` while an override stands.
+  - API: `GET /platform/agents`, `PUT /platform/agents/{agent_id}/agent-size`, `POST /platform/agents/{agent_id}/restart`; `AgentRead.agent_size_set_by_platform`; the Organization's size route answers `409` while an override stands.
   - Events: `agent.agent_size.changed` gains `by_platform` (false when absent, so earlier records still read).
   - Decision: [platform administrators set one Agent's size](../../adr/2026-10-22-platform-administrators-set-an-agents-size.md), superseding the platform-oversight ADR in part.
   - Runtime: the new `Agent` column moves the runtime configuration digest once more, with an unchanged pod spec.
-  - UI: the Platform Agents page and its override dialog; the Profile's CPU & memory tile shows a platform-set size locked.
+  - UI: the Platform Agents page, its override dialog and its Restart/Start action; the Profile's CPU & memory tile shows a platform-set size locked.
   - Docs: [`../agent-sizes.md`](../agent-sizes.md), the RBAC brief, domain events, platform administration, the index, `CONTEXT.md`.
 - Follow-up: none planned.
 

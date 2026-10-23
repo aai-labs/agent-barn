@@ -2,16 +2,19 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Building, Loader2, Lock } from "lucide-react";
+import { Building, Loader2, Lock, Play, RotateCcw } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { Badge, type BadgeVariant } from "@/components/badge";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { ListPageHeader } from "@/components/list-page-header";
 import { OrganizationCombobox } from "@/components/organization-combobox";
 import { describeSize } from "@/features/agent-sizes/utils";
 import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
+import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { usePlatformAgents } from "../hooks/use-platform-agents";
+import { useRestartPlatformAgent } from "../hooks/use-restart-platform-agent";
 import type { PlatformAgent } from "../schemas";
 import { groupByOrganization } from "../utils";
 import { OverrideAgentSizeDialog } from "./override-agent-size-dialog";
@@ -22,7 +25,9 @@ const RUNTIME_LABELS: Record<string, string> = { OPENCLAW: "OpenClaw", HERMES: "
 
 /**
  * Platform → Agents: every live Agent, grouped by Organization, with the CPU and memory each
- * runs on. A Platform Administrator overrides one Agent's size from here.
+ * runs on. A Platform Administrator overrides one Agent's size from here, and restarts any
+ * Agent (or starts one that is not running) so a size applies without waiting on its
+ * Organization.
  *
  * Platform Oversight Data only: no link into an Organization's Agent pages, which a Platform
  * Administrator without a Membership cannot open.
@@ -32,6 +37,8 @@ export function PlatformAgentsPage() {
   const [organization, setOrganization] = useState<{ id: string; name: string } | null>(null);
   // Each opening gets a fresh dialog, keyed on this count.
   const [overriding, setOverriding] = useState<{ agent: PlatformAgent; opening: number } | null>(null);
+  const [restarting, setRestarting] = useState<PlatformAgent | null>(null);
+  const restart = useRestartPlatformAgent();
   const { agents, total, hasNextPage, fetchNextPage, isFetchingNextPage, isLoading, error, refetch } =
     usePlatformAgents({ search, organizationId: organization?.id ?? null });
   const loadMoreRef = useLoadMoreOnScroll({
@@ -114,11 +121,11 @@ export function PlatformAgentsPage() {
               {/* Fixed columns, so every Organization's table lines up with the others. */}
               <table className="w-full min-w-[44rem] table-fixed border-collapse text-[0.84rem]">
                 <colgroup>
-                  <col className="w-[26%]" />
-                  <col className="w-[13%]" />
-                  <col className="w-[13%]" />
-                  <col className="w-[34%]" />
-                  <col className="w-[14%]" />
+                  <col className="w-[22%]" />
+                  <col className="w-[11%]" />
+                  <col className="w-[11%]" />
+                  <col className="w-[32%]" />
+                  <col className="w-[24%]" />
                 </colgroup>
                 <thead>
                   <tr className="text-left text-[0.75rem]" style={{ color: "var(--ink-4)" }}>
@@ -131,7 +138,15 @@ export function PlatformAgentsPage() {
                 </thead>
                 <tbody>
                   {group.agents.map((agent) => (
-                    <AgentRow key={agent.id} agent={agent} onOverride={() => open(agent)} />
+                    <AgentRow
+                      key={agent.id}
+                      agent={agent}
+                      onOverride={() => open(agent)}
+                      onRestart={() => {
+                        restart.reset();
+                        setRestarting(agent);
+                      }}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -158,11 +173,50 @@ export function PlatformAgentsPage() {
           onOpenChange={(isOpen) => !isOpen && setOverriding(null)}
         />
       )}
+
+      {restarting && (
+        <ConfirmationDialog
+          open
+          onOpenChange={(isOpen) => !isOpen && setRestarting(null)}
+          title={`${restarting.status === "RUNNING" ? "Restart" : "Start"} ${restarting.name}?`}
+          description={
+            restarting.status === "RUNNING"
+              ? `It stops and starts again on ${restarting.agentSize.name}. Anything it is doing is interrupted, and ${restarting.organizationName} sees the restart in its activity.`
+              : `It starts on ${restarting.agentSize.name}, and ${restarting.organizationName} sees the start in its activity.`
+          }
+          confirmLabel={restarting.status === "RUNNING" ? "Restart" : "Start"}
+          pendingLabel={restarting.status === "RUNNING" ? "Restarting…" : "Starting…"}
+          isPending={restart.isPending}
+          onConfirm={async () => {
+            try {
+              await restart.mutateAsync(restarting.id);
+              setRestarting(null);
+            } catch {
+              /* The error stays in the dialog. */
+            }
+          }}
+        >
+          {restart.isError && (
+            <p className="m-0 text-[13px]" role="alert" style={{ color: "var(--err)" }}>
+              {getErrorDisplay(restart.error).description}
+            </p>
+          )}
+        </ConfirmationDialog>
+      )}
     </div>
   );
 }
 
-function AgentRow({ agent, onOverride }: { agent: PlatformAgent; onOverride: () => void }) {
+function AgentRow({
+  agent,
+  onOverride,
+  onRestart,
+}: {
+  agent: PlatformAgent;
+  onOverride: () => void;
+  onRestart: () => void;
+}) {
+  const running = agent.status === "RUNNING";
   return (
     <tr data-testid={`platform-agent-row-${agent.id}`} style={{ borderTop: "1px solid var(--line)" }}>
       <td className="px-4 py-3 font-medium" style={{ color: "var(--ink)" }}>
@@ -194,10 +248,26 @@ function AgentRow({ agent, onOverride }: { agent: PlatformAgent; onOverride: () 
           </div>
         )}
       </td>
-      <td className="px-4 py-3 text-right">
-        <button type="button" className="af-btn af-btn-sm" onClick={onOverride} aria-label={`Override size of ${agent.name}`}>
-          Override size
-        </button>
+      <td className="px-4 py-3">
+        <div className="flex flex-wrap justify-end gap-1.5">
+          <button
+            type="button"
+            className="af-btn af-btn-sm"
+            onClick={onOverride}
+            aria-label={`Override size of ${agent.name}`}
+          >
+            Override size
+          </button>
+          <button
+            type="button"
+            // Prominent while a size is waiting on it.
+            className={`af-btn af-btn-sm${agent.pendingSize ? " af-btn-primary" : ""}`}
+            onClick={onRestart}
+            aria-label={`${running ? "Restart" : "Start"} ${agent.name}`}
+          >
+            {running ? <RotateCcw size={13} /> : <Play size={13} />} {running ? "Restart" : "Start"}
+          </button>
+        </div>
       </td>
     </tr>
   );

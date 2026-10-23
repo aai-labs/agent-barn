@@ -112,6 +112,33 @@ test.describe("Platform Agents (platform_admin)", () => {
     await expect(agentsPage.row(OVERRIDDEN.id)).not.toContainText("Set by platform");
   });
 
+  test("restarts an agent whose size is pending, after confirming", async ({ page }) => {
+    const { restarts } = await new PlatformAgentDataSupport(page).intercept({ agents: [OVERRIDDEN] });
+    await agentsPage.goto();
+    const restart = agentsPage.row(OVERRIDDEN.id).getByRole("button", { name: "Restart Cruncher" });
+
+    await restart.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("It stops and starts again on Large");
+    await dialog.getByRole("button", { name: "Restart", exact: true }).click();
+
+    await expect(dialog).toBeHidden();
+    expect(restarts).toEqual([OVERRIDDEN.id]);
+    await expect(agentsPage.row(OVERRIDDEN.id)).not.toContainText("Pending: applies on restart");
+  });
+
+  test("starts an agent that is not running", async ({ page }) => {
+    const { restarts } = await new PlatformAgentDataSupport(page).intercept({ agents: [REPORTER] });
+    await agentsPage.goto();
+
+    await agentsPage.row(REPORTER.id).getByRole("button", { name: "Start Reporter" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Start", exact: true }).click();
+
+    await expect(page.getByRole("dialog")).toBeHidden();
+    expect(restarts).toEqual([REPORTER.id]);
+    await expect(agentsPage.row(REPORTER.id)).toContainText("running");
+  });
+
   test("searches by agent or organization name", async ({ page }) => {
     const { listQueries } = await new PlatformAgentDataSupport(page).intercept({
       agents: [OVERRIDDEN, REPORTER, SALLY],

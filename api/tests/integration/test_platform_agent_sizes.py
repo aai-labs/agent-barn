@@ -19,6 +19,7 @@ from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_l
 
 from api.domains.agent_sizes.models import GIB, MIB, STANDARD_SIZE_ID, AgentSize, OrganizationAgentSize
 from api.domains.agents.models import Agent, AgentStatus
+from api.domains.events import ActorIdentityType
 from api.domains.events.catalog import AGENT_AGENT_SIZE_CHANGED
 from api.domains.events.models import EventScope, OutboxMessage
 from api.domains.users.organization_users.models import OrganizationRole
@@ -437,3 +438,77 @@ def test_a_size_an_override_holds_cannot_be_deleted():
 
         assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
         assert_that(_stored_agent(context).agent_size_id, equal_to(large.id))
+
+
+# --- restarting any Agent ----------------------------------------------------------
+
+
+def _restart(context, token: str, agent_id: UUID | None = None):
+    return context.client.post(f"{_PLATFORM_AGENTS}/{agent_id or context.agent.id}/restart", headers=_auth(token))
+
+
+def _lifecycle_events(context, name: str) -> list[OutboxMessage]:
+    return [message for message in _delegate(context).find_all(OutboxMessage) if message.event_name == name]
+
+
+def test_a_platform_administrator_restarts_a_running_agent_onto_its_overridden_size():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        large = _size(context, "Large", scale=4)
+        admin = _platform_admin(context)
+        agent_url = f"{_AGENTS}/{context.agent.id}".format(organization_id=context.organization.id)
+        context.client.post(f"{agent_url}/start", headers=_auth(context.access_token))
+        _override(context, admin, large.id)
+        k8s = context.injector.get(KubernetesClient)
+        k8s.reset_mock()
+
+        with when("the administrator restarts it from Platform View"):
+            response = _restart(context, admin)
+
+        with then("its pod is replaced by one on Large, and nothing is pending"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            assert_that(response.json(), has_entries(status=AgentStatus.RUNNING.value, pending_size=False))
+            assert_that(k8s.delete_deployment.called, equal_to(True))
+            container = k8s.create_deployment.call_args.args[1].spec.template.spec.containers[0].resources
+            assert_that(container.limits, equal_to({"memory": "4Gi", "cpu": "2000m"}))
+
+        with then("the stop and the start name the administrator, who has no Membership there"):
+            for name in ("agent.stopped", "agent.started"):
+                events = _lifecycle_events(context, name)
+                assert_that(events[-1].actor["type"], equal_to(ActorIdentityType.USER.value))
+                assert_that(events[-1].organization_id, equal_to(context.organization.id))
+
+
+def test_a_platform_administrator_starts_an_agent_that_is_not_running():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        admin = _platform_admin(context)
+        k8s = context.injector.get(KubernetesClient)
+
+        response = _restart(context, admin)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json(), has_entries(status=AgentStatus.RUNNING.value))
+        assert_that(k8s.create_deployment.called, equal_to(True))
+        assert_that(_lifecycle_events(context, "agent.stopped"), has_length(0))
+
+
+def test_only_a_platform_administrator_with_a_writable_credential_restarts_from_platform_view():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        owner = context.access_token
+        admin = _platform_admin(context)
+        key = context.client.post(
+            "/api/v1/auth/me/api-keys",
+            json={"name": "Automation", "access_mode": "READ_ONLY"},
+            headers=_auth(admin),
+        ).json()["token"]
+
+        assert_that(_restart(context, owner).status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(_restart(context, key).status_code, equal_to(status.HTTP_403_FORBIDDEN))
+        assert_that(_stored_agent(context).status, equal_to(AgentStatus.STOPPED))
+
+
+def test_restarting_an_unknown_or_deleted_agent_is_not_found():
+    with given([*_GIVEN, there_is_an_agent(name="Gone", deleted=True)]) as context:
+        admin = _platform_admin(context)
+
+        assert_that(_restart(context, admin).status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(_restart(context, admin, uuid7()).status_code, equal_to(status.HTTP_404_NOT_FOUND))

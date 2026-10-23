@@ -1351,6 +1351,11 @@
   ],
   [
     "POST",
+    "/platform/agents/{agent_id}/restart",
+    "restart_platform_agent_platform_agents__agent_id__restart_post"
+  ],
+  [
+    "POST",
     "/platform/organizations/{organization_id}/end-trial",
     "end_organization_trial_platform_organizations__organization_id__end_trial_post"
   ],

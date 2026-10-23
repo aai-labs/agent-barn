@@ -42,3 +42,16 @@ def set_platform_agent_size(
     until then.
     """
     return service.set_agent_size(agent_id, choice.agent_size_id, context)
+
+
+@platform_agents_router.post("/{agent_id}/restart", response_model=PlatformAgentRead)
+def restart_platform_agent(
+    agent_id: UUID,
+    context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
+    service: Annotated[PlatformAgentService, Injected(PlatformAgentService)],
+):
+    """Restart any Agent, starting it on its current size; one that is not running is started.
+
+    A failed start answers with the same provisioning error body as the Organization's own.
+    """
+    return service.restart_agent(agent_id, context)

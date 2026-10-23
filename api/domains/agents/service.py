@@ -2945,6 +2945,34 @@ class AgentService:
             stopped = self._stop_agent_unchecked(current, actor)
         return self._get_agent_read(stopped, context)
 
+    def restart_agent_for_platform(self, agent_id: UUID, context: CurrentUserContext) -> Agent:
+        """Restart any Agent for a Platform Administrator: stop it if it runs, then start it.
+
+        Platform authority, so the route's `require_platform_admin` is the check and no
+        Membership is needed; the Agent's lifecycle Events name the administrator. The same
+        lock and guards as an Organization's own start apply. Returns the Agent as started.
+        """
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        actor = resolve_actor_identity(context, agent.organization_id)
+        self.restore_points.reconcile_agent(agent.id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id)
+            if current is None or current.deleted_at is not None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            _refuse_during_managed_update(current)
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
+            if current.status == AgentStatus.RUNNING:
+                current = self._stop_agent_unchecked(current, actor)
+            return self._start_agent_unchecked(current, actor)
+
     def _stop_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Stop a known Agent after its caller has established authority."""
 
