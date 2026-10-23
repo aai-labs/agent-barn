@@ -1,16 +1,22 @@
-"""Private, authenticated ingress for immediate one-shot Agent triggers.
+"""Private, authenticated ingress for immediate one-shot Agent triggers and workflow steps.
 
 Agent Barn only learns whether the native scheduler accepted the trigger. Hermes or
 OpenClaw owns execution, delivery through the selected native channel, and run history.
+
+A workflow step runs as a new session in this Agent's own runtime, under the Agent's
+configured tools, integrations, approval mode and spend limits. Its outcome is reported
+to the attempt's callback URL with the attempt's capability token.
 """
 
 import hashlib
 import hmac
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 from contextlib import closing
@@ -24,6 +30,7 @@ TRIGGER_KEY = os.environ.get("AGENT_TRIGGER_KEY", "")
 RUNTIME_KIND = os.environ.get("RUNTIME_KIND", "")
 RUNTIME_API_KEY = os.environ.get("RUNTIME_API_KEY", "")
 RUNTIME_API_URL = os.environ.get("RUNTIME_API_URL", "").rstrip("/")
+RUNTIME_MODEL = os.environ.get("RUNTIME_MODEL", "")
 RECEIPT_PATH = Path(os.environ.get("AGENT_TRIGGER_RECEIPT_PATH", "/tmp/agent-trigger-receipts.sqlite3"))
 MAX_BODY_BYTES = 128 * 1024
 PLATFORMS = {"slack", "discord", "telegram", "teams"}
@@ -234,14 +241,227 @@ def dispatch(idempotency_key: str, payload: dict) -> str:
         return native_job_id
 
 
+# Workflow steps -----------------------------------------------------------------
+
+WORKFLOW_STEPS_PATH = "/agent-triggers/v1/workflow-steps"
+_STEP_PATH = re.compile(r"^/agent-triggers/v1/workflow-steps/([0-9a-f-]{36})/stop$")
+_STEP_TIMEOUT_SECONDS = 900
+_SUMMARY_LIMIT = 4000
+# In-flight steps by attempt id. Process-local: a pod restart ends the session, and the
+# platform retries the step once the attempt expires.
+_STEPS_LOCK = threading.Lock()
+_STEPS: dict[str, dict] = {}
+
+
+class NeedsAttention(RuntimeError):
+    """The session stopped for something only a person can resolve, such as an approval."""
+
+
+def _post_json(url: str, token: str, body: dict | None, *, method: str = "POST") -> dict | None:
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    for attempt in range(5):
+        request = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 and exc.code != 429:
+                raise
+        except (urllib.error.URLError, OSError):
+            pass
+        time.sleep(2**attempt)
+    raise DispatchError("Workflow callback is unreachable")
+
+
+def _runtime_headers(session_id: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {RUNTIME_API_KEY}",
+        "Content-Type": "application/json",
+        "X-Hermes-Session-Key": session_id,
+        "X-OpenClaw-Session-Key": session_id,
+    }
+
+
+def _sse_events(response):
+    data_lines: list[str] = []
+    for raw_line in response:
+        line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        if line == "":
+            if data_lines:
+                yield "\n".join(data_lines)
+            data_lines = []
+        elif line.startswith("data:"):
+            data_lines.append(line[len("data:") :].strip())
+    if data_lines:
+        yield "\n".join(data_lines)
+
+
+def _hermes_step(attempt_id: str, session_id: str, prompt: str) -> str:
+    request = urllib.request.Request(
+        f"{RUNTIME_API_URL}/v1/runs",
+        data=json.dumps({"input": prompt, "session_id": session_id}).encode(),
+        method="POST",
+        headers=_runtime_headers(session_id),
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        run_id = json.loads(response.read())["run_id"]
+    with _STEPS_LOCK:
+        if attempt_id in _STEPS:
+            _STEPS[attempt_id]["run_id"] = run_id
+            _STEPS[attempt_id]["session_id"] = session_id
+        stopped = _STEPS.get(attempt_id, {}).get("stopped", False)
+    if stopped:
+        _stop_hermes(run_id, session_id)
+        raise RuntimeError("Agent session cancelled")
+    events = urllib.request.Request(
+        f"{RUNTIME_API_URL}/v1/runs/{run_id}/events",
+        method="GET",
+        headers={**_runtime_headers(session_id), "Accept": "text/event-stream"},
+    )
+    with urllib.request.urlopen(events, timeout=_STEP_TIMEOUT_SECONDS) as response:
+        for data in _sse_events(response):
+            payload = json.loads(data)
+            event = payload.get("event")
+            if event == "approval.request":
+                _stop_hermes(run_id, session_id)
+                command = str(payload.get("command") or payload.get("description") or "a command")[:500]
+                raise NeedsAttention(f"The Agent needs approval to run {command}. Approve it in chat, then rerun.")
+            if event == "run.completed":
+                return str(payload.get("text") or payload.get("output") or "")
+            if event in ("run.failed", "run.cancelled"):
+                raise RuntimeError(str(payload.get("error") or f"Agent session {event.split('.')[1]}"))
+    raise RuntimeError("The Agent session ended without a result")
+
+
+def _stop_hermes(run_id: str, session_id: str) -> None:
+    try:
+        stop = urllib.request.Request(
+            f"{RUNTIME_API_URL}/v1/runs/{run_id}/stop", data=b"{}", method="POST", headers=_runtime_headers(session_id)
+        )
+        urllib.request.urlopen(stop, timeout=10).close()
+    except (urllib.error.URLError, OSError):
+        pass
+
+
+def _openclaw_step(session_id: str, prompt: str) -> str:
+    request = urllib.request.Request(
+        f"{RUNTIME_API_URL}/v1/chat/completions",
+        data=json.dumps(
+            {
+                "model": RUNTIME_MODEL or "openclaw/default",
+                "stream": False,
+                "user": session_id,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+        ).encode(),
+        method="POST",
+        headers=_runtime_headers(session_id),
+    )
+    with urllib.request.urlopen(request, timeout=_STEP_TIMEOUT_SECONDS) as response:
+        return str(json.loads(response.read())["choices"][0]["message"]["content"] or "")
+
+
+def _parse_step_reply(text: str) -> tuple[bool, str]:
+    """The Agent is asked for {"summary", "criteria_met"}; plain prose still counts as the summary."""
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        try:
+            reply, _ = decoder.raw_decode(text, match.start())
+        except ValueError:
+            continue
+        if isinstance(reply, dict) and isinstance(reply.get("summary"), str) and reply["summary"].strip():
+            return reply.get("criteria_met") is not False, reply["summary"].strip()[:_SUMMARY_LIMIT]
+    if not text.strip():
+        raise RuntimeError("The Agent returned an empty reply")
+    return True, text.strip()[:_SUMMARY_LIMIT]
+
+
+def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
+    try:
+        handoff = _post_json(f"{callback_url}/handoff", token, None, method="GET") or {}
+        session_id, prompt = str(handoff["session_id"]), str(handoff["prompt"])
+        if RUNTIME_KIND == "hermes":
+            text = _hermes_step(attempt_id, session_id, prompt)
+        elif RUNTIME_KIND == "openclaw":
+            text = _openclaw_step(session_id, prompt)
+        else:
+            raise RuntimeError("Unsupported Agent runtime")
+        met, summary = _parse_step_reply(text)
+        if met:
+            _post_json(f"{callback_url}/result", token, {"summary": summary, "criteria_met": True})
+        else:
+            _post_json(f"{callback_url}/failure", token, {"reason": summary[:2000]})
+    except NeedsAttention as exc:
+        _report_failure(attempt_id, token, callback_url, str(exc), needs_attention=True)
+    except Exception as exc:  # every failure is reported, never swallowed silently
+        _report_failure(attempt_id, token, callback_url, str(exc) or exc.__class__.__name__)
+    finally:
+        with _STEPS_LOCK:
+            _STEPS.pop(attempt_id, None)
+
+
+def _report_failure(
+    attempt_id: str, token: str, callback_url: str, reason: str, *, needs_attention: bool = False
+) -> None:
+    with _STEPS_LOCK:
+        stopped = _STEPS.get(attempt_id, {}).get("stopped", False)
+    if stopped:
+        return
+    try:
+        _post_json(
+            f"{callback_url}/failure",
+            token,
+            {"reason": reason[:2000].replace(token, "[redacted]"), "needs_attention": needs_attention},
+        )
+    except Exception:  # the platform expires the attempt and retries
+        pass
+
+
+def start_workflow_step(payload: dict) -> bool:
+    """Start the step once per attempt; returns False when it is already running here."""
+    attempt_id = str(UUID(str(payload.get("attempt_id", ""))))
+    token = str(payload.get("token", ""))
+    callback_url = str(payload.get("callback_url", "")).rstrip("/")
+    if not token or not callback_url.startswith(("http://", "https://")):
+        raise ValueError("invalid workflow step")
+    with _STEPS_LOCK:
+        if attempt_id in _STEPS:
+            return False
+        _STEPS[attempt_id] = {"run_id": None, "stopped": False}
+    threading.Thread(target=_run_workflow_step, args=(attempt_id, token, callback_url), daemon=True).start()
+    return True
+
+
+def stop_workflow_step(attempt_id: str) -> None:
+    with _STEPS_LOCK:
+        step = _STEPS.get(attempt_id)
+        if step is None:
+            return
+        step["stopped"] = True
+        run_id = step.get("run_id")
+        session_id = step.get("session_id")
+    if run_id and session_id and RUNTIME_KIND == "hermes":
+        _stop_hermes(run_id, session_id)
+
+
 class TriggerHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
-        if self.path != "/agent-triggers/v1/invocations":
+        stop = _STEP_PATH.match(self.path)
+        if self.path not in ("/agent-triggers/v1/invocations", WORKFLOW_STEPS_PATH) and not stop:
             self._respond(404, {"error": "not found"})
             return
         authorization = self.headers.get("Authorization", "")
         if not TRIGGER_KEY or not hmac.compare_digest(authorization, f"Bearer {TRIGGER_KEY}"):
             self._respond(401, {"error": "unauthorized"})
+            return
+        if stop:
+            stop_workflow_step(stop.group(1))
+            self._respond(202, {})
+            return
+        if self.path == WORKFLOW_STEPS_PATH:
+            self._workflow_step()
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -280,6 +500,24 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(503, {"error": str(exc)})
             return
         self._respond(202, {"native_job_id": native_job_id})
+
+    def _workflow_step(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_BODY_BYTES:
+            self._respond(413, {"error": "invalid body size"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(length))
+            if not isinstance(payload, dict):
+                raise TypeError("body must be an object")
+            started = start_workflow_step(payload)
+        except (TypeError, ValueError) as exc:
+            self._respond(400, {"error": str(exc)})
+            return
+        self._respond(202 if started else 409, {})
 
     def log_message(self, format: str, *args: object) -> None:
         return

@@ -6,6 +6,14 @@ Read before changing Agent Restore Point Jobs, Hermes/OpenClaw behavior, agent K
 
 ## Agent runtime assembly
 
+Workflow steps have no separate assembly path. Each step runs as a new session in
+the owning Agent's running runtime, started through the Agent's private trigger
+server (`api/domains/agents/scripts/agent-trigger-server.py`, port 8082), so the
+Agent's own tools, Integrations, approval mode and spend limits govern it. The
+[workflow feature](../features/agent-workflows.md#wf02-execution-and-outputs)
+owns admission and text-checkpoint invariants; [operations](../guidelines/operations.md#workflow-execution-wf02)
+owns installation prerequisites.
+
 Starting an agent is an API-orchestrated deployment flow:
 
 1. Load the organization-owned agent and its pinned template version.

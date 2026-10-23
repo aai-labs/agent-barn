@@ -501,6 +501,21 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs",
+    "list_runs_organizations__organization_id__agents__agent_id__workflow_runs_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}",
+    "get_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/history",
+    "history_organizations__organization_id__agents__agent_id__workflow_runs__run_id__history_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/workflows",
     "list_workflows_organizations__organization_id__agents__agent_id__workflows_get"
   ],
@@ -1231,6 +1246,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/cancel",
+    "cancel_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__cancel_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/workflows",
     "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
   ],
@@ -1238,6 +1258,11 @@
     "POST",
     "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/archive",
     "archive_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__archive_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/runs",
+    "start_run_organizations__organization_id__agents__agent_id__workflows__workflow_id__runs_post"
   ],
   [
     "POST",
