@@ -237,8 +237,9 @@ def test_retiring_an_agent_deletes_its_folder_at_the_provider_and_keeps_its_acti
         assert_that(fake_drive(context).calls[calls_before:], equal_to(["delete_item"]))
         assert_that(_folders(context), equal_to([]))
         with Session(context.postgres_delegate.engine) as session:
-            assert_that(list(session.exec(select(SyncFile))), equal_to([]))
-            activity = list(session.exec(select(SyncActivity)))
+            files = list(session.exec(select(SyncFile).where(col(SyncFile.folder_id) == folder.id)))
+            activity = list(session.exec(select(SyncActivity).where(col(SyncActivity.agent_id) == agent.id)))
+        assert_that(files, equal_to([]))
         assert_that([(entry.kind, entry.folder_id) for entry in activity], equal_to([("restored", None)]))
 
 
