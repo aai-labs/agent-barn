@@ -31,13 +31,21 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Limits: Documented that failed/expired unfinished steps can currently retry automatically, dispatch deduplication does not guarantee exactly-once external effects, and the agreed uncertain-effect handling remains unimplemented. This documentation change does not change runtime behavior.
 - Verification: Compared the guide with the start/read/cancel services, runtime dispatch, DTOs and controller; checked Markdown structure and whitespace. No application tests were rerun for this prose-only correction.
 
+### 2026-10-23 — AF-415 — local independent-review corrections (not pushed)
+
+- Fixed: completion credentials stay out of prompts/CLI arguments; runtime identity plus an owning-Agent attempt fence authorizes file publication. S3 I/O holds only the file lock; finalization reacquires run then file locks and fences intervening cancellation/deletion.
+- Concurrency: overlapping publication/finalization uses nonblocking file locks; lock contention returns retryable 409 without failing another upload. The owning Agent trust boundary is explicit; there is no per-session isolation claim.
+- Bounded: 16 staged/READY files per attempt and 16,000 bytes of file references per run. Unsafe purge targets record attempts/backoff, and pin release preserves deletion retry timing.
+- Updated: RBAC runtime/background exceptions, attempt provenance, settled-run file polling, HTTP-only links, input validation and storage-disabled prompt behavior. Regression evidence and follow-up review are recorded with the artifact evidence.
+- Review: Opus 5.5 approved the final local working tree with no Required findings; its 15 review regressions passed against PostgreSQL/Garage. The proposed whole-Agent trust boundary still awaits maintainer agreement.
+- Delivery: these corrections remain local pending the maintainer's explicit agreement to push; PR #328 still contains the earlier revision.
+
 ### 2026-10-22 — AF-415 — [PR #328](https://github.com/aai-labs/agent-barn/pull/328) — shared Agent artifacts and file sharing
 
 - Changed: Additive artifact/reference schema, private Garage-compatible S3 adapter, credential-derived runtime identity and current attempt/initiator fences. Published bytes are immutable and verified before READY.
 - Delivered: one scoped CLI on both runtimes, ordinary chat publication, fresh signed links, Agent Files and workflow downloads alongside text results; active run pins and 30-day retention after release; deletion journals survive aggregate hard deletion.
 - Operations: storage remains optional for text-only work. Documented service-only bucket access, limits, URL bearer semantics, migration/guarded rollback, recovery and bounded purge CronJob. No production provisioning, merge or deployment.
 - Verification: see [evidence](../agent-artifacts/EVIDENCE.md), which distinguishes disposable real storage/runtime contracts from intercepted UI tests and unperformed live messaging/deployment acceptance.
-
 
 ### 2026-10-21 — AF-389 — PR preparation against latest staging
 

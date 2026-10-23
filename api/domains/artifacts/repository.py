@@ -1,4 +1,6 @@
-from collections.abc import Iterator
+import hmac
+import json
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -7,17 +9,19 @@ from uuid import UUID
 import sqlalchemy as sa
 from fastapi import HTTPException
 from injector import inject, singleton
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, col, select
 from sqlmodel.sql.expression import SelectOfScalar
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
+from api.domains.artifacts import config as artifact_config
 from api.domains.artifacts.credentials import runtime_token
 from api.domains.artifacts.models import Artifact, ArtifactCreate, ArtifactReference
 from api.domains.rbac.policy import AuthorizationScope
-from api.domains.workflows.models import Workflow, WorkflowVersion
-from api.domains.workflows.run_models import TERMINAL_STATES, WorkflowAttempt, WorkflowRun
+from api.domains.workflows.models import WorkflowVersion
+from api.domains.workflows.run_models import TERMINAL_STATES, WorkflowRun
 from api.domains.workflows.run_repository import WorkflowRunRepository
 from api.infrastructure.crypto import decrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -25,6 +29,13 @@ from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 def object_key(row: Artifact) -> str:
     return f"artifacts/{row.organization_id}/{row.agent_id}/{row.id}"
+
+
+class PublicationBusy(HTTPException):
+    """Retryable contention must never mark another publication's file as failed."""
+
+    def __init__(self) -> None:
+        super().__init__(409, "Artifact publication in progress; retry this artifact")
 
 
 @inject
@@ -36,8 +47,6 @@ class ArtifactRepository:
     config: Config
 
     def authenticate(self, token: str) -> Agent:
-        import hmac
-
         try:
             agent_id = UUID(token.split(".", 1)[0])
         except ValueError:
@@ -91,15 +100,6 @@ class ArtifactRepository:
             ).all()
             return list(rows), total
 
-    def _attempt(
-        self, session: Session, agent_id: UUID, attempt_id: UUID, token: str
-    ) -> tuple[WorkflowRun, WorkflowAttempt]:
-        run, attempt = self.workflows._bound(session, attempt_id, token)
-        workflow = session.get_one(Workflow, run.workflow_id)
-        if workflow.agent_id != agent_id:
-            raise HTTPException(404, "Workflow attempt not found")
-        return run, attempt
-
     def create(
         self,
         agent_id: UUID,
@@ -108,12 +108,44 @@ class ArtifactRepository:
         source: str,
         user_id: UUID | None,
         attempt_id: UUID | None,
-        token: str,
     ) -> Artifact:
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             run = attempt = None
             if attempt_id:
-                run, attempt = self._attempt(session, agent_id, attempt_id, token)
+                run, attempt = self.workflows.artifact_attempt(session, attempt_id, agent_id)
+                files = session.exec(
+                    select(Artifact).where(
+                        col(Artifact.run_id) == run.id, col(Artifact.state).in_(["UPLOADING", "READY"])
+                    )
+                ).all()
+                if sum(item.attempt_id == attempt_id for item in files) >= artifact_config.MAX_FILES_PER_ATTEMPT:
+                    raise HTTPException(
+                        409,
+                        f"Workflow attempt file limit reached ({artifact_config.MAX_FILES_PER_ATTEMPT}); combine files or use an archive",
+                    )
+                # Reserve context for text; names and UTF-8 width count towards the file budget.
+                entries = [
+                    {
+                        "artifact_id": str(item.id),
+                        "checksum": item.checksum,
+                        "filename": item.filename,
+                        "size": item.size,
+                    }
+                    for item in files
+                ]
+                entries.append(
+                    {
+                        "artifact_id": str(agent_id),
+                        "checksum": payload.checksum,
+                        "filename": payload.filename,
+                        "size": payload.size,
+                    }
+                )
+                if len(json.dumps(entries, ensure_ascii=False).encode()) > artifact_config.MAX_RUN_FILE_CONTEXT_BYTES:
+                    raise HTTPException(
+                        409,
+                        f"Workflow file-reference context limit reached ({artifact_config.MAX_RUN_FILE_CONTEXT_BYTES} bytes)",
+                    )
             agent = session.exec(
                 select(Agent).where(col(Agent.id) == agent_id, *agent_scope_predicates(scope))
             ).one_or_none()
@@ -141,32 +173,65 @@ class ArtifactRepository:
 
     @contextmanager
     def publication(
-        self, artifact_id: UUID, agent_id: UUID, scope: AuthorizationScope, token: str
+        self,
+        artifact_id: UUID,
+        agent_id: UUID,
+        scope: AuthorizationScope,
+        *,
+        runtime: bool,
+        revalidate: Callable[[], None],
     ) -> Iterator[Artifact]:
+        snapshot = self.get(artifact_id, agent_id, scope)
+        if snapshot.attempt_id:
+            if not runtime:
+                raise HTTPException(403, "Workflow publication requires the owning runtime credential")
+            with Session(self.delegate.engine) as admission:
+                self.workflows.artifact_attempt(admission, snapshot.attempt_id, agent_id, lock=False)
+        # Only the file lock crosses storage I/O. Cancel, completion and reconciliation
+        # can acquire the run lock while an upload is in flight.
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            snapshot = self.get(artifact_id, agent_id, scope)
-            if snapshot.attempt_id:
-                self._attempt(session, agent_id, snapshot.attempt_id, token)
-            row = session.exec(
-                self.scoped(agent_id, scope).where(col(Artifact.id) == artifact_id).with_for_update(of=Artifact)
-            ).one_or_none()
-            if row is None or row.state not in {"UPLOADING", "READY"}:
-                raise HTTPException(409, "Artifact is no longer publishable")
-            if row.state == "UPLOADING" and row.expires_at <= datetime.now(UTC):
-                raise HTTPException(409, "Upload expired")
+            row = self._publication_row(session, artifact_id, agent_id, scope)
             yield row
-            if row.attempt_id:
-                session.expire_all()
-                self._attempt(session, agent_id, row.attempt_id, token)
-            if row.state == "UPLOADING":
-                row.state, row.published_at = "READY", datetime.now(UTC)
-                row.expires_at = row.published_at + timedelta(days=self.config.artifact_retention_days)
-                if row.run_id:
-                    session.add(
-                        ArtifactReference(artifact_id=row.id, checksum=row.checksum, kind="run", owner_id=row.run_id)
-                    )
-                session.add(row)
             session.commit()
+        # Release the file lock before acquiring run -> file locks, matching settlement.
+        # An intervening deletion or attempt change fences finalization instead of
+        # publishing bytes that lost their owner/authority while S3 was being written.
+        revalidate()
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            if snapshot.attempt_id:
+                self.workflows.artifact_attempt(session, snapshot.attempt_id, agent_id)
+            finalized = self._publication_row(session, artifact_id, agent_id, scope)
+            if finalized.state == "UPLOADING":
+                finalized.state, finalized.published_at = "READY", datetime.now(UTC)
+                finalized.expires_at = finalized.published_at + timedelta(days=self.config.artifact_retention_days)
+                if finalized.run_id:
+                    session.add(
+                        ArtifactReference(
+                            artifact_id=finalized.id, checksum=finalized.checksum, kind="run", owner_id=finalized.run_id
+                        )
+                    )
+                session.add(finalized)
+            session.commit()
+            row.state, row.published_at, row.expires_at = finalized.state, finalized.published_at, finalized.expires_at
+
+    def _publication_row(
+        self, session: Session, artifact_id: UUID, agent_id: UUID, scope: AuthorizationScope
+    ) -> Artifact:
+        try:
+            row = session.exec(
+                self.scoped(agent_id, scope)
+                .where(col(Artifact.id) == artifact_id)
+                .with_for_update(of=Artifact, nowait=True)
+            ).one_or_none()
+        except OperationalError as exc:
+            if (getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)) == "55P03":
+                raise PublicationBusy() from exc
+            raise
+        if row is None or row.state not in {"UPLOADING", "READY"}:
+            raise HTTPException(409, "Artifact is no longer publishable")
+        if row.state == "UPLOADING" and row.expires_at <= datetime.now(UTC):
+            raise HTTPException(409, "Upload expired")
+        return row
 
     def failed(self, artifact_id: UUID) -> None:
         with Session(self.delegate.engine) as session:
@@ -212,10 +277,13 @@ class ArtifactRepository:
             for ref in refs:
                 run = session.get(WorkflowRun, ref.owner_id)
                 if run is None or run.state in TERMINAL_STATES:
+                    artifact = session.exec(
+                        select(Artifact).where(col(Artifact.id) == ref.artifact_id).with_for_update()
+                    ).one()
                     ref.released_at = now
                     session.add(ref)
-                    artifact = session.get_one(Artifact, ref.artifact_id)
-                    artifact.expires_at = now + timedelta(days=self.config.artifact_retention_days)
+                    if artifact.state == "READY":
+                        artifact.expires_at = now + timedelta(days=self.config.artifact_retention_days)
                     session.add(artifact)
             session.flush()
             pinned = sa.exists(
@@ -258,10 +326,10 @@ class ArtifactRepository:
             if row is None or row.state != "DELETING":
                 yield None
                 return
-            if row.bucket != self.config.artifact_s3_bucket or row.object_key != object_key(row):
-                raise ValueError("Unsafe artifact purge target")
             row.purge_attempts += 1
             try:
+                if row.bucket != self.config.artifact_s3_bucket or row.object_key != object_key(row):
+                    raise ValueError("Unsafe artifact purge target")
                 yield row
             except Exception:
                 row.expires_at = datetime.now(UTC) + timedelta(seconds=min(3600, 2 ** min(row.purge_attempts, 12)))

@@ -10,7 +10,7 @@ from injector import inject, singleton
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.artifacts.models import Artifact, ArtifactCreate, ArtifactLinkRead, ArtifactRead
-from api.domains.artifacts.repository import ArtifactRepository
+from api.domains.artifacts.repository import ArtifactRepository, PublicationBusy
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
@@ -31,9 +31,10 @@ class ArtifactService:
     config: Config
 
     def scope(self, agent_id: UUID, context: CurrentUserContext, write: bool = False) -> AuthorizationScope:
-        self.authorization.require_action(
-            context, agent_id, PermissionKey.AGENT_UPDATE
-        ) if write else self.authorization.require_visible(context, agent_id)
+        if write:
+            self.authorization.require_action(context, agent_id, PermissionKey.AGENT_UPDATE)
+        else:
+            self.authorization.require_visible(context, agent_id)
         return self.authorization.authorization_scope(
             context, PermissionKey.AGENT_UPDATE if write else PermissionKey.AGENT_READ
         )
@@ -54,7 +55,6 @@ class ArtifactService:
         *,
         user_id: UUID | None = None,
         attempt_id: UUID | None = None,
-        attempt_token: str = "",
     ) -> ArtifactRead:
         self.enabled()
         if payload.size > self.config.artifact_max_bytes:
@@ -67,11 +67,23 @@ class ArtifactService:
                 "workflow" if attempt_id else "human" if user_id else "chat",
                 user_id,
                 attempt_id,
-                attempt_token,
             )
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc
         return ArtifactRead.model_validate(row)
+
+    def upload_limit(
+        self, artifact_id: UUID, agent_id: UUID, scope: AuthorizationScope, *, runtime: bool = False
+    ) -> int:
+        self.enabled()
+        row = self.repository.get(artifact_id, agent_id, scope)
+        if row.attempt_id and not runtime:
+            raise HTTPException(403, "Workflow publication requires the owning runtime credential")
+        if row.state == "UPLOADING" and row.expires_at <= datetime.now(UTC):
+            raise HTTPException(409, "Upload expired")
+        if row.size > self.config.artifact_max_bytes:
+            raise HTTPException(413, "Artifact exceeds the configured file limit")
+        return row.size
 
     def publish(
         self,
@@ -80,14 +92,28 @@ class ArtifactService:
         scope: AuthorizationScope,
         content: bytes,
         *,
-        attempt_token: str = "",
         runtime_token: str | None = None,
         human_context: CurrentUserContext | None = None,
     ) -> ArtifactRead:
         self.enabled()
+
+        def revalidate() -> None:
+            # Check rotated/stopped runtime credentials again after the byte boundary.
+            if runtime_token is not None:
+                self.repository.authenticate(runtime_token)
+            if human_context is not None:
+                membership_id = human_context.require_current_user_organization().id
+                for permission in (PermissionKey.AGENT_READ, PermissionKey.AGENT_UPDATE):
+                    current_scope = self.authorization.membership_scope(membership_id, permission)
+                    if current_scope is None:
+                        raise HTTPException(403, "Publication authority was revoked")
+                    self.repository.get(artifact_id, agent_id, current_scope)
+
         admitted = False
         try:
-            with self.repository.publication(artifact_id, agent_id, scope, attempt_token) as row:
+            with self.repository.publication(
+                artifact_id, agent_id, scope, runtime=runtime_token is not None, revalidate=revalidate
+            ) as row:
                 admitted = True
                 if (
                     len(content) > self.config.artifact_max_bytes
@@ -97,17 +123,9 @@ class ArtifactService:
                     raise HTTPException(422, "File bytes do not match the declared size and SHA-256")
                 if row.state != "READY":
                     self.storage.put(row, content)
-                # Check rotated/stopped runtime credentials again after the byte boundary.
-                if runtime_token is not None:
-                    self.repository.authenticate(runtime_token)
-                if human_context is not None:
-                    membership_id = human_context.require_current_user_organization().id
-                    for permission in (PermissionKey.AGENT_READ, PermissionKey.AGENT_UPDATE):
-                        current_scope = self.authorization.membership_scope(membership_id, permission)
-                        if current_scope is None:
-                            raise HTTPException(403, "Publication authority was revoked")
-                        self.repository.get(artifact_id, agent_id, current_scope)
             return ArtifactRead.model_validate(row)
+        except PublicationBusy:
+            raise
         except (HTTPException, WorkflowConflict) as exc:
             if admitted:
                 self.repository.failed(artifact_id)

@@ -95,6 +95,18 @@ Subordinate repositories must join or use an accessible-Agent query so alternate
 
 Agent-authenticated gateway traffic has no user Membership. The memory gateway instead resolves the hash of a per-start Agent credential to one undeleted, running, memory-enabled Agent and its existing Organization, then reads only that Agent's same-Organization Memory Grants. Client bank names and tags cannot choose a different tenant or identity. Organization Memory grants permit either read only or read and write; both add a strict `scope:team` scope to recall, and other-Agent grants add exact private scopes only. Shared authorship grants no private read access. The Agent Memory tab requires human `activity.read` and includes Organization records only with the viewed Agent's current Organization grant; revocation hides its own shared contributions too. The explicit writer endpoint requires a live write grant. User-facing memory settings and grants retain the Organization and Agent Permission checks above. See [`Agent Memory`](../agent-memory.md#use-the-memory-gateway) for the machine-request contract.
 
+Agent artifact runtime traffic (`/artifact-runtime/v1`) also has no human Membership.
+A purpose-separated credential derived from the per-start Agent secret resolves one
+undeleted, running Agent and its Organization. Runtime callers cannot choose another
+owner, bucket or key. Workflow publication additionally fences the supplied attempt ID
+against that owning Agent, current generation/state/deadline and initiating Membership
+authority. Completion credentials never enter model prompts or file-tool arguments.
+The entire owning Agent is the runtime trust boundary: all of its sessions share
+that identity and may publish into its current workflow attempts. Attempt IDs are
+non-secret provenance, not per-session capabilities; this is not session isolation.
+Human artifact reads require current `agent.read` and scoped visibility; publication
+and deletion require `agent.update`. See [Agent artifacts](../agent-artifacts.md).
+
 Playbook Extractions read one Agent's transcripts and write an Organization Skill, so they need Agent `activity.read` on the source Agent and Organization `skill.manage`; in practice Owners and Admins. Publishing the resulting Skill makes content derived from that Agent visible to every Member through `skill.read`; the reviewing Owner or Admin is the control. The worker runs a person's request, not background work: when a run starts it re-checks that the requesting Membership still holds both Permissions on the undeleted source Agent. See [`Playbooks`](../playbooks.md#authorization).
 
 Agent Barn Telegram traffic has no user Membership either. Two callers reach it: Telegram, through the shared bot the Communications process polls, and Agent pods, through the Bot API proxy. Neither carries a session, so there is no Active Organization to scope against. The tenant comes from persisted rows instead, and no caller-supplied value can choose it.
@@ -117,6 +129,13 @@ durable deletion tombstones. It derives the bank and document namespace from per
 Agent/Organization IDs, refuses live or mismatched targets, and exposes no router.
 Only the authorized Agent deletion transaction stages new tombstones. See
 [Deletion cleanup](../agent-memory.md#deletion-cleanup).
+
+The artifact purge's `ArtifactRepository.cleanup_candidates` and `purge_target`
+methods use the same narrow operator-only background exception. They expose no router
+and only inspect persisted ownership, references, deadlines and canonical tenant keys.
+They preserve failed deletion records across owner deletion and refuse mismatched
+bucket/key targets with recorded retry backoff. Product paths retain their scoped Agent
+joins. See [Artifact retention and recovery](../agent-artifacts.md#retention-deletion-and-recovery).
 
 HTTP semantics remain deliberate:
 

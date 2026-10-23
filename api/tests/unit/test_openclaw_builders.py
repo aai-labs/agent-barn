@@ -439,8 +439,26 @@ def test_gateway_config_allows_native_message_tool() -> None:
 
 def test_artifact_command_and_instructions_are_available_without_memory() -> None:
     config_map = build_config_map(
-        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "bootstrap", "heartbeat"
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "bootstrap",
+        "heartbeat",
+        artifacts_enabled=True,
     )
     assert "agentbarn_artifacts.py" in config_map.data
     assert "exec python3 /app/config/agentbarn_artifacts.py" in config_map.data["agentbarn-artifacts"]
     assert "/usr/local/bin/agentbarn-artifacts upload" in config_map.data["AGENTS.md"]
+
+
+def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
+    config_map = build_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "bootstrap", "heartbeat"
+    )
+    assert "Files and download links" not in config_map.data["AGENTS.md"]

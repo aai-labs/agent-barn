@@ -12,7 +12,7 @@ import {
   type ArtifactLink,
 } from "../schemas";
 
-export function useArtifacts(agentId: string, page: number, runId?: string, stepId?: string) {
+export function useArtifacts(agentId: string, page: number, runId?: string, stepId?: string, polling = false) {
   const organizationId = useOrganizationContext().selectedOrganization?.id ?? "";
   const base = `${useOrganizationApiBase()}/agents/${agentId}/artifacts`;
   const parameters = new URLSearchParams({ page: String(page) });
@@ -25,7 +25,7 @@ export function useArtifacts(agentId: string, page: number, runId?: string, step
     }),
     enabled: Boolean(organizationId && agentId),
     refetchOnWindowFocus: true,
-    refetchInterval: (query) => runId && !query.state.error ? 5000 : false,
+    refetchInterval: (query) => polling && !query.state.error ? 5000 : false,
     queryFn: async () => (
       await api.get<ArtifactList>(`${base}?${parameters}`, { schema: ArtifactListSchema })
     ).data,

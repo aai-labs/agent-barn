@@ -151,7 +151,6 @@ def test_workflow_exact_handoff_pins_retention_and_cancel_keeps_files(storage):
         response, _, _ = start(context, saved)
         run_id = response.json()["id"]
         repo, current, token = attempt(context, run_id)
-        headers["X-Workflow-Token"] = token
         path = "/artifact-runtime/v1/artifacts"
         row = context.client.post(path + f"?attempt_id={current.id}", headers=headers, json=metadata()).json()
         response = context.client.put(path + f"/{row['id']}/content", headers=headers, content=CONTENT)
@@ -197,7 +196,6 @@ def test_stale_attempt_cannot_publish_orphan_bytes(storage):
         headers = runtime_auth(context)
         response, _, _ = start(context)
         repo, current, token = attempt(context, response.json()["id"])
-        headers["X-Workflow-Token"] = token
         path = "/artifact-runtime/v1/artifacts"
         row = context.client.post(path + f"?attempt_id={current.id}", headers=headers, json=metadata()).json()
         repo.complete(current.id, token, AttemptResult(summary="Done", criteria_met=True))
@@ -329,6 +327,7 @@ def test_incomplete_upload_cleanup_and_unsafe_key_refusal(storage):
         with Session(context.postgres_delegate.engine) as session:
             row = session.get_one(Artifact, UUID(incomplete["id"]))
             row.object_key = object_key(row)
+            row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
             session.add(row)
             session.commit()
         assert_that(context.injector.get(ArtifactService).purge(), equal_to(1))
@@ -458,8 +457,7 @@ def test_attempt_expiring_during_real_storage_cannot_become_ready(storage, monke
     with given([set_env_variable(env), *_GIVEN]) as context:
         headers = runtime_auth(context)
         response, _, _ = start(context)
-        _, active, token = attempt(context, response.json()["id"])
-        headers["X-Workflow-Token"] = token
+        _, active, _ = attempt(context, response.json()["id"])
         path = "/artifact-runtime/v1/artifacts"
         row = context.client.post(path + f"?attempt_id={active.id}", headers=headers, json=metadata()).json()
         with Session(context.postgres_delegate.engine) as session:
@@ -521,7 +519,8 @@ def test_concurrent_finalization_preserves_immutable_garage_bytes(storage):
                     lambda _: context.client.put(path + "/content", headers=auth(context), content=CONTENT), range(2)
                 )
             )
-        assert_that([response.status_code for response in responses], equal_to([200, 200]))
+        assert_that(all(response.status_code in {200, 409} for response in responses), is_(True))
+        assert_that(any(response.status_code == 200 for response in responses), is_(True))
         changed = context.client.put(path + "/content", headers=auth(context), content=b"replacement")
         assert_that(changed.status_code, equal_to(422))
         link = context.client.get(path + "/download-link", headers=auth(context)).json()

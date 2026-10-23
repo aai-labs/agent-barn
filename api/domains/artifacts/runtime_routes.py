@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.concurrency import run_in_threadpool
 
@@ -10,7 +10,6 @@ from api.domains.artifacts.routes import Service, file_body
 
 router = APIRouter(prefix="/artifact-runtime/v1", include_in_schema=False)
 Credential = Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())]
-AttemptToken = Annotated[str, Header(alias="X-Workflow-Token")]
 
 
 @router.post("/artifacts", status_code=201)
@@ -19,25 +18,22 @@ def create_artifact(
     credential: Credential,
     service: Service,
     attempt_id: UUID | None = None,
-    attempt_token: AttemptToken = "",
 ):
     agent_id, scope = service.runtime_scope(credential.credentials)
-    return service.create(agent_id, scope, payload, attempt_id=attempt_id, attempt_token=attempt_token)
+    return service.create(agent_id, scope, payload, attempt_id=attempt_id)
 
 
 @router.put("/artifacts/{artifact_id}/content")
-async def publish_artifact(
-    artifact_id: UUID, request: Request, credential: Credential, service: Service, attempt_token: AttemptToken = ""
-):
+async def publish_artifact(artifact_id: UUID, request: Request, credential: Credential, service: Service):
     agent_id, scope = await run_in_threadpool(service.runtime_scope, credential.credentials)
-    content = await file_body(request, service.config.artifact_max_bytes)
+    limit = await run_in_threadpool(service.upload_limit, artifact_id, agent_id, scope, runtime=True)
+    content = await file_body(request, limit)
     return await run_in_threadpool(
         service.publish,
         artifact_id,
         agent_id,
         scope,
         content,
-        attempt_token=attempt_token,
         runtime_token=credential.credentials,
     )
 

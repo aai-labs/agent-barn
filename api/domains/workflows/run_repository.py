@@ -284,9 +284,28 @@ class WorkflowRunRepository:
             attempt.capability_hash, hashlib.sha256(token.encode()).hexdigest()
         ):
             raise WorkflowConflict("Invalid workflow attempt capability")
-        run = session.exec(select(WorkflowRun).where(col(WorkflowRun.id) == attempt.run_id).with_for_update()).one()
-        # Another request may have changed the attempt while this transaction
-        # waited for its run lock; never admit against the identity-map snapshot.
+        return self._fenced_attempt(session, attempt, lock=True)
+
+    def artifact_attempt(
+        self, session: Session, attempt_id: UUID, agent_id: UUID, *, lock: bool = True
+    ) -> tuple[WorkflowRun, WorkflowAttempt]:
+        """Publication authority comes from an authenticated owning Agent, never the completion bearer."""
+        attempt = session.get(WorkflowAttempt, attempt_id)
+        if attempt is None:
+            raise WorkflowConflict("Workflow attempt not found")
+        run = session.get_one(WorkflowRun, attempt.run_id)
+        workflow = session.get_one(Workflow, run.workflow_id)
+        if workflow.agent_id != agent_id:
+            raise WorkflowConflict("Workflow attempt belongs to another Agent")
+        return self._fenced_attempt(session, attempt, lock=lock)
+
+    def _fenced_attempt(
+        self, session: Session, attempt: WorkflowAttempt, *, lock: bool
+    ) -> tuple[WorkflowRun, WorkflowAttempt]:
+        query = select(WorkflowRun).where(col(WorkflowRun.id) == attempt.run_id)
+        if lock:
+            query = query.with_for_update()
+        run = session.exec(query.execution_options(populate_existing=True)).one()
         session.refresh(attempt)
         if (
             run.state != "RUNNING"

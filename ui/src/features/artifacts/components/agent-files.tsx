@@ -7,17 +7,18 @@ import { useArtifacts } from "../hooks/use-artifacts";
 import type { Artifact } from "../schemas";
 
 function provenance(file: Artifact) {
-  if (file.source === "workflow") return `Workflow run ${file.runId?.slice(0, 8)}`;
+  if (file.source === "workflow") return `Workflow run ${file.runId?.slice(0, 8)} · attempt ${file.attemptId?.slice(0, 8) ?? "unknown"}`;
   return file.source === "human" ? "Uploaded by a person" : "Chat";
 }
 
-export function AgentFiles({ agentId, runId, stepId }: {
+export function AgentFiles({ agentId, runId, stepId, polling = false }: {
   agentId: string;
   runId?: string;
   stepId?: string;
+  polling?: boolean;
 }) {
   const [page, setPage] = useState(1);
-  const { files, download } = useArtifacts(agentId, page, runId, stepId);
+  const { files, download } = useArtifacts(agentId, page, runId, stepId, polling);
   if (files.error) return (
     <AppErrorState error={files.error} title="Files are unavailable" onRetry={() => void files.refetch()} />
   );
