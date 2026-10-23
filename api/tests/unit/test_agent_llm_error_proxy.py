@@ -57,6 +57,11 @@ SPEND_LIMIT_MESSAGE = (
     "A model spend limit has been reached, so this agent cannot reply right now. "
     "Contact your administrator to raise it or wait for the limit to renew."
 )
+# On credit there is no limit beneath the balance, so the reply says what to do about it.
+CREDIT_MESSAGE = (
+    "This organization has used all its credit, so this agent cannot reply right now. "
+    "Ask the organization's owner to add more credit."
+)
 UNKNOWN_MODEL_BODY = {"error": {"message": "model 'nope' not found", "type": "invalid_request_error"}}
 
 _COUNT_START = """
@@ -185,7 +190,7 @@ def _launch(command: list[str], env_for: Callable[[], tuple[dict[str, str], int]
 
 
 @contextmanager
-def _proxy(runtime: str, target: str):
+def _proxy(runtime: str, target: str, extra_env: dict[str, str] | None = None):
     if runtime == "hermes":
         command = [sys.executable, str(_HERMES)]
     else:
@@ -201,6 +206,7 @@ def _proxy(runtime: str, target: str):
             "HEALTHZ_PORT": str(_free_port()),
             "LITELLM_PROXY_TARGET": target,
             "LLM_PROXY_PORT": str(proxy_port),
+            **(extra_env or {}),
         }
         return env, proxy_port
 
@@ -248,6 +254,31 @@ def test_a_budget_rejection_is_rewritten_for_the_user(runtime, upstream_status):
     # whoever is talking to the Agent.
     assert_that(message, not_(contains_string("01a0a4cc")))
     assert_that(message, not_(contains_string("Team=")))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_running_out_of_credit_says_to_add_more_and_is_recorded_as_such(runtime, tmp_path):
+    marker = tmp_path / "marker.json"
+    extra = {"AGENTBARN_SPEND_LIMIT_KIND": "credit", "AGENTBARN_LLM_ERROR_MARKER": str(marker)}
+    with _upstream(400, BUDGET_BODY) as target, _proxy(runtime, target, extra) as proxy:
+        status, body = _post(proxy)
+        recorded = json.loads(marker.read_text())
+    # The same ordinary reply as a spent limit, worded for credit.
+    assert_that(status, equal_to(200))
+    assert_that(body["choices"][0]["message"]["content"], equal_to(CREDIT_MESSAGE))
+    assert_that(recorded["code"], equal_to("CREDIT_EXHAUSTED"))
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_a_spent_limit_is_recorded_as_such_off_credit(runtime, tmp_path):
+    marker = tmp_path / "marker.json"
+    with (
+        _upstream(400, BUDGET_BODY) as target,
+        _proxy(runtime, target, {"AGENTBARN_LLM_ERROR_MARKER": str(marker)}) as proxy,
+    ):
+        _post(proxy)
+        recorded = json.loads(marker.read_text())
+    assert_that(recorded["code"], equal_to("SPEND_LIMIT_REACHED"))
 
 
 @pytest.mark.parametrize("runtime", ["hermes", "openclaw"])

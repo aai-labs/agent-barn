@@ -116,6 +116,22 @@ WEB_APP_URL=http://agentbarn.local
 # "<WEB_APP_URL>/api/v1/integrations/google/callback" as authorized redirect URIs.
 GOOGLE_CLOUD_CLIENT_ID=
 GOOGLE_CLOUD_CLIENT_SECRET=
+# How many Agents an Organization that is not a trial may run, unless a Platform
+# Administrator sets its own, until a Platform Administrator saves a default on the
+# platform settings page (which then wins). Empty is 10. The deploy workflows read
+# ORGANIZATION_DEFAULT_AGENT_LIMIT, STAGING_ORGANIZATION_DEFAULT_AGENT_LIMIT and
+# PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT (GitHub Variables) for their environments.
+ORGANIZATION_DEFAULT_AGENT_LIMIT=
+# Buying credit with Stripe. A Platform Administrator turns payments on in the platform
+# Billing settings, which needs both secrets; a webhook secret without the secret key
+# stops the API booting. The webhook is served whenever its secret is set, payments on
+# or off. The deploy workflows read the STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET GitHub
+# Secrets (prefixed STAGING_ or PUBLIC_ for those environments). The webhook endpoint is
+# <API host>/api/v1/billing/stripe/webhook, listening for checkout.session.completed,
+# checkout.session.async_payment_succeeded, refund.created, refund.updated, refund.failed,
+# charge.dispute.funds_withdrawn and charge.dispute.funds_reinstated.
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
 
 # ── OneDrive sync ───────────────────────────────────────────────────
 # Multi-tenant Microsoft Entra app for Organization OneDrive sync. Leave blank to

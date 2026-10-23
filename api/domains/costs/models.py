@@ -74,6 +74,14 @@ class CostRecord(BaseModel, table=True):
             "occurred_at",
             postgresql_where=sa.text("is_memory IS TRUE"),
         ),
+        # Healed spend is summed over an Organization's whole history on every budget
+        # check while it runs on credit; only the few healed rows are indexed.
+        sa.Index(
+            "ix_cost_record_healed_org_occurred",
+            "organization_id",
+            "occurred_at",
+            postgresql_where=sa.text("healed_at IS NOT NULL"),
+        ),
         sa.Index("ix_cost_record_agent_occurred", "agent_id", "occurred_at"),
         sa.Index("ix_cost_record_occurred_at", "occurred_at"),
         sa.Index(

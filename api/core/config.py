@@ -9,6 +9,8 @@ from pydantic import Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+# How many Agents an Organization that isn't a trial may run when nothing else says.
+DEFAULT_ORGANIZATION_AGENT_LIMIT = 10
 load_dotenv(ROOT_ENV_PATH, override=False)
 
 DEFAULT_POSTHOG_PROJECT_TOKEN = "phc_AjhfVLSegE5yXsARYYJsGJDC3bwBPdKfUD3dLvoLjbw7"
@@ -73,7 +75,8 @@ class Config(BaseSettings):
     litellm_secret_name: str = "litellm"
     agent_litellm_base_url: str = ""
     agent_image_pull_secret: str = ""
-    workflow_authoring_enabled: bool = False
+    # Callback address Agent pods use to report workflow step outcomes.
+    workflow_runtime_base_url: str = "http://agentbarn-api:8000/workflow-runtime/v1"
     agent_default_model: str = "litellm/openrouter/z-ai/glm-5.2"
     organization_creation_limit: int = 5
     # Percentages of an Organization's limit at which it is notified. Empty falls back
@@ -85,6 +88,15 @@ class Config(BaseSettings):
     # divides its own allowance among its Agents.
     organization_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
     agent_default_llm_budget_usd: float = Field(ge=0, allow_inf_nan=False)
+    # Buying credit with Stripe. A Platform Administrator turns payments on in the billing
+    # settings, which needs both. The webhook is served whenever its secret is set, so
+    # payments made before payments were turned off, and their refunds and disputes, still land.
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    # How many Agents an Organization that is not a trial may run, unless a Platform
+    # Administrator sets its own limit, until a Platform Administrator saves a default
+    # on the platform settings page. Unset (or empty) is 10.
+    organization_default_agent_limit: int = Field(default=DEFAULT_ORGANIZATION_AGENT_LIMIT, ge=1)
     # The API's own public base URL, used to show callers where to reach an Agent
     # Webhook or a Teams Connection. Deployments set it from API_HOST; locally it is
     # derived below, because the host port is the only thing that makes it up.
@@ -247,6 +259,28 @@ class Config(BaseSettings):
         if self.agent_default_llm_budget_usd > self.organization_default_llm_budget_usd:
             raise ValueError("AGENT_DEFAULT_LLM_BUDGET_USD must not exceed ORGANIZATION_DEFAULT_LLM_BUDGET_USD")
         return self
+
+    @model_validator(mode="after")
+    def webhook_secret_has_the_secret_key(self) -> Self:
+        """The webhook is served whenever its secret is set, payments on or off, and it
+        reads each refund's status from Stripe: without the key every refund would fail."""
+        if (self.stripe_webhook_secret or "").strip() and not (self.stripe_secret_key or "").strip():
+            raise ValueError("STRIPE_WEBHOOK_SECRET needs STRIPE_SECRET_KEY")
+        return self
+
+    @property
+    def payments_configured(self) -> bool:
+        """Whether this deployment has what payments need, so they may be turned on:
+        without both keys, every purchase or every payment it confirms would fail."""
+        return bool((self.stripe_secret_key or "").strip() and (self.stripe_webhook_secret or "").strip())
+
+    @field_validator("organization_default_agent_limit", mode="before")
+    @classmethod
+    def empty_agent_limit_is_the_default(cls, value: object) -> object:
+        """Deployments pass the variable through even when it is not set."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return DEFAULT_ORGANIZATION_AGENT_LIMIT
+        return value
 
     @field_validator("organization_llm_budget_alert_thresholds", mode="before")
     @classmethod

@@ -2,6 +2,7 @@ import fnmatch
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -31,7 +32,9 @@ from api.domains.events.catalog import (
 from api.domains.onboarding.settings_service import TrialSettingsService
 from api.domains.organizations.exceptions import OrganizationCreationLimitReached
 from api.domains.organizations.llm_budget_service import OrganizationLlmBudgetService
+from api.domains.organizations.lookup import OrganizationAgentLimit
 from api.domains.organizations.models import (
+    CreditGrantKind,
     Organization,
     OrganizationCreate,
     OrganizationFilter,
@@ -41,8 +44,10 @@ from api.domains.organizations.models import (
     PlatformOrganizationRead,
 )
 from api.domains.organizations.repository import OrganizationRepository
+from api.domains.organizations.settings_service import OrganizationSettingsService
 from api.domains.rbac.catalog import ORG_OWNER_ONLY_ROLES, PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
+from api.infrastructure.litellm.client import ONE_OFF_BUDGET_WINDOW
 from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 logger = logging.getLogger(__name__)
@@ -70,6 +75,7 @@ class OrganizationService:
     agent_repository: AgentRepository
     memory_keys: MemoryKeyRepository
     trial_settings: TrialSettingsService
+    organization_settings: OrganizationSettingsService
 
     def get_organization(self, organization_id: UUID, context: CurrentUserContext) -> OrganizationRead:
         # Any member (or a platform administrator in explicit Organization context) may
@@ -82,11 +88,15 @@ class OrganizationService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
             )
-        if organization.is_trial:
-            organization.trial_agent_limit = self.trial_settings.agent_limit()
-            organization.trial_agent_limit_reached = (
-                self.agent_repository.count_active_by_org(organization_id) >= organization.trial_agent_limit
+        # The read carries the Organization's own limit; members see the one in force.
+        organization.agent_limit = self._agent_limit_in_force(organization.agent_limit, organization.is_trial)
+        if organization.agent_limit is not None:
+            organization.agent_limit_reached = (
+                self.agent_repository.count_active_by_org(organization_id) >= organization.agent_limit
             )
+            if organization.is_trial:
+                organization.trial_agent_limit = organization.agent_limit
+                organization.trial_agent_limit_reached = organization.agent_limit_reached
         return organization
 
     def get_platform_organization(self, organization_id: UUID) -> PlatformOrganizationRead:
@@ -99,7 +109,13 @@ class OrganizationService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Organization {organization_id} not found",
             )
+        organization.agent_limit_in_force = self._agent_limit_in_force(organization.agent_limit, organization.is_trial)
         return organization
+
+    def _agent_limit_in_force(self, own: int | None, is_trial: bool) -> int | None:
+        return OrganizationAgentLimit(own=own, is_trial=is_trial).in_force(
+            trial_limit=self.trial_settings.agent_limit, default=self.organization_settings.default_agent_limit
+        )
 
     @staticmethod
     def _bare_model(pattern: str) -> str:
@@ -198,8 +214,8 @@ class OrganizationService:
         still_on_trial = actor.user.signed_up_at is not None and actor.user.trial_ended_at is None
         if still_on_trial or self.organization_repository.owns_active_trial(actor.user.id):
             # Another Organization would be spend outside the trial's limits, including
-            # after deleting the trial. Once a Platform Administrator ends the trial, its
-            # owner is an ordinary user.
+            # after deleting the trial. Once the trial ends (a purchase, or a Platform
+            # Administrator), its owner creates Organizations that run on credit.
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Trial accounts can't create more organizations.",
@@ -213,6 +229,46 @@ class OrganizationService:
             created_by_user_id=actor.user.id,
             allowed_models=allowed_models,
         )
+        # With self-signup on, only accounts a Platform Administrator set up spend the
+        # platform's budget. Everyone else (signed up themselves, or invited by an
+        # Organization, which a trial's owner can do with an address of their own) pays
+        # for what their Organizations spend: each runs on credit, starting with none.
+        # Without self-signup every account traces back to a Platform Administrator or an
+        # Organization they set up, so there is nothing to close.
+        policy = self.trial_settings.signup_policy()
+        on_credit = policy.self_signup_enabled and not (
+            actor.user.is_platform_admin or actor.user.platform_provisioned_at is not None
+        )
+        # Their first Organization of their own is a trial when their address has never
+        # had one: an invited member gets the trial they'd have had by signing up. Someone
+        # who signed themselves up has had theirs, whatever the record says.
+        email = actor.user.email
+        trial = on_credit and actor.user.signed_up_at is None and not self._has_had_trial(email)
+        opening_credit = Decimal(0)
+        if on_credit:
+            if trial:
+                opening_credit = Decimal(str(policy.credit_usd))
+                organization.is_trial = True
+            organization.llm_budget_usd = float(opening_credit)
+            organization.llm_budget_duration = ONE_OFF_BUDGET_WINDOW
+
+        def admit_trial(session: Session) -> None:
+            # Under the lock sign-up takes too, so two trials can't take the last place.
+            if self.trial_settings.trials_full(session):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No free trials are available right now. Try again later.",
+                )
+            # Looked up before the lock: a sign-up with the same inbox, or this request
+            # sent twice, may have taken the address's trial since. Trying again
+            # creates the Organization on credit.
+            if self.trial_settings.has_had_trial(email, session):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Your organization couldn't be created. Try again.",
+                )
+            self.trial_settings.record_trial(email, session)
+
         try:
             # Organization creation and the creator's Owner Membership are one
             # transaction, including the concurrency-safe quota check.
@@ -221,6 +277,9 @@ class OrganizationService:
                 actor.user.id,
                 config.organization_creation_limit,
                 ActorIdentity(type=ActorIdentityType.USER, id=actor.user.id),
+                opening_credit_usd=opening_credit if on_credit else None,
+                opening_credit_kind=CreditGrantKind.TRIAL if trial else CreditGrantKind.ADJUSTMENT,
+                in_transaction=admit_trial if trial else None,
             )
         except OrganizationCreationLimitReached as error:
             raise HTTPException(
@@ -239,6 +298,47 @@ class OrganizationService:
                 detail="Failed to load organization",
             )
         return organization_read
+
+    def _has_had_trial(self, email: str) -> bool:
+        with Session(self.organization_repository.delegate.engine) as session:
+            return self.trial_settings.has_had_trial(email, session)
+
+    def set_agent_limit(
+        self, organization_id: UUID, agent_limit: int | None, context: CurrentUserContext
+    ) -> PlatformOrganizationRead:
+        """Set how many Agents an Organization may run; None returns it to the default.
+        Agents already running are kept: a lower limit only stops new hires."""
+        context.require_platform_admin()
+        result = self.organization_repository.set_agent_limit_with_event(
+            organization_id,
+            agent_limit,
+            actor=resolve_actor_identity(context, organization_id),
+            actor_display=context.user.full_name or context.user.email,
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Organization {organization_id} not found"
+            )
+        self.event_delivery_dispatcher.enqueue_immediate(result[1])
+        return self.get_platform_organization(organization_id)
+
+    def convert_trial(self, organization_id: UUID, *, actor: ActorIdentity, actor_display: str) -> bool:
+        """Make a trial an ordinary Organization because it bought credit.
+
+        System-initiated, so no permission check. Unlike a Platform Administrator ending
+        it, the Organization stays on credit: its ledger and ceiling are untouched, and
+        an expired trial is expired no longer. False when it was not a trial.
+        """
+        organization = self.organization_repository.get(organization_id)
+        if organization is None or not organization.is_trial:
+            return False
+        result = self.organization_repository.end_trial_with_event(
+            organization_id, actor=actor, actor_display=actor_display
+        )
+        if result is None:
+            return False
+        self.event_delivery_dispatcher.enqueue_immediate(result[1])
+        return True
 
     def end_trial(
         self, organization_id: UUID, data: OrganizationTrialEnd, context: CurrentUserContext

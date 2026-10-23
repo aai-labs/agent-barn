@@ -324,7 +324,7 @@ def test_a_concurrent_hire_filling_the_trial_slot_never_creates_a_duplicate(can_
                 )
             else:
                 assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT), response.text)
-                assert_that(response.json(), has_entries(detail="Trial organizations can have one agent."))
+                assert_that(response.json(), has_entries(detail="This organization can have one agent."))
             assert_that(
                 context.injector.get(AgentRepository).count_active_by_org(first["organization_id"]), equal_to(1)
             )

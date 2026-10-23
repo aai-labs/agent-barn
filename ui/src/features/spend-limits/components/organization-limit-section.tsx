@@ -18,6 +18,7 @@ import {
   formatUsd,
   parseAmount,
   periodLabel,
+  runsOnCredit,
   windowLabel,
   zeroNotice,
 } from "@/features/organizations/spend-limit";
@@ -55,6 +56,7 @@ export function OrganizationLimitSection({ editing, onEdit }: { editing: boolean
   }
 
   const per = windowLabel(budget.window);
+  const onCredit = runsOnCredit(budget.window);
   // Empty means "follow the maximum", the same rule as the default Agent limit.
   const value = amount ?? (budget.ownLimitUsd == null ? "" : String(budget.ownLimitUsd));
   const error_ = amountError(value, { max: budget.ceilingUsd });
@@ -86,7 +88,7 @@ export function OrganizationLimitSection({ editing, onEdit }: { editing: boolean
     <SettingsSection
       title="Organization limit"
       description="The most your organization can spend on model calls."
-      canEdit={budget.canManage}
+      canEdit={budget.canManage && !onCredit}
       editing={editing}
       onEdit={onEdit}
       onApply={async () => {
@@ -153,23 +155,36 @@ export function OrganizationLimitSection({ editing, onEdit }: { editing: boolean
           )}
         </div>
       ) : (
+        <div className="flex flex-col gap-4">
+          {onCredit && (
+            <p className="m-0 text-[0.88rem]" style={{ color: "var(--ink-2)" }}>
+              Your Agents can spend all of your organization&apos;s credit.
+            </p>
+          )}
         <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
-          <Fact label="Limit in force">
+          <Fact label={onCredit ? "Credit" : "Limit in force"}>
             {formatUsd(budget.limitUsd)} {per}
           </Fact>
-          <Fact label="Set by">{budget.ownLimitUsd == null ? "The platform" : "This organization"}</Fact>
+          {!onCredit && (
+            <Fact label="Set by">{budget.ownLimitUsd == null ? "The platform" : "This organization"}</Fact>
+          )}
           <Fact label={`Spent ${periodLabel(budget.window)}`}>
             <span style={{ color: budget.state === "exhausted" ? "var(--err)" : undefined }}>
               {budget.spendUsd == null
                 ? "Not available yet"
-                : `${formatUsage(budget.spendUsd, budget.limitUsd)}${budget.state === "exhausted" ? " — limit reached" : ""}`}
+                : `${formatUsage(budget.spendUsd, budget.limitUsd)}${budget.state === "exhausted" ? (onCredit ? " — credit used up" : " — limit reached") : ""}`}
             </span>
           </Fact>
-          <Fact label="Renews">{budget.renewsAt ? formatRenewal(budget.renewsAt) : "—"}</Fact>
-          <Fact label="Most you are allowed">
-            {formatUsd(budget.ceilingUsd)} {per}
-          </Fact>
+          {!onCredit && (
+            <>
+              <Fact label="Renews">{budget.renewsAt ? formatRenewal(budget.renewsAt) : "—"}</Fact>
+              <Fact label="Most you are allowed">
+                {formatUsd(budget.ceilingUsd)} {per}
+              </Fact>
+            </>
+          )}
         </dl>
+        </div>
       )}
     </SettingsSection>
   );
