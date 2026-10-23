@@ -10,7 +10,7 @@ import {
   useConnectSyncProvider,
   useDisconnectSyncProvider,
 } from "../hooks/use-sync-provider-actions";
-import { LOCATION_PICKER, type SyncProvider } from "../schemas";
+import { FILE_SYNC, LOCATION_PICKER, type SyncProvider } from "../schemas";
 import { SyncLocationPicker } from "./sync-location-picker";
 import { SyncProviderIcon } from "./sync-provider-icon";
 
@@ -35,6 +35,9 @@ export function SyncProviderRow({ provider, canManage }: { provider: SyncProvide
   const locationName = provider.connection?.locationName ?? null;
   const noun = provider.locationNoun ?? "location";
   const hasPicker = provider.capabilities.includes(LOCATION_PICKER) && provider.locationNoun !== null;
+  const afterDisconnect = provider.capabilities.includes(FILE_SYNC)
+    ? "Each Agent's folder inside the Agent Barn folder is deleted first. The Agent Barn folder stays, and the Agents keep their own files."
+    : "The Agent Barn folder and its files stay where they are.";
 
   if (!provider.available) {
     return (
@@ -184,7 +187,7 @@ export function SyncProviderRow({ provider, canManage }: { provider: SyncProvide
         open={confirmingDisconnect}
         onOpenChange={setConfirmingDisconnect}
         title={`Disconnect ${provider.displayName}?`}
-        description={`You'll sign in to ${provider.displayName} again so Agent Barn's access can be removed. The Agent Barn folder and its files stay where they are.`}
+        description={`You'll sign in to ${provider.displayName} again so Agent Barn's access can be removed. ${afterDisconnect}`}
         confirmLabel="Disconnect"
         variant="destructive"
         onConfirm={handleDisconnect}

@@ -329,13 +329,28 @@ test.describe("Settings · Sync · disconnecting", () => {
     await sync.open();
 
     await sync.disconnect(ONEDRIVE).click();
-    await expect(sync.dialog).toContainText("The Agent Barn folder and its files stay where they are");
+    await expect(sync.dialog).toContainText("Each Agent's folder inside the Agent Barn folder is deleted");
+    await expect(sync.dialog).toContainText("The Agent Barn folder stays, and the Agents keep their own files");
     await sync.dialog.getByRole("button", { name: "Disconnect", exact: true }).click();
 
     await expect(sync.connect(ONEDRIVE)).toBeVisible();
     await expect(sync.openFolder(ONEDRIVE)).toHaveCount(0);
     expect(record.authorizeQuery?.get("purpose")).toBe("disconnect");
     expect(record.disconnectBody).toEqual({ code: "the-code", state: "the-state" });
+  });
+
+  test("a provider without file sync says its folder and files stay", async () => {
+    await data.users.interceptGetUserContextRequest();
+    await data.syncProviders.interceptConnectFlow({
+      providers: [otherDriveEntry({ connection: activeOtherDriveConnection(), can_connect: false })],
+      providerKey: "otherdrive",
+    });
+    await sync.open();
+
+    await sync.disconnect(OTHER_DRIVE).click();
+
+    await expect(sync.dialog).toContainText("The Agent Barn folder and its files stay where they are");
+    await expect(sync.dialog).not.toContainText("Each Agent's folder");
   });
 
   test("a disconnect the provider refuses keeps the connection and says why", async () => {
