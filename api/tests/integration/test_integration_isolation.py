@@ -48,6 +48,7 @@ from api.tests.steps.agent import (
     TEST_ENCRYPTION_KEY,
     MockK8sModule,
     MockLiteLLMModule,
+    providers_accept_credentials,
     there_is_an_agent,
     use_org_for_auth,
 )
@@ -74,6 +75,7 @@ _GIVEN = [
     there_is_an_organization_with_user_and_access_token(),
     use_org_for_auth(),
     there_is_an_agent(),
+    providers_accept_credentials(),
 ]
 
 
