@@ -242,7 +242,8 @@ ARTIFACT_MAX_BYTES=26214400
 ARTIFACT_LINK_MAX_SECONDS=3600
 ARTIFACT_RETENTION_DAYS=30
 
-# Optional persistent local Garage: add local-garage to COMPOSE_PROFILES in .env.
+# Required persistent Garage and artifact-purge run in the main Compose stack.
+# ./run.sh prepares private storage automatically; no profile is needed.
 # make garage-up works independently of k3d/model providers. Generated keys stay
 # in ignored .garage/application.env; do not paste them into shared .env.
 # Set these only on first initialization; otherwise stored values are reused.

@@ -21,7 +21,9 @@ the per-step workflow prompt checks current API storage configuration live. The 
 per-start Agent service capability and no bucket credentials. File publication
 and sharing follow the [artifact contract](../features/agent-artifacts.md), using
 existing native messaging tools and policy. The [Garage setup](../guidelines/operations.md#agent-artifact-storage-garage)
-is optional for text-only operation. The separate Garage chart owns persistent
+supports text-only operation when storage is unavailable. Normal local startup
+requires Garage and the purge worker in the main Compose project, without a
+profile opt-in. The separate Garage chart owns persistent
 replicated storage; explicit operator bootstrap owns layout, bucket and separate
 service credentials. Local Compose storage uses named volumes and ignored private
 configuration. See [Garage operations](../guidelines/garage.md).

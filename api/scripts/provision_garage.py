@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -59,6 +60,11 @@ def default_endpoint(port: int) -> str:
     return "http://" + network["IPAM"]["Config"][0]["Gateway"] + f":{port}"
 
 
+def main_project() -> str:
+    configured = os.environ.get("COMPOSE_PROJECT_NAME") or dotenv_values(ROOT / ".env").get("COMPOSE_PROJECT_NAME")
+    return str(configured or re.sub(r"[^a-z0-9_-]", "", ROOT.name.lower()).lstrip("_-"))
+
+
 def local_setup(directory: Path, port: int | None, public_endpoint: str | None) -> dict:
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
@@ -82,12 +88,27 @@ def local_setup(directory: Path, port: int | None, public_endpoint: str | None) 
             elif state.get("endpoint_derived", False):
                 state["endpoint"] = default_endpoint(state["port"])
             write_local_state(directory, state)
+        if directory == ROOT / ".garage" and state["project"] != main_project():
+            # Adopt the former standalone container into the main Compose project.
+            # Keep the exact named volumes, keys, node identity and published origin.
+            write_local_state(directory, state)
+            old_compose = local_compose(directory, state)
+            run([*old_compose, "stop", "garage"])
+            run([*old_compose, "rm", "-f", "garage"])
+            state.setdefault("volume_project", state["project"])
+            state["project"] = main_project()
+        write_local_state(directory, state)
         return state
     port = port or 3900
-    project = "agentbarn-garage-" + hashlib.sha256(str(directory).encode()).hexdigest()[:12]
-    existing = run(
-        ["docker", "volume", "ls", "--filter", f"label=com.docker.compose.project={project}", "-q"]
-    ).stdout.strip()
+    project = (
+        main_project()
+        if directory == ROOT / ".garage"
+        else "agentbarn-garage-" + hashlib.sha256(str(directory).encode()).hexdigest()[:12]
+    )
+    existing = any(
+        run(["docker", "volume", "inspect", project + "_" + suffix], check=False).returncode == 0
+        for suffix in ("metadata", "data")
+    )
     if existing or any(directory.iterdir()):
         raise ValueError("Restore the existing private Garage configuration before reinitializing retained storage")
     state = {
@@ -111,13 +132,19 @@ def local_setup(directory: Path, port: int | None, public_endpoint: str | None) 
 
 
 def write_local_state(directory: Path, state: dict) -> None:
-    private_file(directory / "compose.env", f"GARAGE_STATE_DIR={directory}\nGARAGE_S3_PORT={state['port']}\n")
+    private_file(
+        directory / "compose.env",
+        f"GARAGE_SAVED_STATE_DIR={directory}\nGARAGE_SAVED_S3_PORT={state['port']}\n"
+        f"GARAGE_SAVED_VOLUME_PREFIX={state.get('volume_project', state['project'])}\n",
+    )
     private_file(directory / "state.json", json.dumps(state))
 
 
 def require_volumes(state: dict) -> None:
     for suffix in ("metadata", "data"):
-        if run(["docker", "volume", "inspect", state["project"] + "_" + suffix], check=False).returncode:
+        if run(
+            ["docker", "volume", "inspect", state.get("volume_project", state["project"]) + "_" + suffix], check=False
+        ).returncode:
             raise ValueError(
                 "Initialized Garage volumes are missing; restore a consistent backup into a fresh directory"
             )
@@ -128,9 +155,11 @@ def local_compose(directory: Path, state: dict) -> list[str]:
     return [
         "env",
         "-u",
-        "GARAGE_S3_PORT",
+        "GARAGE_SAVED_S3_PORT",
         "-u",
-        "GARAGE_STATE_DIR",
+        "GARAGE_SAVED_STATE_DIR",
+        "-u",
+        "GARAGE_SAVED_VOLUME_PREFIX",
         "docker",
         "compose",
         "--project-name",
@@ -176,9 +205,11 @@ def local(args) -> None:
         state = local_setup(directory, args.port, args.endpoint)
     else:
         state = json.loads((directory / "state.json").read_text())
+        # Storage-only status/backup/stop also work before first adoption on upgrade.
+        write_local_state(directory, state)
     compose = local_compose(directory, state)
     if args.action == "down":
-        run([*compose, "down"])
+        run([*compose, "stop", "garage"])
         print("Garage stopped; named volumes and private configuration preserved")
         return
     if args.action == "status":
@@ -224,11 +255,19 @@ def local(args) -> None:
     except Exception:
         if not state["initialized"]:
             # Only an unpublished first attempt may discard its own newly created volumes.
-            cleanup = run([*compose, "down", "--volumes"], check=False)
+            cleanup = remove_unpublished_storage(compose, state)
             if cleanup.returncode:
                 print("Initial Garage cleanup failed; resolve Docker health before retrying", file=sys.stderr)
         raise
     print(f"Persistent Garage ready at {state['endpoint']}; application configuration: {directory / 'application.env'}")
+
+
+def remove_unpublished_storage(compose: list[str], state: dict) -> subprocess.CompletedProcess:
+    # Never run project-wide down: this project also owns the application database.
+    run([*compose, "stop", "garage"], check=False)
+    run([*compose, "rm", "-f", "garage"], check=False)
+    prefix = state.get("volume_project", state["project"])
+    return run(["docker", "volume", "rm", prefix + "_metadata", prefix + "_data"], check=False)
 
 
 def restore_local(args) -> None:
@@ -239,6 +278,7 @@ def restore_local(args) -> None:
         raise ValueError("Restore requires a complete consistent --backup-dir")
     state = json.loads((args.backup_dir / "configuration/state.json").read_text())
     state["project"] = "agentbarn-garage-" + hashlib.sha256(str(directory).encode()).hexdigest()[:12]
+    state.pop("volume_project", None)
     if run(
         ["docker", "volume", "ls", "--filter", f"label=com.docker.compose.project={state['project']}", "-q"]
     ).stdout.strip():
@@ -263,8 +303,8 @@ def restore_local(args) -> None:
         private_file(directory / "application.env", application_env(state))
     except Exception:
         # The target was empty and the project had no volumes before this restore.
-        run([*compose, "down", "--volumes"], check=False)
-        shutil.rmtree(directory)
+        remove_unpublished_storage(compose, state)
+        shutil.rmtree(directory, ignore_errors=True)
         raise
     print("Garage restored into fresh stopped volumes; verify metadata and start with the same state directory")
 

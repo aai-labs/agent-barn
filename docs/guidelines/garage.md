@@ -40,8 +40,14 @@ First startup writes mode-0600 configuration/keys inside ignored mode-0700 `.gar
 Other state directories must be outside the repository. Secret key imports travel
 through stdin rather than CLI arguments, keeping them out of exec request URLs,
 audit metadata, process listings and Docker exec events.
-It starts `docker/garage/compose.yml` in a worktree-specific project with named metadata
-and data volumes, then provisions a bucket-scoped application key. The local S3
+The root `compose.yml` includes `docker/garage/compose.yml`: Garage is a required
+service in the main application project, alongside the API and purge worker.
+The helper prepares private configuration, starts that same service and provisions
+a bucket-scoped application key. The included file also lets storage-only recovery
+commands run without application/provider configuration. Named metadata and data
+volumes retain their exact names when adopting an older standalone local store;
+the helper stops/removes only its old Garage container before starting the main
+project's replacement. Keys, node identity, bytes and endpoint remain unchanged. The local S3
 port is currently published on all host interfaces; authentication is still required.
 Restrict host/network access for your development environment. Repeated startup
 reuses identities, endpoint and volumes. Only S3 port 3900 is published; RPC/admin/
@@ -63,10 +69,13 @@ URL origin: never rewrite signed host/path. HTTP is for trusted local developmen
 cluster/browser sharing uses TLS. Add the origin to operator proxy bypass settings
 if a host proxy otherwise intercepts local traffic.
 
-To start Garage automatically with the normal application flow, add `local-garage`
-to `COMPOSE_PROFILES` in ignored `.env` (comma-separated with `local-hindsight` if used),
-then run `./run.sh`. It starts storage before the API and a ten-minute bounded local
-purge process after the API launch. Failed cleanup passes retry on the next interval,
+Run `./run.sh` for normal startup. Garage and the ten-minute bounded purge worker
+are required, with no profile opt-in. The launcher prepares configuration and
+bootstraps Garage before API/purge containers load their credentials; those services
+also depend on Garage health in Compose. On first setup, use the launcher or
+`make garage-up` before invoking bare `docker compose up`, because Compose needs
+the generated private files. Subsequent `docker compose up` includes Garage and
+purge automatically; `./stop.sh` stops them with the rest of the stack. Failed cleanup passes retry on the next interval,
 including when an initial pass precedes completion of API migrations. The API and purge alone read `.garage/application.env`.
 The other shared application containers explicitly blank S3 credentials. The local
 API container also hosts ingest and memory-runtime processes; those processes share
@@ -76,14 +85,13 @@ stack, recreate API/purge so their environment is refreshed:
 
 ```sh
 docker compose up -d --no-deps api
-# If the local-garage profile is enabled:
-docker compose --profile local-garage up -d artifact-purge
+docker compose up -d artifact-purge
 ```
 
 Native `make dev-api` and `make purge-artifacts` load the ignored application file
 when present. The native API launch loads it only for the product API process.
 Restart existing Agents to load file instructions/configuration. `make garage-down`
-and `./stop.sh` stop Garage while preserving named volumes and keys. Never use
+stops only Garage; `./stop.sh` stops the main stack. Both preserve named volumes and keys. Never use
 `docker compose down --volumes`, Docker volume pruning, or delete `.garage/` against
 retained developer data. The helper refuses to silently regenerate lost keys when
 its named volumes still exist. Restore the private configuration from backup. Initialized stores also refuse missing

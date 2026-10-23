@@ -296,6 +296,47 @@ an outage-free request guarantee. The infrastructure remains local with no push.
 
 No external deployment or production resources were accessed.
 
+## Required Garage in the main Compose stack — 2026-10-23
+
+This follow-up supersedes the earlier opt-in local profile. Root Compose includes
+the Garage service definition in the main project; Garage and artifact-purge have
+no profile. Normal startup bootstraps private configuration before API startup;
+API/purge also declare a healthy-storage dependency. Storage-only commands retain
+the same service definition for recovery without launching unrelated application
+services. Earlier default standalone stores are adopted with their exact volume
+names, node identity, endpoint and credentials retained.
+
+- Existing persistent storage/recovery plus configuration checks: **8 passed in
+  62.80 seconds**. These include real Garage/PostgreSQL/API publication, replacement,
+  backup/restore, purge and failed-first-start cases, plus configuration unit checks.
+- New main-stack adoption check: **1 passed in 38.06 seconds**. A disposable old
+  store receives actual S3 bytes, is adopted, and is started through root Compose.
+  Root Compose reuses the adopted container and the bytes remain downloadable.
+  Application/provider services are not launched by this case; default model
+  rendering proves Garage/purge inclusion and health dependencies separately.
+- A mutation that disabled main-project adoption failed at the intended project
+  assertion: the helper stayed in its old standalone project. The script was
+  automatically restored after the experiment; only disposable test storage was used.
+- Final combined storage/configuration suite after compatibility adjustments:
+  **9 passed in 96.43 seconds**, including the legacy private-config status check.
+- Python lint/types, shell syntax, diff whitespace and artifact/workflow chart checks passed.
+- A fresh Opus 5.5 review attempt could not run because the Claude API rate limit
+  was reached. Earlier approvals apply to their reviewed revisions; they do not
+  certify this follow-up. Local code review and verification cover this delta.
+
+The existing worktree developer store was also backed up and adopted locally.
+Its container is healthy under the main project, retaining the prior named volumes,
+endpoint, application keys and public node identity. Its data files match the
+consistent pre-adoption backup by SHA-256. The first post-move check assumed the
+older state contained `node_id`; it did not, so identity was verified against the
+backed-up public node-key file instead. Root Compose cannot start the complete
+application in this checkout because required application `.env` values are absent
+(including `POSTGRES_USER` and `API_PORT`). No application credentials were invented;
+the complete root-Compose storage path was verified by the disposable adoption test
+with explicit fixture settings, separately from this retained local store.
+
+No push, merge, production access or external deployment was performed.
+
 ## Limits and deployment acceptance
 
 These are local integration and runtime-image contracts. The runtime tests use
