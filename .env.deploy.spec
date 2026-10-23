@@ -178,3 +178,12 @@ AGENT_DEFAULT_MODEL=
 # $KUBECONFIG (deploy.sh derives it). Set only if the API pod must use a
 # different identity or cluster than this deploy.
 # POD_KUBECONFIG_B64=
+
+# Private Garage: complete docs/guidelines/garage.md bootstrap before enabling.
+# Cluster RPC and application keys live in pre-created Kubernetes Secrets, not CI.
+GARAGE_ENABLED=false
+GARAGE_S3_HOST=
+GARAGE_RPC_SECRET_NAME=garage-rpc
+GARAGE_TLS_SECRET=garage-s3-tls
+ARTIFACT_STORAGE_SECRET=
+ARTIFACT_PURGE_ENABLED=false

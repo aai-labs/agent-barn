@@ -448,3 +448,35 @@ this cross-runtime contract runs through the dedicated target.
 verify storage credentials reach only the API/purge containers, retention
 configuration is shared with workers, and no storage credentials appear in
 the chart-owned common Secret. It creates no Kubernetes resources.
+
+Persistent storage checks add two explicit opt-in contracts:
+
+- `make test-artifact-deployment` requires Docker, both runtime image variables,
+  pnpm/Node and installed Chromium. Both native CLIs publish through the real API
+  to the shipped persistent Compose Garage. After container replacement, Chromium
+  signs into the real local API, opens Agent Files and verifies actual downloads;
+  there is no API-route or download interception. PostgreSQL/identity are disposable
+  fixtures; external integrations and Kubernetes Agent execution are not live.
+- `make test-garage-cluster` requires Docker, k3d, kubectl, Helm 3.19.0 and the
+  Garage image (it pulls a missing Garage/local-path helper image into Docker).
+  It imports the host platform into containerd on each owned node and asserts the
+  cache contents; the Garage pod uses `imagePullPolicy=Never`. It creates a fresh three-node local cluster with its own kubeconfig,
+  applies the rendered chart once and bootstraps it twice, tests quorum reads/writes
+  and two ready S3 Service endpoints with one node unschedulable, and verifies the
+  same node identity/bytes after PVC recovery with a required change of pod IP.
+  Bootstrap and recovery assert advertised RPC Service addresses. Stable per-replica RPC Services
+  preserve peer addresses when the pod IP changes. It
+  deletes only its own cluster. It never consumes current kubeconfig.
+
+The normal API suite's `tests/integration/test_garage_persistent.py` exercises
+the shipped Compose/bootstrap files, private bucket grants, container replacement,
+consistent stopped backups, fresh-volume restore, application links and purge.
+It also covers failed setup/restore recovery, lost-volume refusal, conflicting
+shell defaults and exclusion of the application secret from actual Docker exec
+events. Configuration tests cover private backup paths, `.env` parsing and service
+credential isolation.
+It deletes only its own generated Compose project/volumes; developer storage is
+untouched. The local cleanup process supports one bounded pass or `--interval 600`
+with graceful shutdown. `make check-artifacts` also checks the three-node Garage
+chart's persistent storage, non-root pods, private Secret reference, distinct-node
+scheduling, network policy and TLS ingress render.

@@ -165,3 +165,6 @@ docs/plans
 
 # Internal implementation plan docs (Jira links, design notes) — not for the repo.
 *_plan.md
+
+# Private persistent local Garage bootstrap/configuration (data lives in named volumes).
+.garage/

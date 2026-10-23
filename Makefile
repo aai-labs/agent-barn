@@ -73,7 +73,7 @@ dev-api:
 	AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL=$(AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL) uv run python -m uvicorn api.communications_main:app --app-dir .. --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) --reload --timeout-graceful-shutdown 5 & \
 	uv run python -m uvicorn api.memory_main:app --app-dir .. --host 0.0.0.0 --port $(MEMORY_PORT) --reload --no-access-log & \
 	uv run python -m fastapi dev gateway_main.py --host 0.0.0.0 --port $(GATEWAY_PORT) & \
-	CREDENTIAL_GATEWAY_BASE_URL=$(CREDENTIAL_GATEWAY_BASE_URL) INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) MEMORY_BASE_URL=$(MEMORY_BASE_URL) MEMORY_VIEW_BASE_URL=$(MEMORY_VIEW_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+	CREDENTIAL_GATEWAY_BASE_URL=$(CREDENTIAL_GATEWAY_BASE_URL) INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) MEMORY_BASE_URL=$(MEMORY_BASE_URL) MEMORY_VIEW_BASE_URL=$(MEMORY_VIEW_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run $(if $(wildcard .garage/application.env),--env-file ../.garage/application.env,) python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
 # Ingest on its own — `make dev-api` already starts it; use this to run or
 # restart the telemetry sink independently.
@@ -290,7 +290,7 @@ redis-logs:
 # Bounded operator-only private file cleanup (requires configured artifact storage).
 .PHONY: purge-artifacts
 purge-artifacts:
-	cd api && PYTHONPATH=.. uv run python -m api.domains.artifacts.maintenance
+	cd api && PYTHONPATH=.. uv run $(if $(wildcard .garage/application.env),--env-file ../.garage/application.env,) python -m api.domains.artifacts.maintenance
 
 # Explicit real-image artifact contract (both image variables are required).
 .PHONY: test-artifact-runtime
@@ -300,3 +300,28 @@ test-artifact-runtime:
 .PHONY: check-artifacts
 check-artifacts:
 	cd api && uv run python scripts/check_artifact_charts.py
+
+.PHONY: garage-up garage-down garage-status
+# Generates private, ignored credentials once; reuses named volumes and keys on restart.
+garage-up:
+	cd api && uv run python scripts/provision_garage.py up
+
+garage-down:
+	cd api && uv run python scripts/provision_garage.py down
+
+garage-status:
+	cd api && uv run python scripts/provision_garage.py status
+
+.PHONY: test-artifact-deployment
+test-artifact-deployment:
+	cd api && uv run python -m pytest runtime_tests/test_artifact_deployment.py -v
+
+.PHONY: garage-backup
+garage-backup:
+	@test -n "$(BACKUP_DIR)" || (echo 'Set BACKUP_DIR to a new private directory'; exit 1)
+	cd api && uv run python scripts/provision_garage.py backup --backup-dir "$(BACKUP_DIR)"
+
+.PHONY: test-garage-cluster
+# Creates and removes a fresh three-node local k3d cluster; never uses current kubeconfig.
+test-garage-cluster:
+	cd api && uv run python -m pytest runtime_tests/test_garage_cluster.py -v

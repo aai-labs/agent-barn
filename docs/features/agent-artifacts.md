@@ -149,6 +149,6 @@ and purge serialize; DELETED tombstones retain identity without file bytes.
 
 Storage disabled or unavailable returns truthful artifact errors without blocking
 chat or text-only workflow results. Failed uploads are never READY. See
-[operations](../guidelines/operations.md#agent-artifact-storage-garage) for setup,
+[Garage operations](../guidelines/garage.md) for persistent local/cluster setup,
 migrations, rollback and recovery. [Evidence](agent-artifacts/EVIDENCE.md) separates
 local real-storage/runtime contracts from unperformed live deployment acceptance.

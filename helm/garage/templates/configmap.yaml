@@ -1,0 +1,25 @@
+{{- if or (lt (int .Values.replicationFactor) 1) (gt (int .Values.replicationFactor) (int .Values.replicas)) }}
+{{- fail "Garage replicationFactor must be between 1 and replicas" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+data:
+{{- range $i := until (int .Values.replicas) }}
+  {{ $.Release.Name }}-{{ $i }}.toml: |
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir = "/var/lib/garage/data"
+    db_engine = "sqlite"
+    metadata_fsync = true
+    data_fsync = true
+    replication_factor = {{ $.Values.replicationFactor }}
+    rpc_bind_addr = "[::]:3901"
+    rpc_timeout_msec = {{ $.Values.rpcTimeoutMilliseconds | default 20000 }}
+    rpc_ping_timeout_msec = {{ $.Values.rpcPingTimeoutMilliseconds | default 3000 }}
+    rpc_public_addr = "{{ $.Release.Name }}-{{ $i }}.{{ $.Release.Namespace }}.svc.{{ $.Values.clusterDomain }}:3901"
+    [s3_api]
+    s3_region = "garage"
+    api_bind_addr = "[::]:3900"
+{{- end }}
