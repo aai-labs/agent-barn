@@ -23,7 +23,7 @@ export const ArtifactListSchema = z.object({
 });
 export const ArtifactLinkSchema = z.object({
   artifact: ArtifactSchema,
-  url: z.url(),
+  url: z.url().refine((url) => /^https?:/.test(url), "Expected an HTTP or HTTPS download URL"),
   expiresAt: z.string(),
 });
 export type ArtifactList = z.infer<typeof ArtifactListSchema>;

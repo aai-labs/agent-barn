@@ -976,7 +976,9 @@ the ten-minute bounded CronJob consumes shared configuration and the dedicated
 storage Secret without cluster credentials.
 For local/operator recovery run `make purge-artifacts`; repeat bounded passes to
 clear backlog. S3 failures retain tombstones and retry. Monitor failed jobs,
-DELETING age and `purge_attempts`. Never manually discard the metadata journal.
+DELETING age and `purge_attempts`, including unsafe-target refusals. A refused bucket/key
+records retry backoff so it cannot monopolize every batch; investigate and repair its
+configuration or persisted target without deleting the cleanup journal. Never manually discard the metadata journal.
 Bucket-wide age lifecycle rules must not delete actively pinned objects; let the
 application own object retention. Configure storage-side cleanup only for abandoned
 multipart uploads if other clients use them (this service uses single Put).

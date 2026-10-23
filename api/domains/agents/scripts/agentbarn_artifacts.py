@@ -24,7 +24,6 @@ def main() -> int:
     upload = commands.add_parser("upload")
     upload.add_argument("path")
     upload.add_argument("--attempt-id")
-    upload.add_argument("--attempt-token", help="Current workflow capability supplied in the step prompt")
     listing = commands.add_parser("list")
     listing.add_argument("--page", type=int, default=1)
     for command in ("link", "retrieve"):
@@ -66,7 +65,7 @@ def main() -> int:
             resolved = path.resolve(strict=True)
             if not any(resolved.is_relative_to(root) for root in roots):
                 raise ValueError("Upload file must be inside the configured workspace roots")
-            # Reject symlinks and non-regular files, including path changes while opening.
+            # Resolve workspace paths, then reject final-component races and non-regular files.
             fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(fd, "rb") as stream:
                 if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
@@ -75,11 +74,7 @@ def main() -> int:
                 content = stream.read(limit + 1)
             if len(content) > limit:
                 raise ValueError("File exceeds the configured upload limit")
-            if bool(args.attempt_id) != bool(args.attempt_token):
-                raise ValueError("Workflow upload requires both attempt ID and token")
             headers = {"Content-Type": "application/json"}
-            if args.attempt_token:
-                headers["X-Workflow-Token"] = args.attempt_token
             query = "?" + urlencode({"attempt_id": args.attempt_id}) if args.attempt_id else ""
             artifact = request(
                 "/artifacts" + query,
@@ -120,6 +115,12 @@ def main() -> int:
                 print(
                     json.dumps({"artifact_id": artifact_id, "checksum": artifact["checksum"], "path": args.destination})
                 )
+    except urllib.error.HTTPError as exc:
+        print(
+            f"Artifact operation failed (HTTP {exc.code}). Check access, file limits and storage availability.",
+            file=sys.stderr,
+        )
+        return 1
     except (OSError, ValueError, KeyError) as exc:
         # Do not echo credentials, signed links or HTTP response bodies on errors.
         print(

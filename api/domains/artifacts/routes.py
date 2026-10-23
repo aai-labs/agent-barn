@@ -33,7 +33,8 @@ def create_artifact(agent_id: UUID, payload: ArtifactCreate, context: Context, s
 @router.put("/{artifact_id}/content", response_model=ArtifactRead)
 async def publish_artifact(agent_id: UUID, artifact_id: UUID, request: Request, context: Context, service: Service):
     scope = await run_in_threadpool(service.scope, agent_id, context, True)
-    content = await file_body(request, service.config.artifact_max_bytes)
+    limit = await run_in_threadpool(service.upload_limit, artifact_id, agent_id, scope)
+    content = await file_body(request, limit)
     return await run_in_threadpool(service.publish, artifact_id, agent_id, scope, content, human_context=context)
 
 

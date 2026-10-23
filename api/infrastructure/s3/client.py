@@ -1,6 +1,8 @@
 """Service-only S3 access. No object keys or bucket credentials come from callers."""
 
+import hashlib
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 from urllib.parse import quote
 
@@ -19,6 +21,10 @@ class ArtifactStorage:
     config: Config
 
     def client(self) -> Any:
+        return self._client
+
+    @cached_property
+    def _client(self) -> Any:
         return boto3.client(
             "s3",
             endpoint_url=self.config.artifact_s3_endpoint_url or None,
@@ -48,8 +54,6 @@ class ArtifactStorage:
         )
         # Verify bytes at the actual storage boundary rather than trusting an ETag.
         response = self.client().get_object(Bucket=artifact.bucket, Key=artifact.object_key)
-        import hashlib
-
         with response["Body"] as stream:
             stored = stream.read(artifact.size + 1)
         if len(stored) != artifact.size or hashlib.sha256(stored).hexdigest() != artifact.checksum:

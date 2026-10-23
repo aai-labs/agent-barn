@@ -59,6 +59,7 @@ def release(session: Session, kind: str, owner_id: UUID, retention_days: int) ->
     for ref in refs:
         artifact = session.exec(select(Artifact).where(col(Artifact.id) == ref.artifact_id).with_for_update()).one()
         ref.released_at = now
-        artifact.expires_at = now + timedelta(days=retention_days)
+        if artifact.state == "READY":
+            artifact.expires_at = now + timedelta(days=retention_days)
         session.add(ref)
         session.add(artifact)

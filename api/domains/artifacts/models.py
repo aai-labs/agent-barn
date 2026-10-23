@@ -1,5 +1,6 @@
 """Immutable Agent files; ownership survives aggregate deletion for retryable cleanup."""
 
+import unicodedata
 from datetime import datetime
 from uuid import UUID
 
@@ -61,7 +62,7 @@ class ArtifactCreate(DTO):
     @field_validator("filename")
     @classmethod
     def safe_filename(cls, value: str) -> str:
-        if value in {".", ".."} or any(ord(c) < 32 or c in "/\\" for c in value):
+        if value in {".", ".."} or any(unicodedata.category(c) in {"Cc", "Cf"} or c in "/\\" for c in value):
             raise ValueError("Provide a display filename, without paths or control characters")
         return value
 

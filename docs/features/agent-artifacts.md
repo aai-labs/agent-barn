@@ -26,11 +26,25 @@ the service verifies it against the persisted encrypted secret and a running,
 undeleted Agent. It rotates on restart and stops resolving when the Agent stops.
 The API derives Organization/Agent identity; callers cannot supply another bucket
 or object key. Agents receive no S3 credentials. Ordinary chat publication needs
-no workflow. Workflow publication additionally requires the current attempt
-capability, run generation/state/deadline, owning Agent and current initiating
+no workflow. Workflow publication additionally requires the current attempt ID,
+run generation/state/deadline, authenticated owning Agent and current initiating
 Membership authority. Those fences are checked before storage and again before
-READY, while holding the run/publication locks. Agent-scoped tools remain available
-in ordinary sessions; supplying workflow provenance always requires its capability.
+READY. Only the artifact lock crosses S3 I/O; finalization releases that lock before
+acquiring run then artifact locks and repeating the fence. Cancellation and completion
+can proceed during upload; an intervening attempt/deletion change prevents READY.
+Agent-scoped tools remain available in ordinary sessions. The completion bearer is
+held by the trigger server and never enters the model prompt or file-tool arguments.
+Human publication cannot attach bytes to a workflow-staged artifact.
+
+The owning Agent is the runtime trust boundary. Ordinary chat, workflow and
+integration-driven sessions share that Agent's runtime identity and tool authority;
+any of those sessions can publish files to a current attempt of that same Agent
+when it knows the attempt ID. Attempt IDs are provenance identifiers, not secrets
+or per-session capabilities. Attempt/generation/deadline and initiating Membership
+checks fence stale or unauthorized runs; they do not authenticate which session
+created the bytes. This implementation makes no isolation claim between sessions
+of one Agent. Protecting mutually untrusted sessions would require a separately
+approved execution/credential boundary.
 
 ## Publication and immutable handoff
 
@@ -39,11 +53,15 @@ in ordinary sessions; supplying workflow provenance always requires its capabili
 2. `PUT .../artifacts/{artifact_id}/content` accepts bounded raw bytes. The API
    computes size and SHA-256, writes only matching content, then reads it back
    from S3 and verifies it before committing READY. The service serializes
-   finalization and purge on the same metadata row; READY objects never re-enter
+   byte writing and purge on the same metadata row; READY objects never re-enter
    the byte writer. Garage 2.4.1 ignores conditional Put headers, so immutability
-   is enforced by this transaction and the fixed size/checksum, not by an S3
+   is enforced by the locked lifecycle and fixed size/checksum, not by an S3
    conditional-write or object-lock promise. Bucket credentials remain service-only.
-3. Exact duplicate finalization returns the same READY identity; changed bytes
+3. Sequential exact duplicate finalization returns the same READY identity.
+   File locks use NOWAIT in both byte writing and finalization; concurrent publication
+   returns retryable 409 without marking the artifact failed. A finalizer never waits
+   on another S3 writer while holding the run lock. Retry the same artifact ID after
+   contention; changed bytes
    cannot replace it. After a failed/uncertain upload, stage a new ID to retry.
    A crash after S3 write leaves UPLOADING metadata for cleanup; it is never
    exposed as a file. Staging expires after one hour. Interrupted/oversized
@@ -52,7 +70,7 @@ in ordinary sessions; supplying workflow provenance always requires its capabili
 The default file limit is 25 MiB, configurable from 1 byte to 100 MiB. Uploads
 are buffered within that bound; choose API concurrency/memory limits accordingly.
 Display filenames are at most 255 characters and cannot contain paths or control
-characters. Content types are bounded MIME identifiers. All downloads use
+characters, including DEL and Unicode format/bidi controls. Content types are bounded MIME identifiers. All downloads use
 attachment disposition and octet-stream; active content has no inline preview.
 
 Both runtimes receive `/usr/local/bin/agentbarn-artifacts` in their generated
@@ -60,17 +78,26 @@ ConfigMap and executable mount. `upload <workspace-file>`, `list [--page N]`,
 `retrieve <id> <new-path>` and `link <id> [--seconds N]` use the same scoped service.
 Upload roots are `/workspace` on Hermes and
 `/home/node/.openclaw/workspace` on OpenClaw. Retrieval verifies the expected
-checksum and refuses to overwrite a destination. Workflow prompts provide
-`--attempt-id` and `--attempt-token` for publication. Tokens must not enter logs.
+checksum and refuses to overwrite a destination. Workflow prompts provide only
+`--attempt-id`; the CLI's Agent credential supplies publication authority, not the
+completion bearer. The service rejects superseded/expired/unauthorized attempts.
+With storage unconfigured, prompts omit the file-tool instructions. HTTP failures
+include their status code without echoing credentials, URLs or response bodies.
+
+Admission caps staged/READY files at 16 per attempt and reserves at most 16,000 UTF-8
+bytes of file-reference metadata across a run. These checks serialize on the run lock;
+excess staging returns 409 before accepting bytes. Use an archive for larger file sets.
+The overall workflow context bound still applies to combined text and file references.
 
 Publication pins an exact artifact ID/checksum to its active run. Completion
 records published files in the step checkpoint, so later sessions receive immutable
 references alongside earlier text summaries. Workspace paths and signed URLs are
 never reference identities. Trusted services can acquire checksum-validated pins
 through `artifacts.references.pin` and release them transactionally; this is the
-integration seam for future reviews, not an approval implementation. Checkpoint
-and review owners release their own pins; the run-repair scan never interprets
-their owner UUIDs as run IDs.
+integration seam for future reviews, not an approval implementation. Current workflow
+checkpoints are protected by their active run pin. Separate checkpoint/review owners
+will release their own pins; the run-repair scan never interprets their owner UUIDs
+as run IDs.
 
 ## Downloads and ordinary messaging
 
@@ -88,7 +115,10 @@ The Agent Files view shows READY chat, human and workflow files with names,
 sizes, types, provenance and download actions. Run/step attachments use the same
 service alongside existing text summaries. Each click requests a fresh link;
 access errors conceal protected responses and display a retryable failure.
-Query identity includes Organization, Agent, run, step and pagination.
+Query identity includes Organization, Agent, run, step and pagination. Workflow files
+show their attempt identity, including outputs retained from superseded attempts;
+the list does not claim all such files were accepted checkpoints. File polling follows
+progressing runs and stops when settled or parked. Download URLs must use HTTP(S).
 
 CLI publication returns actual identity/checksum and a signed URL. The Agent may
 share it using existing native messaging tools under its configured policy.
@@ -113,7 +143,8 @@ journal. The operator-only bounded purge detects deleted/missing owners,
 expired unpinned files, stale uploads and prior deletion failures. It repairs
 run references whose run was removed, and locks/validates the exact stored bucket and
 canonical tenant key before deleting. Failures retain DELETING evidence, increment
-attempt count and use bounded exponential retry delay. Concurrent publication
+attempt count and use bounded exponential retry delay, including refused unsafe targets.
+Releasing references never postpones a DELETING row's pending retry. Concurrent publication
 and purge serialize; DELETED tombstones retain identity without file bytes.
 
 Storage disabled or unavailable returns truthful artifact errors without blocking

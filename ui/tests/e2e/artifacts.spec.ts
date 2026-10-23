@@ -37,16 +37,29 @@ test.describe("Agent artifacts", () => {
     await expect(page.getByText("Download is unavailable", {exact: true})).toBeVisible();
     expect(support.links).toBe(0);
   });
+  test("download links reject non-HTTP URL schemes", async ({page}) => {
+    const files = new AgentFilesPage(page);
+    await files.goto(MOCK_AGENT_ID);
+    await expect(files.files).toContainText("pipeline.csv");
+    support.downloadUrl = "javascript:alert(1)";
+    await files.download("pipeline.csv");
+    await expect(page.getByText("Download is unavailable", {exact: true})).toBeVisible();
+    await expect(page).toHaveURL(/tab=files/);
+  });
   test("run and selected step retain attachments alongside text summaries", async ({page}) => {
     await new WorkflowDataSupport(page).intercept(MOCK_AGENT_ID, {saved: true});
     const runs = new WorkflowRunDataSupport(page); runs.state = "SUCCEEDED"; await runs.intercept(MOCK_AGENT_ID);
     await support.intercept(MOCK_AGENT_ID);
     const stepId = workflowFixture(MOCK_AGENT_ID).version.draft.steps[0].id;
-    support.files = [{...artifactFixture, source: "workflow", run_id: RUN_ID, step_id: stepId}];
+    support.files = [{...artifactFixture, source: "workflow", run_id: RUN_ID, step_id: stepId, attempt_id: "a4150000-0000-4000-8000-000000000002"}];
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
     await expect(page.getByLabel("Run files", {exact: true})).toContainText("pipeline.csv");
     await page.getByRole("button", {name: "Step 1: Read pipeline"}).click();
     await expect(page.getByLabel("Step files", {exact: true})).toContainText("pipeline.csv");
     await expect(page.getByText("Finished read pipeline.", {exact: true})).toBeVisible();
+    await expect(page.getByLabel("Step files", {exact: true})).toContainText("attempt a4150000");
+    const requests = support.lists;
+    await page.waitForTimeout(5500);
+    expect(support.lists).toBe(requests);
   });
 });

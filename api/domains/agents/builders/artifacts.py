@@ -20,8 +20,8 @@ Links expire after 15 minutes by default; anyone holding one can download until
 expiry. Share links only through your existing native messaging tools under your
 configured approval and messaging policy. Link creation does not send a message.
 If storage is unavailable, report that honestly and continue text-only work.
-Workflow steps must include the current --attempt-id and --attempt-token supplied
-in their step prompt when uploading. Preserve exact artifact IDs/checksums for
+Workflow steps must include the current --attempt-id supplied
+in their step prompt when uploading. The completion capability is never a file-tool argument. Preserve exact artifact IDs/checksums for
 handoff; a signed URL is never the artifact's identity.
 """
 

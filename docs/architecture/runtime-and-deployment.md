@@ -14,8 +14,10 @@ Agent's own tools, Integrations, approval mode and spend limits govern it. The
 owns admission and text-checkpoint invariants; [operations](../guidelines/operations.md#workflow-execution-wf02)
 owns installation prerequisites.
 
-Both runtime builders mount the shared `agentbarn-artifacts` CLI and append its
-instructions to AGENTS.md. The runtime Secret contains a purpose-separated
+Both runtime builders mount the shared `agentbarn-artifacts` CLI. They append its
+instructions to AGENTS.md when artifact storage is configured at Agent start.
+Enabling storage requires restarting existing Agents to load those instructions;
+the per-step workflow prompt checks current API storage configuration live. The runtime Secret contains a purpose-separated
 per-start Agent service capability and no bucket credentials. File publication
 and sharing follow the [artifact contract](../features/agent-artifacts.md), using
 existing native messaging tools and policy. The [Garage setup](../guidelines/operations.md#agent-artifact-storage-garage)
