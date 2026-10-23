@@ -199,7 +199,6 @@ class FileSyncEngine:
         for row, folder in self.repository.synced_files_in_connection(changes.connection.id):
             if row.item_id not in seen and folder.folder_item_id in changes.by_item and folder.folder_item_id in seen:
                 self.repository.restore_from_agent(row.id)
-                self.repository.record_activity(folder, SyncActivityKind.RESTORED, row.path, now)
         self.repository.save_cursor(changes.connection.id, cursor)
 
     def _remote_change(self, changes: _Changes, item: RemoteItem) -> None:
@@ -221,7 +220,6 @@ class FileSyncEngine:
             if in_own_folder and self._move_back(changes, folder, row, item):
                 return
             self.repository.restore_from_agent(row.id)
-            self.repository.record_activity(folder, SyncActivityKind.RESTORED, row.path, datetime.now(UTC))
             if target is not None:
                 self._park(changes, target, item)
             return
@@ -253,10 +251,9 @@ class FileSyncEngine:
                 return
             self.repository.mark_remote_change(row.id, SyncPendingAction.DOWNLOAD, settle_at)
         elif category in (SyncCategory.CONFIG, SyncCategory.SKILLS):
-            if self.repository.mark_remote_change(row.id, SyncPendingAction.REUPLOAD, settle_at):
-                self.repository.record_activity_once(
-                    target.folder, SyncActivityKind.EDIT_UNDONE, row.path, version, now
-                )
+            self.repository.mark_remote_change(
+                row.id, SyncPendingAction.REUPLOAD, settle_at, note=SyncActivityKind.EDIT_UNDONE
+            )
 
     def _move_back(self, changes: _Changes, folder: SyncAgentFolder, row: SyncFile, item: RemoteItem) -> bool:
         folder_item_id = folder.folder_item_id

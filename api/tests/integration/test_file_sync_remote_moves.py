@@ -12,8 +12,11 @@ from api.tests.steps.file_sync_ingest import (
     AGENT_KEY,
     activity_entries,
     agent_folder,
+    complete_upload,
+    file_entry,
     file_sync_ingest_base,
     ready_agent,
+    report_files,
     synced_files,
     upload_through_the_pod,
 )
@@ -130,7 +133,10 @@ def test_a_synced_file_a_person_deletes_is_restored_from_the_agent():
 
         row = _row(context, "workspace/notes.md")
         assert_that(_restored(row), equal_to((SyncPendingAction.REUPLOAD, None, None)))
-        assert_that(activity_entries(context), equal_to([(SyncActivityKind.RESTORED, "workspace/notes.md")]))
+        assert_that(
+            (activity_entries(context), _row(context, "workspace/notes.md").pending_activity),
+            equal_to(([], SyncActivityKind.RESTORED)),
+        )
         operations = context.ingest_client.get(
             f"/ingest/v1/agents/{agent.id}/file-sync/operations", headers={"Authorization": f"Bearer {AGENT_KEY}"}
         ).json()["operations"]
@@ -176,7 +182,10 @@ def test_a_synced_file_moved_into_not_synced_is_restored_and_the_move_kept():
 
         assert_that(_exists(context, "Sales Bot/_Not synced/notes.md"), equal_to(True))
         assert_that(_restored(_row(context, "workspace/notes.md")), equal_to((SyncPendingAction.REUPLOAD, None, None)))
-        assert_that(activity_entries(context), equal_to([(SyncActivityKind.RESTORED, "workspace/notes.md")]))
+        assert_that(
+            (activity_entries(context), _row(context, "workspace/notes.md").pending_activity),
+            equal_to(([], SyncActivityKind.RESTORED)),
+        )
 
 
 def test_a_synced_file_moved_outside_agent_barn_is_restored():
@@ -285,3 +294,35 @@ def test_the_engines_own_moves_do_not_trigger_more_work():
 
         assert_that(activity_entries(context), equal_to(recorded))
         assert_that(_row(context, "workspace/notes.md").pending, none())
+
+
+def _operations(context, agent: Agent) -> list[dict]:
+    return context.ingest_client.get(
+        f"/ingest/v1/agents/{agent.id}/file-sync/operations", headers={"Authorization": f"Bearer {AGENT_KEY}"}
+    ).json()["operations"]
+
+
+def test_the_restore_note_is_written_when_the_file_is_back():
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"))
+        fake_drive(context).user_deletes(context.sync_root, "Sales Bot/workspace/notes.md")
+        _process(context)
+        operation = _operations(context, agent)[0]
+
+        fake_drive(context).complete_upload(operation["url"], b"hello")
+        complete_upload(context, agent, "workspace/notes.md")
+
+        assert_that(activity_entries(context), equal_to([(SyncActivityKind.RESTORED, "workspace/notes.md")]))
+        assert_that(_row(context, "workspace/notes.md").pending_activity, none())
+
+
+def test_no_restore_note_when_the_agent_deleted_the_file_too():
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"), ("workspace/kept.md", b"k"))
+        fake_drive(context).user_deletes(context.sync_root, "Sales Bot/workspace/notes.md")
+        _process(context)
+
+        report_files(context, agent, file_entry("workspace/kept.md", size=1), complete=True)
+
+        assert_that(activity_entries(context), equal_to([]))
+        assert_that("workspace/notes.md" in synced_files(context), equal_to(False))

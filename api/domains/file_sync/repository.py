@@ -142,6 +142,7 @@ class FileSyncRepository:
             row.synced_at = now
             row.upload_started_at = None
             row.pending = None
+            row.pending_activity = None
             row.lease_until = None
             row.attempts = 0
             row.retry_at = None
@@ -207,7 +208,7 @@ class FileSyncRepository:
             return [(row, folder) for row, folder in rows]
 
     def restore_from_agent(self, file_id: UUID) -> None:
-        self._update_file(file_id, **self._restore_values())
+        self._update_file(file_id, **self._restore_values(), pending_activity=SyncActivityKind.RESTORED)
 
     def restore_folder_files(self, folder_id: UUID) -> None:
         with Session(self.delegate.engine) as session:
@@ -217,7 +218,15 @@ class FileSyncRepository:
             session.commit()
 
     def adopt_item(self, file_id: UUID, item_id: str) -> None:
-        self._update_file(file_id, item_id=item_id, pending=None, lease_until=None, attempts=0, retry_at=None)
+        self._update_file(
+            file_id,
+            item_id=item_id,
+            pending=None,
+            pending_activity=None,
+            lease_until=None,
+            attempts=0,
+            retry_at=None,
+        )
 
     def forget_folder_item(self, folder_id: UUID) -> None:
         with Session(self.delegate.engine) as session:
@@ -243,7 +252,16 @@ class FileSyncRepository:
             "retry_at": None,
         }
 
-    def mark_remote_change(self, file_id: UUID, action: SyncPendingAction, retry_at: datetime) -> bool:
+    def mark_remote_change(
+        self,
+        file_id: UUID,
+        action: SyncPendingAction,
+        retry_at: datetime,
+        note: SyncActivityKind | None = None,
+    ) -> bool:
+        values: dict = {"pending": action, "retry_at": retry_at}
+        if note is not None:
+            values["pending_activity"] = note
         with Session(self.delegate.engine) as session:
             result = session.exec(
                 sa.update(SyncFile)
@@ -251,13 +269,13 @@ class FileSyncRepository:
                     col(SyncFile.id) == file_id,
                     or_(col(SyncFile.pending).is_(None), col(SyncFile.pending) == action),
                 )
-                .values(pending=action, retry_at=retry_at)
+                .values(**values)
             )
             session.commit()
             return result.rowcount > 0
 
     def clear_pending(self, file_id: UUID) -> None:
-        self._update_file(file_id, pending=None, lease_until=None, attempts=0, retry_at=None)
+        self._update_file(file_id, pending=None, pending_activity=None, lease_until=None, attempts=0, retry_at=None)
 
     def release(self, file_id: UUID, retry_at: datetime | None) -> None:
         self._update_file(file_id, lease_until=None, retry_at=retry_at)

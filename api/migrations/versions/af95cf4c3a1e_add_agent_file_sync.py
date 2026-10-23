@@ -71,6 +71,7 @@ def upgrade() -> None:
         sa.Column("synced_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("upload_started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("pending", sa.String(length=16), nullable=True),
+        sa.Column("pending_activity", sa.String(length=32), nullable=True),
         sa.Column("lease_until", sa.DateTime(timezone=True), nullable=True),
         sa.Column("attempts", sa.Integer(), server_default="0", nullable=False),
         sa.Column("retry_at", sa.DateTime(timezone=True), nullable=True),

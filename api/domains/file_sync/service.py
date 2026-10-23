@@ -135,9 +135,10 @@ class FileSyncIngestService:
             raise FileSyncProviderFailed(exc.message) from exc
         if item.is_folder or item.size != row.size:
             raise FileSyncConflict("The provider holds a different file at this path")
-        self.repository.record_synced(
-            target.folder.id, path, item, sha256=row.local_sha256, size=row.size, now=datetime.now(UTC)
-        )
+        now = datetime.now(UTC)
+        self.repository.record_synced(target.folder.id, path, item, sha256=row.local_sha256, size=row.size, now=now)
+        if row.pending_activity is not None:
+            self.repository.record_activity(target.folder, row.pending_activity, row.path, now)
 
     def claim_operations(self, agent_id: UUID, provided_key: str) -> FileSyncOperationsRead:
         target = self._target(agent_id, provided_key)

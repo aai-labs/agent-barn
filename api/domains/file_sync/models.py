@@ -98,6 +98,7 @@ class SyncFile(BaseModel, table=True):
         default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
     )
     pending: SyncPendingAction | None = SqlField(default=None, sa_column=Column(sa.String(16), nullable=True))
+    pending_activity: SyncActivityKind | None = SqlField(default=None, sa_column=Column(sa.String(32), nullable=True))
     lease_until: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))
     attempts: int = SqlField(default=0, sa_column=Column(sa.Integer(), nullable=False, server_default="0"))
     retry_at: datetime | None = SqlField(default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True))

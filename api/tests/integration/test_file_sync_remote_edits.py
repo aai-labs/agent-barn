@@ -1,11 +1,12 @@
 from datetime import UTC, datetime, timedelta
 
-from hamcrest import assert_that, close_to, equal_to, has_length, none, not_none
-from sqlmodel import Session
+from hamcrest import assert_that, close_to, equal_to, none, not_none
+from sqlmodel import Session, select
 
 from api.domains.agents.models import Agent
 from api.domains.file_sync.engine import FileSyncEngine
 from api.domains.file_sync.models import (
+    SyncActivity,
     SyncActivityKind,
     SyncAgentFolder,
     SyncFile,
@@ -18,6 +19,7 @@ from api.tests.steps.file_sync_ingest import (
     AGENT_KEY,
     activity_entries,
     agent_folder,
+    complete_upload,
     file_sync_ingest_base,
     ready_agent,
     synced_files,
@@ -129,7 +131,7 @@ def test_a_persons_edit_to_a_memory_file_becomes_a_download():
         assert_that(_row(context, "workspace/USER.md").pending, equal_to(SyncPendingAction.DOWNLOAD))
 
 
-def test_a_persons_edit_to_a_config_file_is_undone_and_recorded():
+def test_a_persons_edit_to_a_config_file_is_queued_with_its_note_owed():
     with given(_BASE) as context:
         agent = _connected_with(context, ("workspace/AGENTS.md", b"rules"))
         fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/AGENTS.md", b"my rules")
@@ -140,10 +142,13 @@ def test_a_persons_edit_to_a_config_file_is_undone_and_recorded():
 
         assert_that(_row(context, "workspace/AGENTS.md").pending, equal_to(SyncPendingAction.REUPLOAD))
         assert_that([(op["path"], op["action"]) for op in operations], equal_to([("workspace/AGENTS.md", "reupload")]))
-        assert_that(activity_entries(context), equal_to([(SyncActivityKind.EDIT_UNDONE, "workspace/AGENTS.md")]))
+        assert_that(
+            (activity_entries(context), _row(context, "workspace/AGENTS.md").pending_activity),
+            equal_to(([], SyncActivityKind.EDIT_UNDONE)),
+        )
 
 
-def test_a_persons_edit_to_a_skill_file_is_undone_and_recorded():
+def test_a_persons_edit_to_a_skill_file_is_queued_with_its_note_owed():
     with given(_BASE) as context:
         _connected_with(context, ("workspace/skills/jira/SKILL.md", b"skill"))
         fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/skills/jira/SKILL.md", b"changed")
@@ -152,7 +157,8 @@ def test_a_persons_edit_to_a_skill_file_is_undone_and_recorded():
 
         assert_that(_row(context, "workspace/skills/jira/SKILL.md").pending, equal_to(SyncPendingAction.REUPLOAD))
         assert_that(
-            activity_entries(context), equal_to([(SyncActivityKind.EDIT_UNDONE, "workspace/skills/jira/SKILL.md")])
+            (activity_entries(context), _row(context, "workspace/skills/jira/SKILL.md").pending_activity),
+            equal_to(([], SyncActivityKind.EDIT_UNDONE)),
         )
 
 
@@ -180,8 +186,11 @@ def test_a_pending_undo_is_not_replaced_by_a_later_edit():
         fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/AGENTS.md", b"two")
         _process(context)
 
-        assert_that(_row(context, "workspace/AGENTS.md").pending, equal_to(SyncPendingAction.REUPLOAD))
-        assert_that(activity_entries(context), has_length(2))
+        row = _row(context, "workspace/AGENTS.md")
+        assert_that(
+            (row.pending, row.pending_activity), equal_to((SyncPendingAction.REUPLOAD, SyncActivityKind.EDIT_UNDONE))
+        )
+        assert_that(activity_entries(context), equal_to([]))
 
 
 def test_a_change_while_the_agents_upload_is_under_way_is_left_to_the_upload():
@@ -235,11 +244,12 @@ def test_the_cursor_moves_on_so_an_edit_is_handled_once():
         fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/AGENTS.md", b"mine")
         _process(context)
         before = _connection(context).sync_cursor
+        retry_at = _row(context, "workspace/AGENTS.md").retry_at
 
         _process(context)
 
         assert_that(_connection(context).sync_cursor == before, equal_to(True))
-        assert_that(activity_entries(context), has_length(1))
+        assert_that(_row(context, "workspace/AGENTS.md").retry_at, equal_to(retry_at))
 
 
 def test_a_full_engine_pass_reads_the_change_feed():
@@ -250,3 +260,23 @@ def test_a_full_engine_pass_reads_the_change_feed():
         _engine(context).run_pass(datetime.now(UTC))
 
         assert_that(_row(context, "workspace/notes.md").pending, equal_to(SyncPendingAction.DOWNLOAD))
+
+
+def test_the_undo_note_is_written_when_the_agents_copy_is_back():
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/AGENTS.md", b"rules"))
+        fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/AGENTS.md", b"my rules")
+        _process(context)
+        _settle(context, "workspace/AGENTS.md")
+        operation = _claim(context, agent)[0]
+        before = datetime.now(UTC)
+
+        fake_drive(context).complete_upload(operation["url"], b"rules")
+        response = complete_upload(context, agent, "workspace/AGENTS.md")
+
+        assert_that(response.status_code, equal_to(204))
+        with Session(context.postgres_delegate.engine) as session:
+            notes = list(session.exec(select(SyncActivity)))
+        assert_that([(note.kind, note.path) for note in notes], equal_to([("edit_undone", "workspace/AGENTS.md")]))
+        assert_that(notes[0].occurred_at >= before, equal_to(True))
+        assert_that(_row(context, "workspace/AGENTS.md").pending_activity, none())

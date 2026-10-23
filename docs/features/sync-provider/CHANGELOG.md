@@ -81,6 +81,24 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 ## Changes
 
+### 2026-10-23 — AF-384 — Activity notes carry the time the change really happened
+
+- **Problem:** `edit_undone` and `restored` were recorded when the engine noticed a person's edit or delete. For a stopped Agent, the Agent's copy is only put back at its next start, so the note claimed it happened days early. If the job was dropped (the Agent had deleted the file too), the note described something that never happened.
+- **Delivered:**
+  - **Owed note:** `sync_file.pending_activity`, a nullable `String(32)` added to the existing AF-384 migration `af95cf4c3a1e` at the maintainer's request, not a new migration. The engine now stores the owed note instead of writing it: `mark_remote_change(…, note=EDIT_UNDONE)` for a locked file's edit, and `restore_from_agent` sets `RESTORED`.
+  - **Written on completion:** `uploads/complete` writes the owed note with the completion time.
+  - **Cleared when the job ends:** `record_synced`, `clear_pending` and `adopt_item` clear it. A dropped job never writes its note.
+  - **Unchanged:** `folder_restored` is still written at once, because the engine rebuilds folders itself.
+  - **Behaviour change:** several edits to a locked file before the undo make one `edit_undone`, for the one undo. It used to be one per provider version.
+- **Migration:** a database that already ran `af95cf4c3a1e` lacks the column, so start from a fresh database. The branch is unreleased.
+- **Verified:**
+  - **3 new tests:** a note is written at completion (`occurred_at` at or after the moment before completion), a restore note is written at completion, and no note is written when the Agent deleted the file too.
+  - **6 existing assertions** now check "no note yet, one owed".
+  - **2 tests** that counted notes at detection now check one owed undo, and a second pass leaving the job's wait untouched.
+  - **Order:** the 9 changed or new tests failed first. The 2 counting tests broke with the fix and were then rewritten.
+  - **Suites:** the sync provider and file sync suites pass together (387, with `TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1`).
+  - **Checks:** `make check-migrations`, ruff, format and ty pass.
+
 ### 2026-10-23 — AF-384 — Retiring an Agent deletes its folder
 
 - **Decision (maintainer, 2026-10-22, during the end-to-end run):** retiring an Agent deletes its Agent Folder at the provider. It used to be marked `stopped` and kept. Stopping an Agent never touches its folder.

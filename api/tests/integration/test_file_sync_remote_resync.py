@@ -86,7 +86,10 @@ def test_edits_made_while_the_cursor_was_expired_are_found_by_the_relisting():
 
         assert_that(_row(context, "workspace/notes.md").pending, equal_to(SyncPendingAction.DOWNLOAD))
         assert_that(_row(context, "workspace/AGENTS.md").pending, equal_to(SyncPendingAction.REUPLOAD))
-        assert_that(activity_entries(context), equal_to([(SyncActivityKind.EDIT_UNDONE, "workspace/AGENTS.md")]))
+        assert_that(
+            (activity_entries(context), _row(context, "workspace/AGENTS.md").pending_activity),
+            equal_to(([], SyncActivityKind.EDIT_UNDONE)),
+        )
 
 
 def test_files_deleted_while_the_cursor_was_expired_are_restored():
@@ -100,7 +103,10 @@ def test_files_deleted_while_the_cursor_was_expired_are_restored():
         row = _row(context, "workspace/notes.md")
         assert_that((row.pending, row.item_id), equal_to((SyncPendingAction.REUPLOAD, None)))
         assert_that(_row(context, "workspace/kept.md").pending, none())
-        assert_that(activity_entries(context), equal_to([(SyncActivityKind.RESTORED, "workspace/notes.md")]))
+        assert_that(
+            (activity_entries(context), _row(context, "workspace/notes.md").pending_activity),
+            equal_to(([], SyncActivityKind.RESTORED)),
+        )
 
 
 def test_files_added_while_the_cursor_was_expired_are_parked():

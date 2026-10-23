@@ -224,7 +224,7 @@ A changed item is matched to its Agent Folder by its first path segment, and to 
 Files a person adds, removes or moves:
 - **A file the Agent does not have:** a new file anywhere in an Agent's folder is moved to `<Agent>/_Not synced/` (created when missing), and `moved_not_synced` is recorded. A name already taken there gets ` (2)`, ` (3)` before its extension.
 - **A new file at a synced path,** such as one deleted and added again, is taken as an edit of that file, unless the Agent's own upload of that path is under way.
-- **A synced file deleted,** or moved out of "Agent Barn", into `_Not synced/` or into another Agent's folder: it is restored from the Agent (a `reupload` job, with the row's provider fields cleared), and `restored` is recorded. A file that lands in another Agent's folder is moved to that folder's `_Not synced/`.
+- **A synced file deleted,** or moved out of "Agent Barn", into `_Not synced/` or into another Agent's folder: it is restored from the Agent (a `reupload` job, with the row's provider fields cleared). `restored` is recorded when the Agent's copy is back. A file that lands in another Agent's folder is moved to that folder's `_Not synced/`.
 - **A synced file renamed or moved within its folder:** it is moved back to its path, and `renamed_back` is recorded. If the way back is blocked, it is restored instead and the moved copy is parked in `_Not synced/`.
 
 Agent folders:
@@ -234,7 +234,7 @@ Agent folders:
 
 A file whose path and row match is a content edit. It is ignored when an upload of it is under way, or its content version equals the one recorded. Otherwise a person changed its content:
 - **Work and memory files:** a `download` job for the pod. An edit over 100 MB is not downloaded, and is recorded once as `skipped_too_large`.
-- **Config and skills files:** a `reupload` job, which undoes the edit with the Agent's copy, and `edit_undone` recorded once per provider version.
+- **Config and skills files:** a `reupload` job, which undoes the edit with the Agent's copy. `edit_undone` is recorded when the Agent's copy is back, once per undo, however many edits it threw away.
 - **Autosave:** a job is not handed out until 30 s after the item's last modification (`retry_at`). Each further autosave pushes that back, and the cursor never waits.
 - **One job per file:** a pending re-upload is never turned into a download.
 
@@ -250,7 +250,7 @@ The helper never deletes a file on the volume.
 
 ### Activity
 
-Everything File Sync does that a person should be able to see is stored in `sync_activity`: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever. No route or UI reads them yet; the agent page card is the next ticket.
+Everything File Sync does that a person should be able to see is stored in `sync_activity`, at the time it actually happened: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever. No route or UI reads them yet; the agent page card is the next ticket.
 
 | Kind | Meaning |
 |---|---|
@@ -276,7 +276,6 @@ Everything File Sync does that a person should be able to see is stored in `sync
 - **Every Organization Member can open the Agent Folders,** and can edit work and memory files there, including Members without Agent Access to that Agent. This is accepted in the ADR and recorded in the [RBAC brief](../rbac/IMPLEMENTATION-BRIEF.md).
 - **Deleting the "Agent Barn" folder itself is not handled.** The change feed is anchored to that folder, and what the provider then returns is unverified.
 - **Stopped Agents:** undos, restores and people's edits wait for the Agent's next start, with no time limit. The Agent then gets each file's latest version.
-- **Activity times for a stopped Agent:** `edit_undone` and `restored` are recorded when the engine notices the change, not when the Agent's copy is actually put back at its next start.
 - **Conflicts keep the Agent's version.** The person's edit survives only in the provider's version history.
 - **Running Agents** start syncing after their next restart or managed update.
 - **Pods ask Ingest every 15 s** even when their Organization has no connection, so that sync starts as soon as one is made.
