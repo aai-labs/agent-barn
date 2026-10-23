@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from dotenv import dotenv_values
+from dotenv import dotenv_values, set_key
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -138,6 +138,10 @@ def write_local_state(directory: Path, state: dict) -> None:
         f"GARAGE_SAVED_VOLUME_PREFIX={state.get('volume_project', state['project'])}\n",
     )
     private_file(directory / "state.json", json.dumps(state))
+    if directory == ROOT / ".garage" and (ROOT / ".env").is_file():
+        # Only public Compose settings go in .env. Keys remain in private files.
+        for name, value in read_env(directory / "compose.env").items():
+            set_key((ROOT / ".env").resolve(), name, value, quote_mode="always")
 
 
 def require_volumes(state: dict) -> None:
@@ -213,7 +217,7 @@ def local(args) -> None:
         print("Garage stopped; named volumes and private configuration preserved")
         return
     if args.action == "status":
-        result = run([*compose, "ps", "--format", "json"])
+        result = run([*compose, "ps", "--format", "json", "garage"])
         print(result.stdout)
         return
     if args.action == "backup":
@@ -224,9 +228,9 @@ def local(args) -> None:
             raise ValueError("Backup destination must be absolute and outside the repository (it contains credentials)")
         if destination.is_relative_to(directory) or destination.exists():
             raise ValueError("Backup destination must be a new directory outside the Garage configuration")
-        if not run([*compose, "ps", "-q"]).stdout.strip():
+        if not run([*compose, "ps", "-q", "garage"]).stdout.strip():
             raise ValueError("Start Garage before taking a consistent backup")
-        running = bool(run([*compose, "ps", "--status", "running", "-q"]).stdout.strip())
+        running = bool(run([*compose, "ps", "--status", "running", "-q", "garage"]).stdout.strip())
         destination.mkdir(mode=0o700, parents=True)
         try:
             run([*compose, "stop", "garage"])

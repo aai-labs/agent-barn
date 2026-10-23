@@ -7,7 +7,6 @@
 # operator's isolated backup/restore commands. ./run.sh prepares its private files.
 include:
   - path: docker/garage/compose.yml
-    env_file: .garage/compose.env
 
 x-api-env: &api-env
   # Container-network hostnames override the localhost defaults in .env.

@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import boto3
 import httpx
@@ -270,7 +270,7 @@ def test_failed_first_start_can_retry_with_another_port(tmp_path, explicit_endpo
 def test_main_compose_adopts_standalone_storage_without_changing_bytes(tmp_path):
     import re
 
-    project = tmp_path / "main-stack"
+    project = tmp_path / ("main-stack-" + uuid4().hex[:12])
     directory = project / ".garage"
     scripts = project / "api/scripts"
     scripts.mkdir(parents=True)
@@ -331,7 +331,7 @@ def test_main_compose_adopts_standalone_storage_without_changing_bytes(tmp_path)
         assert_that(result.returncode, equal_to(0), "Main-project adoption must succeed")
         after = json.loads((directory / "state.json").read_text())
         adopted_compose = local_compose(directory, after)
-        assert_that(after["project"], equal_to("main-stack"))
+        assert_that(after["project"], equal_to(project.name))
         assert_that(after["volume_project"], equal_to(before["project"]))
         for field in ("node_id", "access_key", "secret_key", "endpoint", "port"):
             assert_that(after[field], equal_to(before[field]), field)
@@ -358,3 +358,108 @@ def test_main_compose_adopts_standalone_storage_without_changing_bytes(tmp_path)
             subprocess.run([*adopted_compose, "down", "--volumes"], capture_output=True, check=False)
         elif old_compose:
             subprocess.run([*old_compose, "down", "--volumes"], capture_output=True, check=False)
+
+
+@pytest.mark.parametrize("garage_present", [False, True], ids=["missing-garage", "stopped-garage"])
+def test_garage_backup_and_status_ignore_other_project_services(tmp_path, capsys, garage_present):
+    import argparse
+
+    from api.scripts.provision_garage import local, private_file
+
+    directory = tmp_path / "state"
+    directory.mkdir()
+    project = "af415-backup-scope-" + uuid4().hex[:12]
+    state = {"project": project, "port": 3900}
+    private_file(directory / "state.json", json.dumps(state))
+    private_file(directory / "server.env", "")
+    fixture = tmp_path / "compose.yml"
+    fixture.write_text(
+        "services:\n  other:\n    image: redis:7-alpine\n    command: ['sleep', '300']\n"
+        "  garage:\n    image: redis:7-alpine\n    command: ['sleep', '300']\n"
+    )
+    command = ["docker", "compose", "-p", project, "-f", str(fixture)]
+    try:
+        subprocess.run([*command, "up", "-d", "other"], capture_output=True, check=True)
+        if garage_present:
+            subprocess.run([*command, "create", "garage"], capture_output=True, check=True)
+        running = subprocess.run(
+            [*command, "ps", "--status", "running", "-q", "other"], capture_output=True, check=True
+        )
+        assert_that(bool(running.stdout.strip()), equal_to(True), "Another main-project service must be running")
+        args = argparse.Namespace(state_dir=directory, action="backup", backup_dir=tmp_path / "backup")
+        with pytest.raises(ValueError, match="Start Garage before taking a consistent backup"):
+            local(args)
+        assert_that((tmp_path / "backup").exists(), equal_to(False))
+        args.action = "status"
+        local(args)
+        assert_that(capsys.readouterr().out.strip(), equal_to(""), "Garage status must exclude other services")
+        after = subprocess.run([*command, "ps", "--status", "running", "-q", "other"], capture_output=True, check=True)
+        assert_that(after.stdout, equal_to(running.stdout))
+    finally:
+        subprocess.run([*command, "down", "--volumes"], capture_output=True, check=False)
+
+
+def test_prebootstrap_compose_failure_does_not_block_first_setup(tmp_path):
+    import re
+
+    project = tmp_path / ("pre-bootstrap-" + uuid4().hex[:12])
+    scripts = project / "api/scripts"
+    scripts.mkdir(parents=True)
+    shutil.copytree(ROOT / "docker/garage", project / "docker/garage")
+    shutil.copyfile(ROOT / "api/scripts/provision_garage.py", scripts / "provision_garage.py")
+    source = (ROOT / "compose.yml").read_text()
+    (project / "compose.yml").write_text(source)
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):?\?", source))
+    values = {name: "fixture" for name in required}
+    values.update({name: str(18000 + i) for i, name in enumerate(sorted(required)) if name.endswith("_PORT")})
+    (project / ".env").write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "COMPOSE_PROJECT_NAME" and not key.startswith("GARAGE_SAVED_")
+    }
+    compose = ["docker", "compose", "-f", str(project / "compose.yml")]
+    sentinel_prefix = project.name + "-garage-unconfigured"
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    try:
+        failed = subprocess.run(
+            [*compose, "up", "-d", "garage"], env=environment, capture_output=True, text=True, check=False
+        )
+        assert_that(failed.returncode != 0, equal_to(True), "Unconfigured Garage must fail before running")
+        assert_that("bind source path does not exist" in failed.stderr, equal_to(True))
+        assert_that((project / ".garage").exists(), equal_to(False))
+        assert_that((project / ".garage-unconfigured").exists(), equal_to(False))
+        for suffix in ("metadata", "data"):
+            volume = subprocess.run(
+                ["docker", "volume", "inspect", project.name + "_" + suffix], capture_output=True, check=False
+            )
+            assert_that(
+                volume.returncode != 0, equal_to(True), "Pre-setup failure must not allocate real store volumes"
+            )
+        started = subprocess.run(
+            [
+                sys.executable,
+                str(scripts / "provision_garage.py"),
+                "up",
+                "--port",
+                str(port),
+                "--endpoint",
+                f"http://127.0.0.1:{port}",
+            ],
+            env=environment,
+            capture_output=True,
+            check=False,
+        )
+        assert_that(started.returncode, equal_to(0), "Normal first bootstrap must recover from bare Compose failure")
+        status = subprocess.run(
+            [*compose, "ps", "--status", "running", "-q", "garage"], env=environment, capture_output=True, check=True
+        )
+        assert_that(bool(status.stdout.strip()), equal_to(True))
+    finally:
+        subprocess.run([*compose, "down", "--volumes"], env=environment, capture_output=True, check=False)
+        for prefix in (project.name, sentinel_prefix):
+            subprocess.run(
+                ["docker", "volume", "rm", prefix + "_metadata", prefix + "_data"], capture_output=True, check=False
+            )

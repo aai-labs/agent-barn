@@ -5,17 +5,21 @@ services:
     image: dxflrs/garage:v2.4.1
     restart: unless-stopped
     command: ["/garage", "server", "--single-node", "--default-bucket"]
-    env_file: ["${GARAGE_SAVED_STATE_DIR:?Run make garage-up first}/server.env"]
+    # Optional at parse time so db-only development and stop work before setup.
+    # Missing bind sources still prevent an unconfigured Garage from starting.
+    env_file:
+      - path: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/server.env
+        required: false
     ports:
       - "${GARAGE_SAVED_S3_PORT:-3900}:3900"
     volumes:
       - type: bind
-        source: ${GARAGE_SAVED_STATE_DIR}/garage.toml
+        source: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/garage.toml
         target: /etc/garage.toml
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: ${GARAGE_SAVED_STATE_DIR}/rpc-secret
+        source: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/rpc-secret
         target: /secrets/rpc-secret
         read_only: true
         bind: {create_host_path: false}
@@ -29,6 +33,6 @@ services:
     stop_grace_period: 30s
 volumes:
   metadata:
-    name: ${GARAGE_SAVED_VOLUME_PREFIX:?Run make garage-up first}_metadata
+    name: ${GARAGE_SAVED_VOLUME_PREFIX:-${COMPOSE_PROJECT_NAME}-garage-unconfigured}_metadata
   data:
-    name: ${GARAGE_SAVED_VOLUME_PREFIX:?Run make garage-up first}_data
+    name: ${GARAGE_SAVED_VOLUME_PREFIX:-${COMPOSE_PROJECT_NAME}-garage-unconfigured}_data

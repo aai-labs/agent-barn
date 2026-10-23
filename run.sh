@@ -78,6 +78,8 @@ green "  all required values set"
 step "Starting persistent Garage"
 command -v uv >/dev/null 2>&1 || red "uv is required for Garage bootstrap"
 (cd api && uv run python scripts/provision_garage.py up)
+# Bootstrap may refresh saved paths/volumes after restore; let Compose reread .env.
+unset GARAGE_SAVED_STATE_DIR GARAGE_SAVED_S3_PORT GARAGE_SAVED_VOLUME_PREFIX
 
 # ── k3d cluster + litellm ─────────────────────────────────────────────────────
 
