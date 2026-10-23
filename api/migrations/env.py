@@ -9,6 +9,7 @@ from sqlmodel import SQLModel
 import api.domains.agent_memory.models
 import api.domains.agent_memory.platform_models
 import api.domains.agent_settings.models
+import api.domains.agent_tasks.models
 import api.domains.agent_webhooks.models
 import api.domains.agents.models
 import api.domains.analytics.models

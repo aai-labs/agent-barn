@@ -1396,6 +1396,19 @@ def test_start_agent_wires_telemetry_push_into_the_secret():
             assert_that(secret.string_data["INGEST_API_KEY"], is_not(equal_to("")))
 
 
+def test_start_agent_tells_the_task_command_the_file_size_limit():
+    with given([set_env_variable({"TASK_FILE_MAX_BYTES": "4096"}), *_GIVEN, there_is_an_agent()]) as context:
+        client: TestClient = context.client
+        k8s: MagicMock = context.injector.get(KubernetesClient)
+
+        with when("I start the agent"):
+            client.post(f"{_BASE}/{context.agent.id}/start", headers=_auth(context))
+
+        with then("the secret carries the per-file limit, so oversized files are refused before upload"):
+            _, secret = k8s.create_secret.call_args.args
+            assert_that(secret.string_data["TASK_FILE_MAX_BYTES"], equal_to("4096"))
+
+
 def test_start_with_stored_secret_that_no_longer_validates_returns_400():
     """Stored content is re-validated on every start. A Pipedrive domain saved before the
     single-label rule must stop the start with a fixable message, not an unhandled error."""
@@ -2604,7 +2617,7 @@ def test_start_hermes_agent_configmap_has_hermes_config():
             cfg = _yaml.safe_load(config_map.data["hermes-config.yaml"])
             assert_that(cfg["model"]["base_url"], equal_to("http://localhost:8090"))
             assert_that(cfg["display"]["platforms"], equal_to({}))
-            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push"]))
+            assert_that(cfg["plugins"]["enabled"], equal_to(["telemetry-push", "agentbarn-tasks"]))
             assert_that(cfg, is_not(has_key("slack")))
 
         with then("the ConfigMap has the headless runtime adapter"):

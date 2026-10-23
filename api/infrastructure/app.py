@@ -2,6 +2,7 @@ from injector import Module, provider, singleton
 
 from api.core.config import Config, get_config
 from api.domains.agent_memory.key_repository import MemoryKeyRepository
+from api.domains.agent_tasks.file_storage import PostgresTaskFileStorage, TaskFileStorage
 from api.domains.agents.event_handlers import AgentBudgetEmailHandler, AgentLifecycleEmailHandler
 from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
 from api.domains.agents.microsoft_identity import MicrosoftIdentityClient
@@ -51,6 +52,11 @@ class AppModule(Module):
     @singleton
     def provide_postgres_delegate(self, config: Config) -> PostgresRepositoryDelegate:
         return PostgresRepositoryDelegate(config)
+
+    @provider
+    @singleton
+    def provide_task_file_storage(self, delegate: PostgresRepositoryDelegate) -> TaskFileStorage:
+        return PostgresTaskFileStorage(delegate)
 
     @provider
     @singleton

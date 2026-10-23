@@ -65,6 +65,7 @@ line-length = 120
 "domains/agents/scripts/retire-messaging.py" = "py312"
 "domains/agents/scripts/memory-gateway-ready.py" = "py312"
 "domains/agents/scripts/agentbarn_memory.py" = "py312"
+"domains/agents/scripts/agentbarn_task.py" = "py312"
 
 [tool.ruff.lint]
 # B008   - FastAPI dependency injection relies on function calls in default
@@ -80,6 +81,7 @@ ignore = ["B008", "BLE001", "S110"]
 # package name, so these plugin directories intentionally have a hyphen.
 "domains/agents/scripts/hermes/plugins/telemetry-push/__init__.py" = ["N999"]
 "domains/agents/scripts/hermes/plugins/agentbarn-observer/__init__.py" = ["N999"]
+"domains/agents/scripts/hermes/plugins/agentbarn-tasks/__init__.py" = ["N999"]
 # SIM117 - tests use a given/when/then BDD DSL where each nested `with` is a
 #          deliberate narrative block; merging them loses that structure.
 "tests/**" = ["SIM117"]

@@ -2522,6 +2522,7 @@ class AgentService:
                 "AGENT_ID": str(agent.id),
                 "INGEST_URL": self.config.ingest_base_url,
                 "INGEST_API_KEY": ingest_key,
+                "TASK_FILE_MAX_BYTES": str(self.config.task_file_max_bytes),
                 "COMMUNICATIONS_URL": self.config.communications_base_url,
                 "COMMUNICATIONS_API_KEY": communication_key,
                 "COMMUNICATIONS_PROTOCOL_VERSION": "2",
