@@ -22,6 +22,7 @@ import {
   Wrench,
   type LucideIcon,
   Workflow,
+  HeartPulse,
 } from "lucide-react";
 
 import type { AgentPageTab } from "@/features/agents/agent-page-tabs";
@@ -165,7 +166,14 @@ export const PLATFORM_AREAS: PlatformArea[] = [
     key: "system",
     label: "System",
     icon: Server,
+    // Environment health first: it is where the System button lands.
     pages: [
+      {
+        key: "environment-health",
+        label: "Environment health",
+        href: `${PLATFORM_BASE}/environment-health`,
+        icon: HeartPulse,
+      },
       {
         key: "event-deliveries",
         label: "Event deliveries",
