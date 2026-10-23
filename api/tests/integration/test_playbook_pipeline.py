@@ -6,18 +6,21 @@ Draft. Every model call is billed to the source Agent's own key.
 """
 
 import json
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from unittest.mock import Mock
 from uuid import uuid7
 
+import pytest
 from fastapi import HTTPException
 from hamcrest import (
     assert_that,
     contains_exactly,
     contains_string,
     equal_to,
+    has_entries,
     has_length,
     has_properties,
     is_not,
@@ -37,6 +40,7 @@ from api.domains.playbooks.platform_repository import PlatformPlaybookRepository
 from api.domains.playbooks.prompts import NOTES_SYSTEM_PROMPT, PLAYBOOK_SYSTEM_PROMPT
 from api.domains.skills.models import Skill
 from api.domains.skills.repository import SkillRepository
+from api.domains.skills.service import PlaybookTargetUnavailable, SkillService
 from api.tests.core.givenpy import LambdaWith, given, then, when
 from api.tests.helpers.litellm_proxy import StubProxy, StubReply, completion, litellm_proxy
 from api.tests.steps.agent import FAKE_LITELLM_KEY, there_is_a_skill, there_is_an_agent
@@ -517,3 +521,57 @@ def test_cancelling_while_notes_are_taken_stops_the_run_before_the_playbook_step
             assert_that([_system(r) for r in context.proxy.requests], only_contains(equal_to(NOTES_SYSTEM_PROMPT)))
             with Session(context.postgres_delegate.engine) as session:
                 assert_that(session.exec(select(Skill)).all(), has_length(0))
+
+
+def test_a_failed_run_records_the_notes_calls_still_in_flight_when_one_failed():
+    budget = {"error": {"type": "budget_exceeded", "message": "Budget has been exceeded"}}
+
+    def respond(posted: dict[str, Any]) -> StubReply:
+        if "Refund order 7" in posted["messages"][1]["content"]:
+            return 400, budget, {}
+        # Still running when the other call fails, and billed when it finishes.
+        time.sleep(0.5)
+        return 200, completion(json.dumps(_notes("Refund an order")), 1_000, 100), {"x-litellm-response-cost": "0.001"}
+
+    with given(
+        _setup(
+            two_refund_conversations(), the_model_proxy_is(StubProxy(respond=respond)), there_is_a_playbook_extraction()
+        )
+    ) as context:
+        with when("one notes call is refused while another is still running"):
+            run = process_extraction(context)
+
+        with then("the run fails with the tokens and cost of the call that finished afterwards"):
+            assert_that(run.error_code, equal_to("spend_limit_reached"))
+            assert_that((run.prompt_tokens, run.completion_tokens), equal_to((1_000, 100)))
+            assert_that(run.cost_usd, equal_to(Decimal("0.001")))
+
+
+def test_a_new_playbook_that_cannot_be_written_leaves_no_skill_behind():
+    with given(_setup()) as context:
+        skills = context.injector.get(SkillService)
+        with when("the rendered SKILL.md is refused by file validation"):
+            with pytest.raises(PlaybookTargetUnavailable):
+                skills.write_playbook_draft(
+                    context.organization.id, None, "Billing playbook", "Use when billing.", lambda slug: "x" * 2_000_000
+                )
+
+        with then("no Skill holds the name, so a retry can use it"):
+            with Session(context.postgres_delegate.engine) as session:
+                assert_that(session.exec(select(Skill)).all(), has_length(0))
+
+
+def test_run_lists_say_whether_the_playbook_still_has_an_unpublished_draft():
+    with given(
+        _setup(two_refund_conversations(), the_model_proxy_is(model_replies()), there_is_a_playbook_extraction())
+    ) as context:
+        run = process_extraction(context)
+        with when("the Owner lists the Organization's runs after the draft was written"):
+            response = context.client.get(
+                "/api/v1/organizations/{organization_id}/playbook-extractions",
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+
+        with then("the run says its Skill has a draft, so it cannot take the next one yet"):
+            [item] = response.json()["items"]
+            assert_that(item, has_entries(skill_id=str(run.skill_id), skill_has_draft=True))
