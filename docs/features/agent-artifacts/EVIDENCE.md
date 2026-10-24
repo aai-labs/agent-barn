@@ -6,6 +6,48 @@ starting at local AF-389 head `6e109add`. AF-389 PR
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
+## Pre-base-update verification and push authorization — 2026-10-24
+
+The maintainer explicitly authorized pushing after verification on October 24.
+Earlier October 23 notes about local-only work and awaiting push agreement are
+historical. The implementation uses the documented whole-Agent runtime trust
+boundary; it does not claim isolation between sessions belonging to one Agent.
+
+- Full standard API suite: **5,659 passed in 966.19 seconds**, with four isolated
+  pytest workers; the separately selected Kubernetes file is excluded by this target.
+- Full non-cluster runtime-image suite: **28 passed in 135.66 seconds** with
+  Hermes `0.2.10`, OpenClaw `0.7.7` and the real pinned host CLI binary.
+- Real runtime/API/persistent Garage/authenticated-browser deployment contract:
+  **1 passed in 64.46 seconds**. Both CLI uploads and a Files download survive
+  Garage replacement; providers/model tool selection remain outside this boundary.
+- Fresh three-node Garage quorum/PVC/changed-pod-IP recovery: **1 passed in
+  151.40 seconds**. This adds one local sample; it is not a general HA guarantee.
+- API lint/format/types, UI lint/types, single migration head, memory/workflow/
+  artifact chart checks and monitoring checks passed. Local API container and
+  optimized UI production builds passed; no image was published or deployed.
+- Full CI-style browser suite: **934 passed, 5 skipped in 9.4 minutes**. The five
+  pre-existing Gmail OAuth cases remain explicitly skipped, not claimed as tested.
+- Clean disposable Kubernetes API suite: **19 passed in 95.73 seconds**.
+- Both runtime images passed their CI smoke/native/startup/resource-metric checks.
+- Lockfile timestamp-only metadata was removed to match the base format; parsed
+  dependency resolution, versions, sources and hashes were proven identical, and
+  `uv lock --check` passed. The branch adds only the four required S3 SDK packages.
+
+These results cover AF-415 source at `5479f75e` before integrating the advanced
+prerequisite branch. GitHub reported conflicts because that branch now includes
+newer staging/billing work and removal of the old workflow active-run cap. The
+combined source requires a fresh verification pass, recorded separately below.
+
+Initial setup failures were corrected before accepting results: the Docker-only
+Helm wrapper could not read temporary values files, so checks used native pinned
+Helm 3.19.0; monitoring required its pinned dependencies; two host CLI contracts
+initially lacked their binary and passed with it configured. The first browser
+run lost its development server during parallel builds, causing connection
+failures; it was interrupted and restarted using the documented CI production
+server/two-worker configuration. The first disposable Kubernetes run passed
+18 cases and returned no logs in one multiline-log case; the clean rerun is
+passed with all 19 cases. No source behavior was weakened to suppress those failures.
+
 ## Reproducible checks
 
 | Check | Result | Evidence boundary |
