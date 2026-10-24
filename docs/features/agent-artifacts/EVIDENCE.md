@@ -61,8 +61,17 @@ cap is preserved and does not weaken per-artifact attempt/generation fences.
 The focused artifact/migration/workflow compatibility suite passed **58 tests in
 34.45 seconds**, including guarded downgrade and re-upgrade through the combined
 migration graph. All API/UI lint/types/format, migration, chart and monitoring
-checks passed on the combined source. Full API/browser/runtime reruns are in
-progress. A new Opus review attempt was rate-limited; the prior independent approval
+checks passed on the combined source. All non-cluster runtime contracts plus the
+real artifact deployment boundary passed **29 tests in 177.12 seconds**. The API
+container rebuild passed, and both runtime health-script contracts passed against
+the incoming source. The Kubernetes client/test and Garage chart/cluster probe are
+unchanged by this integration, so their earlier 19-case and quorum/recovery results
+remain applicable. The full combined API suite passed **5,841 tests in 671.55
+seconds**. The full CI-style browser rerun passed **984 cases with 5 existing Gmail
+OAuth skips in 10.4 minutes**. The final API container build also passes with private
+`.garage/` excluded from its build context. No existing locked package version
+changed relative to the updated base; the only added packages are boto3, botocore,
+jmespath and s3transfer. A new Opus review attempt was rate-limited; the prior independent approval
 covers its reviewed artifact revision, not an unperformed integration review.
 
 ## Reproducible checks

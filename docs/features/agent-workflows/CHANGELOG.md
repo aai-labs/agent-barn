@@ -18,7 +18,8 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 - Updated: integrated current prerequisite head `37901c38`, preserving incoming billing/staging work and the removal of the workflow active-run cap. Resolved shared test cleanup and epic-history conflicts by retaining both domains.
 - Schema: no-op merge revision `a4151c9d0e21` joins artifact head `a4150b8c9d10` and updated prerequisite head `b9e32d74a610`. Artifact publication, ownership and guarded rollback contracts remain unchanged.
-- Verification: pre-integration full API/browser/runtime/storage results are recorded separately from the required combined-source rerun in the artifact evidence. The maintainer authorized pushing after verification; no PR merge or deployment is authorized.
+- Verification: final combined-source checks pass: 5,841 API tests, 984 browser cases with five existing Gmail OAuth skips, 29 runtime/deployment contracts and 58 focused migration/artifact/workflow cases; static checks, monitoring and builds pass. Unchanged Kubernetes/three-node storage checks retain their passing evidence. Earlier failed samples and independent-review limits remain explicit in the artifact evidence.
+- Delivery: the maintainer authorized pushing after verification; this updates draft PR #328 against its existing feature-branch base. No PR merge or deployment is authorized.
 
 ### 2026-10-23 — AF-415 — main-stack review corrections (local, not pushed)
 
