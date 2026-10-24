@@ -36,7 +36,8 @@ make garage-up
 make garage-status
 ```
 
-First startup writes mode-0600 configuration/keys inside ignored mode-0700 `.garage/`.
+First startup writes mode-0600 configuration/keys inside mode-0700 `.garage/`,
+excluded from both Git and Docker build contexts.
 Other state directories must be outside the repository. Secret key imports travel
 through stdin rather than CLI arguments, keeping them out of exec request URLs,
 audit metadata, process listings and Docker exec events.

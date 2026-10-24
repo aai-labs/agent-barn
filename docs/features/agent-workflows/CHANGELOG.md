@@ -31,6 +31,13 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Limits: Documented that failed/expired unfinished steps can currently retry automatically, dispatch deduplication does not guarantee exactly-once external effects, and the agreed uncertain-effect handling remains unimplemented. This documentation change does not change runtime behavior.
 - Verification: Compared the guide with the start/read/cancel services, runtime dispatch, DTOs and controller; checked Markdown structure and whitespace. No application tests were rerun for this prose-only correction.
 
+### 2026-10-24 — AF-415 — update prerequisite base and full verification
+
+- Updated: integrated current prerequisite head `37901c38`, preserving incoming billing/staging work and the removal of the workflow active-run cap. Resolved shared test cleanup and epic-history conflicts by retaining both domains.
+- Schema: no-op merge revision `a4151c9d0e21` joins artifact head `a4150b8c9d10` and updated prerequisite head `b9e32d74a610`. Artifact publication, ownership and guarded rollback contracts remain unchanged.
+- Verification: final combined-source checks pass: 5,841 API tests, 984 browser cases with five existing Gmail OAuth skips, 29 runtime/deployment contracts and 58 focused migration/artifact/workflow cases; static checks, monitoring and builds pass. Unchanged Kubernetes/three-node storage checks retain their passing evidence. Earlier failed samples and independent-review limits remain explicit in the artifact evidence.
+- Delivery: the maintainer authorized pushing after verification; this updates draft PR #328 against its existing feature-branch base. No PR merge or deployment is authorized.
+
 ### 2026-10-23 — AF-415 — main-stack review corrections (local, not pushed)
 
 - Fixed: root Compose parses before private Garage setup, restoring native db/redis commands and shutdown for existing users. Required Garage bind sources still fail when unconfigured; bootstrap refreshes only public saved settings in the application `.env`.

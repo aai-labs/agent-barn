@@ -48,6 +48,31 @@ server/two-worker configuration. The first disposable Kubernetes run passed
 18 cases and returned no logs in one multiline-log case; the clean rerun is
 passed with all 19 cases. No source behavior was weakened to suppress those failures.
 
+## Current prerequisite integration — 2026-10-24
+
+Integrated prerequisite head `37901c38` rather than publishing a conflicting draft.
+The shared cleanup fixture retains artifact and billing tables, and the epic log
+retains both histories. No-op head `a4151c9d0e21` joins artifact migration
+`a4150b8c9d10` with prerequisite head `b9e32d74a610`; publication and guarded
+rollback invariants remain unchanged. Incoming removal of the workflow active-run
+cap is preserved and does not weaken per-artifact attempt/generation fences.
+
+The focused artifact/migration/workflow compatibility suite passed **58 tests in
+34.45 seconds**, including guarded downgrade and re-upgrade through the combined
+migration graph. All API/UI lint/types/format, migration, chart and monitoring
+checks passed on the combined source. All non-cluster runtime contracts plus the
+real artifact deployment boundary passed **29 tests in 177.12 seconds**. The API
+container rebuild passed, and both runtime health-script contracts passed against
+the incoming source. The Kubernetes client/test and Garage chart/cluster probe are
+unchanged by this integration, so their earlier 19-case and quorum/recovery results
+remain applicable. The full combined API suite passed **5,841 tests in 671.55
+seconds**. The full CI-style browser rerun passed **984 cases with 5 existing Gmail
+OAuth skips in 10.4 minutes**. The final API container build also passes with private
+`.garage/` excluded from its build context. No existing locked package version
+changed relative to the updated base; the only added packages are boto3, botocore,
+jmespath and s3transfer. A new Opus review attempt was rate-limited; the prior independent approval
+covers its reviewed artifact revision, not an unperformed integration review.
+
 ## Reproducible checks
 
 | Check | Result | Evidence boundary |
