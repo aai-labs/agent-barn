@@ -44,6 +44,9 @@ def there_is_a_user(
     organization_id: UUID | None = None,
     organization_user_id: UUID | None = None,
     email_verified: bool = True,
+    # Set up by a Platform Administrator, as most test users stand in for: their own
+    # Organizations get the platform's renewing limit rather than credit.
+    platform_provisioned: bool = True,
 ):
     def step(context):
         user_repository: UserRepository = context.injector.get(UserRepository)
@@ -61,6 +64,7 @@ def there_is_a_user(
                 full_name=name,
                 is_platform_admin=is_platform_admin,
                 email_verified_at=datetime.now(UTC) if email_verified else None,
+                platform_provisioned_at=datetime.now(UTC) if platform_provisioned else None,
             )
             user_repository.save(user)
 

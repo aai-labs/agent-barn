@@ -7,12 +7,18 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 ## Current state
 
 - Delivered: AF-388 manual authoring is merged through PR #308.
-- In transition: AF-389 Agent-session text execution is in open PR [#326](https://github.com/aai-labs/agent-barn/pull/326) against staging. This AF-415 worktree starts at local head `6e109add`; neither PR merge nor deployment is implied.
+- Dependency: AF-389 Agent-session execution is tracked in [PR #326](https://github.com/aai-labs/agent-barn/pull/326). AF-415 launched from local `6e109add` and integrates the current prerequisite-branch head `37901c38`; the PR remains based on `feature/af-389-run-workflows-real-outputs`.
 - Implemented in AF-415 draft [PR #328](https://github.com/aai-labs/agent-barn/pull/328): shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
 - Next: review and deploy AF-415 with private Garage configuration, then AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
 - Blockers: AF-389's uncertain-effect automatic retry, truthful stop/quiescence, live OpenClaw Agent-session acceptance and run-read-policy coordination remain open. Storage does not resolve them. Production Garage provisioning and rollout are separate authorized operational steps.
 
 ## Changes
+
+### 2026-10-24 — AF-415 — update prerequisite base and full verification
+
+- Updated: integrated current prerequisite head `37901c38`, preserving incoming billing/staging work and the removal of the workflow active-run cap. Resolved shared test cleanup and epic-history conflicts by retaining both domains.
+- Schema: no-op merge revision `a4151c9d0e21` joins artifact head `a4150b8c9d10` and updated prerequisite head `b9e32d74a610`. Artifact publication, ownership and guarded rollback contracts remain unchanged.
+- Verification: pre-integration full API/browser/runtime/storage results are recorded separately from the required combined-source rerun in the artifact evidence. The maintainer authorized pushing after verification; no PR merge or deployment is authorized.
 
 ### 2026-10-23 — AF-415 — main-stack review corrections (local, not pushed)
 
@@ -51,6 +57,23 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Delivered: one scoped CLI on both runtimes, ordinary chat publication, fresh signed links, Agent Files and workflow downloads alongside text results; active run pins and 30-day retention after release; deletion journals survive aggregate hard deletion.
 - Operations: storage remains optional for text-only work. Documented service-only bucket access, limits, URL bearer semantics, migration/guarded rollback, recovery and bounded purge CronJob. No production provisioning, merge or deployment.
 - Verification: see [evidence](../agent-artifacts/EVIDENCE.md), which distinguishes disposable real storage/runtime contracts from intercepted UI tests and unperformed live messaging/deployment acceptance.
+
+### 2026-10-22 — AF-389 — update from latest staging
+
+- Updated: Merged `origin/staging` at `d2cfca47` without text conflicts. Added no-op merge revision `b9e32d74a610` to join workflow head `f8740a67b788` with staging head `3bbf2465b9cb`; no data or schema operations are introduced.
+- Verification: All 102 workflow run/authoring and trigger-server tests pass after repairing the migration graph. `make check-api`, `make check-migrations`, `make check-workflows` (Helm 3.19.0), and `git diff --check` pass. No new live Agent or browser run is claimed.
+
+### 2026-10-22 — AF-389 — remove the workflow concurrency cap
+
+- Changed: Removed the separate two-active-runs admission cap and its policy constant. Multiple runs of one or several workflows can start as sessions in the owning Agent; transactional start serialization and authorization remain in place.
+- Documentation: Updated the feature contract and operations guidance; removed obsolete capacity tests in favor of acceptance beyond the former cap.
+- Verification: Both updated acceptance tests failed against the original cap with HTTP 409. After removal, all 79 workflow run/authoring integration tests pass, along with `make check-api` and `git diff --check`.
+
+### 2026-10-22 — AF-389 — synchronize the public Agent API guide
+
+- Corrected: The developer guide now describes steps as sessions in the owning Agent, inheriting its current configuration. Removed stale reasoning-only rejection and runtime-image pinning claims. Clarified current permissions, attention-blocked runs, unavailable approval/resume operations and best-effort cancellation.
+- Limits: Documented that failed/expired unfinished steps can currently retry automatically, dispatch deduplication does not guarantee exactly-once external effects, and the agreed uncertain-effect handling remains unimplemented. This documentation change does not change runtime behavior.
+- Verification: Compared the guide with the start/read/cancel services, runtime dispatch, DTOs and controller; checked Markdown structure and whitespace. No application tests were rerun for this prose-only correction.
 
 ### 2026-10-21 — AF-389 — PR preparation against latest staging
 

@@ -233,9 +233,9 @@ pins version, initiator User/Membership, inputs and the Agent's runtime kind; it
 does not pin a runtime image or model, because the Agent's current configuration
 applies. Historical saved versions are addressable directly. Start identities are
 unique per definition; identical retries return the original run, including after
-archive, while changed actor/version/inputs return 409. Starts serialize per Agent across its definitions, with a
-maximum of two QUEUED/RUNNING/CANCELLING runs. PAUSED and BLOCKED runs do not
-consume capacity. Other Agents and Organizations have independent capacity.
+archive, while changed actor/version/inputs return 409. Starts serialize per Agent across its definitions for transactional consistency.
+Workflow admission does not impose an active-run concurrency cap; multiple runs
+can execute as separate sessions in the owning Agent.
 Declared step capabilities do not gate admission. All subordinate reads use current Agent visibility before
 totals/pagination; start/cancel require `agent.update`, including custom and
 general Agent Access. Read-only keys cannot mutate. Viewers can inspect run

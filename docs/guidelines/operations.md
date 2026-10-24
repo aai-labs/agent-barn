@@ -569,6 +569,16 @@ Agent Barn's own Telegram bot lets Organizations use Telegram without bringing a
 - Optional tunables, normally left unset: `AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL` (where linked users' messages are delivered to an Agent; defaults to its in-cluster Service on port 8443) and `AGENTBARN_TELEGRAM_BOT_RATE_PER_SECOND` / `AGENTBARN_TELEGRAM_ORGANIZATION_RATE_PER_SECOND` (defaults 25 and 5).
 - Polling and proxying run on one Communications replica at a time (a database lease decides which). Rate limits are per process, which holds while `communications.replicaCount` is 1.
 
+## Payments (Stripe)
+
+Organizations on Credit buy more through Stripe Checkout (see `../features/credit.md`). Off until a Platform Administrator turns payments on.
+
+- **Turning payments on** is a platform setting: **Take payments** under Billing on the platform settings page, off by default, and refused until the deployment has both Stripe secrets below. Off stops new purchases (checkout answers 404, and the Billing page offers no Buy credit); balances and history stay readable. The webhook is served whenever `STRIPE_WEBHOOK_SECRET` is set, so payments already made, refunds and disputes still land after payments are turned off. A webhook secret requires the secret key whether payments are on or off (the webhook reads refunds from Stripe): the API refuses to boot otherwise.
+- **`STRIPE_SECRET_KEY`** and **`STRIPE_WEBHOOK_SECRET`** are GitHub secrets with the same prefixes, flowing through `helmfile.yaml.gotmpl` into the API chart's shared Secret. Give each environment its own: staging a Stripe sandbox, production the live account. The secret key may be a restricted key with write access to Customers and Checkout Sessions and read access to Refunds and PaymentIntents (the webhook reads a refund's current status, and whether a payment is a credit purchase, because Stripe doesn't deliver events in order).
+- **Webhook endpoint:** in the Stripe Dashboard, point an endpoint at `https://<API host>/api/v1/billing/stripe/webhook` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `refund.created`, `refund.updated`, `refund.failed`, `charge.dispute.funds_withdrawn` and `charge.dispute.funds_reinstated`, and store its signing secret as `STRIPE_WEBHOOK_SECRET`. Locally, `stripe listen --print-secret` prints a `whsec_` to use instead, and `stripe listen --events checkout.session.completed,checkout.session.async_payment_succeeded,refund.created,refund.updated,refund.failed,charge.dispute.funds_withdrawn,charge.dispute.funds_reinstated --forward-to localhost:<API port>/api/v1/billing/stripe/webhook` relays them (recent Stripe CLIs refuse to listen without `--events`).
+- Minimum and maximum purchase and the purchase fee are platform settings, edited on the platform settings page. $1 of credit is always $1 of model spend; the purchase fee (0% by default, so the platform absorbs Stripe's fee) is the only markup. The minimum can't go below $0.50, Stripe's smallest card payment.
+- A payment for an Organization that has left credit meanwhile grants nothing: it is recorded on the platform audit log as `platform.credit_purchase.unapplied` (and logged as an error) for someone to refund in Stripe.
+
 ## Staging environment
 
 Staging is a fully separate stack in its own namespace (`agent-farm-staging`),
@@ -635,6 +645,7 @@ git push origin "$RELEASE_TAG"
 | `PUBLIC_SENDER_EMAIL` | `noreply@mail.agentbarn.dev` |
 | `PUBLIC_AGENT_EMAIL_DOMAIN` | `agents.agentbarn.dev`. Unset leaves agent email inert and skips the Worker publish |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_USERNAME` | The public deployment's own bot, without `@`. Unset hides Agent Barn Telegram |
+| `PUBLIC_ORGANIZATION_DEFAULT_AGENT_LIMIT` | How many Agents a non-trial Organization may run until a Platform Administrator saves a default on the platform settings page. Unset is 10 |
 | `PUBLIC_STORAGE_CLASS` | `rook-ceph-block-main` (or `local-path` until Ceph OSDs exist) |
 
 ### Public GitHub secrets
@@ -662,6 +673,7 @@ kubeconfig portably with
 | `PUBLIC_SLACK_ALERTS_WEBHOOK_URL` | `#alerts` or a public-specific channel |
 | `PUBLIC_EMAIL_INBOUND_SECRET` | New (`openssl rand -hex 32`). Required once `PUBLIC_AGENT_EMAIL_DOMAIN` is set, and must differ from the staging and k3s values |
 | `PUBLIC_AGENTBARN_TELEGRAM_BOT_TOKEN` | Optional. A bot created for this deployment only; never reuse the staging or k3s bot |
+| `PUBLIC_STRIPE_SECRET_KEY` / `PUBLIC_STRIPE_WEBHOOK_SECRET` | Needed before payments can be turned on in the platform Billing settings. The live account's key and this deployment's webhook endpoint secret |
 
 Shared with k3s (already present): `CLOUDFLARE_ACCOUNT_ID`,
 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_WORKERS_TOKEN`,
@@ -851,9 +863,8 @@ value. Local Compose derives it from `API_PORT` through `host.docker.internal`.
 
 Workflow limits and text retention are hard coded in
 `api/domains/workflows/config.py`; they are not environment or Helm options.
-Each Agent permits two queued/running/cancelling runs across all its workflows.
-Paused and blocked runs do not consume capacity; other Agents and Organizations
-have independent capacity. Per-Agent UI settings are future work. Waiting for an unreachable Agent consumes
+Workflow admission has no active-run concurrency cap. Runs execute as sessions
+in the owning Agent and share its resources. Waiting for an unreachable Agent consumes
 the attempt deadline. Non-successful Agent dispatch responses are logged with
 the run identity and HTTP status. A 404 on the workflow step route indicates an
 older trigger server; pause and start that Agent to load the current configuration.
@@ -869,8 +880,9 @@ history retention period; run metadata/status remains.
 
 The unreleased migration `a38901e8a003` follows `c32e42bb0396`, adding run, attempt,
 checkpoint and history records with scope/pin constraints. No-op merge revision
-`f8740a67b788` joins it with staging head `a4e9c2d7b615` to preserve one head. No live schema change
-is performed by this work. Do not downgrade a populated execution schema: it
+`f8740a67b788` joins it with staging head `a4e9c2d7b615`. No-op merge
+`b9e32d74a610` joins that lineage with the later staging head `3bbf2465b9cb`
+to preserve one head. No live schema change is performed by this work. Do not downgrade a populated execution schema: it
 drops the ledger. Existing aggregate deletion cascades workflow-owned records.
 File artifacts and shared object storage are deferred to a separate slice; WF02
 has no storage environment variables, buckets, artifact tables or file endpoints.

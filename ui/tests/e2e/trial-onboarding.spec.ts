@@ -564,7 +564,7 @@ test.describe("Trial onboarding", () => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false }));
     await data.organizations.interceptGetOrganization({
-      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 50, trial_agent_limit_reached: false },
+      organization: { ...trialUserContext.organization_users[0].organization, agent_limit: 50, agent_limit_reached: false, trial_agent_limit: 50, trial_agent_limit_reached: false },
     });
     await data.agents.interceptGetAgentsRequest();
     await data.agents.interceptGetAgentHealthRequest();
@@ -629,7 +629,7 @@ test.describe("Trial onboarding", () => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false }));
     await data.organizations.interceptGetOrganization({
-      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 1, trial_agent_limit_reached: true },
+      organization: { ...trialUserContext.organization_users[0].organization, agent_limit: 1, agent_limit_reached: true, trial_agent_limit: 1, trial_agent_limit_reached: true },
     });
     // Capacity is authoritative even if this member cannot see the Agent using it.
     await data.agents.interceptGetAgentsRequest({ body: { page: 1, page_size: 50, total: 0, items: [] } });
@@ -651,7 +651,7 @@ test.describe("Trial onboarding", () => {
     const data = await signedInTrialUser(page);
     await data.onboarding.interceptGetOnboarding(onboarding({ required: false }));
     await data.organizations.interceptGetOrganization({
-      organization: { ...trialUserContext.organization_users[0].organization, trial_agent_limit: 1 },
+      organization: { ...trialUserContext.organization_users[0].organization, agent_limit: 1 },
     });
     await data.organizations.interceptGetMembers();
 

@@ -1,8 +1,9 @@
 # AF-415 verification evidence
 
 Initial implementation verified 2026-10-22; independent-review corrections verified locally 2026-10-23 in the independent `feature/af-415-agent-artifacts` worktree,
-starting at local AF-389 head `6e109add`. AF-389 PR
-[#326](https://github.com/aai-labs/agent-barn/pull/326) remains open against staging.
+starting at local AF-389 head `6e109add`; the prerequisite work is tracked in
+[#326](https://github.com/aai-labs/agent-barn/pull/326). The October 24 delivery
+integrates current prerequisite-branch head `37901c38`.
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
@@ -47,6 +48,22 @@ failures; it was interrupted and restarted using the documented CI production
 server/two-worker configuration. The first disposable Kubernetes run passed
 18 cases and returned no logs in one multiline-log case; the clean rerun is
 passed with all 19 cases. No source behavior was weakened to suppress those failures.
+
+## Current prerequisite integration — 2026-10-24
+
+Integrated prerequisite head `37901c38` rather than publishing a conflicting draft.
+The shared cleanup fixture retains artifact and billing tables, and the epic log
+retains both histories. No-op head `a4151c9d0e21` joins artifact migration
+`a4150b8c9d10` with prerequisite head `b9e32d74a610`; publication and guarded
+rollback invariants remain unchanged. Incoming removal of the workflow active-run
+cap is preserved and does not weaken per-artifact attempt/generation fences.
+
+The focused artifact/migration/workflow compatibility suite passed **58 tests in
+34.45 seconds**, including guarded downgrade and re-upgrade through the combined
+migration graph. All API/UI lint/types/format, migration, chart and monitoring
+checks passed on the combined source. Full API/browser/runtime reruns are in
+progress. A new Opus review attempt was rate-limited; the prior independent approval
+covers its reviewed artifact revision, not an unperformed integration review.
 
 ## Reproducible checks
 

@@ -32,6 +32,12 @@ from api.domains.api_keys.routes import router as api_keys_router
 from api.domains.artifacts.routes import router as artifacts_router
 from api.domains.artifacts.runtime_routes import router as artifact_runtime_router
 from api.domains.auth.routes import auth_router
+from api.domains.billing.routes import (
+    billing_router,
+    platform_billing_router,
+    platform_billing_settings_router,
+    stripe_webhook_router,
+)
 from api.domains.business_value.routes import business_value_router
 from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.operations import CommunicationOperationalRepository
@@ -46,7 +52,7 @@ from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
 from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
-from api.domains.organizations.routes import org_router, platform_org_router
+from api.domains.organizations.routes import org_router, platform_org_router, platform_organization_settings_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.playbooks.platform_routes import platform_playbooks_router
 from api.domains.playbooks.routes import agent_playbook_extractions_router, playbook_extractions_router
@@ -148,6 +154,11 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_memory_router)
     subapi.include_router(platform_trial_settings_router)
     subapi.include_router(onboarding_router)
+    subapi.include_router(billing_router)
+    subapi.include_router(platform_billing_settings_router)
+    subapi.include_router(platform_organization_settings_router)
+    subapi.include_router(platform_billing_router)
+    subapi.include_router(stripe_webhook_router)
     subapi.include_router(platform_workflow_router)
     subapi.include_router(agent_memory_router)
     subapi.include_router(memory_grants_router)

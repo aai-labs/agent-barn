@@ -103,6 +103,8 @@ spec:
               value: {{ .Values.organizationLlmBudgets.alertThresholds | quote }}
             - name: AGENT_MODEL_ALLOWLIST
               value: "{{ .Values.agentModelAllowlist }}"
+            - name: ORGANIZATION_DEFAULT_AGENT_LIMIT
+              value: {{ .Values.organizationDefaultAgentLimit | quote }}
             - name: AGENT_FIRECRAWL_BASE_URL
               value: "{{ .Values.agentFirecrawlBaseUrl }}"
             - name: PROMETHEUS_URL

@@ -128,6 +128,10 @@ class CostSynchronizer:
     memory_key_hashes: frozenset[str] = frozenset()
     memory_key_source: Callable[[], dict[str, UUID]] | None = None
     memory_organization_keys: dict[str, UUID] = field(default_factory=dict, init=False)
+    # Told which Organizations healing found spend for, once a run's healing is done, so
+    # a limit that depends on it (credit, less what the proxy never counted) is pushed
+    # now rather than at the next reconciliation.
+    on_healed: Callable[[set[UUID]], None] | None = None
 
     def run_once(self) -> CostSyncResult:
         started = time.monotonic()
@@ -358,6 +362,7 @@ class CostSynchronizer:
         attempted = 0
         truncated = False
         seen: set[str] = set()
+        organizations_healed: set[UUID] = set()
 
         while True:
             if self._out_of_time(started):
@@ -371,22 +376,31 @@ class CostSynchronizer:
             seen.update(c.request_id for c in batch)
 
             with ThreadPoolExecutor(max_workers=COST_HEAL_CONCURRENCY) as executor:
-                futures = [
-                    executor.submit(self._heal_one, candidate.request_id, started)
+                futures = {
+                    executor.submit(self._heal_one, candidate.request_id, started): candidate
                     for candidate in batch
                     if not self._out_of_time(started)
-                ]
+                }
                 if len(futures) < len(batch):
                     truncated = True
                 attempted += len(futures)
                 for future in as_completed(futures):
-                    outcome = future.result()
+                    outcome, spend = future.result()
                     if outcome == "healed":
                         healed += 1
+                        organization_id = futures[future].organization_id
+                        if spend > 0 and organization_id is not None:
+                            organizations_healed.add(organization_id)
                     elif outcome == "not_found":
                         not_found += 1
                     else:
                         failed += 1
+
+        if organizations_healed and self.on_healed is not None:
+            try:
+                self.on_healed(organizations_healed)
+            except Exception:
+                logger.exception("Applying healed spend to %s Organizations failed", len(organizations_healed))
 
         return replace(
             result,
@@ -397,34 +411,36 @@ class CostSynchronizer:
             truncated=result.truncated or truncated,
         )
 
-    def _heal_one(self, request_id: str, started: float) -> str:
+    def _heal_one(self, request_id: str, started: float) -> tuple[str, Decimal]:
+        """The outcome, and the cost written back when healed."""
         if self._out_of_time(started):
-            return "failed"
+            return "failed", Decimal(0)
         try:
             generation = self.generations.get_generation(request_id)
         except Exception as exc:
             logger.warning("Cost healing lookup failed for %s: %s", request_id, exc)
-            return "failed"
+            return "failed", Decimal(0)
 
         if generation is None:
             # OpenRouter has no such generation. Leave the row a candidate: writing a
             # zero would assert the call was free, when all we know is that we could
             # not find out.
-            return "not_found"
+            return "not_found", Decimal(0)
 
         total_cost = generation.get("total_cost")
         if total_cost is None:
-            return "failed"
+            return "failed", Decimal(0)
 
         # Tag the row even when the cost is zero. A genuinely free generation is a real
         # answer, and leaving it untagged would have every future run fetch it again.
+        spend = Decimal(str(total_cost))
         self.repository.mark_healed(
             request_id,
-            spend=Decimal(str(total_cost)),
+            spend=spend,
             prompt_tokens=_optional_int(generation.get("native_tokens_prompt")),
             completion_tokens=_optional_int(generation.get("native_tokens_completion")),
         )
-        return "healed"
+        return "healed", spend
 
     # --- Shared ------------------------------------------------------------
 

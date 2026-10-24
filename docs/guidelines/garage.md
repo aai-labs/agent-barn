@@ -315,7 +315,9 @@ and [recovery](https://garagehq.deuxfleurs.fr/documentation/operations/recoverin
 for the deployed version. A lost node's data is repaired from remaining copies;
 replacement node IDs require explicit layout changes, not the initial bootstrap tool.
 
-Migration `a4150b8c9d10` follows `f8740a67b788`; migrate before new API/worker code.
+Artifact migration `a4150b8c9d10` follows `f8740a67b788`. No-op merge head
+`a4151c9d0e21` joins it with updated prerequisite head `b9e32d74a610`; run
+`make migrate` to the single combined head before new API/worker code.
 Rollback admission/UI first and keep additive metadata plus purge tooling until
 in-flight uploads settle/expire. Downgrade refuses any non-DELETED artifact, preserving
 the only deletion journal. Before dropping tables, export required files or authorize
