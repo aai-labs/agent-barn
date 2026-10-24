@@ -470,3 +470,9 @@ _Avoid_: Agent Skill, native scheduled job
 An immutable saved snapshot of a Workflow. Editing and saving appends a new
 version; a future run pins the version it starts with.
 _Avoid_: mutable draft, runtime session
+
+**Agent Artifact**:
+An immutable published file owned by one Organization and Agent, with PostgreSQL
+metadata and private Garage/S3 bytes. Workflow provenance is optional. Consumers
+pin its exact artifact ID and SHA-256; signed download links are temporary bearer
+access, not file identity. See [Agent artifacts](docs/features/agent-artifacts.md).

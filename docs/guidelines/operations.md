@@ -917,3 +917,14 @@ workflow definitions and versions remain. Schema downgrade of WF01 drops
 WF01 records and is appropriate only for a disposable/empty installation or an
 explicitly approved data-removal operation; take a backup before intentional
 removal. Release versions are unchanged until release preparation is requested.
+
+## Agent artifact storage (Garage)
+
+The [Garage operations guide](garage.md) owns persistent local setup, cluster
+installation/bootstrap, credential separation, TLS, backups, recovery, verification
+and storage rollback. [Agent artifacts](../features/agent-artifacts.md) owns the
+publication, access, immutable-reference, link and retention contracts. Storage is
+required by normal local Compose startup, which includes Garage and the purge
+worker without a profile. The feature still supports text-only operation when
+storage is unavailable. Use the guide's explicit local commands; never point
+disposable tests or bootstrap commands at an installation's retained storage.

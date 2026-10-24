@@ -14,6 +14,23 @@ helmDefaults:
   timeout: 600
 
 releases:
+{{ if eq (env "GARAGE_ENABLED") "true" }}
+  - name: garage
+    namespace: {{ env "NAMESPACE" | default "agent-farm" }}
+    chart: ./helm/garage
+    # Bootstrap Garage with helm and cluster-init before enabling this release.
+    # CLI --wait overrides this default; normal deploys wait for existing storage.
+    wait: false
+    labels:
+      name: garage
+    values:
+      - existingRpcSecret: {{ env "GARAGE_RPC_SECRET_NAME" | default "garage-rpc" | quote }}
+        storageClass: {{ env "STORAGE_CLASS" | default "" | quote }}
+        ingress:
+          enabled: true
+          host: {{ env "GARAGE_S3_HOST" | required "GARAGE_S3_HOST is required when GARAGE_ENABLED=true" | quote }}
+          tlsSecret: {{ env "GARAGE_TLS_SECRET" | default "garage-s3-tls" | quote }}
+{{ end }}
   - name: postgres-hindsight
     namespace: {{ env "NAMESPACE" | default "agent-farm" }}
     chart: ./helm/postgres
@@ -158,6 +175,10 @@ releases:
     labels:
       name: agentbarn-api
     set:
+      - name: artifacts.existingSecret
+        value: {{ env "ARTIFACT_STORAGE_SECRET" | default "" | quote }}
+      - name: artifacts.purgeEnabled
+        value: {{ env "ARTIFACT_PURGE_ENABLED" | default "false" }}
       - name: registryPrefix
         value: {{ env "REGISTRY_PREFIX" | default "registry.k8s.aai-labs.com" | quote }}
       - name: image.repository

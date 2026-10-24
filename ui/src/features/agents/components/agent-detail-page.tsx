@@ -22,6 +22,7 @@ import { ToolCallsTab } from "./tool-calls-tab";
 import { LogsTab } from "./logs-tab";
 import { ActivityTab } from "./activity-tab";
 import { AgentMemoryTab } from "@/features/agent-memory/components/agent-memory-tab";
+import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { WorkflowsPage } from "@/features/workflows/components/workflows-page";
 import { useWorkflowCapabilities } from "@/features/workflows/hooks/use-workflows";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
@@ -211,6 +212,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
+            {resolvedTab === "files" && <AgentFiles key={`${orgId}:${agent.id}`} agentId={agent.id} />}
             {resolvedTab === "workflows" && orgId && (
               <WorkflowsPage key={`${orgId}:${agent.id}`} agentId={agent.id} organizationId={orgId} embedded onStartingChange={setStartingRun} />
             )}

@@ -6,13 +6,58 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Current state
 
-- Delivered in this change: [AF-388 / WF01](https://aai-labs.atlassian.net/browse/AF-388) Agent-owned definitions, immutable schema-v1 versions, validated step/input schemas and manual authoring/inspection through the Agent’s Workflows tab. WF01 is merged into staging via PR #308, including its review follow-ups.
-- Implemented and locally verified: [AF-389 / WF02](https://aai-labs.atlassian.net/browse/AF-389) explicit version/input starts, steps run as sessions in the owning Agent under its own configuration, durable progression/cancellation, completed-step text summaries and a final text result stored in PostgreSQL. File artifacts and shared storage are deferred; no deployment or live schema change accompanies this work.
-- In transition: WF02 is committed on top of staging (which includes WF01) and remains unmerged. Natural-language generation remains a separate PR; file artifacts/shared storage and approvals/notifications are later slices.
-- Next: Merge/deployment coordination after the successful local Hermes run. Shared storage and workflow file artifacts need a separate scoped task/PR; generation and WF03 business actions remain independent follow-ups.
-- Verification limits: The original Agent-session checks passed 181 focused API, trigger-server, builder and contract tests. The wakeup repair passes 95 workflow/trigger-server tests plus lint, formatting and API type checks. A live two-step Research run on restarted local Hermes Agent Arlo completed successfully with both text summaries persisted. Live OpenClaw execution and a broad full-suite pass are not claimed.
+- Delivered: AF-388 manual authoring is merged through PR #308.
+- Dependency: AF-389 Agent-session execution is tracked in [PR #326](https://github.com/aai-labs/agent-barn/pull/326). AF-415 launched from local `6e109add` and integrates the current prerequisite-branch head `37901c38`; the PR remains based on `feature/af-389-run-workflows-real-outputs`.
+- Implemented in AF-415 draft [PR #328](https://github.com/aai-labs/agent-barn/pull/328): shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
+- Next: review and deploy AF-415 with private Garage configuration, then AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
+- Blockers: AF-389's uncertain-effect automatic retry, truthful stop/quiescence, live OpenClaw Agent-session acceptance and run-read-policy coordination remain open. Storage does not resolve them. Production Garage provisioning and rollout are separate authorized operational steps.
 
 ## Changes
+
+### 2026-10-24 — AF-415 — update prerequisite base and full verification
+
+- Updated: integrated current prerequisite head `37901c38`, preserving incoming billing/staging work and the removal of the workflow active-run cap. Resolved shared test cleanup and epic-history conflicts by retaining both domains.
+- Schema: no-op merge revision `a4151c9d0e21` joins artifact head `a4150b8c9d10` and updated prerequisite head `b9e32d74a610`. Artifact publication, ownership and guarded rollback contracts remain unchanged.
+- Verification: final combined-source checks pass: 5,841 API tests, 984 browser cases with five existing Gmail OAuth skips, 29 runtime/deployment contracts and 58 focused migration/artifact/workflow cases; static checks, monitoring and builds pass. Unchanged Kubernetes/three-node storage checks retain their passing evidence. Earlier failed samples and independent-review limits remain explicit in the artifact evidence.
+- Delivery: the maintainer authorized pushing after verification; this updates draft PR #328 against its existing feature-branch base. No PR merge or deployment is authorized.
+
+### 2026-10-23 — AF-415 — main-stack review corrections (local, not pushed)
+
+- Fixed: root Compose parses before private Garage setup, restoring native db/redis commands and shutdown for existing users. Required Garage bind sources still fail when unconfigured; bootstrap refreshes only public saved settings in the application `.env`.
+- Fixed: unconfigured Compose uses separate sentinel paths/volume names, so a failed bare start cannot allocate volumes that block first-time bootstrap. Operators may remove leftover empty sentinel volumes after setup.
+- Fixed: backup/status queries select Garage alone, so another running app service cannot trigger a backup or restart an intentionally stopped Garage. The adoption fixture uses a unique project name.
+- Verification: review regressions reproduced and isolated mutations caught; the final 13-case configuration/storage/recovery suite passes, including missing/stopped containers and actual failed-pre-bootstrap recovery. Opus round 11 independently approved with no Required findings and passed its nine-case subset; exact evidence and limits are recorded in the artifact evidence. No push, merge or deployment.
+
+### 2026-10-23 — AF-415 — required main-stack storage (local, not pushed)
+
+- Changed: Garage and artifact-purge run in the main Compose project without a profile. Normal startup prepares private credentials and bootstraps Garage before API startup; API/purge depend on storage health.
+- Compatibility: adopting the earlier standalone local store preserves its exact volumes, keys, node identity and endpoint. Storage-only stop/failed-initialization cleanup targets Garage without stopping the application database.
+- Verification: nine focused configuration/persistence/recovery cases pass, including actual S3-byte adoption through root Compose; disabling adoption fails its project assertion. Python types/lint, shell syntax and artifact/workflow chart checks pass. The new Opus review attempt was rate-limited; earlier approvals cover their reviewed revisions.
+- Delivery: local verification is recorded in the artifact evidence. No push, merge or external deployment.
+
+### 2026-10-23 — AF-415 — persistent storage infrastructure (local, not pushed)
+
+- Added: persistent worktree-isolated Garage Compose service, private one-time bootstrap, API/native-development wiring, scheduled local purge, consistent backup and fresh-volume restore.
+- Deployment: namespace-scoped three-node Garage chart, separate RPC/application Secrets, non-root pods, PVCs, distinct-node scheduling, private networking and optional TLS; explicit idempotent layout/bucket bootstrap plus opt-in Helmfile/CI variables. No external installation deployment.
+- Verification: eight focused storage/configuration cases; both runtime-image CLIs and real authenticated Agent Files downloads after Garage replacement; two final fresh three-node samples pass quorum reads/writes, changed-pod-IP recovery and live RPC-address checks. Earlier failures and exact evidence remain in the artifact evidence, without a production HA claim.
+- Hardened after review: Traefik defaults/private networking, recoverable initial setup/restore, lost-volume and node-identity guards, stdin-only key import, saved settings protected from shell defaults, private state/backup paths and restored deployment/rollback guidance. Stable per-replica RPC Services preserve recovery across pod IP changes.
+- Delivery: infrastructure changes remain local for agreement before any push. AF-389 retry/stop/runtime acceptance and AF-390 approval integration remain separate dependencies.
+
+### 2026-10-23 — AF-415 — local independent-review corrections (not pushed)
+
+- Fixed: completion credentials stay out of prompts/CLI arguments; runtime identity plus an owning-Agent attempt fence authorizes file publication. S3 I/O holds only the file lock; finalization reacquires run then file locks and fences intervening cancellation/deletion.
+- Concurrency: overlapping publication/finalization uses nonblocking file locks; lock contention returns retryable 409 without failing another upload. The owning Agent trust boundary is explicit; there is no per-session isolation claim.
+- Bounded: 16 staged/READY files per attempt and 16,000 bytes of file references per run. Unsafe purge targets record attempts/backoff, and pin release preserves deletion retry timing.
+- Updated: RBAC runtime/background exceptions, attempt provenance, settled-run file polling, HTTP-only links, input validation and storage-disabled prompt behavior. Regression evidence and follow-up review are recorded with the artifact evidence.
+- Review: Opus 5.5 approved the final local working tree with no Required findings; its 15 review regressions passed against PostgreSQL/Garage. The proposed whole-Agent trust boundary still awaits maintainer agreement.
+- Delivery: these corrections remain local pending the maintainer's explicit agreement to push; PR #328 still contains the earlier revision.
+
+### 2026-10-22 — AF-415 — [PR #328](https://github.com/aai-labs/agent-barn/pull/328) — shared Agent artifacts and file sharing
+
+- Changed: Additive artifact/reference schema, private Garage-compatible S3 adapter, credential-derived runtime identity and current attempt/initiator fences. Published bytes are immutable and verified before READY.
+- Delivered: one scoped CLI on both runtimes, ordinary chat publication, fresh signed links, Agent Files and workflow downloads alongside text results; active run pins and 30-day retention after release; deletion journals survive aggregate hard deletion.
+- Operations: storage remains optional for text-only work. Documented service-only bucket access, limits, URL bearer semantics, migration/guarded rollback, recovery and bounded purge CronJob. No production provisioning, merge or deployment.
+- Verification: see [evidence](../agent-artifacts/EVIDENCE.md), which distinguishes disposable real storage/runtime contracts from intercepted UI tests and unperformed live messaging/deployment acceptance.
 
 ### 2026-10-22 — AF-389 — update from latest staging
 

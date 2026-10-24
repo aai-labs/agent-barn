@@ -1,5 +1,6 @@
 "use client";
 
+import { AgentFiles } from "@/features/artifacts/components/agent-files";
 import { useState } from "react";
 import { ChevronRight, FileCheck2, LayoutDashboard } from "lucide-react";
 import { useQueryState } from "nuqs";
@@ -350,6 +351,7 @@ function RunContents({
               <RunSummary run={run} agentName={agent.name} />
             )}
           </div>
+          <AgentFiles key={`${run.id}:${selectedStep?.id ?? "all"}`} agentId={agentId} runId={run.id} stepId={selectedStep?.id} polling={["QUEUED", "RUNNING", "CANCELLING"].includes(run.state)} />
           <WorkflowRunTiming run={run} />
         </div>
       </div>

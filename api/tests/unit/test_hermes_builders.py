@@ -477,3 +477,30 @@ def test_agentbarn_telegram_env_runs_hermes_in_webhook_mode_with_the_stand_in_to
         "TELEGRAM_HOME_CHANNEL": "__agentbarn_no_home_channel__",
         "AGENTBARN_SCHEDULED_DELIVERY": "0",
     }
+
+
+def test_artifact_command_and_instructions_are_available_without_memory() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        {},
+        artifacts_enabled=True,
+    )
+    assert "agentbarn_artifacts.py" in config_map.data
+    assert "exec python3 /app/config/agentbarn_artifacts.py" in config_map.data["agentbarn-artifacts"]
+    assert "/usr/local/bin/agentbarn-artifacts upload" in config_map.data["AGENTS.md"]
+
+
+def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", {}
+    )
+    assert "Files and download links" not in config_map.data["AGENTS.md"]

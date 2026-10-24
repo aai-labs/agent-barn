@@ -14,6 +14,20 @@ Agent's own tools, Integrations, approval mode and spend limits govern it. The
 owns admission and text-checkpoint invariants; [operations](../guidelines/operations.md#workflow-execution-wf02)
 owns installation prerequisites.
 
+Both runtime builders mount the shared `agentbarn-artifacts` CLI. They append its
+instructions to AGENTS.md when artifact storage is configured at Agent start.
+Enabling storage requires restarting existing Agents to load those instructions;
+the per-step workflow prompt checks current API storage configuration live. The runtime Secret contains a purpose-separated
+per-start Agent service capability and no bucket credentials. File publication
+and sharing follow the [artifact contract](../features/agent-artifacts.md), using
+existing native messaging tools and policy. The [Garage setup](../guidelines/operations.md#agent-artifact-storage-garage)
+supports text-only operation when storage is unavailable. Normal local startup
+requires Garage and the purge worker in the main Compose project, without a
+profile opt-in. The separate Garage chart owns persistent
+replicated storage; explicit operator bootstrap owns layout, bucket and separate
+service credentials. Local Compose storage uses named volumes and ignored private
+configuration. See [Garage operations](../guidelines/garage.md).
+
 Starting an agent is an API-orchestrated deployment flow:
 
 1. Load the organization-owned agent and its pinned template version.

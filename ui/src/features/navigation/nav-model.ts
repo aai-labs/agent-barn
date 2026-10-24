@@ -194,6 +194,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
   logs: SquareTerminal,
   memory: Brain,
   workflows: Workflow,
+  files: FileText,
   playbooks: BookOpen,
   activity: Activity,
   costs: Wallet,
@@ -204,7 +205,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
 export const AGENT_TAB_GROUPS: { key: string; label?: string; tabs: AgentPageTab[] }[] = [
   // The Overview (the About section) opens the Agent, so it leads the list.
   { key: "talk", tabs: ["about", "chat", "conversations", "memory"] },
-  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "playbooks"] },
+  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks"] },
   { key: "health", label: "Health", tabs: ["activity", "costs", "resource-usage"] },
 ];
 

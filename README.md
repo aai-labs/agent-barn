@@ -320,6 +320,11 @@ make dev-memory    # Memory gateway only (normally started by dev-api)
 make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 ```
 
+The db/redis targets and `./stop.sh` work before Garage has been configured.
+For native file uploads/downloads, run `make garage-up` before `make dev-api`;
+see [Garage operations](docs/guidelines/garage.md). The full `./run.sh` path starts
+Garage and the purge worker automatically, without a profile.
+
 `make db-down` stops PostgreSQL; `make db-logs` and `make db-restart` manage it.
 The worker and reconciliation command also need a Redis server reachable at the
 `REDIS_URL` in `.env`. The Compose Redis service does not publish a host port,

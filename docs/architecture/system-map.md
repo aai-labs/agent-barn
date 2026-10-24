@@ -33,6 +33,7 @@ Organization
     ├── Communication Connections ── Platform Plugins
     │   ├── Web Chat/Email Deliveries ── Communications Gateway
     │   └── Native chat transport ── Agent runtime
+    ├── Artifacts ── private Garage/S3 bytes, PostgreSQL references and cleanup journal
     ├── Workflows ── immutable Workflow Versions
     ├── Agent Webhooks ── Webhook Invocations
     ├── Runtime resources ── Kubernetes
@@ -49,6 +50,11 @@ The Agent Memory domain owns the persisted opt-in and Organization-managed Memor
 The Workflows domain owns Agent-scoped authoring, immutable versions and manual
 workflow building. WF01 has no execution API or runtime dispatch. See
 [Agent workflows](../features/agent-workflows.md) for validation, authority and capability gates.
+
+The shared `artifacts` domain owns chat/workflow file metadata, publication, links
+and purge; its [feature contract](../features/agent-artifacts.md) owns lifecycle
+and references. Runtime requests have a separate Agent credential boundary at
+`/artifact-runtime/v1` on the product API listener.
 
 ## Dependency direction
 

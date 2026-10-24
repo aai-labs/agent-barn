@@ -4,6 +4,7 @@ from uuid import UUID
 
 from injector import inject, singleton
 
+from api.core.config import Config
 from api.domains.workflows import config as workflow_config
 from api.domains.workflows.repository import WorkflowConflict
 from api.domains.workflows.run_repository import WorkflowRunRepository
@@ -24,10 +25,17 @@ STEP_INSTRUCTIONS = (
 @dataclass
 class WorkflowRuntimeService:
     repository: WorkflowRunRepository
+    config: Config
 
     def handoff(self, attempt_id: UUID, token: str) -> dict:
         run, _, packet = self.repository.admit(attempt_id, token)
+        if self.config.artifact_s3_bucket:
+            packet["file_publication"] = {
+                "command": "/usr/local/bin/agentbarn-artifacts upload <workspace-file>",
+                "required_arguments": {"--attempt-id": str(attempt_id)},
+                "instructions": "Publish requested files before replying. Existing files are identified by exact artifact_id/checksum in completed_steps; use agentbarn-artifacts retrieve to read them. Never report a local path as a published artifact. Storage failure does not prevent an honest text-only result.",
+            }
         context = json.dumps(packet, ensure_ascii=False)
         if len(context.encode()) > workflow_config.MAX_CONTEXT_BYTES:
-            raise WorkflowConflict("Earlier step summaries exceed the workflow context limit")
+            raise WorkflowConflict("Workflow context (summaries and file references) exceeds the context limit")
         return {"runtime": run.runtime, "session_id": f"workflow-{attempt_id}", "prompt": STEP_INSTRUCTIONS + context}

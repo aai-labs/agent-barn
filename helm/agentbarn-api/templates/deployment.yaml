@@ -61,6 +61,10 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.secretName }}
+            {{- if .Values.artifacts.existingSecret }}
+            - secretRef:
+                name: {{ .Values.artifacts.existingSecret }}
+            {{- end }}
             - secretRef:
                 name: {{ .Values.litellmApiKeySecretName }}
           env:

@@ -17,3 +17,16 @@ For multiple connection changes, `POST /custom-api-connections/apply` accepts `c
 For exact field names and request bodies, consult [OpenAPI](/api/v1/openapi.json). In particular, the API field `agent_type` names the Agent Runtime (Hermes or OpenClaw).
 
 The deprecated `POST /api/v1/organizations/{organization_id}/agents/{agent_id}/connections/{connection_id}/reconnect` route remains for compatibility and discovery. Authorized requests for an active Connection always return `409`; native transport recovery requires restarting the Agent. Authentication, Agent update permission, and tenant visibility checks still apply, so invalid credentials, insufficient permission, and concealed or missing resources retain their `401`, `403`, and `404` responses. The route creates no reconnect work.
+
+## Agent files
+
+Under `/organizations/{organization_id}/agents/{agent_id}/artifacts`, POST file
+metadata (filename, content_type, size, lowercase SHA-256 checksum), then PUT raw
+bytes to `/{artifact_id}/content`. Only verified READY files appear in GET lists.
+GET `/{artifact_id}/download-link` issues a fresh 15-minute bearer URL under current
+Agent read access. GET metadata/list/link requires `agent.read`; staging, publication
+and DELETE require `agent.update` and a full-access key. File bytes are immutable;
+failed publication retries create a new artifact identity. Optional `run_id` and
+`step_id` filters apply before pagination. Download links may be shared through
+existing tools; anyone holding one can read until expiry. Expiry neither deletes
+the file nor changes approval state.

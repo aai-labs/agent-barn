@@ -50,6 +50,17 @@ class Config(BaseSettings):
     # to the cluster's default StorageClass.
     storage_class: str = ""
 
+    # Private Agent artifact storage; empty bucket disables file publication only.
+    artifact_s3_bucket: str = ""
+    artifact_s3_endpoint_url: str = ""
+    artifact_s3_region: str = "us-east-1"
+    artifact_s3_access_key: str = ""
+    artifact_s3_secret_key: str = ""
+    artifact_runtime_base_url: str = "http://agentbarn-api:8000/artifact-runtime/v1"
+    artifact_max_bytes: int = Field(default=25 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    artifact_link_max_seconds: int = Field(default=3600, ge=900, le=86400)
+    artifact_retention_days: int = Field(default=30, ge=1, le=3650)
+
     api_image: str = ""
     restore_point_size: str = "1Gi"
     restore_point_max_per_agent: int = Field(default=5, ge=1, le=50)
