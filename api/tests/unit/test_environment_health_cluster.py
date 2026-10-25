@@ -169,6 +169,30 @@ def test_every_claim_is_placed_by_its_agent_in_the_database():
     assert allocation.total_requested_bytes == 16 * _GiB
 
 
+def test_an_agent_claim_created_before_the_current_component_label_is_still_an_agents():
+    running, stopped = _agent("Ada"), _agent("Bob", AgentStatus.STOPPED)
+    gone = uuid4()
+    claims = [
+        _claim(
+            f"agent-{running.id}",
+            "1Gi",
+            {"app": f"agent-{running.id}", "org-id": str(_ACME), "agentfarm.io/component": "agent"},
+        ),
+        _claim(f"agent-{stopped.id}", "1Gi", {"app": f"agent-{stopped.id}", "org-id": str(_ACME)}),
+        _claim(f"agent-{gone}", "1Gi", {"app": f"agent-{gone}"}),
+        _claim("data-postgres-app-0", "10Gi", {"app": "postgres"}),
+    ]
+
+    allocation = cluster.volume_allocation(claims, _identities(running, stopped))
+
+    groups = {group.group: group.claims for group in allocation.groups}
+    assert groups[VolumeGroup.ACTIVE_AGENTS] == 1
+    assert groups[VolumeGroup.STOPPED_AGENTS] == 1
+    assert groups[VolumeGroup.ORPHANED] == 1
+    assert groups[VolumeGroup.INFRASTRUCTURE] == 1
+    assert [row.name for row in allocation.attention] == [f"agent-{gone}"]
+
+
 def test_an_orphaned_or_unbound_claim_needs_a_look_and_names_only_what_is_known():
     running = _agent("Ada")
     gone = uuid4()
@@ -301,7 +325,7 @@ def test_pods_committed_counts_what_the_pods_quota_counts():
 
 
 def test_core_services_leave_out_agents_and_report_replicas():
-    ada = _agent("Ada")
+    ada, bob = _agent("Ada"), _agent("Bob")
     deployments = [
         V1Deployment(
             metadata=V1ObjectMeta(name="agentbarn-api"),
@@ -315,6 +339,11 @@ def test_core_services_leave_out_agents_and_report_replicas():
         ),
         V1Deployment(
             metadata=V1ObjectMeta(name=f"agent-{ada.id}", labels=_agent_labels(ada.id)),
+            spec=V1DeploymentSpec(replicas=1, selector=V1LabelSelector(), template=V1PodTemplateSpec()),
+            status=V1DeploymentStatus(ready_replicas=0),
+        ),
+        V1Deployment(
+            metadata=V1ObjectMeta(name=f"agent-{bob.id}", labels={"app": f"agent-{bob.id}"}),
             spec=V1DeploymentSpec(replicas=1, selector=V1LabelSelector(), template=V1PodTemplateSpec()),
             status=V1DeploymentStatus(ready_replicas=0),
         ),
@@ -608,6 +637,15 @@ def test_the_overall_level_is_the_worst_part():
     assert _level(workloads=failing) == HealthLevel.WARNING
     assert _level(capacity=full) == HealthLevel.CRITICAL
     assert _level(sources={EnvironmentSource.PODS: SourceState.FORBIDDEN}) == HealthLevel.UNKNOWN
+
+
+def test_prometheus_being_unavailable_is_never_ok():
+    reachable = {EnvironmentSource.PODS: SourceState.AVAILABLE, EnvironmentSource.PROMETHEUS: SourceState.UNAVAILABLE}
+    [critical] = cluster.firing_alerts([PrometheusSample({"alertname": "APIDown", "severity": "critical"}, 1.0)], {})
+
+    assert _level(sources=reachable) == HealthLevel.WARNING
+    assert _level(sources=reachable, alerts=[critical]) == HealthLevel.CRITICAL
+    assert _level(sources={**reachable, EnvironmentSource.PROMETHEUS: SourceState.NOT_CONFIGURED}) == HealthLevel.OK
 
 
 @pytest.mark.parametrize("zero_first", [True, False])

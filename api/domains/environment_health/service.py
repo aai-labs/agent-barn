@@ -61,7 +61,8 @@ def overall_level(
     """The worst of what the page shows.
 
     Critical when a platform service has no ready replica, a quota line is at or past 90%,
-    or a critical alert is firing. A warning for anything else that needs a look. Unknown when
+    or a critical alert is firing. A warning for anything else that needs a look, and when
+    Prometheus could not answer, since a critical alert may be firing unseen. Unknown when
     neither pods nor Deployments could be read, since nothing else says whether the platform runs.
     """
     if (
@@ -76,7 +77,8 @@ def overall_level(
     ):
         return HealthLevel.CRITICAL
     if (
-        any(service.level == HealthLevel.WARNING for service in services)
+        sources.get(EnvironmentSource.PROMETHEUS) == SourceState.UNAVAILABLE
+        or any(service.level == HealthLevel.WARNING for service in services)
         or any(line.level in {CapacityLevel.WARNING, CapacityLevel.CEILING_OUT_OF_DATE} for line in capacity)
         or workloads.issues
         or unhealthy_runtimes
@@ -139,14 +141,18 @@ class EnvironmentHealthService:
         if not self.repository.prometheus_configured:
             sources[EnvironmentSource.PROMETHEUS] = SourceState.NOT_CONFIGURED
         else:
+            # Each query on its own, so a failed runtime query still keeps the alerts that loaded.
+            sources[EnvironmentSource.PROMETHEUS] = SourceState.AVAILABLE
             try:
                 alert_samples = self.repository.firing_alerts(at=now)
-                runtime_samples = self.repository.runtime_health(at=now)
-                sources[EnvironmentSource.PROMETHEUS] = SourceState.AVAILABLE
             except PrometheusError:
-                logger.warning("Environment health cannot read Prometheus", exc_info=True)
+                logger.warning("Environment health cannot read firing alerts from Prometheus", exc_info=True)
                 sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
-                alert_samples = runtime_samples = None
+            try:
+                runtime_samples = self.repository.runtime_health(at=now)
+            except PrometheusError:
+                logger.warning("Environment health cannot read runtime health from Prometheus", exc_info=True)
+                sources[EnvironmentSource.PROMETHEUS] = SourceState.UNAVAILABLE
 
         services = cluster.core_services(deployments or [], stateful_sets or [])
         workloads = cluster.workloads(pods, identities, now) if pods is not None else WorkloadsRead()

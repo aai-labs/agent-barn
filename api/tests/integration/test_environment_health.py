@@ -440,6 +440,26 @@ def test_prometheus_being_down_leaves_the_cluster_parts():
         assert_that(_sources(body)["prometheus"], equal_to("unavailable"))
         assert_that(body["workloads"]["pods_total"], equal_to(1))
         assert_that(body["alerts"], equal_to([]))
+        assert_that(body["level"], equal_to("warning"))
+
+
+def test_a_failed_runtime_query_keeps_the_firing_alerts():
+    with given([*_BASE_GIVEN, *_platform_admin("env-admin-prom-half@example.com")]) as context:
+        _quiet_cluster(context)
+        _cluster(context).list_pods.return_value = [_pod("agentbarn-api-1")]
+
+        def answer(promql: str, at):
+            if "ALERTS" in promql:
+                return [PrometheusSample({"alertname": "APIDown", "severity": "critical"}, 1.0)]
+            raise PrometheusError("Prometheus request failed: ReadTimeout")
+
+        _prometheus(context).query.side_effect = answer
+
+        body = _get(context).json()
+
+        assert_that(_sources(body)["prometheus"], equal_to("unavailable"))
+        assert_that([a["name"] for a in body["alerts"]], contains_exactly("APIDown"))
+        assert_that(body["level"], equal_to("critical"))
 
 
 def test_a_lost_volume_makes_the_overall_health_a_warning():

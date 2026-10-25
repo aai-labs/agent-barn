@@ -188,11 +188,17 @@ def _agent_id_from_labels(labels: Mapping[str, str]) -> UUID | None:
 
 
 def _kind(labels: Mapping[str, str]) -> WorkloadKind:
+    """What an object belongs to, from the labels this platform sets.
+
+    An Agent's claims are created once and never relabelled, so older ones carry the
+    pre-rebrand `agentfarm.io/component` label or no component label at all. Every Agent object
+    carries `app=agent-<uuid>`, whichever labels it was created with, so that label is enough on its own.
+    """
     component = labels.get(COMPONENT_LABEL_KEY)
-    if component == AGENT_COMPONENT:
-        return WorkloadKind.AGENT
     if component == RESTORE_POINT_COMPONENT:
         return WorkloadKind.RESTORE_POINT
+    if component == AGENT_COMPONENT or agent_id_from_app(labels.get("app")) is not None:
+        return WorkloadKind.AGENT
     return WorkloadKind.INFRASTRUCTURE
 
 

@@ -36,18 +36,18 @@ The API already lists pods, Deployments and claims to run Agents, so those reads
 
 ## What the page shows
 
-- **Services.** The platform's own Deployments and StatefulSets (anything not labelled `agentbarn.io/component` `agent` or `restore-point`). Critical with no ready replica, a warning with fewer than desired, fine when scaled to zero.
+- **Services.** The platform's own Deployments and StatefulSets: anything that is not an Agent's (`app=agent-<id>` or `agentbarn.io/component=agent`) or a restore point's (`agentbarn.io/component=restore-point`). Critical with no ready replica, a warning with fewer than desired, fine when scaled to zero.
 - **Capacity.** One line per quota resource, storage and pods first, since those stop new Agents.
   - When the ResourceQuota can be read and the namespace has one, its `hard` and `used` figures are the answer (`source: quota`).
   - Otherwise each line is a ceiling a Platform Administrator entered (`source: entered`) beside what the API counts: `requests.storage` is every claim's request added up, terminating ones included; `pods` is every pod not Succeeded or Failed; CPU and memory are what the pods commit, from kube-state-metrics, as on the Platform Resource Usage page. The ceilings are the `platform_resource_limits` row (see [resource usage](resource-usage.md#namespace-quota)).
   - Levels: `warning` at 75% and `critical` at 90%, the same as the resource usage meters; `ceiling_out_of_date` when an entered ceiling is exceeded, since the quota cannot be; `unknown` with no ceiling or nothing to compare it with. A quota of zero is critical and takes precedence over any nonzero quota for the same resource.
-- **Volumes.** Every claim, grouped as `infrastructure` (no platform label), `active_agents`, `stopped_agents`, `restore_points` and `orphaned` (an Agent's claim whose Agent is not live), with counts and requested bytes. Orphaned claims and claims that are not Bound are listed.
+- **Volumes.** Every claim, grouped as `infrastructure` (no Agent or restore-point label), `active_agents`, `stopped_agents`, `restore_points` and `orphaned` (an Agent's claim whose Agent is not live), with counts and requested bytes. An Agent's claim is recognized by its `app=agent-<id>` label, since claims are never relabelled and older ones carry the pre-rebrand `agentfarm.io/component` label or none. Orphaned claims and claims that are not Bound are listed.
 - **Workloads.** Pod counts, and the pods that need a look: Failed, unschedulable, waiting on a crash loop or an image that will not pull, restarted three times or more with the last restart in the past hour, or not ready two minutes after starting. Restart counts never reset, so a pod that restarted when its node rebooted and has run cleanly since is not listed. A finished Job's pod is not counted. Platform pods are listed before Agents'.
 - **Unhealthy runtimes.** Agents whose healthz reports `agent_healthz_ok` 0, with whether their pod is ready and whether the runtime ever connected. A stopped Agent's lingering reading is left out.
 - **Failed Agents.** Every live Agent in ERROR, with its stored failure's fixed-copy summary, code and detail.
 - **Events.** Warning Events from the last six hours, newest first, at most 50.
-- **Alerts.** The monitoring chart's firing alerts by name and severity, with the Agent for an Agent's alert. Rules with the same name and Agent are combined at their highest firing severity.
-- **Level.** `critical` when a service has no ready replica, a capacity line is critical, or a critical alert fires; `warning` for anything else listed, including orphaned or unbound claims and recent Warning Events; `unknown` when neither pods nor Deployments could be read; otherwise `ok`.
+- **Alerts.** The monitoring chart's firing alerts by name and severity, with the Agent for an Agent's alert. Rules with the same name and Agent are combined at their highest firing severity. The alert and runtime queries are read separately, so one failing keeps what the other returned.
+- **Level.** `critical` when a service has no ready replica, a capacity line is critical, or a critical alert fires; `warning` for anything else listed, including orphaned or unbound claims and recent Warning Events, and when Prometheus is `unavailable`, since a critical alert may be firing unseen; `unknown` when neither pods nor Deployments could be read; otherwise `ok`.
 - **Ceilings.** The `platform_resource_limits` row as entered (`ceilings`), whichever source the capacity lines came from, so the page can edit it.
 
 ## The page
