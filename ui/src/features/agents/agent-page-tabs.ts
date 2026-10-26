@@ -11,6 +11,7 @@ export type AgentPageTab =
   | "memory"
   | "workflows"
   | "playbooks"
+  | "file-sync"
   | "activity"
   | "costs"
   | "resource-usage"
@@ -24,6 +25,7 @@ export const AGENT_PAGE_TABS: AgentPageTab[] = [
   "memory",
   "workflows",
   "playbooks",
+  "file-sync",
   "activity",
   "costs",
   "resource-usage",
@@ -38,6 +40,7 @@ export const AGENT_PAGE_TAB_LABELS: Record<AgentPageTab, string> = {
   memory: "Memory",
   workflows: "Workflows",
   playbooks: "Playbooks",
+  "file-sync": "File sync",
   activity: "Activity",
   costs: "Costs",
   "resource-usage": "Resource usage",
@@ -71,6 +74,7 @@ export function visibleAgentPageTabs(
     // platform offers authoring.
     ...(workflowAuthoring && canAgent(agent, "agent.read") ? (["workflows"] as AgentPageTab[]) : []),
     ...(canExtractPlaybooks ? (["playbooks"] as AgentPageTab[]) : []),
+    ...(canReadActivity ? (["file-sync"] as AgentPageTab[]) : []),
     // Every part of Activity needs activity.read: the runtime diagnostics on
     // their own, the usage sections together with cost.read. The tab itself
     // decides what to show a reader who has only the first.

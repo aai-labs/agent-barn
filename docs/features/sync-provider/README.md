@@ -282,6 +282,22 @@ The state is the first of these that holds:
 
 The 10 minutes outlast an Agent's start and a managed update's readiness wait (600 s, [Agents](../agents.md)), so a restart alone doesn't read as an error. Nothing about provider failures is stored, so the status can't report them; they are in the Sync Engine's log.
 
+### Agent page
+
+An Agent's **File sync** tab (`?tab=file-sync`, in the panel's Work group) shows [the status](#status) to anyone with `activity.read` on the Agent; without it the tab isn't offered (`ui/src/features/file-sync/`).
+- **The card** names the state in plain words, with the provider's name from the status:
+  - "Synced", with the last check time; for a stopped Agent, also that edits made at the provider are applied when it starts;
+  - "Starts syncing after the next restart";
+  - "Turned off", and that the folder at the provider is kept;
+  - "Setting up the folder in {provider}…";
+  - "{provider} asked Agent Barn to slow down", with when edits are picked up again;
+  - "This agent hasn't checked in with sync since {time}", with what to try;
+  - "Not connected": Owners and Admins get a link to Organization settings → Sync, and everyone else is told an Owner or Admin can connect one.
+- **Open in {provider}** opens the folder in a new tab, whenever the folder exists.
+- **The switch,** "Sync this agent's files", shows the switch's position in every state, including while not connected. It appears only with `agent.update`, and calls [the switch's request](#turning-sync-off) at once, then reads the status again.
+- **Refreshing:** the status is read again every 30 s while the tab is open. A failed read is shown in place with Retry.
+- **Caching:** the query is keyed by Organization and Agent id, so switching Organization never shows another one's status.
+
 ### Activity
 
 Everything File Sync does that a person should be able to see is stored in `sync_activity`, at the time it actually happened: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever.

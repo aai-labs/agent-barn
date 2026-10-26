@@ -274,6 +274,16 @@ test.describe("App navigation", () => {
       await expect(navigation.panelLink("Overview")).toHaveAttribute("aria-current", "page");
     });
 
+    test("lists File sync among an Agent's Work sections, after Logs and before Activity", async () => {
+      await navigation.gotoAgent(MOCK_AGENT_ID);
+      await expect(navigation.panelLink("Overview")).toBeVisible();
+
+      const sections = await navigation.panelSections().allTextContents();
+
+      expect(sections.indexOf("File sync")).toBeGreaterThan(sections.indexOf("Logs"));
+      expect(sections.indexOf("File sync")).toBeLessThan(sections.indexOf("Activity"));
+    });
+
     test("gives Chat the panel for its threads, with a way up to the Overview and back", async () => {
       await navigation.gotoAgent(MOCK_AGENT_ID);
 

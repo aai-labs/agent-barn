@@ -91,10 +91,11 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - the full re-list is safe alongside the pod: no false restore for a file uploaded during the listing, and no failed pass for a file gone before it is parked;
   - turning sync on re-checks the folder: the next pass re-lists, so changes people made while sync was off are handled;
   - `GET …/agents/{agent_id}/file-sync` (`activity.read`): the Agent's File Sync status;
-  - `GET …/agents/{agent_id}/file-sync/activity` (`activity.read`): the Agent's File Sync history, newest first, paged.
+  - `GET …/agents/{agent_id}/file-sync/activity` (`activity.read`): the Agent's File Sync history, newest first, paged;
+  - the Agent page **File sync** tab: the status card, Open in {provider}, and the switch.
 - In transition: none.
 - Next, in this order, each as its own slice:
-  1. the Agent page File sync tab (status and switch, then activity);
+  1. the File sync tab's activity list;
   2. the hire form option;
   3. the local k3d end-to-end run;
   4. closing this log.
@@ -111,6 +112,31 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — The Agent page File sync tab
+
+- Delivered: `ui/src/features/file-sync/`.
+  - **Data:**
+    - `schemas.ts`: the status and the switch's answer;
+    - `utils.ts`: query keys by Organization and Agent id, and `fileSyncSummary`, the wording for each state;
+    - `use-file-sync-query.ts`: the status, re-read every 30 s;
+    - `use-file-sync-actions.ts`: the switch, which invalidates the Agent's file sync queries.
+  - **UI:** `FileSyncTab` and `FileSyncStatusCard`, with the state, Open in {provider} when the folder exists, the Organization settings link for Owners and Admins when not connected, and the "Sync this agent's files" checkbox with `agent.update`.
+  - **Wiring:** `agent-page-tabs.ts` adds `file-sync` ("File sync") after Playbooks, gated on `activity.read`. `nav-model.ts` gives it the `FolderSync` icon in the Work group. `agent-detail-page.tsx` renders it.
+- Changed: README new "Agent page" section; `docs/INDEX.md` routes `ui/src/features/file-sync/`.
+- Verified:
+  - **`ui/tests/e2e/agent-file-sync.spec.ts` (17 tests),** with `AgentFileSyncPage`, `FileSyncDataSupport` (stateful: a PUT changes what the next GET returns) and `tests/fixtures/file-sync.ts`. 16 failed first, the card not being found. The one that passed before is "not offered without `activity.read`", true while no tab existed; it now guards the gate.
+  - **They cover:**
+    - the seven states' wording;
+    - Open in OneDrive (`href`, `target=_blank`), and none while the folder doesn't exist;
+    - the settings link for an Owner, and text without a link for a Member;
+    - the switch unchecked while not connected;
+    - turning sync off: the exact PUT body, then "Turned off";
+    - the switch hidden without `agent.update`, and the tab without `activity.read`;
+    - a failed read with Retry.
+  - **`app-navigation.spec.ts`:** a new test, File sync is listed after Logs and before Activity, failed first. The whole navigation spec passes with the File sync spec (39).
+  - **`agent-detail-page.spec.ts`:** the 98 tests whose titles mention tabs, sections, the panel, the Overview or activity pass, in 2.6 minutes. The other 18 weren't run, to stay within the time limit for one run.
+  - `pnpm lint` and `tsc --noEmit` pass.
 
 ### 2026-10-26 — AF-385 — An Agent's File Sync history
 
