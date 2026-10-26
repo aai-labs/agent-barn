@@ -113,7 +113,7 @@ export function AgentUpdateNotice({ agent }: { agent: Agent }) {
     return null;
   }
 
-  const update = () => void managedUpdate.mutateAsync(agent.id).catch(toastError);
+  const update = () => void managedUpdate.mutateAsync({ agentId: agent.id }).catch(toastError);
 
   if (updating) {
     return (
