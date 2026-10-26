@@ -83,19 +83,19 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 - Delivered:
   - the schema: `agent.file_sync_enabled` (on by default) and `sync_agent_folder.resync_requested_at` (migration `df10528f512f`);
-  - `POST …/agents` accepts `file_sync_enabled` and stores it. Nothing else reads the switch yet, so an Agent created with it off still gets a folder until the engine slice.
+  - `POST …/agents` accepts `file_sync_enabled` and stores it. Nothing else reads the switch yet, so an Agent created with it off still gets a folder until the engine slice;
+  - the Domain Events `agent.file_sync.enabled` / `agent.file_sync.disabled`, registered for the security audit. Nothing emits them until the switch route.
 - Next, in this order, each as its own slice:
-  1. the switch's Domain Events;
-  2. `PUT …/agents/{agent_id}/file-sync`;
-  3. Ingest refusing a switched-off Agent;
-  4. the engine applying the switch to folders;
-  5. making the full re-list safe alongside the pod;
-  6. turning on re-checks the folder;
-  7. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
-  8. the Agent page File sync tab (status and switch, then activity);
-  9. the hire form option;
-  10. the local k3d end-to-end run;
-  11. closing this log.
+  1. `PUT …/agents/{agent_id}/file-sync`;
+  2. Ingest refusing a switched-off Agent;
+  3. the engine applying the switch to folders;
+  4. making the full re-list safe alongside the pod;
+  5. turning on re-checks the folder;
+  6. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
+  7. the Agent page File sync tab (status and switch, then activity);
+  8. the hire form option;
+  9. the local k3d end-to-end run;
+  10. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -109,6 +109,19 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — Domain Events for the switch
+
+- Delivered: `AGENT_FILE_SYNC_ENABLED` (`agent.file_sync.enabled`) and `AGENT_FILE_SYNC_DISABLED` (`agent.file_sync.disabled`), schema version 1.
+  - **Payload:** `AgentFileSyncChangedPayload`: Organization and Agent ids, actor and Agent display names, nothing else (`extra="forbid"`).
+  - **Handler:** routed to `security_audit.projection` only, which lists them as supported. They stay out of product analytics, like the Agent Memory switch.
+- Changed: [Domain Events](../domain-events.md) names the two events.
+- Verified:
+  - **6 new tests, all failing first:**
+    - `test_domain_events.py`: for both events, the payload carries only the four fields (failed on the event not being registered), and any other field is refused (failed because the error was `UnsupportedDomainEventError`, not a payload refusal).
+    - `test_event_handler_registry_wiring.py`: both route to the security audit only, and the production handler registry supports them (failed: no handlers).
+    The tests name the events by string, so they fail on an assertion rather than on an import.
+  - Both unit files pass (49 tests). ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
 
 ### 2026-10-26 — AF-385 — Creating an Agent with sync off
 
