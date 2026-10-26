@@ -284,7 +284,9 @@ The 10 minutes outlast an Agent's start and a managed update's readiness wait (6
 
 ### Activity
 
-Everything File Sync does that a person should be able to see is stored in `sync_activity`, at the time it actually happened: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever. No route or UI reads them yet; the agent page card is the next ticket.
+Everything File Sync does that a person should be able to see is stored in `sync_activity`, at the time it actually happened: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever.
+
+`GET /organizations/{organization_id}/agents/{agent_id}/file-sync/activity?page&page_size` lists one Agent's rows, newest first (ties by id), with `page`, `page_size`, `total` and `items` of `{id, kind, path, occurred_at}`. `page_size` is 1 to 100, 20 by default. It needs `activity.read`, with the same 404 and 403 as [the status](#status). Rows from before a disconnect are included. `detail` is internal (a content hash or provider version that makes a skip recorded once) and is never returned; `path` is null for `folder_restored`.
 
 | Kind | Meaning |
 |---|---|

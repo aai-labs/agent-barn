@@ -14,7 +14,7 @@ from sqlmodel import Session
 
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.file_sync.engine import FileSyncEngine
-from api.domains.file_sync.models import SyncAgentFolder, SyncFolderStatus
+from api.domains.file_sync.models import SyncActivity, SyncActivityKind, SyncAgentFolder, SyncFolderStatus
 from api.domains.file_sync.repository import FileSyncRepository
 from api.domains.rbac.catalog import AGENT_VIEWER_ROLE_ID, PERMISSION_ID_BY_KEY, PermissionKey
 from api.domains.rbac.models import AgentAccessRole, AgentAccessRolePermission
@@ -350,3 +350,183 @@ def test_an_agent_in_error_out_of_contact_is_not_syncing():
 def test_a_stopped_agent_out_of_contact_is_still_synced():
     with given(_given(an_agent_folder(), last_contact(timedelta(days=2)), agent_status=AgentStatus.STOPPED)) as context:
         assert_that(_state(_read(context)), equal_to("synced"))
+
+
+# --- What happened ---------------------------------------------------------------------
+
+
+def _read_activity(context, agent_id: UUID | None = None, params: dict | None = None, headers: dict | None = None):
+    return context.client.get(
+        f"{_url(context, agent_id or context.agent.id)}/activity",
+        params=params,
+        headers=_auth(context) if headers is None else headers,
+    )
+
+
+def _record(
+    context,
+    kind: SyncActivityKind,
+    path: str | None,
+    occurred_at: datetime,
+    agent: Agent | None = None,
+    detail: str | None = None,
+) -> SyncActivity:
+    row = SyncActivity(
+        organization_id=context.organization.id,
+        agent_id=(agent or context.agent).id,
+        folder_id=None,
+        kind=kind,
+        path=path,
+        detail=detail,
+        occurred_at=occurred_at,
+    )
+    context.injector.get(PostgresRepositoryDelegate).save(row)
+    return row
+
+
+def _paths(response) -> list[str | None]:
+    assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+    return [item["path"] for item in response.json()["items"]]
+
+
+def test_an_agent_viewer_can_read_the_history():
+    with given(
+        _given(signed_in_as(OrganizationRole.MEMBER), there_is_agent_access(access_role_id=AGENT_VIEWER_ROLE_ID))
+    ) as context:
+        with when("an Agent Viewer reads what File Sync did"):
+            response = _read_activity(context)
+
+        with then("they are allowed"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+
+
+def test_the_history_needs_activity_read():
+    with given(_given(signed_in_as(OrganizationRole.MEMBER))) as context:
+        _custom_access_without_activity(context)
+
+        with when("a Member who can see the Agent but not its activity reads the history"):
+            response = _read_activity(context)
+
+        with then("the request is forbidden"):
+            assert_that(response.status_code, equal_to(status.HTTP_403_FORBIDDEN))
+
+
+def test_the_history_of_an_agent_a_member_cannot_see_is_concealed():
+    with given(_given(signed_in_as(OrganizationRole.MEMBER))) as context:
+        with when("a Member with no access to the Agent reads its history"):
+            response = _read_activity(context)
+
+        with then("the Agent is concealed"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+@pytest.mark.parametrize("target", ["missing", "deleted", "foreign"])
+def test_the_history_of_an_absent_or_foreign_agent_is_not_found(target):
+    with given(_given()) as context:
+        there_is_an_agent(name="Retired", deleted=True)(context)
+        deleted_agent_id = context.agent.id
+        there_is_an_agent_in_another_org()(context)
+        agent_id = {"missing": uuid7(), "deleted": deleted_agent_id, "foreign": context.other_org_agent.id}[target]
+
+        with when("the Owner reads the history of an unavailable Agent"):
+            response = _read_activity(context, agent_id=agent_id)
+
+        with then("the Agent is concealed"):
+            assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+
+
+def test_reading_the_history_requires_authentication():
+    with given(_given()) as context:
+        with when("an unauthenticated caller reads the history"):
+            response = _read_activity(context, headers={})
+
+        with then("the request is rejected"):
+            assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
+
+
+def test_the_history_is_newest_first():
+    with given(_given()) as context:
+        now = datetime.now(UTC)
+        _record(context, SyncActivityKind.EDIT_UNDONE, "workspace/AGENTS.md", now - timedelta(hours=2))
+        _record(context, SyncActivityKind.MOVED_NOT_SYNCED, "workspace/budget.xlsx", now)
+        _record(context, SyncActivityKind.SKIPPED_TOO_LARGE, "workspace/video.mp4", now - timedelta(hours=1))
+
+        response = _read_activity(context)
+
+        assert_that(_paths(response), equal_to(["workspace/budget.xlsx", "workspace/video.mp4", "workspace/AGENTS.md"]))
+
+
+def test_entries_at_the_same_moment_keep_a_stable_order():
+    with given(_given()) as context:
+        moment = datetime.now(UTC)
+        first = _record(context, SyncActivityKind.RESTORED, "workspace/a.md", moment)
+        second = _record(context, SyncActivityKind.RESTORED, "workspace/b.md", moment)
+
+        response = _read_activity(context)
+
+        expected = [row.path for row in sorted((first, second), key=lambda row: row.id, reverse=True)]
+        assert_that(_paths(response), equal_to(expected))
+
+
+def test_the_history_is_paged():
+    with given(_given()) as context:
+        now = datetime.now(UTC)
+        for minutes in range(3):
+            _record(context, SyncActivityKind.RESTORED, f"workspace/{minutes}.md", now - timedelta(minutes=minutes))
+
+        first = _read_activity(context, params={"page": 1, "page_size": 2})
+        second = _read_activity(context, params={"page": 2, "page_size": 2})
+
+        assert_that(first.json(), has_entries(page=1, page_size=2, total=3))
+        assert_that(_paths(first), equal_to(["workspace/0.md", "workspace/1.md"]))
+        assert_that(_paths(second), equal_to(["workspace/2.md"]))
+
+
+def test_a_page_larger_than_a_hundred_is_refused():
+    with given(_given()) as context:
+        response = _read_activity(context, params={"page_size": 101})
+
+        assert_that(response.status_code, equal_to(status.HTTP_422_UNPROCESSABLE_ENTITY))
+
+
+def test_the_history_holds_only_this_agents_entries():
+    with given(_given()) as context:
+        sales = context.agent
+        there_is_an_agent(name="Support")(context)
+        support = context.agent
+        now = datetime.now(UTC)
+        _record(context, SyncActivityKind.RESTORED, "workspace/sales.md", now, agent=sales)
+        _record(context, SyncActivityKind.RESTORED, "workspace/support.md", now, agent=support)
+
+        response = _read_activity(context, agent_id=sales.id)
+
+        assert_that(_paths(response), equal_to(["workspace/sales.md"]))
+        assert_that(response.json()["total"], equal_to(1))
+
+
+def test_entries_from_before_a_disconnect_are_kept():
+    with given(_given()) as context:
+        _record(context, SyncActivityKind.CONFLICT_AGENT_WON, "workspace/notes.md", datetime.now(UTC))
+
+        assert_that(_paths(_read_activity(context)), equal_to(["workspace/notes.md"]))
+
+
+def test_an_entry_shows_what_happened_and_when_but_never_its_internal_detail():
+    with given(_given()) as context:
+        row = _record(context, SyncActivityKind.SKIPPED_NAME, "workspace/a:b.md", datetime.now(UTC), detail="0" * 64)
+
+        response = _read_activity(context)
+
+        item = response.json()["items"][0]
+        assert_that(set(item), equal_to({"id", "kind", "path", "occurred_at"}))
+        assert_that(
+            (item["id"], item["kind"], datetime.fromisoformat(item["occurred_at"])),
+            equal_to((str(row.id), "skipped_name", row.occurred_at)),
+        )
+
+
+def test_a_folder_entry_has_no_path():
+    with given(_given()) as context:
+        _record(context, SyncActivityKind.FOLDER_RESTORED, None, datetime.now(UTC))
+
+        assert_that(_paths(_read_activity(context)), equal_to([None]))

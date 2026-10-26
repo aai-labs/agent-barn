@@ -149,6 +149,13 @@ class AgentFileSyncRead(PydanticBaseModel):
     retry_at: datetime | None
 
 
+class AgentFileSyncActivityRead(PydanticBaseModel):
+    id: UUID
+    kind: SyncActivityKind
+    path: str | None
+    occurred_at: datetime
+
+
 class AgentFileSyncUpdate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 

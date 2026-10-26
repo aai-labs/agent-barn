@@ -13,6 +13,7 @@ from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
 from api.domains.file_sync.engine import delete_agent_folder, sync_root
 from api.domains.file_sync.models import (
+    AgentFileSyncActivityRead,
     AgentFileSyncProviderRead,
     AgentFileSyncRead,
     AgentFileSyncSettingRead,
@@ -22,9 +23,11 @@ from api.domains.file_sync.models import (
 )
 from api.domains.file_sync.repository import AgentFileSyncRepository, FileSyncRepository
 from api.domains.rbac.catalog import PermissionKey
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.sync_provider.models import SyncProviderCapability, SyncProviderConnection
 from api.domains.sync_provider.plugins.base import SyncProviderPlugin
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 DISCONNECT_LOCK_WAIT_SECONDS = 15
 NOT_SYNCING_AFTER = timedelta(minutes=10)
@@ -63,13 +66,22 @@ class AgentFileSyncService:
     plugins: SyncProviderPluginRegistry
 
     def status(self, agent_id: UUID, context: CurrentUserContext) -> AgentFileSyncRead:
-        agent = self.authorization.require_visible(context, agent_id)
-        scope = self.authorization.require_action_for_visible(context, agent, PermissionKey.ACTIVITY_READ)
+        agent, scope = self._readable(agent_id, context)
         found = self.repository.status_inputs(agent.id, scope)
         if found is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found.")
         current, connection, folder = found
         return self._status(current, connection, folder, datetime.now(UTC))
+
+    def activity(
+        self, agent_id: UUID, pagination: Pagination, context: CurrentUserContext
+    ) -> PaginatedItems[AgentFileSyncActivityRead]:
+        agent, scope = self._readable(agent_id, context)
+        return self.repository.activity_page(agent.id, pagination, scope)
+
+    def _readable(self, agent_id: UUID, context: CurrentUserContext) -> tuple[Agent, AuthorizationScope]:
+        agent = self.authorization.require_visible(context, agent_id)
+        return agent, self.authorization.require_action_for_visible(context, agent, PermissionKey.ACTIVITY_READ)
 
     def _status(
         self,

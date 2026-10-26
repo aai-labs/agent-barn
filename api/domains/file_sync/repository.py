@@ -17,6 +17,7 @@ from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, Su
 from api.domains.events.catalog import AGENT_FILE_SYNC_DISABLED, AGENT_FILE_SYNC_ENABLED, EVENT_REGISTRY
 from api.domains.events.repository import OutboxMessageRepository
 from api.domains.file_sync.models import (
+    AgentFileSyncActivityRead,
     SyncActivity,
     SyncActivityKind,
     SyncAgentFolder,
@@ -28,6 +29,7 @@ from api.domains.rbac.policy import AuthorizationScope
 from api.domains.sync_provider.models import SyncProviderConnection, SyncProviderStatus
 from api.domains.sync_provider.plugins.base import RemoteItem
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.shared.models import PaginatedItems, Pagination
 
 LOCK_POLL_SECONDS = 0.1
 
@@ -544,3 +546,35 @@ class AgentFileSyncRepository:
                 else None
             )
             return agent, connection, folder
+
+    def activity_page(
+        self, agent_id: UUID, pagination: Pagination, scope: AuthorizationScope
+    ) -> PaginatedItems[AgentFileSyncActivityRead]:
+        predicates = (col(SyncActivity.agent_id) == agent_id, *agent_scope_predicates(scope))
+        with Session(self.delegate.engine) as session:
+            total = (
+                session.scalar(
+                    select(sa.func.count())
+                    .select_from(SyncActivity)
+                    .join(Agent, col(Agent.id) == col(SyncActivity.agent_id))
+                    .where(*predicates)
+                )
+                or 0
+            )
+            rows = session.exec(
+                select(SyncActivity)
+                .join(Agent, col(Agent.id) == col(SyncActivity.agent_id))
+                .where(*predicates)
+                .order_by(col(SyncActivity.occurred_at).desc(), col(SyncActivity.id).desc())
+                .offset((pagination.page - 1) * pagination.size)
+                .limit(pagination.size)
+            ).all()
+        return PaginatedItems[AgentFileSyncActivityRead](
+            page=pagination.page,
+            page_size=pagination.size,
+            total=total,
+            items=[
+                AgentFileSyncActivityRead(id=row.id, kind=row.kind, path=row.path, occurred_at=row.occurred_at)
+                for row in rows
+            ],
+        )

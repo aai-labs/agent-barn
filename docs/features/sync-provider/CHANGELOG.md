@@ -90,14 +90,14 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - the Sync Engine follows the switch: no folder for an Agent whose switch is off, and a folder brought in line with the switch when its request couldn't reach it;
   - the full re-list is safe alongside the pod: no false restore for a file uploaded during the listing, and no failed pass for a file gone before it is parked;
   - turning sync on re-checks the folder: the next pass re-lists, so changes people made while sync was off are handled;
-  - `GET …/agents/{agent_id}/file-sync` (`activity.read`): the Agent's File Sync status.
+  - `GET …/agents/{agent_id}/file-sync` (`activity.read`): the Agent's File Sync status;
+  - `GET …/agents/{agent_id}/file-sync/activity` (`activity.read`): the Agent's File Sync history, newest first, paged.
 - In transition: none.
 - Next, in this order, each as its own slice:
-  1. `GET …/file-sync/activity`;
-  2. the Agent page File sync tab (status and switch, then activity);
-  3. the hire form option;
-  4. the local k3d end-to-end run;
-  5. closing this log.
+  1. the Agent page File sync tab (status and switch, then activity);
+  2. the hire form option;
+  3. the local k3d end-to-end run;
+  4. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -111,6 +111,23 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — An Agent's File Sync history
+
+- Delivered: `GET /organizations/{organization_id}/agents/{agent_id}/file-sync/activity?page&page_size` → `{page, page_size, total, items}` of `{id, kind, path, occurred_at}`.
+  - **Permission:** `activity.read`, the same checks as the status (`AgentFileSyncService._readable`, shared by both reads).
+  - **Order and pages:** newest first, ties broken by id; `page_size` 1 to 100, 20 by default (as Agent Webhooks and Communications).
+  - **Query:** `AgentFileSyncRepository.activity_page` joins `sync_activity` to the Agent under `agent_scope_predicates` before counting, ordering and paging, so only this Agent's rows are counted.
+  - **Not returned:** `detail`. It is the content hash or provider version that keeps a skip recorded once, and has no meaning for a person.
+- Changed:
+  - README "Activity": the route replaces "No route or UI reads them yet". RBAC brief: the history read.
+  - `api/developer_docs/operations-v1.json` lists the operation.
+- Verified:
+  - **15 new tests in `test_file_sync_status.py`.** 11 failed first with 404 (no route).
+  - **The 4 that passed before** did so because every request was 404 then: a Member without access, and missing, deleted and foreign Agents. They now pass against the route.
+  - **They cover:** a Viewer reads it; `agent.read` alone is 403; no authentication is 401; newest first; a stable order for equal times; paging with `total`; `page_size` 101 is 422; only this Agent's rows; a row with no folder (after a disconnect); exactly the four fields, without `detail`; a null path for a folder entry.
+  - **Suites:** the file passes (40). `test_public_api_contract.py`, `test_file_sync_switch.py` and `test_cross_org_isolation.py` pass (56).
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
 
 ### 2026-10-26 — AF-385 — An Agent's File Sync status
 
