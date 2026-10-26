@@ -4,7 +4,7 @@ from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from sqlalchemy import Column
 from sqlmodel import Field as SqlField
 
@@ -123,6 +123,17 @@ class SyncActivity(BaseModel, table=True):
     path: str | None = SqlField(default=None, nullable=True, sa_type=sa.Text)
     detail: str | None = SqlField(default=None, nullable=True, sa_type=sa.Text)
     occurred_at: datetime = SqlField(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
+
+
+class AgentFileSyncUpdate(PydanticBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
+class AgentFileSyncSettingRead(PydanticBaseModel):
+    agent_id: UUID
+    enabled: bool
 
 
 class FileSyncEntryCreate(PydanticBaseModel):

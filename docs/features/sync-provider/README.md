@@ -248,6 +248,17 @@ The pod reports its full file list, and Ingest answers with upload links. The [I
 
 The helper never deletes a file on the volume.
 
+### Turning sync off
+
+Each Agent has a File Sync switch, `agent.file_sync_enabled`, on by default. It can be set when the Agent is created ([Agents](../agents.md#create)), and changed at any time with `PUT /organizations/{organization_id}/agents/{agent_id}/file-sync {enabled}`:
+- **Permission:** `agent.update`. An invisible, other-Organization or deleted Agent is 404; a visible one without the permission is 403; a read-only API key is refused.
+- **Answer:** 200 `{agent_id, enabled}`. Setting the value it already has changes nothing and records nothing.
+- **In the same transaction:**
+  - the Agent's folder on the Organization's active connection, if there is one, becomes `disabled` (off), or `active` with `resync_requested_at` set (on);
+  - `agent.file_sync.disabled` or `agent.file_sync.enabled` is recorded for the security audit ([Domain Events](../domain-events.md)).
+- **While the folder is `disabled`:** the pod is refused (409), the Sync Engine leaves the folder and its files alone, and the folder and everything in it stay at the provider. The folder's name stays taken.
+- **A restore** of an Agent Restore Point doesn't change the switch.
+
 ### Activity
 
 Everything File Sync does that a person should be able to see is stored in `sync_activity`, at the time it actually happened: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever. No route or UI reads them yet; the agent page card is the next ticket.
@@ -342,7 +353,7 @@ When either setting is blank, OneDrive is listed as "OneDrive is not configured 
 | Folder location for other domains | `../../../api/domains/sync_provider/lookup.py`, used by `../../../api/domains/agents/sharepoint_service.py` |
 | Microsoft identity and Graph calls | `../../../api/domains/agents/microsoft_identity.py`, `microsoft_graph_sites.py` |
 | UI | `../../../ui/src/features/sync-provider/`, registered as `sync` in `../../../ui/src/features/organizations/components/organization-settings-utils.ts` and `../../../ui/src/app/dashboard/[orgId]/settings/page.tsx` |
-| Agent file sync: rules, models, engine pass, Ingest service and routes, folder removal on disconnect | `../../../api/domains/file_sync/` (`rules.py`, `models.py`, `engine.py`, `repository.py`, `service.py`, `routes.py`); Ingest routes registered in `../../../api/ingest_app.py` |
+| Agent file sync: rules, models, engine pass, Ingest service and routes, folder removal on disconnect, the per-Agent switch | `../../../api/domains/file_sync/` (`rules.py`, `models.py`, `engine.py`, `repository.py`; `ingest_service.py` and `ingest_routes.py` for the pod, registered in `../../../api/ingest_app.py`; `service.py` and `routes.py` for folder removal and the switch, registered in `../../../api/api_app.py`) |
 | Pod helper and its start | `../../../api/domains/agents/scripts/file-sync.py`, shipped by `../../../api/domains/agents/builders/hermes.py` and `openclaw.py`, started by both runtimes' `start.sh` |
 | Sync Engine process and deployment | `../../../api/sync_engine_main.py`, `../../../helm/agentbarn-api/templates/sync-engine-deployment.yaml` |
 | Microsoft file calls and app-only tokens | `../../../api/domains/agents/microsoft_graph_files.py`, `MicrosoftAppTokens` in `microsoft_identity.py` |

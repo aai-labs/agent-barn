@@ -83,19 +83,22 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 
 - Delivered:
   - the schema: `agent.file_sync_enabled` (on by default) and `sync_agent_folder.resync_requested_at` (migration `df10528f512f`);
-  - `POST …/agents` accepts `file_sync_enabled` and stores it. Nothing else reads the switch yet, so an Agent created with it off still gets a folder until the engine slice;
-  - the Domain Events `agent.file_sync.enabled` / `agent.file_sync.disabled`, registered for the security audit. Nothing emits them until the switch route.
+  - `POST …/agents` accepts `file_sync_enabled` and stores it;
+  - the Domain Events `agent.file_sync.enabled` / `agent.file_sync.disabled`, registered for the security audit;
+  - `PUT …/agents/{agent_id}/file-sync` (`agent.update`): sets the switch, makes the Agent's folder `disabled` or `active` with a re-check requested, and records the event, in one transaction. A folder that is turned off is already refused by Ingest and left alone by the Sync Engine.
+- In transition:
+  - an Agent switched off before it has a folder still gets one when the engine reaches it, and Ingest doesn't read the switch itself;
+  - `resync_requested_at` is written but not yet read, so turning on resumes the folder without the re-check.
 - Next, in this order, each as its own slice:
-  1. `PUT …/agents/{agent_id}/file-sync`;
-  2. Ingest refusing a switched-off Agent;
-  3. the engine applying the switch to folders;
-  4. making the full re-list safe alongside the pod;
-  5. turning on re-checks the folder;
-  6. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
-  7. the Agent page File sync tab (status and switch, then activity);
-  8. the hire form option;
-  9. the local k3d end-to-end run;
-  10. closing this log.
+  1. Ingest refusing a switched-off Agent;
+  2. the engine applying the switch to folders;
+  3. making the full re-list safe alongside the pod;
+  4. turning on re-checks the folder;
+  5. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
+  6. the Agent page File sync tab (status and switch, then activity);
+  7. the hire form option;
+  8. the local k3d end-to-end run;
+  9. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -109,6 +112,24 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — Turning sync off or on
+
+- Delivered: `PUT /organizations/{organization_id}/agents/{agent_id}/file-sync {enabled}` → 200 `{agent_id, enabled}`.
+  - **Permission:** `agent.update` (`AgentAuthorization.require_action`). An invisible, other-Organization or deleted Agent is 404; a visible one without the permission (Agent Viewer) is 403; a read-only API key is 403.
+  - **One transaction** (`AgentFileSyncRepository.set_enabled_with_event`): locks the Agent row, sets `file_sync_enabled`, updates the Agent's folder on the active connection (off: `disabled`; on: `active` with `resync_requested_at`), and stages the Domain Event. Deliveries are enqueued after commit.
+  - **No change, no record:** setting the current value returns 200 and writes nothing.
+  - **Payload:** `AgentFileSyncUpdate` refuses a missing or non-boolean `enabled` and any other field (422).
+- Changed:
+  - `AgentFileSyncRepository` is a new repository for the user-facing request, separate from the Sync Engine's `FileSyncRepository`, so the RBAC background-work exception keeps covering only engine work.
+  - `api/developer_docs/operations-v1.json` lists the operation.
+  - **One file pair per app**, as Agent Memory (`gateway_routes.py`/`gateway_service.py`) and Workflows (`runtime_routes.py`/`runtime_service.py`) do: the pod-facing Ingest router, `FileSyncIngestService`, its exceptions and `FileSyncTarget` moved unchanged from `routes.py`/`service.py` to `ingest_routes.py`/`ingest_service.py`, which only `ingest_app.py` imports. `routes.py`/`service.py` now hold the product API: the switch, and `FileSyncFolderRemoval` for disconnect. The moved code is byte-identical to the previous commit.
+  - README: new "Turning sync off" section. RBAC brief: the request and its repository. `CONTEXT.md`: File Sync names the switch.
+- Verified:
+  - **`tests/integration/test_file_sync_switch.py` (21 tests, product API with Test Drive).** 16 failed first, all with 404 because the route didn't exist. The 5 that passed before did so for that same reason: a Member without access (404), the three absent, deleted and foreign Agents (404), and one Agent's switch leaving another Agent alone. They are guards now that the route exists.
+  - They cover Owner, Admin, Agent Owner, Editor and Viewer; a Member without access; missing, deleted and foreign Agents; a read-only key; no authentication; three malformed bodies; the folder disabled and kept at the provider; the folder resumed with a re-check requested; no folder; both events in order and their payload; a repeated value recording nothing; another Agent left alone.
+  - **Regression:** `test_agent_memory.py` and `test_file_sync_ingest_auth.py` pass (78). After the move, the three Ingest suites, `test_file_sync_disconnect.py`, `test_file_sync_switch.py` and `test_public_api_contract.py` pass together (100). The API, Ingest and Sync Engine apps import.
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
 
 ### 2026-10-26 — AF-385 — Domain Events for the switch
 

@@ -1401,6 +1401,11 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/file-sync",
+    "set_agent_file_sync_organizations__organization_id__agents__agent_id__file_sync_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/isolation",
     "apply_integration_isolation_organizations__organization_id__agents__agent_id__integrations__provider__isolation_put"
   ],

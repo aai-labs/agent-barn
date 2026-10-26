@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 from injector import inject, singleton
@@ -12,6 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentType
+from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
+from api.domains.events.catalog import AGENT_FILE_SYNC_DISABLED, AGENT_FILE_SYNC_ENABLED, EVENT_REGISTRY
+from api.domains.events.repository import OutboxMessageRepository
 from api.domains.file_sync.models import (
     SyncActivity,
     SyncActivityKind,
@@ -410,3 +413,76 @@ class FileSyncRepository:
                 .values(status=SyncFolderStatus.RETIRED)
             )
             session.commit()
+
+
+@inject
+@singleton
+@dataclass
+class AgentFileSyncRepository:
+    delegate: PostgresRepositoryDelegate
+    outbox_repository: OutboxMessageRepository
+
+    def set_enabled_with_event(
+        self,
+        agent_id: UUID,
+        organization_id: UUID,
+        enabled: bool,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+        now: datetime,
+    ) -> list[UUID] | None:
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agent = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent_id,
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).one_or_none()
+            if agent is None:
+                return None
+            if agent.file_sync_enabled == enabled:
+                return []
+            agent.file_sync_enabled = enabled
+            session.add(agent)
+            folder_state = (
+                {"status": SyncFolderStatus.ACTIVE, "resync_requested_at": now}
+                if enabled
+                else {"status": SyncFolderStatus.DISABLED}
+            )
+            session.exec(
+                sa.update(SyncAgentFolder)
+                .where(
+                    col(SyncAgentFolder.agent_id) == agent_id,
+                    col(SyncAgentFolder.connection_id).in_(
+                        select(SyncProviderConnection.id).where(
+                            col(SyncProviderConnection.organization_id) == organization_id,
+                            col(SyncProviderConnection.status) == SyncProviderStatus.ACTIVE,
+                        )
+                    ),
+                )
+                .values(**folder_state)
+            )
+            session.flush()
+            event = EVENT_REGISTRY.build_event(
+                event_name=AGENT_FILE_SYNC_ENABLED if enabled else AGENT_FILE_SYNC_DISABLED,
+                schema_version=1,
+                occurred_at=now,
+                organization_id=organization_id,
+                actor=actor,
+                subject=SubjectIdentity(type=SubjectIdentityType.AGENT, id=agent_id, organization_id=organization_id),
+                correlation_id=uuid4(),
+                payload={
+                    "organization_id": organization_id,
+                    "agent_id": agent_id,
+                    "actor_display": actor_display,
+                    "subject_display": agent.name,
+                },
+            )
+            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            session.commit()
+            return delivery_ids
