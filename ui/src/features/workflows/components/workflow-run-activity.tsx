@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import { AppErrorState } from "@/components/app-error-state";
 import { useWorkflowRunHistory } from "../hooks/use-workflow-runs";
 import { isRunProgressing, type WorkflowRun } from "../run-schemas";
 
@@ -78,8 +79,18 @@ export function WorkflowRunActivity({
   const history = useWorkflowRunHistory(
     agentId,
     run.id,
+    run.revision,
     isRunProgressing(run.state),
   );
+  if (history.error)
+    return (
+      <AppErrorState
+        error={history.error}
+        title="Couldn’t load run activity"
+        onRetry={() => void history.refetch()}
+        className="md:col-start-2"
+      />
+    );
   const items = [...(history.data?.items ?? [])].reverse();
   if (items.length === 0) return null;
   return (
