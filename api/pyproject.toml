@@ -32,6 +32,7 @@ dependencies = [
     "redis>=8.1.0",
     "prometheus-fastapi-instrumentator>=8.1.0",
     "pynacl>=1.6.2",
+    "stripe[async]>=15.6.1,<16",
     "pytest-xdist>=3.8",
 ]
 

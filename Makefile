@@ -2,6 +2,8 @@ COMPOSE := docker compose -f compose.yml
 RUNTIME ?= hermes
 
 .PHONY: \
+	check-workflows \
+	reconcile-workflows \
 	setup run stop stop-clean test-api-runtime test-integration-isolation \
 	restart-ui \
 	dev-api dev-ingest dev-communications dev-gateway dev-memory dev-ui dev-worker dev-monitoring reconcile reconcile-restore-points reconcile-llm-budgets run-llm-budget-alerts report-message-counts backfill-business-actions forward-teams forward-triggers forward-telegram forward-prometheus seed-event-deliveries seed-costs seed-agent-overrides migrate merge-heads rollback makemigrations test-api test-ui lint-ui check-ui coverage check-api check-migrations check-monitoring check-memory fix-api test check fix \
@@ -89,6 +91,9 @@ dev-memory:
 check-memory:
 	cd api && uv run python scripts/check_memory_charts.py
 
+check-workflows:
+	cd api && uv run --frozen python scripts/check_workflow_charts.py
+
 # Local runtime-owned Teams: the API (Docker or host) cannot reach Agent Services
 # in k3d, so expose one Agent's webhook port on the host. Re-run after the pod
 # restarts. Usage: make forward-teams AGENT=<agent-uuid>
@@ -140,6 +145,10 @@ reconcile:
 # does it: `python -m` would re-import the module and break the injector bindings.
 reconcile-restore-points:
 	cd api && uv run python -c "from api.domains.restore_points.reconciliation import main; main()"
+
+# Same bounded controller/retention pass as the deployment's workflow CronJob.
+reconcile-workflows:
+	cd api && uv run python -c "from api.domains.workflows.maintenance import main; main()"
 
 # Both run as CronJobs in a deployment; these are the same passes by hand. Named to
 # match `reconcile`, not `check-*`: they mutate the proxy and send notifications,

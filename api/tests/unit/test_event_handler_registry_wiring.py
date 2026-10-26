@@ -37,6 +37,7 @@ from api.domains.events.catalog import (
     ORGANIZATION_MODEL_ALLOWLIST_CHANGED,
     ORGANIZATION_OWNERSHIP_TRANSFERRED,
     ORGANIZATION_ROLE_CHANGED,
+    ORGANIZATION_TRIAL_EXPIRY_HANDLER,
     ORGANIZATION_UPDATED,
     ORGANIZATION_VALUE_SETTINGS_CHANGED,
     PLATFORM_USER_PRIVILEGE_GRANTED,
@@ -55,7 +56,7 @@ from api.domains.events.catalog import (
 )
 from api.domains.events.handlers import EventHandlerRegistry
 from api.domains.events.security_audit import SecurityAuditProjection
-from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler
+from api.domains.organizations.event_handlers import OrganizationBudgetEmailHandler, OrganizationTrialExpiryHandler
 
 
 def _build_production_handler_registry() -> EventHandlerRegistry:
@@ -64,6 +65,7 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
             AgentLifecycleEmailHandler(repository=Mock(), email_service=Mock()),
             SecurityAuditProjection(repository=Mock()),
             OrganizationBudgetEmailHandler(repository=Mock(), email_service=Mock()),
+            OrganizationTrialExpiryHandler(repository=Mock(), event_delivery_dispatcher=Mock()),
             ProductAnalyticsHandler(
                 config=Mock(),
                 installation_repository=Mock(),
@@ -97,7 +99,10 @@ def _build_production_handler_registry() -> EventHandlerRegistry:
         (ORGANIZATION_MEMBER_REMOVED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (ORGANIZATION_ROLE_CHANGED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
         (ORGANIZATION_OWNERSHIP_TRANSFERRED, {SECURITY_AUDIT_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
-        (ORGANIZATION_LLM_BUDGET_EXHAUSTED, {ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, PRODUCT_ANALYTICS_HANDLER}),
+        (
+            ORGANIZATION_LLM_BUDGET_EXHAUSTED,
+            {ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER, ORGANIZATION_TRIAL_EXPIRY_HANDLER, PRODUCT_ANALYTICS_HANDLER},
+        ),
         (ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED, {ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER}),
         (AGENT_ACCESS_GRANTED, {SECURITY_AUDIT_HANDLER}),
         (TEMPLATE_CREATED, {SECURITY_AUDIT_HANDLER}),

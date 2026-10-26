@@ -20,23 +20,23 @@ class PlatformWorkflowRepository:
     delegate: PostgresRepositoryDelegate
     outbox: OutboxMessageRepository
 
-    def read(self, default_enabled: bool) -> PlatformWorkflowSettingsRead:
+    def read(self) -> PlatformWorkflowSettingsRead:
         with Session(self.delegate.engine) as session:
             row = session.get(PlatformWorkflowSettings, 1)
             return (
                 PlatformWorkflowSettingsRead(authoring_enabled=row.authoring_enabled, updated_at=row.updated_at)
                 if row
-                else PlatformWorkflowSettingsRead(authoring_enabled=default_enabled)
+                else PlatformWorkflowSettingsRead(authoring_enabled=False)
             )
 
     def set_authoring(
-        self, enabled: bool, default_enabled: bool, actor_id: UUID, actor_display: str
+        self, enabled: bool, actor_id: UUID, actor_display: str
     ) -> tuple[PlatformWorkflowSettingsRead, list[UUID]]:
         with Session(self.delegate.engine) as session:
             # Serialize updates even before the singleton row exists.
             session.connection().execute(sa.text("SELECT pg_advisory_xact_lock(732914106)"))
             row = session.get(PlatformWorkflowSettings, 1)
-            previous = row.authoring_enabled if row else default_enabled
+            previous = row.authoring_enabled if row else False
             if row and previous == enabled:
                 return PlatformWorkflowSettingsRead(authoring_enabled=enabled, updated_at=row.updated_at), []
             now = datetime.now(UTC)

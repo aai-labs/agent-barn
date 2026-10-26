@@ -349,6 +349,37 @@ def test_candidates_are_healed_with_the_cost_openrouter_reports():
     assert dict(repository.healed) == {"gen-a": Decimal("0.0026582"), "gen-b": Decimal("0.5")}
 
 
+def test_organizations_with_newly_healed_spend_are_reported_once_healing_is_done():
+    """So their credit limits can come down by what healing found, without waiting for
+    the next reconciliation."""
+    other_org = uuid4()
+    candidates = [_candidate("gen-a"), _candidate("gen-b"), _candidate("gen-free"), _candidate("gen-c")]
+    candidates[0].organization_id = ORG_ID
+    candidates[1].organization_id = ORG_ID
+    candidates[2].organization_id = other_org
+    repository = FakeCostRepository(candidates=candidates)
+    generations = FakeGenerations(costs={"gen-a": 0.2, "gen-b": 0.3, "gen-free": 0})
+    reported: list[set] = []
+    synchronizer = _synchronizer(repository, generations=generations)
+    synchronizer.on_healed = reported.append
+
+    synchronizer.run_once()
+
+    # A free call changes nothing, and a call with no Organization has no limit to lower.
+    assert reported == [{ORG_ID}]
+
+
+def test_nothing_is_reported_when_healing_found_no_spend():
+    repository = FakeCostRepository(candidates=[_candidate("gen-free")])
+    reported: list[set] = []
+    synchronizer = _synchronizer(repository, generations=FakeGenerations(costs={"gen-free": 0}))
+    synchronizer.on_healed = reported.append
+
+    synchronizer.run_once()
+
+    assert reported == []
+
+
 def test_a_zero_cost_generation_is_still_marked_healed():
     """Otherwise a genuinely free call is re-fetched on every run, for ever."""
     repository = FakeCostRepository(candidates=[_candidate("gen-free")])

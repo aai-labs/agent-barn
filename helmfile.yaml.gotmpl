@@ -176,6 +176,9 @@ releases:
         value: {{ env "ORGANIZATION_DEFAULT_LLM_BUDGET_USD" | quote }}
       - name: organizationLlmBudgets.defaultAgentUsd
         value: {{ env "AGENT_DEFAULT_LLM_BUDGET_USD" | quote }}
+      # Empty means the default of 10 Agents for Organizations that are not trials.
+      - name: organizationDefaultAgentLimit
+        value: {{ env "ORGANIZATION_DEFAULT_AGENT_LIMIT" | default "" | quote }}
       - name: litellmKeyServiceAccountName
         value: {{ env "LITELLM_KEY_SERVICE_ACCOUNT" | default "agent-farm-user" | quote }}
       - name: openclawImage.repository
@@ -226,6 +229,11 @@ releases:
         value: {{ env "GOOGLE_CLOUD_CLIENT_ID" | default "" | quote }}
       - name: googleCloudClientSecret
         value: {{ env "GOOGLE_CLOUD_CLIENT_SECRET" | default "" | quote }}
+      # Payments are turned on in the platform Billing settings; these only make it possible.
+      - name: stripe.secretKey
+        value: {{ env "STRIPE_SECRET_KEY" | default "" | quote }}
+      - name: stripe.webhookSecret
+        value: {{ env "STRIPE_WEBHOOK_SECRET" | default "" | quote }}
       - name: onedriveSyncClientId
         value: {{ env "ONEDRIVE_SYNC_CLIENT_ID" | default "" | quote }}
       - name: onedriveSyncClientSecret
@@ -249,8 +257,8 @@ releases:
         value: {{ env "RESTORE_POINT_SIZE" | default "1Gi" | quote }}
       - name: restorePoints.maxPerAgent
         value: {{ env "RESTORE_POINT_MAX_PER_AGENT" | default "5" | quote }}
-      - name: workflows.authoringEnabled
-        value: {{ env "WORKFLOW_AUTHORING_ENABLED" | default "false" }}
+      - name: workflows.runtimeBaseUrl
+        value: {{ env "WORKFLOW_RUNTIME_BASE_URL" | default "" | quote }}
       - name: agentDefaultModel
         value: {{ env "AGENT_DEFAULT_MODEL" | default "" | quote }}
       - name: agentModelAllowlist

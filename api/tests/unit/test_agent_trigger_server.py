@@ -20,6 +20,62 @@ def test_listener_source_parses_for_the_oldest_runtime_image() -> None:
     ast.parse(_SCRIPT.read_text(), filename=str(_SCRIPT), feature_version=(3, 12))
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '{"summary":"CRM unavailable", "criteria_met":false}\nNote: config uses {braces}.',
+        'Config uses {braces}.\n```json\n{"summary":"CRM unavailable", "criteria_met":false}\n```',
+        '{"summary":"CRM {unavailable}", "criteria_met":false} trailing {text}',
+    ],
+)
+def test_explicit_failure_survives_surrounding_braces(trigger_server, reply) -> None:
+    met, summary = trigger_server._parse_step_reply(reply)
+    assert met is False
+    assert summary.startswith("CRM")
+
+
+def test_hermes_stop_uses_the_original_session_header(monkeypatch, trigger_server) -> None:
+    requests = []
+
+    class Response:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        trigger_server.urllib.request, "urlopen", lambda request, **kw: requests.append(request) or Response()
+    )
+    trigger_server.RUNTIME_KIND = "hermes"
+    trigger_server.RUNTIME_API_URL = "http://runtime"
+    trigger_server._STEPS["a"] = {"run_id": "run-1", "session_id": "workflow-a", "stopped": False}
+    trigger_server.stop_workflow_step("a")
+    assert requests[0].full_url.endswith("/v1/runs/run-1/stop")
+    assert requests[0].get_header("X-hermes-session-key") == "workflow-a"
+
+
+def test_cancellation_while_hermes_start_is_in_flight_stops_the_accepted_run(monkeypatch, trigger_server) -> None:
+    trigger_server.RUNTIME_API_URL = "http://runtime"
+    trigger_server.RUNTIME_KIND = "hermes"
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    stopped = []
+
+    class Response:
+        def __enter__(self):
+            trigger_server.stop_workflow_step("a")
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            return b'{"run_id":"run-1"}'
+
+    monkeypatch.setattr(trigger_server.urllib.request, "urlopen", lambda *args, **kw: Response())
+    monkeypatch.setattr(trigger_server, "_stop_hermes", lambda *args: stopped.append(args))
+    with pytest.raises(RuntimeError, match="cancelled"):
+        trigger_server._hermes_step("a", "workflow-a", "Do the step")
+    assert stopped == [("run-1", "workflow-a")]
+
+
 def _payload() -> dict:
     return {
         "invocation_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e",
@@ -171,3 +227,133 @@ def test_openclaw_maps_teams_to_its_native_channel_and_schedules_the_job(monkeyp
     assert calls[0][calls[0].index("--channel") + 1] == "msteams"
     assert "--to" not in calls[0]
     assert len(calls) == 1
+
+
+# Workflow steps --------------------------------------------------------------
+
+
+def _step_reports(monkeypatch, trigger_server, reply=None, error=None, runtime="hermes"):
+    trigger_server.RUNTIME_KIND = runtime
+    reports = []
+
+    def post(url, token, body, *, method="POST"):
+        if url.endswith("/handoff"):
+            return {"session_id": "workflow-a", "prompt": "Do the step"}
+        reports.append((url.rsplit("/", 1)[1], body))
+        return None
+
+    def run(*args):
+        if error:
+            raise error
+        return reply
+
+    monkeypatch.setattr(trigger_server, "_post_json", post)
+    monkeypatch.setattr(trigger_server, "_hermes_step", run)
+    monkeypatch.setattr(trigger_server, "_openclaw_step", run)
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
+    return reports
+
+
+@pytest.mark.parametrize("runtime", ["hermes", "openclaw"])
+def test_a_completed_step_reports_the_agents_summary(monkeypatch, trigger_server, runtime) -> None:
+    reply = 'Done.\n```json\n{"summary": "Found 3 leads", "criteria_met": true}\n```'
+    reports = _step_reports(monkeypatch, trigger_server, reply=reply, runtime=runtime)
+    assert reports == [("result", {"summary": "Found 3 leads", "criteria_met": True})]
+    assert "a" not in trigger_server._STEPS
+
+
+def test_plain_prose_still_counts_as_the_step_summary(monkeypatch, trigger_server) -> None:
+    reports = _step_reports(monkeypatch, trigger_server, reply="Found 3 leads in HubSpot.")
+    assert reports == [("result", {"summary": "Found 3 leads in HubSpot.", "criteria_met": True})]
+
+
+def test_unmet_criteria_are_reported_as_a_failure(monkeypatch, trigger_server) -> None:
+    reply = '{"summary": "HubSpot is not connected", "criteria_met": false}'
+    reports = _step_reports(monkeypatch, trigger_server, reply=reply)
+    assert reports == [("failure", {"reason": "HubSpot is not connected"})]
+
+
+def test_an_approval_request_is_reported_as_needing_attention(monkeypatch, trigger_server) -> None:
+    error = trigger_server.NeedsAttention("The Agent needs approval to run ls.")
+    reports = _step_reports(monkeypatch, trigger_server, error=error)
+    assert reports == [("failure", {"reason": "The Agent needs approval to run ls.", "needs_attention": True})]
+
+
+def test_a_stopped_step_reports_nothing(monkeypatch, trigger_server) -> None:
+    trigger_server.RUNTIME_KIND = "hermes"
+    reports = []
+    monkeypatch.setattr(
+        trigger_server,
+        "_post_json",
+        lambda url, token, body, method="POST": (
+            {"session_id": "s", "prompt": "p"} if url.endswith("/handoff") else reports.append(body)
+        ),
+    )
+
+    def stopped(*args):
+        trigger_server._STEPS["a"]["stopped"] = True
+        raise RuntimeError("Agent session cancelled")
+
+    monkeypatch.setattr(trigger_server, "_hermes_step", stopped)
+    trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+    trigger_server._run_workflow_step("a", "token", "http://api/attempts/a")
+    assert reports == []
+
+
+def test_a_step_is_started_once_per_attempt(monkeypatch, trigger_server) -> None:
+    started = []
+    monkeypatch.setattr(trigger_server, "_run_workflow_step", lambda *args: started.append(args))
+    payload = {
+        "attempt_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8e",
+        "token": "token",
+        "callback_url": "http://api/attempts/x",
+    }
+    assert trigger_server.start_workflow_step(payload) is True
+    assert trigger_server.start_workflow_step(payload) is False
+    with pytest.raises(ValueError):
+        trigger_server.start_workflow_step(
+            {**payload, "attempt_id": "018f0f6d-2d51-7d82-a8ef-1b646c15bd8f", "token": ""}
+        )
+
+
+def test_hermes_step_runs_a_new_session_and_reads_the_final_reply(trigger_server) -> None:
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    seen = {}
+
+    class FakeHermes(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen["start"] = (self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            seen["session_header"] = self.headers["X-Hermes-Session-Key"]
+            body = json.dumps({"run_id": "run-1"}).encode()
+            self.send_response(202)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            seen["events"] = self.path
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for event in ({"event": "tool.started"}, {"event": "run.completed", "text": "All done"}):
+                self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+
+        def log_message(self, format, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FakeHermes)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        trigger_server.RUNTIME_API_URL = f"http://127.0.0.1:{server.server_port}"
+        trigger_server._STEPS["a"] = {"run_id": None, "stopped": False}
+        assert trigger_server._hermes_step("a", "workflow-a", "Do the step") == "All done"
+    finally:
+        server.shutdown()
+    assert seen["start"] == ("/v1/runs", {"input": "Do the step", "session_id": "workflow-a"})
+    assert seen["session_header"] == "workflow-a"
+    assert seen["events"] == "/v1/runs/run-1/events"
+    assert trigger_server._STEPS["a"]["run_id"] == "run-1"
