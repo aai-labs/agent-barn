@@ -13,7 +13,7 @@ type PlatformAgent = {
   organization_id: string;
   organization_name: string;
   agent_size_id: string | null;
-  agent_size: Omit<Size, "enabled" | "sort_order" | "created_at" | "updated_at">;
+  agent_size: Omit<Size, "enabled" | "sort_order" | "created_at" | "updated_at" | "agent_count" | "following_agent_count">;
   agent_size_set_by_platform: boolean;
   pending_size: boolean;
 };

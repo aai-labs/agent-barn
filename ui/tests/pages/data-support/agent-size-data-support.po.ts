@@ -17,6 +17,8 @@ type Size = {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  agent_count: number;
+  following_agent_count: number;
 };
 
 export function mockSize(overrides: Partial<Size> = {}): Size {
@@ -32,6 +34,8 @@ export function mockSize(overrides: Partial<Size> = {}): Size {
     sort_order: 0,
     created_at: "2026-10-22T09:00:00Z",
     updated_at: "2026-10-22T09:00:00Z",
+    agent_count: 0,
+    following_agent_count: 0,
     ...overrides,
   };
 }
@@ -58,7 +62,8 @@ export class AgentSizeDataSupport {
         body: body === undefined ? "" : JSON.stringify(body),
       });
 
-    await this.page.route("**/api/v1/platform/agent-sizes", async (route) => {
+    // By path, so the catalog read for one Organization (`?organization_id=`) is served too.
+    await this.page.route((url) => url.pathname.endsWith("/api/v1/platform/agent-sizes"), async (route) => {
       const method = route.request().method();
       if (method === "GET") return reply(route, 200, catalog);
       const body = route.request().postDataJSON() as Record<string, unknown>;

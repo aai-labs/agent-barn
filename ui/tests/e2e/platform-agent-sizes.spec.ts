@@ -138,14 +138,19 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
     ]);
   });
 
-  test("makes another size the default, which moves the badge", async () => {
+  test("makes another size the default after confirming, which moves the badge", async () => {
     const { writes } = await sizes.intercept({
-      sizes: [mockSize(), mockSize({ id: LARGE_ID, name: "Large", is_default: false, sort_order: 1 })],
+      sizes: [
+        mockSize({ following_agent_count: 3 }),
+        mockSize({ id: LARGE_ID, name: "Large", is_default: false, sort_order: 1 }),
+      ],
     });
     await sizesPage.goto();
 
     await sizesPage.openActions("Large");
     await sizesPage.action("Make default").click();
+    await expect(sizesPage.confirmDialog()).toContainText("3 agents that follow Standard move to Large");
+    await sizesPage.confirm("Make default").click();
 
     await expect(sizesPage.row("Large")).toContainText("Default");
     await expect(sizesPage.row("Standard")).not.toContainText("Default");
@@ -165,6 +170,21 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
 
     await sizesPage.openActions("Large");
     await expect(sizesPage.action("Make default")).toHaveAttribute("data-disabled", "");
+  });
+
+  test("asks before disabling a size agents are on, since they stay on it", async () => {
+    const { writes } = await sizes.intercept({
+      sizes: [mockSize(), mockSize({ id: LARGE_ID, name: "Large", is_default: false, agent_count: 2 })],
+    });
+    await sizesPage.goto();
+
+    await sizesPage.enabledSwitch("Large").click();
+    await expect(sizesPage.confirmDialog()).toContainText("2 agents on Large stay on it");
+    expect(writes).toEqual([]);
+    await sizesPage.confirm("Disable size").click();
+
+    await expect(sizesPage.enabledSwitch("Large")).toHaveAttribute("aria-checked", "false");
+    expect(writes).toEqual([{ method: "PATCH", id: LARGE_ID, body: { enabled: false } }]);
   });
 
   test("deletes a size after confirming, and never offers to delete the default", async () => {

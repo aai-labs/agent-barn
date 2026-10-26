@@ -64,7 +64,7 @@ test.describe("Organizations choosing Agent sizes", () => {
   test("a Platform Administrator lets an organization choose a size, then withdraws it", async ({ page }) => {
     const data = await signIn(page);
     const sizes = new AgentSizeDataSupport(page);
-    await sizes.intercept({ sizes: [STANDARD, LARGE, RETIRED] });
+    await sizes.intercept({ sizes: [STANDARD, { ...LARGE, agent_count: 2 }, RETIRED] });
     const organization = platformOrganization();
     await data.organizations.interceptGetPlatformOrganization({ organization });
     const { writes } = await sizes.interceptSetOrganizationSizes(organization);
@@ -89,6 +89,7 @@ test.describe("Organizations choosing Agent sizes", () => {
 
     await toggle.click();
     await expect(card.getByRole("checkbox", { name: "Large" })).toHaveCount(0);
+    await expect(card.getByTestId("agent-sizes-withdraw-note")).toContainText("2 agents on Large stay on it");
     await card.getByRole("button", { name: "Save" }).click();
 
     await expect(toggle).toHaveAttribute("aria-checked", "false");

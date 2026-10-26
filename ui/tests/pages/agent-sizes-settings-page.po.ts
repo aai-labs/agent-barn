@@ -54,6 +54,14 @@ export class AgentSizesSettingsPage {
     await this.dialog().locator('button[type="submit"]').click();
   }
 
+  confirmDialog(): Locator {
+    return this.page.getByRole("dialog");
+  }
+
+  confirm(name: "Make default" | "Disable size"): Locator {
+    return this.confirmDialog().getByRole("button", { name, exact: true });
+  }
+
   confirmDelete(): Locator {
     return this.page.getByRole("button", { name: "Delete size" });
   }
