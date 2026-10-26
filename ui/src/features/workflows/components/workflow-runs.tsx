@@ -346,8 +346,8 @@ function RunContents({
             onSelectStep={setSelectedStepId}
           />
         </nav>
-        <div className="contents">
-          <div id="workflow-run-panel" className="min-w-0 [&>section]:h-full">
+        <div className="min-w-0 space-y-4 self-start">
+          <div id="workflow-run-panel" className="min-w-0">
             {selectedStep ? (
               <StepDetail run={run} step={selectedStep} />
             ) : (
