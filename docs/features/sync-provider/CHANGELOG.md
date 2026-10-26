@@ -85,20 +85,20 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - the schema: `agent.file_sync_enabled` (on by default) and `sync_agent_folder.resync_requested_at` (migration `df10528f512f`);
   - `POST …/agents` accepts `file_sync_enabled` and stores it;
   - the Domain Events `agent.file_sync.enabled` / `agent.file_sync.disabled`, registered for the security audit;
-  - `PUT …/agents/{agent_id}/file-sync` (`agent.update`): sets the switch, makes the Agent's folder `disabled` or `active` with a re-check requested, and records the event, in one transaction. A folder that is turned off is already refused by Ingest and left alone by the Sync Engine.
+  - `PUT …/agents/{agent_id}/file-sync` (`agent.update`): sets the switch, makes the Agent's folder `disabled` or `active` with a re-check requested, and records the event, in one transaction. A folder that is turned off is already refused by Ingest and left alone by the Sync Engine;
+  - Ingest refuses an Agent whose switch is off (409), with or without a folder.
 - In transition:
-  - an Agent switched off before it has a folder still gets one when the engine reaches it, and Ingest doesn't read the switch itself;
+  - an Agent switched off before it has a folder still gets one when the engine reaches it;
   - `resync_requested_at` is written but not yet read, so turning on resumes the folder without the re-check.
 - Next, in this order, each as its own slice:
-  1. Ingest refusing a switched-off Agent;
-  2. the engine applying the switch to folders;
-  3. making the full re-list safe alongside the pod;
-  4. turning on re-checks the folder;
-  5. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
-  6. the Agent page File sync tab (status and switch, then activity);
-  7. the hire form option;
-  8. the local k3d end-to-end run;
-  9. closing this log.
+  1. the engine applying the switch to folders;
+  2. making the full re-list safe alongside the pod;
+  3. turning on re-checks the folder;
+  4. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
+  5. the Agent page File sync tab (status and switch, then activity);
+  6. the hire form option;
+  7. the local k3d end-to-end run;
+  8. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -112,6 +112,19 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — Ingest refuses an Agent whose switch is off
+
+- Delivered: `FileSyncIngestService._target` answers 409 "File sync is turned off for this Agent" when `agent.file_sync_enabled` is false. The check comes after the connection and capability checks and before the folder is looked up or touched, so:
+  - an Agent switched off before it has a folder gets 409, not 404;
+  - an Agent switched off while its folder is still `active` is refused at once, on every pod route;
+  - a refused call doesn't update `last_contact_at`.
+
+  The pod helper already handles a 409 by logging it and asking again after its interval (`file-sync.py` `run_loop`).
+- Changed: [activity and ingest](../activity-and-ingest.md) lists the new 409 case. README: "The Agent's pod" and "Turning sync off".
+- Verified:
+  - **4 new tests in `test_file_sync_ingest_auth.py`, all failing first:** a report from a switched-off Agent with an active folder (was 200), with no folder (was 404), its job claim (was 200), and `last_contact_at` left empty (was set).
+  - The three Ingest suites pass (74). ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
 
 ### 2026-10-26 — AF-385 — Turning sync off or on
 

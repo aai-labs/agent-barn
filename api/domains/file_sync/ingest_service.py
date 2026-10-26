@@ -289,6 +289,8 @@ class FileSyncIngestService:
         root = sync_root(connection)
         if SyncProviderCapability.FILE_SYNC not in plugin.capabilities or root is None:
             raise FileSyncConflict("The connected provider does not sync Agent files")
+        if not agent.file_sync_enabled:
+            raise FileSyncConflict("File sync is turned off for this Agent")
         if folder is None:
             raise FileSyncNotFound("The Agent's folder does not exist yet")
         if folder.status != SyncFolderStatus.ACTIVE:

@@ -39,7 +39,7 @@ Conversation Messages and Tool Calls share the Agent Activity UI but have differ
   - **Contact:** every authenticated call records the folder's `last_contact_at`.
   - **Authentication:** a wrong or missing key, or an Agent that does not exist, is 401, before anything else is revealed. The lookup includes deleted Agents, so a deleted Agent presenting its last key is 404.
   - **Target:** the folder comes only from the authenticated Agent's own Organization.
-  - **Not ready (409):** no active connection, a provider without `file_sync`, sync turned off for the folder, or a folder still being created at the provider. A folder the Sync Engine has not made yet is 404.
+  - **Not ready (409):** no active connection, a provider without `file_sync`, the Agent's File Sync switch off ("File sync is turned off for this Agent", whether or not it has a folder), sync turned off for the folder, or a folder still being created at the provider. A folder the Sync Engine has not made yet is 404. A refused call doesn't count as contact (`last_contact_at`).
   - **Paths:** each must be in NFC form and allowed by the Agent's runtime's sync rules; otherwise the request is 400, naming the first refused path.
 - Email normalizes sender/location identities and applies policy directly before durable Communication Delivery acceptance; the shared provider enrichment and driver-ingress hooks are removed. Teams authenticates and applies admission policy at the product API relay, passing the raw activity to its native runtime without creating a gateway Delivery. Native runtime observers continue mirroring conversation identities and names through Ingest.
 

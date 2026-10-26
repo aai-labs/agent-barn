@@ -170,7 +170,7 @@ Paths are relative to the runtime's root: `/opt/data` for Hermes, whose `workspa
 Every Hermes and OpenClaw ConfigMap carries `file-sync.py` and `file-sync-rules.json`, which is `rules_manifest` for that runtime. After the Template files and skills are written, `start.sh` runs the helper once, bounded at 60 s and never failing the start, then keeps it running every 15 s while the runtime starts.
 - **Each round:** it scans the synced paths, reports them, uploads what the server asks for, and applies its download and re-upload jobs.
 - **Files being written:** in the background loop, a file changed within the last 5 s keeps its last reported version, or is left out and the report marked incomplete. The run before start skips this wait, because the runtime is not yet writing, so the files `start.sh` has just written are offered at once.
-- **When it stops:** a refused key (401) stops it. An Agent without an active folder gets 404 or 409 and keeps asking, so sync starts once a connection is made.
+- **When it stops:** a refused key (401) stops it. An Agent without an active folder gets 404 or 409 and keeps asking, so sync starts once a connection is made. An Agent whose File Sync switch is off gets 409 on every round, so its Logs show `[file-sync] ingest answered 409` every 15 s until the switch is turned on.
 - **No provider credentials:** the pod only ever holds per-file upload and download links.
 
 ### Sync Engine
@@ -256,6 +256,7 @@ Each Agent has a File Sync switch, `agent.file_sync_enabled`, on by default. It 
 - **In the same transaction:**
   - the Agent's folder on the Organization's active connection, if there is one, becomes `disabled` (off), or `active` with `resync_requested_at` set (on);
   - `agent.file_sync.disabled` or `agent.file_sync.enabled` is recorded for the security audit ([Domain Events](../domain-events.md)).
+- **While the switch is off:** the pod is refused (409) on every route, even before the folder is `disabled` and even when there is no folder.
 - **While the folder is `disabled`:** the pod is refused (409), the Sync Engine leaves the folder and its files alone, and the folder and everything in it stay at the provider. The folder's name stays taken.
 - **A restore** of an Agent Restore Point doesn't change the switch.
 
