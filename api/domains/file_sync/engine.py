@@ -26,8 +26,8 @@ from api.domains.file_sync.rules import (
 from api.domains.sync_provider.models import FOLDER_NAME, SyncProviderCapability, SyncProviderConnection
 from api.domains.sync_provider.plugins.base import (
     ProviderThrottled,
-    ProviderUnavailable,
     RemoteItem,
+    RemoteItemLocked,
     RemoteItemMissing,
     RemoteNameTaken,
     RemoteResyncRequired,
@@ -41,7 +41,6 @@ logger = logging.getLogger(__name__)
 
 FOLDER_NAME_MAX = 255
 THROTTLE_FALLBACK_SECONDS = 60
-UNAVAILABLE_BACKOFF_SECONDS = 120
 SETTLE_DELAY = timedelta(seconds=30)
 FOLDER_NAME_FALLBACK = "Agent"
 FOLDER_FORBIDDEN_CHARACTERS = FORBIDDEN_CHARACTERS | {"/"}
@@ -148,13 +147,9 @@ class FileSyncEngine:
                     wait = exc.retry_after or THROTTLE_FALLBACK_SECONDS
                     self.repository.postpone(connection.id, now + timedelta(seconds=wait))
                     logger.info("File sync for connection %s throttled for %ss", connection.id, wait)
-                except ProviderUnavailable as exc:
-                    self.repository.postpone(connection.id, now + timedelta(seconds=UNAVAILABLE_BACKOFF_SECONDS))
-                    logger.warning(
-                        "File sync for connection %s postponed %ss: provider unavailable (%s)",
-                        connection.id,
-                        UNAVAILABLE_BACKOFF_SECONDS,
-                        exc,
+                except RemoteItemLocked:
+                    logger.info(
+                        "File sync for connection %s found an item open for editing; retrying next pass", connection.id
                     )
                 except Exception:
                     logger.exception("File sync pass failed for connection %s", connection.id)

@@ -4,6 +4,7 @@ from hamcrest import assert_that, contains_string, equal_to, is_, none
 from api.domains.sync_provider.models import SyncProviderCapability
 from api.domains.sync_provider.plugins.base import (
     ProviderThrottled,
+    RemoteItemLocked,
     RemoteItemMissing,
     RemoteNameTaken,
     RemoteResyncRequired,
@@ -196,3 +197,14 @@ def test_a_user_move_out_of_the_root_leaves_the_item_without_a_path():
 
     assert_that((moved.id, moved.path, moved.deleted), equal_to((item.id, None, False)))
     assert_that((reported[item.id].deleted, reported[item.id].path), equal_to((True, None)))
+
+
+def test_failing_one_kind_of_call_raises_once_and_leaves_the_others_alone():
+    plugin, root = _connected()
+    plugin.fail_call("create_folder", RemoteItemLocked("open in Word"))
+
+    with pytest.raises(RemoteItemLocked):
+        plugin.create_folder(root, parent_id=root.folder_id, name="Sales Bot")
+
+    assert_that(plugin.get_item(root, item_id=root.folder_id).id, equal_to(root.folder_id))
+    assert_that(plugin.create_folder(root, parent_id=root.folder_id, name="Sales Bot").path, equal_to("Sales Bot"))

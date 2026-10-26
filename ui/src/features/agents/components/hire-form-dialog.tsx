@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { useSyncProvidersQuery } from "@/features/sync-provider/hooks/use-sync-providers-query";
 import { FILE_SYNC } from "@/features/sync-provider/schemas";
 import { useHireAgentForm, type HiredAgent } from "../hooks/use-hire-agent-form";
@@ -62,6 +63,8 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
   const fileSyncProvider = providers?.find(
     (provider) => provider.connection?.status === "active" && provider.capabilities.includes(FILE_SYNC),
   );
+  const fieldsBeforeHint = 4 + (agentType === "hermes" ? 1 : 0) + (fileSyncProvider ? 1 : 0);
+  const hintStartsRow = fieldsBeforeHint % 2 === 0;
 
   const hireButtonLabel = createdAgent
     ? pending
@@ -141,7 +144,7 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
             </button>
           </div>
         )}
-        <div className="rounded-xl border border-dashed p-4 text-sm sm:col-span-2" style={{ color: "var(--ink-3)" }}>
+        <div className={cn("rounded-xl border border-dashed p-4 text-sm", hintStartsRow && "sm:col-span-2")} style={{ color: "var(--ink-3)" }}>
           {template?.requiredSkills.length
             ? "Communication connections are configured after hiring. Credentials required by this template are configured before hiring."
             : "Communication connections and integration credentials are configured independently after hiring."}

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import {
   mockAgent,
@@ -36,6 +36,33 @@ async function hirePayload(page: Page, dataSupport: DataSupport) {
   );
   await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
   return (await createRequest).postDataJSON();
+}
+
+const HINT = "Communication connections and integration credentials are configured independently after hiring.";
+
+type Box = { x: number; y: number; width: number; height: number };
+
+async function box(locator: Locator): Promise<Box> {
+  const found = await locator.boundingBox();
+  if (!found) throw new Error("element has no box");
+  return found;
+}
+
+function sameRow(a: Box, b: Box) {
+  return a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+async function openHire(page: Page, dataSupport: DataSupport, dashboardPage: DashboardPage, withProvider: boolean) {
+  await dataSupport.syncProviders.interceptProviders({
+    providers: [withProvider ? oneDriveEntry({ connection: activeOneDriveConnection() }) : oneDriveEntry()],
+  });
+  await dashboardPage.goto();
+  await dashboardPage.openHireCard();
+  await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
+}
+
+async function chooseOpenClaw(page: Page) {
+  await page.getByRole("radiogroup", { name: "Runtime" }).getByRole("radio", { name: "OpenClaw", exact: true }).click();
 }
 
 async function chooseTemplate(page: Page) {
@@ -148,6 +175,50 @@ test.describe("Hire Dialog", () => {
 
     await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
     await expect(page.getByRole("switch", { name: /^Sync files with/ })).toHaveCount(0);
+  });
+
+  test("puts the hint beside Command approval for Hermes without a sync provider", async ({ page }) => {
+    await openHire(page, dataSupport, dashboardPage, false);
+
+    const hint = await box(page.getByText(HINT));
+    const approval = await box(page.getByRole("combobox", { name: "Command approval" }));
+    const name = await box(dashboardPage.agentNameInput());
+
+    expect(sameRow(hint, approval)).toBe(true);
+    expect(hint.width).toBeLessThan(name.width * 1.5);
+  });
+
+  test("puts the hint on its own full row below the sync toggle for Hermes", async ({ page }) => {
+    await openHire(page, dataSupport, dashboardPage, true);
+
+    const hint = await box(page.getByText(HINT));
+    const toggle = await box(syncFilesCheckbox(page));
+    const name = await box(dashboardPage.agentNameInput());
+
+    expect(hint.y).toBeGreaterThan(toggle.y + toggle.height);
+    expect(hint.width).toBeGreaterThan(name.width * 1.5);
+  });
+
+  test("puts the hint on its own full row for OpenClaw without a sync provider", async ({ page }) => {
+    await openHire(page, dataSupport, dashboardPage, false);
+    await chooseOpenClaw(page);
+
+    const hint = await box(page.getByText(HINT));
+    const name = await box(dashboardPage.agentNameInput());
+
+    expect(hint.width).toBeGreaterThan(name.width * 1.5);
+  });
+
+  test("puts the hint beside the sync toggle for OpenClaw", async ({ page }) => {
+    await openHire(page, dataSupport, dashboardPage, true);
+    await chooseOpenClaw(page);
+
+    const hint = await box(page.getByText(HINT));
+    const toggle = await box(syncFilesCheckbox(page));
+    const name = await box(dashboardPage.agentNameInput());
+
+    expect(sameRow(hint, toggle)).toBe(true);
+    expect(hint.width).toBeLessThan(name.width * 1.5);
   });
 
   test("preserves manual edits when selecting a template", async ({ page }) => {

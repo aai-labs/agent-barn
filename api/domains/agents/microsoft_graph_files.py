@@ -51,6 +51,10 @@ class GraphResyncRequired(GraphUnavailable):
     """The change cursor is no longer valid; the folder has to be read again from the start (410)."""
 
 
+class GraphItemLocked(GraphUnavailable):
+    """The item is open for editing elsewhere and can't be changed right now (423)."""
+
+
 class GraphThrottled(GraphUnavailable):
     """Graph is limiting requests (429). ``retry_after`` is the wait it asked for, in seconds."""
 
@@ -201,6 +205,8 @@ class MicrosoftGraphFiles:
             raise GraphResyncRequired(f"HTTP {status}")
         if status == 412:
             raise GraphPreconditionFailed(f"HTTP {status}")
+        if status == 423:
+            raise GraphItemLocked(f"HTTP {status}")
         if status >= 300:
             raise GraphUnavailable(f"HTTP {status}")
         if status == 204 or not response.content:

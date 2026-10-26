@@ -22,6 +22,7 @@ from api.domains.sync_provider.plugins.base import (
     SignedIn,
     SyncFolder,
     SyncLocation,
+    SyncProviderError,
     SyncProviderPlugin,
     SyncRoot,
     UploadTarget,
@@ -72,6 +73,7 @@ class TestDrivePlugin(SyncProviderPlugin):
     calls: list[str] = field(default_factory=list)
     moved_out: set[str] = field(default_factory=set)
     throttled_calls: dict[str, int] = field(default_factory=dict)
+    failing_calls: dict[str, SyncProviderError] = field(default_factory=dict)
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
     _instance: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
@@ -210,8 +212,13 @@ class TestDrivePlugin(SyncProviderPlugin):
     def throttle_call(self, name: str, retry_after: int) -> None:
         self.throttled_calls[name] = retry_after
 
+    def fail_call(self, name: str, error: SyncProviderError) -> None:
+        self.failing_calls[name] = error
+
     def _call(self, name: str) -> None:
         self.calls.append(name)
+        if name in self.failing_calls:
+            raise self.failing_calls.pop(name)
         if name in self.throttled_calls:
             raise ProviderThrottled("Test Drive is limiting requests.", retry_after=self.throttled_calls.pop(name))
         if self.throttle_seconds is not None:

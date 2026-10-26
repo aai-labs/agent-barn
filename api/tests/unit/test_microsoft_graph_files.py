@@ -11,6 +11,7 @@ from api.domains.agents.microsoft_graph_files import (
     DeltaPage,
     DriveItem,
     GraphAccessRefused,
+    GraphItemLocked,
     GraphItemNotFound,
     GraphNameConflict,
     GraphPreconditionFailed,
@@ -325,6 +326,7 @@ def test_an_empty_file_is_written_directly_because_upload_sessions_refuse_it(gra
         (401, GraphAccessRefused),
         (403, GraphAccessRefused),
         (412, GraphPreconditionFailed),
+        (423, GraphItemLocked),
         (500, GraphUnavailable),
         (503, GraphUnavailable),
     ],
@@ -343,6 +345,7 @@ def test_rejections_are_still_unavailable_for_callers_that_undo_on_any_failure()
         GraphPreconditionFailed,
         GraphResyncRequired,
         GraphThrottled,
+        GraphItemLocked,
     ):
         assert_that(issubclass(error, GraphUnavailable), equal_to(True))
 

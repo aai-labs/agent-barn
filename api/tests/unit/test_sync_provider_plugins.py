@@ -29,6 +29,7 @@ from api.domains.sync_provider.plugins.base import (
     RemoteChangeRejected,
     RemoteChanges,
     RemoteItem,
+    RemoteItemLocked,
     RemoteItemMissing,
     RemoteNameTaken,
     RemoteResyncRequired,
@@ -296,7 +297,7 @@ def test_throttling_can_carry_the_providers_requested_wait():
 
 
 def test_file_sync_failures_are_provider_errors():
-    for error in (RemoteItemMissing, RemoteNameTaken, RemoteChangeRejected, RemoteResyncRequired):
+    for error in (RemoteItemMissing, RemoteNameTaken, RemoteChangeRejected, RemoteResyncRequired, RemoteItemLocked):
         assert_that(issubclass(error, SyncProviderError), is_(True))
 
 
@@ -950,6 +951,7 @@ def test_onedrive_writes_go_where_the_engine_asks(graph):
         (httpx.Response(400), RemoteChangeRejected),
         (httpx.Response(412), RemoteChangeRejected),
         (httpx.Response(410), RemoteResyncRequired),
+        (httpx.Response(423), RemoteItemLocked),
         (httpx.Response(401), LocationAccessRefused),
         (httpx.Response(403), LocationAccessRefused),
         (httpx.Response(500), ProviderUnavailable),

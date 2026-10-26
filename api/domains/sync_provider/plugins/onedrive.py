@@ -6,6 +6,7 @@ from api.core.config import Config
 from api.domains.agents.microsoft_graph_files import (
     DriveItem,
     GraphAccessRefused,
+    GraphItemLocked,
     GraphItemNotFound,
     GraphNameConflict,
     GraphPreconditionFailed,
@@ -49,6 +50,7 @@ from api.domains.sync_provider.plugins.base import (
     RemoteChangeRejected,
     RemoteChanges,
     RemoteItem,
+    RemoteItemLocked,
     RemoteItemMissing,
     RemoteNameTaken,
     RemoteResyncRequired,
@@ -381,6 +383,8 @@ def _file_failures() -> Iterator[None]:
         raise RemoteChangeRejected(str(exc)) from exc
     except GraphResyncRequired as exc:
         raise RemoteResyncRequired(str(exc)) from exc
+    except GraphItemLocked as exc:
+        raise RemoteItemLocked(str(exc)) from exc
     except GraphUnavailable as exc:
         raise ProviderUnavailable(_UNREACHABLE) from exc
 

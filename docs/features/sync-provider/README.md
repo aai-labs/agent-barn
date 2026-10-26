@@ -117,7 +117,7 @@ A new provider is a plugin, its provider client, and tests. No route, table, mig
 3. **Capabilities.** Declare only what it implements:
    - `location_picker` needs `search_locations`, `resolve_location` and a `location_noun`;
    - `admin_approval` needs `approval_url` and `is_approval_callback`;
-   - `file_sync` needs `create_folder`, `get_item`, `get_item_by_path`, `move_item`, `delete_item`, `changes`, `upload_target`, `download_url` and `write_empty_file`. They act as Agent Barn under the connection's `SyncRoot`, report paths relative to the "Agent Barn" folder in `RemoteItem`, and raise `RemoteItemMissing`, `RemoteNameTaken`, `RemoteChangeRejected`, `RemoteResyncRequired`, or `ProviderThrottled` with `retry_after`. The upload and download URLs must work without any provider credential, because the Agent's pod uses them.
+   - `file_sync` needs `create_folder`, `get_item`, `get_item_by_path`, `move_item`, `delete_item`, `changes`, `upload_target`, `download_url` and `write_empty_file`. They act as Agent Barn under the connection's `SyncRoot`, report paths relative to the "Agent Barn" folder in `RemoteItem`, and raise `RemoteItemMissing`, `RemoteNameTaken`, `RemoteChangeRejected`, `RemoteResyncRequired`, `RemoteItemLocked` (an item open for editing elsewhere), or `ProviderThrottled` with `retry_after`. The upload and download URLs must work without any provider credential, because the Agent's pod uses them.
 
    The registry refuses a plugin that declares a capability without its methods.
 4. **Guards.** A check owned by another domain is declared as a `SyncLocationGuard` member and bound in `SyncProviderService._guard`. The plugin never imports that domain.
@@ -178,6 +178,7 @@ Every Hermes and OpenClaw ConfigMap carries `file-sync.py` and `file-sync-rules.
 The Sync Engine (`api/sync_engine_main.py`, `make dev-sync-engine`, chart value `syncEngine`) runs one pass every 30 s. A pass handles each active connection that has a root folder, whose provider declares `file_sync`, and that is not waiting out throttling.
 - **Locking:** it holds that connection's advisory lock, and skips a connection another copy holds.
 - **Throttling:** when the provider throttles, the connection waits until now plus the provider's `Retry-After` (`sync_retry_at`), or 60 s when none is given. Other connections go on.
+- **Locked items:** when the provider refuses a change because an item is open for editing (`RemoteItemLocked`; OneDrive's 423, for example Word still saving a new file), the pass stops with one INFO line and the next pass, 30 s later, tries again from the same point. The connection is not postponed and the status doesn't change.
 - **Failures:** any other failure is logged, and the other connections still sync.
 - **Heartbeat:** a completed pass refreshes the liveness heartbeat; a failed pass does not.
 
@@ -252,7 +253,7 @@ The helper never deletes a file on the volume.
 
 ### Turning sync off
 
-Each Agent has a File Sync switch, `agent.file_sync_enabled`, on by default. It can be set when the Agent is created ([Agents](../agents.md#create)): the hire form offers a "Sync files with {provider}" checkbox, checked by default and shown only while the Organization has an active provider that declares `file_sync`; unchecking it sends `file_sync_enabled: false`, and Quick start and the API leave it on. It can be changed at any time with `PUT /organizations/{organization_id}/agents/{agent_id}/file-sync {enabled}`:
+Each Agent has a File Sync switch, `agent.file_sync_enabled`, on by default. It can be set when the Agent is created ([Agents](../agents.md#create)): the hire form offers a "Sync files with {provider}" toggle, on by default and shown only while the Organization has an active provider that declares `file_sync`; turning it off sends `file_sync_enabled: false`, and Quick start and the API leave it on. It can be changed at any time with `PUT /organizations/{organization_id}/agents/{agent_id}/file-sync {enabled}`:
 - **Permission:** `agent.update`. An invisible, other-Organization or deleted Agent is 404; a visible one without the permission is 403; a read-only API key is refused.
 - **Answer:** 200 `{agent_id, enabled}`. Setting the value it already has changes nothing and records nothing.
 - **In the same transaction:**
@@ -294,8 +295,8 @@ An Agent's **File sync** tab (`?tab=file-sync`, in the panel's Work group) shows
   - "This agent hasn't checked in with sync since {time}", with what to try;
   - "Not connected": Owners and Admins get a link to Organization settings → Sync, and everyone else is told an Owner or Admin can connect one.
 - **Open in {provider}** opens the folder in a new tab, whenever the folder exists.
-- **The switch,** "Sync this agent's files", shows the switch's position in every state, including while not connected. It appears only with `agent.update`, and calls [the switch's request](#turning-sync-off) at once, then reads the status again.
-- **What happened:** below the card, [the history](#activity) in plain sentences, newest first, each with its time, 20 at a time with Load more. One sentence per kind, naming the path and the provider; a folder entry names the folder instead. With no entries it says "Nothing has happened yet."
+- **The switch,** a "Sync this agent's files" toggle on the right of the card, shows the switch's position in every state, including while not connected. It appears only with `agent.update`, and calls [the switch's request](#turning-sync-off) at once, then reads the status again.
+- **Sync activity:** below the card, [the history](#activity) in plain sentences, newest first, each with its time, 20 at a time with Load more. One sentence per kind, naming the path and the provider; a folder entry names the folder instead. With no entries it says "Nothing has happened yet."
 - **Refreshing:** the status is read again every 30 s while the tab is open; the history is read when the tab opens and after the switch changes. A failed read of either is shown in place with Retry, and the other part still shows.
 - **Caching:** the query is keyed by Organization and Agent id, so switching Organization never shows another one's status.
 

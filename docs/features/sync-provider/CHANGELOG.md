@@ -93,11 +93,11 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - `GET …/agents/{agent_id}/file-sync` (`activity.read`): the Agent's File Sync status;
   - `GET …/agents/{agent_id}/file-sync/activity` (`activity.read`): the Agent's File Sync history, newest first, paged;
   - the Agent page **File sync** tab: the status card, Open in {provider}, the switch, and the history;
-  - the hire form's "Sync files with {provider}" option.
+  - the hire form's "Sync files with {provider}" toggle;
+  - an item open for editing at the provider (`RemoteItemLocked`) makes a pass retry quietly instead of failing.
 - In transition: none.
 - Next, in this order, each as its own slice:
-  1. the local k3d end-to-end run;
-  2. closing this log.
+  1. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -111,6 +111,41 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — Locked items, hint layout and activity wording (fixes after the manual check)
+
+- **Context:** the maintainer checked PRs 1–13 by hand on local k3d and reported three issues:
+  - whitespace in the hire card;
+  - a checkbox where a toggle was wanted;
+  - a memory edit that wasn't tracked.
+
+  Commit `3a81a16f` (made in another session) addressed them. Verifying that commit found the problems this entry fixes.
+- **`3a81a16f` delivered:**
+  - **Toggles:** both "sync" checkboxes became toggles on the right (`role="switch"`, the same markup as the Platform workflow setting).
+  - **Hint:** the hire form's dashed hint always spanned both columns.
+  - **Heading:** "Files that needed attention".
+  - **Backoff:** the engine postponed a connection 120 s on any `ProviderUnavailable`.
+- **Fixed here:**
+  - **Locked items.** The `ProviderUnavailable` backoff answered one 423 Locked from Graph (Word saving the new `Document.docx` at 13:03:41), which the next pass at 13:04:12 had already cleared. With it, any outage set `sync_retry_at`, so the status card said "OneDrive asked Agent Barn to slow down". It is removed. Graph's 423 is now `GraphItemLocked` and the neutral `RemoteItemLocked` (it was "Microsoft couldn't be reached"). `run_pass` logs it at INFO and retries on the next pass, without postponing.
+  - **Hint layout.** Spanning always left an empty cell beside Command approval for Hermes without a sync provider. The hint now spans both columns only when it starts a row (an even number of fields before it).
+  - **Wording.** The history is headed "Sync activity", since it also lists the Agent's own deletes, and is empty as "Nothing has happened yet.". The README now says toggle, not checkbox.
+- **The memory edit:** not a sync defect. On the cluster, Graph showed `memories/USER.md` last written by the app at 13:08:56, and the only file a person changed under "Agent Barn" was `_Not synced/Document.docx`. The edit never reached OneDrive. An applied person-edit still creates no activity entry, by design.
+- **Verified by automated tests only.** The cluster was not redeployed after this change, so none of it has been seen on k3d.
+  - **Unit:** 423 maps to `GraphItemLocked` and to `RemoteItemLocked` (both failed first). Test Drive's new `fail_call(name, error)` raises once and leaves other calls alone (failed first: no hook). The two suites and the Test Drive contract pass (128 and 15).
+  - **Engine:** an unreachable provider leaves `sync_retry_at` empty (failed first: the backoff set it). A locked item logs no warning or error and the next pass finishes the work (failed first: "File sync pass failed"). The engine pass, re-sync, status and folder suites pass (99).
+  - **UI:** `hire-dialog.spec.ts` gains 4 layout tests comparing boxes. "Beside Command approval" for Hermes without a provider, and "beside the toggle" for OpenClaw with one, failed first; the two full-row cases are guards. The spec passes (28). In `agent-file-sync.spec.ts`, the heading test failed first; the spec passes (21). `pnpm lint` and `tsc --noEmit` pass.
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
+
+### 2026-10-26 — AF-385 — The local k3d run
+
+- **Run by:** the maintainer, on `k3d-local-cluster` against the test tenant (`AgentBarnTest`), on the build of `3a81a16f`.
+- **What the cluster's records showed, read-only:**
+  - folders created;
+  - the Agent's Template files and memory uploaded;
+  - a person's new file moved to `_Not synced/` and listed;
+  - the Sync Engine passing every 30 s with a fresh cursor.
+- **No record yet of:** a config edit undone, a deleted file restored, sync turned off and on, or an Agent hired with sync off. Automated tests cover these; they were not checked on the cluster.
+- **Open AF-384 Graph checks** (the from-start listing after a resume; a deleted folder's children; moves out of the folder): not checked on the cluster.
 
 ### 2026-10-26 — AF-385 — The hire form's file sync option
 
