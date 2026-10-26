@@ -7,6 +7,47 @@ from api.domains.communications.plugins.agentbarn_telegram import RUNTIME_WEBHOO
 
 _NON_LABEL_CHARS = re.compile(r"[^a-z0-9]+")
 
+_MIB = 1024**2
+_GIB = 1024**3
+
+# The `fix-pvc-owner` init container's own resources, fixed at what every agent ran with
+# before Agent Sizes. It must carry a block: without one the namespace LimitRange fills in
+# its default (512Mi / 2Gi), and a pod is charged the larger of its containers added up and
+# its biggest init container, so an unset block would make every agent cost more than its
+# size. It does not follow the size because it only runs `chown` for a moment; a size below
+# this one is still charged this much while it starts.
+INIT_CONTAINER_RESOURCES = client.V1ResourceRequirements(
+    requests={"memory": "320Mi", "cpu": "50m"},
+    limits={"memory": "1Gi", "cpu": "500m"},
+)
+
+
+def _memory_quantity(value: int) -> str:
+    """Bytes the way the manifests have always written them: Gi or Mi when whole."""
+    if value % _GIB == 0:
+        return f"{value // _GIB}Gi"
+    if value % _MIB == 0:
+        return f"{value // _MIB}Mi"
+    return str(value)
+
+
+def container_resources(
+    *,
+    cpu_request_millicores: int,
+    cpu_limit_millicores: int,
+    memory_request_bytes: int,
+    memory_limit_bytes: int,
+) -> client.V1ResourceRequirements:
+    """An Agent Size as the agent container's resources block.
+
+    Written in the same units the builders used before sizes existed, so the default size
+    renders the identical pod spec (320Mi / 50m requests, 1Gi / 500m limits).
+    """
+    return client.V1ResourceRequirements(
+        requests={"memory": _memory_quantity(memory_request_bytes), "cpu": f"{cpu_request_millicores}m"},
+        limits={"memory": _memory_quantity(memory_limit_bytes), "cpu": f"{cpu_limit_millicores}m"},
+    )
+
 
 def _resource_name(agent_id: UUID) -> str:
     return f"agent-{agent_id}"

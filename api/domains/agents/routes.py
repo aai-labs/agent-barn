@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi_injector import Injected
 
+from api.domains.agent_sizes.models import AgentSizeChoice
 from api.domains.agents.access_service import AgentAccessService
 from api.domains.agents.llm_budget import AgentLlmBudgetService
 from api.domains.agents.models import (
@@ -205,6 +206,21 @@ def set_agent_llm_budget(
 ):
     """Set the Agent's own spend limit, or clear it to follow the default."""
     return service.set_llm_budget(agent_id, budget.budget_usd, context)
+
+
+@agents_router.put("/{agent_id}/agent-size", response_model=AgentRead)
+def set_agent_size(
+    agent_id: UUID,
+    choice: AgentSizeChoice,
+    context: Annotated[CurrentUserContext, Depends(get_current_user())],
+    service: Annotated[AgentService, Injected(AgentService)],
+):
+    """Choose the size the Agent starts on next, or null to follow the platform default.
+
+    Separate from the Agent update so it is accepted while the Agent runs; the change
+    applies at the next start, and `pending_size` says so until then.
+    """
+    return service.set_agent_size(agent_id, choice.agent_size_id, context)
 
 
 @agents_router.get("/{agent_id}/configuration", response_model=AgentConfigurationRead)
