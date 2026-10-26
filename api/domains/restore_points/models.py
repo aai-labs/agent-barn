@@ -167,6 +167,5 @@ class AgentRestorePointList(PaginatedItems[AgentRestorePointRead]):
     cap: int
     manual_count: int
     scheduled_cap: int
-    scheduled_count: int
     # 0 when scheduled snapshots are off.
     schedule_interval_minutes: int

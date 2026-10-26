@@ -541,7 +541,6 @@ export const PaginatedRestorePointsSchema = z.object({
   cap: z.number().int().min(1),
   manualCount: z.number().int().min(0),
   scheduledCap: z.number().int().min(1),
-  scheduledCount: z.number().int().min(0),
   // 0 when scheduled snapshots are off.
   scheduleIntervalMinutes: z.number().int().min(0),
 });

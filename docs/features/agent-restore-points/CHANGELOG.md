@@ -50,8 +50,7 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Changed: a scheduled snapshot in progress blocks nothing (`has_blocking_operation` ignores it).
   A capture or a restore of the same Agent stops it first and marks it failed.
 - Changed: the restore points section lists scheduled snapshots apart, with how often they are
-  taken and how many are kept. The list response adds `scheduled_cap`, `scheduled_count` and
-  `schedule_interval_minutes`.
+  taken and how many are kept. The list response adds `scheduled_cap` and `schedule_interval_minutes`.
 - Decision: reversed — `PRE_UPGRADE` backups are no longer kept forever; see retention above.
 
 ### 2026-10-19 — AF-406 — Continue without a backup when the snapshot fails

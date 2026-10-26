@@ -93,6 +93,7 @@ def test_the_schedule_snapshots_a_due_running_agent_beside_its_pod():
         due = _agent(context, "Due", AgentStatus.RUNNING)
         _seed(context, due, RestorePointOrigin.SCHEDULED, age_minutes=400)
         k8s = context.injector.get(KubernetesClient)
+        k8s.has_pods_for_deployment.return_value = True
 
         with when("the schedule runs"):
             result = context.injector.get(ScheduledSnapshotRunner).run_once()
@@ -198,3 +199,44 @@ def test_a_manual_capture_replaces_a_scheduled_snapshot_in_progress():
                 context.injector.get(RestorePointRepository).find_in_flight_scheduled(),
                 has_length(0),
             )
+
+
+def test_a_refused_capture_leaves_the_scheduled_snapshot_running():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.STOPPED)]) as context:
+        for _ in range(2):  # RESTORE_POINT_MAX_PER_AGENT
+            _seed(context, context.agent, RestorePointOrigin.MANUAL)
+        scheduled = _seed(
+            context,
+            context.agent,
+            RestorePointOrigin.SCHEDULED,
+            status_value=RestorePointStatus.CAPTURING,
+            job_name="rp-cap-scheduled",
+        )
+        k8s = context.injector.get(KubernetesClient)
+        k8s.get_job.return_value = V1Job(status=V1JobStatus(active=1))
+
+        with when("the user captures with their restore points at the limit"):
+            response = context.client.post(
+                f"{_BASE}/{context.agent.id}/restore-points".replace("{organization_id}", str(context.organization.id)),
+                json={},
+                headers={"Authorization": f"Bearer {context.access_token}"},
+            )
+
+        with then("the capture is refused and the scheduled snapshot keeps running"):
+            assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+            k8s.delete_job.assert_not_called()
+            kept = context.injector.get(RestorePointRepository).get_by_id(scheduled.id)
+            assert_that(kept.status, equal_to(RestorePointStatus.CAPTURING))
+
+
+def test_the_schedule_skips_a_running_agent_with_no_pod():
+    with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
+        k8s = context.injector.get(KubernetesClient)
+        k8s.has_pods_for_deployment.return_value = False
+
+        with when("the schedule runs for an Agent whose pod was never created"):
+            result = context.injector.get(ScheduledSnapshotRunner).run_once()
+
+        with then("no capture is started, so no slot waits on a pod that does not exist"):
+            assert_that(result.started, equal_to(0))
+            k8s.create_job.assert_not_called()

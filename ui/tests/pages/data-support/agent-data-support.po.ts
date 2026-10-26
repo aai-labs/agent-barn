@@ -325,7 +325,6 @@ export function mockRestorePointsPage({
     cap,
     manual_count: manualCount ?? items.length,
     scheduled_cap: scheduledCap,
-    scheduled_count: 0,
     schedule_interval_minutes: scheduleIntervalMinutes,
   };
 }
