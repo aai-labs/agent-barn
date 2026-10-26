@@ -203,7 +203,7 @@ function confirmationText(size: AgentSize, change: "default" | "disable", curren
     following > 0
       ? `${agentCountLabel(following)} that follow ${currentDefault?.name ?? "the default"} move to ${size.name} the next time each starts. `
       : `New agents start on ${size.name}. `;
-  return `${moves}Agents given a size keep it, and organizations allowed ${size.name} are allowed ${currentDefault?.name ?? "the old default"} instead, so they keep the same choices.`;
+  return `${moves}Agents given a size keep it, and organizations that can choose are allowed ${currentDefault?.name ?? "the old default"}, so none loses a size it could choose.`;
 }
 
 function RequestLimit({ request, limit }: { request: string; limit: string }) {

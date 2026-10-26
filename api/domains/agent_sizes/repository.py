@@ -126,14 +126,19 @@ class AgentSizeRepository:
         saves cannot both report the same "before". Returns the deliveries to dispatch
         (none when nothing changed), or None when the Organization does not exist. Raises
         AgentSizesNotAllowable.
+
+        Lock order, shared with a default switch so neither deadlocks the other: every size
+        row in id order (`_lock_sizes`). The Organization lock is `FOR NO KEY UPDATE`, so a
+        switch inserting into this set, which key-share-locks the Organization through the
+        foreign key, waits on the size rows instead of on it.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             organization = session.exec(
-                select(Organization).where(col(Organization.id) == organization_id).with_for_update()
+                select(Organization).where(col(Organization.id) == organization_id).with_for_update(key_share=True)
             ).first()
             if organization is None:
                 return None
-            sizes = {size.id: size for size in session.exec(select(AgentSize).with_for_update(read=True)).all()}
+            sizes = {size.id: size for size in self._lock_sizes(session, read=True)}
             wanted = {size_id for size_id in size_ids if not (size_id in sizes and sizes[size_id].is_default)}
             current = set(
                 session.exec(
@@ -178,13 +183,17 @@ class AgentSizeRepository:
         """Apply the changes and record one change Event per field that moved.
 
         Making a size the default clears the old default in the same transaction, with
-        both rows locked, so the catalog never has two defaults or none, even when two
-        administrators switch it at once. Every allowed set that held the new default gets
-        the old one in its place, so each Organization keeps the choices it had. A value
-        equal to the stored one records nothing. Returns None when the size does not exist.
+        every size row locked in id order, the order an allowed-set save locks them in, so
+        the catalog never has two defaults or none and neither write deadlocks the other.
+        Every Organization that can choose is given the old default, so none loses a size it
+        could choose. A value equal to the stored one records nothing. Returns None when the
+        size does not exist.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
-            size = session.get(AgentSize, size_id, with_for_update=True)
+            if changes.get("is_default"):
+                size = next((locked for locked in self._lock_sizes(session) if locked.id == size_id), None)
+            else:
+                size = session.get(AgentSize, size_id, with_for_update=True)
             if size is None:
                 return None
 
@@ -193,9 +202,7 @@ class AgentSizeRepository:
             moved: list[tuple[AgentSize, str, object, object]] = []
             allowed_event_ids: list[UUID] = []
             if changes.get("is_default") and not size.is_default:
-                previous_default = session.exec(
-                    select(AgentSize).where(col(AgentSize.is_default)).with_for_update()
-                ).one_or_none()
+                previous_default = session.exec(select(AgentSize).where(col(AgentSize.is_default))).one_or_none()
                 if previous_default is not None:
                     previous_default.is_default = False
                     session.add(previous_default)
@@ -253,23 +260,25 @@ class AgentSizeRepository:
             session.commit()
             return AgentSizeWriteResult(size=size, delivery_ids=delivery_ids)
 
+    @staticmethod
+    def _lock_sizes(session: Session, *, read: bool = False) -> list[AgentSize]:
+        """Lock every size row in id order. Writes that lock more than one size row take
+        them this way, so they wait on each other instead of deadlocking."""
+        return list(session.exec(select(AgentSize).order_by(col(AgentSize.id)).with_for_update(read=read)).all())
+
     def _swap_default_in_allowed_sets(
         self, session: Session, new_default: AgentSize, old_default: AgentSize, actor: Actor, correlation_id: UUID
     ) -> list[UUID]:
-        """Put the old default where the new one was allowed, recording each set that changed.
+        """Give the old default to every Organization that can choose, recording each set.
 
-        An allowed set never stores the default, so a set that listed the new default would
-        otherwise lose it and offer the Organization less than before. The Organization
-        rows are not locked: an allowed-set save holds every size row's share lock, which
-        this transaction's locks on the two defaults already wait out.
+        An allowed set never stores the default, so without this an Organization that can
+        choose would lose the old default, and one that listed the new default would lose
+        that too. Each keeps every size it could choose, and the new default joins them as
+        it does for everyone. An Organization that cannot choose still just follows the
+        default. The caller holds every size row's update lock, so an allowed-set save
+        for any of these Organizations is waiting on it and reads the result.
         """
-        organization_ids = list(
-            session.exec(
-                select(OrganizationAgentSize.organization_id).where(
-                    col(OrganizationAgentSize.agent_size_id) == new_default.id
-                )
-            )
-        )
+        organization_ids = list(session.exec(select(OrganizationAgentSize.organization_id).distinct()))
         if not organization_ids:
             return []
         sizes = {size.id: size for size in session.exec(select(AgentSize)).all()}
@@ -283,7 +292,8 @@ class AgentSizeRepository:
                     )
                 )
             )
-            session.delete(session.get(OrganizationAgentSize, (organization_id, new_default.id)))
+            if new_default.id in current:
+                session.delete(session.get(OrganizationAgentSize, (organization_id, new_default.id)))
             if old_default.id not in current:
                 session.add(OrganizationAgentSize(organization_id=organization_id, agent_size_id=old_default.id))
             session.flush()

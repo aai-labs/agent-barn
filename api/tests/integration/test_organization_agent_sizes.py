@@ -43,7 +43,7 @@ from api.tests.steps.agent import (
     use_org_for_auth,
 )
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
-from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
+from api.tests.steps.organization import there_is_an_organization, there_is_an_organization_with_user_and_access_token
 from api.tests.steps.template import there_is_a_template
 from api.tests.steps.user import there_is_a_user, there_is_an_access_token_for_user
 
@@ -665,31 +665,50 @@ def test_a_size_withdrawn_or_disabled_after_the_check_is_refused_under_the_lock(
             assert_that(_events(context, AGENT_AGENT_SIZE_CHANGED), has_length(0))
 
 
-def test_making_an_allowed_size_the_default_keeps_the_organizations_choices():
+def test_making_a_size_the_default_keeps_every_choice_an_organization_had():
     with given(_GIVEN) as context:
-        large = _size(context, "Large")
+        large, medium = _size(context, "Large"), _size(context, "Medium", scale=3)
         admin = _platform_admin(context)
         _set_allowed(context, admin, [large.id])
+        home = context.organization
+        there_is_an_organization(name="Medium Only", id=uuid7())(context)
+        medium_only = context.organization
+        there_is_an_organization(name="Cannot Choose", id=uuid7())(context)
+        cannot_choose = context.organization
+        context.organization = home
+        _set_allowed(context, admin, [medium.id], organization_id=medium_only.id)
+
+        def stored(organization) -> list[str]:
+            url = _PLATFORM_ORG.format(organization_id=organization.id)
+            return context.client.get(url, headers=_auth(admin)).json()["agent_size_ids"]
 
         with when("the administrator makes Large the default"):
             response = context.client.patch(
                 f"/api/v1/platform/agent-sizes/{large.id}", json={"is_default": True}, headers=_auth(admin)
             )
 
-        with then("the Organization can still choose both, with Standard now the stored one"):
+        with then("the Organization allowed Large can still choose both, with Standard now the stored one"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK))
             choosable = _choosable(context, context.access_token).json()
             assert_that(choosable["can_choose"], equal_to(True))
             assert_that([size["name"] for size in choosable["sizes"]], contains_exactly("Large", "Standard"))
-            detail = context.client.get(
-                _PLATFORM_ORG.format(organization_id=context.organization.id), headers=_auth(admin)
-            ).json()
-            assert_that(detail["agent_size_ids"], equal_to([str(STANDARD_SIZE_ID)]))
+            assert_that(stored(home), equal_to([str(STANDARD_SIZE_ID)]))
 
-        with then("the swap is recorded for the Organization in the default switch's correlation"):
-            swap = _events(context, ORGANIZATION_AGENT_SIZES_CHANGED)[-1]
+        with then("the one allowed only Medium keeps Standard beside it, and one that cannot choose still cannot"):
+            assert_that(stored(medium_only), equal_to(sorted([str(STANDARD_SIZE_ID), str(medium.id)])))
+            assert_that(stored(cannot_choose), equal_to([]))
+
+        with then("each swap is recorded for its Organization in the default switch's correlation"):
+            switch = {message.correlation_id for message in _events(context, "platform.agent_size.changed")}
+            assert_that(switch, has_length(1))
+            swaps = {
+                message.organization_id: message
+                for message in _events(context, ORGANIZATION_AGENT_SIZES_CHANGED)
+                if message.correlation_id in switch
+            }
+            assert_that(set(swaps), equal_to({home.id, medium_only.id}))
             assert_that(
-                swap.payload,
+                swaps[home.id].payload,
                 has_entries(
                     agent_size_ids=[str(STANDARD_SIZE_ID)],
                     agent_size_names=["Standard"],
@@ -697,12 +716,10 @@ def test_making_an_allowed_size_the_default_keeps_the_organizations_choices():
                     previous_agent_size_names=["Large"],
                 ),
             )
-            switch = [
-                message
-                for message in _delegate(context).find_all(OutboxMessage)
-                if message.event_name == "platform.agent_size.changed"
-            ]
-            assert_that({message.correlation_id for message in switch}, equal_to({swap.correlation_id}))
+            assert_that(
+                swaps[medium_only.id].payload,
+                has_entries(agent_size_names=["Standard", "Medium"], previous_agent_size_names=["Medium"]),
+            )
 
 
 def test_the_catalog_counts_the_agents_on_each_size_and_those_following_the_default():
