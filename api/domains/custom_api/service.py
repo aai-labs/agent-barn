@@ -23,10 +23,11 @@ from api.domains.custom_api.models import (
     CustomApiConnectionsApply,
     CustomApiConnectionUpdate,
     HeaderRead,
+    requires_isolation,
     validate_credentials,
 )
 from api.domains.custom_api.repository import CustomApiRepository
-from api.domains.custom_api.request import RequestRefused, parse_url
+from api.domains.custom_api.request import RequestRefused, TokenExchangeFailed, fetch_access_token, parse_url
 from api.domains.events import resolve_actor_identity
 from api.domains.integrations.repository import IntegrationRepository
 from api.domains.rbac.catalog import PermissionKey
@@ -66,6 +67,7 @@ class CustomApiService:
             or applied.get("base_url") != row.base_url,
             auth_type=config["auth"]["type"],
             auth_header_name=config["auth"].get("header_name"),
+            auth_token_url=config["auth"].get("token_url"),
             headers=[
                 HeaderRead(name=h["name"], secret=h["secret"], value=None if h["secret"] else h["value"])
                 for h in config["headers"]
@@ -128,7 +130,7 @@ class CustomApiService:
 
     def _new_connection(self, agent_id: UUID, data: CustomApiConnectionCreate) -> CustomApiConnection:
         config = {"auth": data.auth.model_dump(exclude_none=True), "headers": [h.model_dump() for h in data.headers]}
-        self._validate(config, data.base_url)
+        self._validate(config, data.base_url, data.isolated, check_credentials=True)
         return CustomApiConnection(
             agent_id=agent_id,
             slug=data.slug,
@@ -177,9 +179,15 @@ class CustomApiService:
         if data.auth is not None:
             auth = data.auth.model_dump(exclude_none=True)
             previous = config["auth"]
-            if auth["type"] == previous["type"] and (
-                auth["type"] != "api_key"
-                or auth.get("header_name", "").lower() == previous.get("header_name", "").lower()
+            # Saved secrets carry over only within the same scheme and the same place they
+            # are sent to: a new header name or token URL needs its credentials entered again.
+            if (
+                auth["type"] == previous["type"]
+                and (
+                    auth["type"] != "api_key"
+                    or auth.get("header_name", "").lower() == previous.get("header_name", "").lower()
+                )
+                and (auth["type"] != "oauth2_client_credentials" or auth.get("token_url") == previous.get("token_url"))
             ):
                 auth = {**previous, **auth}
             config["auth"] = auth
@@ -199,7 +207,7 @@ class CustomApiService:
                 if value is None:
                     raise HTTPException(422, f"{field} cannot be null")
                 setattr(row, field, value)
-        self._validate(config, row.base_url)
+        self._validate(config, row.base_url, row.isolated, check_credentials=data.auth is not None)
         row.credentials_encrypted = encrypt_token(json.dumps(config), self.config.agent_token_encryption_key)
         row.token_hash = None
         row.generation = None
@@ -213,12 +221,27 @@ class CustomApiService:
             self._apply_locked(row, context, "deleted", restart)
 
     @staticmethod
-    def _validate(config: dict, base_url: str) -> None:
+    def _validate(config: dict, base_url: str, isolated: bool, *, check_credentials: bool) -> None:
         try:
             parse_url(base_url, base=True)
             validate_credentials(config)
         except RequestRefused, KeyError, TypeError:
             raise HTTPException(422, "Invalid Custom API authentication, headers or base URL") from None
+        if not requires_isolation(config):
+            return
+        if not isolated:
+            raise HTTPException(
+                422,
+                "OAuth2 client credentials require credential isolation; the Agent never receives the client secret",
+            )
+        if check_credentials:
+            # The other schemes are checked only for shape, because any request can carry them.
+            # A client-credentials grant is worth one token request at save time: a wrong
+            # secret would otherwise surface only as the Agent's first failed call.
+            try:
+                fetch_access_token(config["auth"])
+            except (TokenExchangeFailed, RequestRefused) as exc:
+                raise HTTPException(422, f"OAuth2 client credentials could not be verified: {exc}") from None
 
     def apply(
         self, agent_id: UUID, connection_id: UUID, data: CustomApiConnectionApply, context: CurrentUserContext

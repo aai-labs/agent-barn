@@ -211,8 +211,10 @@ Connections live in `api/domains/custom_api/`, independently of the one-Secret-p
 provider registry. Each row encrypts its authentication and additional headers with
 the existing Agent credential encryption key. Supported authentication is none,
 Bearer token, a named API-key header (including a complete custom Authorization
-scheme), or Basic username/password. Additional headers may be ordinary or secret;
-secret values, auth tokens, and Basic credentials are never returned by read APIs.
+scheme), Basic username/password, or OAuth2 client credentials (a token URL, client
+id, client secret and optional scope; see below). Additional headers may be ordinary
+or secret; secret values, auth tokens, Basic credentials and client credentials are
+never returned by read APIs. The token URL is returned, like the API-key header name.
 Header entries are lists so the web client's case transformations do not rename
 HTTP header names.
 
@@ -239,6 +241,31 @@ header values. A namespaced manifest removes the previous Custom API entries bef
 installing current values, including after isolation, auth/header changes and
 connection deletion. Built-in integration entries are preserved. Old managed
 Kubernetes Secrets are replaced on start.
+
+### OAuth2 client credentials
+
+An API whose keys are an OAuth2 client id and secret (the `client_credentials` grant,
+RFC 6749 section 4.4, for example Snov.io) issues short-lived bearer tokens, so no
+static value could be saved as a Bearer token or API-key header. The
+`oauth2_client_credentials` authentication type holds the token URL, client id, client
+secret and an optional scope, and the credential gateway obtains the tokens: it posts
+the credentials as a form body to the token URL, caches the token in process memory
+per connection and credential revision until shortly before `expires_in` (bounded to
+a day, defaulting to an hour), attaches it as `Authorization: Bearer`, and discards it
+early when the upstream answers 401. The token URL follows the same destination policy
+as requests: public HTTPS, a pinned public address, and no redirects.
+
+Connections with this type are isolated only. The agent-side CLI has no such
+authentication type, and a pod holding the client secret would hold the whole grant,
+so the API refuses to save or switch such a connection to direct mode (422) and the
+materializer refuses to render a direct profile for it. The pod receives the same
+gateway profile and per-start gateway token as any other isolated connection. Saving
+or changing the credentials makes one token request to verify them; a refused
+exchange fails the save with the token endpoint's status, a rename does not re-verify.
+Saved client credentials carry over on update only when the token URL is unchanged. At
+request time the gateway answers 401 when the token endpoint refuses the credentials
+and 502 when it cannot be reached or does not issue a usable bearer token. Nothing in
+the stored schema changes: the fields live in the encrypted credentials blob.
 
 Startup installs an aai-cli configuration containing only encrypted-store paths
 even when no CLI integrations remain. This clears stale profiles while the setup

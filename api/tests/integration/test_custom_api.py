@@ -1,6 +1,7 @@
 import hashlib
 import json
 import tomllib
+from typing import ClassVar
 from uuid import UUID, uuid4
 
 import pytest
@@ -597,3 +598,138 @@ def test_gateway_injects_connection_credentials_and_refuses_revoked_generation(m
         integrations.set_state(context.agent.id, "stopped")
         response = gateway.post("/gateway/v1/custom-api/request", headers=headers, json=body)
         assert_that(response.status_code, equal_to(403))
+
+
+class _TokenIssuingUpstream:
+    """A fake pinned connection: a client-credentials token endpoint plus an API that echoes its authorization."""
+
+    exchanges: ClassVar[list[dict]] = []
+    api_calls: ClassVar[list[dict]] = []
+    reject_api: ClassVar[bool] = False
+
+    def __init__(self, *_args, **_kwargs):
+        self.status = 200
+        self.body = b""
+
+    def request(self, method, path, body=None, headers=None):
+        from urllib.parse import parse_qs
+
+        cls = type(self)
+        if path == "/v1/oauth/access_token":
+            form = {key: values[0] for key, values in parse_qs((body or b"").decode()).items()}
+            cls.exchanges.append({"method": method, "headers": headers, **form})
+            if form.get("client_secret") == "fixture-client-secret":
+                issued = {"access_token": f"minted-{len(cls.exchanges)}", "token_type": "Bearer", "expires_in": 3600}
+                self.body = json.dumps(issued).encode()
+            else:
+                self.status, self.body = 401, json.dumps({"error": "invalid_client"}).encode()
+            return
+        cls.api_calls.append(headers or {})
+        if cls.reject_api:
+            self.status = 401
+        self.body = json.dumps({"echo": (headers or {}).get("authorization"), "path": path}).encode()
+
+    def getresponse(self):
+        return self
+
+    def read(self, _limit):
+        return self.body
+
+    def close(self):
+        pass
+
+
+def test_oauth2_connection_is_isolated_only_verified_on_save_and_authenticated_by_the_gateway(monkeypatch):
+    from starlette.testclient import TestClient
+
+    from api.domains.custom_api import request as engine
+    from api.gateway_app import create_gateway_app
+
+    class Upstream(_TokenIssuingUpstream):
+        exchanges: ClassVar[list[dict]] = []
+        api_calls: ClassVar[list[dict]] = []
+        reject_api: ClassVar[bool] = False
+
+    upstream = Upstream
+    monkeypatch.setattr(engine, "public_addresses", lambda *_args: ["8.8.8.8"])
+    monkeypatch.setattr(engine, "PinnedHTTPSConnection", upstream)
+
+    def payload(secret="fixture-client-secret", isolated=True):
+        return {
+            "name": "Snov.io",
+            "base_url": "https://api.snov.io",
+            "isolated": isolated,
+            "auth": {
+                "type": "oauth2_client_credentials",
+                "token_url": "https://api.snov.io/v1/oauth/access_token",
+                "client_id": "fixture-client-id",
+                "client_secret": secret,
+            },
+        }
+
+    with given(_GIVEN) as context:
+        direct = context.client.post(_path(context), headers=_headers(context), json=payload(isolated=False))
+        assert_that(direct.status_code, equal_to(422))
+        assert_that(direct.json()["detail"], contains_string("isolation"))
+        assert_that(upstream.exchanges, has_length(0))
+
+        wrong = context.client.post(_path(context), headers=_headers(context), json=payload(secret="wrong-secret"))
+        assert_that(wrong.status_code, equal_to(422))
+        assert_that(wrong.json()["detail"], contains_string("HTTP 401"))
+        assert_that(wrong.text, not_(contains_string("wrong-secret")))
+        assert_that(upstream.exchanges, has_length(1))
+        assert_that(upstream.exchanges[0]["headers"]["content-type"], equal_to("application/x-www-form-urlencoded"))
+
+        created = context.client.post(_path(context), headers=_headers(context), json=payload())
+        assert_that(created.status_code, equal_to(201))
+        assert_that(created.json()["auth_type"], equal_to("oauth2_client_credentials"))
+        assert_that(created.json()["auth_token_url"], equal_to("https://api.snov.io/v1/oauth/access_token"))
+        assert_that(created.json()["isolated"], is_(True))
+        listed = context.client.get(_path(context), headers=_headers(context))
+        for text in (created.text, listed.text):
+            assert_that(text, not_(contains_string("fixture-client")))
+        assert_that(upstream.exchanges, has_length(2))
+
+        # A rename does not re-verify the credentials; turning isolation off is refused.
+        connection_id = created.json()["id"]
+        renamed = context.client.patch(
+            _path(context, f"/{connection_id}"), headers=_headers(context), json={"name": "Snov.io outreach"}
+        )
+        assert_that(renamed.status_code, equal_to(200))
+        assert_that(upstream.exchanges, has_length(2))
+        unisolated = context.client.patch(
+            _path(context, f"/{connection_id}"), headers=_headers(context), json={"isolated": False}
+        )
+        assert_that(unisolated.status_code, equal_to(422))
+
+        repository = context.injector.get(CustomApiRepository)
+        integrations = context.injector.get(IntegrationRepository)
+        rows = repository.runtime_connections(context.agent.id)
+        generation = integrations.begin(context.agent.id, connection_snapshot(rows))
+        artifacts = materialize_custom_api(
+            rows, TEST_ENCRYPTION_KEY, "http://gateway.test", repository, generation.generation
+        )
+        for rendered in artifacts.files.values():
+            assert_that(rendered, not_(contains_string("fixture-client")))
+        token = next(value for name, value in artifacts.env.items() if name.endswith("_GATEWAY"))
+        context.agent.status = AgentStatus.RUNNING
+        context.injector.get(AgentRepository).save(context.agent)
+        gateway = TestClient(create_gateway_app(context.injector))
+        headers = {"Authorization": "Bearer " + token}
+        body = {"url": "https://api.snov.io/v1/campaigns"}
+
+        response = gateway.post("/gateway/v1/custom-api/request", headers=headers, json=body)
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.json(), equal_to({"status": 200, "body": {"echo": "[REDACTED]", "path": "/v1/campaigns"}}))
+        assert_that(upstream.api_calls[-1]["authorization"], equal_to("Bearer minted-3"))
+        gateway.post("/gateway/v1/custom-api/request", headers=headers, json=body)
+        assert_that(upstream.exchanges, has_length(3))
+
+        # An upstream 401 drops the cached token, so the next request exchanges again.
+        upstream.reject_api = True
+        rejected = gateway.post("/gateway/v1/custom-api/request", headers=headers, json=body)
+        assert_that(rejected.json()["status"], equal_to(401))
+        upstream.reject_api = False
+        gateway.post("/gateway/v1/custom-api/request", headers=headers, json=body)
+        assert_that(upstream.exchanges, has_length(4))
+        assert_that(upstream.api_calls[-1]["authorization"], equal_to("Bearer minted-4"))
