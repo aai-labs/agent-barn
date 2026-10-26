@@ -13,6 +13,10 @@ export const AgentSizeSchema = z.object({
   sortOrder: z.number().int(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  /** Live Agents whose stored size this is; one Organization's when the catalog was read for one. */
+  agentCount: z.number().int(),
+  /** On the default only: live Agents that follow it, and move when another size becomes it. */
+  followingAgentCount: z.number().int(),
 });
 export type AgentSize = z.infer<typeof AgentSizeSchema>;
 

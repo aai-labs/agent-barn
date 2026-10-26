@@ -15,6 +15,15 @@ Platform Administrators keep a catalog of CPU and memory sizes. Organizations th
 
 ## Changes
 
+### 2026-10-26 — Agent Sizes PR 3 — review follow-ups
+
+- Delivered: making a size the default no longer takes it away from Organizations that were allowed it: the old default takes its place in their allowed sets, so each keeps the same choices. A size chosen on hire is audited. A choice, on hire or later, is re-checked under its locks, so a size disabled or withdrawn while it saves is refused. Platform Settings asks before switching the default or disabling a size Agents are on, and the Platform Organization card says how many Agents stay on a size before it is withdrawn.
+- Changed:
+  - API: `AgentSizeRead.agent_count` and `following_agent_count`; `GET /platform/agent-sizes?organization_id=` scopes them.
+  - Events: `agent.agent_size.changed` on hire, in the `agent.created` correlation; `organization.agent_sizes.changed` for each set a default switch swaps, in its correlation.
+  - Docs: [`../agent-sizes.md`](../agent-sizes.md) (default switch, under-lock re-check, restarting a pending size), domain events, the RBAC brief.
+- Follow-up: none planned. Kept as documented after review: changing the default moves every Agent that follows it, withdrawing or disabling leaves Agents on a size, and whoever may restart an Agent applies its pending size.
+
 ### 2026-10-22 — Agent Sizes PR 3 — Platform per-Agent override
 
 - Delivered: Platform → Agents lists every live Agent, one group per Organization, with its runtime, status and size, searchable and filterable by Organization. A Platform Administrator gives one Agent any enabled size, even one its Organization can't choose; the Organization then sees it as "Set by platform" and can't change it until the override is cleared, which puts the Agent back on the default. Overriding never restarts the Agent: the size applies at its next start, pending meanwhile. A Platform Administrator can restart any Agent from the same page, or start one that is not running, as the epic's acceptance criteria require.

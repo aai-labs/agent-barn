@@ -7,7 +7,7 @@ from injector import inject, singleton
 from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupService, to_option
 from api.domains.agent_sizes.models import size_is_pending
 from api.domains.agents.models import PlatformAgentRead, PlatformAgentRow
-from api.domains.agents.repository import AgentRepository, AgentSizeVanished
+from api.domains.agents.repository import AgentRepository, AgentSizeUnavailable
 from api.domains.agents.service import AgentService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.events import EventDeliveryDispatcher, resolve_actor_identity
@@ -103,7 +103,7 @@ class PlatformAgentService:
                     actor_display=context.user.full_name or context.user.email,
                     by_platform=True,
                 )
-            except AgentSizeVanished:
+            except AgentSizeUnavailable:
                 raise _size_unavailable() from None
         if result is None:
             # Deleted between the read and the write.

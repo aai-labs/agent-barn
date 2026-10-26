@@ -30,8 +30,10 @@ organization_agent_sizes_router = APIRouter(
 def list_agent_sizes(
     context: Annotated[CurrentUserContext, Depends(require_platform_admin())],
     service: Annotated[AgentSizeService, Injected(AgentSizeService)],
+    organization_id: UUID | None = None,
 ):
-    return service.list_sizes()
+    """The catalog. With `organization_id`, the Agent counts are that Organization's."""
+    return service.list_sizes(organization_id)
 
 
 @platform_agent_sizes_router.post("", response_model=AgentSizeRead, status_code=status.HTTP_201_CREATED)

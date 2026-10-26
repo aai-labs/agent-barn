@@ -8,7 +8,7 @@ import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 
 import { useAgentSizes } from "../hooks/use-agent-sizes";
 import { useSetOrganizationAgentSizes } from "../hooks/use-organization-agent-sizes";
-import { describeSize } from "../utils";
+import { agentCountLabel, describeSize } from "../utils";
 
 type Draft = { canChoose: boolean; sizeIds: string[] };
 
@@ -19,10 +19,11 @@ function sameIds(a: string[], b: string[]) {
 /**
  * Platform → Organization → Agent sizes: whether this Organization's Owners and Admins may
  * choose CPU and memory for its Agents, and from which sizes. The default is always available
- * and is never listed; withdrawing a size leaves the Agents already on it where they are.
+ * and is never listed; withdrawing a size leaves the Agents already on it where they are, which
+ * the card says before it saves.
  */
 export function OrganizationAgentSizesCard({ organization }: { organization: PlatformOrganization }) {
-  const { sizes, isLoadingSizes, sizesError } = useAgentSizes();
+  const { sizes, isLoadingSizes, sizesError } = useAgentSizes(organization.id);
   const setAllowed = useSetOrganizationAgentSizes(organization.id);
   const saved = organization.agentSizeIds;
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -34,6 +35,7 @@ export function OrganizationAgentSizesCard({ organization }: { organization: Pla
   const willSave = current.canChoose ? current.sizeIds : [];
   const dirty = !sameIds(willSave, saved) || current.canChoose !== saved.length > 0;
   const missingChoice = current.canChoose && current.sizeIds.length === 0;
+  const keptOn = sizes.filter((size) => saved.includes(size.id) && !willSave.includes(size.id) && size.agentCount > 0);
 
   const update = (next: Partial<Draft>) => {
     setAllowed.reset();
@@ -122,6 +124,14 @@ export function OrganizationAgentSizesCard({ organization }: { organization: Pla
       {setAllowed.isError && (
         <p className="mb-0 mt-3 text-[13px]" role="alert" style={{ color: "var(--err)" }}>
           {getErrorDisplay(setAllowed.error).description}
+        </p>
+      )}
+
+      {dirty && keptOn.length > 0 && (
+        <p className="mb-0 mt-4 text-[13px]" data-testid="agent-sizes-withdraw-note" style={{ color: "var(--ink-3)" }}>
+          {keptOn.map((size) => `${agentCountLabel(size.agentCount)} on ${size.name}`).join(", ")} stay on{" "}
+          {keptOn.length === 1 ? "it" : "them"} until someone changes their size. Withdrawing only stops a size
+          being chosen again.
         </p>
       )}
 

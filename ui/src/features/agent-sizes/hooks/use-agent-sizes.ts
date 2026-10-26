@@ -16,11 +16,20 @@ import { agentSizesKey } from "../utils";
 
 const BASE = "/api/v1/platform/agent-sizes";
 
-/** The Agent Size catalog. Platform Administrators only. */
-export function useAgentSizes() {
+/**
+ * The Agent Size catalog. Platform Administrators only. With an Organization, each size's Agent
+ * counts are that Organization's.
+ */
+export function useAgentSizes(organizationId?: string) {
   const query = useQuery({
-    queryKey: agentSizesKey.platform,
-    queryFn: async () => (await api.get<AgentSize[]>(BASE, { schema: AgentSizeListSchema })).data,
+    queryKey: organizationId ? agentSizesKey.platformForOrganization(organizationId) : agentSizesKey.platform,
+    queryFn: async () =>
+      (
+        await api.get<AgentSize[]>(BASE, {
+          schema: AgentSizeListSchema,
+          params: organizationId ? { organization_id: organizationId } : undefined,
+        })
+      ).data,
   });
   return {
     sizes: query.data ?? [],

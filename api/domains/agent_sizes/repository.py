@@ -90,6 +90,19 @@ class AgentSizeRepository:
         with Session(self.delegate.engine) as own_session:
             return own_session.exec(query).first() is not None
 
+    def agent_counts(self, organization_id: UUID | None = None) -> dict[UUID | None, int]:
+        """Live Agents on each stored size, in one Organization when given. The None key
+        counts the Agents that follow the default."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(Agent.agent_size_id, func.count())
+                .where(col(Agent.deleted_at).is_(None))
+                .group_by(col(Agent.agent_size_id))
+            )
+            if organization_id is not None:
+                query = query.where(col(Agent.organization_id) == organization_id)
+            return {size_id: count for size_id, count in session.exec(query)}
+
     def allowed_size_ids(self, organization_id: UUID) -> set[UUID]:
         """The sizes an Organization may choose beyond the default, enabled or not."""
         with Session(self.delegate.engine) as session:
@@ -142,33 +155,10 @@ class AgentSizeRepository:
                 session.add(OrganizationAgentSize(organization_id=organization_id, agent_size_id=size_id))
             session.flush()
 
-            def ordered(ids: set[UUID]) -> list[AgentSize]:
-                return sorted((sizes[size_id] for size_id in ids), key=lambda size: (size.sort_order, size.name))
-
-            event = EVENT_REGISTRY.build_event(
-                event_name=ORGANIZATION_AGENT_SIZES_CHANGED,
-                schema_version=1,
-                occurred_at=datetime.now(UTC),
-                organization_id=organization_id,
-                actor=actor,
-                subject=SubjectIdentity(
-                    type=SubjectIdentityType.ORGANIZATION,
-                    id=organization_id,
-                    organization_id=organization_id,
-                ),
-                correlation_id=uuid4(),
-                payload={
-                    "organization_id": organization_id,
-                    "agent_size_ids": [size.id for size in ordered(wanted)],
-                    "agent_size_names": [size.name for size in ordered(wanted)],
-                    "previous_agent_size_ids": [size.id for size in ordered(current)],
-                    "previous_agent_size_names": [size.name for size in ordered(current)],
-                    "actor_display": actor_display,
-                    "subject_display": organization.name,
-                },
+            event_id = self._stage_allowed_changed(
+                session, organization, sizes, wanted, current, actor, actor_display, uuid4()
             )
-            self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            delivery_ids = self._delivery_ids(session, [event.event_id])
+            delivery_ids = self._delivery_ids(session, [event_id])
             session.commit()
             return delivery_ids
 
@@ -189,15 +179,19 @@ class AgentSizeRepository:
 
         Making a size the default clears the old default in the same transaction, with
         both rows locked, so the catalog never has two defaults or none, even when two
-        administrators switch it at once. A value equal to the stored one records nothing.
-        Returns None when the size does not exist.
+        administrators switch it at once. Every allowed set that held the new default gets
+        the old one in its place, so each Organization keeps the choices it had. A value
+        equal to the stored one records nothing. Returns None when the size does not exist.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             size = session.get(AgentSize, size_id, with_for_update=True)
             if size is None:
                 return None
 
+            # One save, one correlation: switching the default changes two sizes together.
+            correlation_id = uuid4()
             moved: list[tuple[AgentSize, str, object, object]] = []
+            allowed_event_ids: list[UUID] = []
             if changes.get("is_default") and not size.is_default:
                 previous_default = session.exec(
                     select(AgentSize).where(col(AgentSize.is_default)).with_for_update()
@@ -208,6 +202,9 @@ class AgentSizeRepository:
                     # The partial unique index allows one default, so the old one is cleared first.
                     session.flush()
                     moved.append((previous_default, "is_default", True, False))
+                    allowed_event_ids = self._swap_default_in_allowed_sets(
+                        session, size, previous_default, actor, correlation_id
+                    )
 
             for setting in SIZE_SETTINGS:
                 if setting not in changes:
@@ -222,8 +219,6 @@ class AgentSizeRepository:
 
             session.add(size)
             session.flush()
-            # One save, one correlation: switching the default changes two sizes together.
-            correlation_id = uuid4()
             event_ids = [
                 self._stage(
                     session,
@@ -235,7 +230,7 @@ class AgentSizeRepository:
                 )
                 for changed, setting, previous, current in moved
             ]
-            delivery_ids = self._delivery_ids(session, event_ids)
+            delivery_ids = self._delivery_ids(session, event_ids + allowed_event_ids)
             session.commit()
             session.refresh(size)
             return AgentSizeWriteResult(size=size, delivery_ids=delivery_ids)
@@ -257,6 +252,95 @@ class AgentSizeRepository:
             session.delete(size)
             session.commit()
             return AgentSizeWriteResult(size=size, delivery_ids=delivery_ids)
+
+    def _swap_default_in_allowed_sets(
+        self, session: Session, new_default: AgentSize, old_default: AgentSize, actor: Actor, correlation_id: UUID
+    ) -> list[UUID]:
+        """Put the old default where the new one was allowed, recording each set that changed.
+
+        An allowed set never stores the default, so a set that listed the new default would
+        otherwise lose it and offer the Organization less than before. The Organization
+        rows are not locked: an allowed-set save holds every size row's share lock, which
+        this transaction's locks on the two defaults already wait out.
+        """
+        organization_ids = list(
+            session.exec(
+                select(OrganizationAgentSize.organization_id).where(
+                    col(OrganizationAgentSize.agent_size_id) == new_default.id
+                )
+            )
+        )
+        if not organization_ids:
+            return []
+        sizes = {size.id: size for size in session.exec(select(AgentSize)).all()}
+        event_ids = []
+        for organization_id in organization_ids:
+            organization = session.get(Organization, organization_id)
+            current = set(
+                session.exec(
+                    select(OrganizationAgentSize.agent_size_id).where(
+                        col(OrganizationAgentSize.organization_id) == organization_id
+                    )
+                )
+            )
+            session.delete(session.get(OrganizationAgentSize, (organization_id, new_default.id)))
+            if old_default.id not in current:
+                session.add(OrganizationAgentSize(organization_id=organization_id, agent_size_id=old_default.id))
+            session.flush()
+            wanted = (current - {new_default.id}) | {old_default.id}
+            if organization is not None:
+                event_ids.append(
+                    self._stage_allowed_changed(
+                        session,
+                        organization,
+                        sizes,
+                        wanted,
+                        current,
+                        ActorIdentity(type=ActorIdentityType.USER, id=actor.user_id),
+                        actor.display,
+                        correlation_id,
+                    )
+                )
+        return event_ids
+
+    def _stage_allowed_changed(
+        self,
+        session: Session,
+        organization: Organization,
+        sizes: Mapping[UUID, AgentSize],
+        wanted: set[UUID],
+        current: set[UUID],
+        actor: ActorIdentity,
+        actor_display: str,
+        correlation_id: UUID,
+    ) -> UUID:
+        def ordered(ids: set[UUID]) -> list[AgentSize]:
+            return sorted((sizes[size_id] for size_id in ids), key=lambda size: (size.sort_order, size.name))
+
+        event = EVENT_REGISTRY.build_event(
+            event_name=ORGANIZATION_AGENT_SIZES_CHANGED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=organization.id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.ORGANIZATION,
+                id=organization.id,
+                organization_id=organization.id,
+            ),
+            correlation_id=correlation_id,
+            payload={
+                "organization_id": organization.id,
+                "agent_size_ids": [size.id for size in ordered(wanted)],
+                "agent_size_names": [size.name for size in ordered(wanted)],
+                "previous_agent_size_ids": [size.id for size in ordered(current)],
+                "previous_agent_size_names": [size.name for size in ordered(current)],
+                "actor_display": actor_display,
+                "subject_display": organization.name,
+            },
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return event.event_id
 
     @staticmethod
     def _values(size: AgentSize) -> dict[str, object]:

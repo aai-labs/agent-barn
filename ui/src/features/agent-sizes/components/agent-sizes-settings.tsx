@@ -15,14 +15,15 @@ import { toastError } from "@/shared/toast";
 
 import { useAgentSizeActions, useAgentSizes } from "../hooks/use-agent-sizes";
 import type { AgentSize } from "../schemas";
-import { formatCpu, formatMemory } from "../utils";
+import { agentCountLabel, formatCpu, formatMemory } from "../utils";
 import { AgentSizeDialog } from "./agent-size-dialog";
 
 /**
  * Platform → Settings → Agent sizes: the catalog of CPU and memory Agents run with.
  *
  * Every Agent runs on the default size. The default can be neither disabled nor deleted;
- * making another size the default is how it changes.
+ * making another size the default is how it changes. Switching the default and disabling a size
+ * Agents are on both ask first, saying which Agents move and which stay.
  */
 export function AgentSizesSettings() {
   const { sizes, isLoadingSizes, sizesError, reloadSizes } = useAgentSizes();
@@ -30,6 +31,7 @@ export function AgentSizesSettings() {
   // Each opening gets a fresh form, keyed on this count.
   const [editing, setEditing] = useState<{ size: AgentSize | null; opening: number } | null>(null);
   const [deleting, setDeleting] = useState<AgentSize | null>(null);
+  const [confirming, setConfirming] = useState<{ size: AgentSize; change: "default" | "disable" } | null>(null);
 
   if (isLoadingSizes) return <p className="m-0">Loading Agent sizes…</p>;
   if (sizesError) {
@@ -37,10 +39,22 @@ export function AgentSizesSettings() {
   }
 
   const open = (size: AgentSize | null) => setEditing((current) => ({ size, opening: (current?.opening ?? 0) + 1 }));
-  const setEnabled = (size: AgentSize, enabled: boolean) =>
-    update.mutate({ id: size.id, data: { enabled } }, { onError: (error) => toastError(error) });
-  const makeDefault = (size: AgentSize) =>
-    update.mutate({ id: size.id, data: { isDefault: true } }, { onError: (error) => toastError(error) });
+  const currentDefault = sizes.find((size) => size.isDefault);
+  const toggleEnabled = (size: AgentSize) => {
+    if (size.enabled && size.agentCount > 0) {
+      setConfirming({ size, change: "disable" });
+      return;
+    }
+    update.mutate({ id: size.id, data: { enabled: !size.enabled } }, { onError: (error) => toastError(error) });
+  };
+  const confirm = () => {
+    if (!confirming) return;
+    const data = confirming.change === "default" ? { isDefault: true as const } : { enabled: false };
+    update.mutate(
+      { id: confirming.size.id, data },
+      { onSuccess: () => setConfirming(null), onError: (error) => toastError(error) },
+    );
+  };
 
   return (
     <>
@@ -95,7 +109,7 @@ export function AgentSizesSettings() {
                     aria-label={`${size.name} enabled`}
                     title={size.isDefault ? "The default size is always enabled" : undefined}
                     disabled={size.isDefault || update.isPending}
-                    onClick={() => setEnabled(size, !size.enabled)}
+                    onClick={() => toggleEnabled(size)}
                     className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     style={{ backgroundColor: size.enabled ? "var(--ink)" : "var(--line)" }}
                   >
@@ -114,7 +128,10 @@ export function AgentSizesSettings() {
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onSelect={() => open(size)}>Edit</DropdownMenuItem>
                       {!size.isDefault && (
-                        <DropdownMenuItem disabled={!size.enabled} onSelect={() => makeDefault(size)}>
+                        <DropdownMenuItem
+                          disabled={!size.enabled}
+                          onSelect={() => setConfirming({ size, change: "default" })}
+                        >
                           Make default
                         </DropdownMenuItem>
                       )}
@@ -142,6 +159,21 @@ export function AgentSizesSettings() {
       )}
 
       <ConfirmationDialog
+        open={confirming !== null}
+        onOpenChange={(isOpen) => !isOpen && setConfirming(null)}
+        title={
+          confirming?.change === "default"
+            ? `Make ${confirming.size.name} the default?`
+            : `Disable ${confirming?.size.name ?? "this size"}?`
+        }
+        description={confirming ? confirmationText(confirming.size, confirming.change, currentDefault) : ""}
+        confirmLabel={confirming?.change === "default" ? "Make default" : "Disable size"}
+        pendingLabel="Saving…"
+        isPending={update.isPending}
+        onConfirm={confirm}
+      />
+
+      <ConfirmationDialog
         open={deleting !== null}
         onOpenChange={(isOpen) => !isOpen && setDeleting(null)}
         variant="destructive"
@@ -160,6 +192,18 @@ export function AgentSizesSettings() {
       />
     </>
   );
+}
+
+function confirmationText(size: AgentSize, change: "default" | "disable", currentDefault?: AgentSize): string {
+  if (change === "disable") {
+    return `${agentCountLabel(size.agentCount)} on ${size.name} stay on it, and keep starting on it, until someone changes their size. Disabling only stops it being chosen again.`;
+  }
+  const following = currentDefault?.followingAgentCount ?? 0;
+  const moves =
+    following > 0
+      ? `${agentCountLabel(following)} that follow ${currentDefault?.name ?? "the default"} move to ${size.name} the next time each starts. `
+      : `New agents start on ${size.name}. `;
+  return `${moves}Agents given a size keep it, and organizations allowed ${size.name} are allowed ${currentDefault?.name ?? "the old default"} instead, so they keep the same choices.`;
 }
 
 function RequestLimit({ request, limit }: { request: string; limit: string }) {

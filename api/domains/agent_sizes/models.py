@@ -113,6 +113,11 @@ class AgentSizeRead(PydanticBaseModel):
     sort_order: int
     created_at: datetime
     updated_at: datetime
+    # Live Agents whose stored size this is, which keep starting on it even after it is
+    # disabled or withdrawn. Scoped to one Organization when the list asks for one.
+    agent_count: int = 0
+    # On the default only: live Agents that follow it and move when it changes.
+    following_agent_count: int = 0
 
 
 def _name(value: str) -> str:

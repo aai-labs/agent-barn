@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -23,8 +24,13 @@ from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import PermissionPolicy
 
 
-def to_read(size: AgentSize) -> AgentSizeRead:
-    return AgentSizeRead.model_validate(size, from_attributes=True)
+def to_read(size: AgentSize, agent_counts: Mapping[UUID | None, int]) -> AgentSizeRead:
+    return AgentSizeRead.model_validate(size, from_attributes=True).model_copy(
+        update={
+            "agent_count": agent_counts.get(size.id, 0),
+            "following_agent_count": agent_counts.get(None, 0) if size.is_default else 0,
+        }
+    )
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -50,8 +56,10 @@ class AgentSizeService:
     repository: AgentSizeRepository
     event_delivery_dispatcher: EventDeliveryDispatcher
 
-    def list_sizes(self) -> list[AgentSizeRead]:
-        return [to_read(size) for size in self.repository.list_all()]
+    def list_sizes(self, organization_id: UUID | None = None) -> list[AgentSizeRead]:
+        """The catalog, with how many live Agents each size holds, in one Organization when given."""
+        agent_counts = self.repository.agent_counts(organization_id)
+        return [to_read(size, agent_counts) for size in self.repository.list_all()]
 
     def create_size(self, data: AgentSizeCreate, context: CurrentUserContext) -> AgentSizeRead:
         if self.repository.name_taken(data.name):
@@ -62,7 +70,7 @@ class AgentSizeService:
         except IntegrityError:
             raise _conflict(f"A size named {data.name!r} already exists") from None
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
-        return to_read(result.size)
+        return to_read(result.size, {})
 
     def update_size(self, size_id: UUID, data: AgentSizeUpdate, context: CurrentUserContext) -> AgentSizeRead:
         changes = data.model_dump(exclude_unset=True)
@@ -98,7 +106,7 @@ class AgentSizeService:
         if result is None:
             raise _not_found()
         self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
-        return to_read(result.size)
+        return to_read(result.size, self.repository.agent_counts())
 
     def delete_size(self, size_id: UUID, context: CurrentUserContext) -> None:
         size = self.repository.get(size_id)

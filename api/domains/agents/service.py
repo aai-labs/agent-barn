@@ -122,7 +122,7 @@ from api.domains.agents.provisioning_errors import (
     normalize_agent_provisioning_error,
     persisted_provisioning_error,
 )
-from api.domains.agents.repository import AgentRepository, AgentSizeSetByPlatform, AgentSizeVanished
+from api.domains.agents.repository import AgentRepository, AgentSizeSetByPlatform, AgentSizeUnavailable
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
@@ -267,6 +267,13 @@ def _provisioning_error_read(agent: Agent) -> AgentProvisioningErrorRead | None:
 def _refuse_during_managed_update(agent: Agent) -> None:
     if managed_update_in_flight(agent):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
+
+
+def _size_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="That size isn't available to your organization.",
+    )
 
 
 def _size_set_by_platform() -> HTTPException:
@@ -415,10 +422,7 @@ class AgentService:
             return None
         size = next((size for size in self.agent_sizes.choosable(org_id) if size.id == agent_size_id), None)
         if size is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="That size isn't available to your organization.",
-            )
+            raise _size_unavailable()
         return None if size.is_default else size.id
 
     @staticmethod
@@ -1097,15 +1101,19 @@ class AgentService:
                     self.config.agent_token_encryption_key,
                 )
 
-            created = self.repository.create_with_creator_access(
-                agent,
-                creator_membership_id,
-                actor=secret_actor,
-                secrets=prepared_secrets,
-                skills=prepared_skills,
-                actor_display=secret_actor_display,
-                agent_limit=agent_limit,
-            )
+            try:
+                created = self.repository.create_with_creator_access(
+                    agent,
+                    creator_membership_id,
+                    actor=secret_actor,
+                    secrets=prepared_secrets,
+                    skills=prepared_skills,
+                    actor_display=secret_actor_display,
+                    agent_limit=agent_limit,
+                )
+            except AgentSizeUnavailable:
+                # Disabled or withdrawn since the check above.
+                raise _size_unavailable() from None
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
             if allocated_litellm_key is not None:
@@ -1169,11 +1177,8 @@ class AgentService:
                     actor=resolve_actor_identity(context, agent.organization_id),
                     actor_display=context.user.full_name or context.user.email,
                 )
-            except AgentSizeVanished:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="That size isn't available to your organization.",
-                ) from None
+            except AgentSizeUnavailable:
+                raise _size_unavailable() from None
             except AgentSizeSetByPlatform:
                 # A Platform Administrator set it after the check above.
                 raise _size_set_by_platform() from None

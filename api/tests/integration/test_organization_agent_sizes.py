@@ -9,7 +9,10 @@ The contract under test:
 - a change never stops the Agent: it applies at the next start, and `pending_size` says so;
 - withdrawing or disabling a size leaves the Agents on it, and a size any Agent row
   references, even a soft-deleted one, cannot be deleted;
-- every change leaves one audit Event, and an unchanged save none.
+- a choice is re-checked under its locks, so a size withdrawn or disabled meanwhile is refused;
+- making an allowed size the default puts the old default in its place, so the Organization
+  keeps its choices;
+- every change, a size chosen on hire included, leaves one audit Event, and an unchanged save none.
 """
 
 from datetime import UTC, datetime
@@ -21,7 +24,9 @@ from hamcrest import assert_that, contains_exactly, equal_to, has_entries, has_i
 
 from api.domains.agent_sizes.models import GIB, MIB, STANDARD_SIZE_ID, AgentSize, OrganizationAgentSize
 from api.domains.agents.models import Agent, AgentStatus
-from api.domains.events.catalog import AGENT_AGENT_SIZE_CHANGED, ORGANIZATION_AGENT_SIZES_CHANGED
+from api.domains.agents.repository import AgentRepository, AgentSizeUnavailable
+from api.domains.events import ActorIdentity, ActorIdentityType
+from api.domains.events.catalog import AGENT_AGENT_SIZE_CHANGED, AGENT_CREATED, ORGANIZATION_AGENT_SIZES_CHANGED
 from api.domains.events.models import EventScope, OutboxMessage
 from api.domains.rbac.catalog import AGENT_EDITOR_ROLE_ID, AGENT_OWNER_ROLE_ID, AGENT_VIEWER_ROLE_ID
 from api.domains.users.organization_users.models import OrganizationRole
@@ -344,6 +349,35 @@ def test_a_size_the_organization_may_not_choose_is_refused_when_hiring():
             assert_that(response.status_code, equal_to(status.HTTP_400_BAD_REQUEST))
 
 
+def test_a_size_chosen_on_hire_is_audited_and_the_default_is_not():
+    with given(_GIVEN) as context:
+        large = _size(context, "Large")
+        _allow(context, large)
+
+        with when("the Owner hires one Agent on Large and one naming the default"):
+            on_large = _hire(context, context.access_token, agent_size_id=str(large.id)).json()
+            _hire(context, context.access_token, name="Default Agent", agent_size_id=str(STANDARD_SIZE_ID))
+
+        with then("only the first records the choice, from the default, in its creation's correlation"):
+            events = _events(context, AGENT_AGENT_SIZE_CHANGED)
+            assert_that(events, has_length(1))
+            assert_that(
+                events[0].payload,
+                has_entries(
+                    agent_id=on_large["id"],
+                    agent_size_id=str(large.id),
+                    agent_size_name="Large",
+                    previous_agent_size_id=None,
+                    previous_agent_size_name=None,
+                    by_platform=False,
+                ),
+            )
+            created = next(
+                event for event in _events(context, AGENT_CREATED) if event.payload["agent_id"] == on_large["id"]
+            )
+            assert_that(events[0].correlation_id, equal_to(created.correlation_id))
+
+
 # --- who may change an Agent's size ---------------------------------------------
 
 
@@ -598,3 +632,102 @@ def test_a_size_any_agent_row_is_on_cannot_be_deleted_even_once_the_agent_is():
                 _PLATFORM_ORG.format(organization_id=context.organization.id), headers=_auth(admin)
             ).json()
             assert_that(detail["agent_size_ids"], equal_to([str(large.id)]))
+
+
+def test_a_size_withdrawn_or_disabled_after_the_check_is_refused_under_the_lock():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        withdrawn, disabled = _size(context, "Large"), _size(context, "Retired", scale=3)
+        _allow(context, disabled)
+        _disable(context, disabled)
+        repository = context.injector.get(AgentRepository)
+        actor = ActorIdentity(type=ActorIdentityType.USER, id=context.user.id)
+
+        with then("writing either, as if the service had checked before the change, is refused"):
+            for size in (withdrawn, disabled):
+                with pytest.raises(AgentSizeUnavailable):
+                    repository.set_agent_size_with_event(context.agent, size.id, actor=actor, actor_display="Owner")
+                with pytest.raises(AgentSizeUnavailable):
+                    repository.create_with_creator_access(
+                        Agent(
+                            organization_id=context.organization.id,
+                            created_by_user_id=context.user.id,
+                            name="Raced",
+                            agent_size_id=size.id,
+                        ),
+                        None,
+                        actor=actor,
+                        actor_display="Owner",
+                    )
+
+        with then("the Agent stays on the default, no Agent was hired, and nothing is recorded"):
+            assert_that(_stored_agent(context).agent_size_id, equal_to(None))
+            assert_that([agent.name for agent in _delegate(context).find_all(Agent)], is_not(has_item("Raced")))
+            assert_that(_events(context, AGENT_AGENT_SIZE_CHANGED), has_length(0))
+
+
+def test_making_an_allowed_size_the_default_keeps_the_organizations_choices():
+    with given(_GIVEN) as context:
+        large = _size(context, "Large")
+        admin = _platform_admin(context)
+        _set_allowed(context, admin, [large.id])
+
+        with when("the administrator makes Large the default"):
+            response = context.client.patch(
+                f"/api/v1/platform/agent-sizes/{large.id}", json={"is_default": True}, headers=_auth(admin)
+            )
+
+        with then("the Organization can still choose both, with Standard now the stored one"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+            choosable = _choosable(context, context.access_token).json()
+            assert_that(choosable["can_choose"], equal_to(True))
+            assert_that([size["name"] for size in choosable["sizes"]], contains_exactly("Large", "Standard"))
+            detail = context.client.get(
+                _PLATFORM_ORG.format(organization_id=context.organization.id), headers=_auth(admin)
+            ).json()
+            assert_that(detail["agent_size_ids"], equal_to([str(STANDARD_SIZE_ID)]))
+
+        with then("the swap is recorded for the Organization in the default switch's correlation"):
+            swap = _events(context, ORGANIZATION_AGENT_SIZES_CHANGED)[-1]
+            assert_that(
+                swap.payload,
+                has_entries(
+                    agent_size_ids=[str(STANDARD_SIZE_ID)],
+                    agent_size_names=["Standard"],
+                    previous_agent_size_ids=[str(large.id)],
+                    previous_agent_size_names=["Large"],
+                ),
+            )
+            switch = [
+                message
+                for message in _delegate(context).find_all(OutboxMessage)
+                if message.event_name == "platform.agent_size.changed"
+            ]
+            assert_that({message.correlation_id for message in switch}, equal_to({swap.correlation_id}))
+
+
+def test_the_catalog_counts_the_agents_on_each_size_and_those_following_the_default():
+    with given([*_GIVEN, there_is_an_agent(name="On Large")]) as context:
+        large = _size(context, "Large")
+        _allow(context, large)
+        _set_size(context, context.access_token, large.id)
+        there_is_an_agent(name="Follows")(context)
+        there_is_an_agent(name="Gone")(context)
+        gone = _stored_agent(context)
+        gone.deleted_at = datetime.now(UTC)
+        _delegate(context).save(gone)
+        admin = _platform_admin(context)
+
+        def counts(**params):
+            sizes = context.client.get("/api/v1/platform/agent-sizes", params=params, headers=_auth(admin)).json()
+            return {size["name"]: (size["agent_count"], size["following_agent_count"]) for size in sizes}
+
+        with then("live Agents count: one stored on Large, one following Standard"):
+            assert_that(counts(), has_entries(Large=(1, 0), Standard=(0, 1)))
+
+        with then("scoped to another Organization, there are none"):
+            assert_that(counts(organization_id=str(uuid7())), has_entries(Large=(0, 0), Standard=(0, 0)))
+
+        with then("scoped to this one, they are its own"):
+            assert_that(
+                counts(organization_id=str(context.organization.id)), has_entries(Large=(1, 0), Standard=(0, 1))
+            )

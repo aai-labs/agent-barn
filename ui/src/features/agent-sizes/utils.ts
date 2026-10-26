@@ -3,6 +3,8 @@ import { formatBytes } from "@/features/resource-usage/format";
 export const agentSizesKey = {
   /** Platform data: no Organization's cache is its. */
   platform: ["platform", "agent-sizes"] as const,
+  /** The catalog with one Organization's Agent counts; under `platform`, so catalog writes refresh it. */
+  platformForOrganization: (organizationId: string) => ["platform", "agent-sizes", organizationId] as const,
   /** What one Organization may choose; keyed by it, so switching Organization never reuses another's. */
   organization: (organizationId: string) => ["organization-agent-sizes", organizationId] as const,
 };
@@ -29,4 +31,9 @@ export function describeSize(size: {
   memoryLimitBytes: number;
 }): string {
   return `${size.name} · ${formatCpu(size.cpuLimitMillicores)} · ${formatMemory(size.memoryLimitBytes)}`;
+}
+
+/** "1 agent", "3 agents". */
+export function agentCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "agent" : "agents"}`;
 }
