@@ -12,13 +12,14 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from injector import inject, singleton
+from kubernetes.client.exceptions import ApiException
 from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.activity.repository import ActivityRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupService, to_option
-from api.domains.agent_sizes.models import size_is_pending, size_resources
+from api.domains.agent_sizes.models import running_snapshot, size_is_pending
 from api.domains.agents.aai_cli_artifacts import (
     build_local_tools_policy_md,
     build_tool_context_md,
@@ -50,8 +51,10 @@ from api.domains.agents.builders import (
     native_slack_env,
     native_telegram_channel,
     native_telegram_env,
+    pvc_storage_bytes,
     runtime_teams_channel,
     runtime_teams_env,
+    storage_quantity,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition
@@ -2218,6 +2221,34 @@ class AgentService:
                 logger.warning("Slack default delivery target for agent %s not resolved (%s)", agent_id, exc)
         return connection.settings, connection.credentials, home_channel
 
+    def _ensure_volume(self, pvc: object, name: str, namespace: str, storage_bytes: int) -> int:
+        """Grow an existing volume to its size's storage, and return the size it now has.
+
+        A new volume was just created at that size. An older, smaller one is patched up, which
+        needs a StorageClass that allows volume expansion; when the cluster refuses, the Agent
+        still starts on the volume it has, and `pending_size` keeps saying the size is not
+        applied. A volume is never shrunk, so a larger one than the size asks for stays.
+        """
+        current = pvc_storage_bytes(pvc)
+        if current is None:
+            # Nothing to read back (the PVC call returned no manifest): what was asked for.
+            return storage_bytes
+        if current >= storage_bytes:
+            return current
+        try:
+            self.k8s.patch_pvc_storage(name, namespace, storage_quantity(storage_bytes))
+        except ApiException as exc:
+            logger.warning(
+                "Could not grow volume %s from %s to %s bytes (%s %s); starting on the volume it has",
+                name,
+                current,
+                storage_bytes,
+                exc.status,
+                exc.reason,
+            )
+            return current
+        return storage_bytes
+
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""
         try:
@@ -2772,9 +2803,14 @@ class AgentService:
         self.k8s.delete_secret(name, ns)
         self.k8s.create_config_map(ns, config_map)
         self.k8s.create_secret(ns, secret)
-        self.k8s.create_pvc(
+        volume_bytes = self._ensure_volume(
+            self.k8s.create_pvc(
+                ns,
+                build_pvc(agent.id, org_id, ns, self.config.storage_class or None, storage_bytes=size.storage_bytes),
+            ),
+            name,
             ns,
-            build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
+            size.storage_bytes,
         )
         self.k8s.create_service(ns, service)
         self.k8s.create_deployment(ns, deployment)
@@ -2788,8 +2824,9 @@ class AgentService:
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
-        # Likewise the resources, so a size changed while it runs reads as pending.
-        agent.running_resources = size_resources(size)
+        # Likewise the resources and the volume, so a size changed while it runs reads as
+        # pending.
+        agent.running_resources = running_snapshot(size, volume_bytes)
         if agent.agent_type == AgentType.HERMES:
             agent.running_config_digest = agent_runtime_config_digest(
                 self.config.openclaw_image,

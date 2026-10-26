@@ -764,7 +764,7 @@ Documentation-only changes do not change a service image and do not require a se
   `agent-farm` is labelled `privileged` by `k8s/agent-farm-user.yaml`; namespaces created
   out-of-band, including `agent-farm-staging`, inherit whatever the cluster defaults to.
 - **On `local-path`, restore points are node-local and unreplicated.** Each restore point gets
-  its own PVC sized by `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
+  its own PVC, as large as the Agent's volume and never below `RESTORE_POINT_SIZE`, provisioned on the node holding the Agent's
   volume. They do not survive loss of that node, and they consume real node disk — the only
   bound is `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent and not per Organization.
 - Restore point rows resolve from live Job status when they are read, and a

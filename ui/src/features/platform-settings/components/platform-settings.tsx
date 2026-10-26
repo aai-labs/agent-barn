@@ -21,7 +21,7 @@ export const PLATFORM_SETTINGS_SECTIONS = {
   "agent-sizes": {
     label: "Agent sizes",
     Icon: Gauge,
-    description: "The CPU and memory Agents run with. Every Agent runs on the default size.",
+    description: "The CPU, memory and storage Agents run with. Every Agent runs on the default size.",
   },
   organizations: {
     label: "Organizations",

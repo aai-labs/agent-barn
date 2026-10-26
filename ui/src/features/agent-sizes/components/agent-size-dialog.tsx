@@ -14,21 +14,22 @@ import {
 
 import { useAgentSizeActions } from "../hooks/use-agent-sizes";
 import type { AgentSize, AgentSizeValues } from "../schemas";
-import { MAX_CPU_MILLICORES, MAX_MEMORY_BYTES, MIB } from "../utils";
+import { GIB, MAX_CPU_MILLICORES, MAX_MEMORY_BYTES, MAX_STORAGE_BYTES, MIB, MIN_STORAGE_BYTES } from "../utils";
 
 const DECIMAL = /^\d+(\.\d{1,3})?$/;
 const WHOLE = /^\d+$/;
 
-type FieldKey = "name" | "cpuRequest" | "cpuLimit" | "memoryRequest" | "memoryLimit";
+type FieldKey = "name" | "cpuRequest" | "cpuLimit" | "memoryRequest" | "memoryLimit" | "storage";
 
 function textOf(size: AgentSize | null): Record<FieldKey, string> {
-  if (!size) return { name: "", cpuRequest: "", cpuLimit: "", memoryRequest: "", memoryLimit: "" };
+  if (!size) return { name: "", cpuRequest: "", cpuLimit: "", memoryRequest: "", memoryLimit: "", storage: "1" };
   return {
     name: size.name,
     cpuRequest: String(size.cpuRequestMillicores / 1000),
     cpuLimit: String(size.cpuLimitMillicores / 1000),
     memoryRequest: String(Math.round(size.memoryRequestBytes / MIB)),
     memoryLimit: String(Math.round(size.memoryLimitBytes / MIB)),
+    storage: String(Math.round(size.storageBytes / GIB)),
   };
 }
 
@@ -52,6 +53,15 @@ function parse(text: Record<FieldKey, string>): { values: AgentSizeValues | null
     return bytes;
   };
 
+  const storage = () => {
+    const value = text.storage.trim();
+    const bytes = WHOLE.test(value) ? Number(value) * GIB : Number.NaN;
+    if (!(bytes >= MIN_STORAGE_BYTES) || bytes > MAX_STORAGE_BYTES) {
+      errors.storage = `Enter whole GiB from ${MIN_STORAGE_BYTES / GIB} to ${MAX_STORAGE_BYTES / GIB}.`;
+    }
+    return bytes;
+  };
+
   const name = text.name.trim();
   if (!name) errors.name = "Give the size a name.";
   const values = {
@@ -60,6 +70,7 @@ function parse(text: Record<FieldKey, string>): { values: AgentSizeValues | null
     cpuLimitMillicores: cpu("cpuLimit"),
     memoryRequestBytes: memory("memoryRequest"),
     memoryLimitBytes: memory("memoryLimit"),
+    storageBytes: storage(),
   };
   if (!errors.cpuRequest && !errors.cpuLimit && values.cpuRequestMillicores > values.cpuLimitMillicores) {
     errors.cpuRequest = "The request can't be more than the limit.";
@@ -75,6 +86,7 @@ const FIELDS: { key: Exclude<FieldKey, "name">; label: string; placeholder: stri
   { key: "cpuLimit", label: "CPU limit (vCPU)", placeholder: "e.g. 1", inputMode: "decimal" },
   { key: "memoryRequest", label: "Memory request (MiB)", placeholder: "e.g. 512", inputMode: "numeric" },
   { key: "memoryLimit", label: "Memory limit (MiB)", placeholder: "e.g. 2048", inputMode: "numeric" },
+  { key: "storage", label: "Storage (GiB)", placeholder: "e.g. 10", inputMode: "numeric" },
 ];
 
 /**
@@ -116,7 +128,8 @@ export function AgentSizeDialog({
           <DialogTitle>{size ? `Edit ${size.name}` : "Add a size"}</DialogTitle>
           <DialogDescription>
             The request is what the namespace quota charges and the cluster reserves for the Agent; the limit is how far
-            it may grow. A change reaches each Agent on this size the next time it starts.
+            it may grow. Storage is the Agent&apos;s volume, which grows to it but never shrinks. A change reaches each Agent
+            on this size the next time it starts.
           </DialogDescription>
         </DialogHeader>
 

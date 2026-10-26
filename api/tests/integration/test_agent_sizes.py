@@ -202,6 +202,8 @@ def test_a_name_is_unique_whatever_its_case():
         {"memory_limit_bytes": -1},
         {"cpu_limit_millicores": 64_001},
         {"memory_limit_bytes": 256 * _GIB + 1},
+        {"storage_bytes": 512 * _MIB},
+        {"storage_bytes": 100 * _GIB + 1},
         {"name": "   "},
         {"is_default": True},
     ],

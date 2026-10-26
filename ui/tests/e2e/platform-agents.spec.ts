@@ -16,6 +16,7 @@ const LARGE = mockSize({
   cpu_limit_millicores: 2000,
   memory_request_bytes: 2 * GIB,
   memory_limit_bytes: 4 * GIB,
+  storage_bytes: 10 * GIB,
   is_default: false,
   sort_order: 1,
 });
@@ -68,9 +69,9 @@ test.describe("Platform Agents (platform_admin)", () => {
     await expect(agentsPage.heading()).toBeVisible();
     await expect(agentsPage.organization("Acme")).toContainText("1 agent");
     await expect(agentsPage.organization("AAI Labs")).toContainText("2 agents");
-    await expect(agentsPage.row(SALLY.id)).toContainText("Standard · 0.5 vCPU · 1 GiB(default)");
+    await expect(agentsPage.row(SALLY.id)).toContainText("Standard · 0.5 vCPU · 1 GiB · 1 GiB disk(default)");
     await expect(agentsPage.row(REPORTER.id)).toContainText("Hermes");
-    await expect(agentsPage.row(OVERRIDDEN.id)).toContainText("Large · 2 vCPU · 4 GiB");
+    await expect(agentsPage.row(OVERRIDDEN.id)).toContainText("Large · 2 vCPU · 4 GiB · 10 GiB disk");
     await expect(agentsPage.row(OVERRIDDEN.id)).toContainText("Set by platform");
     await expect(agentsPage.row(OVERRIDDEN.id)).toContainText("Pending: applies on restart");
     await expect(new AppNavigation(page).mainLink("Agents")).toHaveAttribute("aria-current", "page");
@@ -86,12 +87,12 @@ test.describe("Platform Agents (platform_admin)", () => {
     await agentsPage.openOverride("Sally");
     await agentsPage.dialog().getByRole("combobox", { name: "Size" }).click();
     await expect(page.getByRole("option", { name: /Retired/ })).toHaveCount(0);
-    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB" }).click();
+    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB · 10 GiB disk" }).click();
     await agentsPage.setSize();
 
     await expect(agentsPage.dialog()).toBeHidden();
     expect(writes).toEqual([{ agentId: SALLY.id, body: { agent_size_id: LARGE.id } }]);
-    await expect(agentsPage.row(SALLY.id)).toContainText("Large · 2 vCPU · 4 GiB");
+    await expect(agentsPage.row(SALLY.id)).toContainText("Large · 2 vCPU · 4 GiB · 10 GiB disk");
     await expect(agentsPage.row(SALLY.id)).toContainText("Set by platform");
     await expect(agentsPage.row(SALLY.id)).toContainText("Pending: applies on restart");
   });
@@ -108,7 +109,7 @@ test.describe("Platform Agents (platform_admin)", () => {
 
     await expect(agentsPage.dialog()).toBeHidden();
     expect(writes).toEqual([{ agentId: OVERRIDDEN.id, body: { agent_size_id: null } }]);
-    await expect(agentsPage.row(OVERRIDDEN.id)).toContainText("Standard · 0.5 vCPU · 1 GiB(default)");
+    await expect(agentsPage.row(OVERRIDDEN.id)).toContainText("Standard · 0.5 vCPU · 1 GiB · 1 GiB disk(default)");
     await expect(agentsPage.row(OVERRIDDEN.id)).not.toContainText("Set by platform");
   });
 

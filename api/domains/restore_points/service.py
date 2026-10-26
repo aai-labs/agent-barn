@@ -10,9 +10,11 @@ from uuid import UUID, uuid7
 from fastapi import HTTPException, status
 from injector import inject, singleton
 from kubernetes.client import V1Job
+from kubernetes.utils import parse_quantity
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
+from api.domains.agents.builders.common import pvc_storage_bytes, storage_quantity
 from api.domains.agents.builders.restore_point import (
     build_capture_job,
     build_restore_job,
@@ -755,7 +757,7 @@ class RestorePointService:
                         agent.id,
                         agent.organization_id,
                         namespace,
-                        self.config.restore_point_size,
+                        self._archive_size(agent),
                         self.config.storage_class or None,
                     ),
                 )
@@ -908,6 +910,15 @@ class RestorePointService:
         if self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace) is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NOTHING_TO_CAPTURE_DETAIL)
 
+    def _archive_size(self, agent: Agent) -> str:
+        """The volume a restore point's archive gets: as large as the Agent's own volume, so a
+        compressed copy of it always fits, and never below `RESTORE_POINT_SIZE`."""
+        floor = int(parse_quantity(self.config.restore_point_size))
+        volume = pvc_storage_bytes(self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace))
+        if volume is None or volume <= floor:
+            return self.config.restore_point_size
+        return storage_quantity(volume)
+
     def _provision_capture(self, agent: Agent, restore_point: AgentRestorePoint) -> None:
         namespace = self.config.k8s_namespace
         try:
@@ -918,7 +929,7 @@ class RestorePointService:
                     agent.id,
                     agent.organization_id,
                     namespace,
-                    self.config.restore_point_size,
+                    self._archive_size(agent),
                     self.config.storage_class or None,
                 ),
             )

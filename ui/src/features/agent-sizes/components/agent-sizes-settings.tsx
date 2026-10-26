@@ -19,7 +19,7 @@ import { agentCountLabel, formatCpu, formatMemory } from "../utils";
 import { AgentSizeDialog } from "./agent-size-dialog";
 
 /**
- * Platform → Settings → Agent sizes: the catalog of CPU and memory Agents run with.
+ * Platform → Settings → Agent sizes: the catalog of CPU, memory and storage Agents run with.
  *
  * Every Agent runs on the default size. The default can be neither disabled nor deleted;
  * making another size the default is how it changes. Switching the default and disabling a size
@@ -68,12 +68,13 @@ export function AgentSizesSettings() {
       </div>
 
       <div className="af-card overflow-x-auto p-0">
-        <table className="w-full min-w-[40rem] border-collapse text-[0.84rem]" aria-label="Agent sizes">
+        <table className="w-full min-w-[46rem] border-collapse text-[0.84rem]" aria-label="Agent sizes">
           <thead>
             <tr style={{ color: "var(--ink-4)" }} className="text-left text-[0.75rem]">
               <th className="px-4 py-2.5 font-medium">Name</th>
               <th className="px-4 py-2.5 font-medium">CPU</th>
               <th className="px-4 py-2.5 font-medium">Memory</th>
+              <th className="px-4 py-2.5 font-medium">Storage</th>
               <th className="px-4 py-2.5 font-medium">Enabled</th>
               <th className="px-4 py-2.5" aria-label="Actions" />
             </tr>
@@ -101,6 +102,9 @@ export function AgentSizesSettings() {
                   request={formatMemory(size.memoryRequestBytes)}
                   limit={formatMemory(size.memoryLimitBytes)}
                 />
+                <td className="px-4 py-3" style={{ color: "var(--ink-2)" }} data-testid="agent-size-storage">
+                  {formatMemory(size.storageBytes)}
+                </td>
                 <td className="px-4 py-3">
                   <button
                     type="button"

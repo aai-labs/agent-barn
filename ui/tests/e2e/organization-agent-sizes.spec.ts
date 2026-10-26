@@ -21,6 +21,7 @@ const LARGE = mockSize({
   cpu_limit_millicores: 2000,
   memory_request_bytes: 2 * GIB,
   memory_limit_bytes: 4 * GIB,
+  storage_bytes: 10 * GIB,
   is_default: false,
   sort_order: 1,
 });
@@ -136,9 +137,9 @@ test.describe("Organizations choosing Agent sizes", () => {
     await page.getByRole("option", { name: "General Purpose · v1" }).click();
 
     const size = page.getByRole("combobox", { name: "CPU & memory" });
-    await expect(size).toHaveText("Standard · 0.5 vCPU · 1 GiB (default)");
+    await expect(size).toHaveText("Standard · 0.5 vCPU · 1 GiB · 1 GiB disk (default)");
     await size.click();
-    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB" }).click();
+    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB · 10 GiB disk" }).click();
 
     const create = page.waitForRequest((request) => request.url().endsWith("/agents") && request.method() === "POST");
     await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
@@ -183,13 +184,13 @@ test.describe("Organizations choosing Agent sizes", () => {
     await configuration.goto(MOCK_AGENT_ID, TEST_ORG_ID);
     const tile = page.getByTestId("agent-size-tile");
     const size = tile.getByRole("combobox", { name: "CPU & memory" });
-    await expect(size).toHaveText("Standard · 0.5 vCPU · 1 GiB (default)");
+    await expect(size).toHaveText("Standard · 0.5 vCPU · 1 GiB · 1 GiB disk (default)");
     await expect(page.getByTestId("agent-pending-size-note")).toHaveCount(0);
 
     await size.click();
-    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB" }).click();
+    await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB · 10 GiB disk" }).click();
 
-    await expect(size).toHaveText("Large · 2 vCPU · 4 GiB");
+    await expect(size).toHaveText("Large · 2 vCPU · 4 GiB · 10 GiB disk");
     await expect(page.getByTestId("agent-pending-size-note")).toHaveText("Pending: applies on restart");
     await expect(page.getByTestId("agent-pending-size-restart")).toBeEnabled();
     expect(writes).toEqual([{ agent_size_id: LARGE.id }]);
@@ -215,7 +216,7 @@ test.describe("Organizations choosing Agent sizes", () => {
     await new AgentConfigurationPage(page).goto(MOCK_AGENT_ID, TEST_ORG_ID);
     const tile = page.getByTestId("agent-size-tile");
 
-    await expect(tile).toContainText("Large · 2 vCPU · 4 GiB");
+    await expect(tile).toContainText("Large · 2 vCPU · 4 GiB · 10 GiB disk");
     await expect(tile.getByTestId("agent-size-set-by-platform")).toHaveText("Set by platform");
     await expect(tile.getByRole("combobox")).toHaveCount(0);
   });
@@ -233,7 +234,7 @@ test.describe("Organizations choosing Agent sizes", () => {
     await new AgentConfigurationPage(page).goto(MOCK_AGENT_ID, TEST_ORG_ID);
     const tile = page.getByTestId("agent-size-tile");
 
-    await expect(tile).toContainText("Standard · 0.5 vCPU · 1 GiB(default)");
+    await expect(tile).toContainText("Standard · 0.5 vCPU · 1 GiB · 1 GiB disk(default)");
     await expect(tile.getByRole("combobox")).toHaveCount(0);
   });
 });

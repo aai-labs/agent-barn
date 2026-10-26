@@ -44,7 +44,7 @@ export class AgentSizesSettingsPage {
     return this.dialog().getByLabel(label, { exact: true });
   }
 
-  async fill(values: Partial<Record<"Name" | "CPU request (vCPU)" | "CPU limit (vCPU)" | "Memory request (MiB)" | "Memory limit (MiB)", string>>) {
+  async fill(values: Partial<Record<"Name" | "CPU request (vCPU)" | "CPU limit (vCPU)" | "Memory request (MiB)" | "Memory limit (MiB)" | "Storage (GiB)", string>>) {
     for (const [label, value] of Object.entries(values)) {
       await this.field(label).fill(value);
     }

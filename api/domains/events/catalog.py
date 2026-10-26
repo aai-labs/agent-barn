@@ -690,6 +690,8 @@ class PlatformAgentSizePayload(BaseModel):
     cpu_limit_millicores: int
     memory_request_bytes: int
     memory_limit_bytes: int
+    # None in records written before sizes carried storage.
+    storage_bytes: int | None = None
     enabled: bool
     is_default: bool
 

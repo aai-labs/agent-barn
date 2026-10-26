@@ -57,6 +57,9 @@ class MockK8sModule(Module):
         mock.get_pod_image.return_value = None
         # A MagicMock cannot be compared with an int, and a fresh pod has not restarted.
         mock.get_pod_restart_count.return_value = 0
+        # Creating a volume answers with the volume asked for, as a new one is; a test that
+        # needs one that already exists sets a return value instead.
+        mock.create_pvc.side_effect = lambda namespace, manifest: manifest
         return mock
 
 

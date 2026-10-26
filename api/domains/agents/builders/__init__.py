@@ -1,4 +1,4 @@
-from .common import build_pvc, build_service, container_resources
+from .common import build_pvc, build_service, container_resources, pvc_storage_bytes, storage_quantity
 from .hermes import (
     HERMES_BOOTLOADER_FOOTER,
     HERMES_DEFAULT_MAX_TURNS,
@@ -41,6 +41,8 @@ from .openclaw import (
 __all__ = [  # noqa: RUF022 - grouped by runtime (common/openclaw/hermes), not alphabetical
     # common
     "build_pvc",
+    "pvc_storage_bytes",
+    "storage_quantity",
     "container_resources",
     "build_service",
     # openclaw

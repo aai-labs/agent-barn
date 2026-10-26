@@ -234,6 +234,13 @@ class KubernetesClient:
             manifest,
         )
 
+    def patch_pvc_storage(self, name: str, namespace: str, storage: str) -> None:
+        """Ask for a larger volume. Kubernetes refuses a smaller one, and any resize at all when
+        the StorageClass does not allow volume expansion; both raise ApiException."""
+        self._core_v1.patch_namespaced_persistent_volume_claim(
+            name, namespace, {"spec": {"resources": {"requests": {"storage": storage}}}}
+        )
+
     def delete_pvc(self, name: str, namespace: str) -> None:
         self._delete_ignoring_not_found(self._core_v1.delete_namespaced_persistent_volume_claim, name, namespace)
 

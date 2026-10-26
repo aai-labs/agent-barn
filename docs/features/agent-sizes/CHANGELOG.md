@@ -4,16 +4,28 @@ Status: Active
 Epic: Agent Sizes (agreed with Kalkidan Betre, 2026-10-21; no ticket yet)
 Related context: [Agent Sizes](../agent-sizes.md), [runtime and deployment](../../architecture/runtime-and-deployment.md), [resource usage](../resource-usage.md), [platform oversight ADR](../../adr/2026-07-30-platform-oversight-without-organization-access.md), [platform override ADR](../../adr/2026-10-22-platform-administrators-set-an-agents-size.md)
 
-Platform Administrators keep a catalog of CPU and memory sizes. Organizations they allow pick from it when hiring or later; a Platform Administrator can give one Agent its own size even where its Organization can't choose. Custom values are never typed in. Custom runtime images are separate work.
+Platform Administrators keep a catalog of CPU, memory and storage sizes. Organizations they allow pick from it when hiring or later; a Platform Administrator can give one Agent its own size even where its Organization can't choose. Custom values are never typed in. Custom runtime images are separate work.
 
 ## Current state
 
-- Delivered: the size catalog with platform CRUD and audit Events, the Platform Settings section, and builders reading the resolved size (PR 1). Organizations the platform allows choose a size on hire or on the Agent's profile, Owners and Admins only, with a `pending_size` restart-needed signal (PR 2). A Platform Administrator lists every Agent on Platform → Agents, grouped by Organization, overrides one Agent's size, which locks it for the Organization until cleared, and restarts any Agent to apply it (PR 3). Agents that never chose run on the default, seeded as Standard with the values Agents always had.
+- Delivered: the size catalog with platform CRUD and audit Events, the Platform Settings section, and builders reading the resolved size (PR 1). Organizations the platform allows choose a size on hire or on the Agent's profile, Owners and Admins only, with a `pending_size` restart-needed signal (PR 2). A Platform Administrator lists every Agent on Platform → Agents, grouped by Organization, overrides one Agent's size, which locks it for the Organization until cleared, and restarts any Agent to apply it (PR 3). A size also says how large the Agent's volume is, growing existing volumes at start and sizing restore-point archives to match (storage follow-up). Agents that never chose run on the default, seeded as Standard with the values Agents always had, including its 1Gi volume.
 - In transition: nothing.
-- Next: close the epic once PR 3 merges: the durable facts already live in [`../agent-sizes.md`](../agent-sizes.md) and the ADR.
-- Blockers: open questions with Kalkidan (none blocks a PR): the name "Agent Size"; separate requests and limits (assumed yes); whether a size choice warns or blocks above the remaining Capacity Limit headroom (neither; the quota error at start covers it); whether Agent Owners should choose too (Organization Owners and Admins only); a 1Gi PVC for every size; whether an override should be able to pick a disabled size (no) and whether the Organization should see who set it (it sees "Set by platform").
+- Next: close the epic once the storage follow-up merges: the durable facts already live in [`../agent-sizes.md`](../agent-sizes.md) and the ADR.
+- Blockers: open questions with Kalkidan (none blocks a PR): the name "Agent Size"; separate requests and limits (assumed yes); whether a size choice warns or blocks above the remaining Capacity Limit headroom (neither; the quota error at start covers it); whether Agent Owners should choose too (Organization Owners and Admins only); (answered by the storage follow-up: each size sets its volume); whether an override should be able to pick a disabled size (no) and whether the Organization should see who set it (it sees "Set by platform").
 
 ## Changes
+
+### 2026-10-26 — Agent Sizes storage follow-up
+
+- Delivered: a size says how large the Agent's volume is, from 1Gi to 100Gi, edited in Platform Settings in whole GiB and shown wherever a size is described. A new Agent's volume is created at it; an older, smaller one grows to it at the Agent's next start (production's StorageClass allows expansion), and none is ever shrunk. While a size asks for more than the volume has, `pending_size` is true. A restore point's archive volume is as large as the Agent's volume, never below `RESTORE_POINT_SIZE`. The original plan's "SSD doesn't apply to us" is superseded: storage is now part of a size, as agreed with the maintainer on 2026-10-26.
+- Changed:
+  - Schema (migration `20e7d399d7c9`): `agent_sizes.storage_bytes`, 1Gi for every existing size; `agent.running_resources` gains `storage_bytes` at start (a record without it reads as 1Gi).
+  - API: `storage_bytes` on `AgentSizeRead`, `AgentSizeCreate` (optional, 1Gi), `AgentSizeUpdate` and `AgentSizeOption`, so on every Agent and Platform Agents read.
+  - Events: `platform.agent_size.created`/`.deleted` carry `storage_bytes` (absent in earlier records); `.changed` names it as a setting.
+  - Runtime: `build_pvc` takes the size's storage and `_ensure_volume` grows an existing volume, which edits the provisioning closure, so the runtime configuration digest moves once, with an unchanged pod spec and a 1Gi volume for every Agent on Standard.
+  - UI: the size dialog's Storage (GiB) field, the settings table's Storage column, and storage in every size description ("Large · 2 vCPU · 4 GiB · 10 GiB disk").
+  - Docs: [`../agent-sizes.md`](../agent-sizes.md), runtime and deployment, resource usage, domain events, operations (restore-point volumes), `CONTEXT.md`.
+- Follow-up: none planned.
 
 ### 2026-10-26 — Agent Sizes PR 3 — review follow-ups
 
