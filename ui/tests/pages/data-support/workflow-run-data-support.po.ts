@@ -20,6 +20,7 @@ export class WorkflowRunDataSupport {
   state = "RUNNING";
   attempt: Record<string, unknown> | null = null;
   runReason: string | null = null;
+  failHistory = false;
   /** Overrides the step list with this many-step progression (for walkthrough captures). */
   stepStates: string[] | null = null;
   constructor(private page: Page) {}
@@ -190,6 +191,17 @@ export class WorkflowRunDataSupport {
               kind: "ATTEMPT_FAILED",
               detail: "Pipedrive is not connected",
             },
+            ...(this.state === "SUCCEEDED"
+              ? [
+                  {
+                    id: "00000000-0000-4000-8000-0000000000a3",
+                    created_at: "2026-10-17T10:02:18Z",
+                    revision: 3,
+                    kind: "STEP_COMPLETED",
+                    detail: "Final step completed",
+                  },
+                ]
+              : []),
           ]),
         });
       } else if (path.endsWith("/re-run")) {

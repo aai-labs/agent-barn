@@ -207,6 +207,31 @@ test.describe("WF02 run progress and text results", () => {
     ]);
   });
 
+  test("activity picks up the final transition after the run settles", async ({
+    page,
+  }) => {
+    await page.clock.install();
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const activity = page.getByLabel("Run activity");
+    await expect(activity).not.toContainText("Final step completed");
+    support.state = "SUCCEEDED";
+    await page.clock.runFor(3_100);
+    await expect(activity.locator("li").first()).toContainText(
+      "Final step completed",
+    );
+  });
+
+  test("an activity load failure is shown inline and can be retried", async ({
+    page,
+  }) => {
+    support.failHistory = true;
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    await expect(page.getByText("Couldn’t load run activity")).toBeVisible();
+    support.failHistory = false;
+    await page.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByLabel("Run activity")).toBeVisible();
+  });
+
   test("an Agent that has not accepted the step is called out", async ({
     page,
   }) => {

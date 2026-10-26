@@ -58,6 +58,7 @@ export const WorkflowRunHistorySchema = z.object({
       detail: z.string(),
     }),
   ),
+  total: z.number(),
 });
 export type WorkflowRunHistory = z.infer<typeof WorkflowRunHistorySchema>;
 export const WorkflowRunListSchema = z.object({
