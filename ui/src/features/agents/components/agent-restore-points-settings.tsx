@@ -301,15 +301,20 @@ export function AgentRestorePointsSettings({
           </div>
         )}
 
-        {restorePoint.status === "FAILED" && restorePoint.failureReason && (
-          <p
-            className="mb-0 mt-2 text-[0.78rem]"
-            style={{ color: "var(--err)" }}
-            role="alert"
-          >
-            {restorePoint.failureReason}
-          </p>
-        )}
+        {restorePoint.failureReason &&
+          (restorePoint.status === "FAILED" || restorePoint.status === "READY") && (
+            <p
+              className="mb-0 mt-2 text-[0.78rem]"
+              style={{ color: "var(--err)" }}
+              role="alert"
+            >
+              {/* A READY row keeps a reason only when a restore from it, run without a
+                  backup, failed: the Agent's files may not be what this point holds. */}
+              {restorePoint.status === "READY"
+                ? `The last restore from this point did not finish: ${restorePoint.failureReason}`
+                : restorePoint.failureReason}
+            </p>
+          )}
 
         {isExpanded && (
           <RestorePointConfigDiff
