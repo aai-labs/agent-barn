@@ -1,7 +1,7 @@
 """restore point backup skipped by user
 
 Revision ID: c7d2e9f4a1b3
-Revises: a4e9c2d7b615
+Revises: 8b2e4f61c9d3
 Create Date: 2026-10-21 12:00:00.000000
 
 Whether the restore running from a restore point was one the user chose to run without
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c7d2e9f4a1b3"
-down_revision: str | Sequence[str] | None = "a4e9c2d7b615"
+down_revision: str | Sequence[str] | None = "8b2e4f61c9d3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
