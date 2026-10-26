@@ -30,6 +30,12 @@ from api.domains.agents.routes import agents_router
 from api.domains.agents.service import AgentService
 from api.domains.api_keys.routes import router as api_keys_router
 from api.domains.auth.routes import auth_router
+from api.domains.billing.routes import (
+    billing_router,
+    platform_billing_router,
+    platform_billing_settings_router,
+    stripe_webhook_router,
+)
 from api.domains.business_value.routes import business_value_router
 from api.domains.communications.metrics import refresh_communication_metrics
 from api.domains.communications.operations import CommunicationOperationalRepository
@@ -45,7 +51,7 @@ from api.domains.events.routes import event_delivery_monitor_router
 from api.domains.integrations.google_oauth.routes import integrations_router
 from api.domains.integrations.microsoft_oauth.routes import microsoft_callback_router, sharepoint_sign_in_router
 from api.domains.onboarding.routes import onboarding_router, platform_trial_settings_router
-from api.domains.organizations.routes import org_router, platform_org_router
+from api.domains.organizations.routes import org_router, platform_org_router, platform_organization_settings_router
 from api.domains.platform_admin.routes import platform_stats_router
 from api.domains.playbooks.platform_routes import platform_playbooks_router
 from api.domains.playbooks.routes import agent_playbook_extractions_router, playbook_extractions_router
@@ -68,6 +74,8 @@ from api.domains.users.service import UserService
 from api.domains.web_chat.routes import web_chat_router
 from api.domains.workflows.platform_routes import platform_workflow_router
 from api.domains.workflows.routes import router as workflows_router
+from api.domains.workflows.run_routes import router as workflow_runs_router
+from api.domains.workflows.runtime_routes import router as workflow_runtime_router
 from api.infrastructure.email.logging_utils import (
     log_email_delivery_disabled_warning,
 )
@@ -137,10 +145,17 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(custom_api_router)
     subapi.include_router(agent_webhooks_router)
     subapi.include_router(workflows_router)
+    subapi.include_router(workflow_runs_router)
+    app_v1.include_router(workflow_runtime_router)
     subapi.include_router(agent_settings_router)
     subapi.include_router(platform_memory_router)
     subapi.include_router(platform_trial_settings_router)
     subapi.include_router(onboarding_router)
+    subapi.include_router(billing_router)
+    subapi.include_router(platform_billing_settings_router)
+    subapi.include_router(platform_organization_settings_router)
+    subapi.include_router(platform_billing_router)
+    subapi.include_router(stripe_webhook_router)
     subapi.include_router(platform_workflow_router)
     subapi.include_router(agent_memory_router)
     subapi.include_router(memory_grants_router)

@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { AlertTriangle, Ban } from "lucide-react";
 
+import { useOrganizationBilling } from "@/features/billing/hooks/use-organization-billing";
+
 import { useActiveOrgRole } from "../hooks/use-active-org-role";
 import { useOrganizationLlmBudget } from "../hooks/use-organization-llm-budget";
-import { formatRenewal, formatUsage, periodLabel } from "../spend-limit";
+import { formatRenewal, formatUsage, periodLabel, runsOnCredit } from "../spend-limit";
 
 
 function renewalSuffix(renewsAt: string | null | undefined) {
@@ -22,13 +24,22 @@ function renewalSuffix(renewsAt: string | null | undefined) {
  */
 export function LlmBudgetBanner({ show }: { show: "warning" | "exhausted" }) {
   const { budget } = useOrganizationLlmBudget();
-  const { selectedOrganization } = useActiveOrgRole();
+  const { selectedOrganization, role } = useActiveOrgRole();
+  const onCredit = runsOnCredit(budget?.window);
+  const { billing } = useOrganizationBilling(selectedOrganization?.id, { enabled: onCredit && role === "OWNER" });
 
   if (!budget || budget.state !== show) return null;
   if (budget.spendUsd == null) return null;
 
   const exhausted = show === "exhausted";
   const used = formatUsage(budget.spendUsd, budget.limitUsd);
+  const message = onCredit
+    ? exhausted
+      ? `This organization has used all its credit (${used}). Agents can't make model calls until more is added.`
+      : `This organization has used ${used} of its credit.`
+    : exhausted
+      ? `This organization has reached its model spend limit (${used}). Agents can't make model calls until it renews or is raised.${renewalSuffix(budget.renewsAt)}`
+      : `This organization has used ${used} of its model spend limit ${periodLabel(budget.window)}.${renewalSuffix(budget.renewsAt)}`;
 
   return (
     <div
@@ -45,12 +56,16 @@ export function LlmBudgetBanner({ show }: { show: "warning" | "exhausted" }) {
       ) : (
         <AlertTriangle width={15} height={15} className="mt-[1px] flex-shrink-0" />
       )}
-      <span>
-        {exhausted
-          ? `This organization has reached its model spend limit (${used}). Agents can't make model calls until it renews or is raised.${renewalSuffix(budget.renewsAt)}`
-          : `This organization has used ${used} of its model spend limit ${periodLabel(budget.window)}.${renewalSuffix(budget.renewsAt)}`}
-      </span>
-      {exhausted && budget.canManage && selectedOrganization && (
+      <span>{message}</span>
+      {onCredit && billing?.available && selectedOrganization && (
+        <Link
+          href={`/dashboard/${selectedOrganization.id}/billing`}
+          className="ml-auto flex-shrink-0 font-medium underline underline-offset-2"
+        >
+          Buy credit
+        </Link>
+      )}
+      {!onCredit && exhausted && budget.canManage && selectedOrganization && (
         <Link
           href={`/dashboard/${selectedOrganization.id}/settings?tab=spend-limits`}
           className="ml-auto flex-shrink-0 font-medium underline underline-offset-2"

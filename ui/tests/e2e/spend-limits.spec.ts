@@ -202,6 +202,28 @@ test.describe("Settings · Spend limits", () => {
     await expect(limits.defaultAgentLimit).toContainText("$10.00 per month");
     await expect(limits.defaultAgentLimit).toContainText("This organization");
   });
+
+  test("an organization on credit has no limits beneath its credit", async ({ page }) => {
+    await data.organizations.interceptGetOrganizationLlmBudget({
+      organizationId: TEST_ORG_ID,
+      budget: organizationLlmBudget({
+        limit_usd: 10,
+        ceiling_usd: 10,
+        window: "once",
+        spend_usd: 2.5,
+        renews_at: null,
+      }),
+    });
+    await limits.open();
+
+    await expect(limits.organizationLimit).toContainText("$10.00 in total");
+    await expect(limits.organizationLimit).toContainText("$2.50 of $10.00");
+    await expect(page.getByText("Your Agents can spend all of your organization's credit.")).toBeVisible();
+    // Any limit beneath credit would never renew, so none is offered.
+    await expect(limits.organizationLimit.getByRole("button", { name: "Edit" })).toHaveCount(0);
+    await expect(limits.defaultAgentLimit).toHaveCount(0);
+    await expect(limits.agentLimits).toHaveCount(0);
+  });
 });
 
 test.describe("An Agent's spend limit", () => {
@@ -310,6 +332,35 @@ test.describe("An Agent's spend limit", () => {
       "href",
       `/dashboard/${TEST_ORG_ID}/settings?tab=spend-limits`,
     );
+  });
+
+  test("an Agent on credit spends from its organization's credit, with no limit of its own", async () => {
+    await data.agents.interceptAgentLlmBudget({
+      budget: {
+        window: "once",
+        limit_usd: 10,
+        organization_limit_usd: 10,
+        source: "organization",
+        renews_at: null,
+      },
+    });
+    await openSpendLimit();
+
+    const section = configuration.spendLimitSection();
+    await expect(section).toContainText("$10.00 in total");
+    await expect(section).toContainText("This Agent can spend all of your organization's credit.");
+    await expect(configuration.editSpendLimitButton()).toHaveCount(0);
+  });
+
+  test("an Agent whose organization has used up its credit says so, without a renewal date", async () => {
+    await data.agents.interceptAgentLlmBudget({
+      budget: { window: "once", limit_usd: 10, source: "organization", state: "exhausted", spend_usd: 10.2, renews_at: null },
+    });
+    await openSpendLimit();
+
+    const section = configuration.spendLimitSection();
+    await expect(section).toContainText("Your organization's credit has run out, so this Agent can't make model calls.");
+    await expect(section).not.toContainText("until");
   });
 
   test("someone who may not change it sees it read-only", async () => {

@@ -67,6 +67,15 @@ AF-219 ships the first concrete events as RBAC audit inputs and usage examples:
 - `platform.trial_settings.changed` — emitted atomically when a Platform Administrator changes a trial setting (`self_signup_enabled`, `credit_usd`, `agent_limit` or `max_active_trials`), one event per setting that moved, with its previous and current value (booleans for signup, numbers for credit and limits, `null` for no cap). The subject is the `SYSTEM` trial settings row. Not emitted when a save leaves the value unchanged.
 - `organization.trial.ended` — emitted atomically when a Platform Administrator ends a Trial Organization's trial. Not emitted when the Organization was not a trial.
 
+AF-381 (prepaid credit) adds, all projected by `security_audit.projection`:
+
+- `organization.trial.ended` is also emitted when a credit purchase converts a trial (actor: the payment system, `actor_display` "Credit purchase").
+- `organization.trial.expired` — emitted once when a trial runs out of credit; it then no longer counts toward the cap on active trials. Emitted by the `organization.trial_expiry.projection` Event Handler, which handles `organization.llm_budget.exhausted` (alongside the budget email and product analytics handlers).
+- `organization.agent_limit.changed` — emitted atomically when a Platform Administrator sets or clears an Organization's own Agent limit, with the previous and current limit (`null` follows the default).
+- `platform.billing_settings.changed` — emitted atomically when a Platform Administrator changes a billing setting (`payments_enabled`, `min_purchase_usd`, `max_purchase_usd`, `purchase_fee_percent`), one event per setting that moved, same payload shape as `platform.trial_settings.changed`.
+- `platform.organization_settings.changed` — the same, for the platform's Organization settings (`default_agent_limit`).
+- `platform.credit_purchase.unapplied` — emitted when a paid credit purchase arrives for an Organization that no longer runs on Credit, so nothing was granted; carries the payment reference, the credit, the amount paid and the reason (for example, the amount paid doesn't match the checkout we created), and names the Organization in `subject_display` (a Platform event carries no Organization id). Also emitted for a paid session that doesn't match a checkout we created.
+
 AF-167 broadens Security Audit Record coverage to additional mutations:
 
 - `agent.updated` — emitted when `update_agent` changes a tracked scalar field (name, model, approval_mode, template pin); carries a generic `field_changes` diff and is not emitted when no tracked field actually changed.
@@ -330,6 +339,20 @@ This foundation deliberately excludes event sourcing, public webhooks, replay ad
 Adding a Domain Event requires a registered event name/version, payload schema, intended handler mapping, payload safety tests, and repository/integration coverage for any event-producing mutation. Adding an event-producing business mutation requires a domain-specific repository transaction boundary that commits business state and staged event rows together, plus service-layer post-commit enqueue if low-latency delivery is required. Adding an Event Handler requires static registry wiring, idempotency design, success/retry/terminal-failure tests, and metrics/logging coverage. Changes to event envelope fields, delivery identity, lifecycle states, dead-letter reasons, handler registry semantics, reconciliation thresholds, or privacy rules require model, migration, registry/processor tests, this document, and ADR review when the decision changes.
 
 Changes to the Platform Event Delivery Monitor's summary/explorer response contract, stale-threshold semantics, redaction behavior, or supported filters require updating `api/domains/events/models.py` (DTOs), `repository.py` (query composition), `service.py`/`routes.py`, the matching UI schemas/hooks/components under `ui/src/features/event-deliveries/`, this document, and both test suites listed in the source map. A new index needed for a monitor query requires an Alembic migration under `api/migrations/versions/`.
+
+## Workflow run wakeups
+
+Workflow run transitions stage `workflow.run.changed` v1 with the run identity,
+revision and state only, alongside their ledger/history transaction. The
+`workflow.controller` handler advances durable intent and dispatches steps to the
+owning Agent through the Kubernetes client. It tolerates duplicate events and
+uses the same cluster access as the API. Services and the controller enqueue
+staged delivery IDs immediately after each successful ledger commit, including
+starts, cancellation, step results, failures and recovery transitions. Broker
+failures leave committed deliveries pending for reconciliation. A scheduled
+workflow operator pass handles missed events, expired attempts and retention. Run inputs, reasoning, files and capability credentials never enter
+the event payload. These are workflow wakeup facts, not Security Audit or product
+analytics projections. See the [workflow feature](agent-workflows.md#wf02-execution-and-outputs).
 
 ## Personal API Key security events
 

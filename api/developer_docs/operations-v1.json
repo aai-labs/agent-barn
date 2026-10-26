@@ -491,6 +491,21 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs",
+    "list_runs_organizations__organization_id__agents__agent_id__workflow_runs_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}",
+    "get_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/history",
+    "history_organizations__organization_id__agents__agent_id__workflow_runs__run_id__history_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/workflows",
     "list_workflows_organizations__organization_id__agents__agent_id__workflows_get"
   ],
@@ -503,6 +518,11 @@
     "GET",
     "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
     "list_workflow_versions_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/billing",
+    "read_billing_organizations__organization_id__billing_get"
   ],
   [
     "GET",
@@ -686,6 +706,11 @@
   ],
   [
     "GET",
+    "/platform/billing/credit-history",
+    "read_credit_history_platform_billing_credit_history_get"
+  ],
+  [
+    "GET",
     "/platform/costs",
     "list_platform_costs_platform_costs_get"
   ],
@@ -773,6 +798,16 @@
     "GET",
     "/platform/settings/agent-memory/models",
     "list_models_platform_settings_agent_memory_models_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/billing",
+    "read_billing_settings_platform_settings_billing_get"
+  ],
+  [
+    "GET",
+    "/platform/settings/organizations",
+    "read_organization_settings_platform_settings_organizations_get"
   ],
   [
     "GET",
@@ -1001,6 +1036,11 @@
   ],
   [
     "POST",
+    "/billing/stripe/webhook",
+    "receive_stripe_event_billing_stripe_webhook_post"
+  ],
+  [
+    "POST",
     "/integrations/google/token",
     "google_token_exchange_integrations_google_token_post"
   ],
@@ -1186,6 +1226,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/cancel",
+    "cancel_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__cancel_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/workflows",
     "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
   ],
@@ -1196,8 +1241,18 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/runs",
+    "start_run_organizations__organization_id__agents__agent_id__workflows__workflow_id__runs_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/versions",
     "save_workflow_version_organizations__organization_id__agents__agent_id__workflows__workflow_id__versions_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/billing/checkout",
+    "create_checkout_organizations__organization_id__billing_checkout_post"
   ],
   [
     "POST",
@@ -1381,6 +1436,11 @@
   ],
   [
     "PUT",
+    "/platform/organizations/{organization_id}/agent-limit",
+    "set_organization_agent_limit_platform_organizations__organization_id__agent_limit_put"
+  ],
+  [
+    "PUT",
     "/platform/organizations/{organization_id}/llm-budget",
     "set_organization_llm_budget_platform_organizations__organization_id__llm_budget_put"
   ],
@@ -1393,6 +1453,16 @@
     "PUT",
     "/platform/settings/agent-memory",
     "update_settings_platform_settings_agent_memory_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/billing",
+    "update_billing_settings_platform_settings_billing_put"
+  ],
+  [
+    "PUT",
+    "/platform/settings/organizations",
+    "update_organization_settings_platform_settings_organizations_put"
   ],
   [
     "PUT",

@@ -188,6 +188,12 @@ matter when a budget was set. The team and every Agent key therefore renew at th
 same moment; any other `Nd` would renew N days after it was set and drift. `30d` is a
 calendar month, not a 30-day interval.
 
+**Limits on Credit.** An Organization on a one-off limit runs on Credit (see
+[Credit](credit.md)): any limit beneath its ceiling would be a lifetime cap that no
+top-up could lift, so its own limit, Agent limits and the default Agent limit are refused,
+any left from before is ignored and not shown, and every Agent key carries the
+Organization's limit.
+
 **One-off limits.** A Trial Organization's limit is its Trial Credit, granted once:
 its window is stored as `once`, which the LiteLLM client sends as no
 `budget_duration`, so the team and every Agent key accumulate spend for good and never

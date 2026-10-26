@@ -33,12 +33,28 @@ The most an Organization may spend on model calls in one renewal period, set by 
 _Avoid_: allowance, plan limit, platform budget
 
 **Trial Organization**:
-The one Organization a self-signed-up user gets; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A Platform Administrator ends the trial, choosing the spend limit it goes on to, after which it is an ordinary Organization.
+The one Organization a self-signed-up user gets; an email address gets one trial, ever, and the platform may cap how many trials are active at once. It runs up to the platform's trial agent limit, and its Model Spend Limit is its Trial Credit, granted once rather than every renewal period. The user who signed up creates no other Organizations until the trial is ended, even after deleting it. A trial whose credit runs out is expired: it keeps its Agents but no longer counts as active. A Platform Administrator ends the trial, choosing the spend limit it goes on to, or buying credit converts it while it stays on Credit; either way it is then an ordinary Organization.
 _Avoid_: free plan, trial account, demo org
 
 **Trial Credit**:
 The one-off Model Spend Limit a new Trial Organization starts with, set by Platform Administrators for trials created afterwards. When it is spent the trial's Agent stops; it never renews.
 _Avoid_: free credits, balance, allowance
+
+**Agent Limit**:
+How many live Agents an Organization may run: its own, when a Platform Administrator has set one, otherwise the trial setting for a Trial Organization or the deployment's default for any other. Lowering it never removes Agents; it only refuses new hires.
+_Avoid_: seat count, agent quota, plan size
+
+**Credit**:
+How an Organization on a one-off Model Spend Limit pays for model spend: in advance, never renewed. Its ceiling is the sum of its Credit Grants, and its Agents spend from it down to zero; no Organization or Agent limit sits beneath it. Trial Organizations start on Credit.
+_Avoid_: prepaid budget, wallet, tokens
+
+**Credit Grant**:
+One recorded change to an Organization's Credit: its Trial Credit, a purchase, a refund or chargeback (negative), or a Platform Administrator's adjustment.
+_Avoid_: top-up record, transaction, payment
+
+**Credit Balance**:
+An Organization's Credit less everything it has spent. It can fall below zero, for example after a chargeback of credit already spent, and the next Credit Grant pays that off first.
+_Avoid_: remaining budget, wallet balance
 
 **Trial Onboarding**:
 The steps a self-signed-up user goes through after their first sign-in: their Agent is set up and started, they link Telegram to it, and they finish. Returning users who finished go straight to the dashboard.

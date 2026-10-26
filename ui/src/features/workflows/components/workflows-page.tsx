@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Archive, MoreHorizontal } from "lucide-react";
 import Link from "next/link";
-import { createParser, parseAsString, useQueryState } from "nuqs";
+import { parseAsString, useQueryState } from "nuqs";
 
 import { AppErrorState } from "@/components/app-error-state";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
@@ -29,6 +29,7 @@ import {
   type WorkflowVersion,
 } from "../schemas";
 import { changedByOthers } from "../utils";
+import { workflowPageParser, workflowViewParser } from "../url-state";
 import {
   workflowApiProblems,
   workflowProblems,
@@ -39,17 +40,8 @@ import { WorkflowHistory } from "./workflow-history";
 import { WorkflowList } from "./workflow-list";
 import { WorkflowSaveAlert } from "./workflow-save-alert";
 import { WorkflowSnapshot } from "./workflow-snapshot";
-
-const pageParser = createParser({
-  parse: (value) => {
-    if (!/^[1-9]\d*$/.test(value)) return null;
-    const page = Number(value);
-    return Number.isSafeInteger(page) ? page : null;
-  },
-  serialize: String,
-})
-  .withDefault(1)
-  .withOptions({ history: "replace", scroll: false });
+import { WorkflowRunStart } from "./workflow-run-start";
+import { WorkflowRunDetail, WorkflowRuns } from "./workflow-runs";
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError && Array.isArray(error.details?.detail)) {
@@ -68,10 +60,13 @@ export function WorkflowsPage({
   agentId,
   organizationId,
   embedded = false,
+  onStartingChange,
 }: {
   agentId: string;
   organizationId: string;
   embedded?: boolean;
+  /** Reports that the start-run screen replaces the surrounding Agent chrome. */
+  onStartingChange?: (starting: boolean) => void;
 }) {
   const {
     agent,
@@ -81,9 +76,11 @@ export function WorkflowsPage({
   } = useAgent(agentId);
   const [selected, setSelected] = useQueryState(
     "workflow",
-    parseAsString.withDefault(""),
+    parseAsString
+      .withDefault("")
+      .withOptions({ history: "push", scroll: false }),
   );
-  const [page, setPage] = useQueryState("workflowPage", pageParser);
+  const [page, setPage] = useQueryState("workflowPage", workflowPageParser);
   const [editTarget, setEditTarget] = useState<{
     workflowId: string;
     revision: number;
@@ -93,7 +90,7 @@ export function WorkflowsPage({
   const detail = useWorkflow(agentId, editTarget?.workflowId ?? selected);
   const [versionPage, setVersionPage] = useQueryState(
     "workflowVersionPage",
-    pageParser,
+    workflowPageParser,
   );
   const capabilities = useWorkflowCapabilities(agentId);
   const actions = useWorkflowActions(agentId);
@@ -107,7 +104,22 @@ export function WorkflowsPage({
   const [discard, setDiscard] = useState(false);
   const [archive, setArchive] = useState(false);
   const [historic, setHistoric] = useState<WorkflowVersion | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
+  const [view, setView] = useQueryState("workflowView", workflowViewParser);
+  const [, setRunPage] = useQueryState("workflowRunPage", workflowPageParser);
+  const [startVersion, setStartVersion] = useState<WorkflowVersion | null>(
+    null,
+  );
+  const [runId, setRunId] = useQueryState(
+    "workflowRun",
+    parseAsString
+      .withDefault("")
+      .withOptions({ history: "push", scroll: false }),
+  );
+  useEffect(() => {
+    if (!startVersion) return;
+    onStartingChange?.(true);
+    return () => onStartingChange?.(false);
+  }, [startVersion, onStartingChange]);
   const canAuthor =
     canAgent(agent, "agent.update") && capabilities.data?.authoring;
   const maySave =
@@ -160,6 +172,7 @@ export function WorkflowsPage({
       setNotice([]);
       setHistoric(null);
       setVersionPage(1);
+      void setView("overview");
       void setSelected(saved.id);
     } catch (failure) {
       const issues = workflowApiProblems(failure, draft);
@@ -181,12 +194,7 @@ export function WorkflowsPage({
         onRetry={() => void refetchAgent()}
       />
     );
-  if (isLoading || !agent)
-    return (
-      <p role="status">
-        Loading Agent…
-      </p>
-    );
+  if (isLoading || !agent) return <p role="status">Loading Agent…</p>;
   // The list owns its own read failure; a definition failure replaces every protected view.
   if ((selected || editTarget) && detail.error)
     return (
@@ -199,10 +207,11 @@ export function WorkflowsPage({
   const editing = Boolean(draft);
   const current = historic ?? detail.data?.version;
   return (
-    <div
-      style={{ color: "var(--ink)" }}
-    >
-      <div className="flex items-center gap-2 text-sm text-[var(--ink-3)]">
+    <div style={{ color: "var(--ink)" }}>
+      <nav
+        aria-label="Workflow navigation"
+        className="flex flex-wrap items-center gap-2 text-sm text-[var(--ink-3)]"
+      >
         {!embedded && (
           <>
             <Link href={home}>{agent.name}</Link>
@@ -215,7 +224,10 @@ export function WorkflowsPage({
             aria-label="All workflows"
             onClick={() => {
               setHistoric(null);
-              setShowHistory(false);
+              void setView(null);
+              void setRunPage(null);
+              setStartVersion(null);
+              void setRunId("");
               void setSelected("");
             }}
           >
@@ -224,114 +236,188 @@ export function WorkflowsPage({
         ) : !embedded ? (
           <span>Workflows</span>
         ) : null}
-      </div>
-      <div className="flex flex-wrap justify-between items-start gap-4 my-6">
-        <div>
-          <Heading className="text-3xl font-semibold tracking-tight">
-            {editing
-              ? draft?.name || "Create a workflow"
-              : selected
-                ? current?.draft.name || "Workflow"
-                : "Workflows"}
-          </Heading>
-          <p className="text-sm mt-2" style={{ color: "var(--ink-3)" }}>
-            {agent.name} ·{" "}
-            {editing
-              ? "Unsaved draft"
-              : selected
-                ? `Saved v${current?.number ?? "…"}${detail.data?.archivedAt ? " · Archived" : ""}`
-                : "Your repeatable work"}
-          </p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          {editing ? (
-            <>
-              <button
-                className="af-btn"
-                disabled={pending}
-                onClick={() => setDiscard(true)}
+        {selected && !editing && (
+          <>
+            <span aria-hidden="true">/</span>
+            {view === "overview" && !runId && !startVersion ? (
+              <span
+                aria-current="page"
+                className="max-w-60 truncate text-[var(--ink)]"
               >
-                Discard
+                {detail.data?.version.draft.name ?? "Workflow"}
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="max-w-60 truncate hover:text-[var(--ink)]"
+                onClick={() => {
+                  setStartVersion(null);
+                  setHistoric(null);
+                  void setView("overview");
+                  void setRunId(null);
+                }}
+              >
+                {detail.data?.version.draft.name ?? "Workflow"}
               </button>
-              {draft && (
+            )}
+            {(runId || view !== "overview" || startVersion) && (
+              <span aria-hidden="true">/</span>
+            )}
+            {runId ? (
+              <>
+                <button
+                  type="button"
+                  aria-label="Back to runs"
+                  className="hover:text-[var(--ink)]"
+                  onClick={() => {
+                    setStartVersion(null);
+                    setHistoric(null);
+                    void setView("runs");
+                    void setRunId(null);
+                  }}
+                >
+                  Runs
+                </button>
+                <span aria-hidden="true">/</span>
+                <span aria-current="page" className="text-[var(--ink)]">
+                  Run detail
+                </span>
+              </>
+            ) : startVersion ? (
+              <span aria-current="page">Start run</span>
+            ) : view !== "overview" ? (
+              <span aria-current="page" className="text-[var(--ink)]">
+                {view === "runs" ? "Runs" : "Version history"}
+              </span>
+            ) : null}
+          </>
+        )}
+      </nav>
+      {!runId && !startVersion && (
+        <>
+          <div className="flex flex-wrap justify-between items-start gap-4 my-6">
+            <div>
+              <Heading className="text-3xl font-semibold tracking-tight">
+                {editing
+                  ? draft?.name || "Create a workflow"
+                  : selected
+                    ? current?.draft.name || "Workflow"
+                    : "Workflows"}
+              </Heading>
+              <p className="text-sm mt-2" style={{ color: "var(--ink-3)" }}>
+                {agent.name} ·{" "}
+                {editing
+                  ? "Unsaved draft"
+                  : selected
+                    ? `Saved v${current?.number ?? "…"}${detail.data?.archivedAt ? " · Archived" : ""}`
+                    : "Your repeatable work"}
+              </p>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {editing ? (
+                <>
+                  <button
+                    className="af-btn"
+                    disabled={pending}
+                    onClick={() => setDiscard(true)}
+                  >
+                    Discard
+                  </button>
+                  {draft && (
+                    <button
+                      className="af-btn af-btn-primary"
+                      disabled={!maySave || pending || draft.steps.length === 0}
+                      onClick={() => void save()}
+                    >
+                      {actions.save.isPending ? "Saving…" : "Save workflow"}
+                    </button>
+                  )}
+                </>
+              ) : selected ? (
+                <>
+                  {detail.data?.allowedActions.includes("save_version") && (
+                    <button
+                      className="af-btn"
+                      onClick={() => {
+                        setHistoric(null);
+                        setEditorSection("details");
+                        setProblems([]);
+                        setAttempted(false);
+                        setDraft(structuredClone(detail.data!.version.draft));
+                        setEditTarget({
+                          workflowId: detail.data!.id,
+                          revision: detail.data!.revision,
+                          base: detail.data!.version.draft,
+                        });
+                        void setView("overview");
+                      }}
+                    >
+                      {historic &&
+                      historic.number !== detail.data.version.number
+                        ? "Edit latest version"
+                        : "Edit workflow"}
+                    </button>
+                  )}
+                  <button
+                    className="af-btn af-btn-primary"
+                    disabled={
+                      !capabilities.data?.execution ||
+                      !detail.data?.executionAvailable ||
+                      !canAgent(agent, "agent.update")
+                    }
+                    onClick={() => {
+                      if (detail.data)
+                        setStartVersion(historic ?? detail.data.version);
+                    }}
+                  >
+                    Run workflow
+                  </button>
+                  {detail.data?.allowedActions.includes("archive") && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          className="af-btn af-btn-icon"
+                          aria-label="Workflow actions"
+                        >
+                          <MoreHorizontal size={18} />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onSelect={() => setArchive(true)}
+                        >
+                          <Archive size={15} /> Archive workflow
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </>
+              ) : canAuthor ? (
                 <button
                   className="af-btn af-btn-primary"
-                  disabled={!maySave || pending || draft.steps.length === 0}
-                  onClick={() => void save()}
-                >
-                  {actions.save.isPending ? "Saving…" : "Save workflow"}
-                </button>
-              )}
-            </>
-          ) : selected ? (
-            <>
-              {detail.data?.allowedActions.includes("save_version") && (
-                <button
-                  className="af-btn"
                   onClick={() => {
-                    setHistoric(null);
+                    void setSelected("");
+                    setEditTarget(null);
                     setEditorSection("details");
                     setProblems([]);
                     setAttempted(false);
-                    setDraft(structuredClone(detail.data!.version.draft));
-                    setEditTarget({
-                      workflowId: detail.data!.id,
-                      revision: detail.data!.revision,
-                      base: detail.data!.version.draft,
-                    });
-                    setShowHistory(false);
+                    setDraft(emptyDraft(""));
+                    setError("");
                   }}
                 >
-                  {historic && historic.number !== detail.data.version.number
-                    ? "Edit latest version"
-                    : "Edit workflow"}
+                  + Create workflow
                 </button>
-              )}
-              <button className="af-btn af-btn-primary" disabled>
-                Run workflow
-              </button>
-              {detail.data?.allowedActions.includes("archive") && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      className="af-btn af-btn-icon"
-                      aria-label="Workflow actions"
-                    >
-                      <MoreHorizontal size={18} />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onSelect={() => setArchive(true)}
-                    >
-                      <Archive size={15} /> Archive workflow
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-            </>
-          ) : canAuthor ? (
-            <button
-              className="af-btn af-btn-primary"
-              onClick={() => {
-                void setSelected("");
-                setEditTarget(null);
-                setEditorSection("details");
-                setProblems([]);
-                setAttempted(false);
-                setDraft(emptyDraft(""));
-                setError("");
-              }}
-            >
-              + Create workflow
-            </button>
-          ) : null}
-        </div>
-      </div>
-      <p className="text-sm mb-6" style={{ color: "var(--ink-3)" }}>
-        Execution is unavailable. Saving a workflow will not start a run.
-      </p>
+              ) : null}
+            </div>
+          </div>
+          <p className="text-sm mb-6" style={{ color: "var(--ink-3)" }}>
+            {capabilities.data?.execution
+              ? "Saving and running are separate. Each run uses the saved version and inputs you choose."
+              : "Execution is unavailable. Saving a workflow will not start a run."}
+          </p>
+        </>
+      )}
       {!canAuthor && (
         <p className="text-sm mb-6">
           {capabilities.data?.authoring === false
@@ -388,7 +474,27 @@ export function WorkflowsPage({
           </ul>
         </div>
       )}
-      {draft ? (
+      {runId ? (
+        <WorkflowRunDetail
+          agentId={agentId}
+          agent={agent}
+          agentHref={home}
+          runId={runId}
+        />
+      ) : startVersion && selected ? (
+        <WorkflowRunStart
+          agentId={agentId}
+          agent={agent}
+          workflowId={selected}
+          version={startVersion}
+          onBack={() => setStartVersion(null)}
+          onStarted={(id) => {
+            setStartVersion(null);
+            void setView("runs");
+            void setRunId(id);
+          }}
+        />
+      ) : draft ? (
         <WorkflowEditor
           draft={draft}
           selected={editorSection}
@@ -401,9 +507,15 @@ export function WorkflowsPage({
       ) : selected ? (
         detail.data && current ? (
           <Tabs
-            value={showHistory ? "history" : "overview"}
+            value={view}
             onValueChange={(value) => {
-              setShowHistory(value === "history");
+              if (
+                value !== "overview" &&
+                value !== "runs" &&
+                value !== "history"
+              )
+                return;
+              void setView(value);
               if (value === "overview") setHistoric(null);
             }}
             className="gap-6"
@@ -418,6 +530,12 @@ export function WorkflowsPage({
                 className="h-full flex-none border-0 px-4 group-data-horizontal/tabs:after:bottom-[-1px]"
               >
                 Overview
+              </TabsTrigger>
+              <TabsTrigger
+                value="runs"
+                className="h-full flex-none border-0 px-4 group-data-horizontal/tabs:after:bottom-[-1px]"
+              >
+                Runs
               </TabsTrigger>
               <TabsTrigger
                 value="history"
@@ -435,7 +553,17 @@ export function WorkflowsPage({
                 onPageChange={setVersionPage}
                 onView={(version) => {
                   setHistoric(version);
-                  setShowHistory(false);
+                  void setView("overview");
+                }}
+              />
+            </TabsContent>
+            <TabsContent value="runs">
+              <WorkflowRuns
+                agentId={agentId}
+                workflowId={detail.data.id}
+                onOpen={(id) => {
+                  void setView("runs");
+                  void setRunId(id);
                 }}
               />
             </TabsContent>
@@ -468,8 +596,9 @@ export function WorkflowsPage({
           onPageChange={setPage}
           onOpen={(workflowId) => {
             setHistoric(null);
-            setShowHistory(false);
+            void setView("overview");
             setVersionPage(1);
+            void setRunPage(null);
             void setSelected(workflowId);
           }}
         />
