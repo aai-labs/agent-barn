@@ -336,12 +336,13 @@ and section title remain mounted but hidden while a run or its start screen is o
 each completed step's `summary`, shown under “What each step did”, and a
 `final_summary` once succeeded, shown with the chat Markdown viewer on the
 completion card. The last step is excluded from the per-step card on success to
-avoid repeating its text. File cards and preview pages are deferred, along with
-approvals and messaging.
+avoid repeating its text. Run and selected-step file attachments are delivered
+through the shared [Agent artifact service](agent-artifacts.md) alongside summaries.
+Dedicated preview pages, approvals and messaging remain follow-ups.
 
 ## AF-389 acceptance dependencies
 
-PR [#326](https://github.com/aai-labs/agent-barn/pull/326) remains open against
+PR [#326](https://github.com/aai-labs/agent-barn/pull/326) is merged into
 staging. The current controller still automatically retries failed/expired
 unfinished attempts. Live planning supersedes the earlier reasoning-only
 assumption: uncertain external effects must block replay until safe non-execution,

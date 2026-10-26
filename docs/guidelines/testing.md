@@ -502,3 +502,10 @@ the generated loopback management endpoint with its private credential and verif
 settings-file permissions. `ui/tests/e2e/artifacts.spec.ts` covers missing storage,
 progress to READY, failure/retry and permission denial; these use synthetic API
 responses. The explicit runtime/deployment contracts above retain real byte evidence.
+
+The artifact review suite retains a PostgreSQL snapshot/row-lock race contract.
+A test-only always-true SQL scheduling barrier holds candidate selection after
+its snapshot; the test observes the database wait event, commits a real review pin,
+and runs the original cleanup path against real Garage. It verifies both the
+active reference and actual file bytes for a live owner, plus deliberate deleted-owner
+reclamation. This is a concurrency schedule, not a simulated storage result.

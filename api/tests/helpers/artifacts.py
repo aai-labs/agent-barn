@@ -133,3 +133,49 @@ def running_product_api(context):
             thread.join(timeout=20)
             if thread.is_alive():
                 raise RuntimeError("Product HTTP server did not stop")
+
+
+@contextmanager
+def cleanup_snapshot_barrier(engine):
+    """Hold cleanup after its statement snapshot, before its artifact row lock.
+
+    The always-true SQL predicate only schedules the real query; eligibility and
+    production lifecycle code are unchanged. Observe PostgreSQL's wait event so
+    the test does not infer snapshot timing from a Python-side sleep.
+    """
+    from threading import Event
+
+    from sqlalchemy import event, text
+
+    scanning = Event()
+
+    def delay_selection(connection, cursor, statement, parameters, execution_context, executemany):
+        if "FOR UPDATE OF artifact SKIP LOCKED" in statement:
+            assert "ORDER BY artifact.expires_at" in statement
+            statement = statement.replace(
+                "ORDER BY artifact.expires_at",
+                "AND (SELECT true FROM pg_sleep(3)) /* AF415_PIN_RACE */ ORDER BY artifact.expires_at",
+            )
+            scanning.set()
+        return statement, parameters
+
+    def wait_for_snapshot():
+        assert scanning.wait(timeout=5), "Cleanup selection did not start"
+        deadline = time.monotonic() + 2
+        while True:
+            with engine.connect() as connection:
+                sleeping = connection.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity WHERE wait_event = 'PgSleep' AND query LIKE '%AF415_PIN_RACE%'"
+                    )
+                ).scalar_one()
+            if sleeping:
+                return
+            assert time.monotonic() < deadline, "Cleanup did not reach its database scheduling barrier"
+            time.sleep(0.01)
+
+    event.listen(engine, "before_cursor_execute", delay_selection, retval=True)
+    try:
+        yield wait_for_snapshot
+    finally:
+        event.remove(engine, "before_cursor_execute", delay_selection)

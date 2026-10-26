@@ -6,6 +6,40 @@ starting at local AF-389 head `6e109add`. AF-389 PR
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
+## Independent-review corrections — 2026-10-26 (local, not pushed)
+
+The Personal Codex GPT 6.1 Sol review compared complete HEAD `36096b17` against
+staging `e207a212` and returned **Request changes**. It reproduced a critical
+cleanup/pin race against PostgreSQL/Garage and found current documentation that
+still described the removed isolated provisioner and deferred file attachments.
+The reviewer independently passed 192 focused and 341 neighboring tests, 16 fixture
+browser cases, and real CLI/storage/deployment/cluster contracts at that original
+HEAD. Those results do not constitute approval of the corrections below.
+
+Cleanup now makes its final active-reference decision in a fresh statement while
+holding the artifact lock shared with pin acquisition. Candidate selection alone
+cannot establish that no pin exists: its statement snapshot can precede a
+reference-only commit. Live-owner references protect the bytes; deleted/missing
+owner reclamation retains its existing policy. Architecture, deployment comments,
+operations and workflow guidance now match API/maintenance management authority,
+delivered attachments and AF-389's merged status, retaining its acceptance gaps.
+
+- The retained race regression failed on the pre-fix implementation: a successful
+  review pin remained active while the artifact became DELETED. Its deleted-owner
+  counterpart already passed (**1 failed, 1 passed, 13.18 seconds**).
+- The same regression now passes both cases (**2 passed, 13.61 seconds**), checking
+  actual Garage bytes for a live owner and NoSuchKey after deliberate deleted-owner
+  purge. The test inserts an always-true pg_sleep predicate only as a scheduling
+  barrier and observes PostgreSQL's wait event before committing the real pin;
+  eligibility and production lifecycle code are not replaced.
+- The affected artifact/review/bucket/workflow suite passed **89 tests in 66.01
+  seconds**. API lint/format/types, single migration head, artifact/workflow chart
+  contracts and whitespace checks pass. UI/runtime/cluster tests were not repeated
+  for this backend lock/documentation correction.
+
+Independent recheck is pending. No retained developer bytes were deleted, and no
+remote push, merge, external deployment or production access occurred.
+
 ## Agent Files delete action — 2026-10-26 (local, not pushed)
 
 The file-list redesign was committed as `73daa0dc`. Its follow-up exposes the

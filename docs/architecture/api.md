@@ -63,9 +63,11 @@ provider signature/expiry fields. No storage endpoint is returned to clients.
 Permission-checked link issuance remains on the human/runtime routes above.
 Per-Agent data keys are encrypted in the durable bucket journal. The API adapter
 selects the exact artifact owner/bucket credential, without shared credentials or
-ambient identity fallback. A separate operator-only provisioner holds private
-Garage control-plane authority; neither the product app nor artifact purge receives
-its token. See [per-Agent authority](../features/agent-artifacts.md#per-agent-storage-authority).
+ambient identity fallback. The product API and artifact maintenance worker hold
+private Garage management authority for asynchronous provisioning and recovery;
+there is no separate provisioner workload. The
+[per-Agent authority contract](../features/agent-artifacts.md#per-agent-storage-authority)
+owns request lifecycle and credential boundaries.
 
 ## Testing
 

@@ -281,8 +281,13 @@ expired unpinned files, stale uploads and prior deletion failures. It repairs
 run references whose run was removed, and locks/validates the exact stored bucket and
 canonical tenant key before deleting. Failures retain DELETING evidence, increment
 attempt count and use bounded exponential retry delay, including refused unsafe targets.
-Releasing references never postpones a DELETING row's pending retry. Concurrent publication
-and purge serialize; DELETED tombstones retain identity without file bytes.
+Releasing references never postpones a DELETING row's pending retry. Cleanup
+selection is provisional: after acquiring the artifact lock, a fresh statement
+rechecks active references for a live owner before marking DELETING. Pin acquisition
+uses the same lock; a pin committed after the selection snapshot still protects
+the file. Deleted/missing-owner cleanup retains its deliberate reclamation policy.
+Concurrent publication and purge serialize; DELETED tombstones retain identity
+without file bytes.
 
 For a deleted/missing Agent, artifact cleanup marks its bucket DELETING
 but retains its data key until **every artifact is DELETED**, not merely unpinned.

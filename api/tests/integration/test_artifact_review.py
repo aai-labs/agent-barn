@@ -334,3 +334,62 @@ def test_human_workflow_publication_is_rejected_before_request_body(storage):  #
             base(context) + f"/artifacts/{row['id']}/content", headers=auth(context), content=unread_body()
         )
         assert_that(response.status_code, equal_to(403), response.text)
+
+
+@pytest.mark.parametrize("owner_deleted", [False, True])
+def test_pin_committed_after_cleanup_snapshot_preserves_live_owner_bytes(storage, owner_deleted):  # noqa: F811
+    from concurrent.futures import ThreadPoolExecutor
+
+    from botocore.exceptions import ClientError
+
+    from api.domains.agents.models import Agent
+    from api.domains.artifacts.models import ArtifactReference
+    from api.tests.helpers.artifacts import cleanup_snapshot_barrier
+
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        published = publish(context)
+        artifact_id = UUID(published["id"])
+        engine = context.postgres_delegate.engine
+        service = context.injector.get(ArtifactService)
+        with Session(engine) as session:
+            artifact = session.get_one(Artifact, artifact_id)
+            artifact.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            session.add(artifact)
+            session.commit()
+        with cleanup_snapshot_barrier(engine) as wait_for_snapshot, ThreadPoolExecutor(max_workers=1) as pool:
+            cleanup = pool.submit(service.purge)
+            wait_for_snapshot()
+            with Session(engine) as session:
+                pin(
+                    session,
+                    artifact_id,
+                    published["checksum"],
+                    context.agent.id,
+                    context.organization.id,
+                    "review",
+                    uuid4(),
+                )
+                if owner_deleted:
+                    agent = session.get_one(Agent, context.agent.id)
+                    agent.deleted_at = datetime.now(UTC)
+                    session.add(agent)
+                session.commit()
+            purged = cleanup.result(timeout=10)
+        with Session(engine) as session:
+            artifact = session.get_one(Artifact, artifact_id)
+            reference = session.exec(
+                select(ArtifactReference).where(ArtifactReference.artifact_id == artifact_id)
+            ).one()
+            assert_that(reference.released_at, equal_to(None))
+            assert_that(artifact.state, equal_to("DELETED" if owner_deleted else "READY"))
+            assert_that(purged, equal_to(1 if owner_deleted else 0))
+        client = context.injector.get(ArtifactStorage).client(artifact)
+        if owner_deleted:
+            with pytest.raises(ClientError) as error:
+                client.get_object(Bucket=artifact.bucket, Key=artifact.object_key)
+            assert_that(error.value.response["Error"]["Code"], equal_to("NoSuchKey"))
+        else:
+            response = client.get_object(Bucket=artifact.bucket, Key=artifact.object_key)
+            with response["Body"] as stream:
+                assert_that(stream.read(), equal_to(CONTENT))

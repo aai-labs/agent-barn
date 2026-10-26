@@ -14,6 +14,13 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-26 — AF-415 — independent-review cleanup pin correction (local, not pushed)
+
+- Review: the full Personal Codex review of `36096b17` against `origin/staging` at `e207a212` requested changes: a concurrent review pin could commit after cleanup's selection snapshot and still lose its file; current architecture/deployment/workflow guidance also contained superseded claims.
+- Fixed: cleanup now rechecks live-owner active references in a fresh statement after acquiring the artifact lock shared with pin acquisition, before transitioning to DELETING. Deleted-owner reclamation remains deliberate. A deterministic real PostgreSQL/Garage race regression fails on the prior implementation and passes after the fix, asserting both references and bytes.
+- Documentation: corrected API/maintenance management authority, deployment Secret comments, delivered run/step attachments and AF-389's merged status while retaining its open acceptance gaps.
+- Verification: the new real PostgreSQL/Garage race contract first failed on the old code, then passed both live/deleted-owner cases. All 89 affected storage/workflow tests, API quality, migration-head, artifact/workflow chart and whitespace checks pass. The original review remains Request changes until independent recheck; no push, merge or external deployment.
+
 ### 2026-10-26 — AF-415 — delete action in Agent Files (local, not pushed)
 
 - Delivered: users with `agent.update` can delete files through a trash action and the shared confirmation dialog. Successful deletion refreshes artifact lists; failures remain in the dialog, and pinned files remain protected by the existing API. Read-only users see no delete controls.

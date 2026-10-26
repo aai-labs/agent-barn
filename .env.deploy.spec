@@ -196,8 +196,8 @@ AGENT_DEFAULT_MODEL=
 # POD_KUBECONFIG_B64=
 
 # Required private Garage: complete docs/guidelines/garage.md bootstrap before deployment.
-# Cluster RPC and application keys live in pre-created Kubernetes Secrets, not CI.
+# Cluster RPC/admin authority and application settings live in pre-created Kubernetes Secrets, not CI.
 ARTIFACT_STORAGE_SECRET=
 ARTIFACT_PURGE_ENABLED=false
-# The provisioner always runs; this dedicated Secret is NEVER mounted by the API.
+# Private management Secret, mounted only by the product API and artifact maintenance worker.
 ARTIFACT_PROVISIONER_SECRET=

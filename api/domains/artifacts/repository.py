@@ -317,6 +317,23 @@ class ArtifactRepository:
             ).all()
             ids = []
             for row in rows:
+                # The selection snapshot may predate a reference-only pin commit.
+                # Recheck under the artifact lock in a fresh statement; pin() takes
+                # this same lock, so a successful live-owner pin cannot be lost.
+                live_owner = sa.exists(
+                    select(Agent.id).where(col(Agent.id) == row.agent_id, col(Agent.deleted_at).is_(None))
+                )
+                active_reference = session.exec(
+                    select(ArtifactReference.id)
+                    .where(
+                        col(ArtifactReference.artifact_id) == row.id,
+                        col(ArtifactReference.released_at).is_(None),
+                        live_owner,
+                    )
+                    .limit(1)
+                ).first()
+                if active_reference is not None:
+                    continue
                 if row.state != "DELETING":
                     row.expires_at = now
                 row.state = "DELETING"

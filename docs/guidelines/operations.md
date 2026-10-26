@@ -884,8 +884,10 @@ checkpoint and history records with scope/pin constraints. No-op merge revision
 `b9e32d74a610` joins that lineage with the later staging head `3bbf2465b9cb`
 to preserve one head. No live schema change is performed by this work. Do not downgrade a populated execution schema: it
 drops the ledger. Existing aggregate deletion cascades workflow-owned records.
-File artifacts and shared object storage are deferred to a separate slice; WF02
-has no storage environment variables, buckets, artifact tables or file endpoints.
+AF-415 adds shared Agent file metadata, private byte storage and run/step
+attachments to this execution model. The [artifact contract](../features/agent-artifacts.md)
+and [Garage operations guide](garage.md) own storage configuration, migrations
+and rollback.
 
 ## Workflow authoring (WF01)
 
@@ -924,7 +926,9 @@ The [Garage operations guide](garage.md) owns persistent local setup, cluster
 installation/bootstrap, credential separation, TLS, backups, recovery, verification
 and storage rollback. [Agent artifacts](../features/agent-artifacts.md) owns the
 publication, access, immutable-reference, link and retention contracts. Storage is
-required by normal local Compose startup, which includes Garage, the isolated
-per-Agent bucket/key provisioner and the file-purge worker without a profile. The feature still supports text-only operation when
-storage is unavailable. Use the guide's explicit local commands; never point
+required by normal local Compose startup, which includes Garage and the artifact
+maintenance worker without a profile. The product API starts explicit provisioning
+requests asynchronously; maintenance recovers pending requests and purges files.
+There is no separate provisioner workload. The feature still supports text-only
+operation when storage is unavailable. Use the guide's explicit local commands; never point
 disposable tests or bootstrap commands at an installation's retained storage.
