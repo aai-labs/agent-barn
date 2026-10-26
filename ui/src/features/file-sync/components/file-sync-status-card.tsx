@@ -3,8 +3,6 @@
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import type { Agent } from "@/features/agents/schemas";
 import { canAgent } from "@/features/agents/utils";
 import { useActiveOrgRole } from "@/features/organizations/hooks/use-active-org-role";
@@ -65,15 +63,25 @@ export function FileSyncStatusCard({ agent, fileSync }: { agent: Agent; fileSync
 
       {canSwitch && (
         <div className="mt-4 flex flex-col gap-1.5">
-          <Label className="flex items-start gap-2 text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
-            <Checkbox
-              className="mt-0.5"
-              checked={fileSync.enabled}
+          <div className="flex items-center justify-between gap-4">
+            <span id="agent-file-sync-label" className="text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+              Sync this agent&apos;s files
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-labelledby="agent-file-sync-label"
+              aria-checked={fileSync.enabled}
               disabled={setFileSync.isPending}
-              onCheckedChange={(checked) => setFileSync.mutate(checked === true)}
-            />
-            <span>Sync this agent&apos;s files</span>
-          </Label>
+              onClick={() => setFileSync.mutate(!fileSync.enabled)}
+              className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ backgroundColor: fileSync.enabled ? "var(--ink)" : "var(--line)" }}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${fileSync.enabled ? "translate-x-4" : ""}`}
+              />
+            </button>
+          </div>
           {setFileSync.error && (
             <span role="alert" className="text-xs" style={{ color: "var(--err)" }}>
               {setFileSync.error instanceof Error ? setFileSync.error.message : "Changing file sync failed."}

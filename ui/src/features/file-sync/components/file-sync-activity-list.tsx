@@ -13,13 +13,13 @@ export function FileSyncActivityList({ agentId, providerName }: { agentId: strin
   return (
     <section className="af-card p-5" aria-label="File sync activity">
       <h2 className="m-0 mb-3 text-[14px] font-semibold" style={{ color: "var(--ink)" }}>
-        What happened
+        Files that needed attention
       </h2>
       {error ? (
         <AppErrorState
           error={error}
           title="We couldn't load the sync history"
-          description="The list of what File Sync did is unavailable right now."
+          description="The list of files that needed attention is unavailable right now."
           onRetry={() => {
             void refetch();
           }}
@@ -30,7 +30,7 @@ export function FileSyncActivityList({ agentId, providerName }: { agentId: strin
         <Skeleton className="h-20 w-full" />
       ) : entries.length === 0 ? (
         <p className="m-0 text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
-          Nothing has happened yet.
+          Nothing needed attention.
         </p>
       ) : (
         <>

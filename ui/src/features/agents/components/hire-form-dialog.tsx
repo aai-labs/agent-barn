@@ -1,8 +1,6 @@
 "use client";
 
 import { XIcon } from "@/components/icons";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -123,17 +121,27 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
           </FormField>
         )}
         {fileSyncProvider && (
-          <Label className="flex items-start gap-2 text-[0.84rem] font-medium sm:col-span-2" style={{ color: "var(--ink)" }}>
-            <Checkbox
-              className="mt-0.5"
-              checked={fileSyncEnabled}
+          <div className="flex items-center justify-between gap-4">
+            <span id="hire-file-sync-label" className="text-[0.84rem] font-medium" style={{ color: "var(--ink)" }}>
+              Sync files with {fileSyncProvider.displayName}
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-labelledby="hire-file-sync-label"
+              aria-checked={fileSyncEnabled}
               disabled={pending}
-              onCheckedChange={(checked) => setFileSyncEnabled(checked === true)}
-            />
-            <span>Sync files with {fileSyncProvider.displayName}</span>
-          </Label>
+              onClick={() => setFileSyncEnabled(!fileSyncEnabled)}
+              className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ backgroundColor: fileSyncEnabled ? "var(--ink)" : "var(--line)" }}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${fileSyncEnabled ? "translate-x-4" : ""}`}
+              />
+            </button>
+          </div>
         )}
-        <div className="rounded-xl border border-dashed p-4 text-sm" style={{ color: "var(--ink-3)" }}>
+        <div className="rounded-xl border border-dashed p-4 text-sm sm:col-span-2" style={{ color: "var(--ink-3)" }}>
           {template?.requiredSkills.length
             ? "Communication connections are configured after hiring. Credentials required by this template are configured before hiring."
             : "Communication connections and integration credentials are configured independently after hiring."}

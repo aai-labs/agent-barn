@@ -22,7 +22,7 @@ import {
 } from "../pages/data-support/sync-provider-data-support.po";
 
 function syncFilesCheckbox(page: Page) {
-  return page.getByRole("checkbox", { name: "Sync files with OneDrive" });
+  return page.getByRole("switch", { name: "Sync files with OneDrive" });
 }
 
 async function hirePayload(page: Page, dataSupport: DataSupport) {
@@ -147,7 +147,7 @@ test.describe("Hire Dialog", () => {
     await dashboardPage.openHireCard();
 
     await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
-    await expect(page.getByRole("checkbox", { name: /^Sync files with/ })).toHaveCount(0);
+    await expect(page.getByRole("switch", { name: /^Sync files with/ })).toHaveCount(0);
   });
 
   test("preserves manual edits when selecting a template", async ({ page }) => {

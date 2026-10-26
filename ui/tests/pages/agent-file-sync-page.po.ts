@@ -22,7 +22,7 @@ export class AgentFileSyncPage {
   }
 
   syncSwitch(): Locator {
-    return this.card().getByRole("checkbox", { name: "Sync this agent's files" });
+    return this.card().getByRole("switch", { name: "Sync this agent's files" });
   }
 
   activityList(): Locator {

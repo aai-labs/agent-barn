@@ -225,7 +225,7 @@ test.describe("Agent File sync activity", () => {
   test("says so when nothing has happened yet", async ({ page }) => {
     const { fileSyncPage } = await open(page);
 
-    await expect(fileSyncPage.activityList()).toContainText("Nothing has happened yet.");
+    await expect(fileSyncPage.activityList()).toContainText("Nothing needed attention.");
     await expect(fileSyncPage.loadMoreButton()).toHaveCount(0);
   });
 
