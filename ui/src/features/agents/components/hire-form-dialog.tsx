@@ -1,6 +1,7 @@
 "use client";
 
 import { XIcon } from "@/components/icons";
+import { AgentSizeSelect } from "@/features/agent-sizes/components/agent-size-select";
 import {
   Select,
   SelectContent,
@@ -39,6 +40,9 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
     defaultModel,
     approvalMode,
     setApprovalMode,
+    sizeChoices,
+    agentSizeId,
+    setAgentSizeId,
     selectedSkillIds,
     setSelectedSkillIds,
     skillCredentials,
@@ -90,6 +94,16 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
         <FormField label="Runtime">
           <RuntimeChoice value={agentType} onChange={setAgentType} disabled={pending} />
         </FormField>
+        {sizeChoices && (
+          <FormField label="CPU & memory" hint="You can change it later; a change applies when the agent restarts.">
+            <AgentSizeSelect
+              sizes={sizeChoices}
+              value={agentSizeId ?? sizeChoices.find((size) => size.isDefault)?.id ?? ""}
+              onChange={(size) => setAgentSizeId(size.isDefault ? null : size.id)}
+              disabled={pending}
+            />
+          </FormField>
+        )}
         <FormField label="Template" hint="Communication connections do not belong to templates or runtimes.">
           <Select value={templateKey} onValueChange={handleTemplateChange} disabled={isLoading || pending}>
             <SelectTrigger aria-label="Template" className="w-full"><SelectValue placeholder={isLoading ? "Loading templates…" : "Choose a template"} /></SelectTrigger>
