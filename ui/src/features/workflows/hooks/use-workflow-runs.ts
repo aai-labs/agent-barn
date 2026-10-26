@@ -5,10 +5,12 @@ import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organ
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { api } from "@/shared/api";
 import {
+  WorkflowRunHistorySchema,
   WorkflowRunListSchema,
   WorkflowRunSchema,
   isRunProgressing,
   type WorkflowRun,
+  type WorkflowRunHistory,
   type WorkflowRunList,
 } from "../run-schemas";
 import { workflowsKey } from "./use-workflows";
@@ -65,6 +67,26 @@ export function useWorkflowRun(agentId: string, runId: string) {
         await api.get<WorkflowRun>(`${scope.base}/workflow-runs/${runId}`, {
           schema: WorkflowRunSchema,
         })
+      ).data,
+  });
+}
+
+export function useWorkflowRunHistory(
+  agentId: string,
+  runId: string,
+  progressing: boolean,
+) {
+  const scope = useRunScope(agentId);
+  return useQuery({
+    queryKey: [...scope.key, runId, "history"],
+    enabled: scope.enabled && Boolean(runId),
+    refetchInterval: progressing ? 3000 : false,
+    queryFn: async () =>
+      (
+        await api.get<WorkflowRunHistory>(
+          `${scope.base}/workflow-runs/${runId}/history?page_size=100`,
+          { schema: WorkflowRunHistorySchema },
+        )
       ).data,
   });
 }

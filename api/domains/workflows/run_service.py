@@ -16,6 +16,7 @@ from api.domains.workflows.repository import WorkflowConflict, WorkflowRepositor
 from api.domains.workflows.run_models import (
     TERMINAL_STATES,
     AttemptFailure,
+    AttemptRead,
     AttemptResult,
     RunState,
     WorkflowHistoryRead,
@@ -71,6 +72,7 @@ class WorkflowRunService:
         context: CurrentUserContext,
         can_cancel: bool | None = None,
         step_records: dict[int, dict[str, Any]] | None = None,
+        attempt: AttemptRead | None = None,
     ) -> WorkflowRunRead:
         if can_cancel is None:
             agent = self.authorization.require_visible(context, agent_id)
@@ -109,13 +111,20 @@ class WorkflowRunService:
             created_at=run.created_at,
             settled_at=run.settled_at,
             allowed_actions=["cancel"] if can_cancel and run.state not in TERMINAL_STATES | {"CANCELLING"} else [],
+            attempt=attempt,
         )
 
     def get(self, agent_id: UUID, run_id: UUID, context: CurrentUserContext) -> WorkflowRunRead:
         found = self.repository.get(run_id, agent_id, self._scope(agent_id, context))
         if not found:
             raise HTTPException(404, "Workflow run not found")
-        return self._read(*found, agent_id, context, step_records=self.repository.step_records(found[0].id))
+        return self._read(
+            *found,
+            agent_id,
+            context,
+            step_records=self.repository.step_records(found[0].id),
+            attempt=self.repository.current_attempt(found[0]),
+        )
 
     def list_runs(
         self, agent_id: UUID, context: CurrentUserContext, page: int, size: int, workflow_id: UUID | None

@@ -15,6 +15,7 @@ import type { WorkflowRun } from "../run-schemas";
 import { WorkflowPager } from "./workflow-pager";
 import { WorkflowMarkdown } from "./workflow-markdown";
 import { WorkflowRunTiming, stepTiming } from "./workflow-run-timing";
+import { AttemptStatus, WorkflowRunActivity } from "./workflow-run-activity";
 import {
   RunCard,
   RunPageHeader,
@@ -121,9 +122,11 @@ export function WorkflowRunDetail({
 function RunSummary({
   run,
   agentName,
+  agentHref,
 }: {
   run: WorkflowRun;
   agentName: string;
+  agentHref: string;
 }) {
   const current = run.steps.find((step) => step.state === "RUNNING");
   const note = (text: string) => (
@@ -210,7 +213,7 @@ function RunSummary({
             <p className="mt-1 text-sm">{current.name}</p>
           </div>
         )}
-        {run.reason && <p className="text-sm">{run.reason}</p>}
+        <AttemptStatus run={run} agentName={agentName} agentHref={agentHref} />
       </div>
     </RunCard>
   );
@@ -338,6 +341,7 @@ function RunContents({
           <StepRail
             steps={run.steps}
             runState={run.state}
+            attempt={run.attempt}
             selectedStepId={selectedStepId}
             onSelectStep={setSelectedStepId}
           />
@@ -347,10 +351,15 @@ function RunContents({
             {selectedStep ? (
               <StepDetail run={run} step={selectedStep} />
             ) : (
-              <RunSummary run={run} agentName={agent.name} />
+              <RunSummary
+                run={run}
+                agentName={agent.name}
+                agentHref={agentHref}
+              />
             )}
           </div>
           <WorkflowRunTiming run={run} />
+          <WorkflowRunActivity agentId={agentId} run={run} />
         </div>
       </div>
       <ConfirmationDialog

@@ -246,14 +246,19 @@ in the numbered rail replaces the main panel with that step’s persisted Markdo
 result, or its current waiting/in-progress/no-result state. The overall-view
 control stays visible so users can return to the final summary. Selection stays
 within the current run; changing runs resets to the overall view. Results use the
-shared chat Markdown viewer. A compact Time taken card replaces the activity log. Each completed step shows
+shared chat Markdown viewer. A compact Time taken card shows durations. Each completed step shows
 wall-clock time from its first attempt admission to its persisted checkpoint,
 including dispatch waiting and retries. The API exposes nullable `started_at` and
 `completed_at` fields derived from existing attempts/checkpoints; no migration is
 needed. Unfinished steps show their status, and missing timestamps are unavailable
 rather than zero. Total run time spans run creation through settlement and includes
 queueing and retries. Selecting a completed step also shows its duration. The
-history API remains available, but the run screen no longer fetches the event log. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
+run screen also lists the run's history newest first as Activity, so a failed attempt's
+reason stays visible while the run retries or after it ends. While a step runs, the
+single-run read includes `attempt` (number, the three-attempt limit, start, deadline and
+`agent_unresponsive`, true when the Agent has not accepted the step after 60 seconds). The
+rail and overview show the attempt and a live elapsed/timeout clock; an unresponsive Agent
+shows a warning pointing to the Agent page to restart it. No migration is needed. Step-rail connectors join the centers and edges of adjacent markers. Run detail uses one breadcrumb row that retains the selected workflow name. Its
 Runs control clears only the selected run and selects the owning workflow’s Runs
 view. Overview, Runs and Version history use `workflowView=overview|runs|history`
 as their source of truth; an absent or invalid view falls back to Overview. Tab
@@ -287,9 +292,11 @@ accepted as the summary. Machine routes at `/workflow-runtime/v1/attempts/{id}`
 (`handoff`, `result`, `failure`) are outside the product API and public discovery.
 A derived capability binds one attempt/generation. Handoff and outcome admission
 check current initiator authority, Agent lifecycle, generation, attempt state and
-deadline under the run lock. A reported failure or unmet criteria retries the step
-with a fresh attempt; at most three attempts per unfinished step are admitted, and
-an attempt that exceeds its 15-minute deadline counts as lost. When the Agent asks
+deadline under the run lock. Unmet criteria reported by the Agent
+fail the run at once with the Agent's reason. Other reported failures retry the step
+with a fresh attempt, showing the reason as the run's note while it retries; at most
+three attempts per unfinished step are admitted, the last failure's reason ends the
+run, and an attempt that exceeds its 15-minute deadline counts as lost. When the Agent asks
 for a command approval, the session is stopped and the run becomes BLOCKED with the
 reason, until a person resolves it in chat and reruns, or cancels. Workflow-specific
 approval handling arrives with WF03. Agent stop or lost initiator authority pauses
