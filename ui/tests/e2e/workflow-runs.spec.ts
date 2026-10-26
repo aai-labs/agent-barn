@@ -181,6 +181,44 @@ test.describe("WF02 run progress and text results", () => {
     );
   });
 
+  test("a retrying step shows its attempt, the failure reason and the activity", async ({
+    page,
+  }) => {
+    support.runReason = "Step failed, retrying: Pipedrive is not connected";
+    support.attempt = {
+      number: 2,
+      limit: 3,
+      started_at: "2026-10-17T10:01:00Z",
+      expires_at: "2026-10-17T10:16:00Z",
+      agent_unresponsive: false,
+    };
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    const summary = page.getByLabel("Run summary");
+    await expect(summary).toContainText("Attempt 2 of 3");
+    await expect(summary).toContainText("Pipedrive is not connected");
+    const activity = page.getByLabel("Run activity");
+    await expect(activity.locator("li")).toHaveText([
+      /Pipedrive is not connected/,
+      /Run started using version 1/,
+    ]);
+  });
+
+  test("an Agent that has not accepted the step is called out", async ({
+    page,
+  }) => {
+    support.attempt = {
+      number: 1,
+      limit: 3,
+      started_at: "2026-10-17T10:00:00Z",
+      expires_at: "2026-10-17T10:15:00Z",
+      agent_unresponsive: true,
+    };
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    await expect(
+      page.getByLabel("Run summary").getByRole("alert"),
+    ).toContainText("hasn’t accepted");
+  });
+
   test("unfinished steps show their status instead of fabricated durations", async ({
     page,
   }) => {

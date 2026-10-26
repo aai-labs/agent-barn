@@ -392,7 +392,7 @@ def _run_workflow_step(attempt_id: str, token: str, callback_url: str) -> None:
         if met:
             _post_json(f"{callback_url}/result", token, {"summary": summary, "criteria_met": True})
         else:
-            _post_json(f"{callback_url}/failure", token, {"reason": summary[:2000]})
+            _post_json(f"{callback_url}/failure", token, {"reason": summary[:2000], "retryable": False})
     except NeedsAttention as exc:
         _report_failure(attempt_id, token, callback_url, str(exc), needs_attention=True)
     except Exception as exc:  # every failure is reported, never swallowed silently

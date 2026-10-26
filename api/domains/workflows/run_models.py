@@ -103,6 +103,8 @@ class AttemptFailure(StrictDTO):
     reason: str = Field(min_length=1, max_length=2000)
     # The Agent stopped for something only a person can resolve, such as a command approval.
     needs_attention: bool = False
+    # False when retrying cannot help, such as unmet step criteria; the run fails immediately.
+    retryable: bool = True
 
 
 class WorkflowHistoryRead(DTO):
@@ -111,6 +113,15 @@ class WorkflowHistoryRead(DTO):
     revision: int
     kind: str
     detail: str
+
+
+class AttemptRead(DTO):
+    number: int
+    limit: int
+    started_at: datetime
+    expires_at: datetime
+    # The Agent has not accepted this attempt's step after the grace period.
+    agent_unresponsive: bool
 
 
 class WorkflowRunRead(DTO):
@@ -132,3 +143,5 @@ class WorkflowRunRead(DTO):
     created_at: datetime
     settled_at: datetime | None
     allowed_actions: list[Literal["cancel"]]
+    # The running step's current attempt; only present on the single-run read.
+    attempt: AttemptRead | None = None

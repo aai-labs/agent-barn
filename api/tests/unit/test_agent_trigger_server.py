@@ -271,7 +271,7 @@ def test_plain_prose_still_counts_as_the_step_summary(monkeypatch, trigger_serve
 def test_unmet_criteria_are_reported_as_a_failure(monkeypatch, trigger_server) -> None:
     reply = '{"summary": "HubSpot is not connected", "criteria_met": false}'
     reports = _step_reports(monkeypatch, trigger_server, reply=reply)
-    assert reports == [("failure", {"reason": "HubSpot is not connected"})]
+    assert reports == [("failure", {"reason": "HubSpot is not connected", "retryable": False})]
 
 
 def test_an_approval_request_is_reported_as_needing_attention(monkeypatch, trigger_server) -> None:

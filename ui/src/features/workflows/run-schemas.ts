@@ -36,7 +36,28 @@ export const WorkflowRunSchema = z.object({
   createdAt: z.string(),
   settledAt: z.string().nullable(),
   allowedActions: z.array(z.literal("cancel")),
+  attempt: z
+    .object({
+      number: z.number(),
+      limit: z.number(),
+      startedAt: z.string(),
+      expiresAt: z.string(),
+      agentUnresponsive: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 });
+export const WorkflowRunHistorySchema = z.object({
+  items: z.array(
+    z.object({
+      id: z.uuid(),
+      createdAt: z.string(),
+      kind: z.string(),
+      detail: z.string(),
+    }),
+  ),
+});
+export type WorkflowRunHistory = z.infer<typeof WorkflowRunHistorySchema>;
 export const WorkflowRunListSchema = z.object({
   items: z.array(WorkflowRunSchema),
   total: z.number(),

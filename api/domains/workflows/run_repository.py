@@ -27,6 +27,7 @@ from api.domains.workflows.repository import WorkflowConflict
 from api.domains.workflows.run_models import (
     TERMINAL_STATES,
     AttemptFailure,
+    AttemptRead,
     AttemptResult,
     WorkflowAttempt,
     WorkflowCheckpoint,
@@ -105,6 +106,28 @@ class WorkflowRunRepository:
                     summary=checkpoint.result.get("summary"), completed_at=checkpoint.created_at
                 )
             return records
+
+    def current_attempt(self, run: WorkflowRun) -> AttemptRead | None:
+        """The running step's live attempt. Callers must already have authorized the run."""
+        if run.state != "RUNNING":
+            return None
+        with Session(self.delegate.engine) as session:
+            attempts = session.exec(
+                select(WorkflowAttempt)
+                .where(col(WorkflowAttempt.run_id) == run.id, col(WorkflowAttempt.step_index) == run.next_step)
+                .order_by(col(WorkflowAttempt.generation))
+            ).all()
+        if not attempts or attempts[-1].state != "REASONING":
+            return None
+        current = attempts[-1]
+        grace = timedelta(seconds=workflow_config.DISPATCH_GRACE_SECONDS)
+        return AttemptRead(
+            number=len(attempts),
+            limit=workflow_config.MAX_ATTEMPTS,
+            started_at=current.created_at,
+            expires_at=current.expires_at,
+            agent_unresponsive=current.dispatched_at is None and datetime.now(UTC) - current.created_at > grace,
+        )
 
     def list_runs(
         self, agent_id: UUID, scope: AuthorizationScope, page: int, size: int, workflow_id: UUID | None
@@ -352,6 +375,7 @@ class WorkflowRunRepository:
             session.add(attempt)
             run.next_step += 1
             run.revision += 1
+            run.reason = None
             run.state = "SUCCEEDED" if run.next_step == len(version.snapshot["steps"]) else "QUEUED"
             if run.state == "SUCCEEDED":
                 self._settle(session, run)
@@ -369,13 +393,19 @@ class WorkflowRunRepository:
                 session.add(attempt)
                 run.state, run.reason = "BLOCKED", failure.reason
                 delivery_ids = self._event(session, run, "NEEDS_ATTENTION", failure.reason)
+            elif not failure.retryable:
+                attempt.state = "STOPPED"
+                session.add(attempt)
+                run.state, run.reason = "FAILED", failure.reason
+                self._settle(session, run)
+                delivery_ids = self._event(session, run, "ATTEMPT_FAILED", failure.reason)
             else:
                 delivery_ids = self._event(session, run, "ATTEMPT_FAILED", failure.reason)
             session.commit()
             run_id = run.id
-        if not failure.needs_attention:
+        if not failure.needs_attention and failure.retryable:
             # The session already ended, so the step can retry within the attempt limit.
-            _, recovery_ids = self.advance(run_id, stopped=True, lost=True)
+            _, recovery_ids = self.advance(run_id, stopped=True, lost=True, cause=failure.reason)
             delivery_ids.extend(recovery_ids)
         return delivery_ids
 
@@ -415,7 +445,7 @@ class WorkflowRunRepository:
             return run, attempt
 
     def advance(
-        self, run_id: UUID, *, stopped: bool = False, lost: bool = False
+        self, run_id: UUID, *, stopped: bool = False, lost: bool = False, cause: str | None = None
     ) -> tuple[WorkflowAttempt | None, list[UUID]]:
         """Serialize all progression. Recovery never replays completed checkpoints."""
         with Session(self.delegate.engine, expire_on_commit=False) as session:
@@ -459,10 +489,14 @@ class WorkflowRunRepository:
                         .select_from(WorkflowAttempt)
                         .where(col(WorkflowAttempt.run_id) == run.id, col(WorkflowAttempt.step_index) == run.next_step)
                     ).one()
+                    # A reported cause stays visible through the retry and into the final failure.
                     run.state, run.reason = (
-                        ("QUEUED", "Fresh attempt after runtime loss")
-                        if retries < 3
-                        else ("FAILED", "Attempt recovery limit reached")
+                        ("QUEUED", f"Step failed, retrying: {cause}" if cause else "Fresh attempt after runtime loss")
+                        if retries < workflow_config.MAX_ATTEMPTS
+                        else (
+                            "FAILED",
+                            f"Attempt recovery limit reached: {cause}" if cause else "Attempt recovery limit reached",
+                        )
                     )
                     if run.state == "FAILED":
                         self._settle(session, run)
@@ -473,7 +507,7 @@ class WorkflowRunRepository:
             if run.state != "QUEUED":
                 return (attempt if attempt and attempt.state == "REASONING" else None), []
             run.generation += 1
-            run.state, run.reason = "RUNNING", None
+            run.state = "RUNNING"
             run.revision += 1
             attempt_id = uuid4()
             attempt = WorkflowAttempt(
