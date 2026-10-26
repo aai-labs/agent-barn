@@ -15,6 +15,7 @@ import {
 } from "../schemas";
 
 export function useArtifacts(agentId: string, runId?: string, stepId?: string, polling = false) {
+  const client = useQueryClient();
   const organizationId = useOrganizationContext().selectedOrganization?.id ?? "";
   const base = `${useOrganizationApiBase()}/agents/${agentId}/artifacts`;
   const files = useInfiniteQuery({
@@ -41,7 +42,13 @@ export function useArtifacts(agentId: string, runId?: string, stepId?: string, p
     ).data,
     onSuccess: (link) => { window.location.assign(link.url); },
   });
-  return { files, download };
+  const deleteFile = useMutation({
+    mutationFn: async (artifactId: string) => { await api.delete(`${base}/${artifactId}`); },
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: artifactsKey.all });
+    },
+  });
+  return { files, download, deleteFile };
 }
 
 export function useArtifactStorage(agentId: string) {

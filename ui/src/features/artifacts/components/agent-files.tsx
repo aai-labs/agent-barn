@@ -1,9 +1,10 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { CircleAlert, CloudOff, Download, HardDrive, Loader2, type LucideIcon } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { CircleAlert, CloudOff, Download, HardDrive, Loader2, Trash2, type LucideIcon } from "lucide-react";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { AppErrorState } from "@/components/app-error-state";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -36,15 +37,16 @@ function StorageStateCard({ title, description, icon: Icon, loading = false, fai
   );
 }
 
-export function AgentFiles({ agentId, runId, stepId, polling = false, canProvision = false }: {
+export function AgentFiles({ agentId, runId, stepId, polling = false, canManageFiles = false }: {
   agentId: string;
   runId?: string;
   stepId?: string;
   polling?: boolean;
-  canProvision?: boolean;
+  canManageFiles?: boolean;
 }) {
   const { storage, provision } = useArtifactStorage(agentId);
-  const { files, download } = useArtifacts(agentId, runId, stepId, polling);
+  const { files, download, deleteFile } = useArtifacts(agentId, runId, stepId, polling);
+  const [fileToDelete, setFileToDelete] = useState<Artifact | null>(null);
   const loadMoreRef = useLoadMoreOnScroll({
     hasNextPage: Boolean(files.hasNextPage) && !files.isFetchNextPageError,
     isFetchingNextPage: files.isFetchingNextPage,
@@ -70,10 +72,10 @@ export function AgentFiles({ agentId, runId, stepId, polling = false, canProvisi
           icon={storage.data?.state === "FAILED" ? CircleAlert : HardDrive}
           failed={storage.data?.state === "FAILED"}
           title={storage.data?.state === "FAILED" ? "Artifact storage provisioning failed" : "Artifact Storage Not Provisioned"}
-          description={canProvision
+          description={canManageFiles
             ? storage.data?.state === "FAILED" ? "We couldn’t finish setting up storage. Try again to get this Agent ready to share files." : "Give this Agent a private place to publish and share files."
             : "Ask someone with Agent update access to provision storage."}
-          action={canProvision && (
+          action={canManageFiles && (
             <Button disabled={provision.isPending} onClick={() => provision.mutate()}>
               {provision.isPending ? <><Loader2 aria-hidden="true" className="size-4 animate-spin" />Requesting…</> : storage.data?.state === "FAILED" ? "Retry provisioning" : "Provision"}
             </Button>
@@ -98,18 +100,32 @@ export function AgentFiles({ agentId, runId, stepId, polling = false, canProvisi
                   SHA-256: {file.checksum}
                 </p>
               </div>
-              <Button
-                variant="outline"
-                className="gap-2 rounded-lg sm:px-3"
-                disabled={download.isPending}
-                onClick={() => download.mutate(file.id)}
-                aria-label={`Download ${file.filename}`}
-              >
-                {download.isPending && download.variables === file.id
-                  ? <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-                  : <Download aria-hidden="true" className="size-4" />}
-                <span className="hidden sm:inline">Download</span>
-              </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  variant="outline"
+                  className="gap-2 rounded-lg sm:px-3"
+                  disabled={download.isPending}
+                  onClick={() => download.mutate(file.id)}
+                  aria-label={`Download ${file.filename}`}
+                >
+                  {download.isPending && download.variables === file.id
+                    ? <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+                    : <Download aria-hidden="true" className="size-4" />}
+                  <span className="hidden sm:inline">Download</span>
+                </Button>
+                {canManageFiles && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-[var(--ink-3)] hover:bg-[var(--err-soft)] hover:text-[var(--err)]"
+                    aria-label={`Delete ${file.filename}`}
+                    title="Delete file"
+                    onClick={() => { deleteFile.reset(); setFileToDelete(file); }}
+                  >
+                    <Trash2 aria-hidden="true" className="size-4" />
+                  </Button>
+                )}
+              </div>
             </div>
             {download.error && download.variables === file.id && (
               <Alert
@@ -128,6 +144,28 @@ export function AgentFiles({ agentId, runId, stepId, polling = false, canProvisi
           </li>
         ))}
       </ul>
+      <ConfirmationDialog
+        open={fileToDelete !== null}
+        onOpenChange={open => { if (!open) { setFileToDelete(null); deleteFile.reset(); } }}
+        title="Delete file?"
+        description={<>Delete “{fileToDelete?.filename}” from this Agent’s files? This cannot be undone. Files used by an active run or review cannot be deleted.</>}
+        confirmLabel="Delete file"
+        pendingLabel="Deleting…"
+        variant="destructive"
+        icon={<Trash2 aria-hidden="true" className="size-5" />}
+        isPending={deleteFile.isPending}
+        onConfirm={() => {
+          if (fileToDelete) deleteFile.mutate(fileToDelete.id, { onSuccess: () => setFileToDelete(null) });
+        }}
+      >
+        {deleteFile.error && (
+          <Alert variant="destructive" className="mt-4" style={{ background: "var(--err-soft)", borderColor: "color-mix(in srgb, var(--err) 30%, transparent)", color: "var(--err)" }}>
+            <CircleAlert aria-hidden="true" className="size-4" />
+            <AlertTitle>File could not be deleted</AlertTitle>
+            <AlertDescription style={{ color: "var(--err)" }}>{getErrorDisplay(deleteFile.error).description}</AlertDescription>
+          </Alert>
+        )}
+      </ConfirmationDialog>
       <div ref={loadMoreRef} aria-hidden="true" />
       {files.isFetchingNextPage && <p role="status">Loading more files…</p>}
       {files.isFetchNextPageError && (

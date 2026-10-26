@@ -14,11 +14,16 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-26 — AF-415 — delete action in Agent Files (local, not pushed)
+
+- Delivered: users with `agent.update` can delete files through a trash action and the shared confirmation dialog. Successful deletion refreshes artifact lists; failures remain in the dialog, and pinned files remain protected by the existing API. Read-only users see no delete controls.
+- Verification: 16 artifact browser cases pass, including confirmation/cancel, successful removal, pin conflicts/retry and permission loss. Three real API/Garage checks cover pins, read-only credentials and tenant boundaries. UI types/lint and whitespace pass. No storage/API contract, migration or retained developer file was changed.
+
 ### 2026-10-26 — AF-415 — file-list icons and row layout (local, not pushed)
 
 - Changed: file rows show format icons for common documents, spreadsheets, images, archives, code, audio/video and presentations, with a generic fallback. Compact metadata and a quieter checksum line accompany download icons and per-file link-request progress. Small-screen controls retain accessible filenames.
 - Verification: UI types/lint and all 12 artifact browser tests pass. The format/fallback fixture also covers a known extension with generic MIME metadata. Actual rendered fixture screenshots are captured; no API or storage contract changed.
-- Delivery: earlier provisioning, infinite-list and diagnostic work was committed as `d0ab467f`; this presentation follow-up remains local and uncommitted.
+- Delivery: earlier provisioning, infinite-list and diagnostic work was committed as `d0ab467f`; the file-list presentation follow-up was committed as `73daa0dc`. Neither commit has been pushed.
 
 ### 2026-10-26 — AF-415 — file-specific diagnostics and infinite Files (local, not pushed)
 

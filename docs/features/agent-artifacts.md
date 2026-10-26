@@ -234,6 +234,13 @@ Download controls include an icon and retain an accessible filename label on sma
 screens; SHA-256 remains available in the quieter checksum line. Run/step attachments use the same
 service alongside existing text summaries. Each click requests a fresh link;
 access errors conceal protected responses and display a retryable failure.
+People with current `agent.update` access can delete from Agent Files using the
+trash action and the shared destructive confirmation dialog. The dialog identifies
+the file, keeps failures visible for retry, and explains active-run/review pin
+conflicts. Successful deletion refreshes Agent and run/step file lists; read-only
+users see no delete control. Storage cleanup follows the existing
+[deletion lifecycle](#retention-deletion-and-recovery).
+
 Download errors appear beside the affected file, leaving other files usable.
 Authenticated link issuance returns 409 for a file in the previous shared-storage
 layout, explicitly explaining that migration or re-upload is required; it never

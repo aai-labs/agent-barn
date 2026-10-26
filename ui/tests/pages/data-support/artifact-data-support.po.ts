@@ -8,6 +8,8 @@ export class ArtifactDataSupport {
   downloadFailure: {id: string; detail: string; status: number} | undefined;
   failPage: number | undefined;
   requestedPages: number[] = [];
+  deleteRequests = 0;
+  deleteFailure: {status: number; detail: string} | undefined;
   links = 0;
   lists = 0;
   downloadUrl: string | undefined;
@@ -38,6 +40,15 @@ export class ArtifactDataSupport {
         }
         this.links++;
         await route.fulfill({json: {artifact: this.files[0], url: this.downloadUrl ?? `http://127.0.0.1:3003/test-artifact-download?signature=${this.links}`, expires_at: "2026-10-21T10:15:00Z"}}); return;
+      }
+      if (route.request().method() === "DELETE") {
+        this.deleteRequests++;
+        if (this.deleteFailure) {
+          await route.fulfill({status: this.deleteFailure.status, json: {detail: this.deleteFailure.detail}}); return;
+        }
+        const id = url.pathname.split("/").pop();
+        this.files = this.files.filter(file => file.id !== id);
+        await route.fulfill({status: 204}); return;
       }
       this.lists++;
       const requestedPage = Number(url.searchParams.get("page") ?? 1);

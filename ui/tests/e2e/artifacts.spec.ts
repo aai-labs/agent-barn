@@ -158,4 +158,50 @@ test.describe("Agent artifacts", () => {
     await files.files.screenshot({path: testInfo.outputPath("file-list-icons.png")});
   });
 
+  test("editors confirm deletion and the list updates", async ({page}) => {
+    await new DataSupport(page).agents.interceptGetAgentRequest({body: {...mockAgent, allowed_actions: ["agent.read", "agent.update"]}});
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await files.delete("pipeline.csv");
+    await expect(files.deleteDialog).toContainText("pipeline.csv");
+    expect(support.deleteRequests).toBe(0);
+    await files.cancelDelete();
+    await expect(files.deleteDialog).toHaveCount(0);
+    expect(support.deleteRequests).toBe(0);
+    await files.delete("pipeline.csv");
+    await files.confirmDelete();
+    await expect(files.deleteDialog).toHaveCount(0);
+    await expect(files.files).toContainText("No published files yet.");
+    await expect(files.files.locator("li")).toHaveCount(0);
+    expect(support.deleteRequests).toBe(1);
+  });
+  test("readers cannot see delete controls", async ({page}) => {
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await expect(files.files).toContainText("pipeline.csv");
+    await expect(files.files.getByRole("button", {name: "Delete pipeline.csv", exact: true})).toHaveCount(0);
+  });
+  test("a pinned file cannot be deleted and the dialog explains why", async ({page}) => {
+    await new DataSupport(page).agents.interceptGetAgentRequest({body: {...mockAgent, allowed_actions: ["agent.read", "agent.update"]}});
+    support.deleteFailure = {status: 409, detail: "An active run or review pins this file"};
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await files.delete("pipeline.csv"); await files.confirmDelete();
+    await expect(files.deleteDialog).toContainText("An active run or review pins this file");
+    await files.cancelDelete();
+    await expect(files.files).toContainText("pipeline.csv");
+    support.deleteFailure = undefined;
+    await files.delete("pipeline.csv");
+    await files.confirmDelete();
+    await expect(files.deleteDialog).toHaveCount(0);
+    await expect(files.files.locator("li")).toHaveCount(0);
+  });
+  test("permission loss during deletion preserves the file", async ({page}) => {
+    await new DataSupport(page).agents.interceptGetAgentRequest({body: {...mockAgent, allowed_actions: ["agent.read", "agent.update"]}});
+    support.deleteFailure = {status: 403, detail: "Agent update permission required"};
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await files.delete("pipeline.csv"); await files.confirmDelete();
+    await expect(files.deleteDialog).toContainText("File could not be deleted");
+    await files.cancelDelete();
+    await expect(files.deleteDialog).toHaveCount(0);
+    await expect(files.files).toContainText("pipeline.csv");
+  });
+
 });

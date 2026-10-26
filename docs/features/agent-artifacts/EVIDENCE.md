@@ -6,7 +6,26 @@ starting at local AF-389 head `6e109add`. AF-389 PR
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
-## File-list icon revision — 2026-10-26 (local, uncommitted)
+## Agent Files delete action — 2026-10-26 (local, not pushed)
+
+The file-list redesign was committed as `73daa0dc`. Its follow-up exposes the
+existing DELETE API through permission-gated trash controls and the shared
+ConfirmationDialog. The dialog names the target, blocks repeated confirmation
+while pending, and keeps API failures visible. Success invalidates artifact query
+families, including Agent and run/step lists. Existing pin and authorization rules
+remain authoritative; no API/storage changes or migrations were introduced.
+
+**16 Playwright cases passed in 16.0 seconds**, including cancellation with no
+request, confirmed removal/refetch, hidden read-only controls, pinned conflict and
+retry, and permission loss without removal. The initial two failure scenarios
+incorrectly looked for the background region while the modal made it inaccessible;
+closing the dialog before checking retained files corrected those test assertions.
+These browser cases use fixture API responses. **3 API/real-Garage cases passed in
+12.42 seconds** for active pins, read-only keys and cross-tenant/runtime identity.
+UI types/lint and whitespace checks pass. No retained developer file was deleted,
+and no remote push, merge or external deployment occurred.
+
+## File-list icon revision — 2026-10-26 (local, not pushed)
 
 The preceding async-provisioning, diagnostics and infinite-list revision was
 committed locally as `d0ab467f`. The subsequent file-list presentation revision

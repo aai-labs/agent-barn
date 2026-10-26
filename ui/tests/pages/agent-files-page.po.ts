@@ -10,5 +10,9 @@ export class AgentFilesPage {
   provision() { return this.page.getByRole("button", {name: "Provision", exact: true}).click(); }
   retryProvisioning() { return this.page.getByRole("button", {name: "Retry provisioning", exact: true}).click(); }
   get provisionButton() { return this.page.getByRole("button", {name: "Provision", exact: true}); }
+  delete(filename: string) { return this.page.getByRole("button", {name: `Delete ${filename}`, exact: true}).click(); }
+  get deleteDialog() { return this.page.getByRole("dialog", {name: "Delete file?"}); }
+  confirmDelete() { return this.deleteDialog.getByRole("button", {name: "Delete file", exact: true}).click(); }
+  cancelDelete() { return this.deleteDialog.getByRole("button", {name: "Cancel", exact: true}).click(); }
   download(filename: string) { return this.page.getByRole("button", {name: `Download ${filename}`}).click(); }
 }
