@@ -12,16 +12,47 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 - Delivered: reconciliation on a schedule (AF-297), so a row's status no longer depends on
   somebody reading it and restore point volumes no row owns are reclaimed.
 - In transition: nothing. Tickets 1, 2 and 3 are complete.
-- Next: nothing planned. Storage remains unmetered per Organization — the only bound is
-  `RESTORE_POINT_MAX_PER_AGENT`, which is per Agent.
+- Delivered: scheduled snapshots of every running Agent (AF-401), kept on a rolling window.
+- Next: nothing planned. Storage remains unmetered per Organization — the bounds are
+  `RESTORE_POINT_MAX_PER_AGENT` and `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT`, both per Agent.
 - Blockers: **no capture or restore has yet run end to end in a cluster with a rebuilt API
   image.** Every check so far is unit tests, mocked services, and the Kubernetes client against
   k3d. The `pods/log` grant is also unverified on staging and prod; without it a capture still
   runs but records no archive measurements and a generic failure reason. Watch the reconciler's
   first runs in staging before trusting the schedule — it is the one path here that deletes
-  storage.
+  storage. The same goes for the scheduled snapshot CronJob, which now also deletes the oldest
+  snapshots, and **no live capture has run against a real running Agent yet.**
 
 ## Changes
+
+### 2026-10-27 — AF-401 — Scheduled snapshots replace the reset
+
+- Replaced: the "reset" built for AF-401 (back up, then empty the volume) was never merged. The
+  requirement became scheduled snapshots a user can restore from.
+- Delivered: a `<release>-restore-point-schedule` CronJob (`scheduling.py`, every 5 minutes) takes
+  a `SCHEDULED` restore point of each running Agent whose newest one is older than
+  `RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES` (default 360; 0 turns it off). At most
+  `RESTORE_POINT_SCHEDULE_MAX_CONCURRENT` (default 2) run at once across the namespace, because
+  each capture Job's memory limit counts against the namespace quota. Stopped Agents are skipped:
+  their files do not change. A failed attempt waits a full interval before the next one.
+- Delivered: the snapshot is captured live, beside the running Agent, on the Agent pod's node.
+  Capture now skips files that vanish mid-walk and pads files that shrink, counting them as
+  `skipped` and `changed`. See [`../../adr/2026-10-27-scheduled-snapshots-capture-live.md`](../../adr/2026-10-27-scheduled-snapshots-capture-live.md).
+- Delivered: retention. When a restore point becomes ready, and on every scheduled run, an Agent
+  keeps its newest `RESTORE_POINT_SCHEDULED_MAX_PER_AGENT` (default 4) scheduled snapshots and only
+  its newest failed one. Backups taken before an update or a restore now share
+  `RESTORE_POINT_MAX_PER_AGENT` with the user's own captures: past it the oldest of those backups
+  is deleted, but never the newest and never one a user took. Only ready rows count, and nothing
+  is deleted while a managed update runs. A removal is `READY → DELETING`, then Job and volume,
+  then the row; a row left `DELETING` is finished by reconciliation.
+- Changed: the limit no longer refuses an update's own backup. A user's capture is still refused
+  when their own captures reach the limit.
+- Changed: a scheduled snapshot in progress blocks nothing (`has_blocking_operation` ignores it).
+  A capture or a restore of the same Agent stops it first and marks it failed.
+- Changed: the restore points section lists scheduled snapshots apart, with how often they are
+  taken and how many are kept. The list response adds `scheduled_cap`, `scheduled_count` and
+  `schedule_interval_minutes`.
+- Decision: reversed — `PRE_UPGRADE` backups are no longer kept forever; see retention above.
 
 ### 2026-10-19 — AF-406 — Continue without a backup when the snapshot fails
 

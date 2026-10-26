@@ -437,9 +437,10 @@ def test_a_pod_that_never_shuts_down_ends_the_update_with_a_reason():
             assert_that(outcome["failure_reason"], contains_string("still shutting down"))
 
 
-def test_a_capture_refused_by_the_cap_ends_the_update_with_a_reason():
+def test_a_full_manual_limit_does_not_stop_the_updates_backup():
     with given([*_GIVEN, there_is_an_agent(status=AgentStatus.RUNNING)]) as context:
-        _k8s(context).read_pod_logs.return_value = ""
+        _succeed_capture_job(context)
+        _k8s(context).get_pod_readiness.return_value = _READY
         repository = context.injector.get(RestorePointRepository)
         for _ in range(2):  # RESTORE_POINT_MAX_PER_AGENT
             repository.save(
@@ -453,13 +454,17 @@ def test_a_capture_refused_by_the_cap_ends_the_update_with_a_reason():
                 )
             )
 
-        with when("the update's capture is refused before its row exists"):
+        with when("the Agent updates with its manual restore points at the limit"):
             _run(context)
 
-        with then("the reason is recorded on the Agent"):
+        with then("the update takes its backup and succeeds, and the user's restore points stay"):
             outcome = _read_agent(context)["last_managed_update"]
-            assert_that(outcome["outcome"], equal_to(ManagedUpdateOutcome.BACKUP_FAILED.value))
-            assert_that(outcome["failure_reason"], contains_string("limit"))
+            assert_that(outcome["outcome"], equal_to(ManagedUpdateOutcome.SUCCEEDED.value))
+            origins = sorted(point["origin"] for point in _restore_points(context))
+            assert_that(
+                origins,
+                equal_to(sorted([RestorePointOrigin.MANUAL.value] * 2 + [RestorePointOrigin.PRE_UPGRADE.value])),
+            )
 
 
 def test_a_managed_update_rolls_back_when_the_start_itself_fails():

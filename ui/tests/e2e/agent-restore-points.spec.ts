@@ -10,6 +10,7 @@ import {
   mockPreRestorePoint,
   mockRestorePoint,
   mockRestorePointsPage,
+  mockScheduledSnapshot,
 } from "../pages/data-support/agent-data-support.po";
 import { DataSupport } from "../pages/data-support/data-support.po";
 
@@ -582,7 +583,7 @@ test.describe("Agent restore points", () => {
     await expect.poll(() => agentReads).toBeGreaterThan(readsWhileOwed);
   });
 
-  test("shows how many captures are used, and that backups are not counted", async ({ page }) => {
+  test("shows how many captures are used, and that backups share the limit", async ({ page }) => {
     const dataSupport = new DataSupport(page);
     const configurationPage = new AgentConfigurationPage(page);
 
@@ -600,8 +601,65 @@ test.describe("Agent restore points", () => {
 
     const capacity = page.getByTestId("restore-point-capacity");
     await expect(capacity).toContainText("1 of 5 captures used");
-    await expect(capacity).toContainText("Automatic backups taken before a restore don't count");
+    await expect(capacity).toContainText("Backups taken before an update or a restore share this limit");
     await expect(configurationPage.restorePointRows()).toHaveCount(2);
+  });
+
+  test("lists scheduled snapshots apart, with when each was taken and how often", async ({
+    page,
+  }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: mockRestorePointsPage({ items: [mockScheduledSnapshot, mockRestorePoint], manualCount: 1 }),
+    });
+
+    await openRestorePoints(configurationPage);
+
+    await expect(page.getByTestId("restore-point-schedule")).toContainText(
+      "A snapshot is taken every 6 hours while the Agent runs, and the newest 4 are kept.",
+    );
+    const scheduled = page.getByTestId("scheduled-snapshots");
+    await expect(scheduled.getByTestId("restore-point-row")).toHaveCount(1);
+    await expect(scheduled).toContainText("Scheduled snapshot");
+    await expect(scheduled).toContainText("2026");
+    await expect(scheduled.getByRole("button", { name: "Restore" })).toBeEnabled();
+    await expect(page.getByTestId("restore-point-capacity")).toContainText("1 of 5 captures used");
+  });
+
+  test("a scheduled snapshot in progress does not block a capture", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: mockRestorePointsPage({
+        items: [{ ...mockScheduledSnapshot, status: "CAPTURING", captured_at: null }],
+        manualCount: 0,
+      }),
+    });
+
+    await openRestorePoints(configurationPage);
+
+    await expect(configurationPage.captureRestorePointButton()).toBeEnabled();
+  });
+
+  test("says when scheduled snapshots are off", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: mockRestorePointsPage({ items: [], manualCount: 0, scheduleIntervalMinutes: 0 }),
+    });
+
+    await openRestorePoints(configurationPage);
+
+    await expect(page.getByTestId("restore-point-schedule")).toHaveText(
+      "Scheduled snapshots are turned off.",
+    );
   });
 
   test("lets a viewer read the list without offering any action", async ({ page }) => {

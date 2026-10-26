@@ -293,14 +293,29 @@ export const mockPreRestorePoint = {
   origin: "PRE_RESTORE",
 };
 
+export const MOCK_SCHEDULED_SNAPSHOT_ID = "77777777-7777-4777-8777-777777777777";
+
+export const mockScheduledSnapshot = {
+  ...mockRestorePoint,
+  id: MOCK_SCHEDULED_SNAPSHOT_ID,
+  label: "Scheduled snapshot",
+  origin: "SCHEDULED",
+  created_at: "2026-05-14T06:00:00Z",
+  captured_at: "2026-05-14T06:01:00Z",
+};
+
 export function mockRestorePointsPage({
   items = [mockRestorePoint],
   cap = 5,
   manualCount,
+  scheduledCap = 4,
+  scheduleIntervalMinutes = 360,
 }: {
   items?: unknown[];
   cap?: number;
   manualCount?: number;
+  scheduledCap?: number;
+  scheduleIntervalMinutes?: number;
 } = {}) {
   return {
     page: 1,
@@ -309,6 +324,9 @@ export function mockRestorePointsPage({
     items,
     cap,
     manual_count: manualCount ?? items.length,
+    scheduled_cap: scheduledCap,
+    scheduled_count: 0,
+    schedule_interval_minutes: scheduleIntervalMinutes,
   };
 }
 

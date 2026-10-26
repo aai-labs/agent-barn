@@ -55,6 +55,11 @@ class Config(BaseSettings):
     restore_point_max_per_agent: int = Field(default=5, ge=1, le=50)
     restore_point_capture_timeout_seconds: int = Field(default=900, ge=60, le=7200)
     restore_point_restore_timeout_seconds: int = Field(default=1800, ge=60, le=7200)
+    # 0 turns scheduled snapshots off.
+    restore_point_schedule_interval_minutes: int = Field(default=360, ge=0, le=10080)
+    restore_point_scheduled_max_per_agent: int = Field(default=4, ge=1, le=50)
+    # Across all Agents. Each capture Job counts its memory limit against the namespace quota.
+    restore_point_schedule_max_concurrent: int = Field(default=2, ge=1, le=20)
     # How long a managed update waits for the new pod to report ready before it
     # rolls back, counted from when the start returns. It has to cover pulling
     # an image the node has never seen, init, the start script's installs, and

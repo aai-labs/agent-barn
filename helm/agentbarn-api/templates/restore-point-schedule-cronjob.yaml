@@ -1,0 +1,65 @@
+{{- if .Values.restorePoints.schedule.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-restore-point-schedule
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbarn-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: restore-point-schedule
+spec:
+  # Takes snapshots of running Agents every RESTORE_POINT_SCHEDULE_INTERVAL_MINUTES.
+  # A run only starts Jobs, so each one is short; Forbid keeps two from counting the
+  # same free slots.
+  schedule: {{ .Values.restorePoints.schedule.cron | quote }}
+  concurrencyPolicy: Forbid
+  # Bounds how far back a missed window may be started. Left unset, the controller
+  # counts every miss since the last run and gives up permanently past 100 of them,
+  # after which no snapshot is taken until someone notices.
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "agentbarn-api.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: restore-point-schedule
+        spec:
+          restartPolicy: OnFailure
+          # Starts capture Jobs and creates their volumes, so it needs the service
+          # account, the namespace, and the mounted kubeconfig below.
+          serviceAccountName: {{ .Release.Name }}
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
+          containers:
+            - name: restore-point-schedule
+              image: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Not `python -m`, for the same reason as the reconciliation CronJob.
+              command:
+                - python
+                - -c
+                - "from api.domains.restore_points.scheduling import main; main()"
+              envFrom:
+                # Carries DB_CONNECTION_URL, REDIS_URL and AGENT_TOKEN_ENCRYPTION_KEY.
+                - secretRef:
+                    name: {{ .Values.secretName }}
+              env:
+                - name: K8S_NAMESPACE
+                  value: {{ .Release.Namespace }}
+                - name: K8S_KUBECONFIG_PATH
+                  value: /etc/kubeconfig/kubeconfig
+                {{- include "agentbarn-api.restorePointEnv" . | nindent 16 }}
+              volumeMounts:
+                - name: kubeconfig
+                  mountPath: /etc/kubeconfig
+                  readOnly: true
+              resources:
+                {{- toYaml .Values.worker.resources | nindent 16 }}
+          volumes:
+            - name: kubeconfig
+              secret:
+                secretName: {{ .Values.kubeconfigSecretName | default (printf "%s-kubeconfig" .Release.Name) }}
+{{- end }}

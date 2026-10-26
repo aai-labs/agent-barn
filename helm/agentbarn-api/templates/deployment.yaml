@@ -93,8 +93,6 @@ spec:
               value: "http://{{ .Release.Name }}-communications:{{ .Values.communications.service.port }}/communications/v1"
             - name: CREDENTIAL_GATEWAY_BASE_URL
               value: "http://{{ .Release.Name }}-gateway:{{ .Values.gateway.service.port }}/gateway/v1"
-            - name: AGENT_IMAGE_PULL_SECRET
-              value: "{{ .Values.agentImagePullSecret }}"
             - name: ORGANIZATION_LLM_BUDGET_ALERT_THRESHOLDS
               value: {{ .Values.organizationLlmBudgets.alertThresholds | quote }}
             - name: AGENT_MODEL_ALLOWLIST
@@ -111,28 +109,7 @@ spec:
             - name: AGENT_DEFAULT_MODEL
               value: "{{ .Values.agentDefaultModel }}"
             {{- end }}
-            {{- if .Values.storageClass }}
-            - name: STORAGE_CLASS
-              value: "{{ .Values.storageClass }}"
-            {{- end }}
-            - name: API_IMAGE
-              value: "{{ .Values.registryPrefix }}/{{ .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
-            {{- if .Values.restorePoints.size }}
-            - name: RESTORE_POINT_SIZE
-              value: "{{ .Values.restorePoints.size }}"
-            {{- end }}
-            {{- if .Values.restorePoints.maxPerAgent }}
-            - name: RESTORE_POINT_MAX_PER_AGENT
-              value: "{{ .Values.restorePoints.maxPerAgent }}"
-            {{- end }}
-            {{- if .Values.restorePoints.captureTimeoutSeconds }}
-            - name: RESTORE_POINT_CAPTURE_TIMEOUT_SECONDS
-              value: "{{ .Values.restorePoints.captureTimeoutSeconds }}"
-            {{- end }}
-            {{- if .Values.restorePoints.restoreTimeoutSeconds }}
-            - name: RESTORE_POINT_RESTORE_TIMEOUT_SECONDS
-              value: "{{ .Values.restorePoints.restoreTimeoutSeconds }}"
-            {{- end }}
+            {{- include "agentbarn-api.restorePointEnv" . | nindent 12 }}
             {{- if .Values.managedUpdate.readyTimeoutSeconds }}
             - name: AGENT_UPDATE_READY_TIMEOUT_SECONDS
               value: "{{ .Values.managedUpdate.readyTimeoutSeconds }}"

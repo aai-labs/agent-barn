@@ -46,6 +46,7 @@ class RestorePointOrigin(str, enum.Enum):
     PRE_RESTORE = "PRE_RESTORE"
     PRE_RESET = "PRE_RESET"
     PRE_UPGRADE = "PRE_UPGRADE"
+    SCHEDULED = "SCHEDULED"
 
 
 class ManagedUpdateOutcome(str, enum.Enum):

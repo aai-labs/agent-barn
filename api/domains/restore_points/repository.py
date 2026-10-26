@@ -6,7 +6,7 @@ from injector import inject, singleton
 from sqlalchemy import and_, func, or_, update
 from sqlmodel import Session, col, select
 
-from api.domains.agents.models import Agent, AgentRestorePoint, RestorePointOrigin, RestorePointStatus
+from api.domains.agents.models import Agent, AgentRestorePoint, AgentStatus, RestorePointOrigin, RestorePointStatus
 from api.domains.agents.repository import agent_scope_predicates
 from api.domains.events.catalog import EVENT_REGISTRY
 from api.domains.events.models import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
@@ -14,6 +14,7 @@ from api.domains.events.repository import OutboxMessageRepository
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.restore_points.models import (
     ACTIVE_CAPTURE_STATUSES,
+    MANUAL_GROUP_ORIGINS,
     NON_TERMINAL_STATUSES,
     AgentRestorePointRead,
 )
@@ -97,10 +98,14 @@ class RestorePointRepository:
             return session.exec(query).first()
 
     def count_manual_for_agent(self, agent_id: UUID) -> int:
-        """Manual restore points that still hold a volume.
+        """Restore points a user took that still hold a volume."""
+        return self.count_holding_a_volume(agent_id, (RestorePointOrigin.MANUAL,))
 
-        FAILED captures release their volume when they fail, so counting them
-        would let a run of failures block an Agent from ever capturing again.
+    def count_holding_a_volume(self, agent_id: UUID, origins: tuple[RestorePointOrigin, ...]) -> int:
+        """Restore points of these origins that still hold a volume.
+
+        FAILED ones released theirs when they failed, so counting them would let a run
+        of failures block an Agent from ever taking another.
         """
         with Session(self.delegate.engine) as session:
             query = (
@@ -108,17 +113,100 @@ class RestorePointRepository:
                 .select_from(AgentRestorePoint)
                 .where(
                     col(AgentRestorePoint.agent_id) == agent_id,
-                    col(AgentRestorePoint.origin) == RestorePointOrigin.MANUAL,
+                    col(AgentRestorePoint.origin).in_(origins),
                     col(AgentRestorePoint.status) != RestorePointStatus.FAILED,
                 )
             )
             return session.scalar(query) or 0
 
+    def find_for_agent_by_origin(
+        self,
+        agent_id: UUID,
+        origins: tuple[RestorePointOrigin, ...],
+        statuses: tuple[RestorePointStatus, ...],
+    ) -> list[AgentRestorePoint]:
+        """Oldest first."""
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(AgentRestorePoint)
+                .where(
+                    col(AgentRestorePoint.agent_id) == agent_id,
+                    col(AgentRestorePoint.origin).in_(origins),
+                    col(AgentRestorePoint.status).in_(statuses),
+                )
+                .order_by(col(AgentRestorePoint.created_at))
+            )
+            return list(session.exec(query).all())
+
+    def find_in_flight_scheduled(self) -> list[AgentRestorePoint]:
+        with Session(self.delegate.engine) as session:
+            query = select(AgentRestorePoint).where(
+                col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED,
+                col(AgentRestorePoint.status).in_(NON_TERMINAL_STATUSES),
+            )
+            return list(session.exec(query).all())
+
+    def find_agent_ids_due_a_snapshot(self, *, last_taken_before: datetime, limit: int) -> list[UUID]:
+        """Running Agents whose newest scheduled snapshot, in any status, is older than the cutoff.
+
+        Any status, so a failed attempt waits a full interval before the next one. The
+        Agents that never had one come first, then the longest waiting.
+        """
+        newest = (
+            select(
+                col(AgentRestorePoint.agent_id).label("agent_id"),
+                func.max(AgentRestorePoint.created_at).label("taken_at"),
+            )
+            .where(col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED)
+            .group_by(col(AgentRestorePoint.agent_id))
+            .subquery()
+        )
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(col(Agent.id))
+                .outerjoin(newest, newest.c.agent_id == col(Agent.id))
+                .where(
+                    col(Agent.status) == AgentStatus.RUNNING,
+                    col(Agent.deleted_at).is_(None),
+                    or_(newest.c.taken_at.is_(None), newest.c.taken_at < last_taken_before),
+                )
+                .order_by(newest.c.taken_at.asc().nulls_first())
+                .limit(limit)
+            )
+            return list(session.exec(query).all())
+
+    def find_agent_ids_over_retention(self, *, scheduled_cap: int, manual_cap: int) -> list[UUID]:
+        """Agents holding more scheduled or manual-group restore points than they keep,
+        or more than one failed scheduled snapshot."""
+        holding = col(AgentRestorePoint.status) != RestorePointStatus.FAILED
+        scheduled = col(AgentRestorePoint.origin) == RestorePointOrigin.SCHEDULED
+        manual_group = col(AgentRestorePoint.origin).in_(MANUAL_GROUP_ORIGINS)
+        with Session(self.delegate.engine) as session:
+            query = (
+                select(col(AgentRestorePoint.agent_id))
+                .group_by(col(AgentRestorePoint.agent_id))
+                .having(
+                    or_(
+                        func.count().filter(and_(scheduled, holding)) > scheduled_cap,
+                        func.count().filter(and_(manual_group, holding)) > manual_cap,
+                        func.count().filter(and_(scheduled, ~holding)) > 1,
+                    )
+                )
+            )
+            return list(session.exec(query).all())
+
+    def mark_deleting(self, restore_point_id: UUID, *, from_statuses: tuple[RestorePointStatus, ...]) -> bool:
+        return self._conditional_update(
+            restore_point_id,
+            from_statuses,
+            {"status": RestorePointStatus.DELETING},
+        )
+
     def has_active_capture(self, agent_id: UUID) -> bool:
         return self._exists_with_status(agent_id, ACTIVE_CAPTURE_STATUSES)
 
-    def has_non_terminal_operation(self, agent_id: UUID) -> bool:
-        return self._exists_with_status(agent_id, NON_TERMINAL_STATUSES)
+    def has_non_terminal_operation(self, agent_id: UUID, *, ignoring: tuple[RestorePointOrigin, ...] = ()) -> bool:
+        return self._exists_with_status(agent_id, NON_TERMINAL_STATUSES, ignoring=ignoring)
 
     def find_owing_replay_for_agent(self, agent_id: UUID) -> list[AgentRestorePoint]:
         """Rows whose volume is back but whose recorded configuration is not written.
@@ -417,13 +505,20 @@ class RestorePointRepository:
         self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
         return list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
 
-    def _exists_with_status(self, agent_id: UUID, statuses: tuple[RestorePointStatus, ...]) -> bool:
+    def _exists_with_status(
+        self,
+        agent_id: UUID,
+        statuses: tuple[RestorePointStatus, ...],
+        *,
+        ignoring: tuple[RestorePointOrigin, ...] = (),
+    ) -> bool:
         with Session(self.delegate.engine) as session:
             query = (
                 select(col(AgentRestorePoint.id))
                 .where(
                     col(AgentRestorePoint.agent_id) == agent_id,
                     col(AgentRestorePoint.status).in_(statuses),
+                    col(AgentRestorePoint.origin).not_in(ignoring),
                 )
                 .limit(1)
             )
