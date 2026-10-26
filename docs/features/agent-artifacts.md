@@ -2,6 +2,50 @@
 
 Status: AF-415 implementation rebased onto staging, including merged AF-389; not externally deployed. [AF-415 specification](https://aai-labs.atlassian.net/wiki/spaces/AF/pages/3089039363) and [AF-387 delivery log](agent-workflows/CHANGELOG.md).
 
+## Architecture
+
+```mermaid
+flowchart LR
+  Human[Web user] -->|current Agent read/update policy| API[Product API / Artifacts domain]
+  Runtime[Hermes or OpenClaw session] -->|Agent credential + workflow fences| API
+  API -->|metadata, checksums, pins and provisioning intent| PG[(PostgreSQL)]
+  API -->|owner-scoped data key| Garage[(Private Garage / S3)]
+  API -->|post-response provisioning| Admin[Private Garage management API]
+  Maintenance[Existing artifact maintenance] -->|recover requests / purge| PG
+  Maintenance -->|scoped byte cleanup| Garage
+  Maintenance -->|bucket/key recovery and reclamation| Admin
+  Human -->|app-origin bearer link| Proxy[App byte proxy]
+  Proxy -->|provider-signed authority validated by Garage| Garage
+```
+
+```mermaid
+sequenceDiagram
+  participant User as User / Artifacts UI
+  participant API as Product API
+  participant PG as PostgreSQL
+  participant Garage as Private Garage
+  participant Worker as Artifact maintenance
+  User->>API: Create Agent or request Provision
+  API->>PG: Commit Agent + PENDING intent, or explicit request
+  API-->>User: 201 Agent / 202 provisioning accepted
+  API->>Garage: Prepare and verify private bucket/key after response
+  alt Storage ready
+    API->>PG: Mark READY
+  else Provider failure or interrupted task
+    API->>PG: Preserve intent and retry evidence
+    Worker->>PG: Pick persisted due requests
+    Worker->>Garage: Recover same bucket/key identity
+    Worker->>PG: Commit READY or bounded retry
+  end
+  User->>API: Poll current authorized storage status
+  API-->>User: Provisioning, ready, or failure/retry feedback
+```
+
+The diagrams summarize the contracts below. Runtime Agents receive no S3 data or
+management credentials, and all download authority is validated by the provider.
+A process killed before recording its result is recovered from the committed
+request; the post-response task is not the durability boundary.
+
 ## Ownership and access
 
 One shared `artifacts` domain serves ordinary Agent sessions and workflow steps
@@ -64,7 +108,7 @@ and commits READY. Storage failure leaves the Agent usable for text with a durab
 retryable request. Failed Agent creation rolls back its request before provider I/O.
 Deliberately disabled storage creates no request.
 
-Existing Agents are never discovered by a background scan. Their Files view shows
+Existing Agents are never discovered by a background scan. Their Artifacts view shows
 **Artifact Storage Not Provisioned** and a **Provision** action for people with
 `agent.update`. `GET .../artifacts/storage` requires current `agent.read` access;
 `POST .../artifacts/storage` requires current `agent.update` and returns 202 after
@@ -74,7 +118,7 @@ are idempotent; failed PENDING requests can be retried. No credentials or raw
 provider diagnostics appear in status responses.
 
 Storage status is `NOT_CONFIGURED`, `NOT_PROVISIONED`, `PROVISIONING`, `READY` or
-`FAILED`. The Files view polls every two seconds while provisioning or failed,
+`FAILED`. The Artifacts view polls every two seconds while provisioning or failed,
 shows progress, and offers **Retry provisioning** after failure. Readers see status
 and instructions to ask an editor; they cannot provision. Missing deployment
 configuration shows storage unavailable without a Provision action. Files remain
@@ -227,14 +271,14 @@ its configured reachable API origin while keeping opaque provider authority inta
 restart existing Agents to load this CLI change. See
 [download delivery operations](../guidelines/garage.md#download-delivery).
 
-The Agent Files view shows READY chat, human and workflow files with names,
+The Agent Artifacts view shows READY chat, human and workflow files with names,
 sizes, types, provenance and download actions. File rows use recognizable type
 icons with a generic fallback, based on the filename extension or MIME type.
 Download controls include an icon and retain an accessible filename label on small
 screens; SHA-256 remains available in the quieter checksum line. Run/step attachments use the same
 service alongside existing text summaries. Each click requests a fresh link;
 access errors conceal protected responses and display a retryable failure.
-People with current `agent.update` access can delete from Agent Files using the
+People with current `agent.update` access can delete from Agent Artifacts using the
 trash action and the shared destructive confirmation dialog. The dialog identifies
 the file, keeps failures visible for retry, and explains active-run/review pin
 conflicts. Successful deletion refreshes Agent and run/step file lists; read-only
@@ -248,7 +292,7 @@ substitutes another Agent's credential or silently migrates bytes. Missing usabl
 credentials for the current layout return a distinct 503 explaining that Agent
 storage provisioning needs checking. No bucket/key or private endpoint is exposed.
 
-Files uses `useInfiniteQuery` with 20 records per request and loads the next page
+Artifacts uses `useInfiniteQuery` with 20 records per request and loads the next page
 when the scroll sentinel approaches the viewport. Loaded pages stay visible during
 additional-page failures, with an explicit retry; exhausted lists stop fetching.
 The API orders by creation time and ID descending for stable timestamp ties.

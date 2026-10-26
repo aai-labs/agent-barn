@@ -6,6 +6,31 @@ starting at local AF-389 head `6e109add`. AF-389 PR
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
+## PR delivery and Artifacts navigation — 2026-10-26
+
+The final delivery follow-up renames the visible tab/heading to **Artifacts** and
+uses a package icon, retaining `tab=files` for existing links. It updates accessible
+labels/probes and README prerequisites/native/full-stack artifact instructions,
+adds Mermaid topology/provisioning diagrams, and refreshes screenshots attached directly to PR #328.
+
+- **16 fixture browser tests passed in 16.9 seconds**, including the Artifacts
+  navigation label, file formats, provisioning states, deletion, downloads and
+  infinite-page behavior. Current PR attachments include the complete navigation and the
+  shared deletion dialog; their captions label fixture sources explicitly.
+- The real runtime/persistent Garage/authenticated browser contract passed
+  **1 test in 26.58 seconds** after the rename. It verified actual image CLI
+  publication, Garage replacement and three byte-exact app downloads. The current real-storage screenshot is from that sample, with the fixture identity
+  and external-integration limitations retained.
+- API quality, UI types/lint, one migration head, artifact/workflow chart checks,
+  shell syntax, README/evidence local links and whitespace checks passed.
+- The independent full review covered `36096b17`; its cleanup/documentation fixes
+  at `ef802873` were independently approved. This subsequent navigation/docs/
+  screenshot follow-up was locally checked, not independently re-reviewed.
+
+PR #328 is refreshed to staging with this revision. Older full-suite/CI runs
+remain evidence for their named historical heads, not a claim about current CI.
+No merge, external deployment, production access or live provider messaging.
+
 ## Independent-review corrections — 2026-10-26 (local, not pushed)
 
 The Personal Codex GPT 6.1 Sol review compared complete HEAD `36096b17` against
@@ -534,7 +559,7 @@ Real-image identities used for the CLI tests:
 - OpenClaw `openclaw-base:0.7.7`: `sha256:8a27c59b29bbf7c97a24e8ce8ad87370f5caca84baf19d938cb5000bd3402fc4`.
 - Garage `dxflrs/garage:v2.4.1`: `sha256:9c96caa2612d3411acc5b0e6701fb238dbfba33e533a6d7d3d811a4b12d0d020`.
 
-[UI screenshots](evidence/README.md) show the Files, run and selected-step views
+[UI screenshots in PR #328](https://github.com/aai-labs/agent-barn/pull/328) show the Files, run and selected-step views
 with synthetic browser fixtures.
 
 ## Behaviors exercised

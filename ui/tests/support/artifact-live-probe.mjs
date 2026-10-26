@@ -11,7 +11,7 @@ try {
   await page.getByRole("button", { name: /log in/i }).click();
   await page.waitForURL(/dashboard/, { timeout: 60000 });
   await page.goto(`${process.env.ARTIFACT_LIVE_UI}/dashboard/${process.env.ARTIFACT_LIVE_ORG}/agents/${process.env.ARTIFACT_LIVE_AGENT}?tab=files`);
-  const files = page.getByRole("region", { name: "Agent files", exact: true });
+  const files = page.getByRole("region", { name: "Agent artifacts", exact: true });
   await expect(files).toContainText("hermes-live.csv", { timeout: 60000 });
   await expect(files).toContainText("openclaw-live.csv");
   for (const name of ["hermes-live.csv", "openclaw-live.csv", "hermes-live.csv"]) {

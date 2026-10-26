@@ -152,7 +152,7 @@ saved installation prefix is needed because aliases are local to the scoped key.
 Per-Agent data secrets
 require the same `AGENT_TOKEN_ENCRYPTION_KEY` in API and purge.
 Configured storage adds a PENDING provisioning request to the Agent creation
-transaction; it never delays the creation response for Garage. Files exposes
+transaction; it never delays the creation response for Garage. Artifacts exposes
 status and an explicit Provision/retry action for existing Agents. Post-response
 API work attempts the request immediately; maintenance recovers interrupted tasks
 and retries failures without changing the key identity. Local Compose runs bounded
@@ -416,7 +416,7 @@ make test-garage-cluster
 The first integration contract uses the shipped Compose/bootstrap path, verifies
 private grants, signed bytes after container replacement, backup/fresh-volume restore
 and API purge. The deployment contract includes both runtime CLI images, real local
-sign-in and Agent Files with unmocked artifact API/download requests after storage
+sign-in and Agent Artifacts with unmocked artifact API/download requests after storage
 restart. Cluster verification creates its own three-node k3d cluster and checks
 quorum I/O during one-node outage plus persistent node identity/data recovery.
 No test consumes installation credentials or current kubeconfig. See

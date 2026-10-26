@@ -38,7 +38,7 @@ export const AGENT_PAGE_TAB_LABELS: Record<AgentPageTab, string> = {
   "tool-calls": "Tool calls",
   logs: "Logs",
   memory: "Memory",
-  files: "Files",
+  files: "Artifacts",
   workflows: "Workflows",
   playbooks: "Playbooks",
   activity: "Activity",

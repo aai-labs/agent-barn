@@ -53,11 +53,11 @@ test.describe("Agent artifacts", () => {
     const stepId = workflowFixture(MOCK_AGENT_ID).version.draft.steps[0].id;
     support.files = [{...artifactFixture, source: "workflow", run_id: RUN_ID, step_id: stepId, attempt_id: "a4150000-0000-4000-8000-000000000002"}];
     await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
-    await expect(page.getByLabel("Run files", {exact: true})).toContainText("pipeline.csv");
+    await expect(page.getByLabel("Run artifacts", {exact: true})).toContainText("pipeline.csv");
     await page.getByRole("button", {name: "Step 1: Read pipeline"}).click();
-    await expect(page.getByLabel("Step files", {exact: true})).toContainText("pipeline.csv");
+    await expect(page.getByLabel("Step artifacts", {exact: true})).toContainText("pipeline.csv");
     await expect(page.getByText("Finished read pipeline.", {exact: true})).toBeVisible();
-    await expect(page.getByLabel("Step files", {exact: true})).toContainText("attempt a4150000");
+    await expect(page.getByLabel("Step artifacts", {exact: true})).toContainText("attempt a4150000");
     const requests = support.lists;
     await page.waitForTimeout(5500);
     expect(support.lists).toBe(requests);
@@ -149,20 +149,25 @@ test.describe("Agent artifacts", () => {
   });
 
   test("file rows show recognizable types and a generic fallback", async ({page}, testInfo) => {
+    await new DataSupport(page).agents.interceptGetAgentRequest({body: {...mockAgent, allowed_actions: ["agent.read", "agent.update"]}});
     support.files = fileIconFixtures;
     const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
     for (const label of ["PDF file", "Spreadsheet file", "Image file", "Archive file", "Generic file"]) {
       await expect(files.files.getByRole("img", {name: label, exact: true})).toBeVisible();
     }
     await expect(files.files.getByRole("button", {name: "Download quarterly-report.pdf"})).toBeVisible();
+    await expect(page.getByRole("heading", {name: "Artifacts", exact: true})).toBeVisible();
+    await expect(page.getByRole("link", {name: "Artifacts", exact: true})).toBeVisible();
     await files.files.screenshot({path: testInfo.outputPath("file-list-icons.png")});
+    await page.screenshot({path: testInfo.outputPath("artifacts-tab.png"), fullPage: true});
   });
 
-  test("editors confirm deletion and the list updates", async ({page}) => {
+  test("editors confirm deletion and the list updates", async ({page}, testInfo) => {
     await new DataSupport(page).agents.interceptGetAgentRequest({body: {...mockAgent, allowed_actions: ["agent.read", "agent.update"]}});
     const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
     await files.delete("pipeline.csv");
     await expect(files.deleteDialog).toContainText("pipeline.csv");
+    await page.screenshot({path: testInfo.outputPath("artifact-delete-confirmation.png"), fullPage: true});
     expect(support.deleteRequests).toBe(0);
     await files.cancelDelete();
     await expect(files.deleteDialog).toHaveCount(0);

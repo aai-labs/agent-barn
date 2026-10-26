@@ -7,13 +7,22 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 ## Current state
 
 - Delivered: AF-388 manual authoring is merged through PR #308.
-- Dependency: AF-389 [PR #326](https://github.com/aai-labs/agent-barn/pull/326) is included in fetched staging via merge `42ea3fc7`. AF-415 originally launched from its feature branch and is now locally rebased onto `origin/staging` at `e207a212`. The remote draft PR target has not been changed or pushed.
+- Dependency: AF-389 [PR #326](https://github.com/aai-labs/agent-barn/pull/326) is included in fetched staging via merge `42ea3fc7`. AF-415 originally launched from its feature branch and is now locally rebased onto `origin/staging` at `e207a212`. The PR delivery is being refreshed against staging after the independent review.
 - Implemented in AF-415 draft [PR #328](https://github.com/aai-labs/agent-barn/pull/328): shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
 - Reviewed: the complete local feature at `36096b17` was independently reviewed against staging `e207a212`; the two blocking findings were fixed in `ef802873`, and an independent focused recheck approved that correction with no new blockers. Full-review and recheck scope/verification are distinguished in the artifact evidence.
 - Next: finalize PR delivery and AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
 - Blockers: AF-389's uncertain-effect automatic retry, truthful stop/quiescence, live OpenClaw Agent-session acceptance and run-read-policy coordination remain open. Storage does not resolve them. Production Garage provisioning and rollout are separate authorized operational steps.
 
 ## Changes
+
+### 2026-10-26 — AF-415 — Artifacts navigation and PR delivery evidence
+
+- Changed: the Agent tab now reads Artifacts and uses the package icon; existing `tab=files` links remain valid. Accessible Agent/run/step labels and the real-browser probe use Artifacts consistently.
+- Developer guidance: README now includes the actual uv/Python bootstrap prerequisite, full-stack/native artifact setup, smoke test, maintenance/retry guidance, troubleshooting and focused checks. The artifact contract includes topology and asynchronous provisioning diagrams.
+- Evidence: fresh current-interface screenshots include navigation, common file formats, provisioning states, deletion confirmation and per-file errors. PR attachment captions label these fixture renders separately from real storage/runtime/browser verification.
+- Verification: all 16 artifact browser tests pass with the visible Artifacts label; the real image/API/persistent-Garage/browser contract passes after the rename (1 test, 26.58 seconds). API/UI quality, migration-head, chart, shell and local link checks pass. This navigation/docs/evidence follow-up was locally verified after independent approval of `ef802873`.
+- Evidence storage: screenshots are uploaded directly to the PR description; the repository screenshot evidence directory is removed at the maintainer's request.
+- Delivery: existing [AF-415 PR #328](https://github.com/aai-labs/agent-barn/pull/328) is refreshed against staging; no duplicate feature PR, runtime Agent deletion, merge or external deployment is included.
 
 ### 2026-10-26 — AF-415 — independent-review cleanup pin correction (local, not pushed)
 

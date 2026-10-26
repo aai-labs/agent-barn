@@ -454,7 +454,7 @@ Persistent storage checks add two explicit opt-in contracts:
 - `make test-artifact-deployment` requires Docker, both runtime image variables,
   pnpm/Node and installed Chromium. Both native CLIs publish through the real API
   to the shipped persistent Compose Garage. After container replacement, Chromium
-  signs into the real local API, opens Agent Files and verifies actual downloads;
+  signs into the real local API, opens Agent Artifacts and verifies actual downloads;
   there is no API-route or download interception. PostgreSQL/identity are disposable
   fixtures; external integrations and Kubernetes Agent execution are not live.
 - `make test-garage-cluster` requires Docker, k3d, kubectl, Helm 3.19.0 and the

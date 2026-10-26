@@ -57,10 +57,10 @@ export function AgentFiles({ agentId, runId, stepId, polling = false, canManageF
     <AppErrorState error={files.error} title="Files are unavailable" onRetry={() => void files.refetch()} />
   );
   if (!files.data) return <p role="status">Loading files…</p>;
-  const label = stepId ? "Step files" : runId ? "Run files" : "Agent files";
+  const label = stepId ? "Step artifacts" : runId ? "Run artifacts" : "Agent artifacts";
   return (
     <section aria-label={label} className="mt-4 space-y-4">
-      <h3 className="font-semibold">Files</h3>
+      <h3 className="font-semibold">Artifacts</h3>
       {storage.isPending && <StorageStateCard icon={Loader2} loading title="Checking artifact storage…" description="Checking whether this Agent is ready to share files." />}
       {storage.error && <AppErrorState error={storage.error} title="Storage status is unavailable" onRetry={() => void storage.refetch()} />}
       {storage.data?.state === "NOT_CONFIGURED" && <StorageStateCard icon={CloudOff} title="Artifact storage is unavailable" description="Storage needs to be configured by an administrator. Text conversations remain available." />}
