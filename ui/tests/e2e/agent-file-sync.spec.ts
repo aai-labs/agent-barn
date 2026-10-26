@@ -170,7 +170,6 @@ test.describe("Agent File sync activity", () => {
       mockFileSyncEntry("moved_not_synced", "workspace/budget.xlsx", at),
       mockFileSyncEntry("folder_restored", null, at),
       mockFileSyncEntry("conflict_agent_won", "workspace/plan.md", at),
-      mockFileSyncEntry("deleted_by_agent", "workspace/old.md", at),
       mockFileSyncEntry("skipped_too_large", "workspace/video.mp4", at),
       mockFileSyncEntry("skipped_name", "workspace/a:b.md", at),
       mockFileSyncEntry("skipped_no_space", "workspace/data.csv", at),
@@ -184,7 +183,6 @@ test.describe("Agent File sync activity", () => {
       "workspace/budget.xlsx was added in OneDrive. The agent doesn't use it, so it was moved to _Not synced.",
       "The agent's folder was renamed, moved or deleted in OneDrive. It was put back.",
       "workspace/plan.md changed in the agent and in OneDrive at the same time. The agent's version was kept; the other edit is in OneDrive's version history.",
-      "The agent deleted workspace/old.md, so it was deleted in OneDrive too.",
       "workspace/video.mp4 is over 100 MB, so it isn't synced.",
       "workspace/a:b.md has a name or path OneDrive doesn't accept, so it isn't synced.",
       "The agent's disk was full, so an edit to workspace/data.csv couldn't be applied yet. It will be retried.",
@@ -222,11 +220,11 @@ test.describe("Agent File sync activity", () => {
     expect(activity.requestedPages).toEqual([1, 2]);
   });
 
-  test("says so when nothing has happened yet", async ({ page }) => {
+  test("says every change synced when nothing is listed", async ({ page }) => {
     const { fileSyncPage } = await open(page);
 
-    await expect(fileSyncPage.activityList().getByRole("heading", { name: "Sync activity" })).toBeVisible();
-    await expect(fileSyncPage.activityList()).toContainText("Nothing has happened yet.");
+    await expect(fileSyncPage.activityList().getByRole("heading", { name: "Changes that didn't sync" })).toBeVisible();
+    await expect(fileSyncPage.activityList()).toContainText("Every change synced as made.");
     await expect(fileSyncPage.loadMoreButton()).toHaveCount(0);
   });
 
@@ -235,7 +233,7 @@ test.describe("Agent File sync activity", () => {
       activityReadStatus: 500,
       entries: [mockFileSyncEntry("restored", "workspace/report.md", "2026-10-26T09:00:00Z")],
     });
-    await expect(fileSyncPage.activityList()).toContainText("We couldn't load the sync history");
+    await expect(fileSyncPage.activityList()).toContainText("We couldn't load the changes that didn't sync");
     await expect(fileSyncPage.card()).toContainText("Synced");
 
     activity.failReadsWith(200);

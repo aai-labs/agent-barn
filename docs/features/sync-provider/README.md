@@ -296,7 +296,7 @@ An Agent's **File sync** tab (`?tab=file-sync`, in the panel's Work group) shows
   - "Not connected": Owners and Admins get a link to Organization settings → Sync, and everyone else is told an Owner or Admin can connect one.
 - **Open in {provider}** opens the folder in a new tab, whenever the folder exists.
 - **The switch,** a "Sync this agent's files" toggle on the right of the card, shows the switch's position in every state, including while not connected. It appears only with `agent.update`, and calls [the switch's request](#turning-sync-off) at once, then reads the status again.
-- **Sync activity:** below the card, [the history](#activity) in plain sentences, newest first, each with its time, 20 at a time with Load more. One sentence per kind, naming the path and the provider; a folder entry names the folder instead. With no entries it says "Nothing has happened yet."
+- **Changes that didn't sync:** below the card, [the history](#activity) in plain sentences, newest first, each with its time, 20 at a time with Load more: every change that didn't go through as made (undone, restored, moved back, moved to `_Not synced/`, folder put back, the Agent's version kept, skipped). One sentence per kind, naming the path and the provider; a folder entry names the folder instead. With no entries it says "Every change synced as made." Changes that did sync, a person's applied edit or the Agent's own change or delete, are not listed.
 - **Refreshing:** the status is read again every 30 s while the tab is open; the history is read when the tab opens and after the switch changes. A failed read of either is shown in place with Retry, and the other part still shows.
 - **Caching:** the query is keyed by Organization and Agent id, so switching Organization never shows another one's status.
 
@@ -304,7 +304,7 @@ An Agent's **File sync** tab (`?tab=file-sync`, in the panel's Work group) shows
 
 Everything File Sync does that a person should be able to see is stored in `sync_activity`, at the time it actually happened: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever.
 
-`GET /organizations/{organization_id}/agents/{agent_id}/file-sync/activity?page&page_size` lists one Agent's rows, newest first (ties by id), with `page`, `page_size`, `total` and `items` of `{id, kind, path, occurred_at}`. `page_size` is 1 to 100, 20 by default. It needs `activity.read`, with the same 404 and 403 as [the status](#status). Rows from before a disconnect are included. `detail` is internal (a content hash or provider version that makes a skip recorded once) and is never returned; `path` is null for `folder_restored`.
+`GET /organizations/{organization_id}/agents/{agent_id}/file-sync/activity?page&page_size` lists one Agent's rows, newest first (ties by id), with `page`, `page_size`, `total` and `items` of `{id, kind, path, occurred_at}`. `page_size` is 1 to 100, 20 by default. It needs `activity.read`, with the same 404 and 403 as [the status](#status). Rows from before a disconnect are included. `deleted_by_agent` rows are left out of the list and its `total`, because the Agent's delete synced; they stay recorded. `detail` is internal (a content hash or provider version that makes a skip recorded once) and is never returned; `path` is null for `folder_restored`.
 
 | Kind | Meaning |
 |---|---|

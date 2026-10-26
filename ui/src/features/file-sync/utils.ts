@@ -66,8 +66,6 @@ export function fileSyncActivitySentence(entry: AgentFileSyncActivityEntry, prov
       return `The agent's folder was renamed, moved or deleted in ${provider}. It was put back.`;
     case "conflict_agent_won":
       return `${path} changed in the agent and in ${provider} at the same time. The agent's version was kept; the other edit is in ${provider}'s version history.`;
-    case "deleted_by_agent":
-      return `The agent deleted ${path}, so it was deleted in ${provider} too.`;
     case "skipped_too_large":
       return `${path} is over 100 MB, so it isn't synced.`;
     case "skipped_name":

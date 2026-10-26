@@ -37,7 +37,6 @@ export const AgentFileSyncActivityKindSchema = z.enum([
   "moved_not_synced",
   "folder_restored",
   "conflict_agent_won",
-  "deleted_by_agent",
   "skipped_too_large",
   "skipped_name",
   "skipped_no_space",

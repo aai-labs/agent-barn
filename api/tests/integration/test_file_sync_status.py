@@ -530,3 +530,15 @@ def test_a_folder_entry_has_no_path():
         _record(context, SyncActivityKind.FOLDER_RESTORED, None, datetime.now(UTC))
 
         assert_that(_paths(_read_activity(context)), equal_to([None]))
+
+
+def test_the_agents_own_deletes_are_not_listed_because_they_synced():
+    with given(_given()) as context:
+        now = datetime.now(UTC)
+        _record(context, SyncActivityKind.DELETED_BY_AGENT, "workspace/old.md", now)
+        _record(context, SyncActivityKind.RESTORED, "workspace/report.md", now - timedelta(minutes=1))
+
+        response = _read_activity(context)
+
+        assert_that(_paths(response), equal_to(["workspace/report.md"]))
+        assert_that(response.json()["total"], equal_to(1))

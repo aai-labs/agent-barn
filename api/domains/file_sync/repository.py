@@ -550,7 +550,11 @@ class AgentFileSyncRepository:
     def activity_page(
         self, agent_id: UUID, pagination: Pagination, scope: AuthorizationScope
     ) -> PaginatedItems[AgentFileSyncActivityRead]:
-        predicates = (col(SyncActivity.agent_id) == agent_id, *agent_scope_predicates(scope))
+        predicates = (
+            col(SyncActivity.agent_id) == agent_id,
+            col(SyncActivity.kind) != SyncActivityKind.DELETED_BY_AGENT,
+            *agent_scope_predicates(scope),
+        )
         with Session(self.delegate.engine) as session:
             total = (
                 session.scalar(
