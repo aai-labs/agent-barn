@@ -5,3 +5,11 @@ export const artifactFixture = {
   published_at: "2026-10-21T10:00:00Z", workflow_id: null,
   run_id: null, step_id: null, attempt_id: null,
 };
+
+export const fileIconFixtures = [
+  ["quarterly-report.pdf", "application/pdf"],
+  ["products.csv", "application/octet-stream"],
+  ["product-photo.png", "image/png"],
+  ["source-files.zip", "application/zip"],
+  ["project-data.bin", "application/octet-stream"],
+].map(([filename, content_type], index) => ({...artifactFixture, id: `file-icon-${index}`, filename, content_type}));

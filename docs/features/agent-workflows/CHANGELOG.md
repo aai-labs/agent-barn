@@ -14,6 +14,12 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-26 — AF-415 — file-list icons and row layout (local, not pushed)
+
+- Changed: file rows show format icons for common documents, spreadsheets, images, archives, code, audio/video and presentations, with a generic fallback. Compact metadata and a quieter checksum line accompany download icons and per-file link-request progress. Small-screen controls retain accessible filenames.
+- Verification: UI types/lint and all 12 artifact browser tests pass. The format/fallback fixture also covers a known extension with generic MIME metadata. Actual rendered fixture screenshots are captured; no API or storage contract changed.
+- Delivery: earlier provisioning, infinite-list and diagnostic work was committed as `d0ab467f`; this presentation follow-up remains local and uncommitted.
+
 ### 2026-10-26 — AF-415 — file-specific diagnostics and infinite Files (local, not pushed)
 
 - UI: provisioning states now follow the centered, dashed empty-card treatment used by Conversations, with state icons, progress and actions. Per-file failures use the shared icon alert card. UI types/lint and all 11 artifact browser cases pass after this presentation revision.

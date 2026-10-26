@@ -228,7 +228,10 @@ restart existing Agents to load this CLI change. See
 [download delivery operations](../guidelines/garage.md#download-delivery).
 
 The Agent Files view shows READY chat, human and workflow files with names,
-sizes, types, provenance and download actions. Run/step attachments use the same
+sizes, types, provenance and download actions. File rows use recognizable type
+icons with a generic fallback, based on the filename extension or MIME type.
+Download controls include an icon and retain an accessible filename label on small
+screens; SHA-256 remains available in the quieter checksum line. Run/step attachments use the same
 service alongside existing text summaries. Each click requests a fresh link;
 access errors conceal protected responses and display a retryable failure.
 Download errors appear beside the affected file, leaving other files usable.

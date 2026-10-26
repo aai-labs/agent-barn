@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { CircleAlert, CloudOff, HardDrive, Loader2, type LucideIcon } from "lucide-react";
+import { CircleAlert, CloudOff, Download, HardDrive, Loader2, type LucideIcon } from "lucide-react";
 import { getErrorDisplay } from "@/shared/api/error/get-error-display";
 import { useLoadMoreOnScroll } from "@/hooks/use-load-more-on-scroll";
 import { AppErrorState } from "@/components/app-error-state";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useArtifacts, useArtifactStorage } from "../hooks/use-artifacts";
 import type { Artifact } from "../schemas";
+import { FileTypeIcon, getFileKind } from "./file-type-icon";
 
 function provenance(file: Artifact) {
   if (file.source === "workflow") return `Workflow run ${file.runId?.slice(0, 8)} · attempt ${file.attemptId?.slice(0, 8) ?? "unknown"}`;
@@ -85,25 +86,36 @@ export function AgentFiles({ agentId, runId, stepId, polling = false, canProvisi
       )}
       <ul className="space-y-2">
         {items.map(file => (
-          <li key={file.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] p-4">
-            <div className="min-w-0">
-              <p className="break-all font-medium">{file.filename}</p>
-              <p className="text-xs text-[var(--ink-3)]">
-                {file.size.toLocaleString()} bytes · {file.contentType} · {provenance(file)}
-              </p>
-              <p className="break-all text-xs text-[var(--ink-3)]">SHA-256: {file.checksum}</p>
+          <li key={file.id} className="group rounded-2xl border border-[var(--line)] p-4 transition-colors hover:border-[var(--line-strong)] sm:px-5">
+            <div className="flex items-start gap-3 sm:items-center sm:gap-4">
+              <FileTypeIcon file={file} />
+              <div className="min-w-0 flex-1">
+                <p className="break-all text-sm font-medium leading-snug text-[var(--ink)]">{file.filename}</p>
+                <p className="mt-1 break-words text-xs leading-relaxed text-[var(--ink-3)]">
+                  {file.size.toLocaleString()} bytes · {getFileKind(file)?.label ?? "File"} · {provenance(file)}
+                </p>
+                <p className="mt-1 truncate font-mono text-[10px] leading-relaxed text-[var(--ink-3)]" title={`SHA-256: ${file.checksum}`}>
+                  SHA-256: {file.checksum}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="gap-2 rounded-lg sm:px-3"
+                disabled={download.isPending}
+                onClick={() => download.mutate(file.id)}
+                aria-label={`Download ${file.filename}`}
+              >
+                {download.isPending && download.variables === file.id
+                  ? <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+                  : <Download aria-hidden="true" className="size-4" />}
+                <span className="hidden sm:inline">Download</span>
+              </Button>
             </div>
-            <Button
-              variant="outline"
-              disabled={download.isPending}
-              onClick={() => download.mutate(file.id)}
-              aria-label={`Download ${file.filename}`}
-            >Download</Button>
             {download.error && download.variables === file.id && (
               <Alert
                 variant="destructive"
                 aria-label={`Download error for ${file.filename}`}
-                className="w-full rounded-xl px-4 py-3"
+                className="mt-3 w-full rounded-xl px-4 py-3"
                 style={{ background: "var(--err-soft)", borderColor: "color-mix(in srgb, var(--err) 30%, transparent)", color: "var(--err)" }}
               >
                 <CircleAlert aria-hidden="true" className="size-4" />

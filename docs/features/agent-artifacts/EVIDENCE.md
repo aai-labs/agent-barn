@@ -6,6 +6,21 @@ starting at local AF-389 head `6e109add`. AF-389 PR
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
+## File-list icon revision — 2026-10-26 (local, uncommitted)
+
+The preceding async-provisioning, diagnostics and infinite-list revision was
+committed locally as `d0ab467f`. The subsequent file-list presentation revision
+adds format icons, a generic fallback, readable type labels, download icons and
+link-request progress. Checksums remain in the row with full text/title available.
+The mapping prefers recognized filename extensions, then MIME metadata; this is
+presentation only and grants no access or file-execution authority.
+
+UI types/lint pass. **12 artifact Playwright tests passed in 14.8 seconds**,
+including format/fallback rendering with an octet-stream CSV, current download,
+infinite loading/retry and per-file diagnostic regressions. The captured PNG uses
+test data and actual rendered components; no new live storage/runtime evidence is
+claimed for this presentation-only change. No push, merge or external deployment.
+
 ## File-specific download errors and infinite Files — 2026-10-26 (local, not pushed)
 
 The reported artifact `01a17763-dca3-7251-8d39-0bc80ba0d98d` was inspected in the

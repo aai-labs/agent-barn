@@ -6,7 +6,7 @@ import { AgentFilesPage } from "../pages/agent-files-page.po";
 import { WorkflowDataSupport } from "../pages/data-support/workflow-data-support.po";
 import { WorkflowRunDataSupport, RUN_ID } from "../pages/data-support/workflow-run-data-support.po";
 import { WorkflowRunsPage } from "../pages/workflow-runs-page.po";
-import { artifactFixture } from "../fixtures/artifacts";
+import { artifactFixture, fileIconFixtures } from "../fixtures/artifacts";
 import { workflowFixture } from "../fixtures/workflows";
 
 test.describe("Agent artifacts", () => {
@@ -146,6 +146,16 @@ test.describe("Agent artifacts", () => {
     await files.retryMoreFiles();
     await expect(files.files.locator("li")).toHaveCount(25);
     await expect(files.files).not.toContainText("More files could not be loaded");
+  });
+
+  test("file rows show recognizable types and a generic fallback", async ({page}, testInfo) => {
+    support.files = fileIconFixtures;
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    for (const label of ["PDF file", "Spreadsheet file", "Image file", "Archive file", "Generic file"]) {
+      await expect(files.files.getByRole("img", {name: label, exact: true})).toBeVisible();
+    }
+    await expect(files.files.getByRole("button", {name: "Download quarterly-report.pdf"})).toBeVisible();
+    await files.files.screenshot({path: testInfo.outputPath("file-list-icons.png")});
   });
 
 });
