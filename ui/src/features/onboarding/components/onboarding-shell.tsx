@@ -24,6 +24,7 @@ function stepsFor(path: OnboardingPath, email: string) {
     path === "own"
       ? { title: "Set up your agent", description: "Template, runtime and model" }
       : { title: "Connect Telegram", description: "Chat with your agent there" },
+    { title: "Connect Gmail", description: "Optional, read-only" },
     { title: "You're ready", description: path === "own" ? "Chat now, add channels later" : "Your agent says hi" },
   ];
 }
@@ -43,7 +44,7 @@ export function OnboardingShell({
   footerEnd,
   children,
 }: {
-  step: 1 | 2 | 3;
+  step: 1 | 2 | 3 | 4;
   path: OnboardingPath;
   email: string;
   creditUsd?: number | null;
