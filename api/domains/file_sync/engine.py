@@ -330,7 +330,7 @@ class FileSyncEngine:
         if SyncProviderCapability.FILE_SYNC not in plugin.capabilities or root is None:
             return
         agents = self.repository.live_agent_names(connection.organization_id)
-        live = {agent_id for agent_id, _ in agents}
+        live = {agent_id for agent_id, _, _ in agents}
         folders = self.repository.folders(connection.id)
         retired = [folder for folder in folders if folder.agent_id not in live]
         self.repository.retire_folders([folder.id for folder in retired if folder.status != SyncFolderStatus.RETIRED])
@@ -347,10 +347,20 @@ class FileSyncEngine:
         folders = [folder for folder in folders if folder.id not in gone]
         by_agent = {folder.agent_id: folder for folder in folders}
         taken = {folder.folder_name.lower() for folder in folders}
-        for agent_id, agent_name in agents:
+        for agent_id, agent_name, sync_enabled in agents:
             base = folder_base_name(agent_name)
-            folder = by_agent.get(agent_id) or self._reserve(connection, agent_id, base, taken)
-            if folder is None or folder.status != SyncFolderStatus.ACTIVE:
+            folder = by_agent.get(agent_id)
+            if folder is None and sync_enabled:
+                folder = self._reserve(connection, agent_id, base, taken)
+            if folder is None:
+                continue
+            if not sync_enabled and folder.status == SyncFolderStatus.ACTIVE:
+                self.repository.set_folder_status(folder.id, SyncFolderStatus.DISABLED)
+                continue
+            if sync_enabled and folder.status == SyncFolderStatus.DISABLED:
+                self.repository.resume_folder(folder.id, datetime.now(UTC))
+                folder.status = SyncFolderStatus.ACTIVE
+            if folder.status != SyncFolderStatus.ACTIVE:
                 continue
             if folder.folder_item_id is None:
                 self._create(plugin, root, folder, base, taken)

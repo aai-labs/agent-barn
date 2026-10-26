@@ -185,7 +185,7 @@ Its reads and writes are background work under the [RBAC brief](../rbac/IMPLEMEN
 
 ### Agent Folders
 
-Every live Agent of the Organization gets a folder directly under "Agent Barn", recorded in `sync_agent_folder`.
+Every live Agent of the Organization whose [File Sync switch](#turning-sync-off) is on gets a folder directly under "Agent Barn", recorded in `sync_agent_folder`.
 - **New Agents:** the row is reserved first, oldest Agent first, and the database's unique name index decides ties. The folder is then created at the provider. A failed create is finished on the next pass.
 - **Renamed Agents:** their folder is renamed.
 - **Retired (deleted) Agents:** their folder is marked `retired` and deleted at the provider (to its recycle bin), then its row is removed. Its `sync_file` rows go with it, and `sync_activity` keeps its history with `folder_id` cleared. Retiring has no undo in Agent Barn, so the provider's recycle bin is the only way back.
@@ -194,7 +194,8 @@ Every live Agent of the Organization gets a folder directly under "Agent Barn", 
   - **Other failures:** any other provider failure is logged, and the next pass tries again. Other Agents' folders are not held up.
   - **The change feed** later reports the deletion, which matches no row, so nothing is rebuilt.
 - **Stopped Agents** (Stop, not Retire) keep their folder `active` and its files. Their jobs wait for the next start.
-- **Disabled folders** are left alone. When no folder needs changing, this part of the pass makes no provider call.
+- **The File Sync switch:** an Agent whose switch is off gets no folder. Each pass also brings the folder in line with the switch, for the cases the switch's own request could not reach (the folder didn't exist yet when it was changed): an `active` folder whose switch is off becomes `disabled`, and a `disabled` folder whose switch is on becomes `active` with a re-check requested.
+- **Disabled folders** are otherwise left alone: not renamed, and their files not synced. When no folder needs changing, this part of the pass makes no provider call.
 
 Folder names follow the Agent's name:
 - `: " * < > ? | \ /` and control characters become `-`;
@@ -256,7 +257,7 @@ Each Agent has a File Sync switch, `agent.file_sync_enabled`, on by default. It 
 - **In the same transaction:**
   - the Agent's folder on the Organization's active connection, if there is one, becomes `disabled` (off), or `active` with `resync_requested_at` set (on);
   - `agent.file_sync.disabled` or `agent.file_sync.enabled` is recorded for the security audit ([Domain Events](../domain-events.md)).
-- **While the switch is off:** the pod is refused (409) on every route, even before the folder is `disabled` and even when there is no folder.
+- **While the switch is off:** the pod is refused (409) on every route, even before the folder is `disabled` and even when there is no folder. An Agent without a folder doesn't get one, and the Sync Engine marks a folder it still finds `active` as `disabled` on its next pass ([Agent Folders](#agent-folders)).
 - **While the folder is `disabled`:** the pod is refused (409), the Sync Engine leaves the folder and its files alone, and the folder and everything in it stay at the provider. The folder's name stays taken.
 - **A restore** of an Agent Restore Point doesn't change the switch.
 

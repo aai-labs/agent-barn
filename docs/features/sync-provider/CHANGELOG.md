@@ -86,19 +86,18 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - `POST …/agents` accepts `file_sync_enabled` and stores it;
   - the Domain Events `agent.file_sync.enabled` / `agent.file_sync.disabled`, registered for the security audit;
   - `PUT …/agents/{agent_id}/file-sync` (`agent.update`): sets the switch, makes the Agent's folder `disabled` or `active` with a re-check requested, and records the event, in one transaction. A folder that is turned off is already refused by Ingest and left alone by the Sync Engine;
-  - Ingest refuses an Agent whose switch is off (409), with or without a folder.
+  - Ingest refuses an Agent whose switch is off (409), with or without a folder;
+  - the Sync Engine follows the switch: no folder for an Agent whose switch is off, and a folder brought in line with the switch when its request couldn't reach it.
 - In transition:
-  - an Agent switched off before it has a folder still gets one when the engine reaches it;
   - `resync_requested_at` is written but not yet read, so turning on resumes the folder without the re-check.
 - Next, in this order, each as its own slice:
-  1. the engine applying the switch to folders;
-  2. making the full re-list safe alongside the pod;
-  3. turning on re-checks the folder;
-  4. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
-  5. the Agent page File sync tab (status and switch, then activity);
-  6. the hire form option;
-  7. the local k3d end-to-end run;
-  8. closing this log.
+  1. making the full re-list safe alongside the pod;
+  2. turning on re-checks the folder;
+  3. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
+  4. the Agent page File sync tab (status and switch, then activity);
+  5. the hire form option;
+  6. the local k3d end-to-end run;
+  7. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -112,6 +111,26 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — The Sync Engine follows the switch
+
+- Delivered: `FileSyncEngine.reconcile_folders` reads each live Agent's `file_sync_enabled` (`live_agent_names` now returns it):
+  - **switch off, no folder:** none is reserved, so an Agent created with sync off, or turned off before the engine reached it, never gets a folder;
+  - **switch off, folder `active`:** the folder becomes `disabled` and stays at the provider (`set_folder_status`). This covers a folder the engine reserved while the switch was being turned off;
+  - **switch on, folder `disabled`:** the folder becomes `active` with `resync_requested_at` set (`resume_folder`), and is created or renamed in the same pass if needed.
+
+  `process_changes` still decides by the stored folder status alone, for both the active list and a tracked file's folder. A person's edit is therefore ignored once the folder is `disabled`, and never mistaken for a file moved away (which would restore the Agent's copy over it).
+- Changed:
+  - README "Agent Folders": folders follow the switch, and "Turning sync off" says an Agent without a folder doesn't get one.
+  - `CONTEXT.md`: an Agent created with the switch off gets no folder.
+- **Contract change in an existing test:** `test_a_folder_with_sync_turned_off_is_left_alone` used to set the folder `disabled` by hand. Under the switch, a pass would turn such a folder back on, so the test now turns the Agent's switch off and lets a pass disable the folder. Its assertions (name and provider folder unchanged after a rename) are the same.
+- Verified:
+  - **5 tests failing first:**
+    - 3 new in `test_file_sync_folders.py`: no folder for an Agent whose switch is off, over two passes (got two folders); an active folder disabled and kept (stayed active); a disabled folder resumed with a re-check (stayed disabled);
+    - the rewritten "left alone" test (the folder followed the rename);
+    - 1 new in `test_file_sync_remote_edits.py`: a full `run_pass` after the switch is turned off leaves a person's edit alone, with the folder `disabled`, no job and no activity (got a download job).
+  - **Suites:** folders, remote edits, engine pass and disconnect pass together (62). Remote moves, remote re-sync, the switch and Ingest auth pass together (82).
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
 
 ### 2026-10-26 — AF-385 — Ingest refuses an Agent whose switch is off
 

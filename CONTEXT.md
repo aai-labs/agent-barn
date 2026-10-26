@@ -353,7 +353,7 @@ An Agent's own folder inside the Organization's "Agent Barn" folder at its Sync 
 _Avoid_: OneDrive folder, agent drive, agent share
 
 **File Sync**:
-The two-way copying between an Agent's volume and its Agent Folder. The Agent's version always wins, and nothing done at the provider ever deletes a file on the volume. Each Agent has a File Sync switch, on by default: turning it off keeps the Agent Folder but stops syncing it. See the [ADR](docs/adr/2026-10-21-agent-file-sync-through-sync-provider.md).
+The two-way copying between an Agent's volume and its Agent Folder. The Agent's version always wins, and nothing done at the provider ever deletes a file on the volume. Each Agent has a File Sync switch, on by default: turning it off keeps the Agent Folder but stops syncing it, and an Agent created with it off gets no folder. See the [ADR](docs/adr/2026-10-21-agent-file-sync-through-sync-provider.md).
 _Avoid_: sync (unqualified), backup, mirror
 
 **Sync Category**:

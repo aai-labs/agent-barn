@@ -343,14 +343,14 @@ class FileSyncRepository:
             )
             session.commit()
 
-    def live_agent_names(self, organization_id: UUID) -> list[tuple[UUID, str]]:
+    def live_agent_names(self, organization_id: UUID) -> list[tuple[UUID, str, bool]]:
         with Session(self.delegate.engine) as session:
             rows = session.exec(
-                select(Agent.id, Agent.name)
+                select(Agent.id, Agent.name, Agent.file_sync_enabled)
                 .where(col(Agent.organization_id) == organization_id, col(Agent.deleted_at).is_(None))
                 .order_by(col(Agent.created_at), col(Agent.id))
             )
-            return [(agent_id, name) for agent_id, name in rows]
+            return [(agent_id, name, sync_enabled) for agent_id, name, sync_enabled in rows]
 
     def folders(self, connection_id: UUID) -> list[SyncAgentFolder]:
         with Session(self.delegate.engine) as session:
@@ -401,6 +401,22 @@ class FileSyncRepository:
     def remove_folder(self, folder_id: UUID) -> None:
         with Session(self.delegate.engine) as session:
             session.exec(sa.delete(SyncAgentFolder).where(col(SyncAgentFolder.id) == folder_id))
+            session.commit()
+
+    def set_folder_status(self, folder_id: UUID, folder_status: SyncFolderStatus) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(SyncAgentFolder).where(col(SyncAgentFolder.id) == folder_id).values(status=folder_status)
+            )
+            session.commit()
+
+    def resume_folder(self, folder_id: UUID, now: datetime) -> None:
+        with Session(self.delegate.engine) as session:
+            session.exec(
+                sa.update(SyncAgentFolder)
+                .where(col(SyncAgentFolder.id) == folder_id)
+                .values(status=SyncFolderStatus.ACTIVE, resync_requested_at=now)
+            )
             session.commit()
 
     def retire_folders(self, folder_ids: list[UUID]) -> None:
