@@ -116,6 +116,8 @@ Background work is the one exception, and it is narrow. It covers scheduled work
 - the request paths over the same table keep their `AgentAuthorization` checks unchanged
 - the work is driven by a schedule, a deploy, or an operator with cluster access, never by anything a product user can trigger
 
+One bounded case: turning an Agent's File Sync back on (an authorized `agent.update` request) leaves a request, `sync_agent_folder.resync_requested_at`, on that Agent's own folder. The Sync Engine reads it on its next scheduled pass and re-lists the whole connection, as it already does when the provider expires the change cursor. The request chooses only *when* that re-list happens, never what it may touch: the re-list keys by the connection's own persisted rows, and changes any folder or file only by the same rules as every other pass. So the user's input reaches the engine as a timing hint, and the exception still holds.
+
 A background method that acquires a user-facing caller stops qualifying and needs the accessible-Agent join like any other.
 
 The operator-only Agent Memory purge worker uses this background exception to consume

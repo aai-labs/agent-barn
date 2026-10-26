@@ -7,7 +7,13 @@ from sqlmodel import Session
 
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.file_sync.engine import FileSyncEngine
-from api.domains.file_sync.models import SyncActivityKind, SyncFile, SyncPendingAction
+from api.domains.file_sync.models import (
+    SyncActivityKind,
+    SyncAgentFolder,
+    SyncFile,
+    SyncFolderStatus,
+    SyncPendingAction,
+)
 from api.domains.sync_provider.models import SyncProviderConnection
 from api.domains.sync_provider.plugins.base import ProviderThrottled, RemoteChanges, RemoteItemMissing, SyncRoot
 from api.tests.core.givenpy import given
@@ -76,6 +82,40 @@ def _while_listing(context, monkeypatch: pytest.MonkeyPatch, action: Callable[[]
         return page
 
     monkeypatch.setattr(drive, "changes", changes)
+
+
+def _turn_sync(context, agent: Agent, *, on: bool) -> None:
+    with Session(context.postgres_delegate.engine) as session:
+        agent_row = session.get(Agent, agent.id)
+        folder = session.get(SyncAgentFolder, agent_folder(context).id)
+        assert agent_row is not None and folder is not None
+        agent_row.file_sync_enabled = on
+        folder.status = SyncFolderStatus.ACTIVE if on else SyncFolderStatus.DISABLED
+        if on:
+            folder.resync_requested_at = datetime.now(UTC)
+        session.add(agent_row)
+        session.add(folder)
+        session.commit()
+
+
+def _off_while(context, agent: Agent, people_change: Callable[[], None]) -> None:
+    _turn_sync(context, agent, on=False)
+    people_change()
+    _process(context)
+
+
+def _count_listings(context, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    drive = fake_drive(context)
+    listing = drive.changes
+    listings: list[bool] = []
+
+    def changes(root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
+        if from_start:
+            listings.append(True)
+        return listing(root, cursor, from_start=from_start)
+
+    monkeypatch.setattr(drive, "changes", changes)
+    return listings
 
 
 def test_an_expired_cursor_relists_everything_without_inventing_edits():
@@ -293,3 +333,96 @@ def test_a_file_deleted_during_a_relisting_does_not_fail_the_pass(monkeypatch):
 
         assert_that(failure, none())
         assert_that(activity_entries(context), equal_to([]))
+
+
+def test_edits_made_while_sync_was_off_are_found_when_it_is_turned_on():
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"), ("workspace/AGENTS.md", b"rules"))
+
+        def people_edit() -> None:
+            fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/notes.md", b"edited")
+            fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/AGENTS.md", b"mine")
+
+        _off_while(context, agent, people_edit)
+
+        assert_that([row.pending for row in synced_files(context).values()], equal_to([None, None]))
+
+        _turn_sync(context, agent, on=True)
+        _process(context)
+
+        assert_that(_row(context, "workspace/notes.md").pending, equal_to(SyncPendingAction.DOWNLOAD))
+        assert_that(
+            (_row(context, "workspace/AGENTS.md").pending, _row(context, "workspace/AGENTS.md").pending_activity),
+            equal_to((SyncPendingAction.REUPLOAD, SyncActivityKind.EDIT_UNDONE)),
+        )
+
+
+def test_deletes_and_new_files_made_while_sync_was_off_are_handled_when_it_is_turned_on():
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"))
+
+        def people_change() -> None:
+            fake_drive(context).user_deletes(context.sync_root, "Sales Bot/workspace/notes.md")
+            fake_drive(context).user_adds(context.sync_root, "Sales Bot/workspace/mine.md", b"mine")
+
+        _off_while(context, agent, people_change)
+        _turn_sync(context, agent, on=True)
+
+        _process(context)
+
+        row = _row(context, "workspace/notes.md")
+        assert_that(
+            (row.pending, row.pending_activity), equal_to((SyncPendingAction.REUPLOAD, SyncActivityKind.RESTORED))
+        )
+        assert_that(_exists(context, "Sales Bot/_Not synced/mine.md"), equal_to(True))
+        assert_that(activity_entries(context), equal_to([(SyncActivityKind.MOVED_NOT_SYNCED, "workspace/mine.md")]))
+
+
+def test_a_folder_deleted_while_sync_was_off_is_rebuilt_when_it_is_turned_on():
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"))
+        _off_while(context, agent, lambda: fake_drive(context).user_deletes(context.sync_root, "Sales Bot"))
+        _turn_sync(context, agent, on=True)
+
+        _process(context)
+
+        assert_that(agent_folder(context).folder_item_id, none())
+        assert_that((SyncActivityKind.FOLDER_RESTORED, None) in activity_entries(context), equal_to(True))
+
+
+def test_the_re_check_request_is_cleared_after_the_pass():
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"))
+        _off_while(context, agent, lambda: None)
+        _turn_sync(context, agent, on=True)
+
+        _process(context)
+
+        assert_that(agent_folder(context).resync_requested_at, none())
+
+
+def test_a_turn_on_made_during_a_re_check_survives_it(monkeypatch):
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"))
+        _off_while(context, agent, lambda: None)
+        _turn_sync(context, agent, on=True)
+        _while_listing(context, monkeypatch, lambda: _turn_sync(context, agent, on=True))
+
+        _process(context)
+
+        assert_that(agent_folder(context).resync_requested_at, not_none())
+
+
+def test_two_turn_ons_before_a_pass_cause_one_re_check(monkeypatch):
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"))
+        _off_while(context, agent, lambda: None)
+        _turn_sync(context, agent, on=True)
+        _turn_sync(context, agent, on=False)
+        _turn_sync(context, agent, on=True)
+        listings = _count_listings(context, monkeypatch)
+
+        _process(context)
+        _process(context)
+
+        assert_that(len(listings), equal_to(1))

@@ -212,6 +212,7 @@ Duplicate names, compared case-insensitively, get the lowest free ` (2)`, ` (3)`
 After the folders, each pass reads the provider's changes under "Agent Barn" since the connection's `sync_cursor`. That is one provider call per page, and normally one per pass.
 - **Starting point:** a connection's first pass only records a cursor starting now, so files already there are not treated as edits.
 - **Saving progress:** the cursor is saved after each page. A page interrupted by throttling or a failure is read again on the next pass; handling the same change twice does nothing more.
+- **Sync turned back on:** a folder with `resync_requested_at` set ([Turning sync off](#turning-sync-off)) makes the pass re-list everything, exactly as for an expired cursor below, instead of reading the feed. Changes made at the provider while sync was off were skipped by earlier passes, so this is how they are found: edits become downloads or undos, new files are parked, deleted files are restored, a deleted folder is rebuilt. Afterwards each request is cleared only if it still holds the value the pass read, so turning sync on again during the re-list asks for another one. Several turn-ons before a pass make one re-list.
 - **Expired cursor:** when the provider says the cursor is no longer valid (`RemoteResyncRequired`), the pass lists everything under "Agent Barn" from the start and handles each item as a change. Matching content versions mean no edit is invented. Afterwards:
   - an active Agent folder that was not listed is rebuilt;
   - a synced file not listed, in a folder that was, is restored from the Agent, unless the pod uploaded or confirmed it after the listing began (the pod keeps syncing while the engine lists, so such a file is simply newer than the listing);
@@ -292,6 +293,7 @@ Everything File Sync does that a person should be able to see is stored in `sync
 - **Conflicts keep the Agent's version.** The person's edit survives only in the provider's version history.
 - **Running Agents** start syncing after their next restart or managed update.
 - **Pods ask Ingest every 15 s** even when their Organization has no connection, so that sync starts as soon as one is made.
+- **Turning sync on re-lists the whole connection,** every Agent's folder, not only the one turned on: one provider call per page of the whole "Agent Barn" folder, and one database read per item. Nothing limits how often a user with `agent.update` can turn sync off and on; each turn-on that a pass sees costs one re-list, and frequent toggling across many Agents could lead the provider to throttle the Organization's connection.
 
 ## OneDrive provider
 

@@ -403,6 +403,21 @@ class FileSyncRepository:
             session.exec(sa.delete(SyncAgentFolder).where(col(SyncAgentFolder.id) == folder_id))
             session.commit()
 
+    def clear_resync(self, requested: dict[UUID, datetime]) -> None:
+        if not requested:
+            return
+        with Session(self.delegate.engine) as session:
+            for folder_id, requested_at in requested.items():
+                session.exec(
+                    sa.update(SyncAgentFolder)
+                    .where(
+                        col(SyncAgentFolder.id) == folder_id,
+                        col(SyncAgentFolder.resync_requested_at) == requested_at,
+                    )
+                    .values(resync_requested_at=None)
+                )
+            session.commit()
+
     def set_folder_status(self, folder_id: UUID, folder_status: SyncFolderStatus) -> None:
         with Session(self.delegate.engine) as session:
             session.exec(

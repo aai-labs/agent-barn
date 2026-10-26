@@ -88,16 +88,15 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - `PUT …/agents/{agent_id}/file-sync` (`agent.update`): sets the switch, makes the Agent's folder `disabled` or `active` with a re-check requested, and records the event, in one transaction. A folder that is turned off is already refused by Ingest and left alone by the Sync Engine;
   - Ingest refuses an Agent whose switch is off (409), with or without a folder;
   - the Sync Engine follows the switch: no folder for an Agent whose switch is off, and a folder brought in line with the switch when its request couldn't reach it;
-  - the full re-list is safe alongside the pod: no false restore for a file uploaded during the listing, and no failed pass for a file gone before it is parked.
-- In transition:
-  - `resync_requested_at` is written but not yet read, so turning on resumes the folder without the re-check.
+  - the full re-list is safe alongside the pod: no false restore for a file uploaded during the listing, and no failed pass for a file gone before it is parked;
+  - turning sync on re-checks the folder: the next pass re-lists, so changes people made while sync was off are handled.
+- In transition: none.
 - Next, in this order, each as its own slice:
-  1. turning on re-checks the folder;
-  2. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
-  3. the Agent page File sync tab (status and switch, then activity);
-  4. the hire form option;
-  5. the local k3d end-to-end run;
-  6. closing this log.
+  1. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
+  2. the Agent page File sync tab (status and switch, then activity);
+  3. the hire form option;
+  4. the local k3d end-to-end run;
+  5. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -111,6 +110,28 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — Turning sync on re-checks the folder
+
+- Delivered: `FileSyncEngine.process_changes` reads `resync_requested_at` on the active folders.
+  - **Any request set:** the pass runs `_relist` instead of following the feed. That finds what people changed while sync was off, which earlier passes skipped because the folder was `disabled`.
+  - **Compare-and-clear:** afterwards, `FileSyncRepository.clear_resync` clears each request only where it still holds the value read at the start, so a turn-on during the re-list survives for the next pass.
+  - **Requests left in place:** a pass interrupted by throttling or a failure raises before the clear, so its requests are retried.
+  - **Coalescing:** several turn-ons before one pass make one re-list.
+- Changed:
+  - README "People's edits" (sync turned back on) and "Known limits of file sync" (the re-list covers the whole connection; no rate limit on toggling).
+  - RBAC brief: the background-work exception records the one bounded case where a user's authorized turn-on asks the engine for a re-list, and why the exception still holds.
+- Verified:
+  - **6 new tests in `test_file_sync_remote_resync.py`.** `_turn_sync` writes what the switch's request writes: the switch, the folder status, and the request time.
+  - **5 failed first:**
+    - edits made while off become a download and an undo (got none);
+    - a delete is restored and a new file parked (got none);
+    - a deleted folder is rebuilt (the folder id stayed);
+    - the request is cleared (stayed set);
+    - two turn-ons cause one re-list (got none).
+  - **The sixth** (a turn-on made during a re-check survives it) passed before the change, because nothing cleared requests yet. With an unconditional clear put in by hand it failed, so it guards the compare-and-clear.
+  - **Suites:** re-sync, remote edits, the engine pass and remote moves pass together (57). Folders, the switch, disconnect and re-sync pass together (74).
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
 
 ### 2026-10-26 — AF-385 — The full re-list is safe alongside the pod
 

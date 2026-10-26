@@ -169,10 +169,17 @@ class FileSyncEngine:
             by_name={folder.folder_name.lower(): (folder, runtime) for folder, runtime in active},
             by_item={folder.folder_item_id: folder for folder, _ in active if folder.folder_item_id is not None},
         )
+        requested = {
+            folder.id: folder.resync_requested_at for folder, _ in active if folder.resync_requested_at is not None
+        }
         try:
-            self._follow(changes, connection.sync_cursor)
+            if requested:
+                self._relist(changes)
+            else:
+                self._follow(changes, connection.sync_cursor)
         except RemoteResyncRequired:
             self._relist(changes)
+        self.repository.clear_resync(requested)
 
     def _follow(self, changes: _Changes, cursor: str) -> None:
         while True:
