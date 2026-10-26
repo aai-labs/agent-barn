@@ -55,9 +55,9 @@ def endpoint(value: str) -> str:
 
 
 def default_endpoint(port: int) -> str:
-    # Linux host address reachable by browsers, Compose and k3d Agent pods.
-    network = json.loads(run(["docker", "network", "inspect", "bridge"]).stdout)[0]
-    return "http://" + network["IPAM"]["Config"][0]["Gateway"] + f":{port}"
+    # Only native API/operator processes use the host-published S3 port.
+    # Compose uses garage:3900; browsers and Agent pods use app download links.
+    return f"http://127.0.0.1:{port}"
 
 
 def main_project() -> str:
@@ -117,21 +117,25 @@ def local_setup(directory: Path, port: int | None, public_endpoint: str | None) 
         "port": port,
         "endpoint": endpoint(public_endpoint) if public_endpoint else default_endpoint(port),
         "endpoint_derived": public_endpoint is None,
-        "bucket": "agent-artifacts",
-        "access_key": "GK" + secrets.token_hex(16),
-        "secret_key": secrets.token_hex(32),
+        "admin_token": secrets.token_hex(32),
     }
     private_file(directory / "rpc-secret", secrets.token_hex(32))
-    private_file(
-        directory / "server.env",
-        f"GARAGE_DEFAULT_ACCESS_KEY=GK{secrets.token_hex(16)}\nGARAGE_DEFAULT_SECRET_KEY={secrets.token_hex(32)}\nGARAGE_DEFAULT_BUCKET={state['bucket']}\n",
-    )
     private_file(directory / "garage.toml", (ROOT / "docker/garage/garage.toml").read_text())
     write_local_state(directory, state)
     return state
 
 
 def write_local_state(directory: Path, state: dict) -> None:
+    state.setdefault("admin_token", secrets.token_hex(32))
+    private_file(directory / "admin-token", state["admin_token"])
+    config_path = directory / "garage.toml"
+    if config_path.exists() and "[admin]" not in config_path.read_text():
+        private_file(
+            config_path,
+            config_path.read_text()
+            + '\n[admin]\napi_bind_addr = "[::]:3903"\nadmin_token_file = "/secrets/admin-token"\n',
+        )
+    private_file(directory / "provisioner.env", provisioner_env(state, "http://garage:3903"))
     private_file(
         directory / "compose.env",
         f"GARAGE_SAVED_STATE_DIR={directory}\nGARAGE_SAVED_S3_PORT={state['port']}\n"
@@ -175,27 +179,15 @@ def local_compose(directory: Path, state: dict) -> list[str]:
     ]
 
 
-def provision_bucket(cli, bucket: str, access_key: str, secret_key: str) -> None:
-    if cli(["bucket", "info", bucket], check=False).returncode:
-        cli(["bucket", "create", bucket])
-    if cli(["key", "info", access_key], check=False).returncode:
-        cli(
-            ["json-api", "ImportKey", "-"],
-            data=json.dumps({"accessKeyId": access_key, "secretAccessKey": secret_key, "name": "agentbarn-artifacts"}),
-        )
-    # No owner or global bucket-creation grant reaches the application.
-    cli(["bucket", "allow", bucket, "--key", access_key, "--read", "--write"])
+def provisioner_env(state: dict, origin: str) -> str:
+    return f"ARTIFACT_PROVISIONER_URL={origin}\nARTIFACT_PROVISIONER_TOKEN={state['admin_token']}\n"
 
 
 def application_env(state: dict) -> str:
     return "".join(
         f"{key}={value}\n"
         for key, value in {
-            "ARTIFACT_S3_BUCKET": state["bucket"],
             "ARTIFACT_S3_ENDPOINT_URL": state["endpoint"],
-            "ARTIFACT_S3_REGION": "garage",
-            "ARTIFACT_S3_ACCESS_KEY": state["access_key"],
-            "ARTIFACT_S3_SECRET_KEY": state["secret_key"],
         }.items()
     )
 
@@ -252,7 +244,6 @@ def local(args) -> None:
         node_id = cli(["node", "id"]).stdout.strip()
         if state.get("node_id") and state["node_id"] != node_id:
             raise ValueError("Garage node identity changed; stop and restore the original metadata and data")
-        provision_bucket(cli, state["bucket"], state["access_key"], state["secret_key"])
         state.update(initialized=True, node_id=node_id)
         write_local_state(directory, state)
         private_file(directory / "application.env", application_env(state))
@@ -331,10 +322,10 @@ def cluster_config(args) -> None:
     directory.chmod(0o700)
     state_file = directory / "cluster.json"
     origin = endpoint(args.endpoint or "")
-    if not origin.startswith("https://") and not args.allow_http_local:
-        raise ValueError("Cluster downloads require an HTTPS origin")
     if state_file.exists():
         state = json.loads(state_file.read_text())
+        if "admin_token" not in state:
+            raise ValueError("Legacy shared-bucket configuration requires a separately approved migration plan")
         if any(
             state[key] != value
             for key, value in {"namespace": args.namespace, "release": args.release, "endpoint": origin}.items()
@@ -345,15 +336,17 @@ def cluster_config(args) -> None:
             "namespace": args.namespace,
             "release": args.release,
             "endpoint": origin,
-            "bucket": "agent-artifacts",
-            "access_key": "GK" + secrets.token_hex(16),
-            "secret_key": secrets.token_hex(32),
+            "admin_token": secrets.token_hex(32),
             "rpc_secret": secrets.token_hex(32),
         }
         private_file(state_file, json.dumps(state))
     private_file(
         directory / "rpc-secret.json",
-        secret_manifest(args.release + "-rpc", args.namespace, {"rpc-secret": state["rpc_secret"]}),
+        secret_manifest(
+            args.release + "-rpc",
+            args.namespace,
+            {"rpc-secret": state["rpc_secret"], "admin-token": state["admin_token"]},
+        ),
     )
     print(
         f"Private cluster RPC Secret prepared: {directory / 'rpc-secret.json'}; apply only to the authorized target cluster"
@@ -424,7 +417,14 @@ def cluster_init(args) -> None:
         time.sleep(1)
     else:
         raise RuntimeError("Garage layout did not become available")
-    provision_bucket(cli, state["bucket"], state["access_key"], state["secret_key"])
+    private_file(
+        args.state_dir / "provisioner-secret.json",
+        secret_manifest(
+            release + "-artifact-provisioner",
+            state["namespace"],
+            read_env_text(provisioner_env(state, f"http://{release}:3903")),
+        ),
+    )
     values = read_env_text(application_env(state))
     private_file(
         args.state_dir / "application-secret.json",
@@ -450,9 +450,6 @@ def main() -> None:
     parser.add_argument("--release", default="garage")
     parser.add_argument("--capacity", default="10GB")
     parser.add_argument("--kubeconfig", type=Path)
-    parser.add_argument(
-        "--allow-http-local", action="store_true", help="Only for disposable local cluster verification"
-    )
     args = parser.parse_args()
     if args.action == "cluster-init" and not args.kubeconfig:
         parser.error("cluster-init requires an explicit --kubeconfig")

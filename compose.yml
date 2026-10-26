@@ -22,16 +22,18 @@ x-api-env: &api-env
   HINDSIGHT_DB_PASSWORD: ""
   HINDSIGHT_LITELLM_API_KEY: ""
   # Agent pods in k3d report workflow step outcomes to the API through the host.
-  ARTIFACT_RUNTIME_BASE_URL: ${ARTIFACT_RUNTIME_BASE_URL:-http://host.docker.internal:${API_PORT:?API_PORT is required}/artifact-runtime/v1}
+  ARTIFACT_RUNTIME_BASE_URL: ${ARTIFACT_RUNTIME_BASE_URL:-http://host.docker.internal:${API_PORT:?API_PORT is required}/api/v1/agent-artifacts/runtime}
   WORKFLOW_RUNTIME_BASE_URL: ${WORKFLOW_RUNTIME_BASE_URL:-http://host.docker.internal:${API_PORT:?API_PORT is required}/workflow-runtime/v1}
+  # Even an operator's shell/.env must not leak control-plane authority to API/purge.
+  ARTIFACT_PROVISIONER_URL: ""
+  ARTIFACT_PROVISIONER_TOKEN: ""
+  ARTIFACT_S3_ACCESS_KEY: ""
+  ARTIFACT_S3_SECRET_KEY: ""
 
 # Shared application processes do not need object-store credentials.
 x-unprivileged-env: &unprivileged-env
   <<: *api-env
-  ARTIFACT_S3_BUCKET: ""
   ARTIFACT_S3_ENDPOINT_URL: ""
-  ARTIFACT_S3_ACCESS_KEY: ""
-  ARTIFACT_S3_SECRET_KEY: ""
 
 services:
   # Opt in with COMPOSE_PROFILES=local-hindsight. The backend has no published
@@ -135,6 +137,7 @@ services:
     environment:
       <<: *api-env
       MEMORY_RUNTIME_SERVICE_KEY: ${MEMORY_RUNTIME_SERVICE_KEY:-}
+      ARTIFACT_S3_ENDPOINT_URL: http://garage:3900
       # Agent pods run in k3d, outside this Compose network, so they reach the
       # Communications gateway through the same host hop as Ingest and LiteLLM.
       COMMUNICATIONS_BASE_URL: ${COMMUNICATIONS_BASE_URL:-http://host.docker.internal:${COMMUNICATIONS_PORT:-8002}/communications/v1}
@@ -340,6 +343,31 @@ services:
     ports:
       - "${GATEWAY_PORT:-8004}:8003"
 
+  artifact-provisioner:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "api.domains.artifacts.provisioning"]
+    env_file:
+      - path: .env
+      - path: .garage/application.env
+        required: false
+      - path: .garage/provisioner.env
+        required: false
+    environment:
+      DB_CONNECTION_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      ARTIFACT_S3_ENDPOINT_URL: http://garage:3900
+      ARTIFACT_S3_ACCESS_KEY: ""
+      ARTIFACT_S3_SECRET_KEY: ""
+    volumes:
+      - ./api:/app/api
+    depends_on:
+      garage:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+
   artifact-purge:
     build:
       context: .
@@ -352,6 +380,7 @@ services:
         required: false
     environment:
       <<: *api-env
+      ARTIFACT_S3_ENDPOINT_URL: http://garage:3900
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

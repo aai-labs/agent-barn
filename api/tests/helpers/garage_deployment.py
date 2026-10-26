@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from api.scripts.provision_garage import ROOT, local_compose, read_env
+from api.tests.helpers.artifacts import registered_compose_storage
 
 
 @contextmanager
@@ -36,7 +37,9 @@ def persistent_garage():
                 raise RuntimeError("Persistent Garage test bootstrap failed")
             state = json.loads((directory / "state.json").read_text())
             compose = local_compose(directory, state)
-            yield read_env(directory / "application.env"), compose, command
+            environment = read_env(directory / "application.env")
+            with registered_compose_storage(environment, compose):
+                yield environment, compose, command
         finally:
             if compose is None and (directory / "state.json").exists():
                 compose = local_compose(directory, json.loads((directory / "state.json").read_text()))

@@ -54,7 +54,8 @@ workflow building. WF01 has no execution API or runtime dispatch. See
 The shared `artifacts` domain owns chat/workflow file metadata, publication, links
 and purge; its [feature contract](../features/agent-artifacts.md) owns lifecycle
 and references. Runtime requests have a separate Agent credential boundary at
-`/artifact-runtime/v1` on the product API listener.
+`/api/v1/agent-artifacts/runtime` on the product API listener, composed within
+the artifact domain router but excluded from the public user API schema.
 
 ## Dependency direction
 

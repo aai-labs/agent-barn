@@ -195,11 +195,9 @@ AGENT_DEFAULT_MODEL=
 # different identity or cluster than this deploy.
 # POD_KUBECONFIG_B64=
 
-# Private Garage: complete docs/guidelines/garage.md bootstrap before enabling.
+# Required private Garage: complete docs/guidelines/garage.md bootstrap before deployment.
 # Cluster RPC and application keys live in pre-created Kubernetes Secrets, not CI.
-GARAGE_ENABLED=false
-GARAGE_S3_HOST=
-GARAGE_RPC_SECRET_NAME=garage-rpc
-GARAGE_TLS_SECRET=garage-s3-tls
 ARTIFACT_STORAGE_SECRET=
 ARTIFACT_PURGE_ENABLED=false
+# The provisioner always runs; this dedicated Secret is NEVER mounted by the API.
+ARTIFACT_PROVISIONER_SECRET=

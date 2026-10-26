@@ -11,18 +11,17 @@ from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import boto3
-import httpx
 import pytest
 from botocore.config import Config as S3Config
-from botocore.exceptions import ClientError
 from hamcrest import assert_that, equal_to
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from api.domains.artifacts.models import Artifact
+from api.domains.artifacts.models import Artifact, ArtifactBucket
 from api.domains.artifacts.service import ArtifactService
 from api.scripts.provision_garage import ROOT, local_compose, read_env
 from api.tests.core.givenpy import given
 from api.tests.core.modules import set_env_variable
+from api.tests.helpers.artifacts import ComposeGarageProvisioner, registered_compose_storage
 from api.tests.integration.test_artifacts import CONTENT, publish, staged
 from api.tests.integration.test_workflows import _GIVEN, auth, base
 
@@ -72,38 +71,29 @@ def test_persistent_compose_api_download_restart_and_purge(tmp_path):
             text=True,
             check=True,
         ).stdout
-        assert_that("ImportKey" in events, equal_to(True), "The key-import exec event must be observed")
-        assert_that(
-            state["secret_key"] in events, equal_to(False), "The application secret must never enter exec arguments"
-        )
+        assert_that("ImportKey" in events, equal_to(False), "Storage bootstrap must not create a shared data key")
+        assert_that(state["admin_token"] in events, equal_to(False))
         environment = read_env(directory / "application.env")
-        key_before = environment["ARTIFACT_S3_ACCESS_KEY"]
-        for name in ("state.json", "application.env", "server.env", "rpc-secret"):
+        assert_that("ARTIFACT_S3_ACCESS_KEY" in environment, equal_to(False))
+        for name in ("state.json", "application.env", "provisioner.env", "admin-token", "rpc-secret"):
             assert_that((directory / name).stat().st_mode & 0o077, equal_to(0))
-        client = boto3.client(
-            "s3",
-            endpoint_url=environment["ARTIFACT_S3_ENDPOINT_URL"],
-            region_name="garage",
-            aws_access_key_id=key_before,
-            aws_secret_access_key=environment["ARTIFACT_S3_SECRET_KEY"],
-            config=S3Config(signature_version="s3v4", s3={"addressing_style": "path"}),
-        )
-        with pytest.raises(ClientError) as rejected:
-            client.create_bucket(Bucket="unauthorized-new-bucket")
-        assert_that(rejected.value.response["ResponseMetadata"]["HTTPStatusCode"], equal_to(403))
-        with pytest.raises(ClientError):
-            client.delete_bucket(Bucket=environment["ARTIFACT_S3_BUCKET"])
-        with given([set_env_variable(environment), *_GIVEN]) as context:
+        with (
+            registered_compose_storage(environment, compose) as provider,
+            given([set_env_variable(environment), *_GIVEN]) as context,
+        ):
             artifact = publish(context)
+            with Session(context.postgres_delegate.engine) as session:
+                key_before = session.exec(select(ArtifactBucket.access_key)).one()
             path = base(context) + f"/artifacts/{artifact['id']}"
             before = context.client.get(path + "/download-link", headers=auth(context)).json()
-            assert_that(httpx.get(before["url"]).content, equal_to(CONTENT))
+            assert_that(context.client.get(before["url"]).content, equal_to(CONTENT))
             # Recreate the container and network, preserving only the named volumes and keys.
             subprocess.run([*compose, "down"], check=True, capture_output=True)
             restarted = subprocess.run(command, capture_output=True, check=False)
             assert_that(restarted.returncode, equal_to(0), "Persistent Garage restart failed")
-            assert_that(read_env(directory / "application.env")["ARTIFACT_S3_ACCESS_KEY"], equal_to(key_before))
-            assert_that(httpx.get(before["url"]).content, equal_to(CONTENT))
+            assert_that(read_env(directory / "application.env"), equal_to(environment))
+            assert_that(provider.key(key_before) is not None, equal_to(True))
+            assert_that(context.client.get(before["url"]).content, equal_to(CONTENT))
             backup = tmp_path / "backup"
             result = subprocess.run(
                 [sys.executable, str(script), "backup", "--state-dir", str(directory), "--backup-dir", str(backup)],
@@ -142,16 +132,18 @@ def test_persistent_compose_api_download_restart_and_purge(tmp_path):
                 check=False,
             )
             assert_that(result.returncode, equal_to(0), "Restored Garage did not start")
-            assert_that(read_env(restored / "application.env")["ARTIFACT_S3_ACCESS_KEY"], equal_to(key_before))
-            assert_that(httpx.get(before["url"]).content, equal_to(CONTENT))
+            assert_that(read_env(restored / "application.env"), equal_to(environment))
+            provider.compose = restored_compose
+            assert_that(provider.key(key_before) is not None, equal_to(True))
+            assert_that(context.client.get(before["url"]).content, equal_to(CONTENT))
             after = context.client.get(path + "/download-link", headers=auth(context)).json()
-            assert_that(httpx.get(after["url"]).content, equal_to(CONTENT))
+            assert_that(context.client.get(after["url"]).content, equal_to(CONTENT))
             assert_that(
                 context.client.get(base(context) + "/artifacts", headers=auth(context)).json()["total"], equal_to(1)
             )
             assert_that(context.client.delete(path, headers=auth(context)).status_code, equal_to(204))
             assert_that(context.injector.get(ArtifactService).purge(), equal_to(1))
-            assert_that(httpx.get(after["url"]).status_code, equal_to(404))
+            assert_that(context.client.get(after["url"]).status_code, equal_to(403))
             incomplete = staged(context)
             with Session(context.postgres_delegate.engine) as session:
                 row = session.get_one(Artifact, UUID(incomplete["id"]))
@@ -260,7 +252,7 @@ def test_failed_first_start_can_retry_with_another_port(tmp_path, explicit_endpo
         assert_that(final["port"], equal_to(replacement_port))
         assert_that(urlsplit(final["endpoint"]).port, equal_to(replacement_port))
         assert_that(read_env(directory / "application.env")["ARTIFACT_S3_ENDPOINT_URL"], equal_to(final["endpoint"]))
-        assert_that(final["access_key"], equal_to(state["access_key"]))
+        assert_that(final["admin_token"], equal_to(state["admin_token"]))
     finally:
         if compose is not None:
             subprocess.run([*compose, "down", "--volumes"], capture_output=True, check=False)
@@ -287,7 +279,11 @@ def test_main_compose_adopts_standalone_storage_without_changing_bytes(tmp_path)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-    environment = {key: value for key, value in os.environ.items() if key != "COMPOSE_PROJECT_NAME"}
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "COMPOSE_PROJECT_NAME" and not key.startswith("GARAGE_SAVED_")
+    }
     # Use the real helper from outside this root to create its former standalone store.
     first = [sys.executable, str(ROOT / "api/scripts/provision_garage.py"), "up", "--state-dir", str(directory)]
     main = ["docker", "compose", "-f", str(project / "compose.yml")]
@@ -304,15 +300,20 @@ def test_main_compose_adopts_standalone_storage_without_changing_bytes(tmp_path)
         before = json.loads((directory / "state.json").read_text())
         old_compose = local_compose(directory, before)
         credentials = read_env(directory / "application.env")
+        provider = ComposeGarageProvisioner(old_compose)
+        access_key, secret_key = "GK" + uuid4().hex, uuid4().hex + uuid4().hex
+        provider.import_key(access_key, secret_key, "adoption-proof")
+        name = "adoption-proof-" + uuid4().hex
+        provider.create_bucket(access_key, name)
         client = boto3.client(
             "s3",
             endpoint_url=credentials["ARTIFACT_S3_ENDPOINT_URL"],
             region_name="garage",
-            aws_access_key_id=credentials["ARTIFACT_S3_ACCESS_KEY"],
-            aws_secret_access_key=credentials["ARTIFACT_S3_SECRET_KEY"],
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
             config=S3Config(signature_version="s3v4", s3={"addressing_style": "path"}),
         )
-        client.put_object(Bucket=before["bucket"], Key="artifacts/adoption-proof", Body=CONTENT)
+        client.put_object(Bucket=name, Key="artifacts/adoption-proof", Body=CONTENT)
         # Older private interpolation files are upgraded even for storage-only commands.
         (directory / "compose.env").write_text(f"GARAGE_STATE_DIR={directory}\nGARAGE_S3_PORT={port}\n")
         status = subprocess.run(
@@ -333,7 +334,7 @@ def test_main_compose_adopts_standalone_storage_without_changing_bytes(tmp_path)
         adopted_compose = local_compose(directory, after)
         assert_that(after["project"], equal_to(project.name))
         assert_that(after["volume_project"], equal_to(before["project"]))
-        for field in ("node_id", "access_key", "secret_key", "endpoint", "port"):
+        for field in ("node_id", "admin_token", "endpoint", "port"):
             assert_that(after[field], equal_to(before[field]), field)
         rendered = subprocess.run(
             [*main, "config", "--format", "json"], capture_output=True, env=environment, check=True
@@ -350,9 +351,7 @@ def test_main_compose_adopts_standalone_storage_without_changing_bytes(tmp_path)
             [*main, "ps", "-q", "garage"], capture_output=True, env=environment, check=True
         ).stdout
         assert_that(main_identifier, equal_to(identifier), "Root Compose must reuse the adopted service")
-        assert_that(
-            client.get_object(Bucket=before["bucket"], Key="artifacts/adoption-proof")["Body"].read(), equal_to(CONTENT)
-        )
+        assert_that(client.get_object(Bucket=name, Key="artifacts/adoption-proof")["Body"].read(), equal_to(CONTENT))
     finally:
         if adopted_compose:
             subprocess.run([*adopted_compose, "down", "--volumes"], capture_output=True, check=False)

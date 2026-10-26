@@ -29,4 +29,12 @@ and DELETE require `agent.update` and a full-access key. File bytes are immutabl
 failed publication retries create a new artifact identity. Optional `run_id` and
 `step_id` filters apply before pagination. Download links may be shared through
 existing tools; anyone holding one can read until expiry. Expiry neither deletes
-the file nor changes approval state.
+the file nor changes approval state. Returned URLs use the existing app domain and
+`/api/v1/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}?access=…`.
+Treat the entire URL, including its opaque query, as a bearer credential; do not
+parse or rewrite it. The app streams bytes from private storage, whose provider
+validates signature and expiry. No separate public storage address, login cookie
+or Authorization header is needed to use an issued URL. Invalid/expired authority
+returns 403; unavailable storage returns 503. Responses force attachment download,
+octet-stream and no-store. Request a fresh link if expired; neither a bare artifact
+ID nor a User API key grants access on the byte route.

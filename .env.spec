@@ -239,23 +239,26 @@ MEMORY_LITELLM_KEY_HASHES=
 COMPOSE_PROFILES=
 HINDSIGHT_DB_PASSWORD=
 
-# Optional private Agent artifacts (text-only operation works with an empty bucket).
-ARTIFACT_S3_BUCKET=
+# Private Agent artifacts; the server derives a fixed bucket name from each Agent UUID.
+# An empty endpoint retains text-only operation. Download links use the existing WEB_APP_URL.
 ARTIFACT_S3_ENDPOINT_URL=
-ARTIFACT_S3_REGION=us-east-1
-# Service-only credentials; leave empty to use the API workload's AWS identity.
-ARTIFACT_S3_ACCESS_KEY=
-ARTIFACT_S3_SECRET_KEY=
-ARTIFACT_RUNTIME_BASE_URL=http://host.docker.internal:8000/artifact-runtime/v1
+# No installation-wide data credentials or workload-identity fallback.
+# Per-Agent data secrets are encrypted with AGENT_TOKEN_ENCRYPTION_KEY in PostgreSQL.
+# ARTIFACT_PROVISIONER_URL/TOKEN belong ONLY in the isolated provisioner environment,
+# generated locally in .garage/provisioner.env, never in this shared file.
+ARTIFACT_RUNTIME_BASE_URL=http://host.docker.internal:8000/api/v1/agent-artifacts/runtime
 ARTIFACT_MAX_BYTES=26214400
 ARTIFACT_LINK_MAX_SECONDS=3600
 ARTIFACT_RETENTION_DAYS=30
 
-# Required persistent Garage and artifact-purge run in the main Compose stack.
+# Persistent Garage, isolated artifact-provisioner, and artifact-purge run in Compose.
 # ./run.sh prepares private storage automatically; no profile is needed.
-# make garage-up works independently of k3d/model providers. Generated keys stay
-# in ignored .garage/application.env; do not paste them into shared .env.
+# make garage-up works independently of k3d/model providers. Control-plane credentials
+# stay in ignored .garage/provisioner.env; application.env contains no storage keys.
 # Bootstrap appends non-secret GARAGE_SAVED_* settings to .env; do not edit those.
 # Set these only on first initialization; otherwise stored values are reused.
+# Optional loopback operator/native port override (default 3900), not a download port.
 GARAGE_S3_PORT=
+# Legacy name: internal native/operator S3 endpoint, not a public browser URL.
+# Defaults to http://127.0.0.1:<saved port>; Compose uses garage:3900.
 GARAGE_PUBLIC_ENDPOINT=

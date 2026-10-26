@@ -27,6 +27,8 @@ def main() -> None:
                 "--set",
                 "artifacts.existingSecret=private-artifact-storage",
                 "--set",
+                "artifacts.provisionerSecret=private-artifact-provisioner",
+                "--set",
                 "artifacts.retentionDays=31",
             ],
             check=False,
@@ -38,6 +40,7 @@ def main() -> None:
         items = [item for item in yaml.safe_load_all(result.stdout) if item]
         jobs = [item for item in items if item["metadata"]["name"] == "artifact-test-artifact-purge"]
         assert len(jobs) == int(enabled)
+        assert len([item for item in items if item["metadata"]["name"] == "artifact-test-artifact-provisioner"]) == 1
         for item in items:
             if item["kind"] not in {"Deployment", "CronJob"}:
                 continue
@@ -47,8 +50,15 @@ def main() -> None:
             pod = spec["template"]["spec"]
             for container in pod["containers"]:
                 names = [ref["secretRef"]["name"] for ref in container.get("envFrom", []) if "secretRef" in ref]
-                expected = item["metadata"]["name"] in {"artifact-test", "artifact-test-artifact-purge"}
+                expected = item["metadata"]["name"] in {
+                    "artifact-test",
+                    "artifact-test-artifact-purge",
+                    "artifact-test-artifact-provisioner",
+                }
                 assert ("private-artifact-storage" in names) == expected, item["metadata"]["name"]
+                assert ("private-artifact-provisioner" in names) == (
+                    item["metadata"]["name"] == "artifact-test-artifact-provisioner"
+                )
             if item["metadata"]["name"] == "artifact-test-artifact-purge":
                 assert pod["automountServiceAccountToken"] is False
                 assert pod["containers"][0]["command"] == ["python", "-m", "api.domains.artifacts.maintenance"]
@@ -58,8 +68,35 @@ def main() -> None:
             if item["kind"] == "Secret" and "ARTIFACT_RETENTION_DAYS" in item.get("stringData", {})
         )
         assert config["stringData"]["ARTIFACT_RETENTION_DAYS"] == "31"
-        assert config["stringData"]["ARTIFACT_RUNTIME_BASE_URL"] == "http://artifact-test:8000/artifact-runtime/v1"
+        assert (
+            config["stringData"]["ARTIFACT_RUNTIME_BASE_URL"]
+            == "http://artifact-test:8000/api/v1/agent-artifacts/runtime"
+        )
         assert not any(key.startswith("ARTIFACT_S3_") for key in config["stringData"])
+    private = subprocess.run(
+        ["helm", "template", "garage", str(ROOT / "helm/garage"), "--namespace", "artifact-fixture"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    private_items = [item for item in yaml.safe_load_all(private.stdout) if item]
+    assert not any(item["kind"] == "Ingress" for item in private_items)
+    private_policy = next(item for item in private_items if item["kind"] == "NetworkPolicy")
+    admin_rule = private_policy["spec"]["ingress"][2]
+    assert admin_rule["ports"] == [{"protocol": "TCP", "port": 3903}]
+    assert admin_rule["from"] == [
+        {
+            "podSelector": {
+                "matchLabels": {
+                    "app.kubernetes.io/name": "agentbarn-api",
+                    "app.kubernetes.io/component": "artifact-provisioner",
+                }
+            }
+        }
+    ]
+    private_sources = private_policy["spec"]["ingress"][1]["from"]
+    assert len(private_sources) == 1
+    assert private_sources[0]["podSelector"]["matchExpressions"][0]["values"] == ["api", "artifact-purge"]
     rendered = subprocess.run(
         [
             "helm",
@@ -93,6 +130,8 @@ def main() -> None:
     assert pod["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]
     assert len(stateful["spec"]["volumeClaimTemplates"]) == 2
     assert pod["containers"][0]["env"][0]["valueFrom"]["secretKeyRef"]["name"] == "garage-rpc"
+    admin_env = next(entry for entry in pod["containers"][0]["env"] if entry["name"] == "GARAGE_ADMIN_TOKEN")
+    assert admin_env["valueFrom"]["secretKeyRef"] == {"name": "garage-rpc", "key": "admin-token"}
     assert not any(item["kind"] in {"Secret", "ClusterRole", "CustomResourceDefinition"} for item in garage)
     config = next(item for item in garage if item["kind"] == "ConfigMap")
     assert len(config["data"]) == 3
@@ -101,7 +140,8 @@ def main() -> None:
         and "rpc_timeout_msec = 20000" in value
         and "rpc_ping_timeout_msec = 3000" in value
         and "s3_web" not in value
-        and "[admin]" not in value
+        and "[admin]" in value
+        and "admin_token" not in value
         for value in config["data"].values()
     )
     for index in range(3):

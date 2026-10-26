@@ -7,29 +7,63 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 ## Current state
 
 - Delivered: AF-388 manual authoring is merged through PR #308.
-- In transition: AF-389 Agent-session text execution is in open PR [#326](https://github.com/aai-labs/agent-barn/pull/326) against staging. This AF-415 worktree starts at local head `6e109add`; neither PR merge nor deployment is implied.
+- Dependency: AF-389 Agent-session execution is tracked in [PR #326](https://github.com/aai-labs/agent-barn/pull/326). AF-415 launched from local `6e109add` and integrates the current prerequisite-branch head `37901c38`; the PR remains based on `feature/af-389-run-workflows-real-outputs`.
 - Implemented in AF-415 draft [PR #328](https://github.com/aai-labs/agent-barn/pull/328): shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
-- Next: review and deploy AF-415 with private Garage configuration, then AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
+- Next: independently re-review the local per-Agent bucket/key and isolated-provisioner revision before push/deployment and AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
 - Blockers: AF-389's uncertain-effect automatic retry, truthful stop/quiescence, live OpenClaw Agent-session acceptance and run-read-policy coordination remain open. Storage does not resolve them. Production Garage provisioning and rollout are separate authorized operational steps.
 
 ## Changes
 
-### 2026-10-22 — AF-389 — update from latest staging
+### 2026-10-26 — AF-415 — fixed Agent-derived bucket names (local, not pushed)
 
-- Updated: Merged `origin/staging` at `d2cfca47` without text conflicts. Added no-op merge revision `b9e32d74a610` to join workflow head `f8740a67b788` with staging head `3bbf2465b9cb`; no data or schema operations are introduced.
-- Verification: All 102 workflow run/authoring and trigger-server tests pass after repairing the migration graph. `make check-api`, `make check-migrations`, `make check-workflows` (Helm 3.19.0), and `git diff --check` pass. No new live Agent or browser run is claimed.
+- Simplified: removed `ARTIFACT_S3_BUCKET_PREFIX` from configuration, bootstrap state generation, application settings and tests. Names are always `agent-artifacts-<agent UUID hex>`; key-local aliases need no installation namespace setting. The existing endpoint determines whether storage is configured, without adding a replacement toggle.
+- Preserved: each Agent still owns a distinct actual provider bucket and scoped data key; exact owner/bucket validation, retry journals and provider-ID isolation remain intact. No existing-file migration is introduced.
 
-### 2026-10-22 — AF-389 — remove the workflow concurrency cap
+### 2026-10-26 — AF-415 — deployment review simplifications (local, not pushed)
 
-- Changed: Removed the separate two-active-runs admission cap and its policy constant. Multiple runs of one or several workflows can start as sessions in the owning Agent; transactional start serialization and authorization remain in place.
-- Documentation: Updated the feature contract and operations guidance; removed obsolete capacity tests in favor of acceptance beyond the former cap.
-- Verification: Both updated acceptance tests failed against the original cap with HTTP 409. After removal, all 79 workflow run/authoring integration tests pass, along with `make check-api` and `git diff --check`.
+- Changed: the provisioner Deployment always runs; removed `ARTIFACT_PROVISIONER_ENABLED` and its chart gate. Signing uses the fixed `garage` region, with no `ARTIFACT_S3_REGION` configuration or override. These supersede the earlier configurable-region note.
+- Simplified: removed the optional `GARAGE_RPC_SECRET_NAME` deployment variable. The actual `garage-rpc` Secret remains mandatory for Garage RPC/node/CLI authentication and holds the separate private admin token.
+- Corrected: Kubernetes loads the admin token via a Secret-backed `GARAGE_ADMIN_TOKEN` environment reference, like the RPC secret. Garage rejects projected files with either world/group read permission, including `0440`; its strict check is not disabled. Local Compose retains its private `0600` file. The corrected three-node quorum/PVC contract passes in 254.69 seconds. Final focused verification passes 176 tests; API/static/migration/chart checks pass.
 
-### 2026-10-22 — AF-389 — synchronize the public Agent API guide
+### 2026-10-26 — AF-415 — per-Agent buckets and isolated provisioning (local, not pushed)
 
-- Corrected: The developer guide now describes steps as sessions in the owning Agent, inheriting its current configuration. Removed stale reasoning-only rejection and runtime-image pinning claims. Clarified current permissions, attention-blocked runs, unavailable approval/resume operations and best-effort cancellation.
-- Limits: Documented that failed/expired unfinished steps can currently retry automatically, dispatch deduplication does not guarantee exactly-once external effects, and the agreed uncertain-effect handling remains unimplemented. This documentation change does not change runtime behavior.
-- Verification: Compared the guide with the start/read/cancel services, runtime dispatch, DTOs and controller; checked Markdown structure and whitespace. No application tests were rerun for this prose-only correction.
+- Changed: each Agent gets a distinct private provider bucket and read/write data key. The ordinary API and file-purge worker resolve the exact owner/bucket key from encrypted PostgreSQL metadata; neither receives a shared data key or provisioning token. Agent runtimes remain credential-free at the storage layer.
+- Boundary: the maintainer approved a separate privileged provisioner. Its dedicated process and private admin endpoint own bucket/key creation and deleted-owner reclamation. Durable intent precedes provider I/O; uncertain creation/revocation responses retry the same identities. Cleanup retains data keys until every artifact is purged.
+- Schema/configuration: `a4152d0e1f32` adds the durable bucket/key journal and guarded downgrade. `ARTIFACT_S3_BUCKET_PREFIX` replaces the shared bucket/credential configuration. Compose/Helm/CI isolate the dedicated control-plane Secret. Existing file migration/legacy access is deliberately out of scope at the maintainer's request; old local buckets/volumes are not deleted.
+- Verification: real-Garage isolation, uncertain-response, owner-deletion and migration regressions pass; both runtime CLI image contracts and the authenticated browser/private-storage contract pass. A test-only shared-provider-bucket mutation was caught. Exact totals and limitations are in [evidence](../agent-artifacts/EVIDENCE.md).
+- Local operations: the additive schema is applied and the provisioner/API/purge are refreshed. One local Agent bucket is READY; app health is 200. No external provisioning, deployment, push or merge occurred. Earlier independent approval does not cover this revision.
+
+### 2026-10-26 — AF-415 — single domain router and runtime URL (local, not pushed)
+
+- Changed: `subapi.include_router(agent_artifacts_router)` mounts a real composed APIRouter; the domain includes management, bearer-download and runtime children. The former mounting helper is removed.
+- Changed: runtime base URL is `/api/v1/agent-artifacts/runtime`; defaults, Helm/Compose wiring and runtime/integration callers move together. The old root path is removed. Runtime routes retain Agent-only credentials and remain excluded from the public user API schema.
+- Operational impact: update explicit `ARTIFACT_RUNTIME_BASE_URL` overrides and update/restart existing Agents. This wire change supersedes the routing-helper arrangement covered by the earlier independent review.
+- Configuration: the default S3 signing region is now `garage`; alternate providers require an explicit region override.
+- Pending: bucket-per-Agent storage and per-bucket data credentials are approved direction but not implemented by this routing change. Automatic provisioning still requires separately scoped administrative authority; its boundary must be settled before credential changes.
+
+### 2026-10-26 — AF-415 — domain-owned artifact route composition (local, not pushed)
+
+- Changed: app composition calls one `mount_agent_artifacts` entry point; the artifact domain mounts its management, bearer-download and runtime routers internally.
+- Preserved: product URLs/OpenAPI inventory, the root `/artifact-runtime/v1` machine protocol, and each surface's authentication boundary.
+- Review: independent Sol medium/full-access review approved the implementation with no required findings; optional follow-ups removed a stale SSH claim and added an actual ASGI disconnect cleanup regression. The focused suite passes 55 tests and API quality checks pass; inherited live acceptance gaps remain unchanged.
+
+### 2026-10-26 — AF-415 — natural file-delivery instructions (local, not pushed)
+
+- Changed: shared Hermes/OpenClaw instructions treat ordinary file/export requests as requests to create and publish the finished deliverable, with a user-facing download link; users need not mention the artifact CLI. Existing-file delivery renews the link instead of duplicating bytes.
+- Preserved: explicit keep-local requests, text/code-only replies, scratch-file exclusion, honest failure reporting, exact workflow references and existing tool/messaging approvals.
+- Verification boundary: generated runtime configuration tests check delivery policy and storage-disabled omission; live natural-language tool selection still needs a restarted Agent and a fresh conversation on each runtime.
+
+### 2026-10-26 — AF-415 — maintainer review corrections (local, not pushed)
+
+- Changed: app byte route is `/api/v1/agent-artifacts/...`; the provider-neutral storage contract retains the `ArtifactStorage` name.
+- Changed: Garage is an unconditional Helmfile release in every deployment workflow, with no `GARAGE_ENABLED` variable. Bootstrap remains an explicit operator prerequisite; private ingress settings are unchanged.
+- Documentation: removed setup-specific SSH instructions; clarified that `GARAGE_S3_PORT` is an optional loopback operator/native-development override, not a download or Agent requirement.
+
+### 2026-10-26 — AF-415 — private storage behind app byte downloads (local, not pushed)
+
+- Changed: app-facing download URLs and bounded API byte streaming replace direct storage URLs. Storage adapters retain provider signing, signature validation and expiry; the app treats download authority as opaque and adds no token issuer. The external app route is independent of the byte-store provider.
+- Preserved: private buckets, permission-checked issuance, bearer sharing, retention and workflow/checkpoint identity. Runtime retrieval uses its reachable app origin. Garage is loopback/private-service only; application Helmfile no longer creates a storage ingress or needs a separate storage hostname/TLS Secret.
+- Verification: real Garage regressions exercise same-app downloads, missing/tampered/expired provider authority, target substitution and actual streamed bytes. Operations guidance covers private storage connectivity, existing saved endpoints, logging, streaming and rollback. This replaces the unpushed separate public-storage endpoint workaround.
 
 ### 2026-10-24 — AF-415 — update prerequisite base and full verification
 
@@ -75,6 +109,23 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 - Delivered: one scoped CLI on both runtimes, ordinary chat publication, fresh signed links, Agent Files and workflow downloads alongside text results; active run pins and 30-day retention after release; deletion journals survive aggregate hard deletion.
 - Operations: storage remains optional for text-only work. Documented service-only bucket access, limits, URL bearer semantics, migration/guarded rollback, recovery and bounded purge CronJob. No production provisioning, merge or deployment.
 - Verification: see [evidence](../agent-artifacts/EVIDENCE.md), which distinguishes disposable real storage/runtime contracts from intercepted UI tests and unperformed live messaging/deployment acceptance.
+
+### 2026-10-22 — AF-389 — update from latest staging
+
+- Updated: Merged `origin/staging` at `d2cfca47` without text conflicts. Added no-op merge revision `b9e32d74a610` to join workflow head `f8740a67b788` with staging head `3bbf2465b9cb`; no data or schema operations are introduced.
+- Verification: All 102 workflow run/authoring and trigger-server tests pass after repairing the migration graph. `make check-api`, `make check-migrations`, `make check-workflows` (Helm 3.19.0), and `git diff --check` pass. No new live Agent or browser run is claimed.
+
+### 2026-10-22 — AF-389 — remove the workflow concurrency cap
+
+- Changed: Removed the separate two-active-runs admission cap and its policy constant. Multiple runs of one or several workflows can start as sessions in the owning Agent; transactional start serialization and authorization remain in place.
+- Documentation: Updated the feature contract and operations guidance; removed obsolete capacity tests in favor of acceptance beyond the former cap.
+- Verification: Both updated acceptance tests failed against the original cap with HTTP 409. After removal, all 79 workflow run/authoring integration tests pass, along with `make check-api` and `git diff --check`.
+
+### 2026-10-22 — AF-389 — synchronize the public Agent API guide
+
+- Corrected: The developer guide now describes steps as sessions in the owning Agent, inheriting its current configuration. Removed stale reasoning-only rejection and runtime-image pinning claims. Clarified current permissions, attention-blocked runs, unavailable approval/resume operations and best-effort cancellation.
+- Limits: Documented that failed/expired unfinished steps can currently retry automatically, dispatch deduplication does not guarantee exactly-once external effects, and the agreed uncertain-effect handling remains unimplemented. This documentation change does not change runtime behavior.
+- Verification: Compared the guide with the start/read/cancel services, runtime dispatch, DTOs and controller; checked Markdown structure and whitespace. No application tests were rerun for this prose-only correction.
 
 ### 2026-10-21 — AF-389 — PR preparation against latest staging
 

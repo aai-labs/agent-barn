@@ -8,7 +8,8 @@ rpcTimeoutMilliseconds: 20000
 # In-cluster probe deadline; failure detection still spans several ping intervals.
 rpcPingTimeoutMilliseconds: 3000
 replicationFactor: 3
-# Pre-created Secret with one 64-character hexadecimal rpc-secret entry.
+# Pre-created Secret with 64-character hexadecimal rpc-secret and admin-token entries.
+# Mounted only by Garage as Secret-backed environment variables; never by the API.
 existingRpcSecret: garage-rpc
 storageClass: ""
 metadataSize: 1Gi

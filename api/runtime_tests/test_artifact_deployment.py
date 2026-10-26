@@ -19,6 +19,7 @@ from alembic.config import Config as AlembicConfig
 from hamcrest import assert_that, equal_to
 from testcontainers.postgres import PostgresContainer
 
+from api.core.config import Config
 from api.domains.agents.builders.artifacts import ARTIFACT_COMMAND, ARTIFACT_TOOL
 from api.domains.artifacts.service import ArtifactService
 from api.runtime_tests.memory_helpers import selected_image
@@ -108,7 +109,7 @@ def test_real_runtimes_persistent_garage_and_authenticated_files_ui(tmp_path):
                                 "-v",
                                 f"{root / 'agentbarn-artifacts'}:/usr/local/bin/agentbarn-artifacts:ro",
                                 "-e",
-                                f"ARTIFACT_URL={api_url}/artifact-runtime/v1",
+                                f"ARTIFACT_URL={api_url}/api/v1/agent-artifacts/runtime",
                                 "-e",
                                 "ARTIFACT_API_KEY=" + headers["Authorization"].removeprefix("Bearer "),
                                 "-e",
@@ -129,6 +130,7 @@ def test_real_runtimes_persistent_garage_and_authenticated_files_ui(tmp_path):
                 with socket.socket() as listener:
                     listener.bind(("127.0.0.1", 0))
                     ui_port = listener.getsockname()[1]
+                context.injector.get(Config).web_app_url = f"http://127.0.0.1:{ui_port}"
                 environment = {
                     **os.environ,
                     "NEXT_PUBLIC_BACKEND_URL": api_url,

@@ -10,7 +10,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -104,8 +104,14 @@ def main() -> int:
             if args.command == "link":
                 print(json.dumps(link))
             else:
-                # Signed S3 URL carries its own authority; never forward the service bearer.
-                with opener.open(link["url"], timeout=120) as response:
+                # Use the Agent's reachable app origin, not the human-facing one.
+                # Provider authority is opaque and unchanged; no service bearer
+                # is forwarded to the app's capability-only byte route.
+                download = urlsplit(link["url"])
+                if not download.path.startswith("/api/v1/agent-artifacts/"):
+                    raise ValueError("Unexpected artifact download route")
+                download_url = urlunsplit(parts._replace(path=download.path, query=download.query, fragment=""))
+                with opener.open(download_url, timeout=120) as response:
                     content = response.read(link["artifact"]["size"] + 1)
                 artifact = link["artifact"]
                 if len(content) != artifact["size"] or hashlib.sha256(content).hexdigest() != artifact["checksum"]:

@@ -75,6 +75,11 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.existingRpcSecret | required "existingRpcSecret is required" }}
                   key: rpc-secret
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingRpcSecret }}
+                  key: admin-token
             - name: POD_NAME
               valueFrom:
                 fieldRef: {fieldPath: metadata.name}
@@ -85,6 +90,7 @@ spec:
           ports:
             - {name: s3, containerPort: 3900}
             - {name: rpc, containerPort: 3901}
+            - {name: admin, containerPort: 3903}
           readinessProbe:
             exec: {command: ["/garage", "health"]}
             periodSeconds: 5

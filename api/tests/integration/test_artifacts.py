@@ -1,8 +1,9 @@
+import base64
 import hashlib
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
-import httpx
 import pytest
 from hamcrest import assert_that, equal_to, has_length, is_
 from sqlmodel import Session, select
@@ -18,7 +19,7 @@ from api.domains.workflows.runtime_service import WorkflowRuntimeService
 from api.infrastructure.crypto import encrypt_token
 from api.tests.core.givenpy import given
 from api.tests.core.modules import set_env_variable
-from api.tests.helpers.artifacts import garage_storage
+from api.tests.helpers.artifacts import garage_storage, provision_agents
 from api.tests.helpers.workflows import draft
 from api.tests.integration.test_workflow_runs import attempt, start
 from api.tests.integration.test_workflows import _GIVEN, auth, base, switch_member
@@ -43,6 +44,7 @@ def metadata(content=CONTENT, **changes):
 
 
 def staged(context, payload=None):
+    provision_agents(context)
     response = context.client.post(base(context) + "/artifacts", headers=auth(context), json=payload or metadata())
     assert_that(response.status_code, equal_to(201), response.text)
     return response.json()
@@ -64,17 +66,102 @@ def test_real_private_bytes_signed_download_and_fresh_link(storage):
         assert_that(row["state"], equal_to("READY"))
         path = base(context) + f"/artifacts/{row['id']}"
         link = context.client.get(path + "/download-link", headers=auth(context)).json()
-        response = httpx.get(link["url"])
+        response = context.client.get(link["url"])
         assert_that(response.content, equal_to(CONTENT))
         assert_that(response.headers["content-disposition"].startswith("attachment"), is_(True))
-        assert_that(httpx.get(link["url"].split("?", 1)[0]).status_code, equal_to(403))
-        assert_that("X-Amz-Expires=900" in link["url"], is_(True))
+        assert_that(context.client.get(link["url"].split("?", 1)[0]).status_code, equal_to(403))
+        access = parse_qs(urlsplit(link["url"]).query)["access"][0]
+        assert_that("X-Amz-Expires=900" in base64.urlsafe_b64decode(access).decode(), is_(True))
         assert_that(
             context.client.get(path + "/download-link?seconds=3601", headers=auth(context)).status_code, equal_to(422)
         )
         listing = context.client.get(base(context) + "/artifacts", headers=auth(context)).json()
         assert_that(listing["items"], has_length(1))
         assert_that(set(row).intersection({"bucket", "object_key", "organization_id"}), equal_to(set()))
+
+
+def test_download_uses_app_origin_and_provider_authority_without_a_public_store(storage):
+    env, _ = storage
+    with given([set_env_variable({**env, "WEB_APP_URL": "https://files.example.test"}), *_GIVEN]) as context:
+        row = publish(context)
+        path = base(context) + f"/artifacts/{row['id']}/download-link"
+        response = context.client.get(path, headers=auth(context))
+        assert_that(response.status_code, equal_to(200))
+        url = response.json()["url"]
+        parsed = urlsplit(url)
+        assert_that(f"{parsed.scheme}://{parsed.netloc}", equal_to("https://files.example.test"))
+        assert_that("agent-artifact-test" in url or env["ARTIFACT_S3_ENDPOINT_URL"] in url, is_(False))
+        download = context.client.get(url)
+        assert_that(download.status_code, equal_to(200))
+        assert_that(download.content, equal_to(CONTENT))
+        assert_that(download.headers["cache-control"], equal_to("private, no-store"))
+        assert_that(download.headers["x-content-type-options"], equal_to("nosniff"))
+        assert_that(download.headers["content-type"], equal_to("application/octet-stream"))
+        assert_that(download.headers["content-length"], equal_to(str(len(CONTENT))))
+        assert_that(context.client.get(parsed.path).status_code, equal_to(403))
+        tampered = urlunsplit(parsed._replace(query=urlencode({"access": "invalid"})))
+        assert_that(context.client.get(tampered).status_code, equal_to(403))
+        headers = runtime_auth(context)
+        runtime_path = f"/api/v1/agent-artifacts/runtime/artifacts/{row['id']}/download-link"
+        shared = context.client.get(runtime_path, headers=headers).json()["url"]
+        assert_that(urlsplit(shared).netloc, equal_to(parsed.netloc))
+        assert_that(context.client.get(shared).content, equal_to(CONTENT))
+
+
+def test_provider_rejects_changed_authority_and_capability_for_a_different_file(storage):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        row = publish(context)
+        other = publish(context)
+        link = context.client.get(
+            base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
+        ).json()["url"]
+        assert_that(context.client.get(link).content, equal_to(CONTENT))
+        wrong_target = link.replace(row["id"], other["id"])
+        assert_that(context.client.get(wrong_target).status_code, equal_to(403))
+        wrong_tenant = link.replace(str(context.organization.id), str(uuid4()))
+        assert_that(context.client.get(wrong_tenant).status_code, equal_to(403))
+        parsed = urlsplit(link)
+        access = parse_qs(parsed.query)["access"][0]
+        authority = base64.urlsafe_b64decode(access).decode().replace("X-Amz-Expires=900", "X-Amz-Expires=901")
+        changed = base64.urlsafe_b64encode(authority.encode()).decode()
+        forged = urlunsplit(parsed._replace(query=urlencode({"access": changed})))
+        denied = context.client.get(forged)
+        assert_that(denied.status_code, equal_to(403))
+        assert_that("garage" in denied.text.lower() or "Signature" in denied.text, is_(False))
+
+
+@pytest.mark.parametrize("content", [b"", bytes(range(256)) * 1000])
+def test_app_streams_exact_empty_and_multichunk_bytes_with_safe_unicode_filename(storage, content):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        row = publish(context, staged(context, metadata(content, filename="résumé.csv")), content)
+        link = context.client.get(
+            base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
+        ).json()["url"]
+        response = context.client.get(link)
+        assert_that(response.status_code, equal_to(200))
+        assert_that(response.content, equal_to(content))
+        assert_that("r%C3%A9sum%C3%A9.csv" in response.headers["content-disposition"], is_(True))
+
+
+def test_private_store_failure_returns_retryable_error_without_its_address(storage, monkeypatch):
+    from api.infrastructure.s3.client import ArtifactStorage
+
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        row = publish(context)
+        link = context.client.get(
+            base(context) + f"/artifacts/{row['id']}/download-link", headers=auth(context)
+        ).json()["url"]
+
+        def unavailable(*args):
+            raise OSError("Private provider URL and credentials must not escape")
+
+        monkeypatch.setattr(context.injector.get(ArtifactStorage), "download", unavailable)
+        response = context.client.get(link)
+        assert_that(response.status_code, equal_to(503))
+        assert_that(response.json(), equal_to({"detail": "Artifact storage is unavailable"}))
 
 
 def test_checksum_failure_unavailable_and_retry_gets_new_identity(storage):
@@ -112,6 +199,7 @@ def test_duplicate_publish_immutable_and_changed_bytes_rejected(storage):
 
 
 def runtime_auth(context):
+    provision_agents(context)
     context.agent.status = AgentStatus.RUNNING
     context.agent.ingest_key_encrypted = encrypt_token(
         "test-ingest", context.injector.get(Config).agent_token_encryption_key
@@ -126,19 +214,20 @@ def test_runtime_chat_publication_and_rotated_credential(storage, runtime):
     with given([set_env_variable(env), *_GIVEN]) as context:
         context.agent.agent_type = runtime
         headers = runtime_auth(context)
-        path = "/artifact-runtime/v1/artifacts"
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
+        assert_that(context.client.get("/artifact-runtime/v1/artifacts", headers=headers).status_code, equal_to(404))
         row = context.client.post(path, headers=headers, json=metadata()).json()
         response = context.client.put(path + f"/{row['id']}/content", headers=headers, content=CONTENT)
         assert_that(response.status_code, equal_to(200), response.text)
         link = context.client.get(path + f"/{row['id']}/download-link", headers=headers).json()
-        assert_that(httpx.get(link["url"]).content, equal_to(CONTENT))
+        assert_that(context.client.get(link["url"]).content, equal_to(CONTENT))
         context.agent.ingest_key_encrypted = encrypt_token(
             "rotated", context.injector.get(Config).agent_token_encryption_key
         )
         context.injector.get(AgentRepository).save(context.agent)
         assert_that(context.client.get(path, headers=headers).status_code, equal_to(401))
-        # Previously issued bearer URL remains usable until its S3 expiry.
-        assert_that(httpx.get(link["url"]).content, equal_to(CONTENT))
+        # Previously issued bearer URL remains usable until its provider expiry.
+        assert_that(context.client.get(link["url"]).content, equal_to(CONTENT))
 
 
 def test_workflow_exact_handoff_pins_retention_and_cancel_keeps_files(storage):
@@ -151,7 +240,7 @@ def test_workflow_exact_handoff_pins_retention_and_cancel_keeps_files(storage):
         response, _, _ = start(context, saved)
         run_id = response.json()["id"]
         repo, current, token = attempt(context, run_id)
-        path = "/artifact-runtime/v1/artifacts"
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
         row = context.client.post(path + f"?attempt_id={current.id}", headers=headers, json=metadata()).json()
         response = context.client.put(path + f"/{row['id']}/content", headers=headers, content=CONTENT)
         assert_that(response.status_code, equal_to(200), response.text)
@@ -196,7 +285,7 @@ def test_stale_attempt_cannot_publish_orphan_bytes(storage):
         headers = runtime_auth(context)
         response, _, _ = start(context)
         repo, current, token = attempt(context, response.json()["id"])
-        path = "/artifact-runtime/v1/artifacts"
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
         row = context.client.post(path + f"?attempt_id={current.id}", headers=headers, json=metadata()).json()
         repo.complete(current.id, token, AttemptResult(summary="Done", criteria_met=True))
         response = context.client.put(path + f"/{row['id']}/content", headers=headers, content=CONTENT)
@@ -255,19 +344,19 @@ def test_signed_link_expires_without_deleting_file(storage):
         row = publish(context)
         path = base(context) + f"/artifacts/{row['id']}/download-link"
         old = context.client.get(path + "?seconds=1", headers=auth(context)).json()
-        assert_that(httpx.get(old["url"]).content, equal_to(CONTENT))
+        assert_that(context.client.get(old["url"]).content, equal_to(CONTENT))
         time.sleep(2)
-        expired = httpx.get(old["url"])
-        assert_that(expired.status_code, equal_to(400))  # Garage returns 400 for expired SigV4 requests.
+        expired = context.client.get(old["url"])
+        assert_that(expired.status_code, equal_to(403))  # Provider rejection is concealed by the app.
         assert_that(expired.content != CONTENT, is_(True))
         fresh = context.client.get(path, headers=auth(context)).json()
-        assert_that(httpx.get(fresh["url"]).content, equal_to(CONTENT))
+        assert_that(context.client.get(fresh["url"]).content, equal_to(CONTENT))
 
 
 def test_failed_storage_after_put_never_ready_and_purge_retries(storage, monkeypatch):
     from api.infrastructure.s3.client import ArtifactStorage
 
-    env, s3 = storage
+    env, _ = storage
     with given([set_env_variable(env), *_GIVEN]) as context:
         row = staged(context)
         adapter = context.injector.get(ArtifactStorage)
@@ -297,6 +386,7 @@ def test_failed_storage_after_put_never_ready_and_purge_retries(storage, monkeyp
             record = session.get_one(Artifact, UUID(row["id"]))
             assert_that((record.state, record.purge_attempts), equal_to(("DELETING", 1)))
             bucket, key = record.bucket, record.object_key
+            s3 = adapter.client(record)
             record.expires_at = datetime.now(UTC) - timedelta(seconds=1)
             session.add(record)
             session.commit()
@@ -323,7 +413,9 @@ def test_incomplete_upload_cleanup_and_unsafe_key_refusal(storage):
             session.commit()
         assert_that(context.injector.get(ArtifactService).purge(), equal_to(0))
         path = base(context) + f"/artifacts/{protected['id']}/download-link"
-        assert_that(httpx.get(context.client.get(path, headers=auth(context)).json()["url"]).content, equal_to(CONTENT))
+        assert_that(
+            context.client.get(context.client.get(path, headers=auth(context)).json()["url"]).content, equal_to(CONTENT)
+        )
         with Session(context.postgres_delegate.engine) as session:
             row = session.get_one(Artifact, UUID(incomplete["id"]))
             row.object_key = object_key(row)
@@ -351,7 +443,7 @@ def test_read_only_key_cannot_publish_or_delete(storage):
 
 
 def test_disabled_storage_keeps_text_workflows_usable():
-    with given([set_env_variable({"ARTIFACT_S3_BUCKET": ""}), *_GIVEN]) as context:
+    with given([set_env_variable({"ARTIFACT_S3_ENDPOINT_URL": ""}), *_GIVEN]) as context:
         response = context.client.post(base(context) + "/artifacts", headers=auth(context), json=metadata())
         assert_that(response.status_code, equal_to(503))
         response, _, _ = start(context)
@@ -410,11 +502,11 @@ def test_cross_tenant_and_runtime_identity_cannot_select_another_agents_bytes(st
         machine = runtime_auth(context)
         assert_that(
             context.client.get(
-                f"/artifact-runtime/v1/artifacts/{row['id']}/download-link", headers=machine
+                f"/api/v1/agent-artifacts/runtime/artifacts/{row['id']}/download-link", headers=machine
             ).status_code,
             equal_to(404),
         )
-        assert_that(httpx.get(link["url"]).content, equal_to(CONTENT))
+        assert_that(context.client.get(link["url"]).content, equal_to(CONTENT))
 
 
 def test_exact_review_reference_keeps_bytes_until_final_release(storage):
@@ -458,7 +550,7 @@ def test_attempt_expiring_during_real_storage_cannot_become_ready(storage, monke
         headers = runtime_auth(context)
         response, _, _ = start(context)
         _, active, _ = attempt(context, response.json()["id"])
-        path = "/artifact-runtime/v1/artifacts"
+        path = "/api/v1/agent-artifacts/runtime/artifacts"
         row = context.client.post(path + f"?attempt_id={active.id}", headers=headers, json=metadata()).json()
         with Session(context.postgres_delegate.engine) as session:
             current = session.get_one(WorkflowAttempt, active.id)
@@ -524,4 +616,4 @@ def test_concurrent_finalization_preserves_immutable_garage_bytes(storage):
         changed = context.client.put(path + "/content", headers=auth(context), content=b"replacement")
         assert_that(changed.status_code, equal_to(422))
         link = context.client.get(path + "/download-link", headers=auth(context)).json()
-        assert_that(httpx.get(link["url"]).content, equal_to(CONTENT))
+        assert_that(context.client.get(link["url"]).content, equal_to(CONTENT))

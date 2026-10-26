@@ -924,7 +924,7 @@ The [Garage operations guide](garage.md) owns persistent local setup, cluster
 installation/bootstrap, credential separation, TLS, backups, recovery, verification
 and storage rollback. [Agent artifacts](../features/agent-artifacts.md) owns the
 publication, access, immutable-reference, link and retention contracts. Storage is
-required by normal local Compose startup, which includes Garage and the purge
-worker without a profile. The feature still supports text-only operation when
+required by normal local Compose startup, which includes Garage, the isolated
+per-Agent bucket/key provisioner and the file-purge worker without a profile. The feature still supports text-only operation when
 storage is unavailable. Use the guide's explicit local commands; never point
 disposable tests or bootstrap commands at an installation's retained storage.

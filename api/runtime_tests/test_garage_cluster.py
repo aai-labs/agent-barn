@@ -15,6 +15,7 @@ import httpx
 from botocore.config import Config
 from hamcrest import assert_that, equal_to, has_length, is_
 
+from api.domains.artifacts.buckets import bucket_name
 from api.scripts.provision_garage import ROOT, cluster_init, run
 from api.tests.helpers.garage_deployment import import_garage_test_images
 
@@ -31,12 +32,31 @@ def exercise(kubeconfig: Path, directory: Path) -> None:
     node = victim["spec"]["nodeName"]
     old_ip = victim["status"]["podIP"]
     old_id = run([*kube, "exec", "garage-2", "--", "/garage", "node", "id"]).stdout.strip()
+    access_key, secret_key = "GK" + uuid4().hex, uuid4().hex + uuid4().hex
+    bucket = bucket_name(uuid4())
+    cli = [*kube, "exec", "-i", "garage-0", "--", "/garage", "json-api"]
+    run(
+        [*cli, "ImportKey", "-"],
+        data=json.dumps({"accessKeyId": access_key, "secretAccessKey": secret_key, "name": "cluster-fixture"}),
+    )
+    run(
+        [*cli, "CreateBucket", "-"],
+        data=json.dumps(
+            {
+                "localAlias": {
+                    "accessKeyId": access_key,
+                    "alias": bucket,
+                    "allow": {"read": True, "write": True, "owner": False},
+                }
+            }
+        ),
+    )
     client = boto3.client(
         "s3",
         endpoint_url=state["endpoint"],
         region_name="garage",
-        aws_access_key_id=state["access_key"],
-        aws_secret_access_key=state["secret_key"],
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
         config=Config(
             signature_version="s3v4",
             s3={"addressing_style": "path"},
@@ -51,10 +71,8 @@ def exercise(kubeconfig: Path, directory: Path) -> None:
     key = "deployment-probe/" + str(uuid4())
     second = key + "-during-outage"
     try:
-        client.put_object(Bucket=state["bucket"], Key=key, Body=content)
-        signed = client.generate_presigned_url(
-            "get_object", Params={"Bucket": state["bucket"], "Key": key}, ExpiresIn=900
-        )
+        client.put_object(Bucket=bucket, Key=key, Body=content)
+        signed = client.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=900)
         assert_that(httpx.get(signed).content, equal_to(content))
         # Hold the replacement Pending, so the read/write checks really run with one replica absent.
         run([*kube, "cordon", node])
@@ -66,9 +84,9 @@ def exercise(kubeconfig: Path, directory: Path) -> None:
                 break
             time.sleep(1)
         assert_that(ready, equal_to(2), "S3 Service must retain two ready endpoints during the outage")
-        assert_that(client.get_object(Bucket=state["bucket"], Key=key)["Body"].read(), equal_to(content))
-        client.put_object(Bucket=state["bucket"], Key=second, Body=content)
-        assert_that(client.get_object(Bucket=state["bucket"], Key=second)["Body"].read(), equal_to(content))
+        assert_that(client.get_object(Bucket=bucket, Key=key)["Body"].read(), equal_to(content))
+        client.put_object(Bucket=bucket, Key=second, Body=content)
+        assert_that(client.get_object(Bucket=bucket, Key=second)["Body"].read(), equal_to(content))
     finally:
         run([*kube, "uncordon", node], check=False)
     try:
@@ -102,8 +120,8 @@ def exercise(kubeconfig: Path, directory: Path) -> None:
         assert_that(own["addr"], equal_to(service["spec"]["clusterIP"] + ":3901"))
         assert_that(hashlib.sha256(httpx.get(signed).content).digest(), equal_to(hashlib.sha256(content).digest()))
     finally:
-        client.delete_object(Bucket=state["bucket"], Key=key)
-        client.delete_object(Bucket=state["bucket"], Key=second)
+        client.delete_object(Bucket=bucket, Key=key)
+        client.delete_object(Bucket=bucket, Key=second)
 
 
 def test_replicated_garage_chart_quorum_and_pvc_recovery(tmp_path):
@@ -149,7 +167,6 @@ def test_replicated_garage_chart_quorum_and_pvc_recovery(tmp_path):
                 "artifacts",
                 "--endpoint",
                 f"http://127.0.0.1:{port}",
-                "--allow-http-local",
             ]
         )
         run(
@@ -189,6 +206,8 @@ def test_replicated_garage_chart_quorum_and_pvc_recovery(tmp_path):
         except Exception:
             print(run([*kube, "get", "pods", "-o", "wide"], check=False).stdout)
             print(run([*kube, "get", "events", "--sort-by=.lastTimestamp"], check=False).stdout)
+            for index in range(3):
+                print(run([*kube, "logs", f"garage-{index}", "-c", "garage", "--tail=15"], check=False).stdout)
             raise
         cluster_init(bootstrap)  # Existing layouts and keys must remain unchanged.
         with open(tmp_path / "forward.log", "w") as log:

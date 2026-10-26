@@ -4,14 +4,10 @@ services:
   garage:
     image: dxflrs/garage:v2.4.1
     restart: unless-stopped
-    command: ["/garage", "server", "--single-node", "--default-bucket"]
-    # Optional at parse time so db-only development and stop work before setup.
-    # Missing bind sources still prevent an unconfigured Garage from starting.
-    env_file:
-      - path: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/server.env
-        required: false
+    command: ["/garage", "server", "--single-node"]
     ports:
-      - "${GARAGE_SAVED_S3_PORT:-3900}:3900"
+      # Operator/native-development access only; browsers and Agents use the app.
+      - "127.0.0.1:${GARAGE_SAVED_S3_PORT:-3900}:3900"
     volumes:
       - type: bind
         source: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/garage.toml
@@ -21,6 +17,11 @@ services:
       - type: bind
         source: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/rpc-secret
         target: /secrets/rpc-secret
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/admin-token
+        target: /secrets/admin-token
         read_only: true
         bind: {create_host_path: false}
       - metadata:/var/lib/garage/meta

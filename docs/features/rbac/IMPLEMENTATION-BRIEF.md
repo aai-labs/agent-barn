@@ -95,7 +95,7 @@ Subordinate repositories must join or use an accessible-Agent query so alternate
 
 Agent-authenticated gateway traffic has no user Membership. The memory gateway instead resolves the hash of a per-start Agent credential to one undeleted, running, memory-enabled Agent and its existing Organization, then reads only that Agent's same-Organization Memory Grants. Client bank names and tags cannot choose a different tenant or identity. Organization Memory grants permit either read only or read and write; both add a strict `scope:team` scope to recall, and other-Agent grants add exact private scopes only. Shared authorship grants no private read access. The Agent Memory tab requires human `activity.read` and includes Organization records only with the viewed Agent's current Organization grant; revocation hides its own shared contributions too. The explicit writer endpoint requires a live write grant. User-facing memory settings and grants retain the Organization and Agent Permission checks above. See [`Agent Memory`](../agent-memory.md#use-the-memory-gateway) for the machine-request contract.
 
-Agent artifact runtime traffic (`/artifact-runtime/v1`) also has no human Membership.
+Agent artifact runtime traffic (`/api/v1/agent-artifacts/runtime`) also has no human Membership.
 A purpose-separated credential derived from the per-start Agent secret resolves one
 undeleted, running Agent and its Organization. Runtime callers cannot choose another
 owner, bucket or key. Workflow publication additionally fences the supplied attempt ID
@@ -105,7 +105,17 @@ The entire owning Agent is the runtime trust boundary: all of its sessions share
 that identity and may publish into its current workflow attempts. Attempt IDs are
 non-secret provenance, not per-session capabilities; this is not session isolation.
 Human artifact reads require current `agent.read` and scoped visibility; publication
-and deletion require `agent.update`. See [Agent artifacts](../agent-artifacts.md).
+and deletion require `agent.update`.
+The app-facing `/api/v1/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}`
+byte route instead uses the opaque provider-signed bearer authority issued after
+those checks. Its repository read still joins the exact persisted Organization,
+Agent and artifact; the private byte store then validates the capability against
+that canonical object before any file bytes/metadata are returned. It is neither
+an unscoped metadata endpoint nor the background-work exception. No user cookie or
+runtime credential substitutes for provider validation. Existing issued authority
+survives issuer-session/Membership revocation until provider expiry (subject to
+file/owner deletion); new issuance uses current permissions. See
+[Agent artifacts](../agent-artifacts.md).
 
 Playbook Extractions read one Agent's transcripts and write an Organization Skill, so they need Agent `activity.read` on the source Agent and Organization `skill.manage`; in practice Owners and Admins. Publishing the resulting Skill makes content derived from that Agent visible to every Member through `skill.read`; the reviewing Owner or Admin is the control. The worker runs a person's request, not background work: when a run starts it re-checks that the requesting Membership still holds both Permissions on the undeleted source Agent. See [`Playbooks`](../playbooks.md#authorization).
 
@@ -135,7 +145,13 @@ methods use the same narrow operator-only background exception. They expose no r
 and only inspect persisted ownership, references, deadlines and canonical tenant keys.
 They preserve failed deletion records across owner deletion and refuse mismatched
 bucket/key targets with recorded retry backoff. Product paths retain their scoped Agent
-joins. See [Artifact retention and recovery](../agent-artifacts.md#retention-deletion-and-recovery).
+joins. `ArtifactBucketRepository.request_buckets`, `due` and `operation` use the
+same exception exclusively from the isolated scheduled provisioner, with no router.
+They derive owners from persisted Agents, validate Organization/Agent/bucket
+identity, and retain keys until all bytes have been purged. API paths still check
+current human/runtime authority and exact owner-scoped data credentials; only the
+provisioner receives Garage administrative authority. See
+[Artifact retention and recovery](../agent-artifacts.md#retention-deletion-and-recovery).
 
 HTTP semantics remain deliberate:
 

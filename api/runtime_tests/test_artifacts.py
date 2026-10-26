@@ -47,7 +47,7 @@ def product_listener(client):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}/artifact-runtime/v1"
+        yield f"http://127.0.0.1:{server.server_port}/api/v1/agent-artifacts/runtime"
     finally:
         server.shutdown()
         server.server_close()

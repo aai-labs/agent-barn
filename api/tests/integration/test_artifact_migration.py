@@ -9,7 +9,7 @@ from hamcrest import assert_that, equal_to
 from sqlalchemy import create_engine, inspect
 from sqlmodel import Session
 
-from api.domains.artifacts.models import Artifact
+from api.domains.artifacts.models import Artifact, ArtifactBucket
 from api.tests.integration.test_rbac_schema import isolated_database  # noqa: F401
 
 
@@ -45,4 +45,37 @@ def test_upgrade_and_guarded_downgrade_preserve_cleanup_evidence(isolated_databa
     assert_that(inspect(engine).has_table("artifact"), equal_to(False))
     command.upgrade(config, "head")
     assert_that(inspect(engine).has_table("artifact_reference"), equal_to(True))
+    engine.dispose()
+
+
+def test_bucket_journal_cannot_be_dropped_until_provider_cleanup_is_complete(isolated_database):  # noqa: F811
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    command.upgrade(config, "head")
+    engine = create_engine(isolated_database)
+    row = ArtifactBucket(
+        organization_id=uuid4(),
+        agent_id=uuid4(),
+        name="migration-fixture",
+        access_key="GK" + "a" * 32,
+        secret_key_encrypted="opaque-ciphertext",
+        retry_at=datetime.now(UTC),
+    )
+    with Session(engine) as session:
+        session.add(row)
+        session.commit()
+        bucket_id = row.id
+    with pytest.raises(RuntimeError, match="Purge per-Agent buckets and revoke their keys"):
+        command.downgrade(config, "a4151c9d0e21")
+    with Session(engine) as session:
+        retained = session.get_one(ArtifactBucket, bucket_id)
+        assert_that(retained.secret_key_encrypted, equal_to("opaque-ciphertext"))
+        retained.state = "DELETED"
+        retained.secret_key_encrypted = ""
+        session.add(retained)
+        session.commit()
+    command.downgrade(config, "a4151c9d0e21")
+    assert_that(inspect(engine).has_table("artifact_bucket"), equal_to(False))
+    assert_that(inspect(engine).has_table("artifact"), equal_to(True))
+    command.upgrade(config, "head")
+    assert_that(inspect(engine).has_table("artifact_bucket"), equal_to(True))
     engine.dispose()

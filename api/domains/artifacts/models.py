@@ -40,6 +40,25 @@ class Artifact(BaseModel, table=True):
     purge_attempts: int = 0
 
 
+class ArtifactBucket(BaseModel, table=True):
+    """Durable per-Agent bucket/key journal; survives owner deletion for cleanup."""
+
+    __tablename__: str = "artifact_bucket"
+    __table_args__ = (
+        sa.CheckConstraint("state IN ('PENDING','READY','DELETING','DELETED')", name="ck_artifact_bucket_state"),
+    )
+    organization_id: UUID = SqlField(index=True)
+    agent_id: UUID = SqlField(unique=True)
+    name: str = SqlField(unique=True)
+    access_key: str = SqlField(unique=True)
+    secret_key_encrypted: str
+    provider_id: str | None = SqlField(default=None, unique=True)
+    state: str = "PENDING"
+    attempts: int = 0
+    retry_at: datetime = SqlField(sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False, index=True))
+    last_error: str | None = None
+
+
 class ArtifactReference(BaseModel, table=True):
     __tablename__: str = "artifact_reference"
     __table_args__ = (sa.UniqueConstraint("artifact_id", "kind", "owner_id", name="uq_artifact_reference"),)

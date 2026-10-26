@@ -44,10 +44,28 @@ The application lifespan ensures a bootstrap Platform Administrator, seeds built
 
 Product API startup deliberately does **not** reconcile [Organization LiteLLM budgets](../features/costs.md#organization-llm-budgets). That runs as its own CronJob alongside cost sync and event-delivery reconciliation, so the API's readiness never depends on the proxy being reachable.
 
-Agent artifact machine routes live outside the product schema at `/artifact-runtime/v1`
-on port 8000 and derive one running Agent from a per-start capability. Product
+The artifact domain owns its three HTTP surfaces through the composed APIRouter
+in `domains/artifacts/routing.py`. App composition includes only
+`agent_artifacts_router` on the `/api/v1` product app; the domain includes management,
+download and runtime routers internally. Each child router retains its own
+explicit authentication dependencies; inclusion adds no shared user dependency.
+Agent artifact machine routes live at `/api/v1/agent-artifacts/runtime` on port 8000
+and derive one running Agent from a per-start capability. They remain excluded
+from the public user API schema despite sharing the product app. Product
 artifact routes reuse current `agent.read`/`agent.update` scopes. The shared
 [artifact contract](../features/agent-artifacts.md) owns immutable file lifecycle.
+The app-facing `/api/v1/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}`
+route is a capability-only byte proxy. The artifact service depends on the
+`ArtifactStorage` boundary; the selected S3 adapter issues opaque provider-signed
+authority and validates it by requesting the canonical private object without
+service-key authorization. The API neither issues a second token nor interprets
+provider signature/expiry fields. No storage endpoint is returned to clients.
+Permission-checked link issuance remains on the human/runtime routes above.
+Per-Agent data keys are encrypted in the durable bucket journal. The API adapter
+selects the exact artifact owner/bucket credential, without shared credentials or
+ambient identity fallback. A separate operator-only provisioner holds private
+Garage control-plane authority; neither the product app nor artifact purge receives
+its token. See [per-Agent authority](../features/agent-artifacts.md#per-agent-storage-authority).
 
 ## Testing
 

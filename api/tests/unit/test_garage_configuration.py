@@ -10,7 +10,7 @@ from hamcrest import assert_that, equal_to, is_
 from api.scripts.provision_garage import ROOT
 
 
-def test_compose_storage_key_is_only_available_to_api_and_purge(tmp_path):
+def test_compose_provisioning_authority_is_isolated_and_no_shared_data_key_is_injected(tmp_path):
     source = (ROOT / "compose.yml").read_text()
     shutil.copyfile(ROOT / "compose.yml", tmp_path / "compose.yml")
     required = set(re.findall(r"\$\{([A-Z0-9_]+):?\?", source))
@@ -20,6 +20,8 @@ def test_compose_storage_key_is_only_available_to_api_and_purge(tmp_path):
         {
             "ARTIFACT_S3_ACCESS_KEY": "fixture-root-key",
             "ARTIFACT_S3_SECRET_KEY": "fixture-root-secret",
+            "ARTIFACT_PROVISIONER_URL": "http://wrong-admin.invalid",
+            "ARTIFACT_PROVISIONER_TOKEN": "fixture-root-admin",
         }
     )
     (tmp_path / ".env").write_text("".join(f"{key}={value}\n" for key, value in settings.items()))
@@ -30,9 +32,9 @@ def test_compose_storage_key_is_only_available_to_api_and_purge(tmp_path):
     )
     with (tmp_path / ".env").open("a") as target:
         target.write((tmp_path / ".garage/compose.env").read_text())
-    (tmp_path / ".garage/server.env").write_text("GARAGE_DEFAULT_ACCESS_KEY=fixture-bootstrap\n")
-    (tmp_path / ".garage/application.env").write_text(
-        "ARTIFACT_S3_BUCKET=fixture-files\nARTIFACT_S3_ACCESS_KEY=fixture-private-key\nARTIFACT_S3_SECRET_KEY=fixture-private-secret\n"
+    (tmp_path / ".garage/application.env").write_text("ARTIFACT_S3_ENDPOINT_URL=http://garage:3900\n")
+    (tmp_path / ".garage/provisioner.env").write_text(
+        "ARTIFACT_PROVISIONER_URL=http://garage:3903\nARTIFACT_PROVISIONER_TOKEN=fixture-private-admin\n"
     )
     result = subprocess.run(
         [
@@ -53,16 +55,23 @@ def test_compose_storage_key_is_only_available_to_api_and_purge(tmp_path):
     assert_that(result.returncode, equal_to(0), "Compose configuration did not render")
     services = json.loads(result.stdout)["services"]
     assert_that("garage" in services, is_(True), "Garage must run without a profile")
+    assert_that(services["garage"]["ports"][0]["host_ip"], equal_to("127.0.0.1"))
     assert_that("artifact-purge" in services, is_(True), "Purge must run without a profile")
     assert_that(services["api"]["depends_on"]["garage"]["condition"], equal_to("service_healthy"))
     assert_that(services["artifact-purge"]["depends_on"]["garage"]["condition"], equal_to("service_healthy"))
     for name, service in services.items():
         environment = service.get("environment", {})
-        if name in {"api", "artifact-purge"}:
-            assert_that(environment.get("ARTIFACT_S3_ACCESS_KEY"), equal_to("fixture-private-key"), name)
+        assert_that(bool(environment.get("ARTIFACT_S3_ACCESS_KEY")), is_(False), name)
+        assert_that(bool(environment.get("ARTIFACT_S3_SECRET_KEY")), is_(False), name)
+        if name in {"api", "artifact-purge", "artifact-provisioner"}:
+            assert_that(environment.get("ARTIFACT_S3_ENDPOINT_URL"), equal_to("http://garage:3900"), name)
+        if name == "artifact-provisioner":
+            assert_that(environment.get("ARTIFACT_PROVISIONER_TOKEN"), equal_to("fixture-private-admin"))
+            assert_that(environment.get("ARTIFACT_PROVISIONER_URL"), equal_to("http://garage:3903"))
         else:
-            assert_that(bool(environment.get("ARTIFACT_S3_ACCESS_KEY")), is_(False), name)
-            assert_that(bool(environment.get("ARTIFACT_S3_SECRET_KEY")), is_(False), name)
+            assert_that(bool(environment.get("ARTIFACT_PROVISIONER_TOKEN")), is_(False), name)
+            assert_that(bool(environment.get("ARTIFACT_PROVISIONER_URL")), is_(False), name)
+    assert_that(len(services["garage"]["ports"]), equal_to(1), "Admin port must not be host-published")
 
 
 def test_backup_refuses_relative_and_repository_destinations(tmp_path):
@@ -105,8 +114,8 @@ def test_cli_reads_dotenv_defaults_and_reports_invalid_port_without_traceback(tm
     assert_that(result.returncode, equal_to(1))
     assert_that(result.stderr.strip(), equal_to("GARAGE_S3_PORT must be an integer"))
     assert_that("Traceback" in result.stderr, is_(False))
-    # Cluster configuration uses its explicit endpoint and ignores local .env defaults;
-    # validation must fail before storage or Docker is touched.
+    # Cluster configuration accepts a private HTTP service origin and ignores
+    # native defaults. This writes manifests only; it must not contact storage.
     result = subprocess.run(
         [
             sys.executable,
@@ -124,8 +133,8 @@ def test_cli_reads_dotenv_defaults_and_reports_invalid_port_without_traceback(tm
         text=True,
         check=False,
     )
-    assert_that(result.returncode, equal_to(1))
-    assert_that(result.stderr.strip(), equal_to("Cluster downloads require an HTTPS origin"))
+    assert_that(result.returncode, equal_to(0))
+    assert_that((tmp_path / "state/rpc-secret.json").exists(), is_(True))
 
 
 def test_unpublished_port_retry_preserves_operator_endpoint(tmp_path):
@@ -156,10 +165,8 @@ def test_bootstrap_checks_live_rpc_address_instead_of_configured_hostname(tmp_pa
     state = {
         "namespace": "fixture",
         "release": "garage",
-        "bucket": "fixture",
         "endpoint": "https://files.example.invalid",
-        "access_key": "fixture-key",
-        "secret_key": "fixture-secret",
+        "admin_token": "fixture-admin-token",
     }
     (tmp_path / "cluster.json").write_text(json.dumps(state))
     args = argparse.Namespace(state_dir=tmp_path, kubeconfig=tmp_path / "kubeconfig", capacity="10GB")
@@ -188,7 +195,7 @@ def test_bootstrap_checks_live_rpc_address_instead_of_configured_hostname(tmp_pa
         advertised = "10.43.0.10:3901"
         provision_garage.cluster_init(args)
         generated = json.loads((tmp_path / "application-secret.json").read_text())
-        assert_that(generated["stringData"]["ARTIFACT_S3_BUCKET"], equal_to("fixture"))
+        assert_that(generated["stringData"], equal_to({"ARTIFACT_S3_ENDPOINT_URL": "https://files.example.invalid"}))
 
 
 def test_main_compose_works_before_garage_setup(tmp_path):

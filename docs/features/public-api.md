@@ -27,5 +27,10 @@ The provider-session reconnect operation remains in the v1 inventory and discove
 Agent artifact staging, raw byte publication, paginated metadata, fresh download
 links and deletion are included in the v1 inventory under each Agent. Reads use
 `agent.read`; writes use `agent.update`. The protocol-specific
-`/artifact-runtime/v1` routes use Agent capabilities and remain outside the public
-schema. See [Agent artifacts](agent-artifacts.md).
+`/api/v1/agent-artifacts/runtime` routes use Agent capabilities and remain outside
+the public user schema, even though the single composed domain router is attached
+to the product app. The capability-only `GET /api/v1/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}`
+route streams private storage bytes using opaque `access` authority from an issued
+link; it does not use a User session or Personal API Key. Provider signing and expiry
+remain in the storage adapter. Links use the existing app URL, not a public S3 URL.
+See [Agent artifacts](agent-artifacts.md).

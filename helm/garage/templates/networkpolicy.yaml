@@ -24,13 +24,21 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
                 values: [api, artifact-purge]
+        {{- if .Values.ingress.enabled }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.ingress.controllerNamespace }}
           podSelector:
             matchLabels:
               {{- toYaml .Values.ingress.controllerLabels | nindent 14 }}
+        {{- end }}
       ports: [{protocol: TCP, port: 3900}]
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: agentbarn-api
+              app.kubernetes.io/component: artifact-provisioner
+      ports: [{protocol: TCP, port: 3903}]
   egress:
     - to:
         - podSelector:

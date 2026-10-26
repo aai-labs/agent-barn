@@ -7,7 +7,7 @@ spec:
   selector:
     app.kubernetes.io/name: garage
     app.kubernetes.io/instance: {{ .Release.Name }}
-  ports: [{name: s3, port: 3900, targetPort: s3}]
+  ports: [{name: s3, port: 3900, targetPort: s3}, {name: admin, port: 3903, targetPort: admin}]
 ---
 apiVersion: v1
 kind: Service

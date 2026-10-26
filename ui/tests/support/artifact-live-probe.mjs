@@ -18,6 +18,8 @@ try {
     const pending = page.waitForEvent("download");
     await page.getByRole("button", { name: `Download ${name}`, exact: true }).click();
     const download = await pending;
+    expect(new URL(download.url()).origin).toBe(process.env.ARTIFACT_LIVE_UI);
+    expect(new URL(download.url()).pathname).toMatch(/^\/api\/v1\/agent-artifacts\//);
     expect(download.suggestedFilename()).toBe(name);
     expect(await readFile(await download.path())).toEqual(Buffer.from(process.env.ARTIFACT_LIVE_CONTENT, "base64"));
   }

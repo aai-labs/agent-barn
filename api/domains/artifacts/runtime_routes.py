@@ -8,7 +8,7 @@ from starlette.concurrency import run_in_threadpool
 from api.domains.artifacts.models import ArtifactCreate
 from api.domains.artifacts.routes import Service, file_body
 
-router = APIRouter(prefix="/artifact-runtime/v1", include_in_schema=False)
+router = APIRouter(prefix="/agent-artifacts/runtime", include_in_schema=False)
 Credential = Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())]
 
 

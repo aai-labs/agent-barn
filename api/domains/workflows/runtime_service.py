@@ -29,7 +29,7 @@ class WorkflowRuntimeService:
 
     def handoff(self, attempt_id: UUID, token: str) -> dict:
         run, _, packet = self.repository.admit(attempt_id, token)
-        if self.config.artifact_s3_bucket:
+        if self.config.artifact_s3_endpoint_url:
             packet["file_publication"] = {
                 "command": "/usr/local/bin/agentbarn-artifacts upload <workspace-file>",
                 "required_arguments": {"--attempt-id": str(attempt_id)},

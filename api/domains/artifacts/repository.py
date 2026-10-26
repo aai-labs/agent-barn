@@ -17,6 +17,7 @@ from api.core.config import Config
 from api.domains.agents.models import Agent, AgentStatus
 from api.domains.agents.repository import agent_scope_predicates
 from api.domains.artifacts import config as artifact_config
+from api.domains.artifacts.buckets import ArtifactBucketRepository, bucket_name
 from api.domains.artifacts.credentials import runtime_token
 from api.domains.artifacts.models import Artifact, ArtifactCreate, ArtifactReference
 from api.domains.rbac.policy import AuthorizationScope
@@ -45,6 +46,7 @@ class ArtifactRepository:
     delegate: PostgresRepositoryDelegate
     workflows: WorkflowRunRepository
     config: Config
+    buckets: ArtifactBucketRepository
 
     def authenticate(self, token: str) -> Agent:
         try:
@@ -151,11 +153,15 @@ class ArtifactRepository:
             ).one_or_none()
             if not agent:
                 raise HTTPException(404, "Agent not found")
+            try:
+                bucket = self.buckets.ready_name(agent.id, agent.organization_id, session)
+            except ValueError:
+                raise HTTPException(503, "Agent file storage is initializing; retry shortly") from None
             row = Artifact(
                 **payload.model_dump(),
                 organization_id=agent.organization_id,
                 agent_id=agent.id,
-                bucket=self.config.artifact_s3_bucket,
+                bucket=bucket,
                 object_key="pending",
                 source=source,
                 created_by_user_id=user_id,
@@ -328,7 +334,7 @@ class ArtifactRepository:
                 return
             row.purge_attempts += 1
             try:
-                if row.bucket != self.config.artifact_s3_bucket or row.object_key != object_key(row):
+                if row.bucket != bucket_name(row.agent_id) or row.object_key != object_key(row):
                     raise ValueError("Unsafe artifact purge target")
                 yield row
             except Exception:

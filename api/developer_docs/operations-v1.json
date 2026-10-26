@@ -136,6 +136,11 @@
   ],
   [
     "GET",
+    "/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}",
+    "download_artifact_agent_artifacts__organization_id___agent_id___artifact_id__get"
+  ],
+  [
+    "GET",
     "/auth/context",
     "get_api_context_auth_context_get"
   ],

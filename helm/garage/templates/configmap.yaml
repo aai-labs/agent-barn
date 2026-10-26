@@ -22,4 +22,6 @@ data:
     [s3_api]
     s3_region = "garage"
     api_bind_addr = "[::]:3900"
+    [admin]
+    api_bind_addr = "[::]:3903"
 {{- end }}

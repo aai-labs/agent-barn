@@ -6,6 +6,195 @@ starting at local AF-389 head `6e109add`. AF-389 PR
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
+## Fixed Agent-derived names — 2026-10-26 (local, not pushed)
+
+The maintainer removed the unnecessary installation-prefix configuration. Bucket
+names are now always `agent-artifacts-<agent UUID hex>`; bootstrap generates no
+prefix and application settings contain only the existing private endpoint.
+An empty endpoint retains text-only operation without a replacement toggle.
+
+- **167 focused API/configuration/persistence/builder/inventory tests passed** in
+  143.16 seconds. Retired prefix-validation cases were replaced by fixed-name and
+  removed-configuration regressions; cross-Agent provider-ID/key denial remains.
+- Both runtime CLI contracts passed (**2 tests, 13.35 seconds**) and the
+  authenticated browser/runtime/persistent-storage contract passed (**1 test,
+  25.21 seconds**). API lint/format/types, migration-head, chart and whitespace
+  checks pass. The prior three-node pass below predates this naming-only revision;
+  cluster topology and token delivery are unchanged.
+- The single local development bucket was verified empty with no retained artifact
+  metadata targeting it before its key-local alias was normalized. Its provider ID,
+  credentials and bytes were preserved; no legacy file migration or deletion was
+  performed. The unused saved prefix was removed, settings/processes refreshed,
+  and app health returns 200.
+
+This revision remains local/unpushed and is not covered by the earlier independent
+approval. No production provisioning or deployment occurred.
+
+## Per-Agent buckets and isolated provisioner — 2026-10-26 (local, not pushed)
+
+The maintainer approved a separate privileged provisioning process and explicitly
+excluded migration of existing files. This revision supersedes the shared-bucket
+configuration in older evidence. The feature contract and Garage operations guide
+own the current topology, credential boundaries and fresh-layout requirement.
+
+- Real Garage tests prove distinct provider bucket IDs and data keys for Agents
+  in the same and different Organizations. Each key is denied cross-Agent reads
+  and overwrites using **both private aliases and actual provider bucket IDs**;
+  anonymous reads, bucket creation and owner operations are denied too.
+- Durable retry tests cover loss of a successful bucket-creation response and
+  loss of a successful key-revocation response without replacing identities.
+  Soft/hard owner deletion keeps credentials until artifact bytes are purged,
+  then reclaims the bucket, revokes the key and clears the encrypted secret.
+  Initializing storage returns 503 without staging file metadata. Migration tests
+  prove journal-preserving downgrade refusal and permitted cleanup/upgrade.
+- A test-process-only mutation deliberately assigned two Agent-local aliases and
+  keys to one actual Garage bucket. The isolation regression failed at the
+  distinct-provider-ID assertion. The unmutated test passes. Provider identity is
+  also unique in the database schema. No unsafe mutation touched live source.
+- Both real-image CLI contracts passed (**2 tests, 13.37 seconds**) with Hermes
+  `0.2.10` and OpenClaw `0.7.7`. The real runtime/persistent-Garage/authenticated
+  Chromium contract passed (**1 test, 25.88 seconds**). An initial browser-harness
+  attempt failed because the extracted host pnpm script lacked execute permission;
+  fixing that tooling permission produced the passing rerun.
+- Helm 3.19.0 was extracted from the cached image after the download hostname was
+  unreachable. Rendered contracts verify the provisioning Secret reaches only
+  its dedicated Deployment and admin port 3903 admits only provisioner pods.
+- Local `make garage-up` preserved old buckets, node identity and named volumes.
+  `make migrate` applied the additive journal, and API/provisioner/purge/worker
+  configuration was refreshed. One local Agent bucket is READY and app health
+  returns 200. API environment checks confirm no shared S3 key/secret or
+  provisioning URL/token. Old shared-bucket files were not migrated or deleted.
+
+Final combined verification passed **176 API/configuration/persistence/builder/
+inventory tests in 143.34 seconds**, plus `make check-api`, `make check-migrations`,
+`make check-artifacts` and diff whitespace checks. After the deployment review,
+provisioning is unconditional, signing is fixed to `garage`, and the optional RPC
+Secret-name deployment variable is removed; the actual `garage-rpc` Secret remains
+required. The real Garage fixture verifies Secret-backed admin-token environment
+injection.
+
+The disposable three-node quorum/PVC-recovery contract passed (**1 test,
+254.69 seconds**) after correcting Kubernetes admin-token delivery. Two initial
+attempts failed at startup because Garage requires exactly `0600` for token files,
+rejecting both normal projected permissions and `0440`. Kubernetes now injects
+`GARAGE_ADMIN_TOKEN` from its Secret like the existing RPC secret; the strict file
+check is not relaxed. These tests prove startup/quorum/recovery, while admin-port
+source restriction and workload Secret isolation are rendered-chart contracts.
+No production access, external rollout, push or merge occurred. Earlier independent
+approval predates these changes; a new independent review is still required.
+Live LLM file-tool selection, external messaging and inherited AF-389 acceptance
+remain outside the passing offline/runtime/browser contracts.
+
+## Private storage and app byte downloads — 2026-10-26 (local, not pushed)
+
+The maintainer requested that Garage remain private and that bytes pass through
+the app, while **provider signing, signature validation and expiry remain with
+S3**, not an application token issuer. This supersedes the earlier direct-storage
+URL/public-storage-ingress evidence below. The abandoned separate public-storage
+endpoint workaround was removed before this delivery.
+
+- A real-Garage regression first failed because the returned origin was storage,
+  not the configured app origin. It now passes with exact downloaded bytes through
+  the capability-only app route. No private origin, bucket or object key is returned.
+- **54 focused API tests passed** across artifact publication/review/download,
+  streaming/log redaction, Compose isolation and the v1 operation inventory.
+  **7 persistent-Garage tests passed** separately, covering retained authority
+  across replacement/backup/restore, purge and main-stack adoption. The first
+  combined run exposed old direct-S3 test requests and inherited developer saved
+  Compose settings; those harness assumptions were corrected and rerun green.
+- **2 real-image CLI tests passed** using Hermes `0.2.10` and OpenClaw `0.7.7`,
+  including retrieval through the runtime's reachable app origin.
+- **1 real runtime/API/persistent Garage/authenticated Chromium contract passed**
+  in 55.14 seconds: two runtime uploads, Garage replacement, login, three exact-byte
+  downloads whose URL origin/path are the app, and purge. The first attempt lacked
+  host pnpm; the rerun used the existing host pnpm executable. No live LLM/tool
+  selection or external messaging-provider delivery is claimed.
+- `make check-api` passed (Ruff lint/format and Python types). `make check-artifacts`
+  passed with checksum-verified Helm 3.19.0, including no default Garage ingress
+  and S3 ingress policy restricted to API/purge pods.
+- A test-process-only security mutation replaced supplied download authority with
+  newly service-issued authority. The real-provider target-substitution regression
+  failed at expected 403 versus actual 200; restoring the genuine implementation
+  passed. No insecure mutation was applied to the running app.
+- On the running developer stack, the previously reported 161-byte CSV downloaded
+  through **`localhost:3000` with HTTP 200**. Missing/tampered authority returned
+  403; app health returned 200. Garage now publishes only `127.0.0.1:13915` for
+  operator/native use, while API/purge use `garage:3900`. Stored keys/volumes/bytes
+  were retained; the saved native endpoint was updated from bridge to loopback.
+
+Maintainer review corrections were reverified locally on October 26: the app byte
+route is now `/api/v1/agent-artifacts/...`, the provider-neutral contract is named
+`ArtifactStorage`, Garage is an unconditional Helmfile release, and setup-specific
+SSH guidance has been removed. The renamed route passes **54 focused API tests**,
+**2 real-image CLI tests** (14.52 seconds), and **1 real authenticated-browser
+runtime/storage contract** (50.99 seconds). API lint/format/types, artifact chart
+renders and diff whitespace checks also passed; the running app health returned 200.
+`GARAGE_S3_PORT` remains an optional local loopback operator/native override only.
+
+No schema migration, production access, external deployment, merge or push was
+performed for this correction. Earlier independent approvals and full-suite
+results apply to their named revisions, not to this unpushed change. Existing
+Agents need a normal update/restart to receive the revised retrieval CLI.
+
+## Natural file-delivery instructions — 2026-10-26 (local, not pushed)
+
+The shared runtime instructions now map ordinary requests for a file/export to
+creating and publishing the finished deliverable and returning its actual download
+link. Users need not name storage or the CLI. Exceptions cover keep-local requests,
+text/code replies, scratch/intermediate files and unrelated workspace contents;
+normal tool approvals and messaging policy remain in effect.
+
+Both generated-runtime configuration tests first failed on missing outcome-driven
+instructions, then passed after the prompt update. **92 Hermes/OpenClaw builder
+and runtime-digest tests passed** in 8.59 seconds; `make check-api` and diff whitespace
+checks passed. These prove instruction assembly and update detection contracts,
+not LLM compliance. Existing Agents need an update/restart and a fresh conversation
+with an ordinary request such as “Create a CSV with three sample products.” No new
+live model/tool-selection or external messaging acceptance is claimed.
+
+## Independent review and follow-ups — 2026-10-26 (local, not pushed)
+
+GPT 6.1 Sol reviewed the complete uncommitted diff with medium reasoning/full
+access using the code-review-and-quality skill and returned **APPROVE, no Critical
+or Required findings**. The review includes the final domain-owned
+`mount_agent_artifacts` routing helper. Independent checks passed: 54 focused
+artifact/configuration/inventory tests, 99 persistence/builder/digest tests, both
+real-image CLI cases, the authenticated Chromium/private-storage download case,
+API lint/format/types and storage chart rendering. Two isolated security/response
+mutations were caught; no unsafe mutation touched the running app.
+
+Both optional notes were addressed afterward: the stale SSH-guidance claim was
+removed from the delivery log, and a retained ASGI HTTP 2.3 test now disconnects
+after a streamed chunk and verifies upstream cleanup without invoking its close
+callback directly. The resulting focused suite passed **55 tests** in 30.92 seconds;
+API lint/format/types and diff whitespace checks passed. Those small follow-ups
+were locally verified, not independently re-reviewed. Live model/tool selection,
+external message delivery and inherited AF-389 acceptance gaps remain unverified.
+
+## Composed router and runtime URL revision — 2026-10-26 (local, not pushed)
+
+The maintainer authorized moving the machine protocol under the product app so
+app composition can include a real domain APIRouter once, rather than a mounting
+helper. Management/download URLs remain unchanged; runtime uses
+`/api/v1/agent-artifacts/runtime` and the previous root path returns 404. Runtime
+credentials remain independent of user sessions, and the child remains outside
+the public user schema. Defaults, Compose/Helm configuration and all test callers
+were updated. Existing Agents and explicit runtime URL overrides need updating.
+
+- **147 focused artifact/configuration/inventory/builder/digest tests passed** in
+  35.22 seconds; both runtime cases assert that the removed root URL returns 404.
+- **2 signing-region configuration tests passed** in 3.23 seconds: Garage defaults
+  to `garage`, with an explicit region override retained for another provider.
+- Both real-image CLI cases passed in **14.83 seconds** and the authenticated
+  Chromium/runtime/persistent-storage case passed in **49.87 seconds** using the
+  new machine URL. API lint/format/types, storage chart rendering and whitespace
+  checks passed.
+
+This wire/configuration revision follows the earlier independent approval and is
+not represented as independently re-reviewed. At that point bucket-per-Agent
+storage and its separate provisioning boundary were still pending; the later
+per-Agent revision documented above supersedes that shared-bucket configuration. No production access, push, merge or external deployment occurred.
+
 ## Pre-base-update verification and push authorization — 2026-10-24
 
 The maintainer explicitly authorized pushing after verification on October 24.
@@ -462,8 +651,11 @@ Artifact READY proves stored bytes, not external provider effects, safe replay
 or tool quiescence. AF-390 remains the approval integration follow-up; file-backed
 reviews must pin exact IDs/checksums and release their references explicitly.
 
-External deployment still requires authorized execution of the provided Garage installation/bootstrap, TLS endpoint
-configuration reachable by download clients, the generated service-only bucket key in the
-existing storage Secret, schema migration, and an opted-in purge schedule. Verify
+External deployment still requires authorized execution of the provided Garage installation/bootstrap,
+private S3 service connectivity, the existing public app HTTPS origin reachable by
+download clients, the generated service-only bucket key in the existing storage
+Secret, the artifact schema migration, and an opted-in purge schedule. No public
+Garage endpoint is required. Existing deployments that enabled the former storage
+ingress must remove it and use the internal service endpoint in their storage Secret. Verify
 fresh links and native messaging delivery in the deployed Hermes/OpenClaw sessions
 before claiming that live acceptance. No merge or deployment was performed here.

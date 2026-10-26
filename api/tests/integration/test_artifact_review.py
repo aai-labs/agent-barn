@@ -33,7 +33,7 @@ from api.tests.integration.test_artifacts import (
 from api.tests.integration.test_workflow_runs import attempt, start
 from api.tests.integration.test_workflows import _GIVEN, auth, base
 
-RUNTIME_PATH = "/artifact-runtime/v1/artifacts"
+RUNTIME_PATH = "/api/v1/agent-artifacts/runtime/artifacts"
 
 
 def workflow_file(context):
@@ -226,7 +226,7 @@ def test_filename_rejects_control_and_bidi_characters(filename):
 
 
 def test_disabled_storage_handoff_omits_file_tool_instructions():
-    with given([set_env_variable({"ARTIFACT_S3_BUCKET": ""}), *_GIVEN]) as context:
+    with given([set_env_variable({"ARTIFACT_S3_ENDPOINT_URL": ""}), *_GIVEN]) as context:
         response, _, _ = start(context)
         _, active, token = attempt(context, response.json()["id"])
         prompt = context.injector.get(WorkflowRuntimeService).handoff(active.id, token)["prompt"]

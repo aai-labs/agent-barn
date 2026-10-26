@@ -2,6 +2,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -11,11 +12,11 @@ from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
 from api.domains.artifacts.models import Artifact, ArtifactCreate, ArtifactLinkRead, ArtifactRead
 from api.domains.artifacts.repository import ArtifactRepository, PublicationBusy
+from api.domains.artifacts.storage import ArtifactDownload, ArtifactStorage, DownloadDenied
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
 from api.domains.workflows.repository import WorkflowConflict
-from api.infrastructure.s3.client import ArtifactStorage
 from api.infrastructure.shared.models import PaginatedItems
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class ArtifactService:
         return agent.id, AuthorizationScope(organization_id=agent.organization_id)
 
     def enabled(self) -> None:
-        if not self.config.artifact_s3_bucket:
+        if not self.config.artifact_s3_endpoint_url:
             raise HTTPException(503, "Artifact storage is not configured; text-only operation remains available")
 
     def create(
@@ -163,14 +164,34 @@ class ArtifactService:
         if not 1 <= seconds <= self.config.artifact_link_max_seconds:
             raise HTTPException(422, "Download lifetime exceeds the configured bound")
         try:
-            url = self.storage.link(row, seconds)
+            access = self.storage.issue_download(row, seconds)
         except Exception as exc:
             raise HTTPException(503, "Artifact storage is unavailable") from exc
         return ArtifactLinkRead(
             artifact=ArtifactRead.model_validate(row),
-            url=url,
+            url=(
+                self.config.web_app_url.rstrip("/")
+                + f"/api/v1/agent-artifacts/{row.organization_id}/{row.agent_id}/{row.id}?"
+                + urlencode({"access": access})
+            ),
             expires_at=datetime.now(UTC) + timedelta(seconds=seconds),
         )
+
+    def download(self, organization_id: UUID, agent_id: UUID, artifact_id: UUID, access: str) -> ArtifactDownload:
+        self.enabled()
+        # This is a provider-capability read, not a user-authenticated metadata
+        # route. Resolve only this persisted tenant target, then let the byte
+        # store validate download authority before returning any file data.
+        try:
+            row = self.ready(artifact_id, agent_id, AuthorizationScope(organization_id=organization_id))
+        except HTTPException:
+            raise HTTPException(403, "Invalid or unavailable artifact download") from None
+        try:
+            return self.storage.download(row, access)
+        except DownloadDenied:
+            raise HTTPException(403, "Invalid or expired artifact download") from None
+        except Exception:
+            raise HTTPException(503, "Artifact storage is unavailable") from None
 
     def delete(self, artifact_id: UUID, agent_id: UUID, context: CurrentUserContext) -> None:
         self.repository.delete(artifact_id, agent_id, self.scope(agent_id, context, True))
