@@ -10,7 +10,7 @@ export class AgentFileSyncPage {
   }
 
   card(): Locator {
-    return this.page.getByRole("region", { name: "File sync" });
+    return this.page.getByRole("region", { name: "File sync", exact: true });
   }
 
   openFolderLink(): Locator {
@@ -23,6 +23,22 @@ export class AgentFileSyncPage {
 
   syncSwitch(): Locator {
     return this.card().getByRole("checkbox", { name: "Sync this agent's files" });
+  }
+
+  activityList(): Locator {
+    return this.page.getByRole("region", { name: "File sync activity" });
+  }
+
+  activityEntries(): Locator {
+    return this.activityList().getByRole("listitem");
+  }
+
+  loadMoreButton(): Locator {
+    return this.activityList().getByRole("button", { name: "Load more" });
+  }
+
+  activityRetryButton(): Locator {
+    return this.activityList().getByRole("button", { name: "Retry" });
   }
 
   retryButton(): Locator {

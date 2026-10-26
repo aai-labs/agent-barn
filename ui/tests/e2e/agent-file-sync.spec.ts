@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { TEST_ORG_ID } from "../constants";
-import { MOCK_FOLDER_URL, mockFileSyncStatus } from "../fixtures/file-sync";
+import { MOCK_FOLDER_URL, mockFileSyncEntry, mockFileSyncStatus } from "../fixtures/file-sync";
 import UserContext from "../fixtures/user-context.json";
 import { AgentFileSyncPage } from "../pages/agent-file-sync-page.po";
 import { MOCK_AGENT_ID, mockAgent, mockAgentAllowedActions } from "../pages/data-support/agent-data-support.po";
@@ -22,11 +22,15 @@ async function open(
     allowedActions = mockAgentAllowedActions,
     userContext,
     readStatus = 200,
+    entries = [],
+    activityReadStatus = 200,
   }: {
     status?: Record<string, unknown>;
     allowedActions?: string[];
     userContext?: unknown;
     readStatus?: number;
+    entries?: Record<string, unknown>[];
+    activityReadStatus?: number;
   } = {},
 ) {
   const data = new DataSupport(page);
@@ -36,9 +40,10 @@ async function open(
   await data.agents.interceptGetAgentRequest({ body: { ...mockAgent, allowed_actions: allowedActions } });
   await data.agents.interceptGetAgentHealthRequest();
   const fileSync = await data.fileSync.interceptFileSync({ status, readStatus });
+  const activity = await data.fileSync.interceptFileSyncActivity({ entries, readStatus: activityReadStatus });
   const fileSyncPage = new AgentFileSyncPage(page);
   await fileSyncPage.goto(MOCK_AGENT_ID);
-  return { fileSync, fileSyncPage };
+  return { fileSync, activity, fileSyncPage };
 }
 
 test.describe("Agent File sync", () => {
@@ -150,5 +155,91 @@ test.describe("Agent File sync", () => {
     await fileSyncPage.retryButton().click();
 
     await expect(fileSyncPage.card()).toContainText("Synced");
+  });
+});
+
+test.describe("Agent File sync activity", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("describes each kind of activity in plain words", async ({ page }) => {
+    const at = "2026-10-26T09:00:00Z";
+    const entries = [
+      mockFileSyncEntry("edit_undone", "workspace/AGENTS.md", at),
+      mockFileSyncEntry("restored", "workspace/report.md", at),
+      mockFileSyncEntry("renamed_back", "workspace/notes.md", at),
+      mockFileSyncEntry("moved_not_synced", "workspace/budget.xlsx", at),
+      mockFileSyncEntry("folder_restored", null, at),
+      mockFileSyncEntry("conflict_agent_won", "workspace/plan.md", at),
+      mockFileSyncEntry("deleted_by_agent", "workspace/old.md", at),
+      mockFileSyncEntry("skipped_too_large", "workspace/video.mp4", at),
+      mockFileSyncEntry("skipped_name", "workspace/a:b.md", at),
+      mockFileSyncEntry("skipped_no_space", "workspace/data.csv", at),
+    ];
+    const { fileSyncPage } = await open(page, { entries });
+
+    const sentences = [
+      "Someone edited workspace/AGENTS.md in OneDrive. Agent Barn manages that file, so the agent's copy was put back.",
+      "workspace/report.md was deleted or moved away in OneDrive. The agent's copy was put back.",
+      "workspace/notes.md was renamed or moved in OneDrive. It was moved back.",
+      "workspace/budget.xlsx was added in OneDrive. The agent doesn't use it, so it was moved to _Not synced.",
+      "The agent's folder was renamed, moved or deleted in OneDrive. It was put back.",
+      "workspace/plan.md changed in the agent and in OneDrive at the same time. The agent's version was kept; the other edit is in OneDrive's version history.",
+      "The agent deleted workspace/old.md, so it was deleted in OneDrive too.",
+      "workspace/video.mp4 is over 100 MB, so it isn't synced.",
+      "workspace/a:b.md has a name or path OneDrive doesn't accept, so it isn't synced.",
+      "The agent's disk was full, so an edit to workspace/data.csv couldn't be applied yet. It will be retried.",
+    ];
+    await expect(fileSyncPage.activityEntries()).toHaveCount(sentences.length);
+    for (const [index, sentence] of sentences.entries()) {
+      await expect(fileSyncPage.activityEntries().nth(index)).toContainText(sentence);
+    }
+  });
+
+  test("lists entries in the order the server gives them, newest first", async ({ page }) => {
+    const { fileSyncPage } = await open(page, {
+      entries: [
+        mockFileSyncEntry("restored", "workspace/newer.md", "2026-10-26T10:00:00Z"),
+        mockFileSyncEntry("restored", "workspace/older.md", "2026-10-25T10:00:00Z"),
+      ],
+    });
+
+    await expect(fileSyncPage.activityEntries().first()).toContainText("workspace/newer.md");
+    await expect(fileSyncPage.activityEntries().last()).toContainText("workspace/older.md");
+  });
+
+  test("loads the next page on request", async ({ page }) => {
+    const entries = Array.from({ length: 21 }, (_, index) =>
+      mockFileSyncEntry("restored", `workspace/${String(index).padStart(2, "0")}.md`, `2026-10-26T09:${String(59 - index).padStart(2, "0")}:00Z`),
+    );
+    const { activity, fileSyncPage } = await open(page, { entries });
+    await expect(fileSyncPage.activityEntries()).toHaveCount(20);
+
+    await fileSyncPage.loadMoreButton().click();
+
+    await expect(fileSyncPage.activityEntries()).toHaveCount(21);
+    await expect(fileSyncPage.activityEntries().last()).toContainText("workspace/20.md");
+    await expect(fileSyncPage.loadMoreButton()).toHaveCount(0);
+    expect(activity.requestedPages).toEqual([1, 2]);
+  });
+
+  test("says so when nothing has happened yet", async ({ page }) => {
+    const { fileSyncPage } = await open(page);
+
+    await expect(fileSyncPage.activityList()).toContainText("Nothing has happened yet.");
+    await expect(fileSyncPage.loadMoreButton()).toHaveCount(0);
+  });
+
+  test("shows a failed history read in place and retries it", async ({ page }) => {
+    const { activity, fileSyncPage } = await open(page, {
+      activityReadStatus: 500,
+      entries: [mockFileSyncEntry("restored", "workspace/report.md", "2026-10-26T09:00:00Z")],
+    });
+    await expect(fileSyncPage.activityList()).toContainText("We couldn't load the sync history");
+    await expect(fileSyncPage.card()).toContainText("Synced");
+
+    activity.failReadsWith(200);
+    await fileSyncPage.activityRetryButton().click();
+
+    await expect(fileSyncPage.activityEntries()).toHaveCount(1);
   });
 });

@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { Agent } from "@/features/agents/schemas";
 
 import { useFileSyncQuery } from "../hooks/use-file-sync-query";
+import { FileSyncActivityList } from "./file-sync-activity-list";
 import { FileSyncStatusCard } from "./file-sync-status-card";
 
 export function FileSyncTab({ agent }: { agent: Agent }) {
@@ -32,6 +33,7 @@ export function FileSyncTab({ agent }: { agent: Agent }) {
   return (
     <div className="flex flex-col gap-4">
       <FileSyncStatusCard agent={agent} fileSync={fileSync} />
+      <FileSyncActivityList agentId={agent.id} providerName={fileSync.provider?.displayName ?? null} />
     </div>
   );
 }

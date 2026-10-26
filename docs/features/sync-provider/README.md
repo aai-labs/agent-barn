@@ -295,7 +295,8 @@ An Agent's **File sync** tab (`?tab=file-sync`, in the panel's Work group) shows
   - "Not connected": Owners and Admins get a link to Organization settings → Sync, and everyone else is told an Owner or Admin can connect one.
 - **Open in {provider}** opens the folder in a new tab, whenever the folder exists.
 - **The switch,** "Sync this agent's files", shows the switch's position in every state, including while not connected. It appears only with `agent.update`, and calls [the switch's request](#turning-sync-off) at once, then reads the status again.
-- **Refreshing:** the status is read again every 30 s while the tab is open. A failed read is shown in place with Retry.
+- **What happened:** below the card, [the history](#activity) in plain sentences, newest first, each with its time, 20 at a time with Load more. One sentence per kind, naming the path and the provider; a folder entry names the folder instead. With no entries it says "Nothing has happened yet."
+- **Refreshing:** the status is read again every 30 s while the tab is open; the history is read when the tab opens and after the switch changes. A failed read of either is shown in place with Retry, and the other part still shows.
 - **Caching:** the query is keyed by Organization and Agent id, so switching Organization never shows another one's status.
 
 ### Activity

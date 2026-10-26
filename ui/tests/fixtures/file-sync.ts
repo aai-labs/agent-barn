@@ -14,3 +14,7 @@ export function mockFileSyncStatus(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+export function mockFileSyncEntry(kind: string, path: string | null, occurredAt: string) {
+  return { id: `${kind}-${occurredAt}`, kind, path, occurred_at: occurredAt };
+}

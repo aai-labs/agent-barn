@@ -92,13 +92,12 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - turning sync on re-checks the folder: the next pass re-lists, so changes people made while sync was off are handled;
   - `GET …/agents/{agent_id}/file-sync` (`activity.read`): the Agent's File Sync status;
   - `GET …/agents/{agent_id}/file-sync/activity` (`activity.read`): the Agent's File Sync history, newest first, paged;
-  - the Agent page **File sync** tab: the status card, Open in {provider}, and the switch.
+  - the Agent page **File sync** tab: the status card, Open in {provider}, the switch, and the history.
 - In transition: none.
 - Next, in this order, each as its own slice:
-  1. the File sync tab's activity list;
-  2. the hire form option;
-  3. the local k3d end-to-end run;
-  4. closing this log.
+  1. the hire form option;
+  2. the local k3d end-to-end run;
+  3. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -112,6 +111,22 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — The File sync tab's history
+
+- Delivered: `FileSyncActivityList` below the status card, from `useFileSyncActivity`.
+  - **Paging:** `useInfiniteQuery`, 20 per page, keyed under the Agent's file sync key so the switch's invalidation refreshes it too.
+  - **Sentences:** one per kind (`fileSyncActivitySentence`), naming the path and the provider (from the status, "the storage provider" when there is none), each with its time.
+  - **Load more** while the server has more; "Nothing has happened yet." when empty.
+  - **A failed read** shows in place with Retry, without hiding the status card.
+- Changed:
+  - `schemas.ts`: the history page and its ten kinds.
+  - README "Agent page": the history.
+  - **Test locator:** the page object's status card locator matches the region name exactly. The new "File sync activity" region also matched "File sync" by substring, and Playwright refused the ambiguous locator. Assertions are unchanged.
+- Verified:
+  - **5 new tests in `agent-file-sync.spec.ts`, all failing first** (no list): the ten sentences, including a folder entry without a path; server order; Load more (`page=1` then `page=2`, then no button); the empty list; a failed history read with Retry while the card still shows.
+  - **`interceptFileSyncActivity`** serves pages from a list of entries and records the pages asked for.
+  - **Suites:** the spec and `app-navigation.spec.ts` pass together (44). `pnpm lint` and `tsc --noEmit` pass.
 
 ### 2026-10-26 — AF-385 — The Agent page File sync tab
 
