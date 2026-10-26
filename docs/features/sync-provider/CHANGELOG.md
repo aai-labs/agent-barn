@@ -92,12 +92,12 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - turning sync on re-checks the folder: the next pass re-lists, so changes people made while sync was off are handled;
   - `GET …/agents/{agent_id}/file-sync` (`activity.read`): the Agent's File Sync status;
   - `GET …/agents/{agent_id}/file-sync/activity` (`activity.read`): the Agent's File Sync history, newest first, paged;
-  - the Agent page **File sync** tab: the status card, Open in {provider}, the switch, and the history.
+  - the Agent page **File sync** tab: the status card, Open in {provider}, the switch, and the history;
+  - the hire form's "Sync files with {provider}" option.
 - In transition: none.
 - Next, in this order, each as its own slice:
-  1. the hire form option;
-  2. the local k3d end-to-end run;
-  3. closing this log.
+  1. the local k3d end-to-end run;
+  2. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -111,6 +111,21 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — The hire form's file sync option
+
+- Delivered: the hire form shows a "Sync files with {provider}" checkbox, checked by default, when the Organization has an active connection whose provider declares `file_sync`.
+  - **Provider check:** the same inline check as the retire dialog in `agent-danger-zone-settings.tsx`, from `useSyncProvidersQuery`. Two uses, so no shared helper yet.
+  - **Request:** unchecking it sends `file_sync_enabled: false` with the create request; left checked, nothing is sent, so the API's default applies.
+  - **Elsewhere:** Quick start and other create paths send nothing.
+- Changed: `CreateAgentData.fileSyncEnabled`, `useHireAgentForm` (`fileSyncEnabled` state), `hire-form-dialog.tsx`. README "Turning sync off".
+- Verified:
+  - **3 new tests in `hire-dialog.spec.ts`:**
+    - checked by default, with the exact create body unchanged (failed first: no checkbox);
+    - unchecked sends `file_sync_enabled: false` (failed first: nothing to click);
+    - no checkbox for a provider not connected, or connected without `file_sync` (passed before; a guard).
+  - **The existing specs don't mock the provider list,** so they get no checkbox, and their exact create bodies stay as they were.
+  - **Suites:** `hire-dialog.spec.ts` and `sync-provider.spec.ts` pass together (48). `pnpm lint` and `tsc --noEmit` pass.
 
 ### 2026-10-26 — AF-385 — The File sync tab's history
 

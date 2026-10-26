@@ -252,7 +252,7 @@ The helper never deletes a file on the volume.
 
 ### Turning sync off
 
-Each Agent has a File Sync switch, `agent.file_sync_enabled`, on by default. It can be set when the Agent is created ([Agents](../agents.md#create)), and changed at any time with `PUT /organizations/{organization_id}/agents/{agent_id}/file-sync {enabled}`:
+Each Agent has a File Sync switch, `agent.file_sync_enabled`, on by default. It can be set when the Agent is created ([Agents](../agents.md#create)): the hire form offers a "Sync files with {provider}" checkbox, checked by default and shown only while the Organization has an active provider that declares `file_sync`; unchecking it sends `file_sync_enabled: false`, and Quick start and the API leave it on. It can be changed at any time with `PUT /organizations/{organization_id}/agents/{agent_id}/file-sync {enabled}`:
 - **Permission:** `agent.update`. An invisible, other-Organization or deleted Agent is 404; a visible one without the permission is 403; a read-only API key is refused.
 - **Answer:** 200 `{agent_id, enabled}`. Setting the value it already has changes nothing and records nothing.
 - **In the same transaction:**

@@ -25,6 +25,7 @@ export type CreateAgentData = {
   // Shared credentials to attach (by ID)
   sharedCredentials?: Array<{ sharedCredentialId: string }>;
   approvalMode?: "manual" | "auto" | "off";
+  fileSyncEnabled?: boolean;
 };
 
 export function useCreateAgent() {

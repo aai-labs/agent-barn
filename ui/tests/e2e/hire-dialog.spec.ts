@@ -14,6 +14,29 @@ import {
 import { DataSupport } from "../pages/data-support/data-support.po";
 import { DashboardPage } from "../pages/dashboard-page.po";
 import { ORG_A_ID } from "../pages/data-support/organization-data-support.po";
+import {
+  activeOneDriveConnection,
+  activeOtherDriveConnection,
+  oneDriveEntry,
+  otherDriveEntry,
+} from "../pages/data-support/sync-provider-data-support.po";
+
+function syncFilesCheckbox(page: Page) {
+  return page.getByRole("checkbox", { name: "Sync files with OneDrive" });
+}
+
+async function hirePayload(page: Page, dataSupport: DataSupport) {
+  await dataSupport.agents.interceptCreateAgentRequest({
+    body: { ...mockAgent, name: "Brandon the Assistant", status: "STOPPED", agent_type: "hermes" },
+  });
+  await dataSupport.agents.interceptStartAgentRequest();
+  await chooseTemplate(page);
+  const createRequest = page.waitForRequest(
+    (request) => request.url().endsWith("/agents") && request.method() === "POST",
+  );
+  await page.getByRole("button", { name: "Hire Agent", exact: true }).click();
+  return (await createRequest).postDataJSON();
+}
 
 async function chooseTemplate(page: Page) {
   await page.getByRole("combobox", { name: "Template", exact: true }).click();
@@ -78,6 +101,53 @@ test.describe("Hire Dialog", () => {
     });
     await startRequest;
     await expect(page.getByText("Brandon the Assistant was hired successfully.")).toBeVisible();
+  });
+
+  test("offers file sync, on by default, when a connected provider syncs files", async ({ page }) => {
+    await dataSupport.syncProviders.interceptProviders({
+      providers: [oneDriveEntry({ connection: activeOneDriveConnection() })],
+    });
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+
+    await expect(syncFilesCheckbox(page)).toBeChecked();
+    expect(await hirePayload(page, dataSupport)).toEqual({
+      name: "Brandon the Assistant",
+      agent_type: "hermes",
+      template_key: "general-purpose",
+      template_version: 1,
+      approval_mode: "auto",
+    });
+  });
+
+  test("hires with file sync off when it is unchecked", async ({ page }) => {
+    await dataSupport.syncProviders.interceptProviders({
+      providers: [oneDriveEntry({ connection: activeOneDriveConnection() })],
+    });
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+
+    await syncFilesCheckbox(page).click();
+
+    expect(await hirePayload(page, dataSupport)).toEqual({
+      name: "Brandon the Assistant",
+      agent_type: "hermes",
+      template_key: "general-purpose",
+      template_version: 1,
+      approval_mode: "auto",
+      file_sync_enabled: false,
+    });
+  });
+
+  test("offers no file sync without a connected provider that syncs files", async ({ page }) => {
+    await dataSupport.syncProviders.interceptProviders({
+      providers: [oneDriveEntry(), otherDriveEntry({ connection: activeOtherDriveConnection() })],
+    });
+    await dashboardPage.goto();
+    await dashboardPage.openHireCard();
+
+    await expect(dashboardPage.agentNameInput()).toHaveValue("Brandon the Assistant");
+    await expect(page.getByRole("checkbox", { name: /^Sync files with/ })).toHaveCount(0);
   });
 
   test("preserves manual edits when selecting a template", async ({ page }) => {

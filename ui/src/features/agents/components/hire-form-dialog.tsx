@@ -1,6 +1,8 @@
 "use client";
 
 import { XIcon } from "@/components/icons";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -9,6 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useSyncProvidersQuery } from "@/features/sync-provider/hooks/use-sync-providers-query";
+import { FILE_SYNC } from "@/features/sync-provider/schemas";
 import { useHireAgentForm, type HiredAgent } from "../hooks/use-hire-agent-form";
 import { CredentialErrorAlert } from "./credential-error-alert";
 import { AgentErrorBanner } from "./agent-error-banner";
@@ -39,6 +43,8 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
     defaultModel,
     approvalMode,
     setApprovalMode,
+    fileSyncEnabled,
+    setFileSyncEnabled,
     selectedSkillIds,
     setSelectedSkillIds,
     skillCredentials,
@@ -54,6 +60,10 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
     canHire,
     hire,
   } = useHireAgentForm({ onHired });
+  const { providers } = useSyncProvidersQuery();
+  const fileSyncProvider = providers?.find(
+    (provider) => provider.connection?.status === "active" && provider.capabilities.includes(FILE_SYNC),
+  );
 
   const hireButtonLabel = createdAgent
     ? pending
@@ -111,6 +121,17 @@ export function HireFormDialog({ onClose, onHired }: HireDialogProps) {
               <SelectContent><SelectGroup><SelectItem value="auto">Automatic</SelectItem><SelectItem value="manual">Manual</SelectItem><SelectItem value="off">Off</SelectItem></SelectGroup></SelectContent>
             </Select>
           </FormField>
+        )}
+        {fileSyncProvider && (
+          <Label className="flex items-start gap-2 text-[0.84rem] font-medium sm:col-span-2" style={{ color: "var(--ink)" }}>
+            <Checkbox
+              className="mt-0.5"
+              checked={fileSyncEnabled}
+              disabled={pending}
+              onCheckedChange={(checked) => setFileSyncEnabled(checked === true)}
+            />
+            <span>Sync files with {fileSyncProvider.displayName}</span>
+          </Label>
         )}
         <div className="rounded-xl border border-dashed p-4 text-sm" style={{ color: "var(--ink-3)" }}>
           {template?.requiredSkills.length

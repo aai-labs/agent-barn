@@ -58,6 +58,7 @@ export function useHireAgentForm({ onHired, templatePagination }: {
   const [model, setModel] = useState<string | null>(null);
   const { defaultModel } = useModels();
   const [approvalMode, setApprovalMode] = useState<"manual" | "auto" | "off">("auto");
+  const [fileSyncEnabled, setFileSyncEnabled] = useState(true);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [skillCredentials, setSkillCredentials] = useState<IntegrationDraft[]>([]);
   const [groupChoices, setGroupChoices] = useState<Record<string, string[]>>({});
@@ -167,6 +168,7 @@ export function useHireAgentForm({ onHired, templatePagination }: {
         ...(manualSecrets.length > 0 ? { secrets: manualSecrets } : {}),
         ...(sharedCredentials.length > 0 ? { sharedCredentials } : {}),
         ...approval,
+        ...(fileSyncEnabled ? {} : { fileSyncEnabled: false }),
       });
       setCreatedAgent({ id: agent.id, name: agent.name });
       await startCreatedAgent({ id: agent.id, name: agent.name });
@@ -213,6 +215,8 @@ export function useHireAgentForm({ onHired, templatePagination }: {
     defaultModel,
     approvalMode,
     setApprovalMode,
+    fileSyncEnabled,
+    setFileSyncEnabled,
     selectedSkillIds,
     setSelectedSkillIds,
     skillCredentials,
