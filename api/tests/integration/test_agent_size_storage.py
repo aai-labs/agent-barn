@@ -9,10 +9,11 @@ from uuid import uuid7
 
 from fastapi import status
 from hamcrest import assert_that, equal_to, has_entries
+from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
 from api.domains.agent_sizes.models import GIB, STANDARD_SIZE_ID
-from api.domains.agents.builders.common import build_pvc
+from api.domains.agents.builders.common import build_pvc, storage_quantity
 from api.domains.agents.models import Agent
 from api.domains.events.catalog import PLATFORM_AGENT_SIZE_CHANGED, PLATFORM_AGENT_SIZE_CREATED
 from api.domains.events.models import OutboxMessage
@@ -184,31 +185,49 @@ def test_a_new_volume_is_created_at_its_sizes_storage():
         assert_that(_volume(context), equal_to(10 * GIB))
 
 
-def test_an_existing_smaller_volume_grows_at_the_next_start():
+def _bound(context, request: int, capacity: int):
+    """The Agent's volume as Kubernetes holds it once bound: capacity trails the request while it grows."""
+    pvc = build_pvc(context.agent.id, context.organization.id, "ns", storage_bytes=request)
+    pvc.status = client.V1PersistentVolumeClaimStatus(capacity={"storage": storage_quantity(capacity)})
+    return pvc
+
+
+def _pending(context) -> bool:
+    return context.client.get(f"{_AGENTS}/{context.agent.id}", headers=_auth(context.access_token)).json()[
+        "pending_size"
+    ]
+
+
+def test_an_existing_volume_grows_and_stays_pending_until_kubernetes_has_grown_it():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         k8s = context.injector.get(KubernetesClient)
         _start(context)
-        admin = _platform_admin(context)
 
         with when("its size gets a bigger volume while it runs"):
-            _make_default(context, admin, _BIG)
-            read = context.client.get(f"{_AGENTS}/{context.agent.id}", headers=_auth(context.access_token)).json()
+            _make_default(context, _platform_admin(context), _BIG)
 
         with then("a restart is pending"):
-            assert_that(read["pending_size"], equal_to(True))
+            assert_that(_pending(context), equal_to(True))
 
-        with when("it restarts, finding its 1Gi volume already there"):
+        with when("it restarts on its bound 1Gi volume, and Kubernetes accepts the resize"):
             k8s.create_pvc.side_effect = None
-            k8s.create_pvc.return_value = build_pvc(context.agent.id, context.organization.id, "ns")
+            k8s.create_pvc.return_value = _bound(context, 1 * GIB, 1 * GIB)
+            k8s.get_pvc.return_value = _bound(context, 10 * GIB, 1 * GIB)
             _stop(context)
             _start(context)
 
-        with then("the volume is grown to 10Gi and nothing is pending"):
+        with then("the volume is asked for 10Gi, but counts as 1Gi and stays pending while it grows"):
             k8s.patch_pvc_storage.assert_called_once()
             assert_that(k8s.patch_pvc_storage.call_args.args[2], equal_to("10Gi"))
+            assert_that(_volume(context), equal_to(1 * GIB))
+            assert_that(_pending(context), equal_to(True))
+
+        with when("Kubernetes finishes growing it"):
+            k8s.get_pvc.return_value = _bound(context, 10 * GIB, 10 * GIB)
+
+        with then("the next read records 10Gi and nothing is pending"):
+            assert_that(_pending(context), equal_to(False))
             assert_that(_volume(context), equal_to(10 * GIB))
-            read = context.client.get(f"{_AGENTS}/{context.agent.id}", headers=_auth(context.access_token)).json()
-            assert_that(read["pending_size"], equal_to(False))
 
 
 def test_a_volume_the_cluster_cannot_grow_still_starts_and_stays_pending():
@@ -216,7 +235,7 @@ def test_a_volume_the_cluster_cannot_grow_still_starts_and_stays_pending():
         k8s = context.injector.get(KubernetesClient)
         _make_default(context, _platform_admin(context), _BIG)
         k8s.create_pvc.side_effect = None
-        k8s.create_pvc.return_value = build_pvc(context.agent.id, context.organization.id, "ns")
+        k8s.create_pvc.return_value = _bound(context, 1 * GIB, 1 * GIB)
         k8s.patch_pvc_storage.side_effect = ApiException(status=403, reason="Forbidden")
 
         response = _start(context)

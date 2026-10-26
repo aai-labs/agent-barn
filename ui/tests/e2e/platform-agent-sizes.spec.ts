@@ -166,6 +166,28 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
     ]);
   });
 
+  test("renaming a size keeps values set in bytes exactly, so no volume grows by rounding", async () => {
+    const { writes } = await sizes.intercept({
+      sizes: [mockSize({ memory_request_bytes: 1_000_000_001, memory_limit_bytes: 2 * GIB, storage_bytes: 1536 * MIB })],
+    });
+    await sizesPage.goto();
+
+    await sizesPage.openActions("Standard");
+    await sizesPage.action("Edit").click();
+    await expect(sizesPage.field("Storage (GiB)")).toHaveValue("1.5");
+    await sizesPage.fill({ Name: "Standard plus" });
+    await sizesPage.submit();
+
+    await expect(sizesPage.dialog()).toBeHidden();
+    expect(writes[0].body).toEqual(
+      expect.objectContaining({
+        name: "Standard plus",
+        memory_request_bytes: 1_000_000_001,
+        storage_bytes: 1536 * MIB,
+      }),
+    );
+  });
+
   test("makes another size the default after confirming, which moves the badge", async () => {
     const { writes } = await sizes.intercept({
       sizes: [

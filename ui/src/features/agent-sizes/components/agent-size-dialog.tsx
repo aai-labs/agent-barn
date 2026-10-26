@@ -21,21 +21,37 @@ const WHOLE = /^\d+$/;
 
 type FieldKey = "name" | "cpuRequest" | "cpuLimit" | "memoryRequest" | "memoryLimit" | "storage";
 
+/** Bytes in a unit, exact to three places, so a value the API took in bytes is not shown rounded. */
+function inUnit(bytes: number, unit: number): string {
+  return String(Number((bytes / unit).toFixed(3)));
+}
+
 function textOf(size: AgentSize | null): Record<FieldKey, string> {
   if (!size) return { name: "", cpuRequest: "", cpuLimit: "", memoryRequest: "", memoryLimit: "", storage: "1" };
   return {
     name: size.name,
     cpuRequest: String(size.cpuRequestMillicores / 1000),
     cpuLimit: String(size.cpuLimitMillicores / 1000),
-    memoryRequest: String(Math.round(size.memoryRequestBytes / MIB)),
-    memoryLimit: String(Math.round(size.memoryLimitBytes / MIB)),
-    storage: String(Math.round(size.storageBytes / GIB)),
+    memoryRequest: inUnit(size.memoryRequestBytes, MIB),
+    memoryLimit: inUnit(size.memoryLimitBytes, MIB),
+    storage: inUnit(size.storageBytes, GIB),
   };
 }
 
-/** The values the text describes, or why they can't be used, per field. */
-function parse(text: Record<FieldKey, string>): { values: AgentSizeValues | null; errors: Partial<Record<FieldKey, string>> } {
+/**
+ * The values the text describes, or why they can't be used, per field.
+ *
+ * A field left as it was keeps the saved value exactly: the form shows it in MiB or GiB, and
+ * reading that back would round a value set in bytes through the API, so saving a renamed size
+ * could quietly grow every volume on it.
+ */
+function parse(
+  text: Record<FieldKey, string>,
+  size: AgentSize | null,
+): { values: AgentSizeValues | null; errors: Partial<Record<FieldKey, string>> } {
   const errors: Partial<Record<FieldKey, string>> = {};
+  const saved = size ? textOf(size) : null;
+  const unchanged = (key: FieldKey) => saved !== null && text[key] === saved[key];
   const cpu = (key: FieldKey) => {
     const value = text[key].trim();
     const millicores = DECIMAL.test(value) ? Math.round(Number(value) * 1000) : Number.NaN;
@@ -44,7 +60,8 @@ function parse(text: Record<FieldKey, string>): { values: AgentSizeValues | null
     }
     return millicores;
   };
-  const memory = (key: FieldKey) => {
+  const memory = (key: "memoryRequest" | "memoryLimit") => {
+    if (size && unchanged(key)) return key === "memoryRequest" ? size.memoryRequestBytes : size.memoryLimitBytes;
     const value = text[key].trim();
     const bytes = WHOLE.test(value) ? Number(value) * MIB : Number.NaN;
     if (!(bytes > 0) || bytes > MAX_MEMORY_BYTES) {
@@ -54,6 +71,7 @@ function parse(text: Record<FieldKey, string>): { values: AgentSizeValues | null
   };
 
   const storage = () => {
+    if (size && unchanged("storage")) return size.storageBytes;
     const value = text.storage.trim();
     const bytes = WHOLE.test(value) ? Number(value) * GIB : Number.NaN;
     if (!(bytes >= MIN_STORAGE_BYTES) || bytes > MAX_STORAGE_BYTES) {
@@ -109,7 +127,7 @@ export function AgentSizeDialog({
   const [showErrors, setShowErrors] = useState(false);
   const { create, update } = useAgentSizeActions();
   const mutation = size ? update : create;
-  const { values, errors } = parse(text);
+  const { values, errors } = parse(text, size);
 
   function save() {
     setShowErrors(true);

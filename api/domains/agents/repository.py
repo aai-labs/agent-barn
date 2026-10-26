@@ -1404,6 +1404,26 @@ class AgentRepository:
         self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
         return event.event_id
 
+    def record_volume_capacity(self, agent_id: UUID, capacity_bytes: int) -> dict[str, int] | None:
+        """Raise a running Agent's recorded volume size to the capacity its volume grew to.
+
+        Under the row lock, and only while the Agent still runs with a record to update: a stop
+        clears the record and a start writes a fresh one, and neither may be undone here. Never
+        lowers it. Returns the record as stored, or None when there was nothing to update.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            persisted = session.exec(
+                select(Agent).where(col(Agent.id) == agent_id, col(Agent.deleted_at).is_(None)).with_for_update()
+            ).first()
+            if persisted is None or persisted.status != AgentStatus.RUNNING or persisted.running_resources is None:
+                return None
+            if capacity_bytes <= persisted.running_resources.get("storage_bytes", 0):
+                return persisted.running_resources
+            persisted.running_resources = {**persisted.running_resources, "storage_bytes": capacity_bytes}
+            session.add(persisted)
+            session.commit()
+            return persisted.running_resources
+
     def soft_delete_with_event(
         self,
         agent: Agent,

@@ -19,7 +19,7 @@ from api.core.config import Config
 from api.domains.activity.repository import ActivityRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupService, to_option
-from api.domains.agent_sizes.models import running_snapshot, size_is_pending
+from api.domains.agent_sizes.models import LEGACY_STORAGE_BYTES, running_snapshot, size_is_pending
 from api.domains.agents.aai_cli_artifacts import (
     build_local_tools_policy_md,
     build_tool_context_md,
@@ -51,6 +51,7 @@ from api.domains.agents.builders import (
     native_slack_env,
     native_telegram_channel,
     native_telegram_env,
+    pvc_capacity_bytes,
     pvc_storage_bytes,
     runtime_teams_channel,
     runtime_teams_env,
@@ -1193,6 +1194,7 @@ class AgentService:
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_visible(context, agent_id)
+        self._reconcile_volume(agent)
         return self._get_agent_read(agent, context)
 
     def get_agent_template(self, agent_id: UUID, version: int, context: CurrentUserContext) -> TemplateRead:
@@ -2222,32 +2224,59 @@ class AgentService:
         return connection.settings, connection.credentials, home_channel
 
     def _ensure_volume(self, pvc: object, name: str, namespace: str, storage_bytes: int) -> int:
-        """Grow an existing volume to its size's storage, and return the size it now has.
+        """Ask an existing volume to grow to its size's storage, and return what it has now.
 
         A new volume was just created at that size. An older, smaller one is patched up, which
-        needs a StorageClass that allows volume expansion; when the cluster refuses, the Agent
-        still starts on the volume it has, and `pending_size` keeps saying the size is not
-        applied. A volume is never shrunk, so a larger one than the size asks for stays.
+        needs a StorageClass that allows volume expansion. Kubernetes grows a volume
+        asynchronously and can still fail after accepting the patch, so what is returned is the
+        volume's actual capacity, not the request: `pending_size` keeps saying the size is not
+        applied until the capacity catches up, which `_reconcile_volume` notices. When the
+        cluster refuses outright, the Agent still starts on the volume it has. A volume is never
+        shrunk, so a larger one than the size asks for stays.
         """
-        current = pvc_storage_bytes(pvc)
-        if current is None:
+        requested = pvc_storage_bytes(pvc)
+        if requested is None:
             # Nothing to read back (the PVC call returned no manifest): what was asked for.
             return storage_bytes
-        if current >= storage_bytes:
-            return current
+        if requested < storage_bytes:
+            try:
+                self.k8s.patch_pvc_storage(name, namespace, storage_quantity(storage_bytes))
+            except ApiException as exc:
+                logger.warning(
+                    "Could not grow volume %s from %s to %s bytes (%s %s); starting on the volume it has",
+                    name,
+                    requested,
+                    storage_bytes,
+                    exc.status,
+                    exc.reason,
+                )
+        # A claim that is not bound yet, such as one just created, has no capacity to read and
+        # is provisioned at its request.
+        capacity = pvc_capacity_bytes(pvc)
+        return capacity if capacity is not None else requested
+
+    def _reconcile_volume(self, agent: Agent) -> None:
+        """Record a running Agent's grown volume once Kubernetes has finished growing it.
+
+        Only reads the cluster when the Agent's size asks for more storage than its last start
+        recorded, so an Agent read stays local otherwise. A read failure leaves the record as
+        it is: the Agent keeps reading as pending, which is the safe side.
+        """
+        if agent.status != AgentStatus.RUNNING or agent.running_resources is None:
+            return
+        recorded = agent.running_resources.get("storage_bytes", LEGACY_STORAGE_BYTES)
+        if self.agent_sizes.resolve(agent.agent_size_id).storage_bytes <= recorded:
+            return
         try:
-            self.k8s.patch_pvc_storage(name, namespace, storage_quantity(storage_bytes))
-        except ApiException as exc:
-            logger.warning(
-                "Could not grow volume %s from %s to %s bytes (%s %s); starting on the volume it has",
-                name,
-                current,
-                storage_bytes,
-                exc.status,
-                exc.reason,
-            )
-            return current
-        return storage_bytes
+            capacity = pvc_capacity_bytes(self.k8s.get_pvc(f"agent-{agent.id}", self.config.k8s_namespace))
+        except Exception:
+            logger.warning("Could not read the volume of agent %s to reconcile its size", agent.id, exc_info=True)
+            return
+        if capacity is None or capacity <= recorded:
+            return
+        updated = self.repository.record_volume_capacity(agent.id, capacity)
+        if updated is not None:
+            agent.running_resources = updated
 
     def _start_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Start a known Agent after its caller has established authority."""

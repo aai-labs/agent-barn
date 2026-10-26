@@ -8,6 +8,7 @@ from uuid import uuid7
 
 import pytest
 from hamcrest import assert_that, equal_to, none
+from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
 from api.domains.agent_sizes.models import (
@@ -18,7 +19,7 @@ from api.domains.agent_sizes.models import (
     running_snapshot,
     size_is_pending,
 )
-from api.domains.agents.builders.common import build_pvc, pvc_storage_bytes, storage_quantity
+from api.domains.agents.builders.common import build_pvc, pvc_capacity_bytes, pvc_storage_bytes, storage_quantity
 from api.domains.agents.service import AgentService
 from api.domains.restore_points.service import RestorePointService
 
@@ -61,25 +62,52 @@ def test_a_volume_reads_back_its_request_and_anything_else_reads_as_unknown():
 # --- growing an existing volume ---------------------------------------------------
 
 
+def _bound(request: int, capacity: int):
+    """A volume Kubernetes has bound, whose capacity can trail its request while it grows."""
+    pvc = _pvc(request)
+    pvc.status = client.V1PersistentVolumeClaimStatus(capacity={"storage": storage_quantity(capacity)})
+    return pvc
+
+
 def _ensure(pvc, storage_bytes: int, k8s: MagicMock) -> int:
     service = cast(Any, SimpleNamespace(k8s=k8s))
     return AgentService._ensure_volume(service, pvc, "agent-x", "agent-farm", storage_bytes)
 
 
-def test_a_smaller_volume_grows_to_its_size():
-    k8s = MagicMock()
-
-    volume = _ensure(_pvc(1 * GIB), 10 * GIB, k8s)
-
-    assert_that(volume, equal_to(10 * GIB))
-    k8s.patch_pvc_storage.assert_called_once_with("agent-x", "agent-farm", "10Gi")
+def test_a_volume_reads_back_its_capacity_only_once_bound():
+    assert_that(pvc_capacity_bytes(_bound(10 * GIB, 1 * GIB)), equal_to(1 * GIB))
+    assert_that(pvc_capacity_bytes(_pvc(10 * GIB)), none())
+    assert_that(pvc_capacity_bytes(MagicMock()), none())
 
 
-def test_a_volume_at_or_above_its_size_is_left_alone():
+def test_a_new_claim_is_provisioned_at_its_request():
     k8s = MagicMock()
 
     assert_that(_ensure(_pvc(10 * GIB), 10 * GIB, k8s), equal_to(10 * GIB))
-    assert_that(_ensure(_pvc(20 * GIB), 10 * GIB, k8s), equal_to(20 * GIB))
+    k8s.patch_pvc_storage.assert_not_called()
+
+
+def test_a_smaller_volume_is_asked_to_grow_but_counts_as_its_capacity_until_it_has():
+    """Kubernetes grows a volume asynchronously and may still fail, so the request is not the size."""
+    k8s = MagicMock()
+
+    volume = _ensure(_bound(1 * GIB, 1 * GIB), 10 * GIB, k8s)
+
+    k8s.patch_pvc_storage.assert_called_once_with("agent-x", "agent-farm", "10Gi")
+    assert_that(volume, equal_to(1 * GIB))
+
+
+def test_a_grown_volume_counts_as_its_new_capacity_and_is_not_patched_again():
+    k8s = MagicMock()
+
+    assert_that(_ensure(_bound(10 * GIB, 10 * GIB), 10 * GIB, k8s), equal_to(10 * GIB))
+    k8s.patch_pvc_storage.assert_not_called()
+
+
+def test_a_volume_above_its_size_is_left_alone():
+    k8s = MagicMock()
+
+    assert_that(_ensure(_bound(20 * GIB, 20 * GIB), 10 * GIB, k8s), equal_to(20 * GIB))
     k8s.patch_pvc_storage.assert_not_called()
 
 
@@ -87,7 +115,7 @@ def test_a_volume_the_cluster_cannot_grow_keeps_its_size_and_the_agent_still_sta
     k8s = MagicMock()
     k8s.patch_pvc_storage.side_effect = ApiException(status=403, reason="Forbidden")
 
-    assert_that(_ensure(_pvc(1 * GIB), 10 * GIB, k8s), equal_to(1 * GIB))
+    assert_that(_ensure(_bound(1 * GIB, 1 * GIB), 10 * GIB, k8s), equal_to(1 * GIB))
 
 
 # --- pending ----------------------------------------------------------------------
