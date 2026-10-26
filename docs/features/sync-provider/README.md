@@ -262,6 +262,26 @@ Each Agent has a File Sync switch, `agent.file_sync_enabled`, on by default. It 
 - **While the folder is `disabled`:** the pod is refused (409), the Sync Engine leaves the folder and its files alone, and the folder and everything in it stay at the provider. The folder's name stays taken.
 - **A restore** of an Agent Restore Point doesn't change the switch.
 
+### Status
+
+`GET /organizations/{organization_id}/agents/{agent_id}/file-sync` tells a person how an Agent's File Sync stands.
+- **Permission:** `activity.read`. An invisible, other-Organization or deleted Agent is 404; a visible one without the permission is 403. A read-only API key may read it.
+- **Answer:** `{enabled, state, provider {key, display_name}, folder_url, last_contact_at, retry_at}`. `enabled` is the Agent's switch in every state. `provider` and `folder_url` are null while not connected; `folder_url` is null until the folder exists at the provider. `last_contact_at` is the last time the Agent's pod got through to the [Ingest file sync routes](../activity-and-ingest.md). `retry_at` is set only while throttled.
+
+The state is the first of these that holds:
+
+| State | When |
+|---|---|
+| `not_connected` | The Organization has no active connection, or its provider is not registered on this server or doesn't declare `file_sync`. A pending connection counts as not connected. |
+| `turned_off` | The Agent's switch is off. |
+| `setting_up` | The engine hasn't made the folder yet, hasn't created it at the provider yet, or hasn't yet resumed it after the switch was turned on. |
+| `throttled` | The provider asked Agent Barn to wait; the Sync Engine resumes this connection at `retry_at`. |
+| `waiting_for_restart` | The pod has never got through. A pod started before AF-384 has no helper, so this lasts until the Agent's next restart or managed update; a pod with the helper gets through within one round (15 s). |
+| `not_syncing` | The Agent is running, or in error, and its pod last got through more than 10 minutes ago. |
+| `synced` | Otherwise. A stopped Agent whose pod has got through before reads as synced. |
+
+The 10 minutes outlast an Agent's start and a managed update's readiness wait (600 s, [Agents](../agents.md)), so a restart alone doesn't read as an error. Nothing about provider failures is stored, so the status can't report them; they are in the Sync Engine's log.
+
 ### Activity
 
 Everything File Sync does that a person should be able to see is stored in `sync_activity`, at the time it actually happened: the Organization, Agent, folder, kind, path, detail and time. Rows are kept after their folder is removed, with `folder_id` cleared, and for now they are kept forever. No route or UI reads them yet; the agent page card is the next ticket.

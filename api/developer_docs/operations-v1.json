@@ -336,6 +336,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/file-sync",
+    "get_agent_file_sync_organizations__organization_id__agents__agent_id__file_sync_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/healthz",
     "get_agent_healthz_organizations__organization_id__agents__agent_id__healthz_get"
   ],

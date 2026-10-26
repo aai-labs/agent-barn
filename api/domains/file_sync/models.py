@@ -125,6 +125,30 @@ class SyncActivity(BaseModel, table=True):
     occurred_at: datetime = SqlField(sa_column=Column(sa.DateTime(timezone=True), nullable=False))
 
 
+class AgentFileSyncState(StrEnum):
+    NOT_CONNECTED = "not_connected"
+    TURNED_OFF = "turned_off"
+    SETTING_UP = "setting_up"
+    THROTTLED = "throttled"
+    WAITING_FOR_RESTART = "waiting_for_restart"
+    NOT_SYNCING = "not_syncing"
+    SYNCED = "synced"
+
+
+class AgentFileSyncProviderRead(PydanticBaseModel):
+    key: str
+    display_name: str
+
+
+class AgentFileSyncRead(PydanticBaseModel):
+    enabled: bool
+    state: AgentFileSyncState
+    provider: AgentFileSyncProviderRead | None
+    folder_url: str | None
+    last_contact_at: datetime | None
+    retry_at: datetime | None
+
+
 class AgentFileSyncUpdate(PydanticBaseModel):
     model_config = ConfigDict(extra="forbid")
 

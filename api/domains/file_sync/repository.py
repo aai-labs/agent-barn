@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agents.models import Agent, AgentType
+from api.domains.agents.repository import agent_scope_predicates
 from api.domains.events import ActorIdentity, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import AGENT_FILE_SYNC_DISABLED, AGENT_FILE_SYNC_ENABLED, EVENT_REGISTRY
 from api.domains.events.repository import OutboxMessageRepository
@@ -23,6 +24,7 @@ from api.domains.file_sync.models import (
     SyncFolderStatus,
     SyncPendingAction,
 )
+from api.domains.rbac.policy import AuthorizationScope
 from api.domains.sync_provider.models import SyncProviderConnection, SyncProviderStatus
 from api.domains.sync_provider.plugins.base import RemoteItem
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
@@ -517,3 +519,28 @@ class AgentFileSyncRepository:
             delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             return delivery_ids
+
+    def status_inputs(
+        self, agent_id: UUID, scope: AuthorizationScope
+    ) -> tuple[Agent, SyncProviderConnection | None, SyncAgentFolder | None] | None:
+        with Session(self.delegate.engine) as session:
+            agent = session.exec(select(Agent).where(col(Agent.id) == agent_id, *agent_scope_predicates(scope))).first()
+            if agent is None:
+                return None
+            connection = session.exec(
+                select(SyncProviderConnection).where(
+                    col(SyncProviderConnection.organization_id) == agent.organization_id,
+                    col(SyncProviderConnection.status) == SyncProviderStatus.ACTIVE,
+                )
+            ).first()
+            folder = (
+                session.exec(
+                    select(SyncAgentFolder).where(
+                        col(SyncAgentFolder.connection_id) == connection.id,
+                        col(SyncAgentFolder.agent_id) == agent.id,
+                    )
+                ).first()
+                if connection is not None
+                else None
+            )
+            return agent, connection, folder

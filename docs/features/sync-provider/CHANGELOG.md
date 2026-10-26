@@ -89,10 +89,11 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - Ingest refuses an Agent whose switch is off (409), with or without a folder;
   - the Sync Engine follows the switch: no folder for an Agent whose switch is off, and a folder brought in line with the switch when its request couldn't reach it;
   - the full re-list is safe alongside the pod: no false restore for a file uploaded during the listing, and no failed pass for a file gone before it is parked;
-  - turning sync on re-checks the folder: the next pass re-lists, so changes people made while sync was off are handled.
+  - turning sync on re-checks the folder: the next pass re-lists, so changes people made while sync was off are handled;
+  - `GET …/agents/{agent_id}/file-sync` (`activity.read`): the Agent's File Sync status.
 - In transition: none.
 - Next, in this order, each as its own slice:
-  1. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
+  1. `GET …/file-sync/activity`;
   2. the Agent page File sync tab (status and switch, then activity);
   3. the hire form option;
   4. the local k3d end-to-end run;
@@ -110,6 +111,39 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — An Agent's File Sync status
+
+- Delivered: `GET /organizations/{organization_id}/agents/{agent_id}/file-sync` → `{enabled, state, provider {key, display_name}, folder_url, last_contact_at, retry_at}`.
+  - **Permission:** `activity.read` (`require_visible`, then `require_action_for_visible`). 404 for an invisible, other-Organization or deleted Agent; 403 without the permission. A read-only API key may read it.
+  - **State,** the first that holds:
+    - `not_connected`: no active connection, a pending one, a provider no longer registered, or one without `file_sync`;
+    - `turned_off`: the switch is off;
+    - `setting_up`: the folder isn't made, isn't created at the provider, or not yet resumed;
+    - `throttled`: the connection's `sync_retry_at` is in the future (returned as `retry_at`);
+    - `waiting_for_restart`: the pod has never got through (`last_contact_at` null);
+    - `not_syncing`: the Agent is running or in error and the last contact is more than 10 minutes old (`NOT_SYNCING_AFTER`);
+    - `synced`: otherwise.
+  - **Reads:** `AgentFileSyncRepository.status_inputs` reads the Agent through `agent_scope_predicates`, then its Organization's active connection and its own folder. The provider's name comes from the registry.
+- Changed:
+  - README: new "Status" section. RBAC brief: the scoped read. `CONTEXT.md`: File Sync names the status.
+  - `api/developer_docs/operations-v1.json` lists the operation.
+- Verified:
+  - **`tests/integration/test_file_sync_status.py` (25 tests, product API with Test Drive), all failing first** with 405 (the path had only the PUT).
+  - **Access:** an Agent Viewer reads it; a custom role with only `agent.read` is 403; a Member without access, and missing, deleted and foreign Agents, are 404; no authentication is 401; a read-only key reads it.
+  - **States:**
+    - no connection (the whole body checked);
+    - a pending connection, a provider without `file_sync`, a provider no longer registered;
+    - turned off, with the folder still openable, and turned off before any connection;
+    - not reached by the engine, reserved but not created, still disabled after turn-on;
+    - throttled with `retry_at`, and a throttle already over;
+    - never contacted;
+    - synced with `last_contact_at`;
+    - 9 min 50 s (synced) and 10 min 10 s (not syncing) for a running Agent;
+    - an Agent in error out of contact;
+    - a stopped Agent out of contact (synced).
+  - **Regression:** `test_public_api_contract.py`, `test_file_sync_switch.py` and `test_cross_org_isolation.py` pass (56).
+  - ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
 
 ### 2026-10-26 — AF-385 — Turning sync on re-checks the folder
 
