@@ -200,7 +200,7 @@ Any failure during provisioning — not only Kubernetes resource creation — mo
 
 ### Create
 
-Creation requires `agent.create`, resolves the requested Template Version or latest version, validates required Skills and tool-provider credentials, live-validates supported provider credentials from the exact request, and atomically persists the Agent with creator provenance and explicit Agent Owner access. It persists Agent Secrets, assigns Skills, and creates a per-Agent LiteLLM key when configured only after deterministic and live preflight validation. New Agents are headless and `STOPPED`; Communication Connections are added independently after creation. Agent General Access defaults to Restricted, so no other Member receives access automatically.
+Creation requires `agent.create`, resolves the requested Template Version or latest version, validates required Skills and tool-provider credentials, live-validates supported provider credentials from the exact request, and atomically persists the Agent with creator provenance and explicit Agent Owner access. It persists Agent Secrets, assigns Skills, and creates a per-Agent LiteLLM key when configured only after deterministic and live preflight validation. New Agents are headless and `STOPPED`; Communication Connections are added independently after creation. Agent General Access defaults to Restricted, so no other Member receives access automatically. `file_sync_enabled` (default true) chooses whether [File Sync](sync-provider/README.md#agent-file-sync) keeps an Agent Folder for the new Agent; an Agent created with it false gets no folder.
 
 ### Suggested names
 

@@ -1146,6 +1146,7 @@ class AgentCreate(PydanticBaseModel):
     verbose_mode: bool = False
     # None follows the platform default; see AgentRead.effective_max_turns.
     max_turns: int | None = Field(default=None, ge=MAX_TURNS_MIN, le=MAX_TURNS_MAX)
+    file_sync_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_unique_secret_providers(self) -> AgentCreate:

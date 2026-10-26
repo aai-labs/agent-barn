@@ -82,20 +82,20 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 ### AF-385 — Per-Agent file sync status and switch
 
 - Delivered:
-  - the schema: `agent.file_sync_enabled` (on by default) and `sync_agent_folder.resync_requested_at` (migration `df10528f512f`). Nothing reads or writes them yet.
+  - the schema: `agent.file_sync_enabled` (on by default) and `sync_agent_folder.resync_requested_at` (migration `df10528f512f`);
+  - `POST …/agents` accepts `file_sync_enabled` and stores it. Nothing else reads the switch yet, so an Agent created with it off still gets a folder until the engine slice.
 - Next, in this order, each as its own slice:
-  1. creating an Agent with sync off;
-  2. the switch's Domain Events;
-  3. `PUT …/agents/{agent_id}/file-sync`;
-  4. Ingest refusing a switched-off Agent;
-  5. the engine applying the switch to folders;
-  6. making the full re-list safe alongside the pod;
-  7. turning on re-checks the folder;
-  8. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
-  9. the Agent page File sync tab (status and switch, then activity);
-  10. the hire form option;
-  11. the local k3d end-to-end run;
-  12. closing this log.
+  1. the switch's Domain Events;
+  2. `PUT …/agents/{agent_id}/file-sync`;
+  3. Ingest refusing a switched-off Agent;
+  4. the engine applying the switch to folders;
+  5. making the full re-list safe alongside the pod;
+  6. turning on re-checks the folder;
+  7. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
+  8. the Agent page File sync tab (status and switch, then activity);
+  9. the hire form option;
+  10. the local k3d end-to-end run;
+  11. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -109,6 +109,16 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — Creating an Agent with sync off
+
+- Delivered: `AgentCreate.file_sync_enabled` (default `true`), stored by `create_agent`. Unknown fields are still refused (422).
+- In transition: the engine doesn't read the switch yet, so an Agent created with it off still gets a folder; the engine slice makes the switch take effect.
+- Changed: [Agents](../agents.md) "Create" names the field.
+- Verified:
+  - **2 new tests in `test_agents.py`:** creating with `file_sync_enabled: false` stores false, and it failed first (422, field refused). Creating without it stores true; it passed before and after, because the column already defaults to true. It is a guard.
+  - **The create tests:** `test_agents.py -k create_agent` and all of `test_onboarding.py`, which builds the only other `AgentCreate`, pass (66).
+  - ruff and format pass. ty passes apart from the 11 existing Unix-only diagnostics.
 
 ### 2026-10-26 — AF-385 — Switch and re-check columns
 
