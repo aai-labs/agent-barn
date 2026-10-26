@@ -1,6 +1,6 @@
 # Agent artifacts and file sharing
 
-Status: AF-415 implementation on AF-389; not deployed. [AF-415 specification](https://aai-labs.atlassian.net/wiki/spaces/AF/pages/3089039363) and [AF-387 delivery log](agent-workflows/CHANGELOG.md).
+Status: AF-415 implementation rebased onto staging, including merged AF-389; not externally deployed. [AF-415 specification](https://aai-labs.atlassian.net/wiki/spaces/AF/pages/3089039363) and [AF-387 delivery log](agent-workflows/CHANGELOG.md).
 
 ## Ownership and access
 

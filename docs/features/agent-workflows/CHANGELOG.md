@@ -7,12 +7,19 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 ## Current state
 
 - Delivered: AF-388 manual authoring is merged through PR #308.
-- Dependency: AF-389 Agent-session execution is tracked in [PR #326](https://github.com/aai-labs/agent-barn/pull/326). AF-415 launched from local `6e109add` and integrates the current prerequisite-branch head `37901c38`; the PR remains based on `feature/af-389-run-workflows-real-outputs`.
+- Dependency: AF-389 [PR #326](https://github.com/aai-labs/agent-barn/pull/326) is included in fetched staging via merge `42ea3fc7`. AF-415 originally launched from its feature branch and is now locally rebased onto `origin/staging` at `e207a212`. The remote draft PR target has not been changed or pushed.
 - Implemented in AF-415 draft [PR #328](https://github.com/aai-labs/agent-barn/pull/328): shared Agent/chat/workflow artifact metadata, private Garage/S3 byte publication, scoped runtime CLI, signed links, Agent Files/run/step downloads, immutable handoff, reference retention and retryable purge. [Artifact contract](../agent-artifacts.md); [verification evidence](../agent-artifacts/EVIDENCE.md).
 - Next: independently re-review the local per-Agent bucket/key and isolated-provisioner revision before push/deployment and AF-390 approval integration. File-backed future reviews must pin exact IDs/checksums; URL expiry is independent of approval lifetime.
 - Blockers: AF-389's uncertain-effect automatic retry, truthful stop/quiescence, live OpenClaw Agent-session acceptance and run-read-policy coordination remain open. Storage does not resolve them. Production Garage provisioning and rollout are separate authorized operational steps.
 
 ## Changes
+
+### 2026-10-26 — AF-415 — rebase onto fetched staging
+
+- Checkpoint: committed the storage revision before rebasing. Rebased onto fetched `origin/staging` at `e207a212`, including Agent Sizes and the AF-389 merge. Preserved both builders' fixed init-container resources, Agent-size and artifact API inventory entries, and both domains' cleanup/history.
+- Schema: retained the earlier artifact merge revision and added no-op merge `fac0030afc38`, joining staging's `8b2e4f61c9d3` with artifact head `a4152d0e1f32`. No schema/data operations are introduced by the merge itself.
+- Verification: 255 affected artifact/builder/inventory/Agent-size tests and 16 size-migration/resource tests pass. Both real-image CLI tests and authenticated browser/storage deployment contract pass; API/UI static checks, migration-head and artifact/workflow chart contracts pass. Local migrations are applied and app health is 200.
+- Delivery: local commits only; no remote force-push, PR retarget, merge or external deployment. Independent review of the current storage architecture remains outstanding; inherited AF-389 acceptance limitations are not resolved by the rebase.
 
 ### 2026-10-26 — AF-415 — fixed Agent-derived bucket names (local, not pushed)
 

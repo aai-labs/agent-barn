@@ -369,7 +369,9 @@ replacement node IDs require explicit layout changes, not the initial bootstrap 
 
 Artifact migration `a4150b8c9d10` follows `f8740a67b788`; merge revision
 `a4151c9d0e21` joins the prerequisite history. New head `a4152d0e1f32` adds the
-per-Agent bucket/key journal. Run `make migrate` before the updated processes.
+per-Agent bucket/key journal. No-op merge `fac0030afc38` joins that history with
+staging's Agent Sizes head `8b2e4f61c9d3`; it performs no schema/data operations.
+Run `make migrate` before the updated processes.
 This change assumes no existing files: there is **no shared-bucket byte migration
 or legacy shared-key access**. Old local buckets/volumes are not automatically
 deleted. Do not apply it to an installation retaining shared-bucket files without

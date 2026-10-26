@@ -6,6 +6,27 @@ starting at local AF-389 head `6e109add`. AF-389 PR
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
+## Post-rebase verification — 2026-10-26 (local, not pushed)
+
+The working revision was committed before rebasing onto freshly fetched
+`origin/staging` at `e207a212` (including AF-389 merge `42ea3fc7` and Agent Sizes).
+Conflict resolution retained staging's init-container resources, Agent-size API
+inventory and cleanup setup alongside artifact behavior. The earlier artifact
+merge migration was retained and no-op `fac0030afc38` joins both current heads.
+
+- **255** affected artifact/configuration/persistence/builder/inventory/Agent-size
+  tests passed in **169.37 seconds**.
+- **16** additional Agent-size migration/container-resource tests passed in
+  **10.46 seconds**.
+- Both real-image CLI tests passed in **13.16 seconds**; the authenticated
+  Chromium/runtime/persistent-Garage contract passed in **25.18 seconds**.
+- API lint/format/types, UI types/lint, single migration head and artifact/workflow
+  chart checks pass. Local migrations are applied, paused services restarted,
+  and app health is 200. Cluster verification was not repeated for the rebase.
+
+These are local commits, not a remote push/PR retarget or external deployment.
+Earlier independent review still does not cover the current storage architecture.
+
 ## Fixed Agent-derived names — 2026-10-26 (local, not pushed)
 
 The maintainer removed the unnecessary installation-prefix configuration. Bucket
