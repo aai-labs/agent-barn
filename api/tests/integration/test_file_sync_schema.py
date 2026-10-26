@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from hamcrest import assert_that, equal_to, none, not_none
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -112,6 +113,39 @@ def test_a_folder_is_stored_with_its_defaults():
         assert_that(found.status, equal_to(SyncFolderStatus.ACTIVE))
         assert_that(found.folder_item_id, none())
         assert_that(found.last_contact_at, none())
+
+
+def test_a_folder_starts_with_no_re_check_requested():
+    with given(_GIVEN) as context:
+        with context.postgres_delegate.engine.connect() as connection:
+            column = connection.execute(
+                text(
+                    "SELECT data_type, is_nullable, column_default FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'sync_agent_folder' "
+                    "AND column_name = 'resync_requested_at'"
+                )
+            ).one_or_none()
+
+        assert_that(column, equal_to(("timestamp with time zone", "YES", None)))
+
+
+def test_a_new_agent_syncs_its_files():
+    with given(_GIVEN) as context:
+        with context.postgres_delegate.engine.connect() as connection:
+            column = connection.execute(
+                text(
+                    "SELECT data_type, is_nullable, column_default FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'agent' AND column_name = 'file_sync_enabled'"
+                )
+            ).one_or_none()
+
+        assert_that(column, equal_to(("boolean", "NO", "true")))
+
+        with Session(context.postgres_delegate.engine) as session:
+            agent = session.get(Agent, context.agent.id)
+
+        assert agent is not None
+        assert_that(agent.file_sync_enabled, equal_to(True))
 
 
 def test_an_agent_has_one_folder_per_connection():

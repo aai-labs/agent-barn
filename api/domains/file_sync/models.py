@@ -68,6 +68,9 @@ class SyncAgentFolder(BaseModel, table=True):
     last_contact_at: datetime | None = SqlField(
         default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
     )
+    resync_requested_at: datetime | None = SqlField(
+        default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
+    )
 
 
 class SyncFile(BaseModel, table=True):

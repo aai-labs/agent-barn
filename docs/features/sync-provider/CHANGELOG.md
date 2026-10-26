@@ -1,7 +1,7 @@
 # Sync providers — change log
 
 Status: Active
-Epic: AF-383 — Connect an Organization to OneDrive; AF-384 — Two-way file sync
+Epic: AF-383 — Connect an Organization to OneDrive; AF-384 — Two-way file sync; AF-385 — Per-Agent file sync status and switch
 Related context: [Sync providers](README.md), [ADR: plugin seam](../../adr/2026-10-16-sync-provider-plugin-seam.md), [ADR: Agent file sync](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Integrations](../integrations.md), [RBAC implementation brief](../rbac/IMPLEMENTATION-BRIEF.md), [epic guideline](../../guidelines/epics.md)
 
 ## Current state
@@ -79,7 +79,51 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
 - **End-to-end run:** on local k3d against the test tenant instead of staging.
 - **Activity:** stored only. Its route and UI belong to the next ticket.
 
+### AF-385 — Per-Agent file sync status and switch
+
+- Delivered:
+  - the schema: `agent.file_sync_enabled` (on by default) and `sync_agent_folder.resync_requested_at` (migration `df10528f512f`). Nothing reads or writes them yet.
+- Next, in this order, each as its own slice:
+  1. creating an Agent with sync off;
+  2. the switch's Domain Events;
+  3. `PUT …/agents/{agent_id}/file-sync`;
+  4. Ingest refusing a switched-off Agent;
+  5. the engine applying the switch to folders;
+  6. making the full re-list safe alongside the pod;
+  7. turning on re-checks the folder;
+  8. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
+  9. the Agent page File sync tab (status and switch, then activity);
+  10. the hire form option;
+  11. the local k3d end-to-end run;
+  12. closing this log.
+- Blockers: none.
+
+Acceptance criteria amendments (maintainer, 2026-10-23):
+- **Names:** routes under `/organizations/{organization_id}/agents/{agent_id}/file-sync` and the UI folder `ui/src/features/file-sync/`, not `onedrive-sync`. Every provider word comes from the provider, as everywhere else in the seam.
+- **Routes:** status (`GET …/file-sync`) and history (`GET …/file-sync/activity`) are separate reads. `PUT …/file-sync` returns `{agent_id, enabled}`, so a caller without `activity.read` never receives the status.
+- **The switch:** it is stored on the Agent, can be changed at any time (including before the folder exists or while not connected), and is offered when creating an Agent. An Agent created with sync off gets no folder.
+- **Turning on:** the Sync Engine re-checks the folder, so edits, deletions and new files made at the provider while sync was off are handled.
+- **"Conflict copies":** the activity is `conflict_agent_won`; AF-384 keeps the person's edit in version history instead of making a copy.
+- **States:** a transient "Setting up the folder…" state is added to the ticket's five.
+- **The tab:** the card is on a new File sync tab, gated on `activity.read`. All ten activity kinds are listed.
+- **Manual check:** on local k3d against the test tenant, not on staging.
+
 ## Changes
+
+### 2026-10-26 — AF-385 — Switch and re-check columns
+
+- Delivered: migration `df10528f512f` (revises `af95cf4c3a1e`):
+  - `agent.file_sync_enabled`, Boolean, not null, server default `true`, so existing Agents keep syncing;
+  - `sync_agent_folder.resync_requested_at`, timestamptz, nullable.
+
+  The models gain `Agent.file_sync_enabled` and `SyncAgentFolder.resync_requested_at`.
+- Verified:
+  - **New tests, all 3 failing first** at their column assertions (column missing):
+    - `test_file_sync_schema.py`: a folder starts with no re-check requested; a new Agent syncs its files;
+    - `test_rbac_schema.py`: existing Agents keep syncing after the upgrade. It sits beside the Agent Memory column test, because that file's `legacy_database` fixture is the one that upgrades a database with existing Agents.
+  - **Both files pass** (45 tests).
+  - **Checks:** one Alembic head (`df10528f512f`), ruff and format pass. ty passes apart from the 11 existing Unix-only diagnostics (`os.getuid` and similar in runtime and test fixtures), run with `--python .venv/Scripts/python.exe` on Windows.
+- Not verified: the downgrade path was not run.
 
 ### 2026-10-23 — AF-384 — Activity notes carry the time the change really happened
 
