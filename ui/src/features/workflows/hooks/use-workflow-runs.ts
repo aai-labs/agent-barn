@@ -1,6 +1,11 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useOrganizationApiBase } from "@/features/organizations/hooks/use-organization-api-base";
 import { useOrganizationContext } from "@/features/organizations/providers/organization-provider";
 import { api } from "@/shared/api";
@@ -14,6 +19,8 @@ import {
   type WorkflowRunList,
 } from "../run-schemas";
 import { workflowsKey } from "./use-workflows";
+
+const HISTORY_PAGE = 100;
 
 function useRunScope(agentId: string) {
   const organizationId =
@@ -74,20 +81,32 @@ export function useWorkflowRun(agentId: string, runId: string) {
 export function useWorkflowRunHistory(
   agentId: string,
   runId: string,
+  revision: number,
   progressing: boolean,
 ) {
   const scope = useRunScope(agentId);
+  const read = async (page: number) =>
+    (
+      await api.get<WorkflowRunHistory>(
+        `${scope.base}/workflow-runs/${runId}/history?page_size=${HISTORY_PAGE}&page=${page}`,
+        { schema: WorkflowRunHistorySchema },
+      )
+    ).data;
   return useQuery({
-    queryKey: [...scope.key, runId, "history"],
+    // The revision in the key refetches on every transition, including the final one.
+    queryKey: [...scope.key, runId, "history", revision],
     enabled: scope.enabled && Boolean(runId),
-    refetchInterval: progressing ? 3000 : false,
-    queryFn: async () =>
-      (
-        await api.get<WorkflowRunHistory>(
-          `${scope.base}/workflow-runs/${runId}/history?page_size=100`,
-          { schema: WorkflowRunHistorySchema },
-        )
-      ).data,
+    placeholderData: keepPreviousData,
+    refetchInterval: (query) =>
+      !query.state.error && progressing ? 3000 : false,
+    queryFn: async () => {
+      const first = await read(1);
+      if (first.total <= HISTORY_PAGE) return first;
+      // The API pages oldest first, so the newest events are on the last pages.
+      const last = Math.ceil(first.total / HISTORY_PAGE);
+      const pages = await Promise.all([read(last - 1), read(last)]);
+      return { ...first, items: pages.flatMap((page) => page.items) };
+    },
   });
 }
 
