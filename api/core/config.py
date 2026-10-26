@@ -52,7 +52,7 @@ class Config(BaseSettings):
 
     # Empty endpoint disables files only. Data keys live encrypted in per-Agent journals.
     artifact_s3_endpoint_url: str = ""
-    # Set ONLY in the isolated provisioning process, never API/runtime/purge workloads.
+    # Private Garage management authority: API provisioning and operator cleanup only.
     artifact_provisioner_url: str = ""
     artifact_provisioner_token: str = Field(default="", repr=False)
     artifact_runtime_base_url: str = "http://agentbarn-api:8000/api/v1/agent-artifacts/runtime"

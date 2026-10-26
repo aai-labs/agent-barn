@@ -296,6 +296,11 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/storage",
+    "storage_status_organizations__organization_id__agents__agent_id__artifacts_storage_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts/{artifact_id}",
     "get_artifact_organizations__organization_id__agents__agent_id__artifacts__artifact_id__get"
   ],
@@ -1113,6 +1118,11 @@
     "POST",
     "/organizations/{organization_id}/agents/{agent_id}/artifacts",
     "create_artifact_organizations__organization_id__agents__agent_id__artifacts_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/artifacts/storage",
+    "provision_storage_organizations__organization_id__agents__agent_id__artifacts_storage_post"
   ],
   [
     "POST",

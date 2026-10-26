@@ -488,3 +488,17 @@ untouched. The local cleanup process supports one bounded pass or `--interval 60
 with graceful shutdown. `make check-artifacts` also checks the three-node Garage
 chart's persistent storage, non-root pods, private Secret reference, distinct-node
 scheduling, network policy and TLS ingress render.
+
+Asynchronous artifact provisioning is covered by
+`tests/integration/test_artifact_creation.py`: real Garage/PostgreSQL creation
+commits Agent/events/request before provider work, and a real HTTP listener proves
+201 and PROVISIONING remain readable while Garage is deliberately held open.
+Provider failures preserve the Agent and exact retry identity; creation failures
+leave no request or provider work. Existing-Agent Provision/status/retry checks
+cover read-only keys, tenant scope, authentication, disabled storage and recovery
+without discovery. Compose/chart contracts exclude the retired provisioner and
+restrict management authority to API/maintenance. Persistent Garage checks call
+the generated loopback management endpoint with its private credential and verify
+settings-file permissions. `ui/tests/e2e/artifacts.spec.ts` covers missing storage,
+progress to READY, failure/retry and permission denial; these use synthetic API
+responses. The explicit runtime/deployment contracts above retain real byte evidence.

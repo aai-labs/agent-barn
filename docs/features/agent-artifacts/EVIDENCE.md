@@ -6,6 +6,143 @@ starting at local AF-389 head `6e109add`. AF-389 PR
 The live AF-415 specification expanded on 2026-10-21 supersedes the older
 workflow-owned storage design and historical POCs, which were left unchanged.
 
+## File-specific download errors and infinite Files — 2026-10-26 (local, not pushed)
+
+The reported artifact `01a17763-dca3-7251-8d39-0bc80ba0d98d` was inspected in the
+local database: its READY record targets the former shared `agent-artifacts`
+bucket, while the owning Agent's READY journal targets its current UUID-derived
+private bucket. Credential resolution refuses that former target before S3 I/O.
+This is a file-layout mismatch, not evidence of a Garage outage. Authenticated
+link issuance now returns a safe, explicit 409 requiring migration or re-upload.
+Current-layout credential absence has a separate diagnostic. The UI places the
+error beside the failed file so other downloads stay usable. No old bytes or
+metadata were modified, migrated or deleted.
+
+Files now uses infinite queries with twenty-file scroll-loaded pages. Timestamp
+ties use ID descending as a stable secondary order. Previously loaded pages survive
+load-more failure and explicit retry; settled run/step polling behavior is retained.
+
+- **46 focused API tests passed in 43.92 seconds**, including real Garage storage,
+  provisioning and the old-layout/current-file regression. **2 additional cases
+  passed in 9.31 seconds** for missing current credentials and tied-date pagination.
+- **11 Playwright tests passed in 13.9 seconds**, including three pages/45 files,
+  downloading an earlier page, retry after page-two failure, and a legacy file's
+  specific error followed by successful download of a newer file. These use mocked
+  API responses. PNG captures show the actual rendered provisioning, retry and
+  per-file-error components with fixture data; they are not live provider captures.
+- Presentation follow-up: provisioning states now match the centered Conversations
+  empty-state card with icons and actions; per-file failures use the shared Alert
+  primitive with an icon. Refreshed PNGs capture the revised rendered components.
+  **11 browser tests passed in 13.0 seconds**; UI types/lint and whitespace pass.
+- A process-only mutation restored the old generic target error; the legacy-file
+  regression failed at expected 409 versus actual 503. The passing implementation
+  was never replaced in running source.
+- Running local service inspection returns the explicit 409 for the reported ID.
+  A current-layout local file also downloaded through the actual service/storage
+  boundary: **157 bytes**, matching persisted size and SHA-256. This operator
+  service check does not claim a new authenticated browser acceptance sample.
+- API lint/format/types, UI types/lint and whitespace checks pass. The shared
+  browser reported unavailable; Playwright captured the screenshots instead.
+
+No migration, external deployment, push or merge was performed. The reported old
+file remains unavailable through current storage until migration or re-upload;
+this correction explains the cause and preserves tenant-scoped credential isolation.
+
+## Asynchronous provisioning and Files feedback — 2026-10-26 (local, not pushed)
+
+The maintainer requested nonblocking creation and a Provision action for existing
+Agents. This supersedes the synchronous creation/lease behavior described in the
+earlier synchronous evidence. Creation now atomically commits PENDING intent with Agent,
+access and events. Post-response tasks start work; the existing maintenance worker
+recovers persisted requests without discovering Agents. The existing journal is
+reused without a migration. Status/retry preserve scoped read/update authorization
+and reveal no storage credentials or raw diagnostics.
+
+- **51 focused API/storage/configuration/inventory tests passed in 40.32 seconds**,
+  including actual Garage bytes, uncertainty recovery, storage status and explicit
+  existing-Agent Provision/retry. **14 final creation/scoped-role tests passed in
+  14.73 seconds**, including additional concurrent-request and deleted-pending-owner
+  regressions. The read-only custom-role checks cover explicit membership and
+  general access without activity permissions.
+- A real Uvicorn/HTTPX contract holds Garage creation open and observes Agent 201
+  and readable PROVISIONING before releasing provider work. It also checks a
+  duplicate Provision request returns 202 while provider work is still running
+  (**final HTTP rerun: 1 passed, 7.01 seconds**).
+  A process-only mutation that moved provisioning before the response was caught
+  by the HTTP timeout regression; live source was never mutated. The first real
+  HTTP probe used the test client's placeholder Organization URL and failed with
+  400; supplying the actual UUID produced the valid passing probe. One initial
+  authorization assertion expected 404 for a nonmember Organization URL; it was
+  aligned with the existing 403 contract without changing authorization behavior.
+- **287 broader Agent/OpenRouter tests passed in 135.88 seconds**.
+- **8 Playwright tests passed in 15.1 seconds**, covering missing storage, Provision,
+  polling progress to READY, failed retry, read-only visibility and permission loss,
+  as well as existing downloads/run attachments. These intercept API responses;
+  they are UI behavior evidence, not actual provider execution.
+- Both real-image CLI contracts passed (**2 tests, 15.55 seconds**, Hermes `0.2.10`
+  and OpenClaw `0.7.7`). The separate real API/persistent Garage/runtime/Chromium
+  contract passed (**1 test, 29.07 seconds**), proving actual publication and exact
+  browser downloads after Garage replacement, followed by purge.
+- API lint/format/types, migration-head and artifact/workflow chart checks pass;
+  UI types/lint pass. Final Compose configuration checks passed **6 tests in
+  3.79 seconds**, including the ten-second maintenance command. Local API and
+  ten-second maintenance were recreated; app
+  health is 200 with database connected. Existing storage identities/bytes remain.
+
+Post-response tasks alone are not durable: operators must run maintenance for
+recovery after process loss. Compose does so every ten seconds; the enabled cluster
+CronJob does so every ten minutes. Local review covered the request transaction,
+concurrency locks, tenant policy and status/credential boundaries. Independent
+review, live model tool selection/messaging and inherited AF-389 gaps remain
+outstanding. No push, merge, production access or external deployment occurred.
+
+## Direct API provisioning — 2026-10-26 (local, not pushed)
+
+The maintainer requested removal of the isolated provisioner. This revision
+supersedes its topology and credential-boundary claims in earlier dated evidence.
+Agent creation now prepares and verifies private storage directly before committing
+Agent/access/events. Configured-storage failures return 503; deliberately disabled
+storage retains text-only creation. The existing cleanup worker reclaims failed
+reservations and deleted-owner storage; no Agent-discovery scan remains.
+
+- **9 creation tests passed in 10.00 seconds** against real PostgreSQL/Garage,
+  including uncertain provider success, failed Agent commit, lease expiry before
+  READY and before Agent commit, unauthenticated requests and disabled storage.
+- **39 storage/configuration tests passed in 30.91 seconds**, covering actual
+  bytes, scoped keys, signed downloads, retention, purge and Compose isolation.
+- Both real-image CLI contracts passed (**2 tests, 16.57 seconds**) with Hermes
+  `0.2.10` and OpenClaw `0.7.7`. These execute generated commands with real API,
+  PostgreSQL and Garage; they do not establish model/tool selection or messaging.
+- A process-only mutation inverted the Agent-commit reservation-deadline check.
+  The expired-READY regression failed at expected 503 versus actual 201. The
+  unmutated creation suite passes; running application source was never mutated.
+  The first mutation command lacked PYTHONPATH and was corrected before the probe.
+- API lint/format/types, one migration head and artifact/workflow chart contracts
+  pass. Rendered charts restrict management credentials/admin access to API and
+  cleanup; Compose excludes the retired workload and binds management to loopback.
+- Local Garage bootstrap preserved its endpoint, node and volumes, generated native
+  management settings, and API/cleanup were recreated. The retired provisioner
+  container was removed. App health returns 200 with database connected.
+
+- The broader Agent/create/persistent-storage/OpenRouter matrix passed **303 tests
+  in 229.67 seconds**. The additional native-management persistence regression
+  passed **1 test in 28.18 seconds**, proving the generated loopback admin endpoint
+  accepts actual authenticated Garage calls and its settings file is private,
+  alongside replacement, backup/restore, byte download and purge. Its first run
+  failed during fixture bootstrap before these assertions; the rerun passed.
+
+- The real runtime/persistent-Garage/authenticated Chromium contract passed
+  **1 test in 25.58 seconds**: both images publish, Garage is replaced, and the
+  browser downloads exact bytes through the app before purge. Initial attempts
+  lacked host pnpm and then node; restoring the existing host tools on PATH
+  produced the passing rerun. A copied Alpine node binary could not execute on
+  this host, so the rerun used the existing Linux host Node 22 installation.
+
+Local review covered reservation/cleanup fencing, create transaction ordering,
+credential wiring and documentation. No independent review of this revision,
+remote push, production provisioning or external deployment is claimed. AF-389
+acceptance gaps remain unchanged.
+
 ## Post-rebase verification — 2026-10-26 (local, not pushed)
 
 The working revision was committed before rebasing onto freshly fetched
@@ -674,8 +811,8 @@ reviews must pin exact IDs/checksums and release their references explicitly.
 
 External deployment still requires authorized execution of the provided Garage installation/bootstrap,
 private S3 service connectivity, the existing public app HTTPS origin reachable by
-download clients, the generated service-only bucket key in the existing storage
-Secret, the artifact schema migration, and an opted-in purge schedule. No public
+download clients, the endpoint-only storage Secret and private API/cleanup management Secret,
+the artifact schema migration, and an opted-in purge schedule. No public
 Garage endpoint is required. Existing deployments that enabled the former storage
 ingress must remove it and use the internal service endpoint in their storage Secret. Verify
 fresh links and native messaging delivery in the deployed Hermes/OpenClaw sessions

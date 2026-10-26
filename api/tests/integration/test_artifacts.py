@@ -484,6 +484,9 @@ def test_custom_read_role_and_general_access_need_no_activity_permission(storage
         path = base(context) + f"/artifacts/{row['id']}"
         assert_that(context.client.get(path + "/download-link", headers=auth(context)).status_code, equal_to(200))
         assert_that(context.client.delete(path, headers=auth(context)).status_code, equal_to(403))
+        storage_path = base(context) + "/artifacts/storage"
+        assert_that(context.client.get(storage_path, headers=auth(context)).json(), equal_to({"state": "READY"}))
+        assert_that(context.client.post(storage_path, headers=auth(context)).status_code, equal_to(403))
 
 
 def test_cross_tenant_and_runtime_identity_cannot_select_another_agents_bytes(storage):
@@ -617,3 +620,60 @@ def test_concurrent_finalization_preserves_immutable_garage_bytes(storage):
         assert_that(changed.status_code, equal_to(422))
         link = context.client.get(path + "/download-link", headers=auth(context)).json()
         assert_that(context.client.get(link["url"]).content, equal_to(CONTENT))
+
+
+def test_previous_storage_layout_has_specific_download_error_without_affecting_current_files(storage):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        previous, current = publish(context), publish(context)
+        with Session(context.postgres_delegate.engine) as session:
+            row = session.get_one(Artifact, UUID(previous["id"]))
+            row.bucket = "agent-artifacts"
+            session.add(row)
+            session.commit()
+        response = context.client.get(
+            base(context) + f"/artifacts/{previous['id']}/download-link", headers=auth(context)
+        )
+        assert_that(response.status_code, equal_to(409))
+        assert_that("previous storage layout" in response.json()["detail"], equal_to(True))
+        assert_that("uploaded again" in response.json()["detail"], equal_to(True))
+        link = context.client.get(base(context) + f"/artifacts/{current['id']}/download-link", headers=auth(context))
+        assert_that(link.status_code, equal_to(200))
+        assert_that(context.client.get(link.json()["url"]).content, equal_to(CONTENT))
+
+
+def test_current_file_missing_usable_credentials_reports_specific_cause(storage):
+    from api.domains.artifacts.models import ArtifactBucket
+
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        artifact = publish(context)
+        with Session(context.postgres_delegate.engine) as session:
+            row = session.exec(select(ArtifactBucket)).one()
+            row.state = "PENDING"
+            session.add(row)
+            session.commit()
+        response = context.client.get(
+            base(context) + f"/artifacts/{artifact['id']}/download-link", headers=auth(context)
+        )
+        assert_that(response.status_code, equal_to(503))
+        assert_that("Storage credentials for this file are unavailable" in response.json()["detail"], equal_to(True))
+
+
+def test_files_have_stable_pagination_when_publication_timestamps_match(storage):
+    env, _ = storage
+    with given([set_env_variable(env), *_GIVEN]) as context:
+        artifacts = [publish(context) for _ in range(3)]
+        with Session(context.postgres_delegate.engine) as session:
+            for artifact in artifacts:
+                row = session.get_one(Artifact, UUID(artifact["id"]))
+                row.created_at = datetime(2026, 10, 26, tzinfo=UTC)
+                session.add(row)
+            session.commit()
+        ids = []
+        for page in (1, 2):
+            response = context.client.get(base(context) + f"/artifacts?page={page}&page_size=2", headers=auth(context))
+            assert_that(response.status_code, equal_to(200))
+            assert_that(response.json()["total"], equal_to(3))
+            ids.extend(item["id"] for item in response.json()["items"])
+        assert_that(ids, equal_to(sorted((row["id"] for row in artifacts), reverse=True)))

@@ -138,6 +138,7 @@ from api.domains.agents.selection import (
     is_model_allowed,
 )
 from api.domains.agents.sharepoint_service import SITES_STILL_GRANTED
+from api.domains.artifacts.buckets import ArtifactBucketRepository
 from api.domains.artifacts.credentials import runtime_token as artifact_runtime_token
 from api.domains.auth.models import CurrentUserContext
 from api.domains.communications.agentbarn_telegram_service import AgentBarnTelegramService
@@ -371,6 +372,7 @@ class AgentService:
     plugins: PlatformPluginRegistry
     agentbarn_telegram_secrets: AgentBarnTelegramService
     agent_sizes: AgentSizeLookupService
+    artifact_buckets: ArtifactBucketRepository
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -1111,6 +1113,11 @@ class AgentService:
                     skills=prepared_skills,
                     actor_display=secret_actor_display,
                     agent_limit=agent_limit,
+                    artifact_bucket=(
+                        self.artifact_buckets.new_request(agent.id, agent.organization_id)
+                        if self.config.artifact_s3_endpoint_url
+                        else None
+                    ),
                 )
             except AgentSizeUnavailable:
                 # Disabled or withdrawn since the check above.

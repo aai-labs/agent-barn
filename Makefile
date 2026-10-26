@@ -73,7 +73,7 @@ dev-api:
 	AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL=$(AGENTBARN_TELEGRAM_RUNTIME_WEBHOOK_URL) uv run python -m uvicorn api.communications_main:app --app-dir .. --host 0.0.0.0 --port $(COMMUNICATIONS_PORT) --reload --timeout-graceful-shutdown 5 & \
 	uv run python -m uvicorn api.memory_main:app --app-dir .. --host 0.0.0.0 --port $(MEMORY_PORT) --reload --no-access-log & \
 	uv run python -m fastapi dev gateway_main.py --host 0.0.0.0 --port $(GATEWAY_PORT) & \
-	CREDENTIAL_GATEWAY_BASE_URL=$(CREDENTIAL_GATEWAY_BASE_URL) INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) MEMORY_BASE_URL=$(MEMORY_BASE_URL) MEMORY_VIEW_BASE_URL=$(MEMORY_VIEW_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run $(if $(wildcard .garage/application.env),--env-file ../.garage/application.env,) python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
+	CREDENTIAL_GATEWAY_BASE_URL=$(CREDENTIAL_GATEWAY_BASE_URL) INGEST_BASE_URL=$(INGEST_BASE_URL) COMMUNICATIONS_BASE_URL=$(COMMUNICATIONS_BASE_URL) MEMORY_BASE_URL=$(MEMORY_BASE_URL) MEMORY_VIEW_BASE_URL=$(MEMORY_VIEW_BASE_URL) TEAMS_RUNTIME_WEBHOOK_URL=$(TEAMS_RUNTIME_WEBHOOK_URL) AGENT_TRIGGER_URL=$(AGENT_TRIGGER_URL) uv run $(if $(wildcard .garage/application.env),--env-file ../.garage/application.env,) $(if $(wildcard .garage/provisioner-host.env),--env-file ../.garage/provisioner-host.env,) python -m fastapi dev main.py --host 0.0.0.0 --port $(API_DEV_PORT)
 
 # Ingest on its own — `make dev-api` already starts it; use this to run or
 # restart the telemetry sink independently.
@@ -290,7 +290,7 @@ redis-logs:
 # Bounded operator-only private file cleanup (requires configured artifact storage).
 .PHONY: purge-artifacts
 purge-artifacts:
-	cd api && PYTHONPATH=.. uv run $(if $(wildcard .garage/application.env),--env-file ../.garage/application.env,) python -m api.domains.artifacts.maintenance
+	cd api && PYTHONPATH=.. uv run $(if $(wildcard .garage/application.env),--env-file ../.garage/application.env,) $(if $(wildcard .garage/provisioner-host.env),--env-file ../.garage/provisioner-host.env,) python -m api.domains.artifacts.maintenance
 
 # Explicit real-image artifact contract (both image variables are required).
 .PHONY: test-artifact-runtime

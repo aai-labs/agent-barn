@@ -244,6 +244,10 @@ def local(args) -> None:
         node_id = cli(["node", "id"]).stdout.strip()
         if state.get("node_id") and state["node_id"] != node_id:
             raise ValueError("Garage node identity changed; stop and restore the original metadata and data")
+        admin_address = run([*compose, "port", "garage", "3903"]).stdout.strip()
+        if not admin_address.startswith("127.0.0.1:") or "\n" in admin_address:
+            raise ValueError("Garage management listener must be bound to loopback")
+        private_file(directory / "provisioner-host.env", provisioner_env(state, "http://" + admin_address))
         state.update(initialized=True, node_id=node_id)
         write_local_state(directory, state)
         private_file(directory / "application.env", application_env(state))

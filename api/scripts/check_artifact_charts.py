@@ -40,7 +40,7 @@ def main() -> None:
         items = [item for item in yaml.safe_load_all(result.stdout) if item]
         jobs = [item for item in items if item["metadata"]["name"] == "artifact-test-artifact-purge"]
         assert len(jobs) == int(enabled)
-        assert len([item for item in items if item["metadata"]["name"] == "artifact-test-artifact-provisioner"]) == 1
+        assert len([item for item in items if item["metadata"]["name"] == "artifact-test-artifact-provisioner"]) == 0
         for item in items:
             if item["kind"] not in {"Deployment", "CronJob"}:
                 continue
@@ -53,11 +53,10 @@ def main() -> None:
                 expected = item["metadata"]["name"] in {
                     "artifact-test",
                     "artifact-test-artifact-purge",
-                    "artifact-test-artifact-provisioner",
                 }
                 assert ("private-artifact-storage" in names) == expected, item["metadata"]["name"]
                 assert ("private-artifact-provisioner" in names) == (
-                    item["metadata"]["name"] == "artifact-test-artifact-provisioner"
+                    item["metadata"]["name"] in {"artifact-test", "artifact-test-artifact-purge"}
                 )
             if item["metadata"]["name"] == "artifact-test-artifact-purge":
                 assert pod["automountServiceAccountToken"] is False
@@ -84,16 +83,8 @@ def main() -> None:
     private_policy = next(item for item in private_items if item["kind"] == "NetworkPolicy")
     admin_rule = private_policy["spec"]["ingress"][2]
     assert admin_rule["ports"] == [{"protocol": "TCP", "port": 3903}]
-    assert admin_rule["from"] == [
-        {
-            "podSelector": {
-                "matchLabels": {
-                    "app.kubernetes.io/name": "agentbarn-api",
-                    "app.kubernetes.io/component": "artifact-provisioner",
-                }
-            }
-        }
-    ]
+    assert admin_rule["from"][0]["podSelector"]["matchLabels"] == {"app.kubernetes.io/name": "agentbarn-api"}
+    assert admin_rule["from"][0]["podSelector"]["matchExpressions"][0]["values"] == ["api", "artifact-purge"]
     private_sources = private_policy["spec"]["ingress"][1]["from"]
     assert len(private_sources) == 1
     assert private_sources[0]["podSelector"]["matchExpressions"][0]["values"] == ["api", "artifact-purge"]

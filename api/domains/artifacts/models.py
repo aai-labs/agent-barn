@@ -2,6 +2,7 @@
 
 import unicodedata
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -106,3 +107,7 @@ class ArtifactLinkRead(DTO):
     artifact: ArtifactRead
     url: str
     expires_at: datetime
+
+
+class ArtifactStorageRead(DTO):
+    state: Literal["NOT_CONFIGURED", "NOT_PROVISIONED", "PROVISIONING", "READY", "FAILED"]

@@ -98,7 +98,9 @@ class ArtifactRepository:
                 query = query.where(col(Artifact.step_id) == step_id)
             total = session.exec(select(sa.func.count()).select_from(query.subquery())).one()
             rows = session.exec(
-                query.order_by(col(Artifact.created_at).desc()).offset((page - 1) * size).limit(size)
+                query.order_by(col(Artifact.created_at).desc(), col(Artifact.id).desc())
+                .offset((page - 1) * size)
+                .limit(size)
             ).all()
             return list(rows), total
 

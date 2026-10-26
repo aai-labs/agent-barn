@@ -1,11 +1,12 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 from fastapi_injector import Injected
 from starlette.concurrency import run_in_threadpool
 
-from api.domains.artifacts.models import ArtifactCreate, ArtifactLinkRead, ArtifactRead
+from api.domains.artifacts.models import ArtifactCreate, ArtifactLinkRead, ArtifactRead, ArtifactStorageRead
+from api.domains.artifacts.provisioning import ArtifactBucketProvisioner
 from api.domains.artifacts.service import ArtifactService
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
@@ -23,6 +24,25 @@ async def file_body(request: Request, limit: int) -> bytes:
             raise HTTPException(413, "Artifact exceeds the configured file limit")
         content.extend(chunk)
     return bytes(content)
+
+
+@router.get("/storage", response_model=ArtifactStorageRead)
+def storage_status(agent_id: UUID, context: Context, service: Service):
+    return service.storage_status(agent_id, context)
+
+
+@router.post("/storage", response_model=ArtifactStorageRead, status_code=202)
+def provision_storage(
+    agent_id: UUID,
+    context: Context,
+    service: Service,
+    background_tasks: BackgroundTasks,
+    provisioner: Annotated[ArtifactBucketProvisioner, Injected(ArtifactBucketProvisioner)],
+):
+    result = service.request_storage(agent_id, context)
+    organization_id = context.require_current_user_organization().organization_id
+    background_tasks.add_task(provisioner.process_agent, agent_id, organization_id)
+    return result
 
 
 @router.post("", response_model=ArtifactRead, status_code=201)

@@ -313,7 +313,7 @@ resources:
 # Private per-Agent storage. No installation-wide data credentials.
 artifacts:
   purgeEnabled: false
-  # Dedicated control-plane Secret, mounted ONLY by artifact-provisioner.
+  # Private control-plane Secret for API provisioning and artifact-purge cleanup only.
   # Contains ARTIFACT_PROVISIONER_URL/TOKEN.
   provisionerSecret: "garage-artifact-provisioner"
   # ARTIFACT_S3_ENDPOINT_URL only; no data/provisioning keys or bucket naming options.

@@ -10,9 +10,16 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agents.authorization import AgentAuthorization
-from api.domains.artifacts.models import Artifact, ArtifactCreate, ArtifactLinkRead, ArtifactRead
+from api.domains.artifacts.buckets import ArtifactBucketRepository
+from api.domains.artifacts.models import Artifact, ArtifactCreate, ArtifactLinkRead, ArtifactRead, ArtifactStorageRead
 from api.domains.artifacts.repository import ArtifactRepository, PublicationBusy
-from api.domains.artifacts.storage import ArtifactDownload, ArtifactStorage, DownloadDenied
+from api.domains.artifacts.storage import (
+    ArtifactCredentialsUnavailable,
+    ArtifactDownload,
+    ArtifactStorage,
+    DownloadDenied,
+    PreviousArtifactStorage,
+)
 from api.domains.auth.models import CurrentUserContext
 from api.domains.rbac.catalog import PermissionKey
 from api.domains.rbac.policy import AuthorizationScope
@@ -30,6 +37,7 @@ class ArtifactService:
     authorization: AgentAuthorization
     storage: ArtifactStorage
     config: Config
+    buckets: ArtifactBucketRepository
 
     def scope(self, agent_id: UUID, context: CurrentUserContext, write: bool = False) -> AuthorizationScope:
         if write:
@@ -39,6 +47,26 @@ class ArtifactService:
         return self.authorization.authorization_scope(
             context, PermissionKey.AGENT_UPDATE if write else PermissionKey.AGENT_READ
         )
+
+    def storage_status(self, agent_id: UUID, context: CurrentUserContext) -> ArtifactStorageRead:
+        scope = self.scope(agent_id, context)
+        if not self.config.artifact_s3_endpoint_url:
+            return ArtifactStorageRead(state="NOT_CONFIGURED")
+        row = self.buckets.status(agent_id, scope.organization_id)
+        if row is None or row.state == "DELETED":
+            return ArtifactStorageRead(state="NOT_PROVISIONED")
+        if row.state == "READY":
+            return ArtifactStorageRead(state="READY")
+        return ArtifactStorageRead(state="FAILED" if row.last_error or row.state == "DELETING" else "PROVISIONING")
+
+    def request_storage(self, agent_id: UUID, context: CurrentUserContext) -> ArtifactStorageRead:
+        scope = self.scope(agent_id, context, True)
+        self.enabled()
+        try:
+            self.buckets.reserve(agent_id, scope.organization_id)
+        except ValueError:
+            raise HTTPException(409, "Agent storage cannot be provisioned") from None
+        return self.storage_status(agent_id, context)
 
     def runtime_scope(self, token: str) -> tuple[UUID, AuthorizationScope]:
         agent = self.repository.authenticate(token)
@@ -165,6 +193,17 @@ class ArtifactService:
             raise HTTPException(422, "Download lifetime exceeds the configured bound")
         try:
             access = self.storage.issue_download(row, seconds)
+        except PreviousArtifactStorage:
+            raise HTTPException(
+                409,
+                "This file uses the previous storage layout and has not been migrated. "
+                "It must be migrated or uploaded again before downloading. Newer files are unaffected.",
+            ) from None
+        except ArtifactCredentialsUnavailable:
+            raise HTTPException(
+                503,
+                "Storage credentials for this file are unavailable. Ask an administrator to check Agent storage provisioning.",
+            ) from None
         except Exception as exc:
             raise HTTPException(503, "Artifact storage is unavailable") from exc
         return ArtifactLinkRead(

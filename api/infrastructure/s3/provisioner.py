@@ -1,22 +1,25 @@
-"""Garage control-plane access, used only by the isolated provisioning process."""
+"""Garage control-plane access, used by API provisioning and operator cleanup."""
 
 from typing import Any
 
 import httpx
+from injector import inject, singleton
 
 from api.core.config import Config
 
 
+@inject
+@singleton
 class GarageProvisioner:
     def __init__(self, config: Config):
-        if not config.artifact_provisioner_url or not config.artifact_provisioner_token:
-            raise ValueError("Private Garage provisioning is not configured")
         self.origin = config.artifact_provisioner_url.rstrip("/")
         self.token = config.artifact_provisioner_token
 
     def request(
         self, operation: str, *, method: str = "POST", params: dict | None = None, body: dict | None = None
     ) -> dict[str, Any] | None:
+        if not self.origin or not self.token:
+            raise ValueError("Private Garage provisioning is not configured")
         with httpx.Client(timeout=15, trust_env=False, follow_redirects=False) as client:
             response = client.request(
                 method,

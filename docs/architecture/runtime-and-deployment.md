@@ -22,13 +22,16 @@ per-start Agent service capability and no bucket credentials. File publication
 and sharing follow the [artifact contract](../features/agent-artifacts.md), using
 existing native messaging tools and policy. The [Garage setup](../guidelines/operations.md#agent-artifact-storage-garage)
 supports text-only operation when storage is unavailable. Normal local startup
-requires Garage, the isolated artifact-provisioner and the purge worker in the
+requires Garage and the purge worker in the
 main Compose project, without a profile opt-in. The Garage chart owns persistent
 replicated storage; operator bootstrap owns layout and private control-plane
-configuration. The isolated provisioner owns per-Agent bucket/key creation and
-reclamation; API/purge receive no provisioning token or shared data key. Local Compose storage uses named volumes and ignored private
-configuration. Garage remains private: Compose publishes only a loopback operator
-port, while API/purge use service DNS; application Helmfile leaves Garage ingress
+configuration. Agent creation atomically queues per-Agent storage requests; post-response API work
+provisions them. The existing purge worker recovers persisted requests and reclaims
+deleted-owner buckets. Both receive the private
+management credential; other workloads and Agent runtimes do not. Neither uses a
+shared data key. Local Compose storage uses named volumes and ignored private
+configuration. Garage remains private: Compose publishes loopback-only S3 and native-management
+ports, while API/purge use service DNS; application Helmfile leaves Garage ingress
 disabled. Garage is an unconditional Helmfile release in all application deployments;
 initial operator bootstrap is required before deploying. Download links use the existing app origin and the API streams bytes,
 with opaque signed authority generated and validated by the storage adapter.

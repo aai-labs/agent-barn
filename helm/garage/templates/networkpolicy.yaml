@@ -37,7 +37,10 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: agentbarn-api
-              app.kubernetes.io/component: artifact-provisioner
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, artifact-purge]
       ports: [{protocol: TCP, port: 3903}]
   egress:
     - to:

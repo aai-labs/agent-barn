@@ -106,6 +106,8 @@ def test_uncertain_bucket_creation_recovers_same_key_and_bucket(storage, monkeyp
         worker = ArtifactBucketProvisioner(
             context.injector.get(ArtifactBucketRepository), context.injector.get(Config), provider
         )
+        worker.buckets.reserve(context.agent.id, context.agent.organization_id)
+        due(context)
         original = provider.create_bucket
 
         def lose_response(*args):
@@ -170,6 +172,7 @@ def test_uncertain_key_deletion_retains_journal_then_finishes_idempotently(stora
         worker = ArtifactBucketProvisioner(
             context.injector.get(ArtifactBucketRepository), context.injector.get(Config), provider
         )
+        worker.buckets.reserve(context.agent.id, context.agent.organization_id)
         worker.run()
         bucket = journal(context)
         with Session(context.postgres_delegate.engine) as session:

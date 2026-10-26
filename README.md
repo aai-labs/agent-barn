@@ -322,7 +322,9 @@ make reconcile     # one-shot repair pass for stuck/unpublished deliveries
 
 The db/redis targets and `./stop.sh` work before Garage has been configured.
 For native file uploads/downloads, run `make garage-up` before `make dev-api`;
-see [Garage operations](docs/guidelines/garage.md). The full `./run.sh` path starts
+this generates private API management settings and a loopback endpoint as well.
+Agent creation queues storage without waiting; Files shows progress and lets
+existing Agents provision or retry. No separate provisioner service is needed. See [Garage operations](docs/guidelines/garage.md). The full `./run.sh` path starts
 Garage and the purge worker automatically, without a profile.
 
 `make db-down` stops PostgreSQL; `make db-logs` and `make db-restart` manage it.

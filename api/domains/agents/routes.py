@@ -35,6 +35,7 @@ from api.domains.agents.models import (
     get_agent_filter,
 )
 from api.domains.agents.service import AgentService
+from api.domains.artifacts.provisioning import ArtifactBucketProvisioner
 from api.domains.auth.models import CurrentUserContext
 from api.domains.auth.utils import get_current_user
 from api.domains.integrations.service import IntegrationIsolationService
@@ -58,10 +59,14 @@ def apply_integration_isolation(
 @agents_router.post("", response_model=AgentRead, status_code=status.HTTP_201_CREATED)
 def create_agent(
     data: AgentCreate,
+    background_tasks: BackgroundTasks,
+    storage: Annotated[ArtifactBucketProvisioner, Injected(ArtifactBucketProvisioner)],
     context: Annotated[CurrentUserContext, Depends(get_current_user())],
     service: Annotated[AgentService, Injected(AgentService)],
 ):
-    return service.create_agent(data, context)
+    agent = service.create_agent(data, context)
+    background_tasks.add_task(storage.process_agent, agent.id, agent.organization_id)
+    return agent
 
 
 @agents_router.get("", response_model=PaginatedItems[AgentRead])

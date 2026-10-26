@@ -10,7 +10,7 @@ from hamcrest import assert_that, equal_to, is_
 from api.scripts.provision_garage import ROOT
 
 
-def test_compose_provisioning_authority_is_isolated_and_no_shared_data_key_is_injected(tmp_path):
+def test_compose_management_authority_reaches_only_api_cleanup_and_no_shared_data_key(tmp_path):
     source = (ROOT / "compose.yml").read_text()
     shutil.copyfile(ROOT / "compose.yml", tmp_path / "compose.yml")
     required = set(re.findall(r"\$\{([A-Z0-9_]+):?\?", source))
@@ -56,22 +56,25 @@ def test_compose_provisioning_authority_is_isolated_and_no_shared_data_key_is_in
     services = json.loads(result.stdout)["services"]
     assert_that("garage" in services, is_(True), "Garage must run without a profile")
     assert_that(services["garage"]["ports"][0]["host_ip"], equal_to("127.0.0.1"))
+    assert_that("artifact-provisioner" in services, is_(False))
+    assert_that(all(port["host_ip"] == "127.0.0.1" for port in services["garage"]["ports"]), is_(True))
     assert_that("artifact-purge" in services, is_(True), "Purge must run without a profile")
+    assert_that(services["artifact-purge"]["command"][-2:], equal_to(["--interval", "10"]))
     assert_that(services["api"]["depends_on"]["garage"]["condition"], equal_to("service_healthy"))
     assert_that(services["artifact-purge"]["depends_on"]["garage"]["condition"], equal_to("service_healthy"))
     for name, service in services.items():
         environment = service.get("environment", {})
         assert_that(bool(environment.get("ARTIFACT_S3_ACCESS_KEY")), is_(False), name)
         assert_that(bool(environment.get("ARTIFACT_S3_SECRET_KEY")), is_(False), name)
-        if name in {"api", "artifact-purge", "artifact-provisioner"}:
+        if name in {"api", "artifact-purge"}:
             assert_that(environment.get("ARTIFACT_S3_ENDPOINT_URL"), equal_to("http://garage:3900"), name)
-        if name == "artifact-provisioner":
+        if name in {"api", "artifact-purge"}:
             assert_that(environment.get("ARTIFACT_PROVISIONER_TOKEN"), equal_to("fixture-private-admin"))
             assert_that(environment.get("ARTIFACT_PROVISIONER_URL"), equal_to("http://garage:3903"))
         else:
             assert_that(bool(environment.get("ARTIFACT_PROVISIONER_TOKEN")), is_(False), name)
             assert_that(bool(environment.get("ARTIFACT_PROVISIONER_URL")), is_(False), name)
-    assert_that(len(services["garage"]["ports"]), equal_to(1), "Admin port must not be host-published")
+    assert_that(len(services["garage"]["ports"]), equal_to(2), "Native management requires a loopback-only port")
 
 
 def test_backup_refuses_relative_and_repository_destinations(tmp_path):

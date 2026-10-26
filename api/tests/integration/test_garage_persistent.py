@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import boto3
+import httpx
 import pytest
 from botocore.config import Config as S3Config
 from hamcrest import assert_that, equal_to
@@ -75,7 +76,22 @@ def test_persistent_compose_api_download_restart_and_purge(tmp_path):
         assert_that(state["admin_token"] in events, equal_to(False))
         environment = read_env(directory / "application.env")
         assert_that("ARTIFACT_S3_ACCESS_KEY" in environment, equal_to(False))
-        for name in ("state.json", "application.env", "provisioner.env", "admin-token", "rpc-secret"):
+        host_management = read_env(directory / "provisioner-host.env")
+        assert_that(urlsplit(host_management["ARTIFACT_PROVISIONER_URL"]).hostname, equal_to("127.0.0.1"))
+        with httpx.Client(trust_env=False) as management:
+            response = management.get(
+                host_management["ARTIFACT_PROVISIONER_URL"] + "/v2/GetClusterStatus",
+                headers={"Authorization": "Bearer " + host_management["ARTIFACT_PROVISIONER_TOKEN"]},
+            )
+        assert_that(response.status_code, equal_to(200))
+        for name in (
+            "state.json",
+            "application.env",
+            "provisioner.env",
+            "provisioner-host.env",
+            "admin-token",
+            "rpc-secret",
+        ):
             assert_that((directory / name).stat().st_mode & 0o077, equal_to(0))
         with (
             registered_compose_storage(environment, compose) as provider,

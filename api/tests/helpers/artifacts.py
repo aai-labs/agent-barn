@@ -7,10 +7,12 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
+from sqlmodel import Session, select
 from testcontainers.core.container import DockerContainer
 
 from api.core.config import Config
 from api.domains.artifacts.buckets import ArtifactBucketRepository
+from api.domains.artifacts.models import ArtifactBucket
 from api.domains.artifacts.provisioning import ArtifactBucketProvisioner
 from api.infrastructure.s3.provisioner import GarageProvisioner
 
@@ -58,7 +60,12 @@ def provision_agents(context):
     config = context.injector.get(Config)
     provider = _PROVIDERS.get(config.artifact_s3_endpoint_url)
     if provider:
-        ArtifactBucketProvisioner(context.injector.get(ArtifactBucketRepository), config, provider).run()
+        buckets = context.injector.get(ArtifactBucketRepository)
+        with Session(context.postgres_delegate.engine) as session:
+            existing = session.exec(select(ArtifactBucket).where(ArtifactBucket.agent_id == context.agent.id)).first()
+        if existing is None:
+            row = buckets.reserve(context.agent.id, context.agent.organization_id)
+            ArtifactBucketProvisioner(buckets, config, provider).process(row.id)
 
 
 @contextmanager
@@ -98,3 +105,31 @@ def garage_storage():
             )
         finally:
             del _PROVIDERS[endpoint]
+
+
+@contextmanager
+def running_product_api(context):
+    """Real HTTP boundary, including response emission before background work."""
+    import socket
+    from threading import Thread
+
+    import uvicorn
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        server = uvicorn.Server(uvicorn.Config(context.client.app, log_level="error", lifespan="off"))
+        thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 10
+            while not server.started:
+                if not thread.is_alive() or time.monotonic() >= deadline:
+                    raise RuntimeError("Product HTTP server did not start")
+                time.sleep(0.01)
+            yield origin
+        finally:
+            server.should_exit = True
+            thread.join(timeout=20)
+            if thread.is_alive():
+                raise RuntimeError("Product HTTP server did not stop")

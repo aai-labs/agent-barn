@@ -1,28 +1,33 @@
-"""Bounded operator-only bucket/key provisioning and deleted-owner reclamation."""
+"""Durable asynchronous storage requests and bounded deleted-owner cleanup."""
 
-import argparse
 import hmac
 import logging
-import signal
 from dataclasses import dataclass
-from threading import Event
 from uuid import UUID
+
+from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.artifacts.buckets import ArtifactBucketRepository
 from api.domains.artifacts.models import ArtifactBucket
 from api.infrastructure.crypto import decrypt_token
-from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.infrastructure.s3.provisioner import GarageProvisioner
 
 logger = logging.getLogger(__name__)
 
 
+@inject
+@singleton
 @dataclass
 class ArtifactBucketProvisioner:
     buckets: ArtifactBucketRepository
     config: Config
     provider: GarageProvisioner
+
+    def process_agent(self, agent_id: UUID, organization_id: UUID) -> None:
+        row = self.buckets.status(agent_id, organization_id)
+        if row is not None and row.state == "PENDING":
+            self.process(row.id)
 
     def key_bucket(self, row: ArtifactBucket) -> str | None:
         key = self.provider.key(row.access_key)
@@ -102,30 +107,6 @@ class ArtifactBucketProvisioner:
             return False
 
     def run(self, limit: int = 100) -> int:
-        self.buckets.request_buckets(limit)
+        if not self.config.artifact_s3_endpoint_url:
+            return 0
         return sum(self.process(bucket_id) for bucket_id in self.buckets.due(limit))
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--interval", type=int, default=10)
-    args = parser.parse_args()
-    if args.interval < 1:
-        parser.error("interval must be positive")
-    config = Config()
-    provisioner = ArtifactBucketProvisioner(
-        ArtifactBucketRepository(PostgresRepositoryDelegate(config), config), config, GarageProvisioner(config)
-    )
-    stopped = Event()
-    signal.signal(signal.SIGTERM, lambda *_: stopped.set())
-    signal.signal(signal.SIGINT, lambda *_: stopped.set())
-    while not stopped.is_set():
-        try:
-            provisioner.run()
-        except Exception as exc:
-            logger.warning("Bucket provisioning pass will retry (%s)", type(exc).__name__)
-        stopped.wait(args.interval)
-
-
-if __name__ == "__main__":
-    main()

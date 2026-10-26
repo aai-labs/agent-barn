@@ -212,7 +212,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
             {resolvedTab === "tool-calls" && <ToolCallsTab agent={agent} />}
             {resolvedTab === "logs" && <LogsTab agent={agent} />}
             {resolvedTab === "memory" && canReadActivity && <AgentMemoryTab agent={agent} />}
-            {resolvedTab === "files" && <AgentFiles key={`${orgId}:${agent.id}`} agentId={agent.id} />}
+            {resolvedTab === "files" && <AgentFiles key={`${orgId}:${agent.id}`} agentId={agent.id} canProvision={agent.allowedActions.includes("agent.update")} />}
             {resolvedTab === "workflows" && orgId && (
               <WorkflowsPage key={`${orgId}:${agent.id}`} agentId={agent.id} organizationId={orgId} embedded onStartingChange={setStartingRun} />
             )}

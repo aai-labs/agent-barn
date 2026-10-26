@@ -145,12 +145,18 @@ methods use the same narrow operator-only background exception. They expose no r
 and only inspect persisted ownership, references, deadlines and canonical tenant keys.
 They preserve failed deletion records across owner deletion and refuse mismatched
 bucket/key targets with recorded retry backoff. Product paths retain their scoped Agent
-joins. `ArtifactBucketRepository.request_buckets`, `due` and `operation` use the
-same exception exclusively from the isolated scheduled provisioner, with no router.
-They derive owners from persisted Agents, validate Organization/Agent/bucket
-identity, and retain keys until all bytes have been purged. API paths still check
-current human/runtime authority and exact owner-scoped data credentials; only the
-provisioner receives Garage administrative authority. See
+joins. Agent creation commits its server-generated storage request atomically with
+the authorized Agent/access/events transaction. `ArtifactBucketRepository.reserve`
+is invoked only after current `agent.update` authorization from the explicit
+Provision action, using the scoped Agent and current Organization. Status reads
+require current `agent.read` visibility. Neither endpoint accepts bucket/key IDs.
+`due` and `operation` use the operator exception from artifact maintenance for
+persisted provisioning requests and deleted owners. There is no Agent-discovery
+scan or separate privileged workload. API background provisioning and artifact
+maintenance receive Garage administrative authority; Agent runtimes and other
+workloads never do. Maintenance validates Organization/Agent/bucket identity and
+retains data keys until all bytes have been purged. Product paths retain current
+human/runtime checks. See
 [Artifact retention and recovery](../agent-artifacts.md#retention-deletion-and-recovery).
 
 HTTP semantics remain deliberate:

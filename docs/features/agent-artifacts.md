@@ -56,29 +56,55 @@ key has no owner or bucket-creation permission and cannot read/write another
 Agent's bucket, including by its provider bucket ID. Private key-local aliases
 are not a substitute for distinct provider buckets.
 
-A separate operator-only `artifact-provisioner` process holds Garage control-plane
-authority. It scans persisted live Agents, commits a PENDING bucket/key journal
-before external calls, imports that exact key, and creates its private bucket with
-only that key's read/write permission. Retries recover the same key and bucket
-through the key's local alias; they do not generate replacement credentials after
-an uncertain response. READY is committed only after checking identity and scope.
-Staging returns retryable 503 while the Agent's bucket is initializing, without
-creating artifact metadata; chat and text-only workflows remain available.
+Agent creation atomically commits a PENDING storage request with the Agent,
+creator access and creation events when storage is configured. It returns 201
+without waiting for Garage. Post-response API work imports the request's exact
+key, creates its private bucket, verifies identity and read/write-only scope,
+and commits READY. Storage failure leaves the Agent usable for text with a durable
+retryable request. Failed Agent creation rolls back its request before provider I/O.
+Deliberately disabled storage creates no request.
+
+Existing Agents are never discovered by a background scan. Their Files view shows
+**Artifact Storage Not Provisioned** and a **Provision** action for people with
+`agent.update`. `GET .../artifacts/storage` requires current `agent.read` access;
+`POST .../artifacts/storage` requires current `agent.update` and returns 202 after
+persisting an explicit request. The same post-response work starts provisioning.
+Concurrent/repeated requests preserve the same bucket/key identity. READY requests
+are idempotent; failed PENDING requests can be retried. No credentials or raw
+provider diagnostics appear in status responses.
+
+Storage status is `NOT_CONFIGURED`, `NOT_PROVISIONED`, `PROVISIONING`, `READY` or
+`FAILED`. The Files view polls every two seconds while provisioning or failed,
+shows progress, and offers **Retry provisioning** after failure. Readers see status
+and instructions to ask an editor; they cannot provision. Missing deployment
+configuration shows storage unavailable without a Provision action. Files remain
+usable alongside status feedback; text conversations never wait for storage.
+
+The existing artifact maintenance worker recovers only persisted requests and
+reclaims deleted-owner storage. It serializes bounded provider work on each bucket
+journal row and uses bounded exponential retry after uncertainty, reusing exact
+key identity and private alias. Post-response tasks accelerate progress but are
+not the durability boundary: a crash between commit and task execution is recovered
+by maintenance. Local Compose checks every ten seconds; Kubernetes' enabled
+maintenance CronJob checks every ten minutes. Operators must enable that schedule
+for unattended recovery. There is no separate provisioner process or queue.
 
 `artifact_bucket` retains Organization/Agent IDs, provider identity, state and
 retry evidence across owner deletion. Its data secret is encrypted with
 `AGENT_TOKEN_ENCRYPTION_KEY`; response DTOs and Agent runtimes never receive it.
-The ordinary API and file-purge worker resolve only the target artifact's matching
-Organization/Agent/bucket key and receive neither a shared data key nor the
-provisioning token. The API remains a trusted service with access to the encrypted
-credential catalogue; this is provider-key isolation, not process isolation between
-all Agents. There is no ambient AWS/workload-identity fallback.
+The API and artifact cleanup worker hold private Garage management authority for
+provisioning and recovery/reclamation respectively. Other application workloads and Agent
+runtimes receive neither the management token nor data credentials. The API is a
+trusted service with access to the encrypted credential catalogue; per-key storage
+isolation does not mean isolation between processes serving different Agents.
+There is no ambient AWS/workload-identity fallback.
 
-Provisioning has no product router and follows the narrow operator-background
-exception in the RBAC brief. Its separate workload always runs; a deployment must
-supply its dedicated control-plane Secret; see [operations](../guidelines/garage.md).
-An empty storage endpoint disables file publication. This revision assumes no existing
-files: no shared-bucket byte migration or legacy access path is implemented.
+Provisioning requests originate only from the existing authorized Agent-create
+flow or the explicit authorized Provision endpoint. Bounded recovery and reclamation run in
+the existing artifact-purge worker under the operator-background exception in the
+RBAC brief. See [operations](../guidelines/garage.md) for private credential wiring.
+This revision assumes no existing shared-bucket files: no shared-bucket byte
+migration or legacy access path is implemented.
 
 ## Publication and immutable handoff
 
@@ -205,7 +231,18 @@ The Agent Files view shows READY chat, human and workflow files with names,
 sizes, types, provenance and download actions. Run/step attachments use the same
 service alongside existing text summaries. Each click requests a fresh link;
 access errors conceal protected responses and display a retryable failure.
-Query identity includes Organization, Agent, run, step and pagination. Workflow files
+Download errors appear beside the affected file, leaving other files usable.
+Authenticated link issuance returns 409 for a file in the previous shared-storage
+layout, explicitly explaining that migration or re-upload is required; it never
+substitutes another Agent's credential or silently migrates bytes. Missing usable
+credentials for the current layout return a distinct 503 explaining that Agent
+storage provisioning needs checking. No bucket/key or private endpoint is exposed.
+
+Files uses `useInfiniteQuery` with 20 records per request and loads the next page
+when the scroll sentinel approaches the viewport. Loaded pages stay visible during
+additional-page failures, with an explicit retry; exhausted lists stop fetching.
+The API orders by creation time and ID descending for stable timestamp ties.
+Query identity includes Organization, Agent, run, step and infinite-list mode. Workflow files
 show their attempt identity, including outputs retained from superseded attempts;
 the list does not claim all such files were accepted checkpoints. File polling follows
 progressing runs and stops when settled or parked. Download URLs must use HTTP(S).
@@ -237,7 +274,7 @@ attempt count and use bounded exponential retry delay, including refused unsafe 
 Releasing references never postpones a DELETING row's pending retry. Concurrent publication
 and purge serialize; DELETED tombstones retain identity without file bytes.
 
-For a deleted/missing Agent, the separate provisioner marks its bucket DELETING
+For a deleted/missing Agent, artifact cleanup marks its bucket DELETING
 but retains its data key until **every artifact is DELETED**, not merely unpinned.
 It then refuses nonempty/shared buckets, deletes the empty bucket and revokes its
 key. Only after both provider operations succeed does it commit a DELETED bucket

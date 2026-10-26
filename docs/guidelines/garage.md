@@ -13,12 +13,15 @@ API and file-purge worker resolve the target Agent's encrypted key from PostgreS
 there is no shared data credential or ambient workload-identity fallback. Agents
 receive only their scoped Agent service credential.
 
-A separate `artifact-provisioner` process holds Garage administrative authority and
-creates/reclaims per-Agent buckets and keys. Its token is never injected into the
-ordinary API, purge worker or Agent runtimes. Garage admin port 3903 is private;
-cluster NetworkPolicy permits it only from the provisioner. The normal API is
-still trusted with the encrypted credential catalogue; per-key storage isolation
-does not mean each Agent has a separate API process. Product ownership, readiness,
+The API holds Garage administrative authority and processes durable per-Agent storage
+requests after the creation/Provision response. The existing artifact-purge worker uses the
+same private authority for request recovery and deleted-owner reclamation. There
+is no separate provisioner process or Agent-discovery scan. Management credentials
+never reach Agent runtimes or other application workloads. Cluster NetworkPolicy
+allows admin port 3903 only from API and artifact-purge pods. Local Compose also
+publishes management on an automatically assigned **127.0.0.1-only** port for
+native API/cleanup; it is never exposed to the LAN or an ingress. The API remains
+trusted with the encrypted credential catalogue. Product ownership, readiness,
 retry and deletion invariants are owned by the [artifact contract](../features/agent-artifacts.md#per-agent-storage-authority).
 
 The local single-node service is for development. The cluster chart defaults to
@@ -51,9 +54,8 @@ through stdin rather than CLI arguments, keeping them out of exec request URLs,
 audit metadata, process listings and Docker exec events.
 The root `compose.yml` includes `docker/garage/compose.yml`: Garage is a required
 service in the main application project, alongside the API and purge worker.
-The helper prepares private Garage configuration and the isolated provisioner's
-control-plane credential. The background provisioner, not bootstrap or the API,
-creates each Agent's bucket and key. It also refreshes the non-secret saved path,
+The helper prepares private Garage configuration and the API/cleanup control-plane
+credential. The API starts each requested bucket/key after the response. It also refreshes the non-secret saved path,
 port and volume prefix (`GARAGE_SAVED_*`) in the existing ignored application
 `.env`; keys remain only in private files. These generated values must not be edited.
 The standalone helper still uses its private `compose.env`. The included file also lets storage-only recovery
@@ -63,8 +65,8 @@ the helper stops/removes only its old Garage container before starting the main
 project's replacement. Keys, node identity and bytes remain unchanged. The local S3
 port is published only on loopback for native development/operator access, never for
 browser downloads. Compose API/purge use the private `garage:3900` service address.
-Repeated startup reuses identities, endpoint and volumes. Only S3 port 3900 is published; RPC/admin/
-website endpoints are not published and website serving is disabled.
+Repeated startup reuses identities, endpoint and volumes. S3 and native-management ports are published only on loopback; RPC/website
+endpoints are not published and website serving is disabled.
 `GARAGE_S3_PORT` is optional: it defaults to 3900 and only selects the loopback
 operator/native-development port. Set it (or pass `--port` to the helper) on first
 setup if another local store already occupies that port; it is not a browser or
@@ -87,7 +89,7 @@ app links. That endpoint-only operation does not migrate legacy shared-bucket
 files into the new per-Agent layout. HTTP is for trusted local
 storage traffic; externally shared app links use the existing app HTTPS origin.
 
-Run `./run.sh` for normal startup. Garage and the ten-minute bounded purge worker
+Run `./run.sh` for normal startup. Garage and the bounded ten-second maintenance worker
 are required, with no profile opt-in. The launcher prepares configuration and
 bootstraps Garage before API/purge containers load their credentials; those services
 also depend on Garage health in Compose. On first setup, use the launcher or
@@ -105,23 +107,29 @@ volumes if unused; never remove the configured store volumes. Subsequent `docker
 purge automatically; `./stop.sh` stops them with the rest of the stack. Failed cleanup passes retry on the next interval,
 including when an initial pass precedes completion of API migrations.
 `.garage/application.env` contains only the private S3 endpoint; it has no
-credentials or bucket naming configuration. API/purge/provisioner read it. Only the provisioner
-reads `.garage/provisioner.env` containing `ARTIFACT_PROVISIONER_URL/TOKEN`.
-Compose explicitly blanks provisioning authority and legacy shared data keys in
-normal application environments, even if an operator put them in shared `.env`.
+credentials or bucket naming configuration. API/purge read it. Both also read `.garage/provisioner.env` containing
+`ARTIFACT_PROVISIONER_URL/TOKEN`. The retained file/setting names describe the
+management client, not a separate running provisioner. Compose blanks management
+authority in other workloads and shared data keys everywhere, even if an operator
+put them in shared `.env`.
 Never put Garage administrative credentials in shared `.env`. After bootstrap on
 an already running stack, migrate and recreate these processes:
 
 ```sh
 make migrate
 docker compose up -d --no-deps api
-docker compose up -d artifact-provisioner artifact-purge
+docker compose up -d artifact-purge
+# Upgrade only: stop/remove the retired worker if it exists.
+docker compose rm -sf artifact-provisioner
 ```
 
 Native `make dev-api` and `make purge-artifacts` load the ignored application file
-when present. Keep `docker compose up -d artifact-provisioner` running for native
-API file publication too. The native API launch loads application settings only
-for the product API process; it never loads `provisioner.env`.
+and `.garage/provisioner-host.env`, generated by `make garage-up` from Docker's
+actual loopback management binding. Rerun `make garage-up` after container
+replacement, then restart the native API to refresh that address. The native
+launcher loads this authority only into the product API, not its child gateways.
+Set `GARAGE_ADMIN_PORT` in the shell if a fixed loopback port is needed; by default
+Docker selects a free port, avoiding collisions across worktrees.
 Restart existing Agents to load file instructions/configuration. `make garage-down`
 stops only Garage; `./stop.sh` stops the main stack. Both preserve named volumes and keys. Never use
 `docker compose down --volumes`, Docker volume pruning, or delete `.garage/` against
@@ -142,11 +150,17 @@ An empty/unconfigured `ARTIFACT_S3_ENDPOINT_URL` retains text-only operation.
 Bucket aliases are always `agent-artifacts-<agent UUID hex>`; no configurable or
 saved installation prefix is needed because aliases are local to the scoped key.
 Per-Agent data secrets
-require the same `AGENT_TOKEN_ENCRYPTION_KEY` in API, purge and provisioner.
-Provisioning runs in bounded batches every ten seconds; staging may return retryable
-503 until the Agent's private bucket is READY. Failed provider operations retain
-journal identity with bounded exponential retry, rather than regenerating keys. Missing storage
-is an artifact error, not an API readiness dependency. The domain limits remain
+require the same `AGENT_TOKEN_ENCRYPTION_KEY` in API and purge.
+Configured storage adds a PENDING provisioning request to the Agent creation
+transaction; it never delays the creation response for Garage. Files exposes
+status and an explicit Provision/retry action for existing Agents. Post-response
+API work attempts the request immediately; maintenance recovers interrupted tasks
+and retries failures without changing the key identity. Local Compose runs bounded
+maintenance every ten seconds. The enabled Kubernetes purge CronJob recovers
+requests every ten minutes; set `ARTIFACT_PURGE_ENABLED=true` with both storage
+and management Secrets for unattended recovery. Requests remain durable if that
+schedule is disabled, but require an explicit retry or `make purge-artifacts`.
+Missing storage is an artifact error, not an API readiness dependency. The domain limits remain
 25 MiB per file by default, 900-second links with a default 3,600-second maximum,
 and 30-day reference-relative retention. Configure application limits through
 existing artifact configuration, not Garage bucket-wide age rules.
@@ -180,7 +194,7 @@ configuration, marks completion, then restarts it if it was running. Backups inc
 credentials and must remain private. Destinations must be absolute, outside the
 repository and outside the live configuration directory. Copy operations have no
 fixed timeout so large backups are not truncated by a two-minute deadline.
-Stop API, artifact-purge and artifact-provisioner writes for a consistent maintenance
+Stop API and artifact-purge writes for a consistent maintenance
 point. Back up PostgreSQL metadata, including `artifact_bucket`, and preserve
 `AGENT_TOKEN_ENCRYPTION_KEY` at that same point. Garage bytes cannot reconstruct
 ownership/references or the encrypted per-Agent credential catalogue.
@@ -252,7 +266,7 @@ DNS is allowed in `kube-system`;
 NodeLocal DNS needs an installation-specific additional egress rule.
 No Garage port is publicly exposed. RPC is restricted to Garage peers; S3 accepts
 only API and artifact-purge pods when ingress is disabled. Admin port 3903 accepts
-only artifact-provisioner pods; it has no ingress or host-published port. ServiceAccount tokens and privilege escalation are disabled.
+only API and artifact-purge pods; it has no ingress or cluster host-published port. ServiceAccount tokens and privilege escalation are disabled.
 A one-replica installation has no PodDisruptionBudget and provides no redundancy.
 SQLite automatic metadata snapshots are not configured; consistent backups remain
 required even with fsync and replication. PVCs survive pod/release replacement.
@@ -301,7 +315,8 @@ They do not guarantee an outage-free request. See the pinned
 
 Bootstrap connects peers, assigns the initial layout only at version zero, waits
 for availability, and writes separate application-settings and provisioner Secrets.
-Per-Agent bucket/key creation belongs to the isolated background provisioner.
+Per-Agent bucket/key creation runs after explicit API creation/Provision responses;
+the existing maintenance worker recovers pending requests.
 On repeat it preserves existing layout and identities, refusing unknown replacement
 nodes rather than silently changing retained data placement. Node replacement,
 capacity expansion and RPC/key rotation require explicit Garage repair/layout
@@ -318,8 +333,8 @@ ARTIFACT_PROVISIONER_SECRET=garage-artifact-provisioner
 ```
 
 Helmfile always manages the Garage release; there is no enable/disable deployment
-flag. Its configured application storage settings reach API/purge/provisioner;
-the dedicated provisioning Secret reaches only the provisioner Deployment.
+flag. Its configured application storage settings reach API/purge;
+the dedicated provisioning Secret reaches only those two workloads.
 Initial install/layout bootstrap must finish before application deployment:
 existing deploy commands use `helmfile sync --wait`, so Garage readiness
 also gates ordinary deployment. A missing replica/PVC can therefore delay or fail
@@ -329,8 +344,7 @@ CI receives Secret names, not Garage credential plaintext. RPC/admin, applicatio
 settings and provisioner Secrets must already exist; no deploy hook regenerates
 them. The application Secret contains only `ARTIFACT_S3_ENDPOINT_URL`, with no
 data credentials or bucket naming options. Signing always uses `garage`;
-there is no region environment variable. The provisioner Deployment is unconditional,
-not gated by an enable flag. `garage-rpc` is the standard RPC/admin Secret name;
+there is no region environment variable or provisioner Deployment. `garage-rpc` is the standard RPC/admin Secret name;
 application Helmfile/CI need no name-override variable.
 The dedicated provisioner Secret contains `ARTIFACT_PROVISIONER_URL` (private
 `http://garage:3903`) and `ARTIFACT_PROVISIONER_TOKEN`. Garage loads `GARAGE_ADMIN_TOKEN` from the `admin-token` key
@@ -349,7 +363,8 @@ Compose configures that host address from `API_PORT`.
 The byte-store adapter and automatic provisioning target Garage; signing uses
 the fixed `garage` region. Another provider needs an adapter/provisioner with the
 same per-Agent bucket/key invariants. Do not substitute installation-wide credentials or workload identity.
-The ordinary API never creates buckets or changes policies.
+The API provisions/verifies requested private Agent buckets asynchronously; the
+cleanup worker recovers requests and reclaims deleted-owner storage.
 
 The adapter uses SigV4 path-style Put/Get/Delete with optional SDK checksum trailers
 disabled in favor of explicit SHA-256 readback. Garage 2.4.1 ignores conditional Put;
@@ -382,7 +397,7 @@ the only deletion journal. Before dropping tables, export required files or auth
 their deletion, release active references through their owning lifecycle, and finish
 purge. The bucket-journal downgrade additionally refuses every non-DELETED bucket:
 finish artifact purge, bucket reclamation and key revocation before discarding it.
-Retain additive tables and compatible purge/provisioner processes during rollback. Never change endpoint or bucket while retained rows still
+Retain additive tables and compatible API/purge processes during rollback. Never change endpoint or bucket while retained rows still
 target the old store; migrate and verify explicitly or preserve old access for purge.
 Monitor Garage health/capacity and failed purge jobs, DELETING age and `purge_attempts`.
 Unsafe-target refusals retain evidence and retry backoff; investigate rather than

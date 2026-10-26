@@ -6,6 +6,7 @@ import signal
 from threading import Event
 
 from api.core.utils import create_injector
+from api.domains.artifacts.provisioning import ArtifactBucketProvisioner
 from api.domains.artifacts.service import ArtifactService
 
 logger = logging.getLogger(__name__)
@@ -20,10 +21,13 @@ def main() -> None:
     stopped = Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
-    service = create_injector().get(ArtifactService)
+    injector = create_injector()
+    service = injector.get(ArtifactService)
+    buckets = injector.get(ArtifactBucketProvisioner)
     while not stopped.is_set():
         try:
             print(f"Purged {service.purge()} artifacts", flush=True)
+            buckets.run()
         except Exception as exc:
             if not args.interval:
                 raise

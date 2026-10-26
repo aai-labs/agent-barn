@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from api.domains.artifacts.models import Artifact
 
 
+class PreviousArtifactStorage(ValueError):
+    """The file belongs to a former layout without current scoped credentials."""
+
+
+class ArtifactCredentialsUnavailable(ValueError):
+    """The current file has no matching usable credential journal."""
+
+
 class DownloadDenied(Exception):
     """The provider rejected a missing, forged, or expired download capability."""
 

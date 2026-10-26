@@ -62,4 +62,90 @@ test.describe("Agent artifacts", () => {
     await page.waitForTimeout(5500);
     expect(support.lists).toBe(requests);
   });
+  test("existing Agents can provision and see progress until ready", async ({page}, testInfo) => {
+    await new DataSupport(page).agents.interceptGetAgentRequest({body: {...mockAgent, allowed_actions: ["agent.read", "agent.update"]}});
+    support.storageState = "NOT_PROVISIONED";
+    support.files = [];
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await expect(files.files).toContainText("Artifact Storage Not Provisioned");
+    await files.files.screenshot({path: testInfo.outputPath("storage-not-provisioned.png")});
+    await files.provision();
+    await expect(files.files).toContainText("Provisioning artifact storage…");
+    await files.files.screenshot({path: testInfo.outputPath("storage-provisioning.png")});
+    await expect(files.provisionButton).toHaveCount(0);
+    expect(support.provisionRequests).toBe(1);
+    support.storageState = "READY";
+    await expect(files.files).toContainText("No published files yet.");
+    await expect(files.files).not.toContainText("Provisioning artifact storage…");
+  });
+  test("readers see missing storage without a provisioning action", async ({page}) => {
+    support.storageState = "NOT_PROVISIONED";
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await expect(files.files).toContainText("Artifact Storage Not Provisioned");
+    await expect(files.provisionButton).toHaveCount(0);
+    await expect(files.files).toContainText("Ask someone with Agent update access");
+  });
+  test("provisioning failure can be retried", async ({page}, testInfo) => {
+    await new DataSupport(page).agents.interceptGetAgentRequest({body: {...mockAgent, allowed_actions: ["agent.read", "agent.update"]}});
+    support.storageState = "FAILED";
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await expect(files.files).toContainText("Artifact storage provisioning failed");
+    await files.files.screenshot({path: testInfo.outputPath("storage-retry.png")});
+    await files.retryProvisioning();
+    await expect(files.files).toContainText("Provisioning artifact storage…");
+    support.storageState = "READY";
+    await expect(files.files).not.toContainText("Provisioning artifact storage…");
+    expect(support.provisionRequests).toBe(1);
+  });
+  test("permission loss during provision shows an inline error", async ({page}) => {
+    await new DataSupport(page).agents.interceptGetAgentRequest({body: {...mockAgent, allowed_actions: ["agent.read", "agent.update"]}});
+    support.storageState = "NOT_PROVISIONED";
+    support.provisionDenied = true;
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await files.provision();
+    await expect(files.files).toContainText("Provisioning could not be requested");
+    await expect(files.files).not.toContainText("Provisioning artifact storage…");
+  });
+
+  test("files load more on scroll and retain earlier downloads", async ({page}) => {
+    support.files = Array.from({length: 45}, (_, index) => ({...artifactFixture, id: `file-${index}`, filename: `report-${index + 1}.csv`}));
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await expect(files.files.locator("li")).toHaveCount(20);
+    await files.scrollToLastFile();
+    await expect(files.files.locator("li")).toHaveCount(40);
+    await files.scrollToLastFile();
+    await expect(files.files.locator("li")).toHaveCount(45);
+    await expect(files.files).toContainText("report-1.csv");
+    await expect(files.files).toContainText("report-45.csv");
+    expect(support.requestedPages).toEqual([1, 2, 3]);
+    await expect(page.getByRole("button", {name: "Next files"})).toHaveCount(0);
+    const pending = page.waitForEvent("download"); await files.download("report-1.csv"); await pending;
+  });
+  test("a legacy file shows its specific error without blocking newer downloads", async ({page}, testInfo) => {
+    support.files = [{...artifactFixture, filename: "older-report.csv"}, {...artifactFixture, id: "current-file", filename: "new-report.csv"}];
+    support.downloadFailure = {id: artifactFixture.id, status: 409, detail: "This file uses the previous storage layout and has not been migrated. It must be migrated or uploaded again before downloading. Newer files are unaffected."};
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await files.download("older-report.csv");
+    const failed = files.files.getByRole("alert");
+    await expect(failed).toContainText("previous storage layout");
+    await expect(failed).not.toContainText("Artifact storage is unavailable");
+    await files.files.screenshot({path: testInfo.outputPath("legacy-file-download-error.png")});
+    const pending = page.waitForEvent("download"); await files.download("new-report.csv"); await pending;
+    await expect(failed).toHaveCount(0);
+  });
+
+  test("a load-more failure retains loaded files and can be retried", async ({page}) => {
+    support.files = Array.from({length: 25}, (_, index) => ({...artifactFixture, id: `file-${index}`, filename: `report-${index + 1}.csv`}));
+    support.failPage = 2;
+    const files = new AgentFilesPage(page); await files.goto(MOCK_AGENT_ID);
+    await expect(files.files.locator("li")).toHaveCount(20);
+    await files.scrollToLastFile();
+    await expect(files.files).toContainText("More files could not be loaded");
+    await expect(files.files.locator("li")).toHaveCount(20);
+    support.failPage = undefined;
+    await files.retryMoreFiles();
+    await expect(files.files.locator("li")).toHaveCount(25);
+    await expect(files.files).not.toContainText("More files could not be loaded");
+  });
+
 });

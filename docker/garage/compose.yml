@@ -8,6 +8,8 @@ services:
     ports:
       # Operator/native-development access only; browsers and Agents use the app.
       - "127.0.0.1:${GARAGE_SAVED_S3_PORT:-3900}:3900"
+      # Native API/cleanup only; never expose management on a LAN interface.
+      - "127.0.0.1:${GARAGE_ADMIN_PORT:-0}:3903"
     volumes:
       - type: bind
         source: ${GARAGE_SAVED_STATE_DIR:-../../.garage-unconfigured}/garage.toml

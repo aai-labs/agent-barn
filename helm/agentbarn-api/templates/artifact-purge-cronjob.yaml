@@ -33,6 +33,8 @@ spec:
                     name: {{ .Values.secretName }}
                 - secretRef:
                     name: {{ .Values.artifacts.existingSecret | required "artifacts.existingSecret is required when purge is enabled" }}
+                - secretRef:
+                    name: {{ .Values.artifacts.provisionerSecret | required "artifacts.provisionerSecret is required for bucket cleanup" }}
               resources:
                 {{- toYaml .Values.worker.resources | nindent 16 }}
 {{- end }}

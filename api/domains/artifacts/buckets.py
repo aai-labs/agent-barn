@@ -15,6 +15,7 @@ from sqlmodel import Session, col, select
 from api.core.config import Config
 from api.domains.agents.models import Agent
 from api.domains.artifacts.models import Artifact, ArtifactBucket
+from api.domains.artifacts.storage import ArtifactCredentialsUnavailable, PreviousArtifactStorage
 from api.infrastructure.crypto import decrypt_token, encrypt_token
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
@@ -59,6 +60,8 @@ class ArtifactBucketRepository:
         return row.name
 
     def credentials(self, artifact: Artifact) -> BucketCredentials:
+        if artifact.bucket != bucket_name(artifact.agent_id):
+            raise PreviousArtifactStorage
         with Session(self.delegate.engine) as session:
             row = session.exec(
                 select(ArtifactBucket).where(
@@ -69,41 +72,65 @@ class ArtifactBucketRepository:
                 )
             ).one_or_none()
             if row is None or row.name != bucket_name(artifact.agent_id):
-                raise ValueError("Invalid Agent storage target")
+                raise ArtifactCredentialsUnavailable
             return BucketCredentials(
                 row.name,
                 row.access_key,
                 decrypt_token(row.secret_key_encrypted, self.config.agent_token_encryption_key),
             )
 
-    def request_buckets(self, limit: int) -> None:
-        """Operator-only scan: derive ownership exclusively from live persisted Agents."""
-        if not self.config.artifact_s3_endpoint_url:
-            return
+    def new_request(self, agent_id: UUID, organization_id: UUID) -> ArtifactBucket:
+        """Build intent for atomic persistence with a newly created Agent."""
+        return ArtifactBucket(
+            organization_id=organization_id,
+            agent_id=agent_id,
+            name=bucket_name(agent_id),
+            access_key="GK" + secrets.token_hex(16),
+            secret_key_encrypted=encrypt_token(secrets.token_hex(32), self.config.agent_token_encryption_key),
+            retry_at=datetime.now(UTC),
+        )
+
+    def status(self, agent_id: UUID, organization_id: UUID) -> ArtifactBucket | None:
         with Session(self.delegate.engine) as session:
-            agents = session.exec(
-                select(Agent)
-                .outerjoin(ArtifactBucket, col(ArtifactBucket.agent_id) == col(Agent.id))
-                .where(col(Agent.deleted_at).is_(None), col(ArtifactBucket.id).is_(None))
-                .order_by(col(Agent.id))
-                .limit(limit)
-                .with_for_update(of=Agent, skip_locked=True)
-            ).all()
-            for agent in agents:
-                session.add(
-                    ArtifactBucket(
-                        organization_id=agent.organization_id,
-                        agent_id=agent.id,
-                        name=bucket_name(agent.id),
-                        access_key="GK" + secrets.token_hex(16),
-                        secret_key_encrypted=encrypt_token(
-                            secrets.token_hex(32), self.config.agent_token_encryption_key
-                        ),
-                        retry_at=datetime.now(UTC),
-                    )
+            return session.exec(
+                select(ArtifactBucket).where(
+                    col(ArtifactBucket.agent_id) == agent_id,
+                    col(ArtifactBucket.organization_id) == organization_id,
                 )
-            # Persist intent and key material BEFORE any provider I/O.
+            ).one_or_none()
+
+    def reserve(self, agent_id: UUID, organization_id: UUID) -> ArtifactBucket:
+        """Idempotent explicit request; serialize concurrent callers on their owner."""
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            agent = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent_id,
+                    col(Agent.organization_id) == organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).one_or_none()
+            if agent is None:
+                raise ValueError("Agent not found")
+            row = session.exec(select(ArtifactBucket).where(col(ArtifactBucket.agent_id) == agent_id)).one_or_none()
+            if row is None:
+                row = self.new_request(agent_id, organization_id)
+            elif row.organization_id != organization_id or row.state in {"DELETING", "DELETED"}:
+                raise ValueError("Agent storage cannot be provisioned")
+            elif row.state == "PENDING" and row.last_error:
+                # A recovery pass may already be holding this row across Garage I/O.
+                # Duplicate HTTP requests must not wait for that provider call.
+                locked = session.exec(
+                    select(ArtifactBucket).where(col(ArtifactBucket.id) == row.id).with_for_update(skip_locked=True)
+                ).one_or_none()
+                if locked is None:
+                    return row
+                row.last_error = None
+                row.retry_at = datetime.now(UTC)
+            session.add(row)
             session.commit()
+            return row
 
     def due(self, limit: int) -> list[UUID]:
         with Session(self.delegate.engine) as session:
