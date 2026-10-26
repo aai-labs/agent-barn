@@ -6,7 +6,11 @@ import {
   mockAgent,
 } from "../pages/data-support/agent-data-support.po";
 import { WorkflowDataSupport } from "../pages/data-support/workflow-data-support.po";
-import { WorkflowRunDataSupport } from "../pages/data-support/workflow-run-data-support.po";
+import {
+  RERUN_ID,
+  RUN_ID,
+  WorkflowRunDataSupport,
+} from "../pages/data-support/workflow-run-data-support.po";
 import { WorkflowRunsPage } from "../pages/workflow-runs-page.po";
 import { WorkflowsPage } from "../pages/workflows-page.po";
 import { WORKFLOW_ID } from "../fixtures/workflows";
@@ -374,6 +378,102 @@ test.describe("WF02 run progress and text results", () => {
       support.starts[1].client_request_id,
     );
   });
+  for (const state of ["FAILED", "CANCELLED", "SUCCEEDED"]) {
+    test(`${state} runs offer Run again`, async ({ page }) => {
+      support.state = state;
+      await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+      await expect(
+        page.getByRole("button", { name: "Run again", exact: true }),
+      ).toBeVisible();
+    });
+  }
+  for (const state of ["QUEUED", "RUNNING", "PAUSED", "BLOCKED"]) {
+    test(`${state} runs do not offer Run again`, async ({ page }) => {
+      support.state = state;
+      await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+      await expect(page.getByLabel("Run detail")).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Run again", exact: true }),
+      ).toHaveCount(0);
+    });
+  }
+  test("Run again asks first, then starts a marked re-run that sends no inputs", async ({
+    page,
+  }) => {
+    support.state = "FAILED";
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    await runs.runAgain();
+    await expect(page.getByRole("dialog")).toContainText(
+      "same inputs as this one",
+    );
+    expect(support.reruns).toHaveLength(0);
+    await runs.confirmRunAgain();
+    await expect(page).toHaveURL(new RegExp(`workflowRun=${RERUN_ID}`));
+    await expect(page.getByLabel("Run detail")).toContainText("Re-run of");
+    await expect(page.getByLabel("Run activity").locator("li")).toHaveText([
+      /Re-run of run 12345678 using version 1/,
+    ]);
+    expect(Object.keys(support.reruns[0])).toEqual(["client_request_id"]);
+    expect(support.starts).toHaveLength(0);
+    await page.getByRole("button", { name: /^run 12345678$/ }).click();
+    await expect(page).toHaveURL(new RegExp(`workflowRun=${RUN_ID}`));
+    await expect(page.getByLabel("Run summary")).toContainText("Run failed");
+    await runs.backToRuns();
+    await expect(
+      page.getByLabel("Workflow runs", { exact: true }),
+    ).toContainText("· Re-run");
+  });
+  test("a re-run can be declined and a dropped request retries with the same identity", async ({
+    page,
+  }) => {
+    support.state = "SUCCEEDED";
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    await runs.runAgain();
+    await page.getByRole("button", { name: "Not now" }).click();
+    expect(support.reruns).toHaveLength(0);
+    support.failRerun = true;
+    await runs.runAgain();
+    await runs.confirmRunAgain();
+    await expect(
+      page.getByText("This run could not be run again"),
+    ).toBeVisible();
+    await runs.runAgain();
+    await runs.confirmRunAgain();
+    await expect(page).toHaveURL(new RegExp(`workflowRun=${RERUN_ID}`));
+    expect(support.reruns[0].client_request_id).toBe(
+      support.reruns[1].client_request_id,
+    );
+  });
+  test("losing access during a re-run replaces the protected run content", async ({
+    page,
+  }) => {
+    support.state = "SUCCEEDED";
+    const runs = new WorkflowRunsPage(page);
+    await runs.goto(MOCK_AGENT_ID, true);
+    await expect(page.getByLabel("Run summary")).toBeVisible();
+    await runs.runAgain();
+    support.failRead = true;
+    await runs.confirmRunAgain();
+    await expect(
+      page.getByText("This run is unavailable", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Run summary")).toHaveCount(0);
+  });
+  test("Viewers cannot run a settled run again", async ({ page }) => {
+    support.viewer = true;
+    support.state = "FAILED";
+    await new DataSupport(page).agents.interceptGetAgentRequest({
+      body: { ...mockAgent, allowed_actions: ["agent.read"] },
+    });
+    await new WorkflowRunsPage(page).goto(MOCK_AGENT_ID, true);
+    await expect(page.getByLabel("Run detail")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Run again", exact: true }),
+    ).toHaveCount(0);
+  });
+
   test("Viewer inspects text results without start or cancel authority", async ({
     page,
   }) => {

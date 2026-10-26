@@ -122,6 +122,11 @@ export function WorkflowsPage({
   }, [startVersion, onStartingChange]);
   const canAuthor =
     canAgent(agent, "agent.update") && capabilities.data?.authoring;
+  const canRun = Boolean(
+    capabilities.data?.execution &&
+      detail.data?.executionAvailable &&
+      canAgent(agent, "agent.update"),
+  );
   const maySave =
     canAuthor &&
     (!editTarget ||
@@ -360,11 +365,7 @@ export function WorkflowsPage({
                   )}
                   <button
                     className="af-btn af-btn-primary"
-                    disabled={
-                      !capabilities.data?.execution ||
-                      !detail.data?.executionAvailable ||
-                      !canAgent(agent, "agent.update")
-                    }
+                    disabled={!canRun}
                     onClick={() => {
                       if (detail.data)
                         setStartVersion(historic ?? detail.data.version);
@@ -480,6 +481,11 @@ export function WorkflowsPage({
           agent={agent}
           agentHref={home}
           runId={runId}
+          canRunAgain={canRun}
+          onOpenRun={(id) => {
+            void setView("runs");
+            void setRunId(id);
+          }}
         />
       ) : startVersion && selected ? (
         <WorkflowRunStart

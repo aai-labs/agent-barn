@@ -24,6 +24,12 @@ class WorkflowRunCreate(StrictDTO):
     inputs: dict[str, InputValue] = Field(default_factory=dict, max_length=30)
 
 
+class WorkflowRunRerun(StrictDTO):
+    """A re-run takes its version and inputs from the original run, never from the caller."""
+
+    client_request_id: UUID
+
+
 class WorkflowRunCancel(StrictDTO):
     expected_revision: int = Field(ge=1)
 
@@ -55,6 +61,8 @@ class WorkflowRun(BaseModel, table=True):
     reason: str | None = None
     settled_at: datetime | None = SqlField(default=None, sa_column=sa.Column(sa.DateTime(timezone=True)))
     content_expired: bool = False
+    # Set when this run repeats another run's version and inputs.
+    rerun_of_run_id: UUID | None = SqlField(default=None, foreign_key="workflow_run.id", ondelete="SET NULL")
 
 
 class WorkflowAttempt(BaseModel, table=True):
@@ -142,6 +150,7 @@ class WorkflowRunRead(DTO):
     final_summary: str | None = None
     created_at: datetime
     settled_at: datetime | None
-    allowed_actions: list[Literal["cancel"]]
+    rerun_of_run_id: UUID | None = None
+    allowed_actions: list[Literal["cancel", "rerun"]]
     # The running step's current attempt; only present on the single-run read.
     attempt: AttemptRead | None = None

@@ -10,6 +10,7 @@ from api.domains.workflows.run_models import (
     WorkflowRunCancel,
     WorkflowRunCreate,
     WorkflowRunRead,
+    WorkflowRunRerun,
 )
 from api.domains.workflows.run_service import WorkflowRunService
 from api.infrastructure.shared.models import PaginatedItems
@@ -23,6 +24,11 @@ Size = Annotated[int, Query(ge=1, le=100)]
 @router.post("/workflows/{workflow_id}/runs", status_code=202, response_model=WorkflowRunRead)
 def start_run(agent_id: UUID, workflow_id: UUID, payload: WorkflowRunCreate, context: Context, service: Service):
     return service.start(agent_id, workflow_id, payload, context)
+
+
+@router.post("/workflow-runs/{run_id}/re-run", status_code=202, response_model=WorkflowRunRead)
+def rerun_run(agent_id: UUID, run_id: UUID, payload: WorkflowRunRerun, context: Context, service: Service):
+    return service.rerun(agent_id, run_id, payload, context)
 
 
 @router.get("/workflow-runs", response_model=PaginatedItems[WorkflowRunRead])

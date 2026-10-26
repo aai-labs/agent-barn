@@ -3,6 +3,7 @@ import { workflowFixture, WORKFLOW_ID } from "../../fixtures/workflows";
 import { TEST_ORG_ID } from "../../constants";
 
 export const RUN_ID = "12345678-1234-4234-8234-123456789abc";
+export const RERUN_ID = "87654321-4321-4432-8432-cba987654321";
 const stepTimes = [
   { started_at: "2026-10-17T10:00:00Z", completed_at: "2026-10-17T10:01:54Z" },
   { started_at: "2026-10-17T10:01:54Z", completed_at: "2026-10-17T10:02:18Z" },
@@ -11,6 +12,9 @@ export class WorkflowRunDataSupport {
   starts: Record<string, unknown>[] = [];
   reads = 0;
   failStart = false;
+  /** The next re-run request fails in transport, as a dropped connection would. */
+  failRerun = false;
+  reruns: Record<string, unknown>[] = [];
   failRead = false;
   viewer = false;
   state = "RUNNING";
@@ -22,7 +26,7 @@ export class WorkflowRunDataSupport {
   async intercept(agentId: string) {
     const fixture = workflowFixture(agentId);
     const base = `**/api/v1/organizations/*/agents/${agentId}`;
-    const run = () => ({
+    const run = (over: Record<string, unknown> = {}) => ({
       id: RUN_ID,
       workflow_id: WORKFLOW_ID,
       version_id: fixture.version.id,
@@ -85,11 +89,34 @@ export class WorkflowRunDataSupport {
       settled_at: ["SUCCEEDED", "CANCELLED", "FAILED"].includes(this.state)
         ? "2026-10-17T10:02:18Z"
         : null,
-      allowed_actions:
-        this.viewer || this.state === "SUCCEEDED" || this.state === "CANCELLED"
-          ? []
+      rerun_of_run_id: null,
+      // The server advertises Run again on settled runs and Cancel on the rest.
+      allowed_actions: this.viewer
+        ? []
+        : ["SUCCEEDED", "CANCELLED", "FAILED"].includes(this.state)
+          ? ["rerun"]
           : ["cancel"],
+      ...over,
     });
+    const rerunRun = () =>
+      run({
+        id: RERUN_ID,
+        state: "QUEUED",
+        revision: 1,
+        next_step: 0,
+        reason: null,
+        final_summary: null,
+        settled_at: null,
+        attempt: null,
+        rerun_of_run_id: RUN_ID,
+        allowed_actions: ["cancel"],
+        steps: fixture.version.draft.steps.map((step) => ({
+          id: step.id,
+          name: step.name,
+          state: "PENDING",
+          summary: null,
+        })),
+      });
     await this.page.route(`${base}/workflow-capabilities`, (route) =>
       route.fulfill({
         json: {
@@ -134,7 +161,19 @@ export class WorkflowRunDataSupport {
         page: 1,
         page_size: 20,
       });
-      if (path.endsWith("/history")) {
+      if (path.endsWith("/history") && path.includes(RERUN_ID)) {
+        await route.fulfill({
+          json: page([
+            {
+              id: "00000000-0000-4000-8000-0000000000b1",
+              created_at: "2026-10-17T10:00:00Z",
+              revision: 1,
+              kind: "RERUN_STARTED",
+              detail: "Re-run of run 12345678 using version 1",
+            },
+          ]),
+        });
+      } else if (path.endsWith("/history")) {
         await route.fulfill({
           json: page([
             {
@@ -153,11 +192,24 @@ export class WorkflowRunDataSupport {
             },
           ]),
         });
+      } else if (path.endsWith("/re-run")) {
+        this.reruns.push(route.request().postDataJSON());
+        if (this.failRerun) {
+          this.failRerun = false;
+          await route.abort("failed");
+          return;
+        }
+        await route.fulfill({ status: 202, json: rerunRun() });
+      } else if (path.endsWith(RERUN_ID)) {
+        await route.fulfill({ json: rerunRun() });
       } else if (path.endsWith("/cancel")) {
         this.state = "CANCELLED";
         await route.fulfill({ json: run() });
       } else if (path.endsWith(RUN_ID)) await route.fulfill({ json: run() });
-      else await route.fulfill({ json: page([run()]) });
+      else
+        await route.fulfill({
+          json: page(this.reruns.length ? [rerunRun(), run()] : [run()]),
+        });
     });
   }
 }

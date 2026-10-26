@@ -129,5 +129,25 @@ export function useWorkflowRunActions(agentId: string) {
       ).data,
     onSettled: invalidate,
   });
-  return { start, cancel };
+  // The server copies the version and inputs from the original run.
+  const rerun = useMutation({
+    mutationFn: async ({
+      run,
+      clientRequestId,
+    }: {
+      run: WorkflowRun;
+      clientRequestId: string;
+    }) =>
+      (
+        await api.post<WorkflowRun>(
+          `${scope.base}/workflow-runs/${run.id}/re-run`,
+          { clientRequestId },
+          { schema: WorkflowRunSchema },
+        )
+      ).data,
+    onSuccess: (run) => client.setQueryData([...scope.key, run.id], run),
+    // A refused re-run may mean access was lost: refetch so errors replace cached content.
+    onSettled: invalidate,
+  });
+  return { start, cancel, rerun };
 }

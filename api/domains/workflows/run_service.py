@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -23,6 +23,7 @@ from api.domains.workflows.run_models import (
     WorkflowRun,
     WorkflowRunCreate,
     WorkflowRunRead,
+    WorkflowRunRerun,
 )
 from api.domains.workflows.run_repository import WorkflowRunRepository
 from api.infrastructure.shared.models import PaginatedItems
@@ -70,13 +71,13 @@ class WorkflowRunService:
         version: WorkflowVersion,
         agent_id: UUID,
         context: CurrentUserContext,
-        can_cancel: bool | None = None,
+        can_write: bool | None = None,
         step_records: dict[int, dict[str, Any]] | None = None,
         attempt: AttemptRead | None = None,
     ) -> WorkflowRunRead:
-        if can_cancel is None:
+        if can_write is None:
             agent = self.authorization.require_visible(context, agent_id)
-            can_cancel = PermissionKey.AGENT_UPDATE in self.authorization.allowed_actions(context, [agent])[agent.id]
+            can_write = PermissionKey.AGENT_UPDATE in self.authorization.allowed_actions(context, [agent])[agent.id]
         return WorkflowRunRead(
             id=run.id,
             workflow_id=run.workflow_id,
@@ -110,9 +111,19 @@ class WorkflowRunService:
             else None,
             created_at=run.created_at,
             settled_at=run.settled_at,
-            allowed_actions=["cancel"] if can_cancel and run.state not in TERMINAL_STATES | {"CANCELLING"} else [],
+            rerun_of_run_id=run.rerun_of_run_id,
+            allowed_actions=self._allowed_actions(run, can_write),
             attempt=attempt,
         )
+
+    @staticmethod
+    def _allowed_actions(run: WorkflowRun, can_write: bool) -> list[Literal["cancel", "rerun"]]:
+        if not can_write:
+            return []
+        if run.state in TERMINAL_STATES:
+            # Retention removes the inputs a re-run would copy.
+            return [] if run.content_expired else ["rerun"]
+        return [] if run.state == "CANCELLING" else ["cancel"]
 
     def get(self, agent_id: UUID, run_id: UUID, context: CurrentUserContext) -> WorkflowRunRead:
         found = self.repository.get(run_id, agent_id, self._scope(agent_id, context))
@@ -131,18 +142,57 @@ class WorkflowRunService:
     ) -> PaginatedItems[WorkflowRunRead]:
         rows, total = self.repository.list_runs(agent_id, self._scope(agent_id, context), page, size, workflow_id)
         agent = self.authorization.require_visible(context, agent_id)
-        can_cancel = PermissionKey.AGENT_UPDATE in self.authorization.allowed_actions(context, [agent])[agent.id]
-        return PaginatedItems(page, size, total, [self._read(*row, agent_id, context, can_cancel) for row in rows])
+        can_write = PermissionKey.AGENT_UPDATE in self.authorization.allowed_actions(context, [agent])[agent.id]
+        return PaginatedItems(page, size, total, [self._read(*row, agent_id, context, can_write) for row in rows])
 
     def start(
         self, agent_id: UUID, workflow_id: UUID, payload: WorkflowRunCreate, context: CurrentUserContext
+    ) -> WorkflowRunRead:
+        return self._start(agent_id, workflow_id, payload, context)
+
+    def rerun(
+        self, agent_id: UUID, run_id: UUID, payload: WorkflowRunRerun, context: CurrentUserContext
+    ) -> WorkflowRunRead:
+        """Start a new run of a settled run's own version and inputs, recording where it came from."""
+        scope = self._scope(agent_id, context, write=True)
+        found = self.repository.get(run_id, agent_id, scope)
+        if not found:
+            raise HTTPException(404, "Workflow run not found")
+        source = found[0]
+        if source.state not in TERMINAL_STATES:
+            raise HTTPException(409, "Only a settled run can be run again")
+        create = WorkflowRunCreate(
+            version_id=source.version_id, client_request_id=payload.client_request_id, inputs=source.inputs
+        )
+        # A retry of a re-run that already started returns it, even after retention removed the inputs.
+        try:
+            existing = self.repository.existing_start(
+                source.workflow_id, agent_id, scope, create, context.user.id, source.id
+            )
+        except WorkflowConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if existing:
+            return self.get(agent_id, existing, context)
+        if source.content_expired:
+            raise HTTPException(409, "This run's inputs were removed by retention; start a new run instead")
+        return self._start(agent_id, source.workflow_id, create, context, source.id)
+
+    def _start(
+        self,
+        agent_id: UUID,
+        workflow_id: UUID,
+        payload: WorkflowRunCreate,
+        context: CurrentUserContext,
+        rerun_of_run_id: UUID | None = None,
     ) -> WorkflowRunRead:
         scope = self._scope(agent_id, context, write=True)
         workflow = self.definitions.get_in_scope(workflow_id, agent_id, scope)
         if workflow is None:
             raise HTTPException(404, "Workflow not found")
         try:
-            existing = self.repository.existing_start(workflow_id, agent_id, scope, payload, context.user.id)
+            existing = self.repository.existing_start(
+                workflow_id, agent_id, scope, payload, context.user.id, rerun_of_run_id
+            )
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc
         if existing:
@@ -166,6 +216,7 @@ class WorkflowRunService:
                 context.user.id,
                 context.require_current_user_organization().id,
                 runtime,
+                rerun_of_run_id,
             )
         except WorkflowConflict as exc:
             raise HTTPException(409, str(exc)) from exc

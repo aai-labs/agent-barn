@@ -14,6 +14,11 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-26 — AF-389 — run again from a settled run
+
+- Added: `POST /workflow-runs/{id}/re-run` starts a new run of a settled run's own version and inputs, copied by the server (the body carries only a client request identity). Migration `c7d4e2a91b58` adds nullable `workflow_run.rerun_of_run_id`; the API exposes it and a `rerun` allowed action, and the new run's first history entry is `RERUN_STARTED` ("Re-run of run …"). The run page offers **Run again** with confirmation and a link back to the original. See [Run again](../agent-workflows.md#run-again).
+- Verification: API integration tests cover the copied version and inputs, a newer saved version, rejected inputs, unsettled and retention-expired sources, retries and identity reuse, a stopped Agent, Viewer and tenant concealment; Playwright covers visibility by state, confirmation, request identity and the marked re-run. Downgrade of the migration was not exercised.
+
 ### 2026-10-22 — AF-389 — update from latest staging
 
 - Updated: Merged `origin/staging` at `d2cfca47` without text conflicts. Added no-op merge revision `b9e32d74a610` to join workflow head `f8740a67b788` with staging head `3bbf2465b9cb`; no data or schema operations are introduced.

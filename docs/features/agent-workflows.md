@@ -236,7 +236,7 @@ archive, while changed actor/version/inputs return 409. Starts serialize per Age
 Workflow admission does not impose an active-run concurrency cap; multiple runs
 can execute as separate sessions in the owning Agent.
 Declared step capabilities do not gate admission. All subordinate reads use current Agent visibility before
-totals/pagination; start/cancel require `agent.update`, including custom and
+totals/pagination; start/re-run/cancel require `agent.update`, including custom and
 general Agent Access. Read-only keys cannot mutate. Viewers can inspect run
 progress, summaries and history. Run detail defaults to the overall run view,
 labelled Result ready after success and Run overview otherwise. The navigation card
@@ -269,6 +269,35 @@ workflow. The legacy workflow URL redirects preserve these parameters. The focus
 workflow layout stays consistent across its overview, list, history and run detail
 so returning to Runs does not reintroduce the surrounding Agent header.
 
+
+### Run again
+
+`POST /workflow-runs/{id}/re-run` takes only a `client_request_id` (a body with
+anything else is rejected with 422) and returns 202 with a new run. The server
+copies the original run's pinned version and inputs, so a caller cannot change
+either; the run's own version is used even when a newer one has been saved. It
+follows the start path: `agent.update`, a running Agent, a non-archived workflow
+and the same admission, ledger and wakeup. Only a settled run (Completed, Failed
+or Cancelled) can be repeated (409 otherwise), and not one whose inputs retention
+has already removed (409). The original run, its history and its revision are not
+touched.
+
+The new run is a separate run with its own history. `workflow_run.rerun_of_run_id`
+(nullable, self-referencing, `ON DELETE SET NULL`) records the original, exposed as
+`rerun_of_run_id`; its first history entry has kind `RERUN_STARTED` and reads
+"Re-run of run 12345678 using version N", where the id is the original's first
+eight characters. The initiating User is whoever requests the re-run. A request
+identity is unique per definition as for starts, and for a re-run it is bound to the
+original run and the actor rather than to inputs: a retry with the same identity and
+original returns the same run, even after retention has removed the original's inputs;
+reusing it for another run or by another actor returns 409. The server advertises `rerun` in `allowed_actions` for a settled run
+whose inputs remain.
+
+In the UI, settled runs with `rerun` in `allowed_actions` show **Run again** in the
+header when the overview's Run workflow would also be enabled (execution enabled and
+available, and `agent.update`). It asks for confirmation, keeps one request identity
+across retries from that run page, then opens the new run. A re-run shows "Re-run of
+run …" linking to the original, and the Runs list marks it "Re-run".
 
 The PostgreSQL ledger comprises `workflow_run`, `workflow_attempt`,
 `workflow_checkpoint` and `workflow_history`. Each transition stages a safe
@@ -319,9 +348,10 @@ and metadata remain. No external storage or object-purge machinery is required.
 
 The product API adds `POST /workflows/{id}/runs`, `GET /workflow-runs` (optional
 `workflow_id`), `GET /workflow-runs/{id}`, `GET /workflow-runs/{id}/history` and
-`POST /workflow-runs/{id}/cancel` with `expected_revision`. Collections retain the
-standard 20/100 pagination bounds. Server-derived `allowed_actions` controls
-cancellation with independent backend authorization. Artifact routes, generic
+`POST /workflow-runs/{id}/cancel` with `expected_revision`, and
+`POST /workflow-runs/{id}/re-run` (see [Run again](#run-again)). Collections retain the
+standard 20/100 pagination bounds. Server-derived `allowed_actions` (`cancel`, `rerun`) controls
+those actions with independent backend authorization. Artifact routes, generic
 resume and approvals are not exposed in WF02.
 
 The Workflows UI includes explicit input review, a Runs view, durable step

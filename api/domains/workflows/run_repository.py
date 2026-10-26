@@ -38,6 +38,20 @@ from api.domains.workflows.run_models import (
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 
 
+def start_hash(payload: WorkflowRunCreate, user_id: UUID, rerun_of_run_id: UUID | None) -> str:
+    if rerun_of_run_id:
+        # The source run determines version and inputs, which retention may later remove,
+        # so a retry's identity is the source run and actor alone.
+        return digest(
+            {
+                "client_request_id": str(payload.client_request_id),
+                "user_id": str(user_id),
+                "rerun_of_run_id": str(rerun_of_run_id),
+            }
+        )
+    return digest({**payload.model_dump(mode="json"), "user_id": str(user_id)})
+
+
 def digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
@@ -53,7 +67,13 @@ class WorkflowRunRepository:
     config: Config
 
     def existing_start(
-        self, workflow_id: UUID, agent_id: UUID, scope: AuthorizationScope, payload: WorkflowRunCreate, user_id: UUID
+        self,
+        workflow_id: UUID,
+        agent_id: UUID,
+        scope: AuthorizationScope,
+        payload: WorkflowRunCreate,
+        user_id: UUID,
+        rerun_of_run_id: UUID | None = None,
     ) -> UUID | None:
         with Session(self.delegate.engine) as session:
             run = session.exec(
@@ -64,7 +84,7 @@ class WorkflowRunRepository:
             ).one_or_none()
             if run is None:
                 return None
-            if run.request_hash != digest({**payload.model_dump(mode="json"), "user_id": str(user_id)}):
+            if run.request_hash != start_hash(payload, user_id, rerun_of_run_id):
                 raise WorkflowConflict("Start request identity was reused with different inputs, version or actor")
             return run.id
 
@@ -198,8 +218,9 @@ class WorkflowRunRepository:
         user_id: UUID,
         membership_id: UUID,
         runtime: str,
+        rerun_of_run_id: UUID | None = None,
     ) -> tuple[WorkflowRun, list[UUID]]:
-        request_hash = digest({**payload.model_dump(mode="json"), "user_id": str(user_id)})
+        request_hash = start_hash(payload, user_id, rerun_of_run_id)
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             # Serialize starts across this Agent's definitions, including its first run.
             agent = session.exec(
@@ -239,10 +260,20 @@ class WorkflowRunRepository:
                 request_hash=request_hash,
                 inputs=payload.inputs,
                 runtime=runtime,
+                rerun_of_run_id=rerun_of_run_id,
             )
             session.add(run)
             session.flush()
-            delivery_ids = self._event(session, run, "STARTED", f"Run started using version {version.number}")
+            delivery_ids = (
+                self._event(
+                    session,
+                    run,
+                    "RERUN_STARTED",
+                    f"Re-run of run {str(rerun_of_run_id)[:8]} using version {version.number}",
+                )
+                if rerun_of_run_id
+                else self._event(session, run, "STARTED", f"Run started using version {version.number}")
+            )
             session.commit()
             return run, delivery_ids
 
