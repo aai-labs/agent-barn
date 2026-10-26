@@ -97,6 +97,10 @@ def _locate(changes: _Changes, path: str | None) -> _Target | None:
     return _Target(folder=entry[0], runtime=entry[1], rel_path=rel_path)
 
 
+def _changed_since(row: SyncFile, moment: datetime) -> bool:
+    return any(at is not None and at >= moment for at in (row.synced_at, row.upload_started_at))
+
+
 def delete_agent_folder(
     plugin: SyncProviderPlugin, root: SyncRoot | None, repository: FileSyncRepository, folder: SyncAgentFolder
 ) -> None:
@@ -181,6 +185,7 @@ class FileSyncEngine:
                 return
 
     def _relist(self, changes: _Changes) -> None:
+        started = datetime.now(UTC)
         seen: set[str] = set()
         cursor: str | None = None
         while True:
@@ -197,6 +202,8 @@ class FileSyncEngine:
             if folder_item_id not in seen:
                 self._rebuild_folder(folder, now)
         for row, folder in self.repository.synced_files_in_connection(changes.connection.id):
+            if _changed_since(row, started):
+                continue
             if row.item_id not in seen and folder.folder_item_id in changes.by_item and folder.folder_item_id in seen:
                 self.repository.restore_from_agent(row.id)
         self.repository.save_cursor(changes.connection.id, cursor)
@@ -287,6 +294,8 @@ class FileSyncEngine:
                 break
             except RemoteNameTaken:
                 continue
+            except RemoteItemMissing:
+                return
         self.repository.record_activity(
             target.folder, SyncActivityKind.MOVED_NOT_SYNCED, target.rel_path, datetime.now(UTC)
         )

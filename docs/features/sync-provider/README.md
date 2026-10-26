@@ -214,7 +214,7 @@ After the folders, each pass reads the provider's changes under "Agent Barn" sin
 - **Saving progress:** the cursor is saved after each page. A page interrupted by throttling or a failure is read again on the next pass; handling the same change twice does nothing more.
 - **Expired cursor:** when the provider says the cursor is no longer valid (`RemoteResyncRequired`), the pass lists everything under "Agent Barn" from the start and handles each item as a change. Matching content versions mean no edit is invented. Afterwards:
   - an active Agent folder that was not listed is rebuilt;
-  - a synced file not listed, in a folder that was, is restored from the Agent;
+  - a synced file not listed, in a folder that was, is restored from the Agent, unless the pod uploaded or confirmed it after the listing began (the pod keeps syncing while the engine lists, so such a file is simply newer than the listing);
   - the cursor from the end of the listing is saved, but only then, so an interrupted listing starts again.
 - **Stopped Agents:** their jobs wait in `sync_file` until the pod asks for them.
 
@@ -223,7 +223,7 @@ A changed item is matched to its Agent Folder by its first path segment, and to 
 - **Inactive folders:** files in a folder that is not active are ignored.
 
 Files a person adds, removes or moves:
-- **A file the Agent does not have:** a new file anywhere in an Agent's folder is moved to `<Agent>/_Not synced/` (created when missing), and `moved_not_synced` is recorded. A name already taken there gets ` (2)`, ` (3)` before its extension.
+- **A file the Agent does not have:** a new file anywhere in an Agent's folder is moved to `<Agent>/_Not synced/` (created when missing), and `moved_not_synced` is recorded. A name already taken there gets ` (2)`, ` (3)` before its extension. A file already gone by the time it is moved is left alone, and nothing is recorded.
 - **A new file at a synced path,** such as one deleted and added again, is taken as an edit of that file, unless the Agent's own upload of that path is under way.
 - **A synced file deleted,** or moved out of "Agent Barn", into `_Not synced/` or into another Agent's folder: it is restored from the Agent (a `reupload` job, with the row's provider fields cleared). `restored` is recorded when the Agent's copy is back. A file that lands in another Agent's folder is moved to that folder's `_Not synced/`.
 - **A synced file renamed or moved within its folder:** it is moved back to its path, and `renamed_back` is recorded. If the way back is blocked, it is restored instead and the moved copy is parked in `_Not synced/`.

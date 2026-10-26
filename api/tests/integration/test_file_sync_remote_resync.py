@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -8,7 +9,7 @@ from api.domains.agents.models import Agent, AgentStatus
 from api.domains.file_sync.engine import FileSyncEngine
 from api.domains.file_sync.models import SyncActivityKind, SyncFile, SyncPendingAction
 from api.domains.sync_provider.models import SyncProviderConnection
-from api.domains.sync_provider.plugins.base import ProviderThrottled, RemoteItemMissing
+from api.domains.sync_provider.plugins.base import ProviderThrottled, RemoteChanges, RemoteItemMissing, SyncRoot
 from api.tests.core.givenpy import given
 from api.tests.steps.file_sync_ingest import (
     AGENT_KEY,
@@ -60,6 +61,21 @@ def _exists(context, remote_path: str) -> bool:
 
 def _row(context, path: str) -> SyncFile:
     return synced_files(context)[path]
+
+
+def _while_listing(context, monkeypatch: pytest.MonkeyPatch, action: Callable[[], None]) -> None:
+    drive = fake_drive(context)
+    listing = drive.changes
+    acted: list[bool] = []
+
+    def changes(root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
+        page = listing(root, cursor, from_start=from_start)
+        if from_start and not acted:
+            acted.append(True)
+            action()
+        return page
+
+    monkeypatch.setattr(drive, "changes", changes)
 
 
 def test_an_expired_cursor_relists_everything_without_inventing_edits():
@@ -242,3 +258,38 @@ def test_a_stopped_agents_jobs_wait_for_its_pod():
 
         assert_that([(op["path"], op["action"]) for op in operations], equal_to([("workspace/notes.md", "download")]))
         assert_that(_row(context, "workspace/notes.md").lease_until, not_none())
+
+
+def test_a_file_the_pod_uploads_during_a_relisting_is_not_restored(monkeypatch):
+    with given(_BASE) as context:
+        agent = _connected_with(context, ("workspace/notes.md", b"hello"))
+        fake_drive(context).expire_cursors()
+        _while_listing(
+            context, monkeypatch, lambda: upload_through_the_pod(context, agent, "workspace/report.md", b"fresh")
+        )
+
+        _process(context)
+
+        assert_that(_row(context, "workspace/report.md").pending, none())
+        assert_that(activity_entries(context), equal_to([]))
+
+
+def test_a_file_deleted_during_a_relisting_does_not_fail_the_pass(monkeypatch):
+    with given(_BASE) as context:
+        _connected_with(context, ("workspace/notes.md", b"hello"))
+        fake_drive(context).user_adds(context.sync_root, "Sales Bot/workspace/budget.xlsx", b"numbers")
+        fake_drive(context).expire_cursors()
+        _while_listing(
+            context,
+            monkeypatch,
+            lambda: fake_drive(context).user_deletes(context.sync_root, "Sales Bot/workspace/budget.xlsx"),
+        )
+
+        failure: Exception | None = None
+        try:
+            _process(context)
+        except Exception as exc:
+            failure = exc
+
+        assert_that(failure, none())
+        assert_that(activity_entries(context), equal_to([]))

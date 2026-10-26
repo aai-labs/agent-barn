@@ -87,17 +87,17 @@ Acceptance criteria amendments (maintainer, 2026-10-21; see the ADR):
   - the Domain Events `agent.file_sync.enabled` / `agent.file_sync.disabled`, registered for the security audit;
   - `PUT …/agents/{agent_id}/file-sync` (`agent.update`): sets the switch, makes the Agent's folder `disabled` or `active` with a re-check requested, and records the event, in one transaction. A folder that is turned off is already refused by Ingest and left alone by the Sync Engine;
   - Ingest refuses an Agent whose switch is off (409), with or without a folder;
-  - the Sync Engine follows the switch: no folder for an Agent whose switch is off, and a folder brought in line with the switch when its request couldn't reach it.
+  - the Sync Engine follows the switch: no folder for an Agent whose switch is off, and a folder brought in line with the switch when its request couldn't reach it;
+  - the full re-list is safe alongside the pod: no false restore for a file uploaded during the listing, and no failed pass for a file gone before it is parked.
 - In transition:
   - `resync_requested_at` is written but not yet read, so turning on resumes the folder without the re-check.
 - Next, in this order, each as its own slice:
-  1. making the full re-list safe alongside the pod;
-  2. turning on re-checks the folder;
-  3. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
-  4. the Agent page File sync tab (status and switch, then activity);
-  5. the hire form option;
-  6. the local k3d end-to-end run;
-  7. closing this log.
+  1. turning on re-checks the folder;
+  2. `GET …/file-sync` (status) and `GET …/file-sync/activity`;
+  3. the Agent page File sync tab (status and switch, then activity);
+  4. the hire form option;
+  5. the local k3d end-to-end run;
+  6. closing this log.
 - Blockers: none.
 
 Acceptance criteria amendments (maintainer, 2026-10-23):
@@ -111,6 +111,19 @@ Acceptance criteria amendments (maintainer, 2026-10-23):
 - **Manual check:** on local k3d against the test tenant, not on staging.
 
 ## Changes
+
+### 2026-10-26 — AF-385 — The full re-list is safe alongside the pod
+
+- **Why now:** the full re-list (`_relist`) has run only when the provider expired the change cursor. Turning sync on will run it routinely (next slice), and the pod keeps syncing through Ingest meanwhile, without the connection lock. Two collisions the independent audit found were fixed first, on the existing expired-cursor path.
+- Delivered (`engine.py`):
+  - **No false restore:** a synced file whose `synced_at` or `upload_started_at` is at or after the start of the listing is not restored for being missing from it (`_changed_since`). Before, a file the pod uploaded during the listing got a `reupload` job and, once done, a false `restored` entry.
+  - **No failed pass:** `_park` treats a file already gone at the provider (`RemoteItemMissing` on the move) as nothing to do and records nothing. Before, it failed the whole pass for that connection, and the re-list started again on the next one.
+- Changed: README "People's edits" (expired cursor and new files).
+- Verified:
+  - **2 new tests in `test_file_sync_remote_resync.py`, both failing first:** a file the pod uploads during a re-list is not restored (got `reupload`), and a file deleted during a re-list doesn't fail the pass (raised `RemoteItemMissing`).
+  - **How "during" is made:** a test-local helper, `_while_listing`, wraps Test Drive's `changes` with `monkeypatch` and runs the action right after the first from-start page is produced: listed, not yet processed. Test Drive itself is unchanged.
+  - **Red again:** both tests failed again with the previous commit's `engine.py` put back, after the helper's final edit.
+  - **Suites:** remote re-sync, remote moves, remote edits and the engine pass pass together (51). ruff, format and ty pass (ty apart from the 11 existing Unix-only diagnostics).
 
 ### 2026-10-26 — AF-385 — The Sync Engine follows the switch
 
