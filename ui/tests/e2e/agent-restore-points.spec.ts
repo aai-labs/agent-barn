@@ -433,11 +433,8 @@ test.describe("Agent restore points", () => {
     await configurationPage.restoreButton().click();
     await configurationPage.restoreConfirmNameInput().fill(mockAgent.name);
 
-    const first = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/restore"));
-    await configurationPage.restoreConfirmButton().click();
-    expect((await first).postDataJSON().skip_backup).toBe(false);
-
     // The Job's backup failed, so the target is READY again and the newest row is the failed backup.
+    // Set before the restore is sent: the list refetches as soon as the restore returns.
     listBody = mockRestorePointsPage({
       items: [
         {
@@ -450,6 +447,10 @@ test.describe("Agent restore points", () => {
       ],
       manualCount: 1,
     });
+
+    const first = page.waitForRequest((r) => r.method() === "POST" && r.url().endsWith("/restore"));
+    await configurationPage.restoreConfirmButton().click();
+    expect((await first).postDataJSON().skip_backup).toBe(false);
 
     const notice = page.getByTestId("restore-backup-failed");
     await expect(notice).toContainText(/backup snapshot failed/i);
@@ -602,6 +603,24 @@ test.describe("Agent restore points", () => {
     await expect(capacity).toContainText("1 of 5 captures used");
     await expect(capacity).toContainText("Automatic backups taken before a restore don't count");
     await expect(configurationPage.restorePointRows()).toHaveCount(2);
+  });
+
+  test("says when a restore run without a backup did not finish", async ({ page }) => {
+    const dataSupport = new DataSupport(page);
+    const configurationPage = new AgentConfigurationPage(page);
+
+    await baseIntercepts(dataSupport);
+    await dataSupport.agents.interceptGetRestorePointsRequest({
+      body: mockRestorePointsPage({
+        items: [{ ...mockRestorePoint, failure_reason: "restore failed: disk full" }],
+      }),
+    });
+
+    await openRestorePoints(configurationPage);
+
+    await expect(configurationPage.restorePointRow("Before the rewrite")).toContainText(
+      "The last restore from this point did not finish: restore failed: disk full",
+    );
   });
 
   test("lets a viewer read the list without offering any action", async ({ page }) => {

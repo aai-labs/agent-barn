@@ -3156,10 +3156,33 @@ class AgentService:
                 agent_id, ManagedUpdateOutcome.SUCCEEDED, restore_point_id=None
             )
             return
-        self._stop_after_failed_update(agent_id, pinned_image)
+        self._stop_after_failed_update(agent_id, actor, pinned_image)
 
-    def _stop_after_failed_update(self, agent_id: UUID, pinned_image: str) -> None:
-        """Stop the Agent on the pin it had before the update, so a start goes back to that image."""
+    def _stop_after_failed_update(self, agent_id: UUID, actor: ActorIdentity, pinned_image: str) -> None:
+        """Stop the Agent on the pin it had before the update, so a start goes back to that image.
+
+        A full stop, like the user's own: the pod's gateway tokens are revoked and the stop is
+        recorded. Only if that cannot run is the workload removed directly.
+        """
+        try:
+            with self.repository.lifecycle_lock(agent_id) as acquired:
+                if not acquired:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                    )
+                current = self.repository.get_by_id(agent_id)
+                if current is not None:
+                    current.pinned_runtime_image = pinned_image
+                    self._stop_agent_unchecked(self.repository.save(current), actor)
+        except Exception:
+            logger.exception("Could not stop agent %s after a failed update", agent_id)
+            self._remove_workload_after_failed_update(agent_id, pinned_image)
+        self.repository.record_managed_update_outcome(
+            agent_id, ManagedUpdateOutcome.UPDATE_FAILED, restore_point_id=None
+        )
+
+    def _remove_workload_after_failed_update(self, agent_id: UUID, pinned_image: str) -> None:
         try:
             self._teardown_workload(agent_id)
         except Exception:
@@ -3169,9 +3192,6 @@ class AgentService:
             agent.status = AgentStatus.STOPPED
             agent.pinned_runtime_image = pinned_image
             self.repository.save(agent)
-        self.repository.record_managed_update_outcome(
-            agent_id, ManagedUpdateOutcome.UPDATE_FAILED, restore_point_id=None
-        )
 
     def _start_and_wait(self, agent_id: UUID, actor: ActorIdentity, *, pinned_image: str) -> bool:
         try:
