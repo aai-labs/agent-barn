@@ -37,8 +37,16 @@ delivered attachments and AF-389's merged status, retaining its acceptance gaps.
   contracts and whitespace checks pass. UI/runtime/cluster tests were not repeated
   for this backend lock/documentation correction.
 
-Independent recheck is pending. No retained developer bytes were deleted, and no
-remote push, merge, external deployment or production access occurred.
+The independent Personal Codex GPT 6.1 Sol recheck of exact HEAD `ef802873`
+returned **Approve**: F1/F2 resolved, no new Critical or Required findings in the
+correction diff. It independently passed both race cases, all **89 affected tests
+in 66.67 seconds**, API quality/migration/chart checks, and a process-only mutation
+that removed the new guard and reproduced the live-owner failure. A clean-process
+race rerun passed afterward. This focused recheck extends the original complete
+124-file review; it does not claim a second full feature/runtime/browser/cluster
+rerun. The following documentation-only approval record does not change reviewed
+implementation. No retained developer bytes were deleted, and no remote push,
+merge, external deployment or production access occurred.
 
 ## Agent Files delete action — 2026-10-26 (local, not pushed)
 
