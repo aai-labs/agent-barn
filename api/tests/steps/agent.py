@@ -57,6 +57,9 @@ class MockK8sModule(Module):
         mock.get_pod_image.return_value = None
         # A MagicMock cannot be compared with an int, and a fresh pod has not restarted.
         mock.get_pod_restart_count.return_value = 0
+        # An add-on install that has not failed, and no install log to read.
+        mock.get_init_container_failure.return_value = None
+        mock.read_init_container_logs.return_value = None
         return mock
 
 

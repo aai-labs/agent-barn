@@ -74,6 +74,11 @@ ORGANIZATION_LLM_BUDGET_CHANGED = "organization.llm_budget.changed"
 ORGANIZATION_TRIAL_ENDED = "organization.trial.ended"
 ORGANIZATION_AGENT_SIZES_CHANGED = "organization.agent_sizes.changed"
 AGENT_AGENT_SIZE_CHANGED = "agent.agent_size.changed"
+AGENT_ADDON_REQUESTED = "agent.addon.requested"
+AGENT_ADDON_APPROVED = "agent.addon.approved"
+AGENT_ADDON_REJECTED = "agent.addon.rejected"
+AGENT_ADDON_WITHDRAWN = "agent.addon.withdrawn"
+AGENT_ADDON_REVOKED = "agent.addon.revoked"
 ORGANIZATION_TRIAL_EXPIRED = "organization.trial.expired"
 ORGANIZATION_AGENT_LIMIT_CHANGED = "organization.agent_limit.changed"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
@@ -85,6 +90,7 @@ AGENT_LIFECYCLE_EMAIL_HANDLER = "agent.lifecycle_email.notification"
 ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notification"
 ORGANIZATION_TRIAL_EXPIRY_HANDLER = "organization.trial_expiry.projection"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
+AGENT_ADDON_EMAIL_HANDLER = "agent.addon_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
 WORKFLOW_RUN_CHANGED = "workflow.run.changed"
 WORKFLOW_CONTROLLER_HANDLER = "workflow.controller"
@@ -471,6 +477,36 @@ class AgentAgentSizeChangedPayload(BaseModel):
     previous_agent_size_id: UUID | None
     previous_agent_size_name: str | None
     by_platform: bool = False
+    actor_display: str
+    subject_display: str
+
+
+class AgentAddonChangedPayload(BaseModel):
+    """One Agent Add-on request changing state, with the request itself.
+
+    The request content travels with the Event because it is what was reviewed: the record
+    must say exactly what was approved or refused even after the request is gone. `reason` is
+    the rejection reason (the Security Audit Record's reason) and is set only on rejection;
+    `request_reason` is why the Organization asked. A withdrawal by Agent deletion carries the
+    deletion's correlation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    addon_id: UUID
+    kind: str
+    name: str
+    version: str | None = None
+    url: str | None = None
+    commit: str | None = None
+    sha256: str | None = None
+    command: str | None = None
+    request_reason: str
+    state: str
+    previous_state: str | None
+    reason: str | None = None
     actor_display: str
     subject_display: str
 
@@ -924,6 +960,24 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_scope=EventScope.ORGANIZATION,
         )
     )
+    # Every state change is audited; the ones a person should hear about are emailed too:
+    # Platform Administrators of a new request, the requester of its decision.
+    for event_name, handler_names in (
+        (AGENT_ADDON_REQUESTED, (SECURITY_AUDIT_HANDLER, AGENT_ADDON_EMAIL_HANDLER)),
+        (AGENT_ADDON_APPROVED, (SECURITY_AUDIT_HANDLER, AGENT_ADDON_EMAIL_HANDLER)),
+        (AGENT_ADDON_REJECTED, (SECURITY_AUDIT_HANDLER, AGENT_ADDON_EMAIL_HANDLER)),
+        (AGENT_ADDON_WITHDRAWN, (SECURITY_AUDIT_HANDLER,)),
+        (AGENT_ADDON_REVOKED, (SECURITY_AUDIT_HANDLER, AGENT_ADDON_EMAIL_HANDLER)),
+    ):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=AgentAddonChangedPayload,
+                handler_names=handler_names,
+                event_scope=EventScope.ORGANIZATION,
+            )
+        )
     for event_name, payload_model in (
         (AGENT_MEMORY_ENABLED, AgentMemoryChangedPayload),
         (AGENT_MEMORY_DISABLED, AgentMemoryChangedPayload),

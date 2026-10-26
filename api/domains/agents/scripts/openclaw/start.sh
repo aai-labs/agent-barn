@@ -32,6 +32,12 @@ for channel in $(echo "${AGENTBARN_NATIVE_CHANNELS:-}" | tr ',' ' '); do
   install_plugin "@openclaw/$channel"
 done
 
+# Approved Agent Add-ons, mounted read-only. Behind the gog wrapper below, so an
+# add-on cannot shadow a command Agent Barn manages.
+if [ -n "${AGENTBARN_ADDONS_PATH:-}" ]; then
+  export PATH="$AGENTBARN_ADDONS_PATH:$PATH"
+fi
+
 # The gog wrapper installs here when Google Workspace is brokered through the
 # credential gateway. Ahead of /usr/local/bin so agent commands resolve it first.
 export PATH="/home/node/.local/bin:$PATH"

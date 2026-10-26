@@ -11,6 +11,14 @@ from api.domains.communications.plugins.agentbarn_telegram import (
     AgentBarnTelegramRuntime,
 )
 
+from .addons import (
+    ADDONS_DIR,
+    OPENCLAW_RUNTIME_UID,
+    addons_agent_env,
+    addons_agent_mount,
+    addons_volumes,
+    install_addons_container,
+)
 from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
 from .memory import (
     MEMORY_COMMAND,
@@ -449,14 +457,25 @@ def build_deployment(
     image_pull_secret: str = "",
     *,
     resources: client.V1ResourceRequirements,
+    addons: bool = False,
 ) -> client.V1Deployment:
     """The Agent's Deployment. `resources` is the agent container's, from its Agent Size.
 
     The limit also sizes OpenClaw's heap: V8 sets its ceiling at about half the cgroup
     limit, so a bigger size gives Node more heap with no other change.
+
+    `addons` adds the `install-addons` init container, which gets the same resources, and the
+    add-ons volume, read-only in the agent container.
     """
     name = _resource_name(agent_id)
     labels = _labels(agent_id, org_id, runtime="openclaw")
+    fix_owner = ["chown", f"{OPENCLAW_RUNTIME_UID}:{OPENCLAW_RUNTIME_UID}", "/home/node/.openclaw"]
+    fix_owner_mounts = [client.V1VolumeMount(name="data", mount_path="/home/node/.openclaw")]
+    if addons:
+        # The add-ons volume comes up root-owned; only its top directory needs handing over,
+        # since everything under it is written by the install container as node.
+        fix_owner.append(ADDONS_DIR)
+        fix_owner_mounts.append(client.V1VolumeMount(name="addons", mount_path=ADDONS_DIR))
 
     return client.V1Deployment(
         metadata=client.V1ObjectMeta(
@@ -482,18 +501,22 @@ def build_deployment(
                         client.V1Container(
                             name="fix-pvc-owner",
                             image=image,
-                            command=["chown", "1000:1000", "/home/node/.openclaw"],
+                            command=fix_owner,
                             security_context=client.V1SecurityContext(
                                 run_as_user=0,
                             ),
                             # Fixed, not the size: see INIT_CONTAINER_RESOURCES.
                             resources=INIT_CONTAINER_RESOURCES,
-                            volume_mounts=[
-                                client.V1VolumeMount(
-                                    name="data",
-                                    mount_path="/home/node/.openclaw",
-                                ),
-                            ],
+                            volume_mounts=fix_owner_mounts,
+                        ),
+                        *(
+                            [
+                                install_addons_container(
+                                    agent_id, image, run_as_user=OPENCLAW_RUNTIME_UID, resources=resources
+                                )
+                            ]
+                            if addons
+                            else []
                         ),
                     ],
                     containers=[
@@ -511,6 +534,7 @@ def build_deployment(
                                 period_seconds=15,
                                 failure_threshold=6,
                             ),
+                            env=addons_agent_env() if addons else None,
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
                                 memory_command_mount(),
@@ -522,6 +546,7 @@ def build_deployment(
                                     name="data",
                                     mount_path="/home/node/.openclaw",
                                 ),
+                                *([addons_agent_mount()] if addons else []),
                             ],
                         )
                     ],
@@ -535,6 +560,7 @@ def build_deployment(
                             name="data",
                             persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=name),
                         ),
+                        *(addons_volumes(agent_id) if addons else []),
                     ],
                 ),
             ),

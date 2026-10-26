@@ -5,6 +5,7 @@ import json
 from hamcrest import assert_that, contains_string, equal_to, is_, is_not, none
 
 from api.domains.agents.provisioning_errors import (
+    AgentAddonInstallFailed,
     AgentProvisioningErrorCategory,
     AgentProvisioningOperation,
     normalize_agent_provisioning_error,
@@ -421,3 +422,37 @@ def test_a_counted_quota_axis_keeps_its_api_group() -> None:
 
     assert normalized.detail is not None
     assert_that(normalized.detail, contains_string("count/deployments.apps"))
+
+
+def test_a_failed_add_on_install_names_the_add_on_and_why() -> None:
+    normalized = normalize_agent_provisioning_error(AgentAddonInstallFailed("humanize", "checksum"))
+
+    assert_that(normalized.category, equal_to(AgentProvisioningErrorCategory.ADDON_INSTALL_FAILED))
+    assert_that(normalized.code, equal_to("ADDON_INSTALL_FAILED"))
+    assert_that(normalized.summary, contains_string("an approved add-on failed to install"))
+    assert_that(normalized.detail, equal_to("humanize: checksum mismatch"))
+
+
+def test_a_failed_install_that_could_not_say_which_add_on_has_no_detail() -> None:
+    normalized = normalize_agent_provisioning_error(AgentAddonInstallFailed(None))
+
+    assert_that(normalized.category, equal_to(AgentProvisioningErrorCategory.ADDON_INSTALL_FAILED))
+    assert_that(normalized.detail, is_(none()))
+
+
+def test_an_add_on_name_survives_the_read_even_when_it_looks_like_a_secret() -> None:
+    restored = persisted_provisioning_error(
+        code="ADDON_INSTALL_FAILED", detail="tiktoken: install failed", legacy_message=None
+    )
+
+    assert restored is not None
+    assert_that(restored.detail, equal_to("tiktoken: install failed"))
+
+
+def test_a_stored_add_on_detail_outside_its_grammar_is_dropped() -> None:
+    restored = persisted_provisioning_error(
+        code="ADDON_INSTALL_FAILED", detail="pip: error: <script>alert(1)</script>", legacy_message=None
+    )
+
+    assert restored is not None
+    assert_that(restored.detail, is_(none()))

@@ -75,8 +75,9 @@ export const AgentPermissionKeySchema = z.enum([
   "agent.memory.manage",
   "activity.read",
   "cost.read",
-  // Held by Organization Owners and Admins through their role; no Agent Access Role grants it.
+  // Held by Organization Owners and Admins through their role; no Agent Access Role grants these.
   "agent.size.manage",
+  "agent.addon.manage",
 ]);
 
 export const AgentAccessRoleReadSchema = z.object({
@@ -149,6 +150,8 @@ export const AgentSchema = z.object({
   pendingSize: z.boolean().default(false),
   /** A Platform Administrator set the size; the Organization cannot change it. */
   agentSizeSetByPlatform: z.boolean().default(false),
+  /** True when a restart would install or remove approved add-ons on a running Agent. */
+  pendingAddons: z.boolean().default(false),
   /** True when a running Agent's pod was built from older platform code or images. */
   updateAvailable: z.boolean().default(false),
   /** A managed update is running; lifecycle actions are refused until it ends. */

@@ -70,6 +70,8 @@ def test_organization_role_permission_matrix_is_exact():
         PermissionKey.LLM_BUDGET_MANAGE,
         # Choosing an Agent's size among those the platform allowed the Organization.
         PermissionKey.AGENT_SIZE_MANAGE,
+        # Requesting an add-on, which installs third-party code into one Agent.
+        PermissionKey.AGENT_ADDON_MANAGE,
         # Buying credit spends the Owner's money.
         PermissionKey.BILLING_MANAGE,
     }

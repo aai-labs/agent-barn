@@ -22,6 +22,7 @@ from api.core.metrics import (
 )
 from api.core.utils import create_injector
 from api.domains.activity.routes import activity_router
+from api.domains.agent_addons.routes import agent_addons_router, platform_agent_addons_router
 from api.domains.agent_memory.platform_routes import platform_memory_router
 from api.domains.agent_memory.routes import agent_memory_router, memory_grants_router, organization_memory_router
 from api.domains.agent_settings.routes import agent_settings_router
@@ -157,6 +158,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_agent_sizes_router)
     subapi.include_router(platform_organization_agent_sizes_router)
     subapi.include_router(platform_agents_router)
+    subapi.include_router(platform_agent_addons_router)
     subapi.include_router(organization_agent_sizes_router)
     subapi.include_router(platform_trial_settings_router)
     subapi.include_router(onboarding_router)
@@ -205,6 +207,7 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(platform_resource_usage_router)
     subapi.include_router(platform_resource_limits_router)
     subapi.include_router(restore_points_router)
+    subapi.include_router(agent_addons_router)
     subapi.include_router(users_router)
     # This remains outside /api/v1 because Azure has the historical public
     # Connection webhook URL registered at /communications/v1/webhooks/{id}.

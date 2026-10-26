@@ -10,6 +10,14 @@ from api.domains.communications.plugins.agentbarn_telegram import (
     AgentBarnTelegramRuntime,
 )
 
+from .addons import (
+    ADDONS_DIR,
+    HERMES_RUNTIME_UID,
+    addons_agent_env,
+    addons_agent_mount,
+    addons_volumes,
+    install_addons_container,
+)
 from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
 from .memory import (
     MEMORY_COMMAND,
@@ -501,15 +509,26 @@ def build_hermes_deployment(
     image_pull_secret: str = "",
     *,
     resources: client.V1ResourceRequirements,
+    addons: bool = False,
 ) -> client.V1Deployment:
     """The Agent's Deployment. `resources` is the agent container's, from its Agent Size.
 
     Unlike OpenClaw's V8 heap, CPython never reads the cgroup limit: here the limit is a
     hard cap on the real working set, so a Hermes Agent that outgrows its size is OOMKilled
     rather than collecting sooner.
+
+    `addons` adds the `install-addons` init container, which gets the same resources, and the
+    add-ons volume, read-only in the agent container.
     """
     name = _resource_name(agent_id)
     labels = _labels(agent_id, org_id, runtime="hermes")
+    fix_owner = "mkdir -p /opt/data/workspace && chown -R hermes:hermes /opt/data"
+    fix_owner_mounts = [client.V1VolumeMount(name="data", mount_path="/opt/data")]
+    if addons:
+        # The add-ons volume comes up root-owned; only its top directory needs handing over,
+        # since everything under it is written by the install container as hermes.
+        fix_owner += f" && chown hermes:hermes {ADDONS_DIR}"
+        fix_owner_mounts.append(client.V1VolumeMount(name="addons", mount_path=ADDONS_DIR))
 
     return client.V1Deployment(
         metadata=client.V1ObjectMeta(
@@ -534,18 +553,21 @@ def build_hermes_deployment(
                         client.V1Container(
                             name="fix-pvc-owner",
                             image=image,
-                            command=[
-                                "sh",
-                                "-c",
-                                "mkdir -p /opt/data/workspace && chown -R hermes:hermes /opt/data",
-                            ],
+                            command=["sh", "-c", fix_owner],
                             security_context=client.V1SecurityContext(run_as_user=0),
                             # Fixed, not the size: see INIT_CONTAINER_RESOURCES.
                             resources=INIT_CONTAINER_RESOURCES,
-                            volume_mounts=[
-                                client.V1VolumeMount(name="data", mount_path="/opt/data"),
-                            ],
-                        )
+                            volume_mounts=fix_owner_mounts,
+                        ),
+                        *(
+                            [
+                                install_addons_container(
+                                    agent_id, image, run_as_user=HERMES_RUNTIME_UID, resources=resources
+                                )
+                            ]
+                            if addons
+                            else []
+                        ),
                     ],
                     containers=[
                         client.V1Container(
@@ -581,6 +603,7 @@ def build_hermes_deployment(
                                 # ocbw sets both alongside terminal.cwd — mirror it.
                                 client.V1EnvVar(name="TERMINAL_CWD", value=HERMES_WORKSPACE_DIR),
                                 client.V1EnvVar(name="MESSAGING_CWD", value=HERMES_WORKSPACE_DIR),
+                                *(addons_agent_env() if addons else []),
                             ],
                             env_from=[client.V1EnvFromSource(secret_ref=client.V1SecretEnvSource(name=name))],
                             volume_mounts=[
@@ -604,6 +627,7 @@ def build_hermes_deployment(
                                     mount_path=HERMES_WORKSPACE_DIR,
                                     sub_path="workspace",
                                 ),
+                                *([addons_agent_mount()] if addons else []),
                             ],
                         )
                     ],
@@ -617,6 +641,7 @@ def build_hermes_deployment(
                             name="data",
                             persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=name),
                         ),
+                        *(addons_volumes(agent_id) if addons else []),
                     ],
                 ),
             ),

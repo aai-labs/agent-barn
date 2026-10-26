@@ -78,7 +78,7 @@ Each change is audited, Security Audit, and a save that changes nothing records 
 
 ## How a size reaches the pod
 
-`AgentService._provision_and_start` asks `AgentSizeLookupService.resolve(agent.agent_size_id)` for the Agent's size (its chosen one, else the default) and passes it to the runtime builder as the agent container's resources, rendered by `container_resources` in the units the builders always wrote (`320Mi`, `1Gi`, `50m`, `500m`). The root `fix-pvc-owner` init container keeps a fixed block at the pre-sizes values instead; why is in [runtime and deployment](../architecture/runtime-and-deployment.md). The PVC stays 1Gi for every size. A bigger size reserves more of the Organization's Capacity Limit at start; see [resource usage](resource-usage.md).
+`AgentService._provision_and_start` asks `AgentSizeLookupService.resolve(agent.agent_size_id)` for the Agent's size (its chosen one, else the default) and passes it to the runtime builder as the agent container's resources, rendered by `container_resources` in the units the builders always wrote (`320Mi`, `1Gi`, `50m`, `500m`). The root `fix-pvc-owner` init container keeps a fixed block at the pre-sizes values instead; why is in [runtime and deployment](../architecture/runtime-and-deployment.md). An Agent with [add-ons](agent-addons.md) also runs `install-addons` on its size's resources, which costs the quota nothing more, since a pod is charged its agent container's size anyway. The PVC stays 1Gi for every size. A bigger size reserves more of the Organization's Capacity Limit at start; see [resource usage](resource-usage.md).
 
 ## The settings section
 

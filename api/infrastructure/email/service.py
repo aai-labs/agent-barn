@@ -280,6 +280,56 @@ class EmailService:
 
         self.client.send(email)
 
+    def send_agent_addon_email(
+        self,
+        *,
+        receiver_email: str,
+        receiver_name: str | None,
+        organization_name: str,
+        agent_name: str,
+        headline: str,
+        body: str,
+        detail_label: str,
+        detail: str,
+        action_label: str,
+        action_url: str,
+        reason: str,
+    ) -> None:
+        """Propagates EmailSendingException like the budget send: the handler runs under the
+        delivery framework and needs the retryable/terminal distinction."""
+        if not self._email_enabled_or_log(action="send_agent_addon_email", receiver_email=receiver_email):
+            # Delivery disabled is a documented no-op, not a failure.
+            return
+
+        email_template = EmailTemplate(
+            file_name="agent-addon-template.mjml",
+            subject=headline,
+            receiver_name=receiver_name,
+            receiver_email=receiver_email,
+            attributes=[
+                EmailTemplateAttribute(name="user_name", value=receiver_name or receiver_email),
+                EmailTemplateAttribute(name="organization_name", value=organization_name),
+                EmailTemplateAttribute(name="agent_name", value=agent_name),
+                EmailTemplateAttribute(name="headline", value=headline),
+                EmailTemplateAttribute(name="body", value=body),
+                EmailTemplateAttribute(name="detail_label", value=detail_label),
+                EmailTemplateAttribute(name="detail", value=detail),
+                EmailTemplateAttribute(name="action_label", value=action_label),
+                EmailTemplateAttribute(name="action_url", value=action_url),
+                EmailTemplateAttribute(name="reason", value=reason),
+            ],
+        )
+        try:
+            email = self.create_email(email_template)
+        except Exception as e:
+            logger.error(
+                f"Unable to build agent add-on email for {receiver_email} "
+                f"from {email_template.file_name} : {traceback.format_exc()}"
+            )
+            raise TerminalEmailSendingException(str(e), email=receiver_email) from e
+
+        self.client.send(email)
+
     def send_user_deletion_email(
         self,
         receiver_email: str,

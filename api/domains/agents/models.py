@@ -576,6 +576,10 @@ class Agent(BaseModel, table=True):
         default=None,
         sa_column=Column(JSONB, nullable=True),
     )
+    # The approved Agent Add-on set the running pod installed (`addons_set_digest`); None when
+    # it had none or is not running. Like `running_resources`, it stays put while add-ons are
+    # approved or revoked underneath it, which is how a pending set is told apart.
+    running_addons_hash: str | None = SqlField(default=None, nullable=True, max_length=64)
     # The exact runtime image this Agent starts on. Empty means "follow the
     # platform pin" (config.openclaw_image / config.hermes_image). Only a
     # managed update's rollback sets it, to the image the pod ran before the
@@ -1613,6 +1617,9 @@ class AgentRead(PydanticBaseModel):
     pending_size: bool = False
     #: A Platform Administrator set the size; the Organization cannot change it.
     agent_size_set_by_platform: bool = False
+    #: True only when a running Agent's pod installed another set of approved add-ons than
+    #: there is now, so a restart would install or remove some.
+    pending_addons: bool = False
     update_available: bool = False
     #: A managed update is running. Lifecycle and restore point actions are
     #: refused until it ends; a client polls until this goes back to false.

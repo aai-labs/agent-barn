@@ -16,6 +16,8 @@ from pydantic import ValidationError
 
 from api.core.config import Config
 from api.domains.activity.repository import ActivityRepository
+from api.domains.agent_addons.lookup import AgentAddonLookupService
+from api.domains.agent_addons.models import ApprovedAddon, addons_are_pending, addons_set_digest
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
 from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupService, to_option
 from api.domains.agent_sizes.models import size_is_pending, size_resources
@@ -52,6 +54,13 @@ from api.domains.agents.builders import (
     native_telegram_env,
     runtime_teams_channel,
     runtime_teams_env,
+)
+from api.domains.agents.builders.addons import (
+    INSTALL_ADDONS_CONTAINER,
+    addons_resource_name,
+    build_addons_config_map,
+    build_addons_policy_md,
+    build_addons_pvc,
 )
 from api.domains.agents.error_messages import friendly_pod_reason
 from api.domains.agents.exceptions import AgentLimitReached, AgentProvisioningPrecondition
@@ -117,6 +126,7 @@ from api.domains.agents.override_repository import (
     AgentOverrideSnapshot,
 )
 from api.domains.agents.provisioning_errors import (
+    AgentAddonInstallFailed,
     AgentProvisioningErrorCategory,
     NormalizedAgentProvisioningError,
     normalize_agent_provisioning_error,
@@ -219,6 +229,8 @@ _CREDENTIAL_FIELDS = frozenset(
 
 
 _MAX_LOG_SNAPSHOT_BYTES = 1_048_576  # 1 MB
+# How much of a failed add-on install's log is kept for the Organization to read.
+_ADDON_INSTALL_LOG_LINES = 80
 
 # Google-backed providers whose credential may omit its OAuth client, in which case the
 # server-owned client is filled in at agent start and before live validation.
@@ -262,6 +274,23 @@ def _stored_provisioning_error(agent: Agent) -> NormalizedAgentProvisioningError
 def _provisioning_error_read(agent: Agent) -> AgentProvisioningErrorRead | None:
     normalized = _stored_provisioning_error(agent)
     return _provisioning_error_dto(normalized) if normalized is not None else None
+
+
+def _failed_addon(termination_message: str, approved: list[ApprovedAddon]) -> tuple[str | None, str]:
+    """The approved add-on an install failed on, and why, from the install's own report.
+
+    Only an id among the Agent's approved add-ons names one: the message is written inside the
+    pod, so it is matched, never displayed.
+    """
+    try:
+        report = json.loads(termination_message) if termination_message else {}
+    except ValueError:
+        report = {}
+    if not isinstance(report, dict):
+        report = {}
+    by_id = {str(addon.id): addon.name for addon in approved}
+    reason = report.get("reason")
+    return by_id.get(str(report.get("addon_id"))), reason if isinstance(reason, str) else "failed"
 
 
 def _refuse_during_managed_update(agent: Agent) -> None:
@@ -370,6 +399,7 @@ class AgentService:
     plugins: PlatformPluginRegistry
     agentbarn_telegram_secrets: AgentBarnTelegramService
     agent_sizes: AgentSizeLookupService
+    agent_addons: AgentAddonLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -596,6 +626,7 @@ class AgentService:
         last_call_at: dt.datetime | None = None,
         shared_credential_names: Mapping[UUID, str] | None = None,
         size_catalog: AgentSizeCatalog | None = None,
+        approved_addons: list[ApprovedAddon] | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
         credential_names = shared_credential_names if shared_credential_names is not None else {}
@@ -671,6 +702,7 @@ class AgentService:
             agent_size=to_option(size),
             pending_size=size_is_pending(agent.running_resources, size),
             agent_size_set_by_platform=agent.agent_size_set_by_platform,
+            pending_addons=self._addons_pending(agent, approved_addons),
             # The recorded digest names the image the pod actually started on, so an
             # Agent pinned behind the platform pin (rolled back) reports an update too.
             update_available=(
@@ -715,6 +747,74 @@ class AgentService:
             created_at=agent.created_at,
             updated_at=agent.updated_at,
         )
+
+    def _addons_pending(self, agent: Agent, approved: list[ApprovedAddon] | None) -> bool:
+        if agent.status != AgentStatus.RUNNING:
+            # Only a running pod can be behind; skip the read for everything else.
+            return False
+        current = addons_set_digest(approved if approved is not None else self.agent_addons.approved(agent.id))
+        return addons_are_pending(agent.status, agent.running_addons_hash, current)
+
+    def _observe_addon_install(self, agent: Agent) -> None:
+        """Record a failed add-on install as the failed start it is.
+
+        The install runs in the pod's `install-addons` init container after the start has
+        returned, so, like a runtime that exits, it is observed when the Agent is read. The
+        add-on is named from the id in the container's termination message, and only when that
+        id is one of the Agent's approved add-ons. The failed pod and its log go with the
+        Deployment, so the log's last lines are kept first as a log snapshot, which is what
+        the Agent's Logs tab shows while it is in ERROR.
+        """
+        if agent.status != AgentStatus.RUNNING or agent.running_addons_hash is None:
+            return
+        name = f"agent-{agent.id}"
+        ns = self.config.k8s_namespace
+        try:
+            failure = self.k8s.get_init_container_failure(name, ns, INSTALL_ADDONS_CONTAINER)
+        except Exception:
+            logger.warning("Could not read the add-on install of agent %s", agent.id, exc_info=True)
+            return
+        if failure is None:
+            return
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                return
+            current = self.repository.get_by_id(agent.id)
+            if (
+                current is None
+                or current.status != AgentStatus.RUNNING
+                or managed_update_in_flight(current)
+                or current.running_addons_hash != agent.running_addons_hash
+            ):
+                return
+            addon_name, reason = _failed_addon(failure, self.agent_addons.approved(agent.id))
+            self._keep_addon_install_log(current, addon_name)
+            self._record_provisioning_failure(current, AgentAddonInstallFailed(addon_name, reason))
+            agent.status = current.status
+            agent.last_error = current.last_error
+            agent.last_error_code = current.last_error_code
+            agent.last_error_detail = current.last_error_detail
+
+    def _keep_addon_install_log(self, agent: Agent, addon_name: str | None) -> None:
+        try:
+            log_text = self.k8s.read_init_container_logs(
+                f"agent-{agent.id}", self.config.k8s_namespace, INSTALL_ADDONS_CONTAINER, _ADDON_INSTALL_LOG_LINES
+            )
+            failed = f"Add-on {addon_name} failed to install." if addon_name else "An add-on failed to install."
+            log_text = f"{failed} The last lines of the install log:\n{log_text or '(the install left no log)'}"
+            now = dt.datetime.now(dt.UTC)
+            self.repository.save_log_snapshot(
+                AgentLogSnapshot(
+                    agent_id=agent.id,
+                    session_started_at=agent.updated_at,
+                    session_ended_at=now,
+                    log_text=log_text,
+                    byte_size=len(log_text.encode("utf-8")),
+                )
+            )
+            self.repository.delete_old_snapshots(agent.id, keep=5)
+        except Exception:
+            logger.warning("Could not keep the add-on install log of agent %s", agent.id, exc_info=True)
 
     def _observe_integration_readiness(self, agent: Agent, readiness: str | None = None) -> None:
         runtime = self.integrations.runtime(agent.id)
@@ -762,6 +862,7 @@ class AgentService:
                     agent.last_error_detail = current.last_error_detail
 
     def _get_agent_read(self, agent: Agent, context: CurrentUserContext) -> AgentRead:
+        self._observe_addon_install(agent)
         self._observe_integration_readiness(agent)
         read_scope = self.authorization.authorization_scope(context, PermissionKey.AGENT_READ)
         secrets = self.repository.get_secret_summaries_for_agents([agent.id], read_scope).get(agent.id, [])
@@ -1808,6 +1909,9 @@ class AgentService:
         # Organization, so resolving per row would be one query per row.
         effective_default_model = self.agent_settings_lookup.resolve_default_model(read_scope.organization_id)
         size_catalog = self.agent_sizes.catalog()
+        approved_addons = self.agent_addons.approved_for_agents(
+            [agent.id for agent in agents if agent.status == AgentStatus.RUNNING]
+        )
 
         items = [
             self._build_agent_read(
@@ -1833,6 +1937,7 @@ class AgentService:
                 last_call_at=call_times.get(agent.id),
                 shared_credential_names=shared_credential_names,
                 size_catalog=size_catalog,
+                approved_addons=approved_addons.get(agent.id, []),
             )
             for agent in agents
         ]
@@ -2353,6 +2458,9 @@ class AgentService:
             memory_request_bytes=size.memory_request_bytes,
             memory_limit_bytes=size.memory_limit_bytes,
         )
+        # Approved Agent Add-ons, read at every start like the size: an approval or revocation
+        # since the last start reaches the Agent now.
+        addons = self.agent_addons.approved(agent.id)
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
@@ -2402,6 +2510,7 @@ class AgentService:
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
                 resources=resources,
+                addons=bool(addons),
             )
         else:
             native_channels: dict[str, dict] = {}
@@ -2445,6 +2554,7 @@ class AgentService:
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
                 resources=resources,
+                addons=bool(addons),
             )
 
         # aai-cli integration secrets — all agent types.
@@ -2716,6 +2826,7 @@ class AgentService:
             + build_chat_commands_policy_md()
             + build_role_scope_policy_md()
             + build_scheduled_runs_policy_md()
+            + build_addons_policy_md(addons)
         )
 
         if agent.agent_type == AgentType.HERMES:
@@ -2776,6 +2887,19 @@ class AgentService:
             ns,
             build_pvc(agent.id, org_id, ns, self.config.storage_class or None),
         )
+        # Only an Agent with add-ons, or one whose last start had them, touches their resources.
+        if addons or agent.running_addons_hash is not None:
+            self.k8s.delete_config_map(addons_resource_name(agent.id), ns)
+        if addons:
+            self.k8s.create_config_map(
+                ns,
+                build_addons_config_map(
+                    agent.id, org_id, ns, image=self._effective_runtime_image(agent), addons=addons
+                ),
+            )
+            # Created with the first approved add-on and kept, as the install cache, until the
+            # Agent is deleted.
+            self.k8s.create_pvc(ns, build_addons_pvc(agent.id, org_id, ns, self.config.storage_class or None))
         self.k8s.create_service(ns, service)
         self.k8s.create_deployment(ns, deployment)
         self.integrations.set_state(agent.id, "provisioned", runtime.generation)
@@ -2788,8 +2912,10 @@ class AgentService:
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
-        # Likewise the resources, so a size changed while it runs reads as pending.
+        # Likewise the resources, so a size changed while it runs reads as pending, and the
+        # add-ons, so one approved or revoked while it runs does.
         agent.running_resources = size_resources(size)
+        agent.running_addons_hash = addons_set_digest(addons)
         if agent.agent_type == AgentType.HERMES:
             agent.running_config_digest = agent_runtime_config_digest(
                 self.config.openclaw_image,
@@ -2995,6 +3121,8 @@ class AgentService:
         self.k8s.delete_deployment(name, ns)
         self.k8s.wait_for_termination(name, ns)
         self.k8s.delete_config_map(name, ns)
+        if agent.running_addons_hash is not None:
+            self.k8s.delete_config_map(addons_resource_name(agent.id), ns)
         self.k8s.delete_secret(name, ns)
         # The pod is gone, so its gateway tokens must stop resolving even if a copy of
         # the Secret was taken while it ran.
@@ -3004,6 +3132,7 @@ class AgentService:
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""
         agent.running_resources = None
+        agent.running_addons_hash = None
         agent.running_config_digest = ""
         result = self.repository.save_with_lifecycle_event(
             agent,
@@ -3380,6 +3509,10 @@ class AgentService:
             self.k8s.delete_pvc(name, ns)
             self.k8s.delete_secret(name, ns)
             self.k8s.delete_config_map(name, ns)
+            if self.agent_addons.ever_approved(current.id):
+                # Its add-ons volume and install plan exist from the first approved add-on on.
+                self.k8s.delete_pvc(addons_resource_name(current.id), ns)
+                self.k8s.delete_config_map(addons_resource_name(current.id), ns)
             self.restore_points.purge_agent(current.id)
 
             delete_result = self.repository.soft_delete_with_event(
@@ -3560,6 +3693,7 @@ class AgentService:
 
     def get_agent_health(self, agent_id: UUID, context: CurrentUserContext) -> AgentHealthRead:
         agent = self.authorization.require_action(context, agent_id, PermissionKey.ACTIVITY_READ)
+        self._observe_addon_install(agent)
 
         if agent.status not in (AgentStatus.ERROR, AgentStatus.RUNNING):
             raise HTTPException(
