@@ -434,3 +434,87 @@ This prerequisite-bearing subprocess contract is outside ordinary `make test-api
 The pinned-image
 `runtime_tests/test_{hermes,openclaw}_custom_api.py` contracts require images built
 with that CLI feature and exercise the installed binary as the runtime user.
+
+## Agent artifact storage and runtime contracts
+
+`api/tests/integration/test_artifacts.py` uses disposable Garage 2.4.1 and the
+migrated PostgreSQL test database. It exercises actual bytes, signed-link download
+and expiry, publication/checksum fences, current access, pinned retention and
+retryable purge; injected failures isolate recovery while keeping real storage.
+The migration contract verifies upgrade and refusal to drop cleanup evidence.
+These tests require Docker, never installation storage credentials.
+
+`make test-artifact-runtime` is an explicit additional contract; set both
+`HERMES_TEST_IMAGE` and `OPENCLAW_TEST_IMAGE` to already-built images. It executes
+the generated ConfigMap command as each image's normal user against real API,
+PostgreSQL and Garage, including verified retrieval. It uses Linux Docker host
+networking for its disposable HTTP listener. It proves executable/byte behavior,
+not a live model's tool selection, provider messaging or workflow stop semantics.
+The regular `make test-api-runtime RUNTIME=...` pattern remains runtime-specific;
+this cross-runtime contract runs through the dedicated target.
+
+`make check-artifacts` uses Helm 3.19.0 to render disabled/enabled purge and
+verify storage credentials reach only the API/purge containers, retention
+configuration is shared with workers, and no storage credentials appear in
+the chart-owned common Secret. It creates no Kubernetes resources.
+
+Persistent storage checks add two explicit opt-in contracts:
+
+- `make test-artifact-deployment` requires Docker, both runtime image variables,
+  pnpm/Node and installed Chromium. Both native CLIs publish through the real API
+  to the shipped persistent Compose Garage. After container replacement, Chromium
+  signs into the real local API, opens Agent Artifacts and verifies actual downloads;
+  there is no API-route or download interception. PostgreSQL/identity are disposable
+  fixtures; external integrations and Kubernetes Agent execution are not live.
+- `make test-garage-cluster` requires Docker, k3d, kubectl, Helm 3.19.0 and the
+  Garage image (it pulls a missing Garage/local-path helper image into Docker).
+  It imports the host platform into containerd on each owned node and asserts the
+  cache contents; the Garage pod uses `imagePullPolicy=Never`. It creates a fresh three-node local cluster with its own kubeconfig,
+  applies the rendered chart once and bootstraps it twice, tests quorum reads/writes
+  and two ready S3 Service endpoints with one node unschedulable, and verifies the
+  same node identity/bytes after PVC recovery with a required change of pod IP.
+  Bootstrap and recovery assert advertised RPC Service addresses. Stable per-replica RPC Services
+  preserve peer addresses when the pod IP changes. It
+  deletes only its own cluster. It never consumes current kubeconfig.
+
+The normal API suite's `tests/integration/test_garage_persistent.py` exercises
+the shipped Compose/bootstrap files, private bucket grants, container replacement,
+consistent stopped backups, fresh-volume restore, application links and purge.
+It also covers failed setup/restore recovery, lost-volume refusal, conflicting
+shell defaults and exclusion of the application secret from actual Docker exec
+events. A real adoption case publishes bytes in the former standalone store,
+then starts the root Compose service and verifies unchanged bytes, keys, node ID,
+endpoint, volume names and container identity. Configuration tests render the main
+stack without profiles and assert Garage/purge presence, storage health
+dependencies, private backup paths, `.env` parsing and service credential isolation.
+A no-`.garage` case renders config and dry-runs db startup/shutdown. A real Docker
+case keeps another project service running and verifies Garage backup refuses and
+status excludes it for missing and stopped Garage containers. A real pre-bootstrap
+Garage start must fail on absent bind sources without creating real store volumes;
+the same test then bootstraps successfully and removes its sentinel volumes.
+It deletes only its own generated Compose project/volumes; developer storage is
+untouched. The local cleanup process supports one bounded pass or `--interval 600`
+with graceful shutdown. `make check-artifacts` also checks the single-node default and the explicit three-node Garage
+chart's persistent storage, non-root pods, private Secret reference, distinct-node
+scheduling, network policy and TLS ingress render.
+
+Asynchronous artifact provisioning is covered by
+`tests/integration/test_artifact_creation.py`: real Garage/PostgreSQL creation
+commits Agent/events/request before provider work, and a real HTTP listener proves
+201 and PROVISIONING remain readable while Garage is deliberately held open.
+Provider failures preserve the Agent and exact retry identity; creation failures
+leave no request or provider work. Existing-Agent Provision/status/retry checks
+cover read-only keys, tenant scope, authentication, disabled storage and recovery
+without discovery. Compose/chart contracts exclude the retired provisioner and
+restrict management authority to API/maintenance. Persistent Garage checks call
+the generated loopback management endpoint with its private credential and verify
+settings-file permissions. `ui/tests/e2e/artifacts.spec.ts` covers missing storage,
+progress to READY, failure/retry and permission denial; these use synthetic API
+responses. The explicit runtime/deployment contracts above retain real byte evidence.
+
+The artifact review suite retains a PostgreSQL snapshot/row-lock race contract.
+A test-only always-true SQL scheduling barrier holds candidate selection after
+its snapshot; the test observes the database wait event, commits a real review pin,
+and runs the original cleanup path against real Garage. It verifies both the
+active reference and actual file bytes for a live owner, plus deliberate deleted-owner
+reclamation. This is a concurrency schedule, not a simulated storage result.

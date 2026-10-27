@@ -59,6 +59,8 @@ AF-216 adds Organization-defined custom Agent Access Roles using the same Agent 
 
 An Agent operation is allowed when the actor has the corresponding Permission through implicit Agent Owner authority, explicit Agent Access, or Agent General Access, and the Agent lifecycle permits the operation. Start and stop use one `agent.lifecycle.manage` Permission; current Agent state selects the valid transition. Capturing, restoring, and deleting an Agent Restore Point reuse that same Permission, because each is a lifecycle operation on a stopped Agent; reading restore points uses `activity.read`, alongside conversations, tool calls, logs, health, and container CPU and memory (Resource usage). The Agents overview lists the Agents the caller can read and judges each figure per Agent: spend needs `cost.read` on that Agent and usage needs `activity.read`, and a withheld figure is null while the row stays. No restore-point-specific Permission exists — an Agent Editor who may stop an Agent and repin its template may also roll its volume back, and gating restore behind Agent Owner would let an Editor break an Agent without being able to fix it. Agent role names are not authorization checks.
 
+Choosing an Agent's [Agent Size](../agent-sizes.md#organization-choice) uses the Organization Permission `agent.size.manage`, held only by Organization Owners and Admins; no Agent Access Role carries it, so an Agent's creator or explicit Agent Owner who is a Member cannot choose, since a bigger size spends the Organization's shared capacity. Restarting an Agent whose size is pending applies it, and needs only `agent.lifecycle.manage`: a start applies the size already chosen, so it is not a size decision. The size route still resolves the Agent through `AgentAuthorization.require_action` first (`404` when concealed, `403` when visible without the grant) and then checks the Organization grant; `allowed_actions` lists it for Owners and Admins. Which sizes may be chosen is the Platform Administrator's, per Organization, and reading that list needs only `organization.read`. A Platform Administrator may also set one Agent's size through `PUT /platform/agents/{agent_id}/agent-size`, and restart any Agent (or start one that is not running) through `POST /platform/agents/{agent_id}/restart` (both `require_platform_admin`, no Membership): the only platform writes on an Organization's Agent, limited to these two by [their ADR](../../adr/2026-10-22-platform-administrators-set-an-agents-size.md). While that override stands, the Organization's size route answers `409` to Owners and Admins alike; `allowed_actions` still lists `agent.size.manage`, and `AgentRead.agent_size_set_by_platform` tells the UI to show the size locked.
+
 Agent Memory adds `agent.memory.manage` to the locked Agent Owner role, allowing the creator through their explicit access and Organization Owners/Admins through implicit Agent Owner authority to toggle memory. Editors and Viewers do not receive it. The separate Organization Permission `memory.access.manage` is held only by Organization Owners and Admins; it governs listing, creating, and revoking Memory Grants and viewing shared Organization Memory across that Organization. Owning an Agent does not confer this Organization capability. See [`Agent Memory`](../agent-memory.md) for grant semantics and API contracts.
 
 ## Agent Access
@@ -100,6 +102,28 @@ Agent file sync traffic from the pod has no user Membership either.
 - **Not background work:** these methods are reachable from an Ingest router, so the background-work exception below does not cover them. See [Activity and Ingest](../activity-and-ingest.md).
 - **Accepted gap at the provider:** the "Agent Barn" folder is open to every Organization Member, so Members without Agent Access to an Agent can read its synced files and edit its work and memory files there. Agent Access is not mirrored into provider permissions ([ADR](../../adr/2026-10-21-agent-file-sync-through-sync-provider.md), [Agent file sync](../sync-provider/README.md#known-limits-of-file-sync)).
 
+Agent artifact runtime traffic (`/api/v1/agent-artifacts/runtime`) also has no human Membership.
+A purpose-separated credential derived from the per-start Agent secret resolves one
+undeleted, running Agent and its Organization. Runtime callers cannot choose another
+owner, bucket or key. Workflow publication additionally fences the supplied attempt ID
+against that owning Agent, current generation/state/deadline and initiating Membership
+authority. Completion credentials never enter model prompts or file-tool arguments.
+The entire owning Agent is the runtime trust boundary: all of its sessions share
+that identity and may publish into its current workflow attempts. Attempt IDs are
+non-secret provenance, not per-session capabilities; this is not session isolation.
+Human artifact reads require current `agent.read` and scoped visibility; publication
+and deletion require `agent.update`.
+The app-facing `/api/v1/agent-artifacts/{organization_id}/{agent_id}/{artifact_id}`
+byte route instead uses the opaque provider-signed bearer authority issued after
+those checks. Its repository read still joins the exact persisted Organization,
+Agent and artifact; the private byte store then validates the capability against
+that canonical object before any file bytes/metadata are returned. It is neither
+an unscoped metadata endpoint nor the background-work exception. No user cookie or
+runtime credential substitutes for provider validation. Existing issued authority
+survives issuer-session/Membership revocation until provider expiry (subject to
+file/owner deletion); new issuance uses current permissions. See
+[Agent artifacts](../agent-artifacts.md).
+
 Playbook Extractions read one Agent's transcripts and write an Organization Skill, so they need Agent `activity.read` on the source Agent and Organization `skill.manage`; in practice Owners and Admins. Publishing the resulting Skill makes content derived from that Agent visible to every Member through `skill.read`; the reviewing Owner or Admin is the control. The worker runs a person's request, not background work: when a run starts it re-checks that the requesting Membership still holds both Permissions on the undeleted source Agent. See [`Playbooks`](../playbooks.md#authorization).
 
 Agent Barn Telegram traffic has no user Membership either. Two callers reach it: Telegram, through the shared bot the Communications process polls, and Agent pods, through the Bot API proxy. Neither carries a session, so there is no Active Organization to scope against. The tenant comes from persisted rows instead, and no caller-supplied value can choose it.
@@ -122,6 +146,25 @@ durable deletion tombstones. It derives the bank and document namespace from per
 Agent/Organization IDs, refuses live or mismatched targets, and exposes no router.
 Only the authorized Agent deletion transaction stages new tombstones. See
 [Deletion cleanup](../agent-memory.md#deletion-cleanup).
+
+The artifact purge's `ArtifactRepository.cleanup_candidates` and `purge_target`
+methods use the same narrow operator-only background exception. They expose no router
+and only inspect persisted ownership, references, deadlines and canonical tenant keys.
+They preserve failed deletion records across owner deletion and refuse mismatched
+bucket/key targets with recorded retry backoff. Product paths retain their scoped Agent
+joins. Agent creation commits its server-generated storage request atomically with
+the authorized Agent/access/events transaction. `ArtifactBucketRepository.reserve`
+is invoked only after current `agent.update` authorization from the explicit
+Provision action, using the scoped Agent and current Organization. Status reads
+require current `agent.read` visibility. Neither endpoint accepts bucket/key IDs.
+`due` and `operation` use the operator exception from artifact maintenance for
+persisted provisioning requests and deleted owners. There is no Agent-discovery
+scan or separate privileged workload. API background provisioning and artifact
+maintenance receive Garage administrative authority; Agent runtimes and other
+workloads never do. Maintenance validates Organization/Agent/bucket identity and
+retains data keys until all bytes have been purged. Product paths retain current
+human/runtime checks. See
+[Artifact retention and recovery](../agent-artifacts.md#retention-deletion-and-recovery).
 
 HTTP semantics remain deliberate:
 

@@ -2,12 +2,19 @@ import json
 from pathlib import Path
 from uuid import UUID
 
+from api.domains.agent_sizes.models import (
+    STANDARD_CPU_LIMIT_MILLICORES,
+    STANDARD_CPU_REQUEST_MILLICORES,
+    STANDARD_MEMORY_LIMIT_BYTES,
+    STANDARD_MEMORY_REQUEST_BYTES,
+)
 from api.domains.agents.builders import (
     agentbarn_telegram_env,
     build_hermes_config_map,
     build_hermes_deployment,
     build_hermes_gateway_config,
     build_secret_hermes_runtime,
+    container_resources,
     native_discord_env,
     native_slack_env,
     native_telegram_env,
@@ -21,6 +28,14 @@ from api.domains.file_sync.rules import rules_manifest
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 _ORG_ID = UUID("11111111-2222-3333-4444-555555555555")
 _NS = "agent-farm"
+
+# The Standard size, which every Agent ran on before sizes existed.
+STANDARD = container_resources(
+    cpu_request_millicores=STANDARD_CPU_REQUEST_MILLICORES,
+    cpu_limit_millicores=STANDARD_CPU_LIMIT_MILLICORES,
+    memory_request_bytes=STANDARD_MEMORY_REQUEST_BYTES,
+    memory_limit_bytes=STANDARD_MEMORY_LIMIT_BYTES,
+)
 
 
 def test_gateway_config_is_headless_and_keeps_telemetry() -> None:
@@ -399,7 +414,7 @@ def test_runtime_secret_tells_the_adapter_the_approval_mode() -> None:
 
 
 def test_deployment_runs_one_headless_runtime_container() -> None:
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
 
     assert deployment.spec.replicas == 1
     assert deployment.spec.template.spec.containers[0].name == "agent"
@@ -408,11 +423,26 @@ def test_deployment_runs_one_headless_runtime_container() -> None:
 def test_init_container_costs_no_more_quota_than_the_agent() -> None:
     """Same rule as OpenClaw: the pod is charged for its biggest container, so the init
     container must not default to the LimitRange's larger values."""
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
     pod = deployment.spec.template.spec
     init = pod.init_containers[0]
 
     assert init.resources == pod.containers[0].resources
+
+
+def test_a_larger_size_grows_the_agent_container_and_not_the_init_container() -> None:
+    """The init container only runs chown, so it keeps its fixed block whatever the size."""
+    large = container_resources(
+        cpu_request_millicores=500,
+        cpu_limit_millicores=2000,
+        memory_request_bytes=2 * 1024**3,
+        memory_limit_bytes=4 * 1024**3,
+    )
+    pod = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=large).spec.template.spec
+
+    assert pod.containers[0].resources.requests == {"memory": "2Gi", "cpu": "500m"}
+    assert pod.containers[0].resources.limits == {"memory": "4Gi", "cpu": "2000m"}
+    assert pod.init_containers[0].resources == STANDARD
 
 
 def test_deployment_declares_explicit_resources_matching_openclaw() -> None:
@@ -420,7 +450,7 @@ def test_deployment_declares_explicit_resources_matching_openclaw() -> None:
     requests.memory (20Gi) -- a 2Gi Hermes limit would cap an all-Hermes fleet at
     50 agents instead of 64. Unlike OpenClaw's V8 heap, this is a hard cap on
     Hermes' real working set, not a GC trigger."""
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
     resources = deployment.spec.template.spec.containers[0].resources
 
     assert resources is not None
@@ -429,12 +459,12 @@ def test_deployment_declares_explicit_resources_matching_openclaw() -> None:
 
 
 def test_deployment_recreates_rather_than_rolling_update() -> None:
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
     assert deployment.spec.strategy.type == "Recreate"
 
 
 def test_deployment_carries_the_hermes_runtime_label() -> None:
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test")
+    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, _NS, "hermes:test", resources=STANDARD)
     assert deployment.metadata.labels["agentbarn.io/runtime"] == "hermes"
 
 
@@ -509,3 +539,33 @@ def test_startup_syncs_files_once_after_template_files_and_skills_then_keeps_syn
     assert HERMES_START_SH.index("cp /app/config/$f /workspace/$f") < once
     assert HERMES_START_SH.index("Wrote {written} skill files") < once < loop
     assert loop < HERMES_START_SH.index('touch "$AGENT_RUNTIME_SETUP_READY_FILE"')
+
+
+def test_artifact_command_and_instructions_are_available_without_memory() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID,
+        _ORG_ID,
+        _NS,
+        "soul",
+        "identity",
+        "user",
+        "tools",
+        "agents",
+        "boot",
+        "heartbeat",
+        {},
+        artifacts_enabled=True,
+    )
+    assert "agentbarn_artifacts.py" in config_map.data
+    assert "exec python3 /app/config/agentbarn_artifacts.py" in config_map.data["agentbarn-artifacts"]
+    assert "/usr/local/bin/agentbarn-artifacts upload" in config_map.data["AGENTS.md"]
+    assert "Do not wait for the user to mention artifacts, storage or the CLI" in config_map.data["AGENTS.md"]
+    assert "Do not publish scratch/intermediate files" in config_map.data["AGENTS.md"]
+    assert "Give the user a concise Markdown download link" in config_map.data["AGENTS.md"]
+
+
+def test_artifact_instructions_are_absent_when_storage_is_disabled() -> None:
+    config_map = build_hermes_config_map(
+        _AGENT_ID, _ORG_ID, _NS, "soul", "identity", "user", "tools", "agents", "boot", "heartbeat", {}
+    )
+    assert "Files and download links" not in config_map.data["AGENTS.md"]

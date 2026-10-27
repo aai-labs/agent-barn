@@ -8,3 +8,5 @@ api/.pytest_cache
 api/.ruff_cache
 api/__pycache__
 api/tests
+# Private local artifact-store credentials and bootstrap state.
+.garage/

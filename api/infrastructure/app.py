@@ -8,6 +8,7 @@ from api.domains.agents.microsoft_graph_sites import MicrosoftGraphSites
 from api.domains.agents.microsoft_identity import MicrosoftAppTokens, MicrosoftIdentityClient
 from api.domains.agents.repository import AgentRepository
 from api.domains.analytics.event_handlers import ProductAnalyticsHandler
+from api.domains.artifacts.storage import ArtifactStorage
 from api.domains.communications.plugins.agentbarn_telegram import AgentBarnTelegramPlatformPlugin
 from api.domains.communications.plugins.discord import DiscordPlatformPlugin
 from api.domains.communications.plugins.email import EmailPlatformPlugin
@@ -40,6 +41,7 @@ from api.infrastructure.kubernetes.client import KubernetesClient
 from api.infrastructure.litellm.client import LiteLLMClient
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
+from api.infrastructure.s3.client import ArtifactStorage as S3ArtifactStorage
 
 
 class AppModule(Module):
@@ -52,6 +54,11 @@ class AppModule(Module):
     @singleton
     def provide_postgres_delegate(self, config: Config) -> PostgresRepositoryDelegate:
         return PostgresRepositoryDelegate(config)
+
+    @provider
+    @singleton
+    def provide_artifact_storage(self, storage: S3ArtifactStorage) -> ArtifactStorage:
+        return storage
 
     @provider
     @singleton

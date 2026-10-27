@@ -228,6 +228,10 @@ _Avoid_: integration, runtime plugin, dynamically installed plugin
 The email address Agent Barn allocates to one Communication Connection on a Platform that is reached by mailbox rather than by a per-Connection endpoint. It is claimed when the Connection is created and released when the Connection is retired or its Agent is deleted; a released address stops routing, but its local part is never reissued, so a former correspondent can never reach a different Agent.
 _Avoid_: mailbox, alias, inbox
 
+**Agent Size**:
+A named amount of CPU and memory, as a request and a limit, from the platform-wide catalog Platform Administrators keep. Every Agent runs on one: the size its Organization chose for it, or the catalog's default. A Platform Administrator decides which sizes each Organization may choose, and its Owners and Admins choose among them; a Platform Administrator may also set one Agent's size, which its Organization then cannot change. Values are chosen from the catalog, never typed in per Agent.
+_Avoid_: preset (a Template word), plan, tier, instance type
+
 **Template**:
 A versioned Markdown configuration lineage used to create and run agents. Predefined templates are Platform Resources; custom templates belong to one Organization.
 _Avoid_: prompt, preset
@@ -485,3 +489,9 @@ _Avoid_: Agent Skill, native scheduled job
 An immutable saved snapshot of a Workflow. Editing and saving appends a new
 version; a future run pins the version it starts with.
 _Avoid_: mutable draft, runtime session
+
+**Agent Artifact**:
+An immutable published file owned by one Organization and Agent, with PostgreSQL
+metadata and private Garage/S3 bytes. Workflow provenance is optional. Consumers
+pin its exact artifact ID and SHA-256; signed download links are temporary bearer
+access, not file identity. See [Agent artifacts](docs/features/agent-artifacts.md).
