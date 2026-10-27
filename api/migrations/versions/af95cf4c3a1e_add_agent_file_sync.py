@@ -1,7 +1,7 @@
 """add agent file sync
 
 Revision ID: af95cf4c3a1e
-Revises: b9e32d74a610
+Revises: fac0030afc38
 Create Date: 2026-10-21
 
 AF-384: each Agent's folder at the Organization's Sync Provider, each synced file with any work
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "af95cf4c3a1e"
-down_revision = "b9e32d74a610"
+down_revision = "fac0030afc38"
 branch_labels = None
 depends_on = None
 
