@@ -215,6 +215,8 @@ class FileSyncEngine:
                 return
             in_own_folder = target is not None and target.folder.id == folder.id
             if in_own_folder and target is not None and target.rel_path.lower() == row.path.lower():
+                if target.rel_path != row.path:
+                    self._move_back(changes, folder, row, item)
                 self._content_edit(target, row, item)
                 return
             if in_own_folder and self._move_back(changes, folder, row, item):
@@ -234,6 +236,8 @@ class FileSyncEngine:
         self.repository.adopt_item(at_path.id, item.id)
         at_path.item_id = item.id
         at_path.pending = None
+        if target.rel_path != at_path.path:
+            self._move_back(changes, target.folder, at_path, item)
         self._content_edit(target, at_path, item)
 
     def _content_edit(self, target: _Target, row: SyncFile, item: RemoteItem) -> None:
@@ -242,7 +246,7 @@ class FileSyncEngine:
         now = datetime.now(UTC)
         settle_at = (item.modified_at or now) + SETTLE_DELAY
         version = item.content_version or ""
-        category = classify(target.runtime, target.rel_path)
+        category = classify(target.runtime, row.path)
         if category in (SyncCategory.WORK, SyncCategory.MEMORY):
             if item.size > MAX_FILE_BYTES:
                 self.repository.record_activity_once(

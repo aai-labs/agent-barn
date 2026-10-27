@@ -142,14 +142,17 @@ Paths are relative to the runtime's root: `/opt/data` for Hermes, whose `workspa
 
 | Category | Hermes | OpenClaw | A person's edit at the provider |
 |---|---|---|---|
-| `config` | `SOUL.md`, `workspace/IDENTITY.md`, `AGENTS.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md` | `workspace/SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `TOOLS.md`, `BOOT.md`, `BOOTSTRAP.md`, `HEARTBEAT.md` | Undone |
+| `config` | `SOUL.md`, `workspace/IDENTITY.md`, `AGENTS.md`, `TOOLS.md`, `BOOT.md`, `HEARTBEAT.md`, and every other name Hermes reads as instructions: `AGENTS.override.md`, `HERMES.md`, `.hermes.md`, `CLAUDE.md`, `.cursorrules`, `.cursor/rules/**` | `workspace/SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `TOOLS.md`, `BOOT.md`, `BOOTSTRAP.md`, `HEARTBEAT.md`, `CLAUDE.md` | Undone |
 | `skills` | `workspace/skills/**` | `workspace/skills/**` | Undone |
 | `memory` | `memories/USER.md`, `memories/MEMORY.md` | `workspace/USER.md`, `workspace/MEMORY.md` | Applied to the Agent |
-| `work` | Everything else under `workspace/` | Everything else under `workspace/` | Applied to the Agent |
+| `work` | Everything else under `workspace/`, except hidden names | Everything else under `workspace/`, except hidden names | Applied to the Agent |
 | `never` | Everything else | Everything else | — |
 
-`never` covers credentials and runtime machinery (`config.yaml`, `openclaw.json`, `.env`, `aai-cli/`, sessions), and also, anywhere:
-- `.git/`, `node_modules/` and `__pycache__/`;
+`config`, `memory` and `skills` names match whatever their case (`agents.md` is `AGENTS.md`), so renaming a locked file by case can't unlock it.
+
+`never` covers credentials and runtime machinery (`config.yaml`, `openclaw.json`, `aai-cli/`, sessions), and also, anywhere:
+- any file or folder whose name starts with `.` (`.env`, `.netrc`, `.venv/`, `.cache/`…), unless it's a protected instruction name above;
+- `.git/`, `node_modules/`, `__pycache__/` and `venv/`;
 - `_Not synced/`;
 - symlinks and anything behind them;
 - the helper's own `.file-sync-` temporary files.
@@ -225,7 +228,7 @@ Files a person adds, removes or moves:
 - **A file the Agent does not have:** a new file anywhere in an Agent's folder is moved to `<Agent>/_Not synced/` (created when missing), and `moved_not_synced` is recorded. A name already taken there gets ` (2)`, ` (3)` before its extension.
 - **A new file at a synced path,** such as one deleted and added again, is taken as an edit of that file, unless the Agent's own upload of that path is under way.
 - **A synced file deleted,** or moved out of "Agent Barn", into `_Not synced/` or into another Agent's folder: it is restored from the Agent (a `reupload` job, with the row's provider fields cleared). `restored` is recorded when the Agent's copy is back. A file that lands in another Agent's folder is moved to that folder's `_Not synced/`.
-- **A synced file renamed or moved within its folder:** it is moved back to its path, and `renamed_back` is recorded. If the way back is blocked, it is restored instead and the moved copy is parked in `_Not synced/`.
+- **A synced file renamed or moved within its folder,** including a rename that changes only the case: it is moved back to its path, and `renamed_back` is recorded. Whether an edit to it is applied or undone follows the name on record, never the new name. If the way back is blocked, it is restored instead and the moved copy is parked in `_Not synced/`.
 
 Agent folders:
 - **Renamed or moved:** an Agent's folder is put back under "Agent Barn" with its name.

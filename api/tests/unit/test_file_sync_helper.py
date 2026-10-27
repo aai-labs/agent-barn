@@ -292,6 +292,36 @@ def test_hermes_paths_are_reported_from_the_hermes_layout(tmp_path):
     )
 
 
+def test_hidden_files_and_virtualenvs_are_never_reported_but_protected_hidden_names_are(tmp_path):
+    volume = tmp_path / "volume"
+    for rel in (
+        "workspace/notes.md",
+        "workspace/.env",
+        "workspace/project/.netrc",
+        "workspace/.venv/lib/site.py",
+        "workspace/venv/lib/site.py",
+        "workspace/.cache/pip/wheel.whl",
+        "workspace/.cursorrules",
+        "workspace/.cursor/rules/style.mdc",
+        "workspace/.hermes.md",
+    ):
+        _write(volume, rel, b"x")
+    with _Ingest() as ingest:
+        _run(tmp_path, ingest.url, "hermes")
+
+    assert_that(
+        sorted(entry.path for entry in ingest.reports[0].entries),
+        equal_to(
+            [
+                "workspace/.cursor/rules/style.mdc",
+                "workspace/.cursorrules",
+                "workspace/.hermes.md",
+                "workspace/notes.md",
+            ]
+        ),
+    )
+
+
 @pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs extra rights on Windows")
 def test_symlinks_and_files_behind_them_are_never_reported(tmp_path):
     volume = tmp_path / "volume"
@@ -605,6 +635,23 @@ def test_the_pod_and_the_server_classify_every_path_alike(runtime):
         "workspace/skillsX/a.md",
         "workspace/AGENTS.md",
         "workspace/AGENTS.md/nested.md",
+        "workspace/agents.md",
+        "workspace/AGENTS.override.md",
+        "workspace/HERMES.md",
+        "workspace/.hermes.md",
+        "workspace/CLAUDE.md",
+        "workspace/.cursorrules",
+        "workspace/.cursor/rules/style.mdc",
+        "workspace/.cursor/settings.json",
+        "workspace/.env",
+        "workspace/project/.env",
+        "workspace/.venv/lib/site.py",
+        "workspace/venv/lib/site.py",
+        "workspace/.cache/x",
+        "workspace/Skills/jira/SKILL.md",
+        "memories/user.md",
+        "workspace/memory.md",
+        "soul.md",
         "workspace/USER.md",
         "workspace/MEMORY.md",
         "memories/USER.md",

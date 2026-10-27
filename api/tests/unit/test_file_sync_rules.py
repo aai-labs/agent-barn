@@ -118,7 +118,6 @@ def test_agent_owned_memory_files_are_memory(runtime, path):
         (_HERMES, "workspace/notes.md"),
         (_HERMES, "workspace/memory/2026-10-21.md"),
         (_HERMES, "workspace/reports/q3/summary.docx"),
-        (_HERMES, "workspace/.gitignore"),
         (_OPENCLAW, "workspace/notes.md"),
         (_OPENCLAW, "workspace/memory/2026-10-21.md"),
         (_OPENCLAW, "workspace/DREAMS.md"),
@@ -159,6 +158,72 @@ def test_anything_outside_the_allowlist_never_syncs(runtime, path):
 def test_tool_and_dependency_directories_never_sync(path):
     assert_that(classify(_HERMES, path), equal_to(SyncCategory.NEVER))
     assert_that(classify(_OPENCLAW, path), equal_to(SyncCategory.NEVER))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "workspace/.env",
+        "workspace/.netrc",
+        "workspace/project/.env",
+        "workspace/.gitignore",
+        "workspace/.ssh/id_rsa",
+        "workspace/.venv/lib/site.py",
+        "workspace/venv/lib/site.py",
+        "workspace/project/venv/bin/python",
+        "workspace/.cache/pip/wheel.whl",
+        "workspace/.cursor/settings.json",
+        "workspace/skills/jira/.env",
+    ],
+)
+def test_hidden_files_and_virtualenvs_never_sync(path):
+    assert_that(classify(_HERMES, path), equal_to(SyncCategory.NEVER))
+    assert_that(classify(_OPENCLAW, path), equal_to(SyncCategory.NEVER))
+
+
+@pytest.mark.parametrize(
+    ("runtime", "path"),
+    [
+        (_HERMES, "SOUL.md"),
+        (_HERMES, "soul.md"),
+        (_HERMES, "workspace/AGENTS.md"),
+        (_HERMES, "workspace/agents.md"),
+        (_HERMES, "workspace/Agents.md"),
+        (_HERMES, "workspace/AGENTS.override.md"),
+        (_HERMES, "workspace/agents.override.md"),
+        (_HERMES, "workspace/HERMES.md"),
+        (_HERMES, "workspace/.hermes.md"),
+        (_HERMES, "workspace/CLAUDE.md"),
+        (_HERMES, "workspace/claude.md"),
+        (_HERMES, "workspace/.cursorrules"),
+        (_HERMES, "workspace/.cursor/rules/style.mdc"),
+        (_HERMES, "workspace/identity.md"),
+        (_OPENCLAW, "workspace/agents.md"),
+        (_OPENCLAW, "workspace/soul.md"),
+        (_OPENCLAW, "workspace/Bootstrap.md"),
+        (_OPENCLAW, "workspace/CLAUDE.md"),
+    ],
+)
+def test_every_name_the_runtime_reads_as_instructions_is_locked_whatever_its_case(runtime, path):
+    assert_that(classify(runtime, path), equal_to(SyncCategory.CONFIG))
+
+
+@pytest.mark.parametrize(
+    ("runtime", "path"),
+    [
+        (_HERMES, "memories/user.md"),
+        (_HERMES, "memories/Memory.md"),
+        (_OPENCLAW, "workspace/user.md"),
+        (_OPENCLAW, "workspace/memory.md"),
+    ],
+)
+def test_memory_files_match_whatever_their_case(runtime, path):
+    assert_that(classify(runtime, path), equal_to(SyncCategory.MEMORY))
+
+
+@pytest.mark.parametrize("runtime", [_HERMES, _OPENCLAW])
+def test_skills_match_whatever_their_case(runtime):
+    assert_that(classify(runtime, "workspace/Skills/jira/SKILL.md"), equal_to(SyncCategory.SKILLS))
 
 
 @pytest.mark.parametrize(
@@ -246,7 +311,7 @@ def test_the_pod_manifest_carries_the_same_rules_as_json(runtime, root):
     assert_that(manifest["root"], equal_to(root))
     assert_that(manifest["max_file_bytes"], equal_to(MAX_FILE_BYTES))
     assert_that(manifest["max_file_bytes"], equal_to(100 * 1024 * 1024))
-    assert_that(sorted(manifest["skip_dir_names"]), equal_to([".git", "__pycache__", "node_modules"]))
+    assert_that(sorted(manifest["skip_dir_names"]), equal_to([".git", "__pycache__", "node_modules", "venv"]))
     for path in manifest["config"]:
         assert_that(classify(runtime, path), equal_to(SyncCategory.CONFIG))
     for path in manifest["memory"]:

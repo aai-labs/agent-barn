@@ -56,17 +56,28 @@ def synced(rel_path, rules):
     segments = rel_path.split("/")
     if any(segment in ("", ".", "..") for segment in segments):
         return False
-    if segments[0] == rules["not_synced_dir"] or any(segment in rules["skip_dir_names"] for segment in segments):
+    if segments[0] == rules["not_synced_dir"]:
         return False
-    if rel_path in rules["memory"] or any(_under(rel_path, entry) for entry in rules["config"]):
+    if any(segment.lower() in rules["skip_dir_names"] for segment in segments):
+        return False
+    folded = rel_path.lower()
+    if any(folded == entry.lower() for entry in rules["memory"]):
         return True
-    return _under(rel_path, rules["skills"]) or rel_path.startswith(f"{rules['workspace']}/")
+    if any(_under(folded, entry.lower()) for entry in rules["config"]):
+        return True
+    if any(segment.startswith(".") for segment in segments):
+        return False
+    return _under(folded, rules["skills"]) or rel_path.startswith(f"{rules['workspace']}/")
 
 
 def _worth_entering(rel_dir, rules):
+    folded = rel_dir.lower()
+    protected = [entry.lower() for entry in [*rules["memory"], *rules["config"]]]
+    if rel_dir.rsplit("/", 1)[-1].startswith("."):
+        return any(entry.startswith(f"{folded}/") or _under(folded, entry) for entry in protected)
     if _under(rel_dir, rules["workspace"]):
         return True
-    return any(entry.startswith(f"{rel_dir}/") for entry in [*rules["memory"], *rules["config"]])
+    return any(entry.startswith(f"{folded}/") for entry in protected)
 
 
 def sha256_of(path):
@@ -95,7 +106,7 @@ def _local_files(rules):
                 continue
             try:
                 if item.is_dir(follow_symlinks=False):
-                    if item.name not in rules["skip_dir_names"] and _worth_entering(rel_path, rules):
+                    if item.name.lower() not in rules["skip_dir_names"] and _worth_entering(rel_path, rules):
                         pending.append((item.path, rel_path))
                 elif (
                     item.is_file(follow_symlinks=False)

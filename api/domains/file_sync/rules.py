@@ -6,7 +6,7 @@ from api.domains.agents.restore_point_job import RUNTIME_HERMES, RUNTIME_OPENCLA
 MAX_FILE_BYTES = 100 * 1024 * 1024
 MAX_PATH_CHARS = 400
 NOT_SYNCED_DIR = "_Not synced"
-SKIP_DIR_NAMES = frozenset({".git", "node_modules", "__pycache__"})
+SKIP_DIR_NAMES = frozenset({".git", "node_modules", "__pycache__", "venv"})
 FORBIDDEN_CHARACTERS = frozenset(':"*<>?|\\')
 RESERVED_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"} | {f"COM{n}" for n in range(10)} | {f"LPT{n}" for n in range(10)}
@@ -47,6 +47,12 @@ RUNTIME_RULES = {
                 "SOUL.md",
                 "workspace/IDENTITY.md",
                 "workspace/AGENTS.md",
+                "workspace/AGENTS.override.md",
+                "workspace/HERMES.md",
+                "workspace/.hermes.md",
+                "workspace/CLAUDE.md",
+                "workspace/.cursorrules",
+                "workspace/.cursor/rules",
                 "workspace/TOOLS.md",
                 "workspace/BOOT.md",
                 "workspace/HEARTBEAT.md",
@@ -65,6 +71,7 @@ RUNTIME_RULES = {
                 "workspace/BOOT.md",
                 "workspace/BOOTSTRAP.md",
                 "workspace/HEARTBEAT.md",
+                "workspace/CLAUDE.md",
             }
         ),
         memory=frozenset({"workspace/USER.md", "workspace/MEMORY.md"}),
@@ -99,13 +106,16 @@ def classify(runtime: str, rel_path: str) -> SyncCategory:
     segments = _segments(rel_path)
     if segments is None or segments[0] == NOT_SYNCED_DIR:
         return SyncCategory.NEVER
-    if any(segment in SKIP_DIR_NAMES for segment in segments):
+    if any(segment.lower() in SKIP_DIR_NAMES for segment in segments):
         return SyncCategory.NEVER
-    if rel_path in rules.memory:
+    folded = rel_path.lower()
+    if any(folded == entry.lower() for entry in rules.memory):
         return SyncCategory.MEMORY
-    if any(_under(rel_path, entry) for entry in rules.config):
+    if any(_under(folded, entry.lower()) for entry in rules.config):
         return SyncCategory.CONFIG
-    if _under(rel_path, SKILLS):
+    if any(segment.startswith(".") for segment in segments):
+        return SyncCategory.NEVER
+    if _under(folded, SKILLS):
         return SyncCategory.SKILLS
     if rel_path.startswith(f"{WORKSPACE}/"):
         return SyncCategory.WORK
