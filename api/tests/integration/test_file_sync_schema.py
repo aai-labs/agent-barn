@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from hamcrest import assert_that, equal_to, none, not_none
+from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -254,3 +255,10 @@ def test_a_soft_deleted_agent_keeps_its_folder():
             session.commit()
 
         assert_that(_get(context, SyncAgentFolder, folder.id), not_none())
+
+
+def test_a_file_can_be_found_by_its_provider_item_alone():
+    with given(_GIVEN) as context:
+        indexes = inspect(context.postgres_delegate.engine).get_indexes("sync_file")
+
+        assert_that(any(index["column_names"][:1] == ["item_id"] for index in indexes), equal_to(True))

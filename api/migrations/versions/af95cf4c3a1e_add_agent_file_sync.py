@@ -80,6 +80,7 @@ def upgrade() -> None:
     )
     op.create_index("uq_sync_file_folder_path", "sync_file", ["folder_id", sa.text("lower(path)")], unique=True)
     op.create_index("uq_sync_file_folder_item", "sync_file", ["folder_id", "item_id"], unique=True)
+    op.create_index("ix_sync_file_item", "sync_file", ["item_id"])
 
     op.create_table(
         "sync_activity",
@@ -102,6 +103,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_sync_activity_agent_occurred", table_name="sync_activity")
     op.drop_table("sync_activity")
+    op.drop_index("ix_sync_file_item", table_name="sync_file")
     op.drop_index("uq_sync_file_folder_item", table_name="sync_file")
     op.drop_index("uq_sync_file_folder_path", table_name="sync_file")
     op.drop_table("sync_file")

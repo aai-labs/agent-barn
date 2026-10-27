@@ -16,6 +16,7 @@ FOLDER_NAME_INDEX = "uq_sync_agent_folder_connection_name"
 FOLDER_AGENT_INDEX = "uq_sync_agent_folder_connection_agent"
 FILE_PATH_INDEX = "uq_sync_file_folder_path"
 FILE_ITEM_INDEX = "uq_sync_file_folder_item"
+FILE_ITEM_LOOKUP_INDEX = "ix_sync_file_item"
 
 
 class SyncFolderStatus(StrEnum):
@@ -83,6 +84,7 @@ class SyncFile(BaseModel, table=True):
     __table_args__ = (
         sa.Index(FILE_PATH_INDEX, "folder_id", sa.text("lower(path)"), unique=True),
         sa.Index(FILE_ITEM_INDEX, "folder_id", "item_id", unique=True),
+        sa.Index(FILE_ITEM_LOOKUP_INDEX, "item_id"),
     )
 
     folder_id: UUID = SqlField(foreign_key="sync_agent_folder.id", nullable=False, ondelete="CASCADE")
