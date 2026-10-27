@@ -62,8 +62,8 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           resources:
-            requests: {cpu: 10m, memory: 8Mi}
-            limits: {memory: 32Mi}
+            requests: {cpu: 10m, memory: 48Mi}
+            limits: {memory: 64Mi}
       containers:
         - name: garage
           image: {{ .Values.image | quote }}
