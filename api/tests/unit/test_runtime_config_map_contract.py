@@ -15,6 +15,12 @@ from uuid import uuid4
 
 import pytest
 
+from api.domains.agent_sizes.models import (
+    STANDARD_CPU_LIMIT_MILLICORES,
+    STANDARD_CPU_REQUEST_MILLICORES,
+    STANDARD_MEMORY_LIMIT_BYTES,
+    STANDARD_MEMORY_REQUEST_BYTES,
+)
 from api.domains.agents.builders import (
     build_config_map,
     build_deployment,
@@ -22,6 +28,7 @@ from api.domains.agents.builders import (
     build_hermes_deployment,
     build_hermes_gateway_config,
     build_openclaw_gateway_config,
+    container_resources,
 )
 from api.domains.agents.builders.memory import MEMORY_TOOL_INSTRUCTIONS
 from api.domains.agents.builders.tasks import TASK_COMMAND, TASK_COMMAND_PATH, TASK_TOOL, TASK_TOOL_INSTRUCTIONS
@@ -30,6 +37,12 @@ _SCRIPTS = Path(__file__).parents[2] / "domains/agents/scripts"
 _AGENT_ID = uuid4()
 _ORG_ID = uuid4()
 _NS = "agent-farm"
+_STANDARD = container_resources(
+    cpu_request_millicores=STANDARD_CPU_REQUEST_MILLICORES,
+    cpu_limit_millicores=STANDARD_CPU_LIMIT_MILLICORES,
+    memory_request_bytes=STANDARD_MEMORY_REQUEST_BYTES,
+    memory_limit_bytes=STANDARD_MEMORY_LIMIT_BYTES,
+)
 
 # Supplied only for some Agents; start.sh guards each with `[ -f ... ]`.
 _OPTIONAL = {"aai-cli-setup.sh", "aai-cli-config.toml", "gog-setup.sh", "skills.json"}
@@ -123,7 +136,7 @@ def test_every_agent_ships_the_task_command_and_when_to_use_it(builder, memory_e
 
 @pytest.mark.parametrize("build", [build_hermes_deployment, build_deployment])
 def test_the_task_command_is_installed_on_the_agents_path(build):
-    pod = build(_AGENT_ID, _ORG_ID, _NS, "runtime:test").spec.template.spec
+    pod = build(_AGENT_ID, _ORG_ID, _NS, "runtime:test", resources=_STANDARD).spec.template.spec
     [mount] = [m for m in pod.containers[0].volume_mounts if m.mount_path == TASK_COMMAND_PATH]
     [volume] = [v for v in pod.volumes if v.name == mount.name]
     [item] = volume.config_map.items
