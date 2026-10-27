@@ -159,8 +159,7 @@ status and an explicit Provision/retry action for existing Agents. Post-response
 API work attempts the request immediately; maintenance recovers interrupted tasks
 and retries failures without changing the key identity. Local Compose runs bounded
 maintenance every ten seconds. The enabled Kubernetes purge CronJob recovers
-requests every ten minutes; Helmfile enables it by default when `ARTIFACT_STORAGE_SECRET`
-is set. Supply both storage and management Secrets for unattended recovery; direct
+requests every ten minutes; Helmfile enables it by default. Supply both storage and management Secrets for unattended recovery; direct
 chart installs must set `artifacts.purgeEnabled=true`. Requests remain durable if that
 schedule is disabled, but require an explicit retry or `make purge-artifacts`.
 Missing storage is an artifact error, not an API readiness dependency. The domain limits remain
@@ -334,29 +333,23 @@ capacity expansion and RPC/key rotation require explicit Garage repair/layout
 procedures. Export and retain private bootstrap state in the installation's secret
 backup system; never add it to the repository or CI logs.
 
-After bootstrap, set deployment inputs in `.env.deploy`, or their CI Variables
-(`STAGING_` prefix for staging, `PUBLIC_` for public, unprefixed for production):
+The staging, main and public CI workflows bootstrap Garage before the regular
+Helmfile sync. Configure GitHub Secrets `STAGING_ARTIFACT_STORAGE_SECRET` and
+`STAGING_ARTIFACT_PROVISIONER_SECRET` for staging, their unprefixed equivalents
+for main, and `PUBLIC_` equivalents for public. Despite their names, these are the
+64-character hexadecimal RPC secret and admin token respectively, not Kubernetes
+Secret names. Generate distinct values for each environment and each purpose.
+CI creates `garage-rpc`, initializes the layout only when it is new, and writes
+`garage-artifact-storage` and `garage-artifact-provisioner`. The names are fixed
+in Helmfile. Set `ARTIFACT_PURGE_ENABLED=false` only to suspend maintenance.
 
-```dotenv
-ARTIFACT_STORAGE_SECRET=garage-artifact-storage
-ARTIFACT_PURGE_ENABLED=true
-ARTIFACT_PROVISIONER_SECRET=garage-artifact-provisioner
-```
-
-Helmfile always manages the Garage release; there is no enable/disable deployment
-flag. Its configured application storage settings reach API/purge;
-the dedicated provisioning Secret reaches only those two workloads.
-Initial install/layout bootstrap must finish before application deployment:
-existing deploy commands use `helmfile sync --wait`, so Garage readiness
-also gates ordinary deployment. A missing replica/PVC can therefore delay or fail
-a deploy; do not rely on the release's default `wait: false` to bypass CLI `--wait`
-([pinned Helmfile flag logic](https://github.com/helmfile/helmfile/blob/v0.171.0/pkg/state/helmx.go#L109-L121)).
-CI receives Secret names, not Garage credential plaintext. RPC/admin, application
-settings and provisioner Secrets must already exist; no deploy hook regenerates
-them. The application Secret contains only `ARTIFACT_S3_ENDPOINT_URL`, with no
-data credentials or bucket naming options. Signing always uses `garage`;
-there is no region environment variable or provisioner Deployment. `garage-rpc` is the standard RPC/admin Secret name;
-application Helmfile/CI need no name-override variable.
+CI refuses to replace an existing RPC/admin credential or initialize existing
+Garage PVCs when their RPC Secret is missing. Inspect and recover the original
+credentials and data before proceeding; credential rotation remains a coordinated
+operator procedure, not an automatic effect of changing a GitHub Secret. Existing
+Agent bucket credentials are retained in PostgreSQL. The application Secret contains
+only `ARTIFACT_S3_ENDPOINT_URL`; no bucket-wide credentials reach Agent runtimes.
+Direct operator installs can use the manual procedure above.
 The dedicated provisioner Secret contains `ARTIFACT_PROVISIONER_URL` (private
 `http://garage:3903`) and `ARTIFACT_PROVISIONER_TOKEN`. Garage loads `GARAGE_ADMIN_TOKEN` from the `admin-token` key
 in its RPC/admin Secret; never mount that Secret in API or Agent workloads.

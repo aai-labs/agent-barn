@@ -15,6 +15,11 @@ Related context: [Feature specification](../agent-workflows.md), [live architect
 
 ## Changes
 
+### 2026-10-27 — AF-415 — CI Garage bootstrap
+
+- Changed: deployment initializes private Garage from environment-specific GitHub Secrets before waiting for the release; Kubernetes Secret names are fixed.
+- Follow-up: staging rollout requires CI verification; existing PVCs without their RPC Secret require operator recovery.
+
 ### 2026-10-26 — AF-415 — Artifacts navigation and PR delivery evidence
 
 - Changed: the Agent tab now reads Artifacts and uses the package icon; existing `tab=files` links remain valid. Accessible Agent/run/step labels and the real-browser probe use Artifacts consistently.

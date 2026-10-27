@@ -197,8 +197,5 @@ AGENT_DEFAULT_MODEL=
 
 # Required private Garage: complete docs/guidelines/garage.md bootstrap before deployment.
 # Cluster RPC/admin authority and application settings live in pre-created Kubernetes Secrets, not CI.
-ARTIFACT_STORAGE_SECRET=
-# Defaults to true when ARTIFACT_STORAGE_SECRET is set; set false to disable maintenance.
+# Maintenance defaults to enabled. Complete the Kubernetes bootstrap in garage.md first.
 ARTIFACT_PURGE_ENABLED=
-# Private management Secret, mounted only by the product API and artifact maintenance worker.
-ARTIFACT_PROVISIONER_SECRET=
