@@ -6,11 +6,9 @@ import type { Agent } from "@/features/agents/schemas";
 
 import { useAgentTasks } from "../hooks/use-agent-tasks";
 import type { AgentTaskStatus } from "../schemas";
-import { TASK_STATUSES, TASK_STATUS_LABEL } from "../utils";
+import { TASK_STATUSES, TASK_STATUS_OPTIONS } from "../utils";
 import { TaskFilterSelect } from "./task-filter-select";
 import { TaskList } from "./task-list";
-
-export const TASK_STATUS_OPTIONS = TASK_STATUSES.map((status) => ({ value: status, label: TASK_STATUS_LABEL[status] }));
 
 /** Shown to people who may see the Agent's Tasks. */
 export function AgentTasksTab({ agent }: { agent: Agent }) {

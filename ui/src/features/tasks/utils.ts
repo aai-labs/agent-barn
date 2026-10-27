@@ -14,6 +14,8 @@ export const TASK_STATUS_LABEL: Record<AgentTaskStatus, string> = {
   failed: "Failed",
 };
 
+export const TASK_STATUS_OPTIONS = TASK_STATUSES.map((status) => ({ value: status, label: TASK_STATUS_LABEL[status] }));
+
 const _tasksKeyBase = createQueryKeyStructure("agent-tasks");
 
 /** Agent-level keys live under the Agent's detail family; Organization-level ones in their own,
