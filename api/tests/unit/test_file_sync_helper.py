@@ -680,3 +680,14 @@ def test_the_pod_and_the_server_classify_every_path_alike(runtime):
             (path, helper.synced(path, rules)),
             equal_to((path, classify(runtime, path) != SyncCategory.NEVER)),
         )
+
+
+def test_a_volume_without_its_workspace_never_reports_complete(tmp_path):
+    volume = tmp_path / "volume"
+    _write(volume, "memories/USER.md", b"profile")
+    with _Ingest() as ingest:
+        _run(tmp_path, ingest.url, "hermes")
+
+    report = ingest.reports[0]
+    assert_that(report.complete, equal_to(False))
+    assert_that([entry.path for entry in report.entries], equal_to(["memories/USER.md"]))

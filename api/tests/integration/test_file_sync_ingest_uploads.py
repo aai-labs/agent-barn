@@ -1,10 +1,12 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi import status
 from hamcrest import assert_that, close_to, equal_to, has_length, none, not_none
 from sqlmodel import Session
 
 from api.domains.file_sync.models import SyncActivityKind, SyncFile
+from api.domains.sync_provider.plugins.base import ProviderUnavailable, RemoteNameTaken
 from api.tests.core.givenpy import given
 from api.tests.steps.file_sync_ingest import (
     SHA_A,
@@ -193,16 +195,45 @@ def test_completing_before_the_file_reached_the_provider_is_a_conflict():
         assert_that(synced_files(context)["workspace/notes.md"].item_id, none())
 
 
-def test_completing_when_the_provider_holds_a_different_size_is_a_conflict():
+def test_an_office_file_the_provider_rewrote_is_confirmed_from_the_providers_record():
     with given(_BASE) as context:
         agent = ready_agent(context)
-        upload = report_files(context, agent, file_entry("workspace/notes.md", size=5)).json()["uploads"][0]
-        fake_drive(context).complete_upload(upload["url"], b"not five bytes")
+        upload = report_files(context, agent, file_entry("workspace/report.docx", size=877)).json()["uploads"][0]
+        stored = fake_drive(context).complete_upload(upload["url"], b"x" * 877)
+
+        response = complete_upload(context, agent, "workspace/report.docx")
+
+        assert_that(response.status_code, equal_to(status.HTTP_204_NO_CONTENT))
+        row = synced_files(context)["workspace/report.docx"]
+        assert_that((row.item_id, row.ctag, row.size), equal_to((stored.id, stored.content_version, 877)))
+        assert_that(row.upload_started_at, none())
+        assert_that(stored.size > 877, equal_to(True))
+
+
+def test_completing_when_a_person_wrote_the_file_is_a_conflict():
+    with given(_BASE) as context:
+        agent = ready_agent(context)
+        report_files(context, agent, file_entry("workspace/notes.md", size=5))
+        fake_drive(context).user_adds(context.sync_root, "Sales Bot/workspace/notes.md", b"mine!")
 
         response = complete_upload(context, agent, "workspace/notes.md")
 
         assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
         assert_that(synced_files(context)["workspace/notes.md"].synced_at, none())
+
+
+def test_completing_when_the_file_was_not_written_since_the_upload_started_is_a_conflict():
+    with given(_BASE) as context:
+        agent = ready_agent(context)
+        upload_through_the_pod(context, agent, "workspace/notes.md", b"hello")
+        node = next(node for node in fake_drive(context).nodes.values() if node.name == "notes.md")
+        node.modified_at = datetime.now(UTC) - timedelta(minutes=10)
+        report_files(context, agent, file_entry("workspace/notes.md", sha=SHA_B, size=5), complete=False)
+
+        response = complete_upload(context, agent, "workspace/notes.md")
+
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(synced_files(context)["workspace/notes.md"].upload_started_at, not_none())
 
 
 def test_completing_needs_the_agents_key_and_an_allowed_path():
@@ -291,12 +322,13 @@ def test_a_path_listed_in_another_case_is_not_deleted():
 def test_a_first_upload_that_never_finished_is_forgotten_without_calling_the_provider():
     with given(_BASE) as context:
         agent = ready_agent(context)
-        report_files(context, agent, file_entry("workspace/draft.md"))
+        upload_through_the_pod(context, agent, "workspace/kept.md", b"k")
+        report_files(context, agent, file_entry("workspace/draft.md"), complete=False)
         calls_before = len(fake_drive(context).calls)
 
-        report_files(context, agent)
+        report_files(context, agent, file_entry("workspace/kept.md", size=1))
 
-        assert_that(synced_files(context), equal_to({}))
+        assert_that(sorted(synced_files(context)), equal_to(["workspace/kept.md"]))
         assert_that("delete_item" in fake_drive(context).calls[calls_before:], equal_to(False))
         assert_that(activity_entries(context), equal_to([]))
 
@@ -305,24 +337,106 @@ def test_a_file_already_gone_at_the_provider_is_simply_forgotten():
     with given(_BASE) as context:
         agent = ready_agent(context)
         upload_through_the_pod(context, agent, "workspace/notes.md", b"hello")
+        upload_through_the_pod(context, agent, "workspace/kept.md", b"k")
         fake_drive(context).user_deletes(context.sync_root, "Sales Bot/workspace/notes.md")
 
-        response = report_files(context, agent)
+        response = report_files(context, agent, file_entry("workspace/kept.md", size=1))
 
         assert_that(response.status_code, equal_to(status.HTTP_200_OK))
-        assert_that(synced_files(context), equal_to({}))
+        assert_that(sorted(synced_files(context)), equal_to(["workspace/kept.md"]))
 
 
 def test_a_delete_interrupted_by_throttling_is_retried_on_the_next_report():
     with given(_BASE) as context:
         agent = ready_agent(context)
         upload_through_the_pod(context, agent, "workspace/notes.md", b"hello")
+        upload_through_the_pod(context, agent, "workspace/kept.md", b"k")
         fake_drive(context).throttle_next(30)
 
-        throttled = report_files(context, agent)
+        throttled = report_files(context, agent, file_entry("workspace/kept.md", size=1))
         kept = sorted(synced_files(context))
-        retried = report_files(context, agent)
+        retried = report_files(context, agent, file_entry("workspace/kept.md", size=1))
 
         assert_that((throttled.status_code, retried.status_code), equal_to((503, 200)))
-        assert_that((kept, sorted(synced_files(context))), equal_to((["workspace/notes.md"], [])))
+        assert_that(
+            (kept, sorted(synced_files(context))),
+            equal_to((["workspace/kept.md", "workspace/notes.md"], ["workspace/kept.md"])),
+        )
         assert_that(provider_has(context, "workspace/notes.md"), equal_to(False))
+
+
+def _refuse_upload_links_for(context, monkeypatch: pytest.MonkeyPatch, path: str, error: Exception) -> None:
+    plugin = fake_drive(context)
+    upload_target = plugin.upload_target
+
+    def refusing(root, *, parent_id: str, rel_path: str):
+        if rel_path == path:
+            raise error
+        return upload_target(root, parent_id=parent_id, rel_path=rel_path)
+
+    monkeypatch.setattr(plugin, "upload_target", refusing)
+
+
+@pytest.mark.parametrize(
+    "error", [RemoteNameTaken("upload session refused"), ProviderUnavailable("Test Drive is down.")]
+)
+def test_one_file_the_provider_refuses_does_not_stop_the_rest(monkeypatch: pytest.MonkeyPatch, error):
+    with given(_BASE) as context:
+        agent = ready_agent(context)
+        _refuse_upload_links_for(context, monkeypatch, "workspace/a.md", error)
+
+        response = report_files(context, agent, file_entry("workspace/a.md"), file_entry("workspace/b.md"))
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that([upload["path"] for upload in response.json()["uploads"]], equal_to(["workspace/b.md"]))
+        assert_that("workspace/a.md" in synced_files(context), equal_to(False))
+
+
+def test_a_refused_file_gets_its_link_on_the_next_report(monkeypatch: pytest.MonkeyPatch):
+    with given(_BASE) as context:
+        agent = ready_agent(context)
+        _refuse_upload_links_for(context, monkeypatch, "workspace/a.md", RemoteNameTaken("upload session refused"))
+        report_files(context, agent, file_entry("workspace/a.md"))
+        monkeypatch.undo()
+
+        response = report_files(context, agent, file_entry("workspace/a.md"))
+
+        assert_that([upload["path"] for upload in response.json()["uploads"]], equal_to(["workspace/a.md"]))
+
+
+def test_one_delete_the_provider_fails_does_not_stop_the_others(monkeypatch: pytest.MonkeyPatch):
+    with given(_BASE) as context:
+        agent = ready_agent(context)
+        for path in ("workspace/a.md", "workspace/b.md", "workspace/kept.md"):
+            upload_through_the_pod(context, agent, path, b"hello")
+        plugin = fake_drive(context)
+        delete_item = plugin.delete_item
+        failing_id = synced_files(context)["workspace/a.md"].item_id
+
+        def failing(root, *, item_id: str) -> None:
+            if item_id == failing_id:
+                raise ProviderUnavailable("Test Drive is down.")
+            delete_item(root, item_id=item_id)
+
+        monkeypatch.setattr(plugin, "delete_item", failing)
+
+        response = report_files(context, agent, file_entry("workspace/kept.md", size=5), complete=True)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(
+            (provider_has(context, "workspace/a.md"), provider_has(context, "workspace/b.md")), equal_to((True, False))
+        )
+        assert_that(sorted(synced_files(context)), equal_to(["workspace/a.md", "workspace/kept.md"]))
+
+
+def test_a_complete_report_with_no_files_deletes_nothing():
+    with given(_BASE) as context:
+        agent = ready_agent(context)
+        upload_through_the_pod(context, agent, "workspace/notes.md", b"hello")
+
+        response = report_files(context, agent, complete=True)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+        assert_that(provider_has(context, "workspace/notes.md"), equal_to(True))
+        assert_that(sorted(synced_files(context)), equal_to(["workspace/notes.md"]))
+        assert_that(activity_entries(context), equal_to([]))

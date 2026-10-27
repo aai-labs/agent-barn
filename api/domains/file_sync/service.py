@@ -1,6 +1,7 @@
+import logging
 import secrets
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -39,7 +40,10 @@ from api.domains.sync_provider.plugins.base import (
 from api.domains.sync_provider.plugins.registry import SyncProviderPluginRegistry
 from api.infrastructure.crypto import decrypt_token
 
+logger = logging.getLogger(__name__)
+
 UPLOAD_REISSUE_AFTER = timedelta(minutes=14)
+UPLOAD_CLOCK_SKEW = timedelta(minutes=2)
 THROTTLE_FALLBACK_SECONDS = 60
 OPERATION_LEASE = timedelta(minutes=10)
 NO_SPACE_RETRY = timedelta(minutes=5)
@@ -104,20 +108,36 @@ class FileSyncIngestService:
         known = {row.path.lower(): row for row in self.repository.files(target.folder.id)}
         seen: set[str] = set()
         uploads: list[FileSyncUploadRead] = []
+        for entry in changes.entries:
+            if self._skipped(target, entry, seen, now):
+                continue
+            upload = self._per_file(
+                target,
+                entry.path,
+                lambda entry=entry: self._sync_entry(target, entry, known.get(entry.path.lower()), now),
+            )
+            if upload is not None:
+                uploads.append(upload)
+        if changes.complete and changes.entries:
+            for lowered, row in known.items():
+                if lowered not in seen:
+                    self._per_file(target, row.path, lambda row=row: self._delete_missing(target, row, now))
+        return FileSyncChangesRead(uploads=uploads)
+
+    def _per_file[T](self, target: FileSyncTarget, path: str, action: Callable[[], T]) -> T | None:
         try:
-            for entry in changes.entries:
-                if self._skipped(target, entry, seen, now):
-                    continue
-                upload = self._sync_entry(target, entry, known.get(entry.path.lower()), now)
-                if upload is not None:
-                    uploads.append(upload)
-            if changes.complete:
-                self._delete_missing(target, known, seen, now)
+            return action()
         except ProviderThrottled as exc:
             raise FileSyncProviderBusy(exc.retry_after or THROTTLE_FALLBACK_SECONDS) from exc
         except SyncProviderError as exc:
-            raise FileSyncProviderFailed(exc.message) from exc
-        return FileSyncChangesRead(uploads=uploads)
+            logger.warning(
+                "File sync skipped %s for Agent %s this round: %s: %s",
+                path,
+                target.agent.id,
+                type(exc).__name__,
+                exc.message,
+            )
+            return None
 
     def complete_upload(self, agent_id: UUID, provided_key: str, path: str) -> None:
         target = self._target(agent_id, provided_key)
@@ -133,8 +153,9 @@ class FileSyncIngestService:
             raise FileSyncProviderBusy(exc.retry_after or THROTTLE_FALLBACK_SECONDS) from exc
         except SyncProviderError as exc:
             raise FileSyncProviderFailed(exc.message) from exc
-        if item.is_folder or item.size != row.size:
-            raise FileSyncConflict("The provider holds a different file at this path")
+        started = row.upload_started_at - UPLOAD_CLOCK_SKEW
+        if item.is_folder or not item.modified_by_app or (item.modified_at is not None and item.modified_at < started):
+            raise FileSyncConflict("The provider holds a file this upload didn't write")
         now = datetime.now(UTC)
         self.repository.record_synced(target.folder.id, path, item, sha256=row.local_sha256, size=row.size, now=now)
         if row.pending_activity is not None:
@@ -228,16 +249,11 @@ class FileSyncIngestService:
             raise FileSyncConflict("A done result names the written content")
         self.repository.record_synced(target.folder.id, row.path, item, sha256=result.sha256, size=result.size, now=now)
 
-    def _delete_missing(
-        self, target: FileSyncTarget, known: dict[str, SyncFile], reported: set[str], now: datetime
-    ) -> None:
-        for lowered, row in known.items():
-            if lowered in reported:
-                continue
-            if row.item_id is not None:
-                target.plugin.delete_item(target.root, item_id=row.item_id)
-                self.repository.record_activity(target.folder, SyncActivityKind.DELETED_BY_AGENT, row.path, now)
-            self.repository.remove_file(row.id)
+    def _delete_missing(self, target: FileSyncTarget, row: SyncFile, now: datetime) -> None:
+        if row.item_id is not None:
+            target.plugin.delete_item(target.root, item_id=row.item_id)
+            self.repository.record_activity(target.folder, SyncActivityKind.DELETED_BY_AGENT, row.path, now)
+        self.repository.remove_file(row.id)
 
     def _skipped(self, target: FileSyncTarget, entry: FileSyncEntryCreate, seen: set[str], now: datetime) -> bool:
         kind = None

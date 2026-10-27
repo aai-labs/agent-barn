@@ -241,11 +241,16 @@ class FileSyncEngine:
         self._content_edit(target, at_path, item)
 
     def _content_edit(self, target: _Target, row: SyncFile, item: RemoteItem) -> None:
-        if row.upload_started_at is not None or item.content_version == row.ctag:
+        if item.content_version == row.ctag:
             return
         now = datetime.now(UTC)
         settle_at = (item.modified_at or now) + SETTLE_DELAY
         version = item.content_version or ""
+        if row.upload_started_at is not None:
+            self.repository.record_activity_once(
+                target.folder, SyncActivityKind.CONFLICT_AGENT_WON, row.path, version, now
+            )
+            return
         category = classify(target.runtime, row.path)
         if category in (SyncCategory.WORK, SyncCategory.MEMORY):
             if item.size > MAX_FILE_BYTES:

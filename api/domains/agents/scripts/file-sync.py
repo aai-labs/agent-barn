@@ -122,6 +122,8 @@ def _local_files(rules):
 
 def scan(rules, cache, settle_seconds=SETTLE_SECONDS):
     found, complete = _local_files(rules)
+    if not os.path.isdir(os.path.join(rules["root"], rules["workspace"])):
+        complete = False
     entries = []
     fresh_cache = {}
     now = time.time()

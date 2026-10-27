@@ -235,7 +235,7 @@ Agent folders:
 - **Deleted:** its folder id is cleared, so the next pass creates it again, and every file it held gets a `reupload` job.
 - Both record `folder_restored`.
 
-A file whose path and row match is a content edit. It is ignored when an upload of it is under way, or its content version equals the one recorded. Otherwise a person changed its content:
+A file whose path and row match is a content edit. It is ignored when its content version equals the one recorded. If the Agent's own upload of it is under way, the Agent's version wins and `conflict_agent_won` is recorded; the person's edit stays in version history. Otherwise a person changed its content:
 - **Work and memory files:** a `download` job for the pod. An edit over 100 MB is not downloaded, and is recorded once as `skipped_too_large`.
 - **Config and skills files:** a `reupload` job, which undoes the edit with the Agent's copy. `edit_undone` is recorded when the Agent's copy is back, once per undo, however many edits it threw away.
 - **Autosave:** a job is not handed out until 30 s after the item's last modification (`retry_at`). Each further autosave pushes that back, and the cursor never waits.
@@ -246,7 +246,7 @@ A file whose path and row match is a content edit. It is ignored when an upload 
 The pod reports its full file list, and Ingest answers with upload links. The [Ingest contract](../activity-and-ingest.md) owns the details:
 - **New and changed files** are uploaded and then confirmed; the server checks each confirmation at the provider.
 - **Empty files** are written by the server.
-- **Deletes:** a file missing from a complete report is deleted at the provider (its recycle bin).
+- **Deletes:** a file missing from a complete report is deleted at the provider (its recycle bin). A report with no files never deletes, and the helper marks its report incomplete when the Agent's `workspace/` is missing, so an unmounted or empty volume can't empty the folder.
 - **Conflicts:** when the Agent changed a file a person also edited, the Agent wins. Its version is uploaded over the person's, which stays in the provider's version history, and `conflict_agent_won` is recorded.
 
 The helper never deletes a file on the volume.

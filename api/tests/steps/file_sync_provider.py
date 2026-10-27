@@ -37,6 +37,8 @@ TEST_DRIVE_TOKEN = "test-drive-token"
 UPLOAD_URL_PREFIX = "https://testdrive.example.test/upload/"
 DOWNLOAD_URL_PREFIX = "https://testdrive.example.test/download/"
 UPLOAD_LIFETIME = timedelta(minutes=15)
+OFFICE_EXTENSIONS = (".docx", ".xlsx", ".pptx")
+OFFICE_REWRITE = b"<sharepoint properties>" * 64
 
 
 @dataclass
@@ -51,6 +53,7 @@ class _Node:
     deleted: bool = False
     modified_by_app: bool = True
     seq: int = 0
+    modified_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -167,6 +170,8 @@ class TestDrivePlugin(SyncProviderPlugin):
 
     def complete_upload(self, url: str, content: bytes) -> RemoteItem:
         root, parent_id, rel_path = self.uploads.pop(url)
+        if rel_path.lower().endswith(OFFICE_EXTENSIONS):
+            content += OFFICE_REWRITE
         return self._item(root, self._write(parent_id, rel_path, content, by_app=True))
 
     def content_at(self, download_url: str) -> bytes:
@@ -231,6 +236,7 @@ class TestDrivePlugin(SyncProviderPlugin):
         if content_changed:
             node.content_version += 1
         node.modified_by_app = by_app
+        node.modified_at = datetime.now(UTC)
 
     def _live(self, item_id: str) -> _Node:
         node = self.nodes.get(item_id)
@@ -328,7 +334,7 @@ class TestDrivePlugin(SyncProviderPlugin):
             content_hash=None if node.is_folder else hashlib.sha256(node.content).hexdigest(),
             is_folder=node.is_folder,
             deleted=deleted,
-            modified_at=datetime.now(UTC),
+            modified_at=node.modified_at,
             modified_by_app=False if deleted else node.modified_by_app,
             web_url=f"https://testdrive.example.test/{node.id}",
         )
