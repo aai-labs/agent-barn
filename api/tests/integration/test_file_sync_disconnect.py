@@ -20,7 +20,13 @@ from api.tests.core.modules import create_test_client, prepare_api_server, prepa
 from api.tests.steps.agent import TEST_ENCRYPTION_KEY, MockK8sModule, there_is_an_agent
 from api.tests.steps.database import database_is_clean, database_repo_is_ready
 from api.tests.steps.file_sync_ingest import SHA_A
-from api.tests.steps.file_sync_provider import TEST_DRIVE, TestDriveModule, fake_drive, there_is_a_sync_connection
+from api.tests.steps.file_sync_provider import (
+    TEST_DRIVE,
+    TEST_DRIVE_TOKEN,
+    TestDriveModule,
+    fake_drive,
+    there_is_a_sync_connection,
+)
 from api.tests.steps.organization import there_is_an_organization_with_user_and_access_token
 
 _GIVEN = [
@@ -96,7 +102,9 @@ def _record_revokes(context, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return revokes
 
 
-def test_disconnecting_deletes_every_agent_folder_first_and_keeps_the_root(monkeypatch: pytest.MonkeyPatch):
+def test_disconnecting_revokes_first_then_deletes_every_agent_folder_with_the_admins_sign_in(
+    monkeypatch: pytest.MonkeyPatch,
+):
     with given(_GIVEN) as context:
         sales, _ = _synced_agents(context)
         repository = context.injector.get(FileSyncRepository)
@@ -110,10 +118,11 @@ def test_disconnecting_deletes_every_agent_folder_first_and_keeps_the_root(monke
         with when("an Owner signs in again and disconnects"):
             response = _disconnect(context)
 
-        with then("every Agent folder, a retired one still waiting to be deleted too, goes before the revoke"):
+        with then("access is revoked first, then every Agent folder, a retired one too, is deleted as the admin"):
             assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
             assert_that(_live_children(context), equal_to([]))
-            assert_that(fake_drive(context).calls, equal_to(["delete_item", "delete_item", "revoke"]))
+            assert_that(fake_drive(context).calls, equal_to(["revoke", "delete_item_with", "delete_item_with"]))
+            assert_that(fake_drive(context).delegated_tokens, equal_to([TEST_DRIVE_TOKEN] * 2))
             assert_that(fake_drive(context).nodes[context.sync_root.folder_id].deleted, equal_to(False))
 
         with then("the folder and file rows are gone, the activity stays, and the connection is closed"):
@@ -140,20 +149,25 @@ def test_the_engine_creates_no_folders_after_a_disconnect(monkeypatch: pytest.Mo
         assert_that(_folders(context), equal_to([]))
 
 
+def _failing_deletes(context, monkeypatch: pytest.MonkeyPatch, error_for: dict[str, Exception]) -> None:
+    plugin = fake_drive(context)
+    delete = plugin.delete_item_with
+
+    def delete_item_with(token: str, root, *, item_id: str) -> None:
+        if item_id in error_for:
+            raise error_for[item_id]
+        delete(token, root, item_id=item_id)
+
+    monkeypatch.setattr(plugin, "delete_item_with", delete_item_with)
+
+
 def test_a_folder_already_gone_at_the_provider_does_not_stop_the_disconnect(monkeypatch: pytest.MonkeyPatch):
     with given(_GIVEN) as context:
         _synced_agents(context)
         revokes = _record_revokes(context, monkeypatch)
-        plugin = fake_drive(context)
-        delete = plugin.delete_item
         gone = _folders(context)[0].folder_item_id
-
-        def delete_item(root, *, item_id: str) -> None:
-            if item_id == gone:
-                raise RemoteItemMissing(item_id)
-            delete(root, item_id=item_id)
-
-        monkeypatch.setattr(plugin, "delete_item", delete_item)
+        assert gone is not None
+        _failing_deletes(context, monkeypatch, {gone: RemoteItemMissing(gone)})
 
         response = _disconnect(context)
 
@@ -163,41 +177,32 @@ def test_a_folder_already_gone_at_the_provider_does_not_stop_the_disconnect(monk
         assert_that(_connection_status(context), equal_to(SyncProviderStatus.DISCONNECTED))
 
 
-def test_a_provider_failure_while_deleting_keeps_the_connection_and_the_engine_restores_the_folder(
+def test_a_folder_the_provider_fails_to_delete_is_left_in_place_and_the_disconnect_still_completes(
     monkeypatch: pytest.MonkeyPatch,
 ):
     with given(_GIVEN) as context:
-        _synced_agents(context)
+        sales, _ = _synced_agents(context)
         revokes = _record_revokes(context, monkeypatch)
-        plugin = fake_drive(context)
-        delete = plugin.delete_item
-        deletes: list[str] = []
+        stuck = next(folder for folder in _folders(context) if folder.agent_id == sales.id).folder_item_id
+        assert stuck is not None
+        _failing_deletes(context, monkeypatch, {stuck: ProviderUnavailable("Test Drive is down.")})
 
-        def delete_item(root, *, item_id: str) -> None:
-            deletes.append(item_id)
-            if len(deletes) == 2:
-                raise ProviderUnavailable("Test Drive is down.")
-            delete(root, item_id=item_id)
-
-        monkeypatch.setattr(plugin, "delete_item", delete_item)
-
-        with when("the provider fails on the second folder"):
+        with when("the provider fails on one folder after access was revoked"):
             response = _disconnect(context)
 
-        with then("the disconnect fails, nothing is revoked, and the connection stays active"):
-            assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY), response.text)
-            assert_that(revokes, equal_to([]))
-            assert_that(_connection_status(context), equal_to(SyncProviderStatus.ACTIVE))
-            assert_that(_folders(context), has_length(1))
-            assert_that(_live_children(context), has_length(1))
+        with then("the connection is closed, and only that folder and its files stay at the provider"):
+            assert_that(response.status_code, equal_to(status.HTTP_200_OK), response.text)
+            assert_that(revokes, has_length(1))
+            assert_that(_connection_status(context), equal_to(SyncProviderStatus.DISCONNECTED))
+            assert_that(_live_children(context), equal_to(["Sales Bot"]))
+            assert_that(_folders(context), equal_to([]))
 
-        with then("the next engine pass gives the Agent whose folder was deleted a new one"):
-            context.injector.get(FileSyncEngine).reconcile_folders(context.connection)
-            assert_that(_folders(context), has_length(2))
-            assert_that(_live_children(context), equal_to(["Sales Bot", "Support"]))
+        with then("no engine pass touches the disconnected connection again"):
+            context.injector.get(FileSyncEngine).run_pass(datetime.now(UTC))
+            assert_that(_live_children(context), equal_to(["Sales Bot"]))
 
 
-def test_a_failed_revoke_keeps_the_connection_and_the_engine_rebuilds_the_folders(monkeypatch: pytest.MonkeyPatch):
+def test_a_failed_revoke_keeps_the_connection_and_deletes_nothing(monkeypatch: pytest.MonkeyPatch):
     with given(_GIVEN) as context:
         _synced_agents(context)
         plugin = fake_drive(context)
@@ -206,13 +211,15 @@ def test_a_failed_revoke_keeps_the_connection_and_the_engine_rebuilds_the_folder
             raise ProviderUnavailable("Test Drive is down.")
 
         monkeypatch.setattr(plugin, "revoke", revoke)
+        plugin.calls.clear()
 
         response = _disconnect(context)
 
         assert_that(response.status_code, equal_to(status.HTTP_502_BAD_GATEWAY), response.text)
         assert_that(_connection_status(context), equal_to(SyncProviderStatus.ACTIVE))
-        context.injector.get(FileSyncEngine).reconcile_folders(context.connection)
+        assert_that("delete_item_with" in plugin.calls, equal_to(False))
         assert_that(_live_children(context), equal_to(["Sales Bot", "Support"]))
+        assert_that(_folders(context), has_length(2))
 
 
 def test_a_disconnect_that_cannot_get_the_connection_from_the_engine_changes_nothing(monkeypatch: pytest.MonkeyPatch):
@@ -248,15 +255,15 @@ def test_a_disconnect_waits_for_a_running_engine_pass(monkeypatch: pytest.Monkey
         _synced_agents(context)
         _record_revokes(context, monkeypatch)
         plugin = fake_drive(context)
-        delete = plugin.delete_item
+        delete = plugin.delete_item_with
         held = threading.Event()
         events: list[str] = []
 
-        def delete_item(root, *, item_id: str) -> None:
+        def delete_item_with(token: str, root, *, item_id: str) -> None:
             events.append("delete")
-            delete(root, item_id=item_id)
+            delete(token, root, item_id=item_id)
 
-        monkeypatch.setattr(plugin, "delete_item", delete_item)
+        monkeypatch.setattr(plugin, "delete_item_with", delete_item_with)
 
         def engine_pass() -> None:
             with context.injector.get(FileSyncRepository).connection_lock(context.connection.id) as acquired:

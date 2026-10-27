@@ -228,6 +228,16 @@ def test_changes_can_leave_out_paths_as_microsoft_documents():
     assert_that(plugin.get_item(root, item_id=page.items[-1].id).path is not None, is_(True))
 
 
+def test_deleting_with_a_token_deletes_and_records_the_token():
+    plugin, root = _connected()
+    item = plugin.user_adds(root, "Sales Bot/notes.md", b"x")
+
+    plugin.delete_item_with("admin-token", root, item_id=item.id)
+
+    assert_that(plugin.nodes[item.id].deleted, is_(True))
+    assert_that(plugin.delegated_tokens, equal_to(["admin-token"]))
+
+
 def test_downloads_and_empty_files_need_no_upload():
     plugin, root = _connected()
     folder = plugin.create_folder(root, parent_id=root.folder_id, name="Sales Bot")

@@ -256,6 +256,10 @@ class SyncProviderPlugin(ABC):
         del root, item_id
         raise NotImplementedError(f"{self.key} has no file sync")
 
+    def delete_item_with(self, token: str, root: SyncRoot, *, item_id: str) -> None:
+        del token, root, item_id
+        raise NotImplementedError(f"{self.key} has no file sync")
+
     def list_files(self, root: SyncRoot, *, folder_id: str) -> list[RemoteItem]:
         del root, folder_id
         raise NotImplementedError(f"{self.key} has no file sync")

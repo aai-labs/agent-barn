@@ -298,9 +298,9 @@ class SyncProviderService:
     def disconnect(
         self, organization_id: UUID, provider_key: str, code: str, state_token: str, context: CurrentUserContext
     ) -> SyncProviderRead:
-        """Delete the Agent folders with Agent Barn's own access, take that access back with the person's
-        fresh sign-in, then close the connection. The root folder is left in place. The Sync Engine is held
-        off the connection throughout, and rebuilds the folders if any step fails."""
+        """Take Agent Barn's access back with the person's fresh sign-in, close the connection, then delete the
+        Agent folders with that sign-in. A failed revoke changes nothing; a folder that fails to delete stays.
+        The root folder is left in place, and the Sync Engine is held off the connection throughout."""
         self._require_manage(organization_id, context)
         plugin = self._offered(provider_key)
         state = self._verified_state(state_token, provider_key, "disconnect", organization_id, context)
@@ -311,7 +311,6 @@ class SyncProviderService:
         self._call(lambda: plugin.require_same_account(connection.account_id, signed_in))
         try:
             with self.file_sync_folders.holding(connection.id):
-                self._call(lambda: self.file_sync_folders.remove_agent_folders(connection, plugin))
                 self._call(
                     lambda: plugin.revoke(
                         signed_in.access_token,
@@ -320,6 +319,7 @@ class SyncProviderService:
                     )
                 )
                 self.repository.mark_disconnected(connection.id)
+                self.file_sync_folders.remove_agent_folders(connection, plugin, signed_in.access_token)
         except FileSyncBusy as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, _FILE_SYNC_BUSY) from exc
         return self._read(organization_id, plugin)

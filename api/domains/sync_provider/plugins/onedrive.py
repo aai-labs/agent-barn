@@ -322,6 +322,12 @@ class OneDriveSyncProviderPlugin(SyncProviderPlugin):
     def delete_item(self, root: SyncRoot, *, item_id: str) -> None:
         self._as_app(root, lambda token, site_id: self.graph_files.delete_item(token, site_id=site_id, item_id=item_id))
 
+    def delete_item_with(self, token: str, root: SyncRoot, *, item_id: str) -> None:
+        if root.location_id is None:
+            raise LocationNotFound(_SITE_NOT_FOUND)
+        with _file_failures():
+            self.graph_files.delete_item(token, site_id=root.location_id, item_id=item_id)
+
     def changes(self, root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
         page = self._as_app(
             root,

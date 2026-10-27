@@ -56,11 +56,11 @@ Paths below are relative to `/organizations/{organization_id}/sync-providers/{pr
    2. `POST …/connection/disconnect {code, state}` requires a disconnect state for this caller, Organization and provider (400), and an active connection (409).
    3. The plugin redeems the code and requires the same account that connected.
    4. Holding the connection's Sync Engine lock (`FileSyncFolderRemoval`), it waits up to 15 s for a running engine pass. If the lock isn't free by then, the answer is 409 "File sync is busy with this connection. Try again in a moment." and nothing changes.
-   5. Every Agent Folder, including disabled ones and retired ones still waiting to be deleted, is deleted at the provider with Agent Barn's own access, and its row is removed, together with its `sync_file` rows. A folder already gone at the provider is skipped. `sync_activity` keeps its history, with `folder_id` cleared.
-   6. The plugin revokes Agent Barn's access with the fresh sign-in.
-   7. The connection is marked disconnected. The "Agent Barn" root folder is left in place, and the Organization may connect again. Agents' volumes and pods are not touched.
+   5. The plugin revokes Agent Barn's access with the fresh sign-in. If that fails, the answer is the provider's error, the connection stays active, and nothing is deleted.
+   6. The connection is marked disconnected, so no engine pass or pod touches it again.
+   7. Every Agent Folder, including disabled ones and retired ones still waiting to be deleted, is deleted at the provider with the administrator's own sign-in (`delete_item_with`), since Agent Barn's access is already gone. Each row is removed, together with its `sync_file` rows, and `sync_activity` keeps its history with `folder_id` cleared. A folder already gone is skipped. A folder the provider fails to delete is logged and left in place with its files.
 
-   If a provider call fails at step 5 or 6, the connection stays active. The next engine pass gives every Agent without a folder a new one, and their pods upload their files again.
+   The "Agent Barn" root folder is left in place, and the Organization may connect again. Agents' volumes and pods are not touched.
 
 Plugin failures map to HTTP the same way for every provider:
 
@@ -101,7 +101,7 @@ Settings → **Sync** (`?tab=sync`) is visible to every Organization Member. It 
 - Pending:
   - Owners and Admins of a provider with `location_picker` get the picker inline: a search that needs a term (labelled from `location_noun`), a result list, and **Use**. The API's `detail` is shown inline when choosing fails. Reloading the page resumes at the picker while the sign-in is fresh. **Start over** abandons the unfinished connection.
   - Members are told no {location_noun} has been chosen yet.
-- Active: **Open in {provider}** links to the folder in a new tab, with the provider's `folder_hint` underneath. Owners and Admins also get **Disconnect**, confirmed in a dialog. For a provider with `file_sync` it says each Agent's folder is deleted first, and that the "Agent Barn" folder and the Agents' own files stay. For any other provider it says the folder and its files stay where they are. It then opens the sign-in popup and posts the code to the disconnect route. A refusal is shown inline and the connection stays.
+- Active: **Open in {provider}** links to the folder in a new tab, with the provider's `folder_hint` underneath. Owners and Admins also get **Disconnect**, confirmed in a dialog. For a provider with `file_sync` it says each Agent's folder is deleted once access is removed, and that the "Agent Barn" folder and the Agents' own files stay. For any other provider it says the folder and its files stay where they are. It then opens the sign-in popup and posts the code to the disconnect route. A refusal is shown inline and the connection stays.
 - Connecting or disconnecting one provider refetches the list, because it changes whether the others may connect.
 
 The query is keyed by Organization id, so switching Organization never shows the previous one's providers.
@@ -117,7 +117,7 @@ A new provider is a plugin, its provider client, and tests. No route, table, mig
 3. **Capabilities.** Declare only what it implements:
    - `location_picker` needs `search_locations`, `resolve_location` and a `location_noun`;
    - `admin_approval` needs `approval_url` and `is_approval_callback`;
-   - `file_sync` needs `create_folder`, `get_item`, `get_item_by_path`, `move_item`, `delete_item`, `changes`, `upload_target`, `download_url` and `write_empty_file`. They act as Agent Barn under the connection's `SyncRoot`, report paths relative to the "Agent Barn" folder in `RemoteItem`, and raise `RemoteItemMissing`, `RemoteNameTaken`, `RemoteChangeRejected`, `RemoteResyncRequired`, or `ProviderThrottled` with `retry_after`. The upload and download URLs must work without any provider credential, because the Agent's pod uses them.
+   - `file_sync` needs `create_folder`, `get_item`, `get_item_by_path`, `move_item`, `delete_item`, `delete_item_with`, `changes`, `list_files`, `upload_target`, `download_url` and `write_empty_file`. They act as Agent Barn under the connection's `SyncRoot`, except `delete_item_with`, which acts with a person's own sign-in token (disconnect uses it after Agent Barn's access is revoked). `list_files` returns every file below a folder, with its path, report paths relative to the "Agent Barn" folder in `RemoteItem`, and raise `RemoteItemMissing`, `RemoteNameTaken`, `RemoteChangeRejected`, `RemoteResyncRequired`, or `ProviderThrottled` with `retry_after`. The upload and download URLs must work without any provider credential, because the Agent's pod uses them.
 
    The registry refuses a plugin that declares a capability without its methods.
 4. **Guards.** A check owned by another domain is declared as a `SyncLocationGuard` member and bound in `SyncProviderService._guard`. The plugin never imports that domain.

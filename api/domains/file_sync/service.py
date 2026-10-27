@@ -11,7 +11,7 @@ from injector import inject, singleton
 
 from api.core.config import Config
 from api.domains.agents.models import Agent, AgentType
-from api.domains.file_sync.engine import delete_agent_folder, sync_root
+from api.domains.file_sync.engine import sync_root
 from api.domains.file_sync.models import (
     FileSyncChangesCreate,
     FileSyncChangesRead,
@@ -349,7 +349,19 @@ class FileSyncFolderRemoval:
                 raise FileSyncBusy
             yield
 
-    def remove_agent_folders(self, connection: SyncProviderConnection, plugin: SyncProviderPlugin) -> None:
+    def remove_agent_folders(self, connection: SyncProviderConnection, plugin: SyncProviderPlugin, token: str) -> None:
         root = sync_root(connection)
         for folder in self.repository.folders(connection.id):
-            delete_agent_folder(plugin, root, self.repository, folder)
+            if root is not None and folder.folder_item_id is not None:
+                try:
+                    plugin.delete_item_with(token, root, item_id=folder.folder_item_id)
+                except RemoteItemMissing:
+                    pass
+                except SyncProviderError as exc:
+                    logger.warning(
+                        "Disconnect left the folder of Agent %s at the provider: %s: %s",
+                        folder.agent_id,
+                        type(exc).__name__,
+                        exc.message,
+                    )
+            self.repository.remove_folder(folder.id)

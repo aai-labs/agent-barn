@@ -76,6 +76,7 @@ class TestDrivePlugin(SyncProviderPlugin):
     moved_out: set[str] = field(default_factory=set)
     throttled_calls: dict[str, int] = field(default_factory=dict)
     omit_paths_in_changes: bool = False
+    delegated_tokens: list[str] = field(default_factory=list)
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
     _instance: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
@@ -124,6 +125,13 @@ class TestDrivePlugin(SyncProviderPlugin):
 
     def delete_item(self, root: SyncRoot, *, item_id: str) -> None:
         self._call("delete_item")
+        node = self.nodes.get(item_id)
+        if node is not None and not node.deleted:
+            self._delete(node)
+
+    def delete_item_with(self, token: str, root: SyncRoot, *, item_id: str) -> None:
+        self._call("delete_item_with")
+        self.delegated_tokens.append(token)
         node = self.nodes.get(item_id)
         if node is not None and not node.deleted:
             self._delete(node)

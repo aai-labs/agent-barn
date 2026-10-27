@@ -12,6 +12,7 @@ CAPABILITY_METHODS: dict[SyncProviderCapability, tuple[str, ...]] = {
         "get_item_by_path",
         "move_item",
         "delete_item",
+        "delete_item_with",
         "changes",
         "list_files",
         "upload_target",

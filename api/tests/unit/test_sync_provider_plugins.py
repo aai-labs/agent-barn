@@ -211,6 +211,7 @@ _FILE_SYNC_METHODS = (
     "get_item_by_path",
     "move_item",
     "delete_item",
+    "delete_item_with",
     "changes",
     "list_files",
     "upload_target",
@@ -253,6 +254,9 @@ class _FileSync(_Stub):
         return _ITEM
 
     def delete_item(self, root: SyncRoot, *, item_id: str) -> None:
+        return None
+
+    def delete_item_with(self, token: str, root: SyncRoot, *, item_id: str) -> None:
         return None
 
     def changes(self, root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
@@ -1067,4 +1071,17 @@ def test_onedrive_lists_every_file_below_a_folder_across_pages_and_subfolders(gr
                 f"{_GRAPH_DRIVE}/items/id-q3/children",
             ]
         ),
+    )
+
+
+def test_onedrive_deletes_with_the_administrators_own_token_not_the_apps(graph):
+    recorder = graph(httpx.Response(204))
+    plugin, identity, _ = _onedrive()
+
+    plugin.delete_item_with("delegated-admin-token", _SYNC_ROOT, item_id="folder-1")
+
+    assert_that(identity.app_token_requests, equal_to([]))
+    assert_that(
+        (recorder.calls[0]["method"], recorder.calls[0]["url"], recorder.calls[0]["headers"]),
+        equal_to(("DELETE", f"{_GRAPH_DRIVE}/items/folder-1", {"Authorization": "Bearer delegated-admin-token"})),
     )
