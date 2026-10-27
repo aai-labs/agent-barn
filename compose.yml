@@ -269,7 +269,7 @@ services:
     env_file:
       - .env
     environment:
-      <<: *api-env
+      <<: *unprivileged-env
     volumes:
       - ./api:/app/api
 
