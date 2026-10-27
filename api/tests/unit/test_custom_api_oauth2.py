@@ -76,12 +76,40 @@ def test_a_token_the_upstream_rejected_is_discarded_but_a_newer_one_is_kept(monk
     assert_that(cache.access_token(connection, "rev-1", _AUTH), equal_to("minted-2"))
 
 
-def test_a_short_lived_token_is_exchanged_on_every_request(monkeypatch):
-    cache, _, exchanges = _cache(monkeypatch, lifetime=TOKEN_EXPIRY_MARGIN)
+def test_a_short_lived_token_keeps_half_its_lifetime_as_the_margin(monkeypatch):
+    cache, clock, exchanges = _cache(monkeypatch, lifetime=TOKEN_EXPIRY_MARGIN)
+    connection = uuid4()
+    cache.access_token(connection, "rev-1", _AUTH)
+    clock.now += TOKEN_EXPIRY_MARGIN / 2 - 1
+    cache.access_token(connection, "rev-1", _AUTH)
+    assert_that(exchanges, has_length(1))
+    clock.now += 2
+    cache.access_token(connection, "rev-1", _AUTH)
+    assert_that(exchanges, has_length(2))
+
+
+def test_a_token_that_already_expired_is_never_served(monkeypatch):
+    cache, _, exchanges = _cache(monkeypatch, lifetime=0)
     connection = uuid4()
     cache.access_token(connection, "rev-1", _AUTH)
     cache.access_token(connection, "rev-1", _AUTH)
     assert_that(exchanges, has_length(2))
+
+
+def test_a_concurrent_exchange_keeps_the_longer_lived_token(monkeypatch):
+    from api.domains.custom_api.gateway import _CachedToken
+
+    cache, clock, _ = _cache(monkeypatch)
+    connection = uuid4()
+
+    def racing_exchange(auth):
+        # Another thread finished first and stored a token that outlives ours.
+        cache._tokens[connection] = _CachedToken("from-other-thread", clock.now + 7200, "rev-1", 60)
+        return "ours", 3600
+
+    monkeypatch.setattr(engine, "fetch_access_token", racing_exchange)
+    assert_that(cache.access_token(connection, "rev-1", _AUTH), equal_to("from-other-thread"))
+    assert_that(cache.access_token(connection, "rev-1", _AUTH), equal_to("from-other-thread"))
 
 
 def _row(isolated: bool) -> CustomApiConnection:

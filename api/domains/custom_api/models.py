@@ -96,6 +96,7 @@ class CustomApiConnectionRead(DTO):
     auth_type: str
     auth_header_name: str | None = None
     auth_token_url: str | None = None
+    auth_scope: str | None = None
     headers: list[HeaderRead]
 
 

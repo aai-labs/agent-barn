@@ -690,17 +690,46 @@ def test_oauth2_connection_is_isolated_only_verified_on_save_and_authenticated_b
             assert_that(text, not_(contains_string("fixture-client")))
         assert_that(upstream.exchanges, has_length(2))
 
-        # A rename does not re-verify the credentials; turning isolation off is refused.
+        # A rename, even one that resends the unchanged auth as the editor does, does not
+        # re-verify; a scope change does, and leaving the scope out clears it.
         connection_id = created.json()["id"]
         renamed = context.client.patch(
-            _path(context, f"/{connection_id}"), headers=_headers(context), json={"name": "Snov.io outreach"}
+            _path(context, f"/{connection_id}"),
+            headers=_headers(context),
+            json={
+                "name": "Snov.io outreach",
+                "auth": {"type": "oauth2_client_credentials", "token_url": payload()["auth"]["token_url"]},
+            },
         )
         assert_that(renamed.status_code, equal_to(200))
         assert_that(upstream.exchanges, has_length(2))
+        scoped = context.client.patch(
+            _path(context, f"/{connection_id}"),
+            headers=_headers(context),
+            json={"auth": {**payload()["auth"], "client_secret": None, "client_id": None, "scope": "campaigns"}},
+        )
+        assert_that(scoped.status_code, equal_to(200))
+        assert_that(scoped.json()["auth_scope"], equal_to("campaigns"))
+        assert_that(upstream.exchanges, has_length(3))
+        assert_that(upstream.exchanges[-1]["scope"], equal_to("campaigns"))
+        cleared = context.client.patch(
+            _path(context, f"/{connection_id}"),
+            headers=_headers(context),
+            json={"auth": {"type": "oauth2_client_credentials", "token_url": payload()["auth"]["token_url"]}},
+        )
+        assert_that(cleared.json()["auth_scope"], is_(none()))
+        assert_that(upstream.exchanges, has_length(4))
+        assert_that("scope" in upstream.exchanges[-1], is_(False))
         unisolated = context.client.patch(
             _path(context, f"/{connection_id}"), headers=_headers(context), json={"isolated": False}
         )
         assert_that(unisolated.status_code, equal_to(422))
+        # The editor's preflight validates the shape only; the token request waits for the save.
+        preflight = context.client.post(
+            _path(context, "/preflight"), headers=_headers(context), json={"creates": [{**payload(), "name": "Second"}]}
+        )
+        assert_that(preflight.status_code, equal_to(204))
+        assert_that(upstream.exchanges, has_length(4))
 
         repository = context.injector.get(CustomApiRepository)
         integrations = context.injector.get(IntegrationRepository)
@@ -721,9 +750,10 @@ def test_oauth2_connection_is_isolated_only_verified_on_save_and_authenticated_b
         response = gateway.post("/gateway/v1/custom-api/request", headers=headers, json=body)
         assert_that(response.status_code, equal_to(200))
         assert_that(response.json(), equal_to({"status": 200, "body": {"echo": "[REDACTED]", "path": "/v1/campaigns"}}))
-        assert_that(upstream.api_calls[-1]["authorization"], equal_to("Bearer minted-3"))
+        exchanged = len(upstream.exchanges)
+        assert_that(upstream.api_calls[-1]["authorization"], equal_to(f"Bearer minted-{exchanged}"))
         gateway.post("/gateway/v1/custom-api/request", headers=headers, json=body)
-        assert_that(upstream.exchanges, has_length(3))
+        assert_that(upstream.exchanges, has_length(exchanged))
 
         # An upstream 401 drops the cached token, so the next request exchanges again.
         upstream.reject_api = True
@@ -731,5 +761,5 @@ def test_oauth2_connection_is_isolated_only_verified_on_save_and_authenticated_b
         assert_that(rejected.json()["status"], equal_to(401))
         upstream.reject_api = False
         gateway.post("/gateway/v1/custom-api/request", headers=headers, json=body)
-        assert_that(upstream.exchanges, has_length(4))
-        assert_that(upstream.api_calls[-1]["authorization"], equal_to("Bearer minted-4"))
+        assert_that(upstream.exchanges, has_length(exchanged + 1))
+        assert_that(upstream.api_calls[-1]["authorization"], equal_to(f"Bearer minted-{exchanged + 1}"))

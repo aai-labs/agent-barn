@@ -328,6 +328,9 @@ def test_token_exchange_posts_the_credentials_as_a_form_to_the_pinned_endpoint(m
     [
         (401, {"error": "invalid_client"}, True),
         (400, {"error": "invalid_request"}, True),
+        (403, {"error": "access_denied"}, True),
+        (429, {"error": "rate_limited"}, False),
+        (404, "not here", False),
         (503, "down", False),
         (302, "", False),
         (200, b"<html>not json</html>", False),
@@ -345,11 +348,12 @@ def test_token_exchange_reports_refusals_separately_from_unusable_answers(monkey
     assert_that(failure.value.refused, equal_to(refused))
 
 
-def test_token_exchange_treats_an_unreachable_endpoint_as_unavailable(monkeypatch):
+@pytest.mark.parametrize("error", [OSError("connection reset"), engine.http.client.BadStatusLine("garbage")])
+def test_token_exchange_treats_an_unreachable_or_garbled_endpoint_as_unavailable(monkeypatch, error):
     endpoint = _token_endpoint(monkeypatch)
 
     def request(self, *args, **kwargs):
-        raise OSError("connection reset")
+        raise error
 
     endpoint.request = request
     with pytest.raises(engine.TokenExchangeFailed) as failure:
@@ -357,9 +361,24 @@ def test_token_exchange_treats_an_unreachable_endpoint_as_unavailable(monkeypatc
     assert_that(failure.value.refused, equal_to(False))
 
 
+def test_token_exchange_treats_a_dns_failure_as_unavailable_but_keeps_a_policy_refusal(monkeypatch):
+    _token_endpoint(monkeypatch)
+
+    def no_dns(host, port):
+        raise socket.gaierror("name or service not known")
+
+    monkeypatch.setattr(engine, "public_addresses", no_dns)
+    with pytest.raises(engine.TokenExchangeFailed) as failure:
+        engine.fetch_access_token(_OAUTH2)
+    assert_that(failure.value.refused, equal_to(False))
+    monkeypatch.setattr(engine, "public_addresses", lambda host, port: (_ for _ in ()).throw(RequestRefused("private")))
+    with pytest.raises(RequestRefused):
+        engine.fetch_access_token(_OAUTH2)
+
+
 @pytest.mark.parametrize(
     "expires_in,lifetime",
-    [(None, 3600), ("soon", 3600), (10**9, 24 * 3600), (-5, 0), ("120", 120)],
+    [(None, 3600), ("soon", 3600), (10**9, 24 * 3600), (-5, 0), ("120", 120), (float("inf"), 3600)],
 )
 def test_token_lifetime_is_defaulted_and_bounded(monkeypatch, expires_in, lifetime):
     payload = {"access_token": "minted-token", "token_type": "bearer"}

@@ -94,7 +94,7 @@ export class CustomApiDataSupport {
             const connection = {
               ...mockCustomApiConnection, ...previous, ...data, id,
               slug: previous?.slug ?? data.name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[-_]+|[-_]+$/g, ""),
-              auth_type: data.auth.type, auth_header_name: data.auth.header_name ?? null, auth_token_url: data.auth.token_url ?? null,
+              auth_type: data.auth.type, auth_header_name: data.auth.header_name ?? null, auth_token_url: data.auth.token_url ?? null, auth_scope: data.auth.scope ?? null,
               pending_apply: !body.restart,
               headers: data.headers.map((header: { secret: boolean; value?: string }) => ({
                 ...header, value: header.secret ? null : (header.value ?? ""),
@@ -116,6 +116,7 @@ export class CustomApiDataSupport {
           auth_type: body.auth.type,
           auth_header_name: body.auth.header_name ?? null,
           auth_token_url: body.auth.token_url ?? null,
+          auth_scope: body.auth.scope ?? null,
           pending_apply: !body.restart,
           headers: body.headers.map(
             (header: { secret: boolean; value?: string }) => ({

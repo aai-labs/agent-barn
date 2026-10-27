@@ -11,6 +11,7 @@ export const CustomApiConnectionSchema = z.object({
   authType: z.enum(["none", "bearer", "api_key", "basic", "oauth2_client_credentials"]),
   authHeaderName: z.string().nullable(),
   authTokenUrl: z.string().nullable().optional(),
+  authScope: z.string().nullable().optional(),
   headers: z.array(
     z.object({
       name: z.string(),

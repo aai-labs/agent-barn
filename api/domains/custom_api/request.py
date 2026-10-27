@@ -243,9 +243,12 @@ def fetch_access_token(auth: dict, *, timeout: int = TOKEN_EXCHANGE_TIMEOUT) -> 
     if scope:
         form["scope"] = scope
     path = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
-    addresses = public_addresses(parsed.hostname, parsed.port or 443)
-    connection = PinnedHTTPSConnection(parsed.hostname, addresses[0], parsed.port or 443, timeout=timeout)
+    connection = None
     try:
+        # Inside the try because a DNS failure is an OSError too; a private or missing
+        # address is a configuration refusal and stays a RequestRefused.
+        addresses = public_addresses(parsed.hostname, parsed.port or 443)
+        connection = PinnedHTTPSConnection(parsed.hostname, addresses[0], parsed.port or 443, timeout=timeout)
         connection.request(
             "POST",
             path,
@@ -255,16 +258,21 @@ def fetch_access_token(auth: dict, *, timeout: int = TOKEN_EXCHANGE_TIMEOUT) -> 
         response = connection.getresponse()
         status = response.status
         content = response.read(MAX_BYTES + 1)
-    except OSError as exc:
+    except RequestRefused:
+        raise
+    except (OSError, http.client.HTTPException) as exc:
         raise TokenExchangeFailed("The token endpoint could not be reached", refused=False) from exc
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
     if 300 <= status < 400:
         raise TokenExchangeFailed("The token endpoint redirected; redirects are not followed", refused=False)
-    if status >= 500:
-        raise TokenExchangeFailed(f"The token endpoint is unavailable (HTTP {status})", refused=False)
-    if status != 200:
+    if status in {400, 401, 403}:
+        # The statuses a token endpoint uses for invalid_client and invalid_request. Anything
+        # else (429, 404, 5xx) says nothing about the credentials, so it is unavailability.
         raise TokenExchangeFailed(f"The token endpoint refused the client credentials (HTTP {status})", refused=True)
+    if status != 200:
+        raise TokenExchangeFailed(f"The token endpoint is unavailable (HTTP {status})", refused=False)
     try:
         payload = json.loads(content[:MAX_BYTES].decode("utf-8", errors="replace"))
     except ValueError:
@@ -281,8 +289,9 @@ def fetch_access_token(auth: dict, *, timeout: int = TOKEN_EXCHANGE_TIMEOUT) -> 
     ):
         raise TokenExchangeFailed("The token endpoint did not issue a usable bearer token", refused=False)
     try:
+        # OverflowError: json.loads accepts Infinity.
         lifetime = int(payload.get("expires_in", DEFAULT_TOKEN_LIFETIME))
-    except TypeError, ValueError:
+    except TypeError, ValueError, OverflowError:
         lifetime = DEFAULT_TOKEN_LIFETIME
     return token, max(0, min(lifetime, MAX_TOKEN_LIFETIME))
 

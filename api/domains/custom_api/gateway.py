@@ -20,7 +20,8 @@ from api.domains.custom_api.request import OAUTH2_CLIENT_CREDENTIALS, RequestRef
 from api.infrastructure.crypto import decrypt_token
 
 #: Seconds of remaining validity below which a cached token is replaced rather than attached,
-#: so a request never goes out with a token that expires in flight.
+#: so a request never goes out with a token that expires in flight. A token that lives for
+#: less than twice this keeps half its lifetime as the margin instead, so it is still reused.
 TOKEN_EXPIRY_MARGIN = 60
 
 
@@ -29,6 +30,10 @@ class _CachedToken:
     value: str
     expires_at: float
     revision: str
+    margin: float
+
+    def usable(self, now: float) -> bool:
+        return self.expires_at - now > self.margin
 
 
 class AccessTokenCache:
@@ -50,14 +55,19 @@ class AccessTokenCache:
     def access_token(self, connection_id: UUID, revision: str, auth: dict) -> str:
         with self._lock:
             cached = self._tokens.get(connection_id)
-            if cached and cached.revision == revision and cached.expires_at - self._clock() > TOKEN_EXPIRY_MARGIN:
+            if cached and cached.revision == revision and cached.usable(self._clock()):
                 return cached.value
         # The exchange runs outside the lock: a slow token endpoint must not block every
         # other connection, and two concurrent exchanges for one connection are harmless.
         token, lifetime = engine.fetch_access_token(auth)
+        fresh = _CachedToken(token, self._clock() + lifetime, revision, min(TOKEN_EXPIRY_MARGIN, lifetime / 2))
         with self._lock:
-            self._tokens[connection_id] = _CachedToken(token, self._clock() + lifetime, revision)
-        return token
+            cached = self._tokens.get(connection_id)
+            # A concurrent exchange may have stored a token meanwhile; keep whichever lasts longer.
+            if cached is None or cached.revision != revision or cached.expires_at < fresh.expires_at:
+                self._tokens[connection_id] = fresh
+                return token
+            return cached.value
 
     def discard(self, connection_id: UUID, token: str) -> None:
         with self._lock:
