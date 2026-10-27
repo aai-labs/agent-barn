@@ -7,7 +7,7 @@ from uuid import UUID
 
 from api.domains.custom_api.models import CustomApiConnection
 from api.domains.custom_api.repository import CustomApiRepository
-from api.domains.custom_api.request import credential_headers, parse_url
+from api.domains.custom_api.request import OAUTH2_CLIENT_CREDENTIALS, credential_headers, parse_url
 from api.domains.integrations.plugins.base import RuntimeArtifacts
 from api.infrastructure.crypto import decrypt_token
 
@@ -77,6 +77,9 @@ def materialize_custom_api(
         else:
             auth = credentials.get("auth", {"type": "none"})
             auth_type = auth["type"]
+            if auth_type == OAUTH2_CLIENT_CREDENTIALS:
+                # Also refused at save time; here so no path can hand the pod the client secret.
+                raise ValueError("OAuth2 client credentials require credential isolation")
             lines.append(
                 f"auth_type = {json.dumps({'bearer': 'bearer_token', 'api_key': 'api_key_header'}.get(auth_type, auth_type))}"
             )

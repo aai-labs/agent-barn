@@ -30,6 +30,38 @@ test.describe("Custom API integrations", () => {
     await expect(ui.section).toContainText("Pending apply");
   });
 
+  test("OAuth2 client credentials are always isolated and send the token URL with the credentials", async ({ page }) => {
+    const data = new CustomApiDataSupport(page);
+    const ui = new CustomApiPage(page);
+    await data.open({ empty: true });
+    await ui.beginEditing();
+    await ui.add.click();
+    await ui.field("Connection name").fill("Snov.io");
+    await ui.field("Allowed base URL").fill("https://api.snov.io");
+    await ui.selectAuth("OAuth2 client credentials");
+    const isolation = ui.form.getByRole("switch", { name: "Snov.io isolation" });
+    await expect(isolation).toBeChecked();
+    await expect(isolation).toBeDisabled();
+    await expect(ui.form).toContainText("The client secret stays in Agent Barn");
+    await ui.field("Token URL").fill("https://api.snov.io/v1/oauth/access_token");
+    await ui.field("Client ID").fill("fixture-client-id");
+    await ui.field("Client secret").fill("fixture-client-secret");
+    await ui.confirmApply();
+    await expect(ui.form).toHaveCount(0);
+    expect(data.requests).toHaveLength(1);
+    expect(data.requests[0].body).toMatchObject({
+      name: "Snov.io",
+      isolated: true,
+      auth: {
+        type: "oauth2_client_credentials",
+        token_url: "https://api.snov.io/v1/oauth/access_token",
+        client_id: "fixture-client-id",
+        client_secret: "fixture-client-secret",
+      },
+    });
+    expect((data.requests[0].body?.auth as Record<string, unknown>)).not.toHaveProperty("scope");
+  });
+
   test("retains hidden secrets and clears ordinary headers through shared Apply", async ({ page }) => {
     const data = new CustomApiDataSupport(page);
     const ui = new CustomApiPage(page);

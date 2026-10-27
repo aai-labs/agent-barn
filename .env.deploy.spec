@@ -199,3 +199,11 @@ AGENT_DEFAULT_MODEL=
 # $KUBECONFIG (deploy.sh derives it). Set only if the API pod must use a
 # different identity or cluster than this deploy.
 # POD_KUBECONFIG_B64=
+
+# Required private Garage: complete docs/guidelines/garage.md bootstrap before deployment.
+# Cluster RPC/admin authority and application settings live in pre-created Kubernetes Secrets, not CI.
+ARTIFACT_STORAGE_SECRET=
+# Defaults to true when ARTIFACT_STORAGE_SECRET is set; set false to disable maintenance.
+ARTIFACT_PURGE_ENABLED=
+# Private management Secret, mounted only by the product API and artifact maintenance worker.
+ARTIFACT_PROVISIONER_SECRET=

@@ -244,3 +244,27 @@ MEMORY_LITELLM_KEY_HASHES=
 # HINDSIGHT_BASE_URL=http://hindsight:8888 when this profile is enabled.
 COMPOSE_PROFILES=
 HINDSIGHT_DB_PASSWORD=
+
+# Private Agent artifacts; the server derives a fixed bucket name from each Agent UUID.
+# An empty endpoint retains text-only operation. Download links use the existing WEB_APP_URL.
+ARTIFACT_S3_ENDPOINT_URL=
+# No installation-wide data credentials or workload-identity fallback.
+# Per-Agent data secrets are encrypted with AGENT_TOKEN_ENCRYPTION_KEY in PostgreSQL.
+# ARTIFACT_PROVISIONER_URL/TOKEN belong only to API provisioning and artifact cleanup.
+# Generated in ignored .garage/provisioner*.env files; never put them in this shared file.
+ARTIFACT_RUNTIME_BASE_URL=http://host.docker.internal:8000/api/v1/agent-artifacts/runtime
+ARTIFACT_MAX_BYTES=26214400
+ARTIFACT_LINK_MAX_SECONDS=3600
+ARTIFACT_RETENTION_DAYS=30
+
+# Persistent Garage and artifact-purge run in Compose; API background work provisions requested Agent storage.
+# ./run.sh prepares private storage automatically; no profile is needed.
+# make garage-up works independently of k3d/model providers. Control-plane credentials
+# stay in ignored .garage/provisioner*.env; application.env contains no storage keys.
+# Bootstrap appends non-secret GARAGE_SAVED_* settings to .env; do not edit those.
+# Set these only on first initialization; otherwise stored values are reused.
+# Optional loopback operator/native port override (default 3900), not a download port.
+GARAGE_S3_PORT=
+# Legacy name: internal native/operator S3 endpoint, not a public browser URL.
+# Defaults to http://127.0.0.1:<saved port>; Compose uses garage:3900.
+GARAGE_PUBLIC_ENDPOINT=
