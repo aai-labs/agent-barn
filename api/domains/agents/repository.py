@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from api.domains.agent_memory.repository import stage_agent_memory_cleanup
+from api.domains.agent_sizes.models import AgentSize, OrganizationAgentSize
 from api.domains.agent_tasks.cleanup import stage_agent_task_cleanup
 from api.domains.agents.exceptions import AgentLimitReached
 from api.domains.agents.models import (
@@ -28,6 +29,7 @@ from api.domains.agents.models import (
     AgentStatus,
     ManagedUpdateOutcome,
     PlatformAgentIdentity,
+    PlatformAgentRow,
     SecretProvider,
 )
 from api.domains.communications.email_address_repository import release_agent_email_addresses
@@ -42,6 +44,7 @@ from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, 
 from api.domains.events.catalog import (
     AGENT_ACCESS_GRANTED,
     AGENT_ACCESS_REVOKED,
+    AGENT_AGENT_SIZE_CHANGED,
     AGENT_CREATED,
     AGENT_DELETED,
     AGENT_GENERAL_ACCESS_CHANGED,
@@ -77,6 +80,14 @@ from api.infrastructure.shared.models import Pagination
 class AgentLifecycleEventResult:
     agent: Agent
     delivery_ids: list[UUID]
+
+
+class AgentSizeUnavailable(Exception):
+    """The size being chosen was deleted, disabled or withdrawn after it was checked."""
+
+
+class AgentSizeSetByPlatform(Exception):
+    """The Organization tried to change a size a Platform Administrator set."""
 
 
 @dataclass(frozen=True)
@@ -898,6 +909,9 @@ class AgentRepository:
 
         With `agent_limit`, the Organization's live Agents are counted under a lock
         held to commit, so two concurrent creates cannot both fit under it.
+
+        A size chosen on hire is re-checked under its locks, as a later choice is, and
+        recorded as `agent.agent_size.changed` from the default. Raises AgentSizeUnavailable.
         """
         with Session(self.delegate.engine, expire_on_commit=False) as session:
             if agent_limit is not None:
@@ -912,6 +926,11 @@ class AgentRepository:
                 )
                 if (live or 0) >= agent_limit:
                     raise AgentLimitReached(agent_limit)
+            size = None
+            if agent.agent_size_id is not None:
+                size = self._lock_choosable_size(session, agent.organization_id, agent.agent_size_id, any_enabled=False)
+                if size.is_default:
+                    agent.agent_size_id, size = None, None
             session.add(agent)
             session.flush()
             if membership_id is not None:
@@ -944,7 +963,23 @@ class AgentRepository:
                 },
             )
             self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
-            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
+            event_ids = [event.event_id]
+            if size is not None:
+                event_ids.append(
+                    self._stage_agent_size_changed(
+                        session,
+                        agent,
+                        size,
+                        None,
+                        by_platform=False,
+                        actor=actor,
+                        actor_display=actor_display,
+                        correlation_id=event.correlation_id,
+                    )
+                )
+            delivery_ids = list(
+                session.exec(select(EventDelivery.id).where(col(EventDelivery.event_id).in_(event_ids)))
+            )
 
             for secret in secrets or []:
                 delivery_ids.extend(
@@ -1125,6 +1160,7 @@ class AgentRepository:
             persisted.ingest_key_encrypted = agent.ingest_key_encrypted
             persisted.memory_key_hash = agent.memory_key_hash
             persisted.running_model = agent.running_model
+            persisted.running_resources = agent.running_resources
             persisted.running_config_digest = agent.running_config_digest
             persisted.communication_key_encrypted = agent.communication_key_encrypted
             session.add(persisted)
@@ -1230,6 +1266,144 @@ class AgentRepository:
             delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event.event_id)))
             session.commit()
             return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
+
+    def set_agent_size_with_event(
+        self,
+        agent: Agent,
+        agent_size_id: UUID | None,
+        *,
+        actor: ActorIdentity,
+        actor_display: str,
+        by_platform: bool = False,
+    ) -> AgentLifecycleEventResult | None:
+        """Set the size an Agent starts on next and stage `agent.agent_size.changed`.
+
+        Writes only the size columns on the locked row, so a concurrent edit is not
+        clobbered, and re-checks under share locks that the size can still be chosen, so
+        it cannot be deleted, disabled or withdrawn before this commits. No Event when
+        nothing changed. None when the Agent is gone.
+
+        `by_platform` is a Platform Administrator's override: a size locks it for the
+        Organization, None clears the override and puts the Agent back on the default.
+        Without it, a size the platform set is refused here, under the row lock, so an
+        override cannot slip in between the caller's check and this write.
+        Raises AgentSizeUnavailable and AgentSizeSetByPlatform.
+        """
+        with Session(self.delegate.engine, expire_on_commit=False) as session:
+            persisted = session.exec(
+                select(Agent)
+                .where(
+                    col(Agent.id) == agent.id,
+                    col(Agent.organization_id) == agent.organization_id,
+                    col(Agent.deleted_at).is_(None),
+                )
+                .with_for_update()
+            ).first()
+            if persisted is None:
+                return None
+            if persisted.agent_size_set_by_platform and not by_platform:
+                raise AgentSizeSetByPlatform(persisted.id)
+            previous_id = persisted.agent_size_id
+            set_by_platform = by_platform and agent_size_id is not None
+            if previous_id == agent_size_id and persisted.agent_size_set_by_platform == set_by_platform:
+                return AgentLifecycleEventResult(agent=persisted, delivery_ids=[])
+            size = None
+            if agent_size_id is not None:
+                size = self._lock_choosable_size(
+                    session, persisted.organization_id, agent_size_id, any_enabled=by_platform
+                )
+                if size.is_default and not by_platform:
+                    # It became the default after the caller's check; the Agent follows it.
+                    agent_size_id, size = None, None
+                    if previous_id is None:
+                        return AgentLifecycleEventResult(agent=persisted, delivery_ids=[])
+            previous = session.get(AgentSize, previous_id) if previous_id is not None else None
+            persisted.agent_size_id = agent_size_id
+            persisted.agent_size_set_by_platform = set_by_platform
+            persisted.updated_at = datetime.now(UTC)
+            session.add(persisted)
+            session.flush()
+            event_id = self._stage_agent_size_changed(
+                session,
+                persisted,
+                size,
+                previous,
+                by_platform=by_platform,
+                actor=actor,
+                actor_display=actor_display,
+                correlation_id=uuid4(),
+            )
+            delivery_ids = list(session.exec(select(EventDelivery.id).where(EventDelivery.event_id == event_id)))
+            session.commit()
+            return AgentLifecycleEventResult(agent=persisted, delivery_ids=delivery_ids)
+
+    @staticmethod
+    def _lock_choosable_size(
+        session: Session, organization_id: UUID, agent_size_id: UUID, *, any_enabled: bool
+    ) -> AgentSize:
+        """Share-lock a size and check, under that lock, that it can still be chosen.
+
+        The size row's lock waits out a catalog edit that disables it, and the allowed-set
+        row's lock waits out a withdrawal, so the caller's earlier check cannot go stale
+        before this commits. `any_enabled` is the platform's override, which may name any
+        enabled size; otherwise it must be the default or an enabled size the Organization
+        is allowed. Raises AgentSizeUnavailable.
+        """
+        size = session.get(AgentSize, agent_size_id, with_for_update={"read": True})
+        if size is None or not size.enabled:
+            raise AgentSizeUnavailable(agent_size_id)
+        if any_enabled or size.is_default:
+            return size
+        allowed = session.exec(
+            select(OrganizationAgentSize.agent_size_id)
+            .where(
+                col(OrganizationAgentSize.organization_id) == organization_id,
+                col(OrganizationAgentSize.agent_size_id) == agent_size_id,
+            )
+            .with_for_update(read=True)
+        ).first()
+        if allowed is None:
+            raise AgentSizeUnavailable(agent_size_id)
+        return size
+
+    def _stage_agent_size_changed(
+        self,
+        session: Session,
+        agent: Agent,
+        size: AgentSize | None,
+        previous: AgentSize | None,
+        *,
+        by_platform: bool,
+        actor: ActorIdentity,
+        actor_display: str | None,
+        correlation_id: UUID,
+    ) -> UUID:
+        event = EVENT_REGISTRY.build_event(
+            event_name=AGENT_AGENT_SIZE_CHANGED,
+            schema_version=1,
+            occurred_at=datetime.now(UTC),
+            organization_id=agent.organization_id,
+            actor=actor,
+            subject=SubjectIdentity(
+                type=SubjectIdentityType.AGENT,
+                id=agent.id,
+                organization_id=agent.organization_id,
+            ),
+            correlation_id=correlation_id,
+            payload={
+                "organization_id": agent.organization_id,
+                "agent_id": agent.id,
+                "agent_size_id": size.id if size is not None else None,
+                "agent_size_name": size.name if size is not None else None,
+                "previous_agent_size_id": previous.id if previous is not None else None,
+                "previous_agent_size_name": previous.name if previous is not None else None,
+                "by_platform": by_platform,
+                "actor_display": actor_display,
+                "subject_display": agent.name,
+            },
+        )
+        self.outbox_repository.stage(session=session, registry=EVENT_REGISTRY, event=event)
+        return event.event_id
 
     def soft_delete_with_event(
         self,
@@ -1587,6 +1761,68 @@ class AgentRepository:
         )
         with self.delegate.engine.connect() as connection:
             return [PlatformAgentIdentity(*row) for row in connection.execute(query).all()]
+
+    def find_platform_agents(
+        self,
+        *,
+        organization_id: UUID | None,
+        search: str | None,
+        pagination: Pagination,
+    ) -> tuple[list[PlatformAgentRow], int]:
+        """A page of live Agents across every Organization, and how many there are in all.
+
+        Platform-wide by design, for the Platform Agents page behind `require_platform_admin`.
+        Ordered by Organization name, then Agent name, so a page reads as consecutive
+        Organization groups. `search` matches the Agent's or the Organization's name.
+        """
+        query = self._platform_agent_rows()
+        if organization_id is not None:
+            query = query.where(col(Agent.organization_id) == organization_id)
+        if search:
+            pattern = f"%{search}%"
+            query = query.where(or_(col(Agent.name).ilike(pattern), col(Organization.name).ilike(pattern)))
+        total_query = sa.select(func.count()).select_from(query.order_by(None).subquery())
+        page_query = (
+            query.order_by(
+                func.lower(col(Organization.name)),
+                col(Organization.id),
+                func.lower(col(Agent.name)),
+                col(Agent.id),
+            )
+            .offset((pagination.page - 1) * pagination.size)
+            .limit(pagination.size)
+        )
+        with self.delegate.engine.connect() as connection:
+            total = connection.execute(total_query).scalar_one()
+            rows = [PlatformAgentRow(*row) for row in connection.execute(page_query).all()]
+        return rows, total
+
+    def get_platform_agent(self, agent_id: UUID) -> PlatformAgentRow | None:
+        """One live Agent as the Platform Agents page reads it; None when absent or deleted."""
+        query = self._platform_agent_rows().where(col(Agent.id) == agent_id)
+        with self.delegate.engine.connect() as connection:
+            row = connection.execute(query).first()
+        return PlatformAgentRow(*row) if row is not None else None
+
+    @staticmethod
+    def _platform_agent_rows():
+        # The column list is the allowlist: see PlatformAgentRow.
+        return (
+            sa.select(
+                col(Agent.id),
+                col(Agent.name),
+                col(Agent.status),
+                col(Agent.agent_type),
+                col(Agent.created_at),
+                col(Agent.organization_id),
+                col(Organization.name),
+                col(Agent.agent_size_id),
+                col(Agent.agent_size_set_by_platform),
+                col(Agent.running_resources),
+            )
+            .join(Organization, col(Organization.id) == col(Agent.organization_id))
+            .where(col(Agent.deleted_at).is_(None))
+        )
 
     def find_all_for_org(self, org_id: UUID) -> list[Agent]:
         """Return all agents for an org — both live and deleted."""

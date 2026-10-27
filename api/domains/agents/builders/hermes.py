@@ -10,7 +10,7 @@ from api.domains.communications.plugins.agentbarn_telegram import (
     AgentBarnTelegramRuntime,
 )
 
-from .common import _labels, _resource_name, _setting_ids
+from .common import INIT_CONTAINER_RESOURCES, _labels, _resource_name, _setting_ids
 from .memory import (
     MEMORY_COMMAND,
     MEMORY_TOOL_INSTRUCTIONS,
@@ -20,20 +20,6 @@ from .memory import (
     memory_command_volume,
 )
 from .tasks import TASK_COMMAND, TASK_TOOL, TASK_TOOL_INSTRUCTIONS, task_command_mount, task_command_volume
-
-# Matches OpenClaw, so limits.memory (100Gi quota) never binds before
-# requests.memory (20Gi). Note the asymmetry in what the limit *does*: OpenClaw
-# is Node, and V8 derives its heap ceiling from the cgroup limit (measured
-# 259/524/1048 MiB at 512m/1g/2g), so a lower limit makes it collect sooner.
-# CPython collects promptly too, but its policy is allocation-count based and
-# never reads the cgroup, so here the limit is a hard cap on the real working
-# set rather than a GC trigger. No Hermes pod is known to exceed 1Gi -- the
-# runtime label added alongside this is what will confirm it -- so watch for
-# OOMKilled on Hermes after rollout.
-AGENT_RESOURCES = client.V1ResourceRequirements(
-    requests={"memory": "320Mi", "cpu": "50m"},
-    limits={"memory": "1Gi", "cpu": "500m"},
-)
 
 _SCRIPTS = Path(__file__).parent.parent / "scripts" / "hermes"
 _COMMON_SCRIPTS = _SCRIPTS.parent
@@ -525,7 +511,15 @@ def build_hermes_deployment(
     namespace: str,
     image: str,
     image_pull_secret: str = "",
+    *,
+    resources: client.V1ResourceRequirements,
 ) -> client.V1Deployment:
+    """The Agent's Deployment. `resources` is the agent container's, from its Agent Size.
+
+    Unlike OpenClaw's V8 heap, CPython never reads the cgroup limit: here the limit is a
+    hard cap on the real working set, so a Hermes Agent that outgrows its size is OOMKilled
+    rather than collecting sooner.
+    """
     name = _resource_name(agent_id)
     labels = _labels(agent_id, org_id, runtime="hermes")
 
@@ -558,10 +552,8 @@ def build_hermes_deployment(
                                 "mkdir -p /opt/data/workspace && chown -R hermes:hermes /opt/data",
                             ],
                             security_context=client.V1SecurityContext(run_as_user=0),
-                            # A pod is charged the larger of its containers added up and its biggest
-                            # init container. With no block here the LimitRange fills one in, and it
-                            # is bigger than the agent's, so every agent would cost more than AGENT_RESOURCES.
-                            resources=AGENT_RESOURCES,
+                            # Fixed, not the size: see INIT_CONTAINER_RESOURCES.
+                            resources=INIT_CONTAINER_RESOURCES,
                             volume_mounts=[
                                 client.V1VolumeMount(name="data", mount_path="/opt/data"),
                             ],
@@ -572,7 +564,7 @@ def build_hermes_deployment(
                             name="agent",
                             image=image,
                             command=["sh", "/app/config/start.sh"],
-                            resources=AGENT_RESOURCES,
+                            resources=resources,
                             readiness_probe=client.V1Probe(
                                 http_get=client.V1HTTPGetAction(
                                     path="/ready",

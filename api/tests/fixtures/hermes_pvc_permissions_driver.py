@@ -9,6 +9,13 @@ from uuid import UUID
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from api.domains.agent_sizes.models import (
+    STANDARD_CPU_LIMIT_MILLICORES,
+    STANDARD_CPU_REQUEST_MILLICORES,
+    STANDARD_MEMORY_LIMIT_BYTES,
+    STANDARD_MEMORY_REQUEST_BYTES,
+)
+from api.domains.agents.builders.common import container_resources
 from api.domains.agents.builders.hermes import build_hermes_deployment
 
 _AGENT_ID = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
@@ -25,7 +32,18 @@ def run(*args: str, capture_output: bool = False) -> subprocess.CompletedProcess
 
 
 def main(image: str) -> None:
-    deployment = build_hermes_deployment(_AGENT_ID, _ORG_ID, "agent-farm", image)
+    deployment = build_hermes_deployment(
+        _AGENT_ID,
+        _ORG_ID,
+        "agent-farm",
+        image,
+        resources=container_resources(
+            cpu_request_millicores=STANDARD_CPU_REQUEST_MILLICORES,
+            cpu_limit_millicores=STANDARD_CPU_LIMIT_MILLICORES,
+            memory_request_bytes=STANDARD_MEMORY_REQUEST_BYTES,
+            memory_limit_bytes=STANDARD_MEMORY_LIMIT_BYTES,
+        ),
+    )
     pod_spec = deployment.spec.template.spec
     init = pod_spec.init_containers[0]
     data_mount = next(mount for mount in init.volume_mounts if mount.name == "data")

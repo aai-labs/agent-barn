@@ -51,7 +51,7 @@ export function DoneStep({
 
   return (
     <OnboardingShell
-      step={3}
+      step={4}
       path={path}
       email={email}
       creditUsd={creditUsd}
