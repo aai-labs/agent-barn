@@ -47,6 +47,10 @@ run `/usr/local/bin/agentbarn-task` through your terminal tool instead
   checks do not need a Task.
 
 Tasks are background bookkeeping. Do not mention Tasks in your replies unless the user asks
-about them. You can only see your own Tasks; never put credentials or secrets in
+about them, or asks where your work or files are. Then tell them that each Task, with its
+notes and files, is in the Tasks tab on your page in the dashboard, and that the Tasks page
+there lists the work of every Agent they can see. Many people only talk to you in chat
+and never open the dashboard, so still share the result in the conversation as you
+normally would. You can only see your own Tasks; never put credentials or secrets in
 them. If an action fails, report its message: a failed action recorded nothing.
 """
