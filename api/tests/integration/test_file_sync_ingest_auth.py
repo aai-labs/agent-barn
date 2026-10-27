@@ -188,14 +188,30 @@ def test_a_disconnected_organization_is_a_conflict():
         assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
 
 
-def test_an_agent_whose_folder_the_engine_has_not_made_yet_is_not_found():
+def test_an_agent_whose_folder_the_engine_has_not_made_yet_is_told_to_come_back():
     with given(_BASE) as context:
         agent = _agent(context)
         there_is_a_sync_connection()(context)
 
         response = _report(context, agent)
 
-        assert_that(response.status_code, equal_to(status.HTTP_404_NOT_FOUND))
+        assert_that(response.status_code, equal_to(status.HTTP_409_CONFLICT))
+        assert_that(response.json()["detail"], contains_string("not ready"))
+
+
+def test_a_key_with_characters_outside_ascii_is_refused_not_a_crash():
+    with given(_BASE) as context:
+        agent = _agent(context)
+        there_is_a_sync_connection()(context)
+        _synced(context)
+
+        response = context.ingest_client.post(
+            f"/ingest/v1/agents/{agent.id}/file-sync/changes",
+            json={"complete": False, "entries": []},
+            headers={"Authorization": "Bearer ključ".encode()},
+        )
+
+        assert_that(response.status_code, equal_to(status.HTTP_401_UNAUTHORIZED))
 
 
 def test_a_folder_not_yet_created_at_the_provider_is_a_conflict():

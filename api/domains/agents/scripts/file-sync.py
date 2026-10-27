@@ -19,7 +19,7 @@ SETTLE_SECONDS = 5
 MAX_PATH_LENGTH = 1024
 MAX_ENTRIES = 10_000
 TEMP_PREFIX = ".file-sync-"
-INGEST_TIMEOUT_SECONDS = 30
+INGEST_TIMEOUT_SECONDS = 120
 TRANSFER_TIMEOUT_SECONDS = 120
 DEFAULT_INTERVAL_SECONDS = 15
 DEFAULT_ONCE_TIMEOUT_SECONDS = 60
@@ -338,12 +338,23 @@ def run_cycle(ingest, rules, state_path, settle_seconds=SETTLE_SECONDS):
         if entry is None:
             continue
         if upload_file(_local_path(rules, entry["path"]), upload["url"], entry["sha256"]):
-            ingest.post("uploads/complete", {"path": entry["path"]})
+            _one_request(entry["path"], lambda path=entry["path"]: ingest.post("uploads/complete", {"path": path}))
     try:
         for operation in (ingest.get("operations") or {}).get("operations", []):
-            _apply(ingest, rules, reported, operation, cache)
+            _one_request(
+                operation.get("path"), lambda operation=operation: _apply(ingest, rules, reported, operation, cache)
+            )
     finally:
         save_state(state_path, cache)
+
+
+def _one_request(path, action):
+    try:
+        action()
+    except IngestRefused as error:
+        log(f"ingest answered {error.status} for {path}; retrying next round")
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        log(f"ingest didn't answer for {path}: {type(error).__name__}; retrying next round")
 
 
 def _settings():

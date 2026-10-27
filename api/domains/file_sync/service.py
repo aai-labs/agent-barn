@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 UPLOAD_REISSUE_AFTER = timedelta(minutes=14)
 UPLOAD_CLOCK_SKEW = timedelta(minutes=2)
 THROTTLE_FALLBACK_SECONDS = 60
-OPERATION_LEASE = timedelta(minutes=10)
+OPERATION_LEASE = timedelta(minutes=3)
 NO_SPACE_RETRY = timedelta(minutes=5)
 FAILED_RETRY_BASE_SECONDS = 60
 FAILED_RETRY_MAX_SECONDS = 1800
@@ -90,6 +90,13 @@ class FileSyncTarget:
     plugin: SyncProviderPlugin
     root: SyncRoot
     folder_item_id: str
+
+
+def _provider_failed(target: FileSyncTarget, exc: SyncProviderError) -> FileSyncProviderFailed:
+    logger.warning(
+        "File sync for Agent %s failed at the provider: %s: %s", target.agent.id, type(exc).__name__, exc.message
+    )
+    return FileSyncProviderFailed(exc.message)
 
 
 @inject
@@ -152,7 +159,7 @@ class FileSyncIngestService:
         except ProviderThrottled as exc:
             raise FileSyncProviderBusy(exc.retry_after or THROTTLE_FALLBACK_SECONDS) from exc
         except SyncProviderError as exc:
-            raise FileSyncProviderFailed(exc.message) from exc
+            raise _provider_failed(target, exc) from exc
         started = row.upload_started_at - UPLOAD_CLOCK_SKEW
         if item.is_folder or not item.modified_by_app or (item.modified_at is not None and item.modified_at < started):
             raise FileSyncConflict("The provider holds a file this upload didn't write")
@@ -178,7 +185,7 @@ class FileSyncIngestService:
         except SyncProviderError as exc:
             for row in claimed:
                 self.repository.release(row.id, None)
-            raise FileSyncProviderFailed(exc.message) from exc
+            raise _provider_failed(target, exc) from exc
         return FileSyncOperationsRead(operations=operations)
 
     def report_result(self, agent_id: UUID, provided_key: str, result: FileSyncOperationResultCreate) -> None:
@@ -241,7 +248,7 @@ class FileSyncIngestService:
         except ProviderThrottled as exc:
             raise FileSyncProviderBusy(exc.retry_after or THROTTLE_FALLBACK_SECONDS) from exc
         except SyncProviderError as exc:
-            raise FileSyncProviderFailed(exc.message) from exc
+            raise _provider_failed(target, exc) from exc
         if item.content_version != result.version:
             self.repository.requeue_download(row.id)
             return
@@ -301,7 +308,7 @@ class FileSyncIngestService:
         if agent is None or not agent.ingest_key_encrypted or not provided_key:
             raise FileSyncUnauthorized()
         stored_key = decrypt_token(agent.ingest_key_encrypted, self.config.agent_token_encryption_key)
-        if not secrets.compare_digest(stored_key, provided_key):
+        if not secrets.compare_digest(stored_key.encode(), provided_key.encode()):
             raise FileSyncUnauthorized()
         if agent.deleted_at is not None:
             raise FileSyncNotFound("Agent not found")
@@ -313,7 +320,7 @@ class FileSyncIngestService:
         if SyncProviderCapability.FILE_SYNC not in plugin.capabilities or root is None:
             raise FileSyncConflict("The connected provider does not sync Agent files")
         if folder is None:
-            raise FileSyncNotFound("The Agent's folder does not exist yet")
+            raise FileSyncConflict("File sync is not ready for this Agent yet")
         if folder.status != SyncFolderStatus.ACTIVE:
             raise FileSyncConflict("File sync is turned off for this Agent")
         if folder.folder_item_id is None:
