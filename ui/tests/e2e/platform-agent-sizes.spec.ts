@@ -38,7 +38,7 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
     await expect(sizesPage.row("Standard").getByTestId("agent-size-storage")).toHaveText("1 GiB");
     // The default is always enabled, so its switch can't be turned off.
     await expect(sizesPage.enabledSwitch("Standard")).toBeDisabled();
-    await expect(page.getByRole("complementary").getByRole("link", { name: "Agent sizes" })).toHaveAttribute(
+    await expect(page.getByRole("complementary").getByRole("link", { name: "Agent specs" })).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -121,7 +121,7 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
   });
 
   test("shows the API's refusal in the dialog and keeps the edit", async () => {
-    await sizes.intercept({ failWith: { status: 409, detail: "A size named 'Standard' already exists" } });
+    await sizes.intercept({ failWith: { status: 409, detail: "A spec named 'Standard' already exists" } });
     await sizesPage.goto();
 
     await sizesPage.addSize();
@@ -231,7 +231,7 @@ test.describe("Platform Agent sizes (platform_admin)", () => {
     await sizesPage.enabledSwitch("Large").click();
     await expect(sizesPage.confirmDialog()).toContainText("2 agents on Large stay on it");
     expect(writes).toEqual([]);
-    await sizesPage.confirm("Disable size").click();
+    await sizesPage.confirm("Disable spec").click();
 
     await expect(sizesPage.enabledSwitch("Large")).toHaveAttribute("aria-checked", "false");
     expect(writes).toEqual([{ method: "PATCH", id: LARGE_ID, body: { enabled: false } }]);
@@ -279,7 +279,7 @@ test.describe("Platform Agent sizes (non platform_admin)", () => {
 
     await new AgentSizesSettingsPage(page).goto();
 
-    await expect(page.getByRole("table", { name: "Agent sizes" })).toHaveCount(0);
+    await expect(page.getByRole("table", { name: "Agent specs" })).toHaveCount(0);
     expect(writes).toEqual([]);
   });
 });

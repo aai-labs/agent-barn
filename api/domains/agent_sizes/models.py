@@ -206,7 +206,7 @@ class AgentSizeUpdate(PydanticBaseModel):
     @classmethod
     def _only_becomes_default(cls, value: bool | None) -> bool | None:
         if value is False:
-            raise ValueError("make another size the default instead")
+            raise ValueError("make another spec the default instead")
         return value
 
 

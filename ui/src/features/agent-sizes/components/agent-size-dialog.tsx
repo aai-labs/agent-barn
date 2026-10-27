@@ -81,7 +81,7 @@ function parse(
   };
 
   const name = text.name.trim();
-  if (!name) errors.name = "Give the size a name.";
+  if (!name) errors.name = "Give the spec a name.";
   const values = {
     name,
     cpuRequestMillicores: cpu("cpuRequest"),
@@ -143,11 +143,11 @@ export function AgentSizeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md" data-testid="agent-size-dialog">
         <DialogHeader>
-          <DialogTitle>{size ? `Edit ${size.name}` : "Add a size"}</DialogTitle>
+          <DialogTitle>{size ? `Edit ${size.name}` : "Add a spec"}</DialogTitle>
           <DialogDescription>
             The request is what the namespace quota charges and the cluster reserves for the Agent; the limit is how far
             it may grow. Storage is the Agent&apos;s volume, which grows to it but never shrinks. A change reaches each Agent
-            on this size the next time it starts.
+            on this spec the next time it starts.
           </DialogDescription>
         </DialogHeader>
 
@@ -205,7 +205,7 @@ export function AgentSizeDialog({
               Cancel
             </button>
             <button type="submit" className="af-btn af-btn-primary" disabled={mutation.isPending}>
-              {mutation.isPending && <Loader2 size={14} className="animate-spin" />} {size ? "Save" : "Add size"}
+              {mutation.isPending && <Loader2 size={14} className="animate-spin" />} {size ? "Save" : "Add spec"}
             </button>
           </DialogFooter>
         </form>

@@ -9,7 +9,7 @@ export class AgentSizesSettingsPage {
   }
 
   heading(): Locator {
-    return this.page.getByRole("heading", { name: "Agent sizes", level: 1 });
+    return this.page.getByRole("heading", { name: "Agent specs", level: 1 });
   }
 
   row(name: string): Locator {
@@ -17,7 +17,7 @@ export class AgentSizesSettingsPage {
   }
 
   rows(): Locator {
-    return this.page.getByRole("table", { name: "Agent sizes" }).locator("tbody tr");
+    return this.page.getByRole("table", { name: "Agent specs" }).locator("tbody tr");
   }
 
   enabledSwitch(name: string): Locator {
@@ -33,7 +33,7 @@ export class AgentSizesSettingsPage {
   }
 
   async addSize() {
-    await this.page.getByRole("button", { name: "Add size" }).click();
+    await this.page.getByRole("button", { name: "Add spec" }).click();
   }
 
   dialog(): Locator {
@@ -58,11 +58,11 @@ export class AgentSizesSettingsPage {
     return this.page.getByRole("dialog");
   }
 
-  confirm(name: "Make default" | "Disable size"): Locator {
+  confirm(name: "Make default" | "Disable spec"): Locator {
     return this.confirmDialog().getByRole("button", { name, exact: true });
   }
 
   confirmDelete(): Locator {
-    return this.page.getByRole("button", { name: "Delete size" });
+    return this.page.getByRole("button", { name: "Delete spec" });
   }
 }

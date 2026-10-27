@@ -89,7 +89,7 @@ export class AgentSizeDataSupport {
       const body = method === "PATCH" ? (route.request().postDataJSON() as Record<string, unknown>) : undefined;
       writes.push({ method, id, body });
       if (failWith) return reply(route, failWith.status, { detail: failWith.detail });
-      if (!size) return reply(route, 404, { detail: "Agent size not found" });
+      if (!size) return reply(route, 404, { detail: "Agent spec not found" });
       if (method === "DELETE") {
         catalog.splice(catalog.indexOf(size), 1);
         return reply(route, 204);

@@ -276,14 +276,14 @@ def _refuse_during_managed_update(agent: Agent) -> None:
 def _size_unavailable() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail="That size isn't available to your organization.",
+        detail="That spec isn't available to your organization.",
     )
 
 
 def _size_set_by_platform() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail="A platform administrator set this agent's size, so it can't be changed here.",
+        detail="A platform administrator set this agent's spec, so it can't be changed here.",
     )
 
 
@@ -412,7 +412,7 @@ class AgentService:
             context,
             org_id,
             PermissionKey.AGENT_SIZE_MANAGE,
-            detail="You don't have permission to choose an agent's size.",
+            detail="You don't have permission to choose an agent's spec.",
         )
 
     def _size_to_store(self, agent_size_id: UUID | None, org_id: UUID) -> UUID | None:
@@ -1156,7 +1156,7 @@ class AgentService:
             context,
             agent_id,
             PermissionKey.AGENT_SIZE_MANAGE,
-            detail="You don't have permission to change this agent's size.",
+            detail="You don't have permission to change this agent's spec.",
         )
         # The Organization grant, which the Agent check above takes for granted from an
         # Owner or Admin role.

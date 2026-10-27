@@ -85,7 +85,7 @@ test.describe("Platform Agents (platform_admin)", () => {
     await agentsPage.goto();
 
     await agentsPage.openOverride("Sally");
-    await agentsPage.dialog().getByRole("combobox", { name: "Size" }).click();
+    await agentsPage.dialog().getByRole("combobox", { name: "Spec" }).click();
     await expect(page.getByRole("option", { name: /Retired/ })).toHaveCount(0);
     await page.getByRole("option", { name: "Large · 2 vCPU · 4 GiB · 10 GiB disk" }).click();
     await agentsPage.setSize();

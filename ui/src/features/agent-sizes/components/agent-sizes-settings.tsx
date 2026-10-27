@@ -33,9 +33,9 @@ export function AgentSizesSettings() {
   const [deleting, setDeleting] = useState<AgentSize | null>(null);
   const [confirming, setConfirming] = useState<{ size: AgentSize; change: "default" | "disable" } | null>(null);
 
-  if (isLoadingSizes) return <p className="m-0">Loading Agent sizes…</p>;
+  if (isLoadingSizes) return <p className="m-0">Loading Agent specs…</p>;
   if (sizesError) {
-    return <AppErrorState error={sizesError} title="Could not load Agent sizes" onRetry={() => void reloadSizes()} />;
+    return <AppErrorState error={sizesError} title="Could not load Agent specs" onRetry={() => void reloadSizes()} />;
   }
 
   const open = (size: AgentSize | null) => setEditing((current) => ({ size, opening: (current?.opening ?? 0) + 1 }));
@@ -60,15 +60,15 @@ export function AgentSizesSettings() {
     <>
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
         <p className="m-0 min-w-0 flex-1 basis-[24rem] text-[0.84rem]" style={{ color: "var(--ink-3)" }}>
-          A change to a size reaches each Agent on it the next time it starts.
+          A change to a spec reaches each Agent on it the next time it starts.
         </p>
         <button type="button" className="af-btn af-btn-sm" onClick={() => open(null)}>
-          <Plus size={14} /> Add size
+          <Plus size={14} /> Add spec
         </button>
       </div>
 
       <div className="af-card overflow-x-auto p-0">
-        <table className="w-full min-w-[46rem] border-collapse text-[0.84rem]" aria-label="Agent sizes">
+        <table className="w-full min-w-[46rem] border-collapse text-[0.84rem]" aria-label="Agent specs">
           <thead>
             <tr style={{ color: "var(--ink-4)" }} className="text-left text-[0.75rem]">
               <th className="px-4 py-2.5 font-medium">Name</th>
@@ -111,7 +111,7 @@ export function AgentSizesSettings() {
                     role="switch"
                     aria-checked={size.enabled}
                     aria-label={`${size.name} enabled`}
-                    title={size.isDefault ? "The default size is always enabled" : undefined}
+                    title={size.isDefault ? "The default spec is always enabled" : undefined}
                     disabled={size.isDefault || update.isPending}
                     onClick={() => toggleEnabled(size)}
                     className="relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50"
@@ -168,10 +168,10 @@ export function AgentSizesSettings() {
         title={
           confirming?.change === "default"
             ? `Make ${confirming.size.name} the default?`
-            : `Disable ${confirming?.size.name ?? "this size"}?`
+            : `Disable ${confirming?.size.name ?? "this spec"}?`
         }
         description={confirming ? confirmationText(confirming.size, confirming.change, currentDefault) : ""}
-        confirmLabel={confirming?.change === "default" ? "Make default" : "Disable size"}
+        confirmLabel={confirming?.change === "default" ? "Make default" : "Disable spec"}
         pendingLabel="Saving…"
         isPending={update.isPending}
         onConfirm={confirm}
@@ -181,9 +181,9 @@ export function AgentSizesSettings() {
         open={deleting !== null}
         onOpenChange={(isOpen) => !isOpen && setDeleting(null)}
         variant="destructive"
-        title={`Delete ${deleting?.name ?? "this size"}?`}
+        title={`Delete ${deleting?.name ?? "this spec"}?`}
         description="It is removed from the catalog. To keep it out of use but restore it later, disable it instead."
-        confirmLabel="Delete size"
+        confirmLabel="Delete spec"
         pendingLabel="Deleting…"
         isPending={remove.isPending}
         onConfirm={() => {
@@ -200,14 +200,14 @@ export function AgentSizesSettings() {
 
 function confirmationText(size: AgentSize, change: "default" | "disable", currentDefault?: AgentSize): string {
   if (change === "disable") {
-    return `${agentCountLabel(size.agentCount)} on ${size.name} stay on it, and keep starting on it, until someone changes their size. Disabling only stops it being chosen again.`;
+    return `${agentCountLabel(size.agentCount)} on ${size.name} stay on it, and keep starting on it, until someone changes their spec. Disabling only stops it being chosen again.`;
   }
   const following = currentDefault?.followingAgentCount ?? 0;
   const moves =
     following > 0
       ? `${agentCountLabel(following)} that follow ${currentDefault?.name ?? "the default"} move to ${size.name} the next time each starts. `
       : `New agents start on ${size.name}. `;
-  return `${moves}Agents given a size keep it, and organizations that can choose are allowed ${currentDefault?.name ?? "the old default"}, so none loses a size it could choose.`;
+  return `${moves}Agents given a spec keep it, and organizations that can choose are allowed ${currentDefault?.name ?? "the old default"}, so none loses a spec it could choose.`;
 }
 
 function RequestLimit({ request, limit }: { request: string; limit: string }) {

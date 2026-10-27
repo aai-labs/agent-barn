@@ -1,6 +1,7 @@
 """An Agent Size's storage: the volume a new Agent gets, how an older one grows, when it is
 pending, and how large a restore point's archive volume is."""
 
+import os
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -20,8 +21,10 @@ from api.domains.agent_sizes.models import (
     size_is_pending,
 )
 from api.domains.agents.builders.common import build_pvc, pvc_capacity_bytes, pvc_storage_bytes, storage_quantity
+from api.domains.agents.restore_point_job import capture
 from api.domains.agents.service import AgentService
-from api.domains.restore_points.service import RestorePointService
+from api.domains.restore_points.constants import RESTORE_POINT_ARCHIVE_MARGIN_PERCENT
+from api.domains.restore_points.service import RestorePointService, archive_volume_bytes
 
 
 def _size(storage_bytes: int, *, memory_limit_bytes: int = 1 * GIB) -> AgentSize:
@@ -154,10 +157,47 @@ def _archive_size(agent_volume, floor: str = "1Gi") -> str:
     return RestorePointService._archive_size(service, cast(Any, SimpleNamespace(id=uuid7())))
 
 
-def test_a_restore_points_volume_follows_the_agents_volume():
-    assert_that(_archive_size(_pvc(10 * GIB)), equal_to("10Gi"))
+@pytest.mark.parametrize(
+    ("volume", "archive"),
+    [(1 * GIB, "1792Mi"), (2 * GIB, "2816Mi"), (10 * GIB, "11776Mi"), (100 * GIB, "113152Mi")],
+)
+def test_a_restore_points_volume_is_the_agents_volume_and_a_margin(volume: int, archive: str):
+    # A tenth more and 512Mi, rounded up to 256Mi: 1Gi -> 1.75Gi, 10Gi -> 11.5Gi.
+    assert_that(_archive_size(_pvc(volume)), equal_to(archive))
+
+
+def test_a_restore_points_volume_follows_what_the_agents_volume_has_when_it_is_larger():
+    assert_that(_archive_size(_bound(1 * GIB, 10 * GIB)), equal_to("11776Mi"))
 
 
 def test_a_restore_points_volume_is_never_below_the_configured_size():
     assert_that(_archive_size(_pvc(1 * GIB), floor="2Gi"), equal_to("2Gi"))
     assert_that(_archive_size(None), equal_to("1Gi"))
+
+
+def test_an_archive_of_a_full_volume_of_incompressible_data_fits_the_margin(tmp_path):
+    # The worst case for the archive format: random data, much of it in files of one 4KiB
+    # block, where tar's per-file header and padding weigh most.
+    source = tmp_path / "volume"
+    for directory in range(20):
+        (source / "workspace" / f"d{directory}").mkdir(parents=True)
+        for index in range(100):
+            (source / "workspace" / f"d{directory}" / f"f{index}.bin").write_bytes(os.urandom(4096))
+    (source / "workspace" / "large.bin").write_bytes(os.urandom(8 * MIB))
+    files = [path for path in source.rglob("*") if path.is_file()]
+    data = sum(path.stat().st_size for path in files)
+    # What the files take on the Agent's volume: whole 4KiB blocks, and one per directory.
+    used = sum(-(-path.stat().st_size // 4096) * 4096 for path in files)
+    used += 4096 * sum(1 for path in source.rglob("*") if path.is_dir())
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+
+    manifest = capture(source, archive_dir, "openclaw")
+
+    # The archive outgrows the data it holds, so a volume only as large as the Agent's would not do.
+    assert_that(manifest["bytes"] > data, equal_to(True))
+    # The format's overhead, with the archive volume's own filesystem (inode tables, about
+    # 1.6% on ext4), stays inside the proportional part of the margin.
+    overhead = manifest["bytes"] / used - 1
+    assert_that(overhead + 0.016 < RESTORE_POINT_ARCHIVE_MARGIN_PERCENT / 100, equal_to(True))
+    assert_that(archive_volume_bytes(used) >= manifest["bytes"] * 1.016, equal_to(True))
