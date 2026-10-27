@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   Layers,
   LayoutGrid,
+  ListChecks,
   PackageOpen,
   MessageSquare,
   MessagesSquare,
@@ -201,6 +202,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
   workflows: Workflow,
   files: PackageOpen,
   playbooks: BookOpen,
+  tasks: ListChecks,
   activity: Activity,
   costs: Wallet,
   "resource-usage": Cpu,
@@ -210,7 +212,7 @@ export const AGENT_TAB_ICONS: Record<AgentPageTab, LucideIcon> = {
 export const AGENT_TAB_GROUPS: { key: string; label?: string; tabs: AgentPageTab[] }[] = [
   // The Overview (the About section) opens the Agent, so it leads the list.
   { key: "talk", tabs: ["about", "chat", "conversations", "memory"] },
-  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks"] },
+  { key: "work", label: "Work", tabs: ["tool-calls", "logs", "workflows", "files", "playbooks", "tasks"] },
   { key: "health", label: "Health", tabs: ["activity", "costs", "resource-usage"] },
 ];
 
