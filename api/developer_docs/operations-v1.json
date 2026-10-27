@@ -481,6 +481,21 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/tasks",
+    "list_agent_tasks_organizations__organization_id__agents__agent_id__tasks_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/tasks/{task_id}",
+    "get_agent_task_organizations__organization_id__agents__agent_id__tasks__task_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/tasks/{task_id}/files/{file_id}/download-link",
+    "task_file_download_link_organizations__organization_id__agents__agent_id__tasks__task_id__files__file_id__download_link_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/template/{version}",
     "get_agent_template_organizations__organization_id__agents__agent_id__template__version__get"
   ],
@@ -703,6 +718,11 @@
     "GET",
     "/organizations/{organization_id}/sync-providers/{provider_key}/connection/locations",
     "search_sync_provider_locations_organizations__organization_id__sync_providers__provider_key__connection_locations_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/tasks",
+    "list_tasks_organizations__organization_id__tasks_get"
   ],
   [
     "GET",

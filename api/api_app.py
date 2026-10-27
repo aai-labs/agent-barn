@@ -30,6 +30,7 @@ from api.domains.agent_sizes.routes import (
     platform_agent_sizes_router,
     platform_organization_agent_sizes_router,
 )
+from api.domains.agent_tasks.routes import agent_tasks_router, tasks_router
 from api.domains.agent_webhooks.routes import agent_webhook_ingress_router, agent_webhooks_router
 from api.domains.agents.platform_routes import platform_agents_router
 from api.domains.agents.routes import agents_router
@@ -193,6 +194,8 @@ def create_app(injector: Injector | None = None):
     subapi.include_router(agent_skills_router)
     subapi.include_router(platform_skills_router)
     subapi.include_router(agent_playbook_extractions_router)
+    subapi.include_router(agent_tasks_router)
+    subapi.include_router(tasks_router)
     subapi.include_router(playbook_extractions_router)
     subapi.include_router(platform_playbooks_router)
     subapi.include_router(integrations_router)
