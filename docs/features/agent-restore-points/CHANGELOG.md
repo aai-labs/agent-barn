@@ -57,7 +57,10 @@ Related context: [`../agents.md`](../agents.md), [`../../architecture/runtime-an
 
 - Delivered: `skip_backup` on the restore request and on `POST .../managed-update`. The UI offers
   it after the automatic backup fails ("Restore without backup snapshot" / "Update without backup
-  snapshot"). The failed-backup state lives only in the browser.
+  snapshot"). The restore offer lives only in the browser. The update offer sits in the note that
+  says the backup failed, and is shown at every screen width for as long as the Agent stays stopped
+  with outcome `BACKUP_FAILED`, so it survives a reload. It was first placed in the update banner,
+  which the navigation rework had made phone-only, so desktop never saw it.
 - Delivered: the update accepts `skip_backup` only for a `STOPPED` Agent whose last outcome is
   `BACKUP_FAILED`. If the new image fails there is no rollback: the Agent is stopped and the
   outcome is the new `UPDATE_FAILED`.
