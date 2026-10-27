@@ -485,7 +485,7 @@ Garage start must fail on absent bind sources without creating real store volume
 the same test then bootstraps successfully and removes its sentinel volumes.
 It deletes only its own generated Compose project/volumes; developer storage is
 untouched. The local cleanup process supports one bounded pass or `--interval 600`
-with graceful shutdown. `make check-artifacts` also checks the three-node Garage
+with graceful shutdown. `make check-artifacts` also checks the single-node default and the explicit three-node Garage
 chart's persistent storage, non-root pods, private Secret reference, distinct-node
 scheduling, network policy and TLS ingress render.
 

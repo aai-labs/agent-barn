@@ -1,21 +1,21 @@
 image: dxflrs/garage:v2.4.1
 imagePullPolicy: IfNotPresent
 dnsWaitImage: rancher/mirrored-library-busybox:1.36.1
-replicas: 3
+replicas: 1
 clusterDomain: cluster.local
 # Bound each RPC attempt below the API S3 client's 30-second read timeout.
 rpcTimeoutMilliseconds: 20000
 # In-cluster probe deadline; failure detection still spans several ping intervals.
 rpcPingTimeoutMilliseconds: 3000
-replicationFactor: 3
+replicationFactor: 1
 # Pre-created Secret with 64-character hexadecimal rpc-secret and admin-token entries.
 # Mounted only by Garage as Secret-backed environment variables; never by the API.
 existingRpcSecret: garage-rpc
 storageClass: ""
 metadataSize: 1Gi
 dataSize: 10Gi
-# Each replica must be on a separate Kubernetes node for independent failure domains.
-requireDistinctNodes: true
+# Enable when deploying replicated Garage across independent Kubernetes nodes.
+requireDistinctNodes: false
 resources:
   requests: {cpu: 100m, memory: 256Mi}
   limits: {memory: 512Mi}

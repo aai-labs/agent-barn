@@ -24,13 +24,15 @@ native API/cleanup; it is never exposed to the LAN or an ingress. The API remain
 trusted with the encrypted credential catalogue. Product ownership, readiness,
 retry and deletion invariants are owned by the [artifact contract](../features/agent-artifacts.md#per-agent-storage-authority).
 
-The local single-node service is for development. The cluster chart defaults to
-three replicas, three-way replication, distinct Kubernetes nodes, separate metadata
-and data PVCs, fsync and a disruption budget of two. The default volumes are 1 GiB
-metadata and 10 GiB data per node. Assigned capacity is 10GB per node. Size capacity
-below the actual data volume and maintain free headroom. Distinct Kubernetes nodes
-must represent independent machines/failure domains; three local k3d nodes on one
-host prove protocol behavior, not physical redundancy. Replication is not a backup.
+The cluster chart and Helmfile default to one Garage replica and one copy, suitable
+for the current single-node cluster. It has 1 GiB of metadata and 10 GiB of data
+PVCs, fsync, and no storage redundancy: a node or disk failure can make artifacts
+unavailable or lose them. Maintain and test independent backups alongside PostgreSQL.
+The example bootstrap assigns 10 GB of capacity; size it below the actual data
+volume and maintain free headroom. For an installation with three independent nodes,
+operators can explicitly set three replicas, replication factor three and distinct-node
+scheduling. Three local k3d nodes on one host prove protocol behavior, not physical
+redundancy. Replication is not a backup.
 
 Sources: [Garage cluster deployment](https://garagehq.deuxfleurs.fr/documentation/cookbook/real-world/),
 [configuration](https://garagehq.deuxfleurs.fr/documentation/reference-manual/configuration/) and
@@ -232,8 +234,8 @@ It uses stable per-replica RPC ClusterIP Services plus explicit operator peer/la
 bootstrap. Peers retain those Service addresses when a pod gets a new IP. This
 requires the deployment identity to have namespace permissions for StatefulSets,
 PVCs, Services, ConfigMaps, Secrets, NetworkPolicies, PodDisruptionBudgets and
-Ingresses; namespace scope alone does not establish these grants. Prepare three schedulable
-storage nodes and suitable StorageClass/capacity. Garage needs only private
+Ingresses; namespace scope alone does not establish these grants. Prepare a schedulable
+storage node and suitable StorageClass/capacity for the default single-replica setup. Garage needs only private
 service DNS reachable by API/purge; browsers and Agents download through the app. Installation is an explicit
 operator action; these commands must not be run against production without authorization.
 
@@ -268,12 +270,13 @@ NodeLocal DNS needs an installation-specific additional egress rule.
 No Garage port is publicly exposed. RPC is restricted to Garage peers; S3 accepts
 only API and artifact-purge pods when ingress is disabled. Admin port 3903 accepts
 only API and artifact-purge pods; it has no ingress or cluster host-published port. ServiceAccount tokens and privilege escalation are disabled.
-For a single-node development cluster, install Garage with `--set replicas=1
---set replicationFactor=1 --set requireDistinctNodes=false`, and bootstrap with
-`cluster-init` after installation. For Helmfile set `GARAGE_REPLICAS=1`,
-`GARAGE_REPLICATION_FACTOR=1`, and `GARAGE_REQUIRE_DISTINCT_NODES=false` in the
-deployment environment. Always create the RPC Secret before syncing.
-This development topology has no redundancy and must not be used as a production default.
+The default chart and Helmfile values deploy one replica with replication factor one.
+Always create the RPC Secret before syncing. For a three-node installation, explicitly
+set `replicas=3`, `replicationFactor=3`, and `requireDistinctNodes=true`; Helmfile
+accepts `GARAGE_REPLICAS=3`, `GARAGE_REPLICATION_FACTOR=3`, and
+`GARAGE_REQUIRE_DISTINCT_NODES=true`. Changing the replication topology of an existing
+store requires an operator-managed Garage layout and data migration; do not merely
+change chart values on retained data.
 
 A one-replica installation has no PodDisruptionBudget and provides no redundancy.
 SQLite automatic metadata snapshots are not configured; consistent backups remain
@@ -387,8 +390,8 @@ independent backup system with a tested Garage recovery procedure; three replica
 on one shared disk/provider are not three independent copies. Retain private layout,
 RPC and application key configuration. Follow [Garage durability/repair](https://garagehq.deuxfleurs.fr/documentation/operations/durability-repairs/)
 and [recovery](https://garagehq.deuxfleurs.fr/documentation/operations/recovering/)
-for the deployed version. A lost node's data is repaired from remaining copies;
-replacement node IDs require explicit layout changes, not the initial bootstrap tool.
+for the deployed version. With replication, a lost node's data can be repaired from
+remaining copies; with one replica, recovery depends on backups. Replacement node IDs require explicit layout changes, not the initial bootstrap tool.
 
 Artifact migration `a4150b8c9d10` follows `f8740a67b788`; merge revision
 `a4151c9d0e21` joins the prerequisite history. New head `a4152d0e1f32` adds the

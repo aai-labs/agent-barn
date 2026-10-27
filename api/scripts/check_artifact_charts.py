@@ -85,6 +85,12 @@ def main() -> None:
         check=True,
     )
     private_items = [item for item in yaml.safe_load_all(private.stdout) if item]
+    default_stateful = next(item for item in private_items if item["kind"] == "StatefulSet")
+    assert default_stateful["spec"]["replicas"] == 1
+    assert "affinity" not in default_stateful["spec"]["template"]["spec"]
+    default_config = next(item for item in private_items if item["kind"] == "ConfigMap")
+    assert all("replication_factor = 1" in value for value in default_config["data"].values())
+    assert not any(item["kind"] == "PodDisruptionBudget" for item in private_items)
     assert not any(item["kind"] == "Ingress" for item in private_items)
     private_policy = next(item for item in private_items if item["kind"] == "NetworkPolicy")
     admin_rule = private_policy["spec"]["ingress"][2]
@@ -102,6 +108,12 @@ def main() -> None:
             str(ROOT / "helm/garage"),
             "--namespace",
             "artifact-fixture",
+            "--set",
+            "replicas=3",
+            "--set",
+            "replicationFactor=3",
+            "--set",
+            "requireDistinctNodes=true",
             "--set",
             "ingress.enabled=true",
             "--set",

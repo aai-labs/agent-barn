@@ -197,6 +197,12 @@ def test_replicated_garage_chart_quorum_and_pvc_recovery(tmp_path):
                 "artifacts",
                 "--set",
                 "imagePullPolicy=Never",
+                "--set",
+                "replicas=3",
+                "--set",
+                "replicationFactor=3",
+                "--set",
+                "requireDistinctNodes=true",
             ]
         ).stdout
         run([*kube, "apply", "-f", "-"], data=chart)

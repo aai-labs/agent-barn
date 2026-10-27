@@ -24,9 +24,9 @@ releases:
       name: garage
     values:
       - storageClass: {{ env "STORAGE_CLASS" | default "" | quote }}
-        replicas: {{ env "GARAGE_REPLICAS" | default "3" }}
-        replicationFactor: {{ env "GARAGE_REPLICATION_FACTOR" | default "3" }}
-        requireDistinctNodes: {{ env "GARAGE_REQUIRE_DISTINCT_NODES" | default "true" }}
+        replicas: {{ env "GARAGE_REPLICAS" | default "1" }}
+        replicationFactor: {{ env "GARAGE_REPLICATION_FACTOR" | default "1" }}
+        requireDistinctNodes: {{ env "GARAGE_REQUIRE_DISTINCT_NODES" | default "false" }}
         ingress:
           enabled: false
   - name: postgres-hindsight
