@@ -202,7 +202,7 @@ from api.infrastructure.integration_validators import (
 from api.infrastructure.integration_validators.atlassian_utils import (
     get_atlassian_cloud_id,
 )
-from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.kubernetes.client import KubernetesClient, VolumeExpansionUnsupported
 from api.infrastructure.litellm.client import LiteLLMClient, LiteLLMError
 from api.infrastructure.openrouter.client import OpenRouterClient
 from api.infrastructure.shared.models import PaginatedItems, Pagination
@@ -2233,6 +2233,10 @@ class AgentService:
         applied until the capacity catches up, which `_reconcile_volume` notices. When the
         cluster refuses outright, the Agent still starts on the volume it has. A volume is never
         shrunk, so a larger one than the size asks for stays.
+
+        A StorageClass that cannot grow volumes at all, such as `local-path`, which does not
+        enforce a claim's size either, counts the volume as already at the size's storage, so
+        the Agent is not left pending on a resize that can never happen.
         """
         requested = pvc_storage_bytes(pvc)
         if requested is None:
@@ -2241,6 +2245,11 @@ class AgentService:
         if requested < storage_bytes:
             try:
                 self.k8s.patch_pvc_storage(name, namespace, storage_quantity(storage_bytes))
+            except VolumeExpansionUnsupported:
+                logger.info(
+                    "Volume %s's StorageClass cannot grow volumes; counting it as %s bytes", name, storage_bytes
+                )
+                return storage_bytes
             except ApiException as exc:
                 logger.warning(
                     "Could not grow volume %s from %s to %s bytes (%s %s); starting on the volume it has",

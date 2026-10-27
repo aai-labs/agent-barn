@@ -23,7 +23,7 @@ Platform Administrators keep a catalog of CPU, memory and storage sizes. Organiz
   - UI and API copy; the Playwright specs' locators.
   - Scripts: `k8s/agent-specs-check.py`, `k8s/agent-specs-expansion-test.py`.
   - Docs: [`../agent-sizes.md`](../agent-sizes.md), operations, resource usage, `CONTEXT.md`.
-- Follow-up: growing existing volumes needs a StorageClass that expands; on `local-path`, a spec with more storage than an Agent's volume keeps that Agent pending.
+- Follow-up: none. On a StorageClass that cannot grow volumes, such as `local-path`, a start counts the volume as at its spec's storage instead of leaving the Agent pending (`VolumeExpansionUnsupported`); any other refusal still keeps it pending.
 
 ### 2026-10-26 — Agent Sizes storage follow-up
 

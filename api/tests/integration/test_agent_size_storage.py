@@ -17,7 +17,7 @@ from api.domains.agents.builders.common import build_pvc, storage_quantity
 from api.domains.agents.models import Agent
 from api.domains.events.catalog import PLATFORM_AGENT_SIZE_CHANGED, PLATFORM_AGENT_SIZE_CREATED
 from api.domains.events.models import OutboxMessage
-from api.infrastructure.kubernetes.client import KubernetesClient
+from api.infrastructure.kubernetes.client import KubernetesClient, VolumeExpansionUnsupported
 from api.infrastructure.postgres.repository import PostgresRepositoryDelegate
 from api.tests.core.givenpy import given, then, when
 from api.tests.core.modules import create_test_client, prepare_api_server, prepare_injector, set_env_variable
@@ -230,7 +230,22 @@ def test_an_existing_volume_grows_and_stays_pending_until_kubernetes_has_grown_i
             assert_that(_volume(context), equal_to(10 * GIB))
 
 
-def test_a_volume_the_cluster_cannot_grow_still_starts_and_stays_pending():
+def test_a_volume_whose_storage_class_cannot_grow_starts_and_is_not_pending():
+    with given([*_GIVEN, there_is_an_agent()]) as context:
+        k8s = context.injector.get(KubernetesClient)
+        _make_default(context, _platform_admin(context), _BIG)
+        k8s.create_pvc.side_effect = None
+        k8s.create_pvc.return_value = _bound(context, 1 * GIB, 1 * GIB)
+        k8s.patch_pvc_storage.side_effect = VolumeExpansionUnsupported("agent")
+
+        response = _start(context)
+
+        assert_that(response.status_code, equal_to(status.HTTP_200_OK))
+        assert_that(response.json()["pending_size"], equal_to(False))
+        assert_that(_volume(context), equal_to(10 * GIB))
+
+
+def test_a_volume_the_cluster_refuses_to_grow_otherwise_still_starts_and_stays_pending():
     with given([*_GIVEN, there_is_an_agent()]) as context:
         k8s = context.injector.get(KubernetesClient)
         _make_default(context, _platform_admin(context), _BIG)

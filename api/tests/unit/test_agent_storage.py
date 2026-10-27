@@ -1,6 +1,7 @@
 """An Agent Size's storage: the volume a new Agent gets, how an older one grows, when it is
 pending, and how large a restore point's archive volume is."""
 
+import json
 import os
 from types import SimpleNamespace
 from typing import Any, cast
@@ -25,6 +26,7 @@ from api.domains.agents.restore_point_job import capture
 from api.domains.agents.service import AgentService
 from api.domains.restore_points.constants import RESTORE_POINT_ARCHIVE_MARGIN_PERCENT
 from api.domains.restore_points.service import RestorePointService, archive_volume_bytes
+from api.infrastructure.kubernetes.client import KubernetesClient, VolumeExpansionUnsupported
 
 
 def _size(storage_bytes: int, *, memory_limit_bytes: int = 1 * GIB) -> AgentSize:
@@ -114,7 +116,15 @@ def test_a_volume_above_its_size_is_left_alone():
     k8s.patch_pvc_storage.assert_not_called()
 
 
-def test_a_volume_the_cluster_cannot_grow_keeps_its_size_and_the_agent_still_starts():
+def test_a_volume_whose_storage_class_cannot_grow_counts_as_the_sizes_storage():
+    # local-path refuses every resize and does not enforce a claim's size either.
+    k8s = MagicMock()
+    k8s.patch_pvc_storage.side_effect = VolumeExpansionUnsupported("agent-x")
+
+    assert_that(_ensure(_bound(1 * GIB, 1 * GIB), 10 * GIB, k8s), equal_to(10 * GIB))
+
+
+def test_any_other_refusal_keeps_the_volume_at_its_capacity_and_the_agent_still_starts():
     k8s = MagicMock()
     k8s.patch_pvc_storage.side_effect = ApiException(status=403, reason="Forbidden")
 
@@ -201,3 +211,31 @@ def test_an_archive_of_a_full_volume_of_incompressible_data_fits_the_margin(tmp_
     overhead = manifest["bytes"] / used - 1
     assert_that(overhead + 0.016 < RESTORE_POINT_ARCHIVE_MARGIN_PERCENT / 100, equal_to(True))
     assert_that(archive_volume_bytes(used) >= manifest["bytes"] * 1.016, equal_to(True))
+
+
+# --- the client --------------------------------------------------------------------
+
+
+def _client_refusing(status: int, message: str):
+    k8s = KubernetesClient(config=MagicMock())
+    core_v1 = MagicMock()
+    error = ApiException(status=status, reason="Forbidden")
+    error.body = json.dumps({"kind": "Status", "message": message})
+    core_v1.patch_namespaced_persistent_volume_claim.side_effect = error
+    cast(Any, k8s)._core_v1 = core_v1
+    return k8s
+
+
+def test_a_storage_class_that_cannot_resize_is_told_apart_from_other_refusals():
+    # The API server's own wording, as staging's local-path claims get it.
+    unsupported = _client_refusing(
+        403,
+        'persistentvolumeclaims "agent-x" is forbidden: only dynamically provisioned pvc can be resized '
+        "and the storageclass that provisions the pvc must support resize",
+    )
+    with pytest.raises(VolumeExpansionUnsupported):
+        unsupported.patch_pvc_storage("agent-x", "agent-farm", "10Gi")
+
+    quota = _client_refusing(403, "exceeded quota: storage, requested: requests.storage=9Gi")
+    with pytest.raises(ApiException):
+        quota.patch_pvc_storage("agent-x", "agent-farm", "10Gi")

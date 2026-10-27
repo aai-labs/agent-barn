@@ -824,8 +824,8 @@ python3 k8s/agent-specs-expansion-test.py --kubeconfig <kubeconfig> --namespace 
   (default `busybox:1.36`) must be pullable.
 - **Staging and production** (one cluster, namespaces `agent-farm-staging` and `agent-farm`) keep
   Agent volumes on `local-path`, which refuses to grow a claim and does not enforce a claim's
-  size. Checked on 2026-10-27; a StorageClass that expands is needed before a bigger spec's
-  storage can reach existing Agents there.
+  size. Checked on 2026-10-27. There a bigger spec's storage reaches new volumes only; an existing
+  Agent's volume is counted as at its spec's storage, so it is not left pending.
 
 ### Business Action backfill
 

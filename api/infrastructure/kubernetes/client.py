@@ -21,6 +21,13 @@ from kubernetes.stream import stream as k8s_stream
 from api.core.config import Config
 
 _SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+# How the API server refuses to resize a claim whose StorageClass cannot grow volumes (or a
+# claim that was not dynamically provisioned).
+_RESIZE_UNSUPPORTED = "must support resize"
+
+
+class VolumeExpansionUnsupported(Exception):
+    """The claim's StorageClass cannot grow volumes, such as `local-path`."""
 
 
 @inject
@@ -235,11 +242,16 @@ class KubernetesClient:
         )
 
     def patch_pvc_storage(self, name: str, namespace: str, storage: str) -> None:
-        """Ask for a larger volume. Kubernetes refuses a smaller one, and any resize at all when
-        the StorageClass does not allow volume expansion; both raise ApiException."""
-        self._core_v1.patch_namespaced_persistent_volume_claim(
-            name, namespace, {"spec": {"resources": {"requests": {"storage": storage}}}}
-        )
+        """Ask for a larger volume. A StorageClass that cannot grow volumes raises
+        VolumeExpansionUnsupported; any other refusal (a smaller size, the quota) ApiException."""
+        try:
+            self._core_v1.patch_namespaced_persistent_volume_claim(
+                name, namespace, {"spec": {"resources": {"requests": {"storage": storage}}}}
+            )
+        except ApiException as exc:
+            if exc.status == 403 and _RESIZE_UNSUPPORTED in str(exc.body or ""):
+                raise VolumeExpansionUnsupported(name) from exc
+            raise
 
     def delete_pvc(self, name: str, namespace: str) -> None:
         self._delete_ignoring_not_found(self._core_v1.delete_namespaced_persistent_volume_claim, name, namespace)
