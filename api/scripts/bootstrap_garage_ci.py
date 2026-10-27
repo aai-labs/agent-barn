@@ -41,8 +41,13 @@ def main() -> None:
             raise ValueError("Existing Garage credentials differ; use a coordinated rotation procedure")
     else:
         pvcs = json.loads(command([*kube, "get", "pvc", "-o", "json"]).stdout)["items"]
-        if any(item["metadata"]["name"] in {"data-garage-0", "metadata-garage-0"} for item in pvcs):
-            raise ValueError("Garage PVCs exist without the RPC Secret; inspect retained data before bootstrap")
+        for item in pvcs:
+            if not re.fullmatch(r"(?:data|metadata)-garage-[0-9]+", item["metadata"]["name"]):
+                continue
+            # A Pending claim without a bound volume contains no persisted bytes.
+            # Refuse unknown states or pre-bound volumes rather than replacing keys.
+            if item.get("status", {}).get("phase") != "Pending" or item.get("spec", {}).get("volumeName"):
+                raise ValueError("Garage PVCs exist without the RPC Secret; inspect retained data before bootstrap")
         command(
             [*kube, "apply", "-f", "-"],
             data=secret_manifest("garage-rpc", args.namespace, {"rpc-secret": rpc, "admin-token": admin}),

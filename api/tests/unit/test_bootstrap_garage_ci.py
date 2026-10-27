@@ -8,7 +8,7 @@ import pytest
 from api.scripts import bootstrap_garage_ci as bootstrap
 
 
-@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("existing", [False, True, "pending"])
 def test_bootstrap_reuses_credentials_and_initializes_layout(monkeypatch, tmp_path, existing):
     rpc, admin = "a" * 64, "b" * 64
     monkeypatch.setenv("GARAGE_RPC_SECRET_INPUT", rpc)
@@ -25,9 +25,20 @@ def test_bootstrap_reuses_credentials_and_initializes_layout(monkeypatch, tmp_pa
                     "admin-token": base64.b64encode(admin.encode()).decode(),
                 }
             }
-            return subprocess.CompletedProcess(args, 0, json.dumps(value) if existing else "", "")
+            return subprocess.CompletedProcess(args, 0, json.dumps(value) if existing is True else "", "")
         if "pvc" in args:
-            return subprocess.CompletedProcess(args, 0, '{"items": []}', "")
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps(
+                    {
+                        "items": [{"metadata": {"name": "data-garage-0"}, "status": {"phase": "Pending"}, "spec": {}}]
+                        if existing == "pending"
+                        else []
+                    }
+                ),
+                "",
+            )
         return subprocess.CompletedProcess(args, 0, "", "")
 
     def init(args):
@@ -38,7 +49,7 @@ def test_bootstrap_reuses_credentials_and_initializes_layout(monkeypatch, tmp_pa
     monkeypatch.setattr(bootstrap, "cluster_init", init)
     bootstrap.main()
     assert any(args[0] == "helm" and "--wait=false" in args for args, _ in calls)
-    assert sum(data is not None and "garage-rpc" in data for _, data in calls) == (0 if existing else 1)
+    assert sum(data is not None and "garage-rpc" in data for _, data in calls) == (0 if existing is True else 1)
     assert sum(data == "{}" for _, data in calls) == 2
 
 

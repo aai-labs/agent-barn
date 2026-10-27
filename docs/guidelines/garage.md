@@ -343,8 +343,9 @@ CI creates `garage-rpc`, initializes the layout only when it is new, and writes
 `garage-artifact-storage` and `garage-artifact-provisioner`. The names are fixed
 in Helmfile. Set `ARTIFACT_PURGE_ENABLED=false` only to suspend maintenance.
 
-CI refuses to replace an existing RPC/admin credential or initialize existing
-Garage PVCs when their RPC Secret is missing. Inspect and recover the original
+CI refuses to replace an existing RPC/admin credential or initialize bound or
+unknown-state Garage PVCs when their RPC Secret is missing. Pending claims without
+a bound volume can be initialized after an unsuccessful first deployment. Inspect and recover the original
 credentials and data before proceeding; credential rotation remains a coordinated
 operator procedure, not an automatic effect of changing a GitHub Secret. Existing
 Agent bucket credentials are retained in PostgreSQL. The application Secret contains
