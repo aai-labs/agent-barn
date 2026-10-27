@@ -7,7 +7,7 @@ from pydantic import BaseModel as DTO
 from pydantic import ConfigDict, Field, model_validator
 from sqlmodel import Field as SqlField
 
-from api.domains.custom_api.request import credential_headers, parse_url
+from api.domains.custom_api.request import OAUTH2_CLIENT_CREDENTIALS, credential_headers, parse_url
 from api.infrastructure.postgres.models import BaseModel
 
 
@@ -34,11 +34,18 @@ class HeaderInput(DTO):
 
 class AuthInput(DTO):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["none", "bearer", "api_key", "basic"]
+    type: Literal["none", "bearer", "api_key", "basic", "oauth2_client_credentials"]
     header_name: str | None = None
     token: str | None = Field(default=None, max_length=8192)
     username: str | None = Field(default=None, max_length=1024)
     password: str | None = Field(default=None, max_length=8192)
+    # OAuth2 client credentials: the gateway posts the id and secret to the token URL and
+    # attaches the bearer token it receives. The id is an identifier, not a secret, but it is
+    # treated like a Basic username and never returned by read APIs either.
+    token_url: str | None = Field(default=None, max_length=2048)
+    client_id: str | None = Field(default=None, max_length=1024)
+    client_secret: str | None = Field(default=None, max_length=8192)
+    scope: str | None = Field(default=None, max_length=1024)
 
 
 class CustomApiConnectionCreate(DTO):
@@ -88,11 +95,22 @@ class CustomApiConnectionRead(DTO):
     pending_apply: bool
     auth_type: str
     auth_header_name: str | None = None
+    auth_token_url: str | None = None
+    auth_scope: str | None = None
     headers: list[HeaderRead]
 
 
 def validate_credentials(config: dict) -> None:
     credential_headers(config)
+
+
+def requires_isolation(config: dict) -> bool:
+    """Whether this credential may never be materialized into the pod.
+
+    OAuth2 client credentials are exchanged by the gateway; the agent-side CLI has no such
+    authentication type, and handing the pod the client secret would hand it the grant.
+    """
+    return config.get("auth", {}).get("type") == OAUTH2_CLIENT_CREDENTIALS
 
 
 class CustomApiRequest(DTO):

@@ -82,6 +82,8 @@ export const PlatformOrganizationSchema = z.object({
   llmBudgetDuration: z.string().nullable().optional(),
   // The organization's own limit beneath the ceiling. Null follows the ceiling.
   llmOwnBudgetUsd: z.number().nullable().optional(),
+  // The Agent sizes it may choose beyond the default, which is never listed. Empty: it cannot choose.
+  agentSizeIds: z.array(z.string().uuid()).default([]),
   // How many agents it may run: its own (null follows the default) and the one in
   // force (null for no limit). Only the single organization read carries the latter.
   agentLimit: z.number().int().nullable().optional(),

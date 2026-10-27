@@ -2,6 +2,14 @@ from dataclasses import dataclass
 
 from sqlalchemy import text
 
+from api.domains.agent_sizes.models import (
+    STANDARD_CPU_LIMIT_MILLICORES,
+    STANDARD_CPU_REQUEST_MILLICORES,
+    STANDARD_MEMORY_LIMIT_BYTES,
+    STANDARD_MEMORY_REQUEST_BYTES,
+    STANDARD_SIZE_ID,
+    STANDARD_SIZE_NAME,
+)
 from api.domains.auth.models import PasswordResetToken, RefreshToken
 from api.domains.auth.repository import (
     PasswordResetTokenRepository,
@@ -59,6 +67,24 @@ def database_is_clean():
                 text(
                     "TRUNCATE platform_workflow_settings, memory_key_revocation, platform_memory_settings, platform_playbook_settings, platform_trial_settings, platform_billing_settings, platform_organization_settings, billing_checkout, billing_unapplied_payment, trial_grant, security_audit_record, gateway_audit_event, event_delivery, event_outbox_message, communication_operation_journal, skill, communication_delivery, agent_chat_message, communication_connection, tool_call, agent_template, platform_template_draft_skill, platform_template_draft, platform_template_skill, platform_template, platform_resource_limits, agent CASCADE"
                 )
+            )
+            # The Agent Size catalog back to what the migration seeded: Standard, the default.
+            conn.execute(text("DELETE FROM agent_sizes"))
+            conn.execute(
+                text(
+                    "INSERT INTO agent_sizes (id, created_at, updated_at, name, cpu_request_millicores,"
+                    " cpu_limit_millicores, memory_request_bytes, memory_limit_bytes, enabled, is_default,"
+                    " sort_order) VALUES (:id, now(), now(), :name, :cpu_request, :cpu_limit, :memory_request,"
+                    " :memory_limit, true, true, 0)"
+                ),
+                {
+                    "id": STANDARD_SIZE_ID,
+                    "name": STANDARD_SIZE_NAME,
+                    "cpu_request": STANDARD_CPU_REQUEST_MILLICORES,
+                    "cpu_limit": STANDARD_CPU_LIMIT_MILLICORES,
+                    "memory_request": STANDARD_MEMORY_REQUEST_BYTES,
+                    "memory_limit": STANDARD_MEMORY_LIMIT_BYTES,
+                },
             )
             conn.commit()
         delegate.delete_all(RefreshToken)

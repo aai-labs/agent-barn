@@ -16,6 +16,7 @@ import type { Onboarding } from "../schemas";
 import { AccountOpeningScreen } from "./account-opening-screen";
 import { ChooseStep, ContinueButton } from "./choose-step";
 import { DoneStep } from "./done-step";
+import { GmailStep } from "./gmail-step";
 import { OnboardingShell, StepAlert, type OnboardingPath } from "./onboarding-shell";
 import { SetupStep } from "./setup-step";
 import { TelegramStep } from "./telegram-step";
@@ -28,11 +29,12 @@ export function OnboardingFlow() {
   const { onboarding: currentOnboarding, isLoadingOnboarding, onboardingError, reloadOnboarding } = useOnboarding();
   const { setUpAgent, complete } = useOnboardingActions();
   const [path, setPath] = useState<OnboardingPath>("quick");
-  const [stage, setStage] = useState<"choose" | "setup" | "finish" | "done">("choose");
+  const [stage, setStage] = useState<"choose" | "setup" | "gmail" | "finish" | "done">("choose");
   const [hired, setHired] = useState<HiredAgent | null>(null);
   const [telegramUsername, setTelegramUsername] = useState<string | null>(null);
   const [skipping, setSkipping] = useState(false);
-  const [returnToDashboard, setReturnToDashboard] = useState(false);
+  // Where finishing goes: the dashboard, Web Chat, or the ready screen when null.
+  const [returnTo, setReturnTo] = useState<string | null>(null);
   // Completion retires the API's setup details. Keep this visit's summary and
   // navigation targets while the completed status refreshes in the query cache.
   const [finishedSetup, setFinishedSetup] = useState<Onboarding | null>(null);
@@ -67,15 +69,16 @@ export function OnboardingFlow() {
   const home = trialOrganizationId ? `/dashboard/${trialOrganizationId}` : "/dashboard";
   const agentId = hired?.id ?? onboarding.agentId;
   const agentName = hired?.name ?? onboarding.agentName ?? "your agent";
+  const chatHref = `${home}/agents/${agentId}?tab=chat`;
   const shell = { email: user.email, creditUsd: onboarding.creditUsd ?? null };
 
-  function finish(username: string | null = null, dashboard = returnToDashboard) {
+  function finish(username: string | null = null, to = returnTo) {
     setFinishedSetup(onboarding ?? null);
     setTelegramUsername(username);
-    setReturnToDashboard(dashboard);
+    setReturnTo(to);
     setStage("finish");
     complete.mutate(undefined, {
-      onSuccess: () => dashboard ? router.push(home) : setStage("done"),
+      onSuccess: () => to ? router.push(to) : setStage("done"),
     });
   }
 
@@ -96,7 +99,7 @@ export function OnboardingFlow() {
         telegramUsername={telegramUsername}
         botUsername={onboarding.telegramBotUsername ?? null}
         onDashboard={() => router.push(home)}
-        chatHref={`${home}/agents/${agentId}?tab=chat`}
+        chatHref={chatHref}
         channelsHref={`${home}/agents/${agentId}/configuration?section=channels&connect=true`}
       />
     );
@@ -109,7 +112,7 @@ export function OnboardingFlow() {
       <OnboardingShell
         {...shell}
         path={path}
-        step={3}
+        step={4}
         title="Finishing your setup"
         footerEnd={
           <button
@@ -136,7 +139,7 @@ export function OnboardingFlow() {
         title="How do you want to start?"
         subtitle="Start with an assistant that's ready to go, or make one your own."
         footerStart={
-          <button type="button" className="af-btn af-btn-ghost" onClick={() => finish(null, true)}>
+          <button type="button" className="af-btn af-btn-ghost" onClick={() => finish(null, home)}>
             I&apos;ll do this later
           </button>
         }
@@ -144,7 +147,7 @@ export function OnboardingFlow() {
           <button
             type="button"
             className="af-btn af-btn-primary af-btn-lg"
-            onClick={() => { setPath("own"); finish(null, true); }}
+            onClick={() => { setPath("own"); finish(null, home); }}
           >
             Go to dashboard
           </button>
@@ -159,13 +162,26 @@ export function OnboardingFlow() {
     );
   }
 
+  // Connecting Gmail is optional, so it comes once the Agent exists and before the ready screen.
+  if (stage === "gmail" && agentId) {
+    return (
+      <GmailStep
+        {...shell}
+        path={path}
+        agentId={agentId}
+        onDone={() => finish(telegramUsername)}
+        onLater={() => finish(null, returnTo ?? home)}
+      />
+    );
+  }
+
   if (path === "own") {
     return (
       <SetupStep
         {...shell}
         onBack={() => setStage("choose")}
-        onLater={() => finish(null, true)}
-        onHired={(agent) => { setHired(agent); finish(); }}
+        onLater={() => finish(null, home)}
+        onHired={(agent) => { setHired(agent); setStage("gmail"); }}
       />
     );
   }
@@ -185,14 +201,21 @@ export function OnboardingFlow() {
       agent={ready ? { id: onboarding.agentId!, connectionId: onboarding.connectionId! } : null}
       setUpError={setUpError}
       hasAgent={!!agentId}
-      onLater={() => finish(null, true)}
+      onLater={() => finish(null, home)}
       onRetrySetUp={() => setUpAgent.mutate()}
-      onContinue={(username) => finish(username)}
+      onContinue={(username) => { setTelegramUsername(username); setStage("gmail"); }}
       isContinuing={complete.isPending}
+      // Chatting on the web still offers Gmail, then opens Web Chat however that step ends.
+      // An Agent whose setup failed goes straight to Web Chat: there is nothing to connect it to.
       onSkip={() => {
+        if (!setUpError) {
+          setReturnTo(chatHref);
+          setStage("gmail");
+          return;
+        }
         setSkipping(true);
         complete.mutate(undefined, {
-          onSuccess: () => router.push(`${home}/agents/${agentId}?tab=chat`),
+          onSuccess: () => router.push(chatHref),
           onError: () => setSkipping(false),
         });
       }}

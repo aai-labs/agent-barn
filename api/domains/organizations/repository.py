@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, or_, select
 
+from api.domains.agent_sizes.models import OrganizationAgentSize
 from api.domains.events import ActorIdentity, ActorIdentityType, EventDelivery, SubjectIdentity, SubjectIdentityType
 from api.domains.events.catalog import (
     EVENT_REGISTRY,
@@ -131,6 +132,13 @@ class OrganizationRepository:
                 col(Organization.llm_budget_duration).label("llm_budget_duration"),
                 col(Organization.llm_own_budget_usd).label("llm_own_budget_usd"),
                 col(Organization.is_trial).label("is_trial"),
+                # ARRAY(subquery) is empty rather than NULL when nothing is allowed.
+                func.array(
+                    select(OrganizationAgentSize.agent_size_id)
+                    .where(col(OrganizationAgentSize.organization_id) == Organization.id)
+                    .order_by(col(OrganizationAgentSize.agent_size_id))
+                    .scalar_subquery()
+                ).label("agent_size_ids"),
                 col(Organization.trial_expired_at).label("trial_expired_at"),
                 col(Organization.agent_limit).label("agent_limit"),
             )

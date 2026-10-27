@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { AppErrorState } from "@/components/app-error-state";
+import { OrganizationAgentSizesCard } from "@/features/agent-sizes/components/organization-agent-sizes-card";
 import { DetailStatTile } from "@/components/detail-stat-tile";
 import { SearchInput } from "@/components/search-input";
 
@@ -146,6 +147,8 @@ export function PlatformOrganizationDetail({ organizationId }: { organizationId:
       </div>
 
       <LlmBudgetCard organization={organization} />
+
+      <OrganizationAgentSizesCard organization={organization} />
 
       <AgentLimitCard organization={organization} />
 
