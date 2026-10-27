@@ -44,6 +44,22 @@ class WorkflowSummaryRow:
 class WorkflowRepository:
     delegate: PostgresRepositoryDelegate
 
+    def version_in_scope(
+        self, version_id: UUID, workflow_id: UUID, agent_id: UUID, scope: AuthorizationScope
+    ) -> WorkflowVersion | None:
+        with Session(self.delegate.engine) as session:
+            return session.exec(
+                select(WorkflowVersion)
+                .join(Workflow, col(Workflow.id) == col(WorkflowVersion.workflow_id))
+                .join(Agent, col(Agent.id) == col(Workflow.agent_id))
+                .where(
+                    col(WorkflowVersion.id) == version_id,
+                    col(Workflow.id) == workflow_id,
+                    col(Workflow.agent_id) == agent_id,
+                    *agent_scope_predicates(scope),
+                )
+            ).one_or_none()
+
     def list_in_scope(
         self, agent_id: UUID, scope: AuthorizationScope, page: int, size: int
     ) -> tuple[list[WorkflowSummaryRow], int]:

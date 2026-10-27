@@ -19,6 +19,7 @@ import { useUpdateAgent } from "../hooks/use-update-agent";
 import type { Agent, CommandApprovalMode } from "../schemas";
 import { ModelChoice } from "./model-choice";
 import { ModelSourceBadge } from "./model-source-badge";
+import { AgentSizeTile } from "./agent-size-tile";
 import { PendingModelNote } from "./pending-model-note";
 import { AgentConfigurationSection } from "./agent-configuration-section";
 
@@ -221,10 +222,7 @@ export function AgentProfileSettings({
             <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Communications</div>
             <div className="mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>Managed as independent connections</div>
           </div>
-          <div className="rounded-xl px-3.5 py-3" style={{ border: "1px solid var(--line)", background: "var(--bg-soft)" }}>
-            <div className="text-[0.72rem] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--ink-4)" }}>Resource management</div>
-            <div className="mt-1 text-[0.9rem]" style={{ color: "var(--ink-2)" }}>Managed on start / stop</div>
-          </div>
+          <AgentSizeTile agent={agent} />
         </div>
         <p className="mb-0 mt-4 text-[0.8rem]" style={{ color: "var(--ink-4)" }}>
           Live deployment inventory is intentionally not editable from this page. Starting the Agent reconciles its deployment, service, storage, secrets, and configuration resources.

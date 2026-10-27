@@ -17,6 +17,8 @@ from pydantic import ValidationError
 from api.core.config import Config
 from api.domains.activity.repository import ActivityRepository
 from api.domains.agent_settings.lookup import AgentSettingsLookupService
+from api.domains.agent_sizes.lookup import AgentSizeCatalog, AgentSizeLookupService, to_option
+from api.domains.agent_sizes.models import size_is_pending, size_resources
 from api.domains.agents.aai_cli_artifacts import (
     build_local_tools_policy_md,
     build_tool_context_md,
@@ -40,6 +42,7 @@ from api.domains.agents.builders import (
     build_secret_hermes_runtime,
     build_secret_runtime,
     build_service,
+    container_resources,
     native_channel_env,
     native_discord_channel,
     native_discord_env,
@@ -119,7 +122,7 @@ from api.domains.agents.provisioning_errors import (
     normalize_agent_provisioning_error,
     persisted_provisioning_error,
 )
-from api.domains.agents.repository import AgentRepository
+from api.domains.agents.repository import AgentRepository, AgentSizeSetByPlatform, AgentSizeUnavailable
 from api.domains.agents.runtime_digest import agent_runtime_config_digest
 from api.domains.agents.runtime_policy import (
     build_chat_commands_policy_md,
@@ -266,6 +269,20 @@ def _refuse_during_managed_update(agent: Agent) -> None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MANAGED_UPDATE_IN_FLIGHT_DETAIL)
 
 
+def _size_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="That size isn't available to your organization.",
+    )
+
+
+def _size_set_by_platform() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="A platform administrator set this agent's size, so it can't be changed here.",
+    )
+
+
 def _managed_update_failure_text(exc: Exception) -> str:
     """Why a managed update's backup step failed, in words safe to show anyone.
 
@@ -352,6 +369,7 @@ class AgentService:
     activity_repository: ActivityRepository
     plugins: PlatformPluginRegistry
     agentbarn_telegram_secrets: AgentBarnTelegramService
+    agent_sizes: AgentSizeLookupService
 
     def _org_id(self, context: CurrentUserContext) -> UUID:
         return context.require_current_user_organization().organization_id
@@ -384,6 +402,28 @@ class AgentService:
 
     def _ensure_model_allowed(self, model: str | None, org_id: UUID) -> None:
         self.selection.ensure_model_allowed(model, org_id)
+
+    def _require_size_manage(self, context: CurrentUserContext, org_id: UUID) -> None:
+        self.authorization.policy.require(
+            context,
+            org_id,
+            PermissionKey.AGENT_SIZE_MANAGE,
+            detail="You don't have permission to choose an agent's size.",
+        )
+
+    def _size_to_store(self, agent_size_id: UUID | None, org_id: UUID) -> UUID | None:
+        """The `agent_size_id` to store for a size someone asked for.
+
+        The size must be one the Organization may choose now: the default, or an enabled
+        size the platform allowed it. Choosing the default stores None, so the Agent keeps
+        following the default wherever it moves.
+        """
+        if agent_size_id is None:
+            return None
+        size = next((size for size in self.agent_sizes.choosable(org_id) if size.id == agent_size_id), None)
+        if size is None:
+            raise _size_unavailable()
+        return None if size.is_default else size.id
 
     @staticmethod
     def _ensure_approval_mode_supported(agent_type: AgentType, approval_mode: CommandApprovalMode | None) -> None:
@@ -555,6 +595,7 @@ class AgentService:
         last_message_at: dt.datetime | None = None,
         last_call_at: dt.datetime | None = None,
         shared_credential_names: Mapping[UUID, str] | None = None,
+        size_catalog: AgentSizeCatalog | None = None,
     ) -> AgentRead:
         shared_ids = [s.shared_credential_id for s in (secrets or []) if s.shared_credential_id is not None]
         credential_names = shared_credential_names if shared_credential_names is not None else {}
@@ -604,6 +645,11 @@ class AgentService:
                 )
             )
         resolved_model = agent.model or effective_default_model
+        size = (
+            size_catalog.resolve(agent.agent_size_id)
+            if size_catalog is not None
+            else self.agent_sizes.resolve(agent.agent_size_id)
+        )
         return AgentRead(
             id=agent.id,
             name=agent.name,
@@ -621,6 +667,10 @@ class AgentService:
             # A running pod that started on something else is the only case a surface
             # must not report the resolved value as current.
             pending_model=(resolved_model if agent.running_model and agent.running_model != resolved_model else ""),
+            agent_size_id=agent.agent_size_id,
+            agent_size=to_option(size),
+            pending_size=size_is_pending(agent.running_resources, size),
+            agent_size_set_by_platform=agent.agent_size_set_by_platform,
             # The recorded digest names the image the pod actually started on, so an
             # Agent pinned behind the platform pin (rolled back) reports an update too.
             update_available=(
@@ -868,6 +918,11 @@ class AgentService:
         self._ensure_approval_mode_supported(data.agent_type, data.approval_mode)
         self._ensure_verbose_mode_supported(data.agent_type, data.verbose_mode)
         self._ensure_max_turns_supported(data.agent_type, data.max_turns)
+        # Omitted means the default, which anyone who may create an Agent gets.
+        agent_size_id = None
+        if data.agent_size_id is not None:
+            self._require_size_manage(context, org_id)
+            agent_size_id = self._size_to_store(data.agent_size_id, org_id)
 
         # Pin to the requested version, or the lineage's latest if unspecified.
         if data.template_version is not None:
@@ -900,6 +955,7 @@ class AgentService:
             approval_mode=data.approval_mode,
             verbose_mode=data.verbose_mode,
             max_turns=data.max_turns,
+            agent_size_id=agent_size_id,
         )
         self._set_pin(agent, template)
 
@@ -1030,15 +1086,19 @@ class AgentService:
                     self.config.agent_token_encryption_key,
                 )
 
-            created = self.repository.create_with_creator_access(
-                agent,
-                creator_membership_id,
-                actor=secret_actor,
-                secrets=prepared_secrets,
-                skills=prepared_skills,
-                actor_display=secret_actor_display,
-                agent_limit=agent_limit,
-            )
+            try:
+                created = self.repository.create_with_creator_access(
+                    agent,
+                    creator_membership_id,
+                    actor=secret_actor,
+                    secrets=prepared_secrets,
+                    skills=prepared_skills,
+                    actor_display=secret_actor_display,
+                    agent_limit=agent_limit,
+                )
+            except AgentSizeUnavailable:
+                # Disabled or withdrawn since the check above.
+                raise _size_unavailable() from None
             created_delivery_ids = created.delivery_ids
         except Exception as exc:
             if allocated_litellm_key is not None:
@@ -1065,6 +1125,53 @@ class AgentService:
             effective_default_model=self.agent_settings_lookup.resolve_default_model(org_id),
             creator=AgentCreatorRead.model_validate(context.user),
         )
+
+    def set_agent_size(self, agent_id: UUID, agent_size_id: UUID | None, context: CurrentUserContext) -> AgentRead:
+        """Choose the size an Agent starts on next; None follows the platform default.
+
+        Never stops or restarts the Agent: a running Agent reads `pending_size` until its
+        next start. Holds the lifecycle lock so it cannot interleave with a start or stop,
+        whose failure paths save the whole Agent row.
+        """
+        agent = self.authorization.require_action(
+            context,
+            agent_id,
+            PermissionKey.AGENT_SIZE_MANAGE,
+            detail="You don't have permission to change this agent's size.",
+        )
+        # The Organization grant, which the Agent check above takes for granted from an
+        # Owner or Admin role.
+        self._require_size_manage(context, agent.organization_id)
+        if agent.agent_size_set_by_platform:
+            raise _size_set_by_platform()
+        if agent_size_id == agent.agent_size_id:
+            # Before the size rules, so re-sending a size that has since been disabled or
+            # withdrawn succeeds as the no-op it is.
+            return self._get_agent_read(agent, context)
+        to_store = self._size_to_store(agent_size_id, agent.organization_id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent.id} has a lifecycle operation already in progress",
+                )
+            try:
+                result = self.repository.set_agent_size_with_event(
+                    agent,
+                    to_store,
+                    actor=resolve_actor_identity(context, agent.organization_id),
+                    actor_display=context.user.full_name or context.user.email,
+                )
+            except AgentSizeUnavailable:
+                raise _size_unavailable() from None
+            except AgentSizeSetByPlatform:
+                # A Platform Administrator set it after the check above.
+                raise _size_set_by_platform() from None
+        if result is None:
+            # Deleted between the visibility check and the write.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent.id} not found")
+        self.event_delivery_dispatcher.enqueue_immediate(result.delivery_ids)
+        return self._get_agent_read(result.agent, context)
 
     def get_agent(self, agent_id: UUID, context: CurrentUserContext) -> AgentRead:
         agent = self.authorization.require_visible(context, agent_id)
@@ -1685,6 +1792,7 @@ class AgentService:
         # Resolved once for the page. Every Agent in it belongs to the same
         # Organization, so resolving per row would be one query per row.
         effective_default_model = self.agent_settings_lookup.resolve_default_model(read_scope.organization_id)
+        size_catalog = self.agent_sizes.catalog()
 
         items = [
             self._build_agent_read(
@@ -1709,6 +1817,7 @@ class AgentService:
                 last_message_at=message_times.get(agent.id),
                 last_call_at=call_times.get(agent.id),
                 shared_credential_names=shared_credential_names,
+                size_catalog=size_catalog,
             )
             for agent in agents
         ]
@@ -2237,6 +2346,16 @@ class AgentService:
             org_name=org_name,
             agent_name=agent.name,
         )
+        # The agent container's CPU and memory: the Agent's Agent Size, or the default when
+        # it has none, read at every start so a changed size reaches the Agent the next time
+        # it starts.
+        size = self.agent_sizes.resolve(agent.agent_size_id)
+        resources = container_resources(
+            cpu_request_millicores=size.cpu_request_millicores,
+            cpu_limit_millicores=size.cpu_limit_millicores,
+            memory_request_bytes=size.memory_request_bytes,
+            memory_limit_bytes=size.memory_limit_bytes,
+        )
         if agent.agent_type == AgentType.HERMES:
             overlay = None
             native_slack = self._native_slack_connection(agent.id)
@@ -2285,6 +2404,7 @@ class AgentService:
                 ns,
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
+                resources=resources,
             )
         else:
             native_channels: dict[str, dict] = {}
@@ -2327,6 +2447,7 @@ class AgentService:
                 ns,
                 self._effective_runtime_image(agent),
                 self.config.agent_image_pull_secret,
+                resources=resources,
             )
 
         # aai-cli integration secrets — all agent types.
@@ -2670,6 +2791,8 @@ class AgentService:
         # is the model it serves until someone restarts it — however the Organization
         # default moves in the meantime.
         agent.running_model = effective_model
+        # Likewise the resources, so a size changed while it runs reads as pending.
+        agent.running_resources = size_resources(size)
         if agent.agent_type == AgentType.HERMES:
             agent.running_config_digest = agent_runtime_config_digest(
                 self.config.openclaw_image,
@@ -2830,6 +2953,34 @@ class AgentService:
             stopped = self._stop_agent_unchecked(current, actor)
         return self._get_agent_read(stopped, context)
 
+    def restart_agent_for_platform(self, agent_id: UUID, context: CurrentUserContext) -> Agent:
+        """Restart any Agent for a Platform Administrator: stop it if it runs, then start it.
+
+        Platform authority, so the route's `require_platform_admin` is the check and no
+        Membership is needed; the Agent's lifecycle Events name the administrator. The same
+        lock and guards as an Organization's own start apply. Returns the Agent as started.
+        """
+        agent = self.repository.get_by_id(agent_id)
+        if agent is None or agent.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+        actor = resolve_actor_identity(context, agent.organization_id)
+        self.restore_points.reconcile_agent(agent.id)
+        with self.repository.lifecycle_lock(agent.id) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Agent {agent_id} has a lifecycle operation already in progress",
+                )
+            current = self.repository.get_by_id(agent.id)
+            if current is None or current.deleted_at is not None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found")
+            _refuse_during_managed_update(current)
+            if self.restore_points.has_blocking_operation(current.id):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESTORE_POINT_IN_FLIGHT_DETAIL)
+            if current.status == AgentStatus.RUNNING:
+                current = self._stop_agent_unchecked(current, actor)
+            return self._start_agent_unchecked(current, actor)
+
     def _stop_agent_unchecked(self, agent: Agent, actor: ActorIdentity) -> Agent:
         """Stop a known Agent after its caller has established authority."""
 
@@ -2855,6 +3006,7 @@ class AgentService:
         self.integrations.set_state(agent.id, "stopped")
         agent.status = AgentStatus.STOPPED
         agent.running_model = ""
+        agent.running_resources = None
         agent.running_config_digest = ""
         result = self.repository.save_with_lifecycle_event(
             agent,

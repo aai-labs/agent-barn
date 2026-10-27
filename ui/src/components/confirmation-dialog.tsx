@@ -20,6 +20,7 @@ type ConfirmationDialogProps = {
   title: ReactNode;
   description: ReactNode;
   confirmLabel: string;
+  cancelLabel?: string;
   pendingLabel?: string;
   onConfirm: () => void | Promise<void>;
   isPending?: boolean;
@@ -36,6 +37,7 @@ export function ConfirmationDialog({
   title,
   description,
   confirmLabel,
+  cancelLabel = "Cancel",
   pendingLabel = "Confirming…",
   onConfirm,
   isPending = false,
@@ -103,7 +105,7 @@ export function ConfirmationDialog({
             onClick={() => onOpenChange(false)}
             disabled={isPending}
           >
-            Cancel
+            {cancelLabel}
           </button>
           <button
             type="button"

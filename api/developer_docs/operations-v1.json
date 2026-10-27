@@ -106,6 +106,11 @@
   ],
   [
     "DELETE",
+    "/platform/agent-sizes/{size_id}",
+    "delete_agent_size_platform_agent_sizes__size_id__delete"
+  ],
+  [
+    "DELETE",
     "/platform/skills/{skill_id}",
     "delete_platform_skill_platform_skills__skill_id__delete"
   ],
@@ -223,6 +228,11 @@
     "GET",
     "/organizations/{organization_id}/agent-settings",
     "get_agent_settings_organizations__organization_id__agent_settings_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agent-sizes",
+    "get_organization_agent_sizes_organizations__organization_id__agent_sizes_get"
   ],
   [
     "GET",
@@ -491,6 +501,21 @@
   ],
   [
     "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs",
+    "list_runs_organizations__organization_id__agents__agent_id__workflow_runs_get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}",
+    "get_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__get"
+  ],
+  [
+    "GET",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/history",
+    "history_organizations__organization_id__agents__agent_id__workflow_runs__run_id__history_get"
+  ],
+  [
+    "GET",
     "/organizations/{organization_id}/agents/{agent_id}/workflows",
     "list_workflows_organizations__organization_id__agents__agent_id__workflows_get"
   ],
@@ -688,6 +713,16 @@
     "GET",
     "/organizations/{organization_id}/value/activity",
     "get_organization_activity_organizations__organization_id__value_activity_get"
+  ],
+  [
+    "GET",
+    "/platform/agent-sizes",
+    "list_agent_sizes_platform_agent_sizes_get"
+  ],
+  [
+    "GET",
+    "/platform/agents",
+    "list_platform_agents_platform_agents_get"
   ],
   [
     "GET",
@@ -943,6 +978,11 @@
     "PATCH",
     "/organizations/{organization_id}/templates/{template_key}/draft",
     "update_org_draft_organizations__organization_id__templates__template_key__draft_patch"
+  ],
+  [
+    "PATCH",
+    "/platform/agent-sizes/{size_id}",
+    "update_agent_size_platform_agent_sizes__size_id__patch"
   ],
   [
     "PATCH",
@@ -1206,6 +1246,11 @@
   ],
   [
     "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflow-runs/{run_id}/cancel",
+    "cancel_run_organizations__organization_id__agents__agent_id__workflow_runs__run_id__cancel_post"
+  ],
+  [
+    "POST",
     "/organizations/{organization_id}/agents/{agent_id}/workflows",
     "create_workflow_organizations__organization_id__agents__agent_id__workflows_post"
   ],
@@ -1213,6 +1258,11 @@
     "POST",
     "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/archive",
     "archive_workflow_organizations__organization_id__agents__agent_id__workflows__workflow_id__archive_post"
+  ],
+  [
+    "POST",
+    "/organizations/{organization_id}/agents/{agent_id}/workflows/{workflow_id}/runs",
+    "start_run_organizations__organization_id__agents__agent_id__workflows__workflow_id__runs_post"
   ],
   [
     "POST",
@@ -1321,6 +1371,16 @@
   ],
   [
     "POST",
+    "/platform/agent-sizes",
+    "create_agent_size_platform_agent_sizes_post"
+  ],
+  [
+    "POST",
+    "/platform/agents/{agent_id}/restart",
+    "restart_platform_agent_platform_agents__agent_id__restart_post"
+  ],
+  [
+    "POST",
     "/platform/organizations/{organization_id}/end-trial",
     "end_organization_trial_platform_organizations__organization_id__end_trial_post"
   ],
@@ -1376,6 +1436,11 @@
   ],
   [
     "PUT",
+    "/organizations/{organization_id}/agents/{agent_id}/agent-size",
+    "set_agent_size_organizations__organization_id__agents__agent_id__agent_size_put"
+  ],
+  [
+    "PUT",
     "/organizations/{organization_id}/agents/{agent_id}/integrations/{provider}/isolation",
     "apply_integration_isolation_organizations__organization_id__agents__agent_id__integrations__provider__isolation_put"
   ],
@@ -1406,8 +1471,18 @@
   ],
   [
     "PUT",
+    "/platform/agents/{agent_id}/agent-size",
+    "set_platform_agent_size_platform_agents__agent_id__agent_size_put"
+  ],
+  [
+    "PUT",
     "/platform/organizations/{organization_id}/agent-limit",
     "set_organization_agent_limit_platform_organizations__organization_id__agent_limit_put"
+  ],
+  [
+    "PUT",
+    "/platform/organizations/{organization_id}/agent-sizes",
+    "set_organization_agent_sizes_platform_organizations__organization_id__agent_sizes_put"
   ],
   [
     "PUT",

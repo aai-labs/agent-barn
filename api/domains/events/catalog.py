@@ -48,6 +48,9 @@ PLATFORM_PLAYBOOK_MODEL_CHANGED = "platform.playbook_model.changed"
 PLATFORM_USER_PRIVILEGE_GRANTED = "platform.user_privilege.granted"
 PLATFORM_USER_PRIVILEGE_REVOKED = "platform.user_privilege.revoked"
 PLATFORM_RESOURCE_LIMITS_CHANGED = "platform.resource_limits.changed"
+PLATFORM_AGENT_SIZE_CREATED = "platform.agent_size.created"
+PLATFORM_AGENT_SIZE_CHANGED = "platform.agent_size.changed"
+PLATFORM_AGENT_SIZE_DELETED = "platform.agent_size.deleted"
 PLATFORM_TRIAL_SETTINGS_CHANGED = "platform.trial_settings.changed"
 PLATFORM_BILLING_SETTINGS_CHANGED = "platform.billing_settings.changed"
 PLATFORM_CREDIT_PURCHASE_UNAPPLIED = "platform.credit_purchase.unapplied"
@@ -69,6 +72,8 @@ ORGANIZATION_LLM_BUDGET_THRESHOLD_REACHED = "organization.llm_budget.threshold_r
 ORGANIZATION_LLM_BUDGET_EXHAUSTED = "organization.llm_budget.exhausted"
 ORGANIZATION_LLM_BUDGET_CHANGED = "organization.llm_budget.changed"
 ORGANIZATION_TRIAL_ENDED = "organization.trial.ended"
+ORGANIZATION_AGENT_SIZES_CHANGED = "organization.agent_sizes.changed"
+AGENT_AGENT_SIZE_CHANGED = "agent.agent_size.changed"
 ORGANIZATION_TRIAL_EXPIRED = "organization.trial.expired"
 ORGANIZATION_AGENT_LIMIT_CHANGED = "organization.agent_limit.changed"
 AGENT_LLM_BUDGET_CHANGED = "agent.llm_budget.changed"
@@ -81,6 +86,15 @@ ORGANIZATION_LLM_BUDGET_EMAIL_HANDLER = "organization.llm_budget_email.notificat
 ORGANIZATION_TRIAL_EXPIRY_HANDLER = "organization.trial_expiry.projection"
 AGENT_LLM_BUDGET_EMAIL_HANDLER = "agent.llm_budget_email.notification"
 PRODUCT_ANALYTICS_HANDLER = "product_analytics.posthog"
+WORKFLOW_RUN_CHANGED = "workflow.run.changed"
+WORKFLOW_CONTROLLER_HANDLER = "workflow.controller"
+
+
+class WorkflowRunChangedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: UUID
+    revision: int
+    state: str
 
 
 class PlatformWorkflowAuthoringChangedPayload(BaseModel):
@@ -420,6 +434,47 @@ class OrganizationAgentLimitChangedPayload(BaseModel):
     subject_display: str
 
 
+class OrganizationAgentSizesChangedPayload(BaseModel):
+    """The Agent Sizes an Organization may choose, before and after, set by the platform.
+
+    The platform default is always choosable and never listed. Names travel with the ids so
+    the record still reads after a size is renamed or deleted; an empty list means the
+    Organization cannot choose.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_size_ids: list[UUID]
+    agent_size_names: list[str]
+    previous_agent_size_ids: list[UUID]
+    previous_agent_size_names: list[str]
+    actor_display: str
+    subject_display: str
+
+
+class AgentAgentSizeChangedPayload(BaseModel):
+    """An Agent's chosen size before and after. A None id (and name) means the Agent
+    follows the platform default. The change applies at the Agent's next start.
+
+    `by_platform` marks a Platform Administrator's override: setting a size locks it for
+    the Organization, and None clears the override. It defaults to false so records
+    written before overrides existed still read.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    agent_id: UUID
+    agent_size_id: UUID | None
+    agent_size_name: str | None
+    previous_agent_size_id: UUID | None
+    previous_agent_size_name: str | None
+    by_platform: bool = False
+    actor_display: str
+    subject_display: str
+
+
 class AgentLlmBudgetChangedPayload(BaseModel):
     """An Agent's own limit before and after; None follows the Organization default.
 
@@ -620,6 +675,42 @@ class PlatformResourceLimitsChangedPayload(BaseModel):
     current: float | None
 
 
+class PlatformAgentSizePayload(BaseModel):
+    """A size added to or removed from the Agent Size catalog, with every value it had.
+
+    The subject is the size (`SYSTEM`, the size's id); `subject_display` is its name.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    cpu_request_millicores: int
+    cpu_limit_millicores: int
+    memory_request_bytes: int
+    memory_limit_bytes: int
+    enabled: bool
+    is_default: bool
+
+
+class PlatformAgentSizeChangedPayload(BaseModel):
+    """One changed field of one size, named by `setting`, with its before and after values.
+
+    Making a size the default changes two sizes, so it records two Events: `is_default`
+    turning false on the old default and true on the new one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: UUID
+    actor_display: str
+    subject_display: str
+    setting: str
+    previous: str | int | bool
+    current: str | int | bool
+
+
 class ApiKeyChangedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -746,6 +837,14 @@ class CommunicationDeliveryRecoveredPayload(BaseModel):
 
 def build_default_event_registry() -> DomainEventRegistry:
     registry = DomainEventRegistry()
+    registry.register(
+        DomainEventDefinition(
+            event_name=WORKFLOW_RUN_CHANGED,
+            schema_version=1,
+            payload_model=WorkflowRunChangedPayload,
+            handler_names=(WORKFLOW_CONTROLLER_HANDLER,),
+        )
+    )
     for event_name, payload_model in (
         (AGENT_ACCESS_GRANTED, AgentAccessGrantedPayload),
         (AGENT_ACCESS_REVOKED, AgentAccessRevokedPayload),
@@ -759,6 +858,8 @@ def build_default_event_registry() -> DomainEventRegistry:
         (ORGANIZATION_LLM_BUDGET_CHANGED, OrganizationLlmBudgetChangedPayload),
         (AGENT_LLM_BUDGET_CHANGED, AgentLlmBudgetChangedPayload),
         (ORGANIZATION_TRIAL_ENDED, OrganizationTrialEndedPayload),
+        (ORGANIZATION_AGENT_SIZES_CHANGED, OrganizationAgentSizesChangedPayload),
+        (AGENT_AGENT_SIZE_CHANGED, AgentAgentSizeChangedPayload),
         (ORGANIZATION_AGENT_LIMIT_CHANGED, OrganizationAgentLimitChangedPayload),
         (ORGANIZATION_TRIAL_EXPIRED, OrganizationTrialExpiredPayload),
     ):
@@ -980,6 +1081,25 @@ def build_default_event_registry() -> DomainEventRegistry:
             event_name=PLATFORM_RESOURCE_LIMITS_CHANGED,
             schema_version=1,
             payload_model=PlatformResourceLimitsChangedPayload,
+            handler_names=(SECURITY_AUDIT_HANDLER,),
+            event_scope=EventScope.PLATFORM,
+        )
+    )
+    for event_name in (PLATFORM_AGENT_SIZE_CREATED, PLATFORM_AGENT_SIZE_DELETED):
+        registry.register(
+            DomainEventDefinition(
+                event_name=event_name,
+                schema_version=1,
+                payload_model=PlatformAgentSizePayload,
+                handler_names=(SECURITY_AUDIT_HANDLER,),
+                event_scope=EventScope.PLATFORM,
+            )
+        )
+    registry.register(
+        DomainEventDefinition(
+            event_name=PLATFORM_AGENT_SIZE_CHANGED,
+            schema_version=1,
+            payload_model=PlatformAgentSizeChangedPayload,
             handler_names=(SECURITY_AUDIT_HANDLER,),
             event_scope=EventScope.PLATFORM,
         )
