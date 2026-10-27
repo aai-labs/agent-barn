@@ -91,11 +91,13 @@ export function WorkflowRunDetail({
   agentId,
   agent,
   agentHref,
+  canManageFiles,
   runId,
 }: {
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
+  canManageFiles: boolean;
   runId: string;
 }) {
   const run = useWorkflowRun(agentId, runId);
@@ -114,6 +116,7 @@ export function WorkflowRunDetail({
       agentId={agentId}
       agent={agent}
       agentHref={agentHref}
+      canManageFiles={canManageFiles}
       run={run.data}
     />
   );
@@ -260,11 +263,13 @@ function RunContents({
   agentId,
   agent,
   agentHref,
+  canManageFiles,
   run,
 }: {
   agentId: string;
   agent: { id: string; name: string };
   agentHref: string;
+  canManageFiles: boolean;
   run: WorkflowRun;
 }) {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
@@ -351,7 +356,7 @@ function RunContents({
               <RunSummary run={run} agentName={agent.name} />
             )}
           </div>
-          <AgentFiles key={`${run.id}:${selectedStep?.id ?? "all"}`} agentId={agentId} runId={run.id} stepId={selectedStep?.id} polling={["QUEUED", "RUNNING", "CANCELLING"].includes(run.state)} />
+          <AgentFiles canManageFiles={canManageFiles} key={`${run.id}:${selectedStep?.id ?? "all"}`} agentId={agentId} runId={run.id} stepId={selectedStep?.id} polling={["QUEUED", "RUNNING", "CANCELLING"].includes(run.state)} />
           <WorkflowRunTiming run={run} />
         </div>
       </div>

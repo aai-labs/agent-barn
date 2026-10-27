@@ -1,5 +1,6 @@
 """Render-only contract for private storage credentials and scheduled cleanup."""
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -30,6 +31,8 @@ def main() -> None:
                 "artifacts.provisionerSecret=private-artifact-provisioner",
                 "--set",
                 "artifacts.retentionDays=31",
+                "--set",
+                f"artifacts.maxBytes={104857600 if enabled else 26214400}",
             ],
             check=False,
             capture_output=True,
@@ -67,6 +70,9 @@ def main() -> None:
             if item["kind"] == "Secret" and "ARTIFACT_RETENTION_DAYS" in item.get("stringData", {})
         )
         assert config["stringData"]["ARTIFACT_RETENTION_DAYS"] == "31"
+        for key in ("ARTIFACT_MAX_BYTES", "ARTIFACT_LINK_MAX_SECONDS", "ARTIFACT_RETENTION_DAYS"):
+            assert re.fullmatch(r"[0-9]+", config["stringData"][key]), key
+        assert config["stringData"]["ARTIFACT_MAX_BYTES"] == ("104857600" if enabled else "26214400")
         assert (
             config["stringData"]["ARTIFACT_RUNTIME_BASE_URL"]
             == "http://artifact-test:8000/api/v1/agent-artifacts/runtime"

@@ -24,6 +24,9 @@ releases:
       name: garage
     values:
       - storageClass: {{ env "STORAGE_CLASS" | default "" | quote }}
+        replicas: {{ env "GARAGE_REPLICAS" | default "3" }}
+        replicationFactor: {{ env "GARAGE_REPLICATION_FACTOR" | default "3" }}
+        requireDistinctNodes: {{ env "GARAGE_REQUIRE_DISTINCT_NODES" | default "true" }}
         ingress:
           enabled: false
   - name: postgres-hindsight
@@ -173,7 +176,7 @@ releases:
       - name: artifacts.existingSecret
         value: {{ env "ARTIFACT_STORAGE_SECRET" | default "" | quote }}
       - name: artifacts.purgeEnabled
-        value: {{ env "ARTIFACT_PURGE_ENABLED" | default "false" }}
+        value: {{ env "ARTIFACT_PURGE_ENABLED" | default (ternary "true" "false" (ne (env "ARTIFACT_STORAGE_SECRET") "")) }}
       - name: artifacts.provisionerSecret
         value: {{ env "ARTIFACT_PROVISIONER_SECRET" | default "garage-artifact-provisioner" | quote }}
       - name: registryPrefix

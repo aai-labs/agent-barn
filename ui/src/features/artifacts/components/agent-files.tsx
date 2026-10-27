@@ -65,7 +65,8 @@ export function AgentFiles({ agentId, runId, stepId, polling = false, canManageF
       {storage.error && <AppErrorState error={storage.error} title="Storage status is unavailable" onRetry={() => void storage.refetch()} />}
       {storage.data?.state === "NOT_CONFIGURED" && <StorageStateCard icon={CloudOff} title="Artifact storage is unavailable" description="Storage needs to be configured by an administrator. Text conversations remain available." />}
       {storage.data?.state === "PROVISIONING" && (
-        <StorageStateCard icon={Loader2} loading title="Provisioning artifact storage…" description="We’re preparing a private place for this Agent’s files. You can keep chatting while we finish." />
+        <StorageStateCard icon={Loader2} loading title="Provisioning artifact storage…" description="We’re preparing a private place for this Agent’s files. You can keep chatting while we finish. If setup is taking too long, retry the request."
+          action={canManageFiles && <Button variant="outline" disabled={provision.isPending} onClick={() => provision.mutate()}>Retry provisioning</Button>} />
       )}
       {["NOT_PROVISIONED", "FAILED"].includes(storage.data?.state ?? "") && (
         <StorageStateCard

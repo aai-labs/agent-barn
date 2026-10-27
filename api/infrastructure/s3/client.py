@@ -3,6 +3,7 @@
 import base64
 import binascii
 import hashlib
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -64,9 +65,15 @@ class ArtifactStorage(ArtifactStorageContract):
         )
         # Verify bytes at the actual storage boundary rather than trusting an ETag.
         response = self.client(artifact).get_object(Bucket=artifact.bucket, Key=artifact.object_key)
+        digest = hashlib.sha256()
+        size = 0
         with response["Body"] as stream:
-            stored = stream.read(artifact.size + 1)
-        if len(stored) != artifact.size or hashlib.sha256(stored).hexdigest() != artifact.checksum:
+            while chunk := stream.read(64 * 1024):
+                size += len(chunk)
+                if size > artifact.size:
+                    raise ValueError("Stored artifact failed integrity verification")
+                digest.update(chunk)
+        if size != artifact.size or digest.hexdigest() != artifact.checksum:
             raise ValueError("Stored artifact failed integrity verification")
 
     def issue_download(self, artifact: Artifact, seconds: int) -> str:
@@ -89,7 +96,7 @@ class ArtifactStorage(ArtifactStorageContract):
             query = base64.b64decode(access, altchars=b"-_", validate=True).decode("ascii")
         except ValueError, binascii.Error, UnicodeError:
             raise DownloadDenied from None
-        if not query or any(c in query for c in "\r\n#"):
+        if not query or not re.fullmatch(r"[A-Za-z0-9._~!$&'()*+,;=:@/?%\-]+", query):
             raise DownloadDenied
         # Derive the upstream origin/path only from service config and persisted
         # metadata. Callers supply opaque authority, never a proxy target URL.
@@ -101,6 +108,8 @@ class ArtifactStorage(ArtifactStorageContract):
         url = urlunsplit(target._replace(query=query))
         try:
             response = build_opener(ProxyHandler({}), _NoRedirect()).open(url, timeout=30)
+        except ValueError:
+            raise DownloadDenied from None
         except HTTPError as exc:
             status = exc.code
             exc.close()

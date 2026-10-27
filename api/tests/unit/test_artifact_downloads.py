@@ -85,3 +85,18 @@ def test_stream_reads_in_bounded_chunks_and_closes_on_completion_or_disconnect(m
         assert_that(first + b"".join(download.chunks), equal_to(content))
     download.close()
     assert_that(stream.closed, is_(True))
+
+
+@pytest.mark.parametrize("query", ["x=bad value", "x=bad\x01value"])
+def test_malformed_signed_query_is_denied(monkeypatch, query):
+    import base64
+
+    from api.domains.artifacts.storage import DownloadDenied
+
+    storage = ArtifactStorage(Mock(spec=Config), Mock())
+    client = Mock()
+    monkeypatch.setattr(storage, "client", lambda artifact: client)
+    access = base64.urlsafe_b64encode(query.encode()).decode()
+    with pytest.raises(DownloadDenied):
+        storage.download(Mock(spec=Artifact), access)
+    client.generate_presigned_url.assert_not_called()

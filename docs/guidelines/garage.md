@@ -157,8 +157,9 @@ status and an explicit Provision/retry action for existing Agents. Post-response
 API work attempts the request immediately; maintenance recovers interrupted tasks
 and retries failures without changing the key identity. Local Compose runs bounded
 maintenance every ten seconds. The enabled Kubernetes purge CronJob recovers
-requests every ten minutes; set `ARTIFACT_PURGE_ENABLED=true` with both storage
-and management Secrets for unattended recovery. Requests remain durable if that
+requests every ten minutes; Helmfile enables it by default when `ARTIFACT_STORAGE_SECRET`
+is set. Supply both storage and management Secrets for unattended recovery; direct
+chart installs must set `artifacts.purgeEnabled=true`. Requests remain durable if that
 schedule is disabled, but require an explicit retry or `make purge-artifacts`.
 Missing storage is an artifact error, not an API readiness dependency. The domain limits remain
 25 MiB per file by default, 900-second links with a default 3,600-second maximum,
@@ -267,6 +268,13 @@ NodeLocal DNS needs an installation-specific additional egress rule.
 No Garage port is publicly exposed. RPC is restricted to Garage peers; S3 accepts
 only API and artifact-purge pods when ingress is disabled. Admin port 3903 accepts
 only API and artifact-purge pods; it has no ingress or cluster host-published port. ServiceAccount tokens and privilege escalation are disabled.
+For a single-node development cluster, install Garage with `--set replicas=1
+--set replicationFactor=1 --set requireDistinctNodes=false`, and bootstrap with
+`cluster-init` after installation. For Helmfile set `GARAGE_REPLICAS=1`,
+`GARAGE_REPLICATION_FACTOR=1`, and `GARAGE_REQUIRE_DISTINCT_NODES=false` in the
+deployment environment. Always create the RPC Secret before syncing.
+This development topology has no redundancy and must not be used as a production default.
+
 A one-replica installation has no PodDisruptionBudget and provides no redundancy.
 SQLite automatic metadata snapshots are not configured; consistent backups remain
 required even with fsync and replication. PVCs survive pod/release replacement.
@@ -399,7 +407,7 @@ purge. The bucket-journal downgrade additionally refuses every non-DELETED bucke
 finish artifact purge, bucket reclamation and key revocation before discarding it.
 Retain additive tables and compatible API/purge processes during rollback. Never change endpoint or bucket while retained rows still
 target the old store; migrate and verify explicitly or preserve old access for purge.
-Monitor Garage health/capacity and failed purge jobs, DELETING age and `purge_attempts`.
+Monitor Garage health/capacity and failed purge jobs, DELETING age and `purge_attempts`. Alert on failed or overdue artifact-purge Jobs and Pending Jobs; check pod scheduling events and available memory (the Job requests the worker resources). A stuck Job stops retention and provisioning recovery.
 Unsafe-target refusals retain evidence and retry backoff; investigate rather than
 discarding the journal. Operator recovery uses bounded `make purge-artifacts` passes.
 
