@@ -1,7 +1,7 @@
 import hashlib
 import itertools
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from injector import Module, provider, singleton
@@ -75,6 +75,7 @@ class TestDrivePlugin(SyncProviderPlugin):
     calls: list[str] = field(default_factory=list)
     moved_out: set[str] = field(default_factory=set)
     throttled_calls: dict[str, int] = field(default_factory=dict)
+    omit_paths_in_changes: bool = False
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
     _instance: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
@@ -148,11 +149,23 @@ class TestDrivePlugin(SyncProviderPlugin):
         page = changed[offset : offset + self.page_size]
         more = offset + self.page_size < len(changed)
         next_cursor = f"{kind}:{since}:{offset + self.page_size}" if more else f"after:{self.seq}:0"
-        return RemoteChanges(
-            items=[self._item(root, node, gone=node.id in self.moved_out) for node in page],
-            cursor=next_cursor,
-            more=more,
-        )
+        items = [self._item(root, node, gone=node.id in self.moved_out) for node in page]
+        if self.omit_paths_in_changes:
+            items = [replace(item, path=None) for item in items]
+        return RemoteChanges(items=items, cursor=next_cursor, more=more)
+
+    def list_files(self, root: SyncRoot, *, folder_id: str) -> list[RemoteItem]:
+        self._call("list_files")
+        files: list[RemoteItem] = []
+        folders = [self._live(folder_id).id]
+        while folders:
+            parent = folders.pop()
+            for node in [node for node in self.nodes.values() if node.parent_id == parent and not node.deleted]:
+                if node.is_folder:
+                    folders.append(node.id)
+                else:
+                    files.append(self._item(root, node))
+        return files
 
     def upload_target(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> UploadTarget:
         self._call("upload_target")

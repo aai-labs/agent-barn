@@ -376,3 +376,27 @@ def test_a_case_only_rename_and_an_edit_in_one_pass_are_both_undone():
         assert_that(
             (row.pending, row.pending_activity), equal_to((SyncPendingAction.REUPLOAD, SyncActivityKind.EDIT_UNDONE))
         )
+
+
+def test_files_in_a_renamed_subfolder_are_moved_back():
+    with given(_BASE) as context:
+        _connected_with(context, ("workspace/reports/q3.md", b"q3"), ("workspace/reports/deep/q4.md", b"q4"))
+        fake_drive(context).user_renames(context.sync_root, "Sales Bot/workspace/reports", "reports-old")
+
+        _process(context)
+
+        assert_that(_content(context, "Sales Bot/workspace/reports/q3.md"), equal_to(b"q3"))
+        assert_that(_content(context, "Sales Bot/workspace/reports/deep/q4.md"), equal_to(b"q4"))
+        assert_that(
+            sorted(activity_entries(context)),
+            equal_to(
+                [
+                    (SyncActivityKind.RENAMED_BACK, "workspace/reports/deep/q4.md"),
+                    (SyncActivityKind.RENAMED_BACK, "workspace/reports/q3.md"),
+                ]
+            ),
+        )
+        assert_that(
+            (_row(context, "workspace/reports/q3.md").pending, _row(context, "workspace/reports/deep/q4.md").pending),
+            equal_to((None, None)),
+        )

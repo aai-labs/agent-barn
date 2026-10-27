@@ -281,3 +281,14 @@ def test_the_undo_note_is_written_when_the_agents_copy_is_back():
         assert_that([(note.kind, note.path) for note in notes], equal_to([("edit_undone", "workspace/AGENTS.md")]))
         assert_that(notes[0].occurred_at >= before, equal_to(True))
         assert_that(_row(context, "workspace/AGENTS.md").pending_activity, none())
+
+
+def test_an_edit_reported_without_a_path_is_still_found():
+    with given(_BASE) as context:
+        _connected_with(context, ("workspace/notes.md", b"hello"))
+        fake_drive(context).omit_paths_in_changes = True
+        fake_drive(context).user_edits(context.sync_root, "Sales Bot/workspace/notes.md", b"edited")
+
+        _process(context)
+
+        assert_that(_row(context, "workspace/notes.md").pending, equal_to(SyncPendingAction.DOWNLOAD))

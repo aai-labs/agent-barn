@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 
 from api.core.config import Config
@@ -12,6 +12,7 @@ from api.domains.agents.microsoft_graph_files import (
     GraphRequestRejected,
     GraphResyncRequired,
     GraphThrottled,
+    GraphTokenRejected,
     GraphUnavailable,
     MicrosoftGraphFiles,
     delta_start_url,
@@ -284,41 +285,50 @@ class OneDriveSyncProviderPlugin(SyncProviderPlugin):
             raise ProviderUnavailable(_UNREACHABLE) from exc
 
     def create_folder(self, root: SyncRoot, *, parent_id: str, name: str) -> RemoteItem:
-        token, site_id = self._app_access(root)
-        with _file_failures():
-            item = self.graph_files.create_folder(token, site_id=site_id, parent_id=parent_id, name=name)
+        item = self._as_app(
+            root,
+            lambda token, site_id: self.graph_files.create_folder(
+                token, site_id=site_id, parent_id=parent_id, name=name
+            ),
+        )
         return _remote_item(root, item)
 
     def get_item(self, root: SyncRoot, *, item_id: str) -> RemoteItem:
-        token, site_id = self._app_access(root)
-        with _file_failures():
-            item = self.graph_files.get_item(token, site_id=site_id, item_id=item_id)
+        item = self._as_app(
+            root, lambda token, site_id: self.graph_files.get_item(token, site_id=site_id, item_id=item_id)
+        )
         return _remote_item(root, item)
 
     def get_item_by_path(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> RemoteItem:
-        token, site_id = self._app_access(root)
-        with _file_failures():
-            item = self.graph_files.get_item_by_path(token, site_id=site_id, parent_id=parent_id, rel_path=rel_path)
+        item = self._as_app(
+            root,
+            lambda token, site_id: self.graph_files.get_item_by_path(
+                token, site_id=site_id, parent_id=parent_id, rel_path=rel_path
+            ),
+        )
         return _remote_item(root, item)
 
     def move_item(
         self, root: SyncRoot, *, item_id: str, name: str | None = None, parent_id: str | None = None
     ) -> RemoteItem:
-        token, site_id = self._app_access(root)
-        with _file_failures():
-            item = self.graph_files.move_item(token, site_id=site_id, item_id=item_id, name=name, parent_id=parent_id)
+        item = self._as_app(
+            root,
+            lambda token, site_id: self.graph_files.move_item(
+                token, site_id=site_id, item_id=item_id, name=name, parent_id=parent_id
+            ),
+        )
         return _remote_item(root, item)
 
     def delete_item(self, root: SyncRoot, *, item_id: str) -> None:
-        token, site_id = self._app_access(root)
-        with _file_failures():
-            self.graph_files.delete_item(token, site_id=site_id, item_id=item_id)
+        self._as_app(root, lambda token, site_id: self.graph_files.delete_item(token, site_id=site_id, item_id=item_id))
 
     def changes(self, root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
-        token, site_id = self._app_access(root)
-        url = cursor or delta_start_url(site_id=site_id, folder_id=root.folder_id, from_now=not from_start)
-        with _file_failures():
-            page = self.graph_files.delta_page(token, url)
+        page = self._as_app(
+            root,
+            lambda token, site_id: self.graph_files.delta_page(
+                token, cursor or delta_start_url(site_id=site_id, folder_id=root.folder_id, from_now=not from_start)
+            ),
+        )
         next_cursor = page.next_link or page.delta_link
         if next_cursor is None:
             raise ProviderUnavailable(_UNREACHABLE)
@@ -328,24 +338,57 @@ class OneDriveSyncProviderPlugin(SyncProviderPlugin):
             more=page.next_link is not None,
         )
 
-    def upload_target(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> UploadTarget:
-        token, site_id = self._app_access(root)
-        with _file_failures():
-            session = self.graph_files.create_upload_session(
-                token, site_id=site_id, parent_id=parent_id, rel_path=rel_path
+    def list_files(self, root: SyncRoot, *, folder_id: str) -> list[RemoteItem]:
+        files: list[RemoteItem] = []
+        folders = [folder_id]
+        while folders:
+            parent = folders.pop()
+            children = self._as_app(
+                root,
+                lambda token, site_id, parent=parent: self.graph_files.list_children(
+                    token, site_id=site_id, item_id=parent
+                ),
             )
+            for child in children:
+                if child.is_folder:
+                    folders.append(child.id)
+                else:
+                    files.append(_remote_item(root, child))
+        return files
+
+    def upload_target(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> UploadTarget:
+        session = self._as_app(
+            root,
+            lambda token, site_id: self.graph_files.create_upload_session(
+                token, site_id=site_id, parent_id=parent_id, rel_path=rel_path
+            ),
+        )
         return UploadTarget(url=session.upload_url, expires_at=session.expires_at)
 
     def download_url(self, root: SyncRoot, *, item_id: str) -> str:
-        token, site_id = self._app_access(root)
-        with _file_failures():
-            return self.graph_files.download_url(token, site_id=site_id, item_id=item_id)
+        return self._as_app(
+            root, lambda token, site_id: self.graph_files.download_url(token, site_id=site_id, item_id=item_id)
+        )
 
     def write_empty_file(self, root: SyncRoot, *, parent_id: str, rel_path: str) -> RemoteItem:
+        item = self._as_app(
+            root,
+            lambda token, site_id: self.graph_files.put_empty_file(
+                token, site_id=site_id, parent_id=parent_id, rel_path=rel_path
+            ),
+        )
+        return _remote_item(root, item)
+
+    def _as_app[T](self, root: SyncRoot, call: Callable[[str, str], T]) -> T:
         token, site_id = self._app_access(root)
         with _file_failures():
-            item = self.graph_files.put_empty_file(token, site_id=site_id, parent_id=parent_id, rel_path=rel_path)
-        return _remote_item(root, item)
+            try:
+                return call(token, site_id)
+            except GraphTokenRejected:
+                self.app_tokens.evict(tenant_id=root.account_id, client_id=self.config.onedrive_sync_client_id)
+        token, site_id = self._app_access(root)
+        with _file_failures():
+            return call(token, site_id)
 
     def _app_access(self, root: SyncRoot) -> tuple[str, str]:
         """The platform app's token in the connection's tenant, and the connected site."""

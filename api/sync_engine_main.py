@@ -1,6 +1,7 @@
 import logging
 import signal
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -15,13 +16,13 @@ HEARTBEAT_PATH = Path("/tmp/sync-engine-heartbeat")
 
 
 class _Engine(Protocol):
-    def run_pass(self, now: datetime) -> None: ...
+    def run_pass(self, now: datetime, progress: Callable[[], None] | None = None) -> None: ...
 
 
 def run(engine: _Engine, *, stop: threading.Event, interval_seconds: float, heartbeat: Path) -> None:
     while not stop.is_set():
         try:
-            engine.run_pass(datetime.now(UTC))
+            engine.run_pass(datetime.now(UTC), progress=heartbeat.touch)
         except Exception:
             logger.exception("File sync pass failed")
         else:

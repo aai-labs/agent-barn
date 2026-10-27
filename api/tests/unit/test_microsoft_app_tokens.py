@@ -1,3 +1,5 @@
+import time
+
 from hamcrest import assert_that, calling, equal_to, raises
 
 from api.domains.agents.microsoft_identity import (
@@ -71,3 +73,29 @@ def test_a_failed_fetch_is_not_remembered():
         raises(MicrosoftIdentityUnavailable),
     )
     assert_that(tokens.get(tenant_id="tenant-1", client_id="app", client_secret="secret"), equal_to("later"))
+
+
+def test_expiry_is_measured_on_the_wall_clock_so_a_sleeping_host_refetches(monkeypatch):
+    identity = _Identity(_tokens("before sleep"), _tokens("after sleep"))
+    wall = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: wall[0])
+    tokens = MicrosoftAppTokens(identity)
+    first = tokens.get(tenant_id="tenant-1", client_id="app", client_secret="secret")
+    wall[0] += 3600
+
+    after = tokens.get(tenant_id="tenant-1", client_id="app", client_secret="secret")
+
+    assert_that((first, after), equal_to(("before sleep", "after sleep")))
+
+
+def test_an_evicted_token_is_fetched_again():
+    identity = _Identity(_tokens("rejected"), _tokens("fresh"))
+    tokens = MicrosoftAppTokens(identity, clock=_Clock())
+    first = tokens.get(tenant_id="tenant-1", client_id="app", client_secret="secret")
+
+    tokens.evict(tenant_id="TENANT-1", client_id="app")
+
+    assert_that(
+        (first, tokens.get(tenant_id="tenant-1", client_id="app", client_secret="secret")),
+        equal_to(("rejected", "fresh")),
+    )

@@ -256,7 +256,7 @@ worker:
 syncEngine:
   enabled: true
   replicaCount: 1
-  heartbeatMaxAgeSeconds: 120
+  heartbeatMaxAgeSeconds: 600
   resources:
     requests:
       memory: 192Mi

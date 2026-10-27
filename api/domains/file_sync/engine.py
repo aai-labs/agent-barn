@@ -1,6 +1,7 @@
 import logging
 import re
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -78,6 +79,7 @@ class _Changes:
     root: SyncRoot
     by_name: dict[str, tuple[SyncAgentFolder, str]]
     by_item: dict[str, SyncAgentFolder]
+    progress: Callable[[], None]
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,10 @@ def delete_agent_folder(
     repository.remove_folder(folder.id)
 
 
+def _no_progress() -> None:
+    return None
+
+
 def sync_root(connection: SyncProviderConnection) -> SyncRoot | None:
     if connection.folder_id is None:
         return None
@@ -130,22 +136,24 @@ class FileSyncEngine:
     repository: FileSyncRepository
     plugins: SyncProviderPluginRegistry
 
-    def run_pass(self, now: datetime) -> None:
+    def run_pass(self, now: datetime, progress: Callable[[], None] | None = None) -> None:
+        tick = progress or _no_progress
         for connection in self.repository.due_connections(now):
             with self.repository.connection_lock(connection.id) as acquired:
                 if not acquired:
                     continue
                 try:
                     self.reconcile_folders(connection)
-                    self.process_changes(connection)
+                    self.process_changes(connection, progress=tick)
                 except ProviderThrottled as exc:
                     wait = exc.retry_after or THROTTLE_FALLBACK_SECONDS
                     self.repository.postpone(connection.id, now + timedelta(seconds=wait))
                     logger.info("File sync for connection %s throttled for %ss", connection.id, wait)
                 except Exception:
                     logger.exception("File sync pass failed for connection %s", connection.id)
+            tick()
 
-    def process_changes(self, connection: SyncProviderConnection) -> None:
+    def process_changes(self, connection: SyncProviderConnection, progress: Callable[[], None] | None = None) -> None:
         plugin = self.plugins.require(connection.provider_key)
         root = sync_root(connection)
         if SyncProviderCapability.FILE_SYNC not in plugin.capabilities or root is None:
@@ -164,6 +172,7 @@ class FileSyncEngine:
             root=root,
             by_name={folder.folder_name.lower(): (folder, runtime) for folder, runtime in active},
             by_item={folder.folder_item_id: folder for folder, _ in active if folder.folder_item_id is not None},
+            progress=progress or _no_progress,
         )
         try:
             self._follow(changes, connection.sync_cursor)
@@ -177,6 +186,7 @@ class FileSyncEngine:
                 self._remote_change(changes, item)
             cursor = page.cursor
             self.repository.save_cursor(changes.connection.id, cursor)
+            changes.progress()
             if not page.more:
                 return
 
@@ -190,6 +200,7 @@ class FileSyncEngine:
                     seen.add(item.id)
                 self._remote_change(changes, item)
             cursor = page.cursor
+            changes.progress()
             if not page.more:
                 break
         now = datetime.now(UTC)
@@ -204,6 +215,14 @@ class FileSyncEngine:
     def _remote_change(self, changes: _Changes, item: RemoteItem) -> None:
         if item.modified_by_app:
             return
+        self._handle(changes, item)
+
+    def _handle(self, changes: _Changes, item: RemoteItem) -> None:
+        if not item.deleted and item.path is None:
+            try:
+                item = changes.plugin.get_item(changes.root, item_id=item.id)
+            except RemoteItemMissing:
+                return
         if item.is_folder:
             self._folder_change(changes, item)
             return
@@ -270,16 +289,31 @@ class FileSyncEngine:
             return False
         original_dir, _, original_name = row.path.rpartition("/")
         try:
-            parent_id = (
-                changes.plugin.get_item_by_path(changes.root, parent_id=folder_item_id, rel_path=original_dir).id
-                if original_dir
-                else folder_item_id
-            )
+            parent_id = self._folder_at(changes, folder_item_id, original_dir) if original_dir else folder_item_id
             changes.plugin.move_item(changes.root, item_id=item.id, name=original_name, parent_id=parent_id)
         except RemoteItemMissing, RemoteNameTaken:
             return False
         self.repository.record_activity(folder, SyncActivityKind.RENAMED_BACK, row.path, datetime.now(UTC))
         return True
+
+    def _folder_at(self, changes: _Changes, folder_item_id: str, rel_dir: str) -> str:
+        parent_id = folder_item_id
+        for segment in rel_dir.split("/"):
+            try:
+                parent_id = changes.plugin.get_item_by_path(changes.root, parent_id=parent_id, rel_path=segment).id
+            except RemoteItemMissing:
+                try:
+                    parent_id = changes.plugin.create_folder(changes.root, parent_id=parent_id, name=segment).id
+                except RemoteNameTaken:
+                    parent_id = changes.plugin.get_item_by_path(changes.root, parent_id=parent_id, rel_path=segment).id
+        return parent_id
+
+    def _subfolder_change(self, changes: _Changes, item: RemoteItem) -> None:
+        if item.deleted or _locate(changes, item.path) is None:
+            return
+        for child in changes.plugin.list_files(changes.root, folder_id=item.id):
+            if self.repository.file_by_item_in_connection(changes.connection.id, child.id) is not None:
+                self._handle(changes, child)
 
     def _park(self, changes: _Changes, target: _Target, item: RemoteItem) -> None:
         folder_item_id = target.folder.folder_item_id
@@ -313,6 +347,7 @@ class FileSyncEngine:
     def _folder_change(self, changes: _Changes, item: RemoteItem) -> None:
         folder = changes.by_item.get(item.id)
         if folder is None:
+            self._subfolder_change(changes, item)
             return
         now = datetime.now(UTC)
         if not item.deleted and item.path == folder.folder_name:

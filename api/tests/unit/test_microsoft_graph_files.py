@@ -17,6 +17,7 @@ from api.domains.agents.microsoft_graph_files import (
     GraphRequestRejected,
     GraphResyncRequired,
     GraphThrottled,
+    GraphTokenRejected,
     GraphUnavailable,
     MicrosoftGraphFiles,
     UploadSession,
@@ -322,11 +323,10 @@ def test_an_empty_file_is_written_directly_because_upload_sessions_refuse_it(gra
     ("status", "error"),
     [
         (400, GraphRequestRejected),
-        (401, GraphAccessRefused),
+        (401, GraphTokenRejected),
         (403, GraphAccessRefused),
         (412, GraphPreconditionFailed),
         (500, GraphUnavailable),
-        (503, GraphUnavailable),
     ],
 )
 def test_graph_failures_map_to_typed_errors(graph, status, error):
@@ -385,3 +385,25 @@ def test_retry_after_keeps_its_cap_unless_a_caller_lifts_it():
     assert_that(retry_after_seconds("0", max_seconds=None), equal_to(1))
     assert_that(retry_after_seconds(None, max_seconds=None), equal_to(1))
     assert_that(retry_after_seconds("soon", max_seconds=None), equal_to(1))
+
+
+def test_a_rejected_token_is_still_access_refused_for_callers_that_dont_retry():
+    assert_that(issubclass(GraphTokenRejected, GraphAccessRefused), equal_to(True))
+
+
+def test_service_unavailable_is_throttling_with_microsofts_wait(graph):
+    graph(httpx.Response(503, headers={"Retry-After": "7"}))
+
+    with pytest.raises(GraphThrottled) as exc:
+        MicrosoftGraphFiles().get_item("app-token", site_id=_SITE, item_id="item-1")
+
+    assert_that(exc.value.retry_after, equal_to(7))
+
+
+def test_service_unavailable_without_retry_after_waits_the_default(graph):
+    graph(httpx.Response(503))
+
+    with pytest.raises(GraphThrottled) as exc:
+        MicrosoftGraphFiles().get_item("app-token", site_id=_SITE, item_id="item-1")
+
+    assert_that(exc.value.retry_after, equal_to(1))

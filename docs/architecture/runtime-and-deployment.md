@@ -190,7 +190,7 @@ The API image also runs Domain Event delivery workloads with different commands:
 
 The Sync Engine is a separate Deployment of the API image (`api/sync_engine_main.py`, chart value `syncEngine`). Every 30 s it runs [Agent file sync](../features/sync-provider/README.md#agent-file-sync) for each active Sync Provider Connection whose provider supports it.
 - **Pod lifecycle:** it uses a non-overlapping rolling update like the worker, and has one replica. A per-connection PostgreSQL advisory lock still keeps two copies off the same connection during a rollout.
-- **Liveness:** the probe fails when the heartbeat file it writes after each completed pass is older than `syncEngine.heartbeatMaxAgeSeconds` (120 s).
+- **Liveness:** the probe fails when the heartbeat file is older than `syncEngine.heartbeatMaxAgeSeconds` (600 s). The engine writes it after each page of changes, each connection and each completed pass, so a long pass stays alive.
 - **What it needs:** the API Secret. It needs no Redis, no LiteLLM and no Kubernetes access.
 - **Local runs:** `make dev-sync-engine`, or the `sync-engine` Compose service.
 

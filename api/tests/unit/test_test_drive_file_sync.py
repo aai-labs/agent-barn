@@ -201,6 +201,33 @@ def test_an_item_reports_when_it_last_changed():
     assert_that(edited.modified_at is not None and edited.modified_at.year > 2020, is_(True))
 
 
+def test_listing_a_folder_returns_every_file_below_it_with_its_path():
+    plugin, root = _connected()
+    plugin.user_adds(root, "Sales Bot/workspace/reports/a.md", b"a")
+    plugin.user_adds(root, "Sales Bot/workspace/reports/q3/b.md", b"b")
+    plugin.user_adds(root, "Sales Bot/workspace/other.md", b"o")
+    reports = plugin.get_item_by_path(root, parent_id=root.folder_id, rel_path="Sales Bot/workspace/reports")
+
+    files = plugin.list_files(root, folder_id=reports.id)
+
+    assert_that(
+        sorted(item.path or "" for item in files),
+        equal_to(["Sales Bot/workspace/reports/a.md", "Sales Bot/workspace/reports/q3/b.md"]),
+    )
+
+
+def test_changes_can_leave_out_paths_as_microsoft_documents():
+    plugin, root = _connected()
+    cursor = plugin.changes(root, None).cursor
+    plugin.user_adds(root, "Sales Bot/notes.md", b"x")
+    plugin.omit_paths_in_changes = True
+
+    page = plugin.changes(root, cursor)
+
+    assert_that({item.path for item in page.items}, equal_to({None}))
+    assert_that(plugin.get_item(root, item_id=page.items[-1].id).path is not None, is_(True))
+
+
 def test_downloads_and_empty_files_need_no_upload():
     plugin, root = _connected()
     folder = plugin.create_folder(root, parent_id=root.folder_id, name="Sales Bot")

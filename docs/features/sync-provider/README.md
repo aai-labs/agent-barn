@@ -181,9 +181,9 @@ Every Hermes and OpenClaw ConfigMap carries `file-sync.py` and `file-sync-rules.
 
 The Sync Engine (`api/sync_engine_main.py`, `make dev-sync-engine`, chart value `syncEngine`) runs one pass every 30 s. A pass handles each active connection that has a root folder, whose provider declares `file_sync`, and that is not waiting out throttling.
 - **Locking:** it holds that connection's advisory lock, and skips a connection another copy holds.
-- **Throttling:** when the provider throttles, the connection waits until now plus the provider's `Retry-After` (`sync_retry_at`), or 60 s when none is given. Other connections go on.
+- **Throttling:** when the provider throttles (429, or 503 Service Unavailable), the connection waits until now plus the provider's `Retry-After` (`sync_retry_at`), or 60 s when none is given. Other connections go on.
 - **Failures:** any other failure is logged, and the other connections still sync.
-- **Heartbeat:** a completed pass refreshes the liveness heartbeat; a failed pass does not.
+- **Heartbeat:** the liveness heartbeat is refreshed after each page of changes, each connection and each completed pass, so a long first sync isn't mistaken for a hung engine. The probe allows 600 s (`syncEngine.heartbeatMaxAgeSeconds`).
 
 Its reads and writes are background work under the [RBAC brief](../rbac/IMPLEMENTATION-BRIEF.md): unscoped, keyed by the connection's own Organization and id, and reachable from no router.
 
@@ -229,7 +229,9 @@ Files a person adds, removes or moves:
 - **A file the Agent does not have:** a new file anywhere in an Agent's folder is moved to `<Agent>/_Not synced/` (created when missing), and `moved_not_synced` is recorded. A name already taken there gets ` (2)`, ` (3)` before its extension.
 - **A new file at a synced path,** such as one deleted and added again, is taken as an edit of that file, unless the Agent's own upload of that path is under way.
 - **A synced file deleted,** or moved out of "Agent Barn", into `_Not synced/` or into another Agent's folder: it is restored from the Agent (a `reupload` job, with the row's provider fields cleared). `restored` is recorded when the Agent's copy is back. A file that lands in another Agent's folder is moved to that folder's `_Not synced/`.
-- **A synced file renamed or moved within its folder,** including a rename that changes only the case: it is moved back to its path, and `renamed_back` is recorded. Whether an edit to it is applied or undone follows the name on record, never the new name. If the way back is blocked, it is restored instead and the moved copy is parked in `_Not synced/`.
+- **A synced file renamed or moved within its folder,** including a rename that changes only the case: it is moved back to its path, and `renamed_back` is recorded. Whether an edit to it is applied or undone follows the name on record, never the new name. If the way back is blocked, it is restored instead and the moved copy is parked in `_Not synced/`. Folders missing on the way back are created again.
+- **A subfolder renamed or moved within the Agent's folder:** the provider reports only the folder, not the files inside it, so the engine lists the files below it and moves each synced one back (`renamed_back`).
+- **An item reported without a path** (the change feed may leave `parentReference.path` out) is read again directly before it's handled.
 
 Agent folders:
 - **Renamed or moved:** an Agent's folder is put back under "Agent Barn" with its name.
@@ -286,7 +288,7 @@ Everything File Sync does that a person should be able to see is stored in `sync
 
 ## OneDrive provider
 
-`OneDriveSyncProviderPlugin` (key `onedrive`) connects OneDrive through one SharePoint site. Agent Barn's multi-tenant Microsoft app is granted `write` on the chosen site with `Sites.Selected`, and creates the "Agent Barn" folder in the site's default document library as the app. Capabilities: `location_picker` (`location_noun` "SharePoint site"), `admin_approval` and `file_sync`. Location guard: `SHAREPOINT_AGENT_SITES`. File sync acts as the platform app in the connection's tenant, with an app-only token cached per tenant (`MicrosoftAppTokens`).
+`OneDriveSyncProviderPlugin` (key `onedrive`) connects OneDrive through one SharePoint site. Agent Barn's multi-tenant Microsoft app is granted `write` on the chosen site with `Sites.Selected`, and creates the "Agent Barn" folder in the site's default document library as the app. Capabilities: `location_picker` (`location_noun` "SharePoint site"), `admin_approval` and `file_sync`. Location guard: `SHAREPOINT_AGENT_SITES`. File sync acts as the platform app in the connection's tenant, with an app-only token cached per tenant (`MicrosoftAppTokens`). Expiry is measured on the wall clock, so a host that slept fetches a fresh token. If Microsoft still rejects a token (401), it is dropped and the call is retried once with a new one; only a second rejection reads as lost access.
 
 ### Platform app
 

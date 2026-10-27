@@ -256,6 +256,10 @@ class SyncProviderPlugin(ABC):
         del root, item_id
         raise NotImplementedError(f"{self.key} has no file sync")
 
+    def list_files(self, root: SyncRoot, *, folder_id: str) -> list[RemoteItem]:
+        del root, folder_id
+        raise NotImplementedError(f"{self.key} has no file sync")
+
     def changes(self, root: SyncRoot, cursor: str | None, *, from_start: bool = False) -> RemoteChanges:
         """The next page of changes under the root since ``cursor``. Without a cursor, the feed starts
         now, or with everything under the root when ``from_start``. Raises RemoteResyncRequired when

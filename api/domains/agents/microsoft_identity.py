@@ -209,7 +209,7 @@ class MicrosoftAppTokens:
     @inject
     def __init__(self, identity: MicrosoftIdentityClient, clock: NoInject[Callable[[], float] | None] = None) -> None:
         self._identity = identity
-        self._clock = clock or time.monotonic
+        self._clock = clock or time.time
         self._lock = threading.Lock()
         self._tokens: dict[tuple[str, str], tuple[str, float]] = {}
 
@@ -225,3 +225,7 @@ class MicrosoftAppTokens:
         with self._lock:
             self._tokens[key] = (tokens.access_token, self._clock() + tokens.expires_in)
         return tokens.access_token
+
+    def evict(self, *, tenant_id: str, client_id: str) -> None:
+        with self._lock:
+            self._tokens.pop((tenant_id.lower(), client_id), None)
